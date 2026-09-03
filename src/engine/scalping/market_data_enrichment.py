@@ -649,6 +649,10 @@ def build_market_data_enrichment(
             if effective_source == "ka10004_rest_orderbook"
             else _safe_float(base.get("last_ws_update_ts"), None)
         ),
+        # Quote age is measured against this instant.  Persist it separately
+        # from pipeline-event emission time so source-only consumers can audit
+        # freshness without treating logging latency as market-data staleness.
+        "market_data_effective_quote_reference_epoch": round(now_value, 6),
         "market_data_effective_quote_request_code": (
             str(rest_orderbook.get("request_code") or "").strip()
             if effective_source == "ka10004_rest_orderbook"

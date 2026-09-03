@@ -9,6 +9,8 @@ comparison-cost contract.
 
 from __future__ import annotations
 
+import ast
+import json
 import math
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -45,6 +47,7 @@ PRE_ANCHOR_BBO_COVERAGE_FLOOR_PCT = 95.0
 PAIRED_COVERAGE_FLOOR_PCT = 95.0
 RIGHT_CENSORED_MAX_PCT = 20.0
 MIN_RESOLVED_SAMPLE_COUNT = 20
+PRE_ANCHOR_BUNDLE_SCHEMA_VERSION = "entry_turn_pre_anchor_bbo_bundle_v2_json"
 
 FORBIDDEN_USES = [
     "standalone_buy_or_drop",
@@ -197,6 +200,7 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
             "market_data_effective_quote_age_ms",
             "market_data_effective_price_source",
             "market_data_effective_quote_observed_epoch",
+            "market_data_effective_quote_reference_epoch",
         ),
         (
             "nxt_post_block_ws_0d_bbo",
@@ -205,10 +209,19 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
             "rising_missed_nxt_post_block_ws_0d_age_ms",
             "rising_missed_nxt_post_block_price_source",
             None,
+            None,
         ),
     )
     gaps: list[str] = []
-    for source, bid_key, ask_key, age_key, provenance_key, epoch_key in candidates:
+    for (
+        source,
+        bid_key,
+        ask_key,
+        age_key,
+        provenance_key,
+        epoch_key,
+        reference_epoch_key,
+    ) in candidates:
         bid = _safe_float(fields.get(bid_key))
         ask = _safe_float(fields.get(ask_key))
         if bid is None and ask is None:
@@ -228,12 +241,26 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
             gaps.append(f"{source}:existing_ws_provenance_unproven")
             continue
         observed_epoch = _safe_float(fields.get(epoch_key)) if epoch_key else None
+        reference_epoch = (
+            _safe_float(fields.get(reference_epoch_key))
+            if reference_epoch_key
+            else None
+        )
+        if reference_epoch is None:
+            # Legacy rows recorded age relative to event emission.  New rows
+            # persist the exact enrichment reference epoch so logger latency is
+            # not misclassified as quote staleness.
+            reference_epoch = event_time.timestamp()
+        if reference_epoch > event_time.timestamp() + 0.1:
+            gaps.append(f"{source}:quote_reference_after_event")
+            continue
         observed_at = (
             datetime.fromtimestamp(observed_epoch, tz=KST)
             if observed_epoch is not None
-            else event_time - timedelta(milliseconds=age_ms)
+            else datetime.fromtimestamp(reference_epoch, tz=KST)
+            - timedelta(milliseconds=age_ms)
         )
-        observed_lag_ms = (event_time - observed_at).total_seconds() * 1_000.0
+        observed_lag_ms = (reference_epoch - observed_at.timestamp()) * 1_000.0
         if observed_lag_ms < 0:
             gaps.append(f"{source}:observation_time_after_event")
             continue
@@ -248,6 +275,7 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
                 "observed_at": observed_at.isoformat(),
                 "observed_epoch": observed_at.timestamp(),
                 "event_epoch": event_time.timestamp(),
+                "reference_epoch": reference_epoch,
                 "best_bid": bid,
                 "best_ask": ask,
                 "spread_bps": (ask - bid) / ask * 10_000.0,
@@ -272,6 +300,37 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
     return None, "executable_existing_ws_bbo_missing"
 
 
+def _parse_bbo_sample_list(value: Any) -> tuple[list[Any] | None, str]:
+    """Decode bounded BBO bundles after scalar pipeline-event persistence.
+
+    ``emit_pipeline_event`` intentionally stores field values as strings.  New
+    producers emit canonical JSON; ``literal_eval`` is retained only for the
+    already persisted Python-repr rows from earlier runtime revisions.
+    """
+
+    if isinstance(value, list):
+        return value, "native_list"
+    if not isinstance(value, str) or not value.strip():
+        return None, "samples_missing"
+    if len(value) > 1_000_000:
+        return None, "samples_payload_too_large"
+    text = value.strip()
+    try:
+        decoded = json.loads(text)
+        decoder = "canonical_json"
+    except (json.JSONDecodeError, TypeError):
+        try:
+            decoded = ast.literal_eval(text)
+            decoder = "legacy_python_repr"
+        except (SyntaxError, ValueError):
+            return None, "samples_malformed"
+    if not isinstance(decoded, list):
+        return None, "samples_not_list"
+    if len(decoded) > 256:
+        return None, "samples_count_exceeds_bound"
+    return decoded, decoder
+
+
 def _bundled_pre_anchor_ws_bbos(
     row: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], list[str]]:
@@ -281,13 +340,31 @@ def _bundled_pre_anchor_ws_bbos(
     event_time = _event_time(row)
     venue = _venue(fields)
     session = _session(fields)
-    raw_samples = fields.get("rising_missed_entry_turn_bbo_samples")
+    raw_samples, samples_decoder = _parse_bbo_sample_list(
+        fields.get("rising_missed_entry_turn_bbo_samples")
+    )
+    bundle_schema_version = str(
+        fields.get("rising_missed_entry_turn_bbo_bundle_schema_version") or ""
+    ).strip()
     if event_time is None:
         return [], ["pre_anchor_bundle:event_time_missing"]
     if venue == "UNKNOWN" or session == "UNKNOWN":
         return [], ["pre_anchor_bundle:explicit_venue_or_session_missing"]
-    if not isinstance(raw_samples, list):
-        return [], ["pre_anchor_bundle:samples_missing"]
+    if raw_samples is None:
+        return [], [f"pre_anchor_bundle:{samples_decoder}"]
+    if samples_decoder == "canonical_json" and bundle_schema_version != (
+        PRE_ANCHOR_BUNDLE_SCHEMA_VERSION
+    ):
+        return [], ["pre_anchor_bundle:schema_version_missing_or_unsupported"]
+    declared_sample_count = _safe_float(
+        fields.get("rising_missed_entry_turn_bbo_sample_count")
+    )
+    if (
+        declared_sample_count is None
+        or not declared_sample_count.is_integer()
+        or int(declared_sample_count) != len(raw_samples)
+    ):
+        return [], ["pre_anchor_bundle:sample_count_mismatch"]
     if not raw_samples:
         capture_reason = str(
             fields.get("rising_missed_entry_turn_bbo_last_capture_reason") or "unknown"
@@ -314,6 +391,8 @@ def _bundled_pre_anchor_ws_bbos(
             continue
         bid = _safe_float(sample.get("best_bid"))
         ask = _safe_float(sample.get("best_ask"))
+        bid_qty = _safe_float(sample.get("best_bid_qty"))
+        ask_qty = _safe_float(sample.get("best_ask_qty"))
         age_ms = _safe_float(sample.get("quote_age_ms"))
         observed_epoch = _safe_float(sample.get("observed_epoch"))
         recorded_epoch = _safe_float(sample.get("recorded_epoch"))
@@ -358,9 +437,21 @@ def _bundled_pre_anchor_ws_bbos(
                 "event_epoch": event_time.timestamp(),
                 "best_bid": bid,
                 "best_ask": ask,
+                "best_bid_qty": (
+                    int(bid_qty)
+                    if bid_qty is not None and bid_qty >= 0 and bid_qty.is_integer()
+                    else None
+                ),
+                "best_ask_qty": (
+                    int(ask_qty)
+                    if ask_qty is not None and ask_qty >= 0 and ask_qty.is_integer()
+                    else None
+                ),
                 "spread_bps": (ask - bid) / ask * 10_000.0,
                 "quote_age_ms": age_ms,
                 "source": "entry_turn_pre_anchor_bbo_ring",
+                "bundle_decoder": samples_decoder,
+                "bundle_schema_version": bundle_schema_version or "legacy_absent",
                 "source_provenance": provenance,
                 "stage": "rising_missed_entry_turn_pre_anchor_bbo_path",
                 "stock_code": _code(row),
@@ -371,6 +462,14 @@ def _bundled_pre_anchor_ws_bbos(
             }
         )
     return observations, gaps
+
+
+def decode_pre_anchor_ws_bbo_bundle(
+    row: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Public source-quality decoder shared by source-only report consumers."""
+
+    return _bundled_pre_anchor_ws_bbos(row)
 
 
 def _master_date(path: Path) -> date | None:

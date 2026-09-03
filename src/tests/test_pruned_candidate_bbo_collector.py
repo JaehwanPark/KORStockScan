@@ -57,12 +57,13 @@ def test_global_collector_emits_secret_free_pid_configuration_receipt(
     receipt = emitted[0]
     assert receipt["stage"] == "scalping_scanner_prune_bbo_source_loaded"
     fields = receipt["fields"]
+    assert fields["observation_schema_version"] == (
+        collector_mod.OBSERVATION_SCHEMA_VERSION
+    )
     assert fields["scanner_prune_observer_configuration_status"] == (
         "collector_created"
     )
-    assert fields["scanner_prune_observer_configuration_receipt_status"] == (
-        "emitted"
-    )
+    assert fields["scanner_prune_observer_configuration_receipt_status"] == ("emitted")
     assert fields["scanner_prune_observer_process_pid"] > 0
     assert fields["scanner_prune_observer_token_present"] is True
     assert fields["scanner_prune_observer_sample_offsets_sec"] == list(
@@ -114,6 +115,8 @@ def test_collector_uses_exact_route_and_emits_source_only_bbo_receipt() -> None:
             "rest_received_ts": clock.value,
             "best_bid": 70000,
             "best_ask": 70100,
+            "best_bid_qty": 200,
+            "best_ask_qty": 180,
             "bid_req_base_tm": "091000",
         }
 
@@ -162,6 +165,8 @@ def test_collector_uses_exact_route_and_emits_source_only_bbo_receipt() -> None:
     assert event["fields"]["scanner_prune_observer_status"] == "captured"
     assert event["fields"]["scanner_prune_observer_best_bid"] == 70000
     assert event["fields"]["scanner_prune_observer_best_ask"] == 70100
+    assert event["fields"]["scanner_prune_observer_best_bid_qty"] == 200
+    assert event["fields"]["scanner_prune_observer_best_ask_qty"] == 180
     assert event["fields"]["scanner_prune_observer_schedule_lag_sec"] == 0.0
     assert event["fields"]["decision_authority"] == (
         "scanner_prune_bbo_observation_only"
@@ -197,9 +202,45 @@ def test_collector_reuses_stable_episode_and_clips_horizon_at_session_end() -> N
     assert second["scanner_prune_observer_schedule_status"] == (
         "existing_episode_reused"
     )
-    assert second["scanner_prune_observer_episode_id"] == (
-        first["scanner_prune_observer_episode_id"]
+    assert (
+        second["scanner_prune_observer_episode_id"]
+        == (first["scanner_prune_observer_episode_id"])
     )
+
+
+def test_collector_fails_closed_when_best_quantity_is_missing() -> None:
+    clock = _Clock(_epoch(9, 10))
+    emitted: list[dict] = []
+    collector = PrunedCandidateBBOCollector(
+        "TOKEN",
+        fetch_quote=lambda _token, request_code, **_kwargs: {
+            "source": "ka10004_rest_orderbook",
+            "stock_code": request_code[:6],
+            "request_code": request_code,
+            "rest_received_ts": clock.value,
+            "best_bid": 70000,
+            "best_ask": 70100,
+        },
+        emit_event=lambda *_args, **kwargs: emitted.append(kwargs["fields"]),
+        clock=clock,
+        autostart=False,
+    )
+    collector.offer(
+        _target(),
+        reason="general_slot_limit",
+        scan_generation_id="SCANGEN-QTY-GAP",
+        scan_rank=1,
+        ranked_candidate_count=1,
+        venue_fields=_venue(),
+    )
+
+    assert collector.run_due_once(now_epoch=clock.value) is True
+    assert emitted[0]["scanner_prune_observer_status"] == "source_quality_gap"
+    assert emitted[0]["scanner_prune_observer_gap_reason"] == (
+        "ka10004_best_quantity_missing_or_invalid"
+    )
+    assert emitted[0]["scanner_prune_observer_best_bid"] is None
+    assert emitted[0]["scanner_prune_observer_best_ask"] is None
 
 
 def test_collector_rotates_episode_only_after_observation_absence() -> None:
@@ -232,8 +273,9 @@ def test_collector_rotates_episode_only_after_observation_absence() -> None:
     assert rotated["scanner_prune_observer_schedule_status"] == (
         "new_episode_scheduled"
     )
-    assert rotated["scanner_prune_observer_episode_id"] != (
-        first["scanner_prune_observer_episode_id"]
+    assert (
+        rotated["scanner_prune_observer_episode_id"]
+        != (first["scanner_prune_observer_episode_id"])
     )
 
 
@@ -288,8 +330,9 @@ def test_deferred_episode_retries_with_same_id_when_capacity_frees() -> None:
     assert retried["scanner_prune_observer_schedule_status"] == (
         "new_episode_scheduled"
     )
-    assert retried["scanner_prune_observer_episode_id"] == (
-        deferred["scanner_prune_observer_episode_id"]
+    assert (
+        retried["scanner_prune_observer_episode_id"]
+        == (deferred["scanner_prune_observer_episode_id"])
     )
     assert retried["scanner_prune_observer_anchor_generation_id"] == "SCANGEN-1"
     assert (
@@ -352,8 +395,9 @@ def test_deferred_episode_does_not_spend_budget_after_anchor_latency_ceiling() -
     assert retried["scanner_prune_observer_schedule_status"] == (
         "anchor_schedule_latency_exceeded"
     )
-    assert retried["scanner_prune_observer_episode_id"] == (
-        deferred["scanner_prune_observer_episode_id"]
+    assert (
+        retried["scanner_prune_observer_episode_id"]
+        == (deferred["scanner_prune_observer_episode_id"])
     )
     assert retried["scanner_prune_observer_scheduled_sample_count"] == 0
     assert retried["scanner_prune_observer_process_daily_scheduled_request_count"] == 2
@@ -399,8 +443,9 @@ def test_collector_preserves_explicit_nxt_route_and_fails_closed_on_capacity() -
         "active_episode_capacity_rejected"
     )
     assert rejected["scanner_prune_observer_episode_id"].startswith("PRUNEBBO-")
-    assert rejected_again["scanner_prune_observer_episode_id"] == (
-        rejected["scanner_prune_observer_episode_id"]
+    assert (
+        rejected_again["scanner_prune_observer_episode_id"]
+        == (rejected["scanner_prune_observer_episode_id"])
     )
     assert rejected["runtime_effect"] is False
 
@@ -637,8 +682,13 @@ def test_unexpected_sample_failure_releases_terminal_episode_capacity(
     assert emitted[0]["scanner_prune_observer_gap_reason"] == (
         "unexpected_collector_failure:RuntimeError"
     )
-    assert emitted[0]["scanner_prune_observer_request_started_epoch"] == clock.value - 0.5
-    assert emitted[0]["scanner_prune_observer_request_completed_epoch"] == clock.value - 0.5
+    assert (
+        emitted[0]["scanner_prune_observer_request_started_epoch"] == clock.value - 0.5
+    )
+    assert (
+        emitted[0]["scanner_prune_observer_request_completed_epoch"]
+        == clock.value - 0.5
+    )
     assert emitted[0]["scanner_prune_observer_schedule_lag_sec"] == 0.0
     assert emitted[0]["scanner_prune_observer_route_match"] is False
     assert emitted[0]["scanner_prune_observer_response_request_code"] == (

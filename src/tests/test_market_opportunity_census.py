@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +17,98 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def _prune_bbo_event(
+    when: datetime,
+    *,
+    bid: int,
+    ask: int,
+    bid_qty: int = 100,
+    ask_qty: int = 100,
+) -> dict:
+    epoch = when.timestamp()
+    return {
+        "stage": "scalping_scanner_prune_bbo_observation",
+        "stock_code": "005930",
+        "emitted_at": when.isoformat(),
+        "fields": {
+            "observation_schema_version": census.PRUNE_BBO_OBSERVATION_SCHEMA_VERSION,
+            "scanner_prune_observer_episode_id": "PRUNEBBO-1",
+            "scanner_prune_observer_status": "captured",
+            "scanner_prune_observer_source_quality_pass": True,
+            "scanner_prune_observer_route_match": True,
+            "scanner_prune_observer_price_source": (
+                "ka10004_rest_orderbook_exact_request_code"
+            ),
+            "scanner_prune_observer_request_code": "005930",
+            "scanner_prune_observer_response_request_code": "005930",
+            "scanner_prune_observer_observed_epoch": epoch,
+            "scanner_prune_observer_request_started_epoch": epoch - 0.1,
+            "scanner_prune_observer_request_completed_epoch": epoch,
+            "scanner_prune_observer_anchor_to_schedule_delay_sec": 0.0,
+            "scanner_prune_observer_schedule_lag_sec": 0.0,
+            "scanner_prune_observer_scheduled_offset_sec": 0,
+            "scanner_prune_observer_quote_age_ms": 0.0,
+            "scanner_prune_observer_best_bid": bid,
+            "scanner_prune_observer_best_ask": ask,
+            "scanner_prune_observer_best_bid_qty": bid_qty,
+            "scanner_prune_observer_best_ask_qty": ask_qty,
+            "effective_venue": "KRX",
+            "venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "scanner_prune_observer_expected_observed_venue": "KRX",
+            "decision_authority": "scanner_prune_bbo_observation_only",
+            "actual_order_submitted": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "broker_order_forbidden": True,
+            "market_data_request_effect": True,
+        },
+    }
+
+
+def _promoted_ws_bundle_event(when: datetime) -> dict:
+    samples = [
+        {
+            "observed_epoch": when.timestamp(),
+            "recorded_epoch": when.timestamp(),
+            "best_bid": 999,
+            "best_ask": 1000,
+            "best_bid_qty": 100,
+            "best_ask_qty": 100,
+            "quote_age_ms": 0.0,
+            "source_provenance": "existing_ws_route_scoped_0d_snapshot",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "observed_venue": "KRX",
+            "route_scope_status": "exact_0d_route_snapshot",
+            "scanner_promotion_id": "PROM-1",
+        }
+    ]
+    return {
+        "stage": "rising_missed_entry_turn_pre_anchor_bbo_path",
+        "stock_code": "005930",
+        "emitted_at": (when + timedelta(seconds=1)).isoformat(),
+        "fields": {
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "scanner_promotion_id": "PROM-1",
+            "rising_missed_tp1_evaluation_id": "EVAL-1",
+            "rising_missed_entry_turn_bbo_bundle_schema_version": (
+                census.PRE_ANCHOR_BUNDLE_SCHEMA_VERSION
+            ),
+            "rising_missed_entry_turn_bbo_sample_count": len(samples),
+            "rising_missed_entry_turn_bbo_samples": json.dumps(samples, sort_keys=True),
+            "decision_authority": (
+                "entry_turn_pre_anchor_existing_ws_bbo_observation_only"
+            ),
+            "actual_order_submitted": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "broker_order_forbidden": True,
+        },
+    }
 
 
 def test_ka10027_forwards_official_venue_and_filter_contract(monkeypatch):
@@ -214,8 +307,7 @@ def test_capture_is_sanitized_source_only_and_separates_venues():
     assert all(row["metric_contract"]["runtime_effect"] is False for row in rows)
     assert all(row["source"]["credential_fields_stored"] == [] for row in rows)
     assert all(
-        len(row["source"]["normalized_source_payload_sha256"]) == 64
-        for row in rows
+        len(row["source"]["normalized_source_payload_sha256"]) == 64 for row in rows
     )
     assert all(
         row["source"]["source_hash_scope"]
@@ -227,6 +319,242 @@ def test_capture_is_sanitized_source_only_and_separates_venues():
         "NXT_REGULAR_OVERLAP",
     }
     assert "secret-token" not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_capture_collects_bounded_exact_route_external_bbo():
+    captured_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
+    bbo_calls = []
+
+    def fake_gainers(_token, **_kwargs):
+        return [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 100000,
+                "ChangeRate": 5.0,
+                "Volume": 100000,
+                "CntrStr": 120.0,
+                "PreSig": "2",
+            }
+        ]
+
+    def fake_bbo(token, code, **kwargs):
+        bbo_calls.append((token, code, kwargs))
+        return {
+            "source": "ka10004_rest_orderbook",
+            "stock_code": "005930",
+            "request_code": "005930_NX",
+            "explicit_request_code": True,
+            "rest_received_ts": captured_at.timestamp() + 0.1,
+            "best_bid": 99900,
+            "best_ask": 100000,
+            "best_bid_qty": 12,
+            "best_ask_qty": 10,
+        }
+
+    clock_values = iter([captured_at.timestamp(), captured_at.timestamp() + 0.2])
+    records = census.capture_market_snapshots(
+        "secret-token",
+        target_date="2026-07-30",
+        captured_at=captured_at,
+        venues=("NXT",),
+        panels=("liquid_common",),
+        fetcher=fake_gainers,
+        collect_executable_bbo=True,
+        bbo_fetcher=fake_bbo,
+        bbo_request_reserver=lambda: {
+            "status": "reserved",
+            "reserved": True,
+            "attempt_ordinal": 1,
+            "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+        },
+        clock=lambda: next(clock_values),
+    )
+
+    observation = records[0]["rows"][0]["executable_bbo_observation"]
+    assert bbo_calls == [
+        (
+            "secret-token",
+            "005930_NX",
+            {"explicit_request_code": True, "max_retries": 1},
+        )
+    ]
+    assert observation["status"] == "captured"
+    assert observation["best_bid_qty"] == 12
+    assert observation["best_ask_qty"] == 10
+    assert observation["market_data_request_effect"] is True
+    assert observation["runtime_effect"] is False
+    assert observation["actual_order_submitted"] is False
+    assert "secret-token" not in json.dumps(records, ensure_ascii=False)
+    assert census._snapshot_contract_error(records[0], target_date="2026-07-30") == ""
+
+
+def test_external_bbo_per_run_budget_records_gap_without_request():
+    records = census.capture_market_snapshots(
+        "token",
+        target_date="2026-07-30",
+        captured_at=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {"Code": "005930", "Name": "삼성전자", "Price": 100000}
+        ],
+        collect_executable_bbo=True,
+        bbo_fetcher=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("BBO request must not run after budget exhaustion")
+        ),
+        max_bbo_requests_per_run=0,
+    )
+
+    observation = records[0]["rows"][0]["executable_bbo_observation"]
+    assert observation["request_attempted"] is False
+    assert observation["gap_reason"] == "per_run_bbo_request_budget_exhausted"
+
+
+def test_external_bbo_without_daily_reservation_never_calls_kiwoom():
+    records = census.capture_market_snapshots(
+        "token",
+        target_date="2026-07-30",
+        captured_at=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {"Code": "005930", "Name": "삼성전자", "Price": 100000}
+        ],
+        collect_executable_bbo=True,
+        bbo_fetcher=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("BBO request requires a durable reservation")
+        ),
+        max_bbo_requests_per_run=1,
+    )
+
+    observation = records[0]["rows"][0]["executable_bbo_observation"]
+    assert observation["request_attempted"] is False
+    assert observation["gap_reason"] == ("daily_bbo_budget_reservation_not_configured")
+
+
+def test_external_bbo_daily_budget_reservation_is_durable_and_fail_closed(tmp_path):
+    path = tmp_path / "budget.json"
+
+    first = census._reserve_external_bbo_request(
+        path,
+        target_date="2026-09-02",
+        limit=41,
+        initial_reserved_count=40,
+    )
+    second = census._reserve_external_bbo_request(
+        path,
+        target_date="2026-09-02",
+        limit=41,
+        initial_reserved_count=40,
+    )
+
+    assert first["status"] == "reserved"
+    assert first["attempt_ordinal"] == 41
+    assert second["status"] == "daily_request_cap_exhausted"
+    assert second["reserved"] is False
+    persisted = json.loads(path.read_text(encoding="utf-8"))
+    assert persisted["reserved_request_count"] == 41
+    assert persisted["actual_order_submitted"] is False
+    assert persisted["market_data_request_effect"] is True
+
+
+def test_external_bbo_budget_contract_binds_snapshot_ordinal(tmp_path):
+    path = tmp_path / "budget.json"
+    reservation = census._reserve_external_bbo_request(
+        path,
+        target_date="2026-09-02",
+        initial_reserved_count=40,
+    )
+
+    contract = census._load_external_bbo_budget_contract(
+        path,
+        target_date="2026-09-02",
+        minimum_reserved_count=41,
+    )
+    ahead_of_ledger = census._load_external_bbo_budget_contract(
+        path,
+        target_date="2026-09-02",
+        minimum_reserved_count=42,
+    )
+
+    assert reservation["attempt_ordinal"] == 41
+    assert contract["status"] == "verified"
+    assert contract["reserved_request_count"] == 41
+    assert ahead_of_ledger["status"] == "invalid"
+
+
+def test_invalid_snapshot_reservation_cannot_reflect_budget_contract(tmp_path):
+    captured_at = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    clock_values = iter([captured_at.timestamp(), captured_at.timestamp() + 0.2])
+    records = census.capture_market_snapshots(
+        "token",
+        target_date="2026-09-02",
+        captured_at=captured_at,
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {"Code": "005930", "Name": "삼성전자", "Price": 100000}
+        ],
+        collect_executable_bbo=True,
+        bbo_fetcher=lambda *_args, **_kwargs: {
+            "source": "ka10004_rest_orderbook",
+            "stock_code": "005930",
+            "request_code": "005930",
+            "explicit_request_code": True,
+            "rest_received_ts": captured_at.timestamp() + 0.1,
+            "best_bid": 99900,
+            "best_ask": 100000,
+            "best_bid_qty": 12,
+            "best_ask_qty": 10,
+        },
+        bbo_request_reserver=lambda: {
+            "status": "reserved",
+            "reserved": True,
+            "attempt_ordinal": 0,
+            "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+        },
+        clock=lambda: next(clock_values),
+    )
+    snapshot_path = tmp_path / "snapshots.jsonl"
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    budget_path = tmp_path / "budget.json"
+    _write_jsonl(snapshot_path, records)
+    _write_jsonl(pipeline_path, [])
+    _write_jsonl(ai_path, [])
+    budget_path.write_text(
+        json.dumps(
+            {
+                "schema_version": census.EXTERNAL_BBO_BUDGET_SCHEMA_VERSION,
+                "target_date": "2026-09-02",
+                "reserved_request_count": 1,
+                "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+                "market_data_request_effect": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = census.build_report(
+        "2026-09-02",
+        snapshot_path=snapshot_path,
+        pipeline_path=pipeline_path,
+        ai_trace_path=ai_path,
+        symbol_master_path=tmp_path / "missing-master.json",
+        trigger_receipt_path=tmp_path / "missing-trigger.json",
+        external_bbo_budget_path=budget_path,
+    )
+
+    source = report["source_quality"]["ex_post_bbo_source"]
+    assert source["external_census_capture_contract_reflected"] is False
+    assert source["gap_reason_counts"] == {
+        "external_census_daily_budget_reservation_invalid": 1
+    }
 
 
 def test_snapshot_source_hash_detects_normalized_row_tampering():
@@ -249,13 +577,12 @@ def test_snapshot_source_hash_detects_normalized_row_tampering():
         ],
     )
 
-    assert census._snapshot_contract_error(
-        records[0], target_date="2026-07-30"
-    ) == ""
+    assert census._snapshot_contract_error(records[0], target_date="2026-07-30") == ""
     records[0]["rows"][0]["current_price"] = 100001
-    assert census._snapshot_contract_error(
-        records[0], target_date="2026-07-30"
-    ) == "source_payload_hash_mismatch"
+    assert (
+        census._snapshot_contract_error(records[0], target_date="2026-07-30")
+        == "source_payload_hash_mismatch"
+    )
 
 
 def test_capture_normalizes_nonfinite_numbers_before_source_hashing():
@@ -280,9 +607,7 @@ def test_capture_normalizes_nonfinite_numbers_before_source_hashing():
     assert row["current_price"] is None
     assert row["change_rate_pct"] is None
     assert row["volume"] is None
-    assert census._snapshot_contract_error(
-        records[0], target_date="2026-07-30"
-    ) == ""
+    assert census._snapshot_contract_error(records[0], target_date="2026-07-30") == ""
 
 
 def test_opportunity_episode_id_is_stable_and_resets_after_declared_gap():
@@ -384,6 +709,39 @@ def test_named_primary_metric_exists_and_missing_contracts_fail_closed(tmp_path)
         "candidate_not_promoted_first_reason_count_sum": 0,
         "candidate_not_promoted_first_reason_conservation_delta": 0,
         "candidate_not_promoted_first_reason_conservation_status": "pass",
+        "ex_post_executable_opportunity": {
+            "denominator_unique_opportunity_episode_count": 0,
+            "exact_bbo_joined_count": 0,
+            "exact_bbo_not_joined_count": 0,
+            "exact_bbo_join_coverage_pct": 0.0,
+            "executable_entry_eligible_count": 0,
+            "primary_horizon_sec": 1200,
+            "primary_label_counts": {},
+            "primary_label_count_sum": 0,
+            "resolved_outcome_count": 0,
+            "right_censored_count": 0,
+            "right_censored_pct": None,
+            "pending_horizon_count": 0,
+            "observed_cohort_source_quality_adjusted_ev_pct": None,
+            "source_quality_adjusted_ev_pct": None,
+            "economic_evidence_floor_met": False,
+            "sample_floor": {
+                "exact_bbo_join_coverage_pct_min": 95.0,
+                "resolved_outcome_count_min": 20,
+                "right_censored_pct_max": 20.0,
+            },
+            "full_external_population_ev_extrapolation_allowed": False,
+            "path_order_basis": ("first_threshold_crossing_on_bounded_observations"),
+            "continuous_first_hit_authority": False,
+            "fill_feasibility_basis": "one_share_at_displayed_best_quantity",
+            "actual_fill_claim": False,
+            "spread_realization_basis": "entry_ask_to_exit_bid",
+            "extra_slippage_model": ("zero_extra_for_one_share_displayed_best_level"),
+            "ev_population_scope": (
+                "bounded_exact_bbo_joined_external_opportunity_cohort_only"
+            ),
+            "by_session": {},
+        },
     }
     assert report["status"] == "early_evidence_hold_sample"
     assert report["scanner_recall_state"] == "insufficient_evidence_scanner_recall"
@@ -470,9 +828,7 @@ def test_primary_master_eligible_terminal_reasons_conserve_denominator(
 
     primary = report["primary_decision"]["by_venue"]["KRX"]
     assert primary["denominator_unique_opportunity_episode_count"] == 1
-    assert primary["terminal_coverage_reason_counts"] == {
-        "candidate_not_promoted": 1
-    }
+    assert primary["terminal_coverage_reason_counts"] == {"candidate_not_promoted": 1}
     assert primary["terminal_coverage_reason_count_sum"] == 1
     assert primary["terminal_denominator_conservation_delta"] == 0
     assert primary["terminal_denominator_conservation_status"] == "pass"
@@ -480,9 +836,7 @@ def test_primary_master_eligible_terminal_reasons_conserve_denominator(
         "reason_missing": 1
     }
     assert (
-        report["source_quality"][
-            "primary_candidate_not_promoted_reason_missing_count"
-        ]
+        report["source_quality"]["primary_candidate_not_promoted_reason_missing_count"]
         == 1
     )
     assert "scanner_prune_first_reason_missing" in report["instrumentation_blockers"]
@@ -778,9 +1132,7 @@ def test_candidate_prune_reason_is_preserved_for_scanner_attribution(tmp_path):
     }
     assert summary["candidate_not_promoted_first_reason_count_sum"] == 1
     assert summary["candidate_not_promoted_first_reason_conservation_delta"] == 0
-    assert (
-        summary["candidate_not_promoted_first_reason_conservation_status"] == "pass"
-    )
+    assert summary["candidate_not_promoted_first_reason_conservation_status"] == "pass"
 
     missing_reason_row = {
         **row,
@@ -1282,6 +1634,328 @@ def test_current_heavy_eval_completion_stage_is_counted():
         in census.PIPELINE_STAGE_MAP["heavy_eval"]
     )
     assert "scanner_async_eval_dispatched" in census.PIPELINE_STAGE_MAP["heavy_eval"]
+
+
+def test_ex_post_opportunity_uses_exact_route_bbo_and_effective_cost(tmp_path):
+    start = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _prune_bbo_event(start + timedelta(seconds=1), bid=999, ask=1000),
+            _prune_bbo_event(start + timedelta(seconds=30), bid=1006, ask=1007),
+        ],
+    )
+    _write_jsonl(ai_path, [])
+    bbo_index: dict = {}
+    gap_counts = Counter()
+
+    stage_index = census._load_stage_index(
+        pipeline_path,
+        ai_path,
+        target_date="2026-09-02",
+        executable_bbo_index=bbo_index,
+        executable_bbo_gap_counts=gap_counts,
+    )
+    row = census._coverage_row(
+        {
+            "venue": "KRX",
+            "session": "KRX_REGULAR",
+            "stock_code": "005930",
+            "stock_name": "삼성전자",
+            "first_census_at": start,
+        },
+        stage_index,
+        after=start,
+        before=start + timedelta(seconds=census.OPPORTUNITY_VALIDITY_SEC),
+        require_venue=True,
+        require_lineage=True,
+        executable_bbo_index=bbo_index,
+        observation_watermark=start + timedelta(minutes=21),
+        round_trip_cost_pct=0.23,
+    )
+
+    outcome = row["ex_post_executable_opportunity"]
+    assert gap_counts == {}
+    assert outcome["status"] == "source_quality_valid"
+    assert outcome["entry_best_ask"] == 1000
+    assert outcome["entry_best_ask_qty"] == 100
+    assert outcome["primary_outcome"]["label"] == "target_first"
+    assert outcome["primary_outcome"]["gross_return_pct"] == 0.6
+    assert outcome["primary_outcome"]["cost_adjusted_return_pct"] == 0.37
+
+
+def test_ex_post_timeout_lag_respects_each_bbo_source_cadence():
+    start = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    entry = {
+        "observed_at": start,
+        "observed_epoch": start.timestamp(),
+        "best_ask": 1000,
+    }
+    delayed_timeout = {
+        "observed_at": start + timedelta(seconds=1220),
+        "observed_epoch": (start + timedelta(seconds=1220)).timestamp(),
+        "best_bid": 1000,
+        "best_bid_qty": 10,
+        "timeout_max_lag_sec": census.CAPTURE_CADENCE_TOLERANCE_SEC,
+    }
+
+    direct = census._ex_post_horizon_outcome(
+        [delayed_timeout],
+        entry=entry,
+        horizon_sec=1200,
+        round_trip_cost_pct=0.23,
+        observation_watermark=start + timedelta(seconds=1300),
+    )
+    promoted = census._ex_post_horizon_outcome(
+        [
+            {
+                **delayed_timeout,
+                "timeout_max_lag_sec": census.EX_POST_TIMEOUT_MAX_LAG_SEC,
+            }
+        ],
+        entry=entry,
+        horizon_sec=1200,
+        round_trip_cost_pct=0.23,
+        observation_watermark=start + timedelta(seconds=1300),
+    )
+
+    assert direct["label"] == "timeout_exit"
+    assert direct["elapsed_sec"] == 1220.0
+    assert promoted["label"] == "right_censored_no_timeout_bbo"
+    assert promoted["cost_adjusted_return_pct"] is None
+
+
+def test_ex_post_index_includes_promoted_ws_bundle_and_deduplicates(tmp_path):
+    start = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    event = _promoted_ws_bundle_event(start)
+    repeated = json.loads(json.dumps(event))
+    repeated["emitted_at"] = (start + timedelta(seconds=2)).isoformat()
+    _write_jsonl(pipeline_path, [event, repeated])
+    _write_jsonl(ai_path, [])
+    bbo_index: dict = {}
+    gap_counts = Counter()
+
+    census._load_stage_index(
+        pipeline_path,
+        ai_path,
+        target_date="2026-09-02",
+        executable_bbo_index=bbo_index,
+        executable_bbo_gap_counts=gap_counts,
+    )
+
+    observations = bbo_index["005930"]["KRX"]["KRX_REGULAR"]
+    assert gap_counts == {}
+    assert len(observations) == 1
+    assert observations[0]["price_source"] == ("existing_ws_route_scoped_0d_snapshot")
+    assert observations[0]["best_bid_qty"] == 100
+    assert observations[0]["best_ask_qty"] == 100
+
+
+def test_external_snapshot_bbo_validates_exact_scope():
+    captured_at = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    snapshot = {
+        "capture_id": "MOC-1",
+        "target_date": "2026-09-02",
+        "venue": "KRX",
+        "session": "KRX_REGULAR",
+    }
+    row = {
+        "stock_code": "005930",
+        "executable_bbo_observation": {
+            "schema_version": census.EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION,
+            "status": "captured",
+            "gap_reason": "not_applicable_capture_pass",
+            "request_attempted": True,
+            "request_code": "005930",
+            "response_request_code": "005930",
+            "stock_code": "005930",
+            "expected_observed_venue": "KRX",
+            "request_started_epoch": captured_at.timestamp(),
+            "request_completed_epoch": captured_at.timestamp() + 0.2,
+            "observed_epoch": captured_at.timestamp() + 0.1,
+            "quote_age_ms": 100.0,
+            "best_bid": 999,
+            "best_ask": 1000,
+            "best_bid_qty": 12,
+            "best_ask_qty": 10,
+            "price_source": ("ka10004_external_market_census_exact_request_code"),
+            "source_quality_pass": True,
+            "daily_budget_reservation": {
+                "status": "reserved",
+                "reserved": True,
+                "attempt_ordinal": 1,
+                "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+            },
+            "decision_authority": ("external_market_census_bbo_observation_only"),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "market_data_request_effect": True,
+        },
+    }
+
+    observation, reason = census._external_snapshot_bbo_observation(
+        snapshot,
+        row,
+        target_date="2026-09-02",
+    )
+
+    assert reason == "pass"
+    assert observation is not None
+    assert observation["venue"] == "KRX"
+    assert observation["session"] == "KRX_REGULAR"
+    assert observation["best_ask_qty"] == 10
+
+    row["executable_bbo_observation"]["daily_budget_reservation"]["attempt_ordinal"] = (
+        "malformed"
+    )
+    invalid_observation, invalid_reason = census._external_snapshot_bbo_observation(
+        snapshot,
+        row,
+        target_date="2026-09-02",
+    )
+    assert invalid_observation is None
+    assert invalid_reason == "external_census_daily_budget_reservation_invalid"
+
+
+def test_promoted_ws_bundle_rejects_missing_source_only_authority():
+    when = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    event = _promoted_ws_bundle_event(when)
+    event["fields"].pop("runtime_effect")
+
+    observations, gaps = census._promoted_ws_bbo_observations(
+        event, target_date="2026-09-02"
+    )
+
+    assert observations == []
+    assert gaps == ["promoted_ws_runtime_effect_missing"]
+
+
+def test_prune_bbo_runtime_receipt_exposes_fresh_pid_contract(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    ai_path = tmp_path / "ai.jsonl"
+    _write_jsonl(
+        pipeline_path,
+        [
+            {
+                "stage": "scalping_scanner_prune_bbo_source_loaded",
+                "stock_code": "-",
+                "emitted_at": "2026-09-02T09:01:00+09:00",
+                "fields": {
+                    "scanner_prune_observer_process_pid": 1234,
+                    "scanner_prune_observer_configuration_status": (
+                        "collector_created"
+                    ),
+                    "scanner_prune_observer_configuration_receipt_status": "emitted",
+                    "observation_schema_version": (
+                        census.PRUNE_BBO_OBSERVATION_SCHEMA_VERSION
+                    ),
+                    "decision_authority": "scanner_prune_bbo_observation_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "market_data_request_effect": True,
+                },
+            }
+        ],
+    )
+    _write_jsonl(ai_path, [])
+    receipts: list[dict] = []
+
+    census._load_stage_index(
+        pipeline_path,
+        ai_path,
+        target_date="2026-09-02",
+        observer_runtime_receipts=receipts,
+    )
+
+    assert receipts == [
+        {
+            "emitted_at": datetime.fromisoformat("2026-09-02T09:01:00+09:00"),
+            "process_pid": 1234,
+            "configuration_status": "collector_created",
+            "configuration_receipt_status": "emitted",
+            "observation_schema_version": (census.PRUNE_BBO_OBSERVATION_SCHEMA_VERSION),
+            "decision_authority": "scanner_prune_bbo_observation_only",
+            "authority_contract_fields_present": True,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "market_data_request_effect": True,
+        }
+    ]
+
+
+def test_ex_post_bbo_rejects_missing_fill_quantity():
+    when = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    event = _prune_bbo_event(when, bid=999, ask=1000)
+    event["fields"].pop("scanner_prune_observer_best_ask_qty")
+
+    observation, reason = census._prune_bbo_observation(event, target_date="2026-09-02")
+
+    assert observation is None
+    assert reason == "required_numeric_field_missing"
+
+
+def test_ex_post_bbo_rejects_conflicting_venue_provenance():
+    when = datetime.fromisoformat("2026-09-02T10:00:00+09:00")
+    event = _prune_bbo_event(when, bid=999, ask=1000)
+    event["fields"]["venue"] = "NXT"
+
+    observation, reason = census._prune_bbo_observation(event, target_date="2026-09-02")
+
+    assert observation is None
+    assert reason == "explicit_venue_conflict_or_invalid"
+
+
+def test_ex_post_ev_remains_non_authoritative_until_full_floor():
+    base_row = {
+        "venue": "KRX",
+        "stage_reached": {stage: False for stage in census.STAGE_ORDER},
+        "stage_latency_from_scanner_promoted_sec": {},
+        "terminal_coverage_reason": "scanner_discovery_gap_or_unobserved",
+        "first_stage_reason_code": {},
+        "scanner_lineage": {},
+        "ex_post_executable_opportunity": {
+            "exact_bbo_joined": True,
+            "executable_entry_eligible": True,
+            "primary_outcome": {
+                "label": "target_first",
+                "cost_adjusted_return_pct": 0.1,
+            },
+        },
+    }
+
+    thin = census._summarize_rows_base([base_row])["ex_post_executable_opportunity"]
+    mature = census._summarize_rows_base([dict(base_row) for _ in range(20)])[
+        "ex_post_executable_opportunity"
+    ]
+
+    assert thin["observed_cohort_source_quality_adjusted_ev_pct"] == 0.1
+    assert thin["source_quality_adjusted_ev_pct"] is None
+    assert thin["economic_evidence_floor_met"] is False
+    assert mature["source_quality_adjusted_ev_pct"] == 0.1
+    assert mature["economic_evidence_floor_met"] is True
+    assert mature["full_external_population_ev_extrapolation_allowed"] is False
+
+    split_rows = [
+        {**base_row, "venue": "KRX", "session": "KRX_REGULAR"} for _ in range(10)
+    ] + [
+        {**base_row, "venue": "NXT", "session": "NXT_REGULAR_OVERLAP"}
+        for _ in range(10)
+    ]
+    scope_summaries, all_scopes_met = census._summarize_ex_post_by_scope(split_rows)
+
+    assert all_scopes_met is False
+    assert scope_summaries["KRX|KRX_REGULAR"]["resolved_outcome_count"] == 10
+    assert scope_summaries["NXT|NXT_REGULAR_OVERLAP"]["resolved_outcome_count"] == 10
 
 
 def test_empty_fetch_preserves_source_unavailable_evidence():

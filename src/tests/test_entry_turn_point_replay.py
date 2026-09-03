@@ -359,6 +359,7 @@ def test_bundled_pre_anchor_path_is_scope_checked_and_replayed():
     bundle["fields"].update(
         {
             "rising_missed_tp1_evaluation_id": "eval-1",
+            "rising_missed_entry_turn_bbo_sample_count": 5,
             "rising_missed_entry_turn_bbo_samples": [
                 {
                     "observed_epoch": (start + timedelta(seconds=offset)).timestamp(),
@@ -408,6 +409,89 @@ def test_bundled_pre_anchor_path_is_scope_checked_and_replayed():
     )
     assert report["exact_ws_bbo_join_coverage_pct"] == 100.0
     assert report["bbo_extraction_gap_counts"] == {}
+
+
+def test_bundled_pre_anchor_path_decodes_persisted_json_and_legacy_repr():
+    start = datetime(2026, 9, 2, 9, 0, tzinfo=KST)
+    samples = [
+        {
+            "observed_epoch": start.timestamp(),
+            "recorded_epoch": start.timestamp(),
+            "best_bid": 1000,
+            "best_ask": 1001,
+            "quote_age_ms": 0.0,
+            "source_provenance": "existing_ws_route_scoped_0d_snapshot",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "observed_venue": "KRX",
+            "route_scope_status": "exact_0d_route_snapshot",
+            "scanner_promotion_id": "PROM-1",
+        }
+    ]
+    for encoded, expected_decoder in (
+        (json.dumps(samples, sort_keys=True), "canonical_json"),
+        (str(samples), "legacy_python_repr"),
+    ):
+        bundle = _event(
+            "rising_missed_entry_turn_pre_anchor_bbo_path",
+            start + timedelta(seconds=1),
+        )
+        bundle["fields"].update(
+            {
+                "rising_missed_tp1_evaluation_id": "eval-1",
+                "rising_missed_entry_turn_bbo_sample_count": 1,
+                "rising_missed_entry_turn_bbo_samples": encoded,
+                "rising_missed_entry_turn_bbo_bundle_schema_version": (
+                    mod.PRE_ANCHOR_BUNDLE_SCHEMA_VERSION
+                    if expected_decoder == "canonical_json"
+                    else ""
+                ),
+            }
+        )
+
+        observations, gaps = mod._bundled_pre_anchor_ws_bbos(bundle)
+
+        assert gaps == []
+        assert len(observations) == 1
+        assert observations[0]["bundle_decoder"] == expected_decoder
+
+
+def test_exact_bbo_freshness_uses_persisted_reference_epoch_not_emit_delay():
+    observed_at = datetime(2026, 9, 2, 9, 0, tzinfo=KST)
+    row = _event(
+        "fixture_bbo",
+        observed_at + timedelta(seconds=2),
+        bid=1000,
+        ask=1001,
+    )
+    row["fields"]["market_data_effective_quote_observed_epoch"] = (
+        observed_at.timestamp()
+    )
+    row["fields"]["market_data_effective_quote_reference_epoch"] = (
+        observed_at.timestamp()
+    )
+
+    observation, reason = mod._executable_ws_bbo(row)
+
+    assert reason == "pass"
+    assert observation is not None
+    assert observation["reference_epoch"] == observed_at.timestamp()
+    assert (
+        observation["event_epoch"] == (observed_at + timedelta(seconds=2)).timestamp()
+    )
+
+
+def test_exact_bbo_rejects_reference_epoch_after_event():
+    observed_at = datetime(2026, 9, 2, 9, 0, tzinfo=KST)
+    row = _event("fixture_bbo", observed_at, bid=1000, ask=1001)
+    row["fields"]["market_data_effective_quote_reference_epoch"] = (
+        observed_at + timedelta(seconds=1)
+    ).timestamp()
+
+    observation, reason = mod._executable_ws_bbo(row)
+
+    assert observation is None
+    assert reason == "market_data_effective_bbo:quote_reference_after_event"
 
 
 def test_feedback_projection_preserves_bounded_pre_anchor_bundle(tmp_path):
@@ -527,9 +611,17 @@ def test_runtime_bbo_ring_is_bounded_source_only_and_evaluation_deduped(monkeypa
     path = emitted[0]
     assert path["stage"] == "rising_missed_entry_turn_pre_anchor_bbo_path"
     assert path["fields"]["rising_missed_entry_turn_bbo_sample_count"] == 1
+    persisted_samples = json.loads(
+        path["fields"]["rising_missed_entry_turn_bbo_samples"]
+    )
     assert (
-        path["fields"]["rising_missed_entry_turn_bbo_samples"][0]["source_provenance"]
+        persisted_samples[0]["source_provenance"]
         == "existing_ws_route_scoped_0d_snapshot"
+    )
+    assert persisted_samples[0]["best_bid_qty"] == 12
+    assert persisted_samples[0]["best_ask_qty"] == 10
+    assert path["fields"]["rising_missed_entry_turn_bbo_bundle_schema_version"] == (
+        mod.PRE_ANCHOR_BUNDLE_SCHEMA_VERSION
     )
     assert path["fields"]["runtime_effect"] is False
     assert path["fields"]["allowed_runtime_apply"] is False
@@ -578,6 +670,50 @@ def test_runtime_bbo_ring_uses_tp1_nxt_session_scope():
     assert sample["effective_venue"] == "NXT"
     assert sample["market_session_bucket"] == "nxt_entry_window"
     assert sample["market_route"] == "nxt_only"
+
+
+def test_runtime_bbo_ring_rejects_missing_displayed_quantity():
+    observed_at = datetime(2026, 9, 2, 9, 1, tzinfo=KST).timestamp()
+    stock = {
+        "code": "000001",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROM-KRX",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+    }
+    ws_data = {
+        "last_realtime_type_market_route": {"0D": "krx_regular"},
+        "realtime_type_snapshots_by_route": {
+            "000001|krx_regular": {
+                "0D": {
+                    "observed_epoch": observed_at,
+                    "item": "000001",
+                    "market_route": "krx_regular",
+                    "effective_venue": "KRX",
+                    "orderbook": {
+                        "asks": [{"price": 1001}],
+                        "bids": [{"price": 1000, "volume": 12}],
+                    },
+                }
+            }
+        },
+    }
+
+    capture = handlers._capture_rising_missed_entry_turn_bbo(
+        stock,
+        "000001",
+        ws_data,
+        now_ts=observed_at + 0.1,
+    )
+
+    assert capture == {
+        "captured": False,
+        "reason": "exact_route_best_quantity_missing_or_invalid",
+        "sample_count": 0,
+    }
+    assert handlers._RISING_MISSED_ENTRY_TURN_BBO_RING_KEY not in stock
 
 
 def test_runtime_bbo_ring_rejects_integrated_sor_as_krx(monkeypatch):
@@ -639,6 +775,10 @@ def test_runtime_bbo_ring_throttle_preserves_spacing_anchor(monkeypatch):
             {
                 "best_bid": 1000,
                 "best_ask": 1001,
+                "best_bid_qty": 12,
+                "best_ask_qty": 10,
+                "best_bid_qty_source_valid": True,
+                "best_ask_qty_source_valid": True,
                 "last_ws_update_ts": ws_data["epoch"],
             },
             {

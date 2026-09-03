@@ -39,6 +39,7 @@ def test_market_data_enrichment_uses_fresh_ws_without_rest():
     assert fields["market_data_freshness_state"] == FRESH_WS
     assert fields["market_data_enrichment_applied"] is False
     assert fields["market_data_effective_price_source"] == "ws"
+    assert fields["market_data_effective_quote_reference_epoch"] == 1000.2
     assert enriched["curr"] == 10000
 
 
@@ -84,6 +85,7 @@ def test_market_data_enrichment_promotes_stale_ws_to_rest_enriched_quote():
     assert fields["market_data_orderbook_state"] == REST_ENRICHED
     assert fields["market_data_effective_price_source"] == "ka10004_rest_orderbook"
     assert fields["market_data_effective_quote_observed_epoch"] == 1000.0
+    assert fields["market_data_effective_quote_reference_epoch"] == 1000.0
     assert enriched["curr"] == 10000
     assert enriched["quote_refresh_source"] == "ka10004_rest_orderbook"
 

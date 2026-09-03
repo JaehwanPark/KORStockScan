@@ -18768,6 +18768,15 @@ def _capture_rising_missed_entry_turn_bbo_impl(
         return {**base, "reason": "exact_route_venue_provenance_invalid"}
     best_bid = _safe_int(scoped_ws.get("best_bid"), 0)
     best_ask = _safe_int(scoped_ws.get("best_ask"), 0)
+    best_bid_qty = _safe_int(scoped_ws.get("best_bid_qty"), 0)
+    best_ask_qty = _safe_int(scoped_ws.get("best_ask_qty"), 0)
+    if not (
+        scoped_ws.get("best_bid_qty_source_valid") is True
+        and scoped_ws.get("best_ask_qty_source_valid") is True
+        and best_bid_qty >= 0
+        and best_ask_qty >= 0
+    ):
+        return {**base, "reason": "exact_route_best_quantity_missing_or_invalid"}
     observed_epoch = _safe_float(scoped_ws.get("last_ws_update_ts"), 0.0)
     quote_age_ms = (
         max(0.0, (float(now_ts) - observed_epoch) * 1_000.0)
@@ -18787,6 +18796,8 @@ def _capture_rising_missed_entry_turn_bbo_impl(
         "recorded_epoch": round(float(now_ts), 6),
         "best_bid": best_bid,
         "best_ask": best_ask,
+        "best_bid_qty": best_bid_qty,
+        "best_ask_qty": best_ask_qty,
         "quote_age_ms": round(quote_age_ms, 3),
         "source_provenance": "existing_ws_route_scoped_0d_snapshot",
         "effective_venue": venue,
@@ -18952,7 +18963,18 @@ def _emit_rising_missed_entry_turn_pre_anchor_bbo_path(
         "scanner_promotion_id": promotion_id,
         "rising_missed_effective_venue": event_venue,
         "rising_missed_market_session_bucket": event_session,
-        "rising_missed_entry_turn_bbo_samples": samples,
+        "rising_missed_entry_turn_bbo_bundle_schema_version": (
+            "entry_turn_pre_anchor_bbo_bundle_v2_json"
+        ),
+        # Pipeline-event fields are scalarized by the shared logger.  Emit a
+        # canonical JSON scalar so the report consumer can reconstruct the
+        # bounded bundle deterministically; it also accepts legacy repr rows.
+        "rising_missed_entry_turn_bbo_samples": json.dumps(
+            samples,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
         "rising_missed_entry_turn_bbo_sample_count": len(samples),
         "rising_missed_entry_turn_bbo_capture_status": (
             "captured" if samples else "no_fresh_exact_route_pre_anchor_samples"
@@ -18988,7 +19010,8 @@ def _emit_rising_missed_entry_turn_pre_anchor_bbo_path(
         "sample_floor": "not_applicable_instrumentation",
         "primary_decision_metric": "fresh_exact_route_pre_anchor_bbo_coverage",
         "source_quality_gate": (
-            "existing_subscription_exact_route_0d_bbo_age_le_1000ms"
+            "existing_subscription_exact_route_0d_bbo_with_nonnegative_integer_"
+            "displayed_best_quantities_and_age_le_1000ms"
         ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -35887,6 +35910,20 @@ def _risky_micro_route_scoped_0d_bbo(
     bid = bid if isinstance(bid, dict) else {}
     best_ask = _safe_int(ask.get("price"), 0)
     best_bid = _safe_int(bid.get("price"), 0)
+    ask_qty_raw = ask.get("volume") if "volume" in ask else ask.get("qty")
+    bid_qty_raw = bid.get("volume") if "volume" in bid else bid.get("qty")
+    ask_qty_number = _safe_float(ask_qty_raw, None)
+    bid_qty_number = _safe_float(bid_qty_raw, None)
+    ask_qty_source_valid = bool(
+        ask_qty_number is not None
+        and ask_qty_number >= 0
+        and float(ask_qty_number).is_integer()
+    )
+    bid_qty_source_valid = bool(
+        bid_qty_number is not None
+        and bid_qty_number >= 0
+        and float(bid_qty_number).is_integer()
+    )
     observed_epoch = _safe_float(snapshot.get("observed_epoch"), 0.0)
     scoped_ws = {
         "curr": (
@@ -35896,8 +35933,10 @@ def _risky_micro_route_scoped_0d_bbo(
         ),
         "best_ask": best_ask,
         "best_bid": best_bid,
-        "best_ask_qty": _safe_int(ask.get("volume") or ask.get("qty"), 0),
-        "best_bid_qty": _safe_int(bid.get("volume") or bid.get("qty"), 0),
+        "best_ask_qty": int(ask_qty_number) if ask_qty_source_valid else 0,
+        "best_bid_qty": int(bid_qty_number) if bid_qty_source_valid else 0,
+        "best_ask_qty_source_valid": ask_qty_source_valid,
+        "best_bid_qty_source_valid": bid_qty_source_valid,
         "orderbook": copy.deepcopy(orderbook),
         "last_ws_update_ts": observed_epoch,
     }

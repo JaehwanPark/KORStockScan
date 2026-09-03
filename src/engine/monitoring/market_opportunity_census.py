@@ -13,11 +13,20 @@ import json
 import math
 import os
 import subprocess
+import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from src.engine.monitoring.entry_turn_point_replay import (
+    PRE_ANCHOR_BUNDLE_SCHEMA_VERSION,
+    decode_pre_anchor_ws_bbo_bundle,
+)
+from src.engine.monitoring.pruned_candidate_bbo_collector import (
+    OBSERVATION_SCHEMA_VERSION as PRUNE_BBO_OBSERVATION_SCHEMA_VERSION,
+)
+from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
@@ -36,7 +45,7 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "market_opportunity_census"
 SNAPSHOT_SCHEMA_VERSION = "market_opportunity_census_v1"
-REPORT_SCHEMA_VERSION = "market_opportunity_census_v2"
+REPORT_SCHEMA_VERSION = "market_opportunity_census_v3"
 # Backward-compatible snapshot schema alias used by existing capture fixtures.
 SCHEMA_VERSION = SNAPSHOT_SCHEMA_VERSION
 SNAPSHOT_DIR = DATA_DIR / "market_opportunity_census"
@@ -51,6 +60,26 @@ OPPORTUNITY_VALIDITY_SEC = 300
 OPPORTUNITY_EPISODE_RESET_GAP_SEC = 600
 MIN_VALID_CAPTURE_TIMES_PER_VENUE_PANEL = 3
 MIN_PRIMARY_OPPORTUNITY_EPISODES = 20
+EX_POST_HORIZONS_SEC = (60, 180, 300, 600, 1200, 1800, 3600)
+EX_POST_PRIMARY_HORIZON_SEC = 1200
+EX_POST_TARGET_PCT = 0.50
+EX_POST_ADVERSE_PCT = -0.50
+EX_POST_MAX_ENTRY_SPREAD_BPS = 50.0
+EX_POST_MAX_QUOTE_AGE_MS = 1_000.0
+EX_POST_MAX_SCHEDULE_LAG_SEC = 2.0
+EX_POST_TIMEOUT_MAX_LAG_SEC = 5.0
+EX_POST_ENTRY_COVERAGE_FLOOR_PCT = 95.0
+EX_POST_RIGHT_CENSORED_MAX_PCT = 20.0
+EX_POST_MIN_RESOLVED_COUNT = 20
+EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION = (
+    "market_opportunity_external_bbo_observation_v1"
+)
+EXTERNAL_BBO_CAPTURE_TOP_N = 20
+EXTERNAL_BBO_MIN_REQUEST_INTERVAL_SEC = 0.25
+EXTERNAL_BBO_MAX_REQUESTS_PER_RUN = 40
+EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE = 4_800
+EXTERNAL_BBO_BUDGET_DIR = DATA_DIR / "runtime" / REPORT_TYPE
+EXTERNAL_BBO_BUDGET_SCHEMA_VERSION = "market_opportunity_external_bbo_budget_v1"
 DEFAULT_SYMBOL_MASTER_DIR = DATA_DIR / "report" / "micro_reversion_economic_reference"
 DEFAULT_TRIGGER_RECEIPT = (
     DATA_DIR / "runtime" / "market_opportunity_census" / "installed_trigger.json"
@@ -88,6 +117,7 @@ FORBIDDEN_USES = [
     "upper_limit_chase_authority",
     "bot_restart",
     "real_execution_quality_approval",
+    "bounded_bbo_observer_ev_extrapolation_to_full_external_population",
 ]
 METRIC_CONTRACT = {
     "metric_role": "scanner_market_opportunity_coverage",
@@ -129,16 +159,25 @@ METRIC_CONTRACT = {
             "episodes whose terminal coverage reason is candidate_not_promoted; "
             "reason_missing is an explicit source-quality diagnostic bucket"
         ),
+        "ex_post_executable_opportunity": (
+            "first exact-route source-qualified BBO at or after benchmark crossing "
+            "within opportunity validity, followed by action-neutral executable-bid "
+            "first-observed target/adverse and timeout outcomes on the declared "
+            "bounded schedule at 1/3/5/10/20/30/60m"
+        ),
     },
     "source_quality_gate": (
         "kiwoom_ka10027_success_same_venue_session_timestamp_official_master_"
-        "normalized_source_payload_hash_installed_trigger_and_scanner_lineage"
+        "normalized_source_payload_hash_installed_trigger_and_scanner_lineage_"
+        "plus_exact_route_bbo_price_quantity_receipt_time_and_effective_cost_for_"
+        "ex_post_economics"
     ),
     "forbidden_uses": FORBIDDEN_USES,
     "runtime_effect": False,
     "allowed_runtime_apply": False,
     "actual_order_submitted": False,
     "broker_order_forbidden": True,
+    "market_data_request_effect": True,
 }
 
 VENUE_REQUEST_CODES = {"KRX": "1", "NXT": "2"}
@@ -222,9 +261,7 @@ def _safe_float(value: Any) -> float | None:
     if value in (None, "", "-"):
         return None
     try:
-        parsed = float(
-            str(value).replace(",", "").replace("+", "").replace("%", "")
-        )
+        parsed = float(str(value).replace(",", "").replace("+", "").replace("%", ""))
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
@@ -572,6 +609,142 @@ def _load_trigger_contract(
     }
 
 
+def _capture_external_bbo_observation(
+    token: str,
+    *,
+    code: str,
+    venue: str,
+    target_date: str,
+    fetcher: Callable[..., Any],
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    request_code = f"{code}_NX" if venue == "NXT" else code
+    expected_observed_venue = "NXT" if venue == "NXT" else "KRX"
+    request_started_epoch = float(clock())
+    source_error = ""
+    try:
+        raw = fetcher(
+            token,
+            request_code,
+            explicit_request_code=True,
+            max_retries=1,
+        )
+        snapshot = raw if isinstance(raw, dict) else {}
+    except Exception as exc:
+        snapshot = {}
+        source_error = type(exc).__name__
+    request_completed_epoch = float(clock())
+    received_epoch = _safe_float(snapshot.get("rest_received_ts"))
+    bid = _safe_float(snapshot.get("best_bid"))
+    ask = _safe_float(snapshot.get("best_ask"))
+    bid_qty = _safe_float(snapshot.get("best_bid_qty"))
+    ask_qty = _safe_float(snapshot.get("best_ask_qty"))
+    response_code = str(snapshot.get("request_code") or "").strip().upper()
+    response_symbol = _safe_code(snapshot.get("stock_code"))
+    response_source = str(snapshot.get("source") or "").strip()
+    status = "source_quality_gap"
+    gap_reason = "empty_or_invalid_ka10004_response"
+    if source_error:
+        gap_reason = f"ka10004_request_exception:{source_error}"
+    elif response_source != "ka10004_rest_orderbook":
+        gap_reason = "ka10004_source_provenance_invalid"
+    elif (
+        response_code != request_code
+        or response_symbol != code
+        or snapshot.get("explicit_request_code") is not True
+    ):
+        gap_reason = "ka10004_exact_request_route_mismatch"
+    elif (
+        received_epoch is None
+        or not request_started_epoch <= received_epoch <= request_completed_epoch + 0.1
+    ):
+        gap_reason = "ka10004_response_received_epoch_invalid"
+    elif (
+        bid is None
+        or ask is None
+        or bid <= 0
+        or ask < bid
+        or not bid.is_integer()
+        or not ask.is_integer()
+    ):
+        gap_reason = "ka10004_bbo_invalid_or_crossed"
+    elif (
+        bid_qty is None
+        or ask_qty is None
+        or bid_qty < 0
+        or ask_qty < 0
+        or not bid_qty.is_integer()
+        or not ask_qty.is_integer()
+    ):
+        gap_reason = "ka10004_best_quantity_missing_or_invalid"
+    elif (
+        datetime.fromtimestamp(received_epoch, tz=KST).date().isoformat() != target_date
+    ):
+        gap_reason = "ka10004_observation_target_date_mismatch"
+    else:
+        status = "captured"
+        gap_reason = "not_applicable_capture_pass"
+    quote_age_ms = (
+        max(0.0, (request_completed_epoch - received_epoch) * 1_000.0)
+        if status == "captured" and received_epoch is not None
+        else None
+    )
+    return {
+        "schema_version": EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION,
+        "status": status,
+        "gap_reason": gap_reason,
+        "request_attempted": True,
+        "request_code": request_code,
+        "response_request_code": response_code or None,
+        "stock_code": code,
+        "expected_observed_venue": expected_observed_venue,
+        "request_started_epoch": round(request_started_epoch, 6),
+        "request_completed_epoch": round(request_completed_epoch, 6),
+        "observed_epoch": (
+            round(received_epoch, 6) if received_epoch is not None else None
+        ),
+        "quote_age_ms": round(quote_age_ms, 3) if quote_age_ms is not None else None,
+        "best_bid": int(bid) if bid is not None and bid.is_integer() else None,
+        "best_ask": int(ask) if ask is not None and ask.is_integer() else None,
+        "best_bid_qty": (
+            int(bid_qty) if bid_qty is not None and bid_qty.is_integer() else None
+        ),
+        "best_ask_qty": (
+            int(ask_qty) if ask_qty is not None and ask_qty.is_integer() else None
+        ),
+        "price_source": "ka10004_external_market_census_exact_request_code",
+        "source_quality_pass": status == "captured",
+        "metric_role": "external_opportunity_executable_bbo_observation",
+        "decision_authority": "external_market_census_bbo_observation_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "market_data_request_effect": True,
+    }
+
+
+def _external_bbo_budget_gap(*, code: str, venue: str, reason: str) -> dict[str, Any]:
+    return {
+        "schema_version": EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION,
+        "status": "source_quality_gap",
+        "gap_reason": reason,
+        "request_attempted": False,
+        "request_code": f"{code}_NX" if venue == "NXT" else code,
+        "stock_code": code,
+        "expected_observed_venue": "NXT" if venue == "NXT" else "KRX",
+        "price_source": "ka10004_external_market_census_exact_request_code",
+        "source_quality_pass": False,
+        "metric_role": "external_opportunity_executable_bbo_observation",
+        "decision_authority": "external_market_census_bbo_observation_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "market_data_request_effect": True,
+    }
+
+
 def capture_market_snapshots(
     token: str,
     *,
@@ -581,9 +754,26 @@ def capture_market_snapshots(
     panels: Iterable[str] = ("all", "liquid_common"),
     limit: int = 200,
     fetcher: Callable[..., list[dict[str, Any]]] | None = None,
+    collect_executable_bbo: bool = False,
+    bbo_fetcher: Callable[..., Any] | None = None,
+    max_bbo_requests_per_run: int = EXTERNAL_BBO_MAX_REQUESTS_PER_RUN,
+    bbo_request_reserver: Callable[[], dict[str, Any]] | None = None,
+    clock: Callable[[], float] | None = None,
+    monotonic_clock: Callable[[], float] | None = None,
+    sleeper: Callable[[float], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch sanitized ka10027 snapshots without exposing credentials."""
+    """Fetch sanitized ka10027 and bounded exact-route BBO observations."""
     fetch = fetcher or kiwoom_utils.get_top_fluctuation_ka10027
+    fetch_bbo = bbo_fetcher or kiwoom_utils.get_stock_orderbook_ka10004
+    now_epoch = clock or time.time
+    monotonic = monotonic_clock or time.monotonic
+    sleep = sleeper or time.sleep
+    bbo_request_budget = min(
+        max(0, int(max_bbo_requests_per_run)),
+        EXTERNAL_BBO_MAX_REQUESTS_PER_RUN,
+    )
+    bbo_request_count = 0
+    last_bbo_request_started_monotonic: float | None = None
     observed_at = captured_at or datetime.now(KST)
     if observed_at.tzinfo is None:
         observed_at = observed_at.replace(tzinfo=KST)
@@ -636,18 +826,89 @@ def capture_market_snapshots(
                 code = _safe_code(item.get("Code"))
                 if not code:
                     continue
-                rows.append(
-                    {
-                        "rank": rank,
-                        "stock_code": code,
-                        "stock_name": str(item.get("Name") or "").strip(),
-                        "current_price": _safe_float(item.get("Price")),
-                        "change_rate_pct": _safe_float(item.get("ChangeRate")),
-                        "volume": _safe_float(item.get("Volume")),
-                        "execution_strength": _safe_float(item.get("CntrStr")),
-                        "previous_close_signal": str(item.get("PreSig") or "").strip(),
-                    }
-                )
+                normalized_row = {
+                    "rank": rank,
+                    "stock_code": code,
+                    "stock_name": str(item.get("Name") or "").strip(),
+                    "current_price": _safe_float(item.get("Price")),
+                    "change_rate_pct": _safe_float(item.get("ChangeRate")),
+                    "volume": _safe_float(item.get("Volume")),
+                    "execution_strength": _safe_float(item.get("CntrStr")),
+                    "previous_close_signal": str(item.get("PreSig") or "").strip(),
+                }
+                if (
+                    collect_executable_bbo
+                    and panel == "liquid_common"
+                    and rank <= EXTERNAL_BBO_CAPTURE_TOP_N
+                ):
+                    if bbo_request_count >= bbo_request_budget:
+                        normalized_row["executable_bbo_observation"] = (
+                            _external_bbo_budget_gap(
+                                code=code,
+                                venue=venue,
+                                reason="per_run_bbo_request_budget_exhausted",
+                            )
+                        )
+                    elif bbo_request_reserver is None:
+                        normalized_row["executable_bbo_observation"] = (
+                            _external_bbo_budget_gap(
+                                code=code,
+                                venue=venue,
+                                reason="daily_bbo_budget_reservation_not_configured",
+                            )
+                        )
+                    else:
+                        try:
+                            reservation = bbo_request_reserver()
+                        except Exception as exc:
+                            reservation = {
+                                "status": (
+                                    "daily_bbo_budget_reservation_exception:"
+                                    f"{type(exc).__name__}"
+                                ),
+                                "reserved": False,
+                            }
+                        if reservation.get("reserved") is not True:
+                            normalized_row["executable_bbo_observation"] = (
+                                _external_bbo_budget_gap(
+                                    code=code,
+                                    venue=venue,
+                                    reason=str(
+                                        reservation.get("status")
+                                        or "daily_bbo_budget_reservation_failed"
+                                    ),
+                                )
+                            )
+                            rows.append(normalized_row)
+                            continue
+                        request_monotonic = monotonic()
+                        if last_bbo_request_started_monotonic is not None:
+                            remaining = EXTERNAL_BBO_MIN_REQUEST_INTERVAL_SEC - (
+                                request_monotonic - last_bbo_request_started_monotonic
+                            )
+                            while remaining > 0:
+                                sleep(remaining)
+                                request_monotonic = monotonic()
+                                remaining = EXTERNAL_BBO_MIN_REQUEST_INTERVAL_SEC - (
+                                    request_monotonic
+                                    - last_bbo_request_started_monotonic
+                                )
+                        last_bbo_request_started_monotonic = request_monotonic
+                        normalized_row["executable_bbo_observation"] = (
+                            _capture_external_bbo_observation(
+                                token,
+                                code=code,
+                                venue=venue,
+                                target_date=target_date,
+                                fetcher=fetch_bbo,
+                                clock=now_epoch,
+                            )
+                        )
+                        normalized_row["executable_bbo_observation"][
+                            "daily_budget_reservation"
+                        ] = reservation
+                        bbo_request_count += 1
+                rows.append(normalized_row)
 
             status = "ok" if rows else "source_unavailable"
             normalized_source_payload_sha256 = _normalized_source_payload_sha256(
@@ -683,6 +944,26 @@ def capture_market_snapshots(
                             "sanitized_request_contract_plus_normalized_response_rows"
                         ),
                         "credential_fields_stored": [],
+                        "executable_bbo_collection": {
+                            "enabled": bool(
+                                collect_executable_bbo and panel == "liquid_common"
+                            ),
+                            "schema_version": EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION,
+                            "top_n": EXTERNAL_BBO_CAPTURE_TOP_N,
+                            "min_request_interval_sec": (
+                                EXTERNAL_BBO_MIN_REQUEST_INTERVAL_SEC
+                            ),
+                            "per_run_request_cap": bbo_request_budget,
+                            "daily_request_cap": (
+                                EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
+                            ),
+                            "daily_budget_enforcement": (
+                                "durable_pre_request_reservation_fail_closed"
+                            ),
+                            "market_data_request_effect": bool(
+                                collect_executable_bbo and panel == "liquid_common"
+                            ),
+                        },
                     },
                     "source_quality_status": status,
                     "source_error": source_error,
@@ -719,8 +1000,669 @@ def append_snapshot_records(path: Path, records: Iterable[dict[str, Any]]) -> in
     return count
 
 
+def _reserve_external_bbo_request(
+    path: Path,
+    *,
+    target_date: str,
+    limit: int = EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+    initial_reserved_count: int = 0,
+) -> dict[str, Any]:
+    """Durably reserve one request before touching Kiwoom.
+
+    A crash after reservation can under-use the budget, but cannot make a
+    subsequent invocation exceed the persisted KST-date cap.
+    """
+
+    if fcntl is None:
+        return {
+            "status": "ledger_lock_unavailable",
+            "reserved": False,
+            "attempt_ordinal": None,
+        }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.seek(0)
+                raw = handle.read().strip()
+                if raw:
+                    try:
+                        payload = json.loads(raw)
+                    except json.JSONDecodeError:
+                        return {
+                            "status": "ledger_invalid",
+                            "reserved": False,
+                            "attempt_ordinal": None,
+                        }
+                    if (
+                        not isinstance(payload, dict)
+                        or payload.get("schema_version")
+                        != EXTERNAL_BBO_BUDGET_SCHEMA_VERSION
+                        or payload.get("target_date") != target_date
+                    ):
+                        return {
+                            "status": "ledger_contract_mismatch",
+                            "reserved": False,
+                            "attempt_ordinal": None,
+                        }
+                    attempted_count = int(payload.get("reserved_request_count") or 0)
+                else:
+                    attempted_count = max(0, int(initial_reserved_count))
+                bounded_limit = max(0, int(limit))
+                if attempted_count >= bounded_limit:
+                    return {
+                        "status": "daily_request_cap_exhausted",
+                        "reserved": False,
+                        "attempt_ordinal": None,
+                        "reserved_request_count": attempted_count,
+                        "daily_request_cap": bounded_limit,
+                    }
+                attempted_count += 1
+                payload = {
+                    "schema_version": EXTERNAL_BBO_BUDGET_SCHEMA_VERSION,
+                    "target_date": target_date,
+                    "reserved_request_count": attempted_count,
+                    "daily_request_cap": bounded_limit,
+                    "updated_at": datetime.now(KST).isoformat(),
+                    "market_data_request_effect": True,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                }
+                handle.seek(0)
+                handle.truncate()
+                handle.write(
+                    json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n"
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+                return {
+                    "status": "reserved",
+                    "reserved": True,
+                    "attempt_ordinal": attempted_count,
+                    "reserved_request_count": attempted_count,
+                    "daily_request_cap": bounded_limit,
+                }
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return {
+            "status": "ledger_io_or_value_error",
+            "reserved": False,
+            "attempt_ordinal": None,
+        }
+
+
+def _count_external_bbo_requests(path: Path, *, target_date: str) -> int:
+    """Count pre-ledger attempted requests for safe migration."""
+
+    count = 0
+    candidates = (path, path.with_name(path.name + ".gz"))
+    for candidate in candidates:
+        if not candidate.exists() and not candidate.is_symlink():
+            continue
+        for snapshot in iter_jsonl(candidate):
+            if str(snapshot.get("target_date") or "") != target_date:
+                continue
+            for row in snapshot.get("rows") or []:
+                if not isinstance(row, dict):
+                    continue
+                observation = row.get("executable_bbo_observation")
+                if (
+                    isinstance(observation, dict)
+                    and observation.get("request_attempted") is True
+                ):
+                    count += 1
+    return count
+
+
+def _load_external_bbo_budget_contract(
+    path: Path,
+    *,
+    target_date: str,
+    minimum_reserved_count: int,
+) -> dict[str, Any]:
+    try:
+        receipt = read_json_object_strict_receipt(path)
+        payload = receipt.payload
+        reserved_count = int(payload.get("reserved_request_count") or 0)
+        daily_cap = int(payload.get("daily_request_cap") or 0)
+    except (FileNotFoundError, OSError, OverflowError, TypeError, ValueError):
+        return {
+            "status": "missing_or_invalid",
+            "path": str(path),
+            "reserved_request_count": None,
+        }
+    authority_valid = bool(
+        payload.get("market_data_request_effect") is True
+        and payload.get("runtime_effect") is False
+        and payload.get("allowed_runtime_apply") is False
+        and payload.get("actual_order_submitted") is False
+        and payload.get("broker_order_forbidden") is True
+    )
+    valid = bool(
+        payload.get("schema_version") == EXTERNAL_BBO_BUDGET_SCHEMA_VERSION
+        and payload.get("target_date") == target_date
+        and daily_cap == EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
+        and minimum_reserved_count <= reserved_count <= daily_cap
+        and authority_valid
+    )
+    return {
+        "status": "verified" if valid else "invalid",
+        "path": str(receipt.logical_path),
+        "artifact_sha256": receipt.decoded_sha256,
+        "reserved_request_count": reserved_count,
+        "minimum_reserved_count_from_snapshot": minimum_reserved_count,
+        "daily_request_cap": daily_cap,
+        "authority_valid": authority_valid,
+    }
+
+
+def _prune_bbo_observation(
+    row: dict[str, Any], *, target_date: str
+) -> tuple[dict[str, Any] | None, str]:
+    """Validate one bounded exact-route ka10004 observation.
+
+    The market census reuses already collected source-only BBOs.  It never
+    creates a new broker request or substitutes the ka10027 mark price for an
+    executable quote.
+    """
+
+    if str(row.get("stage") or "") != "scalping_scanner_prune_bbo_observation":
+        return None, "not_prune_bbo_observation"
+    code = _safe_code(row.get("stock_code"))
+    emitted_at = _parse_ts(row.get("emitted_at"))
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    if not code or emitted_at is None or emitted_at.date().isoformat() != target_date:
+        return None, "identity_or_target_date_invalid"
+    if str(fields.get("scanner_prune_observer_status") or "") != "captured":
+        return None, str(
+            fields.get("scanner_prune_observer_gap_reason") or "observer_not_captured"
+        )
+    if str(fields.get("observation_schema_version") or "") != (
+        PRUNE_BBO_OBSERVATION_SCHEMA_VERSION
+    ):
+        return None, "observation_schema_version_missing_or_unsupported"
+    if not _boolish(fields.get("scanner_prune_observer_source_quality_pass")):
+        return None, "source_quality_pass_missing"
+    if not _boolish(fields.get("scanner_prune_observer_route_match")):
+        return None, "exact_request_route_mismatch"
+    for authority_field in (
+        "actual_order_submitted",
+        "runtime_effect",
+        "allowed_runtime_apply",
+    ):
+        if authority_field not in fields:
+            return None, f"{authority_field}_missing"
+        if _boolish(fields.get(authority_field)):
+            return None, f"{authority_field}_authority_violation"
+    if not _boolish(fields.get("broker_order_forbidden")):
+        return None, "broker_order_forbidden_not_proven"
+    if not _boolish(fields.get("market_data_request_effect")):
+        return None, "market_data_request_effect_not_proven"
+    if str(fields.get("decision_authority") or "") != (
+        "scanner_prune_bbo_observation_only"
+    ):
+        return None, "decision_authority_invalid"
+    if str(fields.get("scanner_prune_observer_price_source") or "") != (
+        "ka10004_rest_orderbook_exact_request_code"
+    ):
+        return None, "price_source_invalid"
+
+    request_code = (
+        str(fields.get("scanner_prune_observer_request_code") or "").strip().upper()
+    )
+    response_request_code = (
+        str(fields.get("scanner_prune_observer_response_request_code") or "")
+        .strip()
+        .upper()
+    )
+    if not request_code or request_code != response_request_code:
+        return None, "request_response_code_mismatch"
+    if _safe_code(request_code) != code:
+        return None, "request_symbol_mismatch"
+
+    observed_epoch = _safe_float(fields.get("scanner_prune_observer_observed_epoch"))
+    request_started_epoch = _safe_float(
+        fields.get("scanner_prune_observer_request_started_epoch")
+    )
+    request_completed_epoch = _safe_float(
+        fields.get("scanner_prune_observer_request_completed_epoch")
+    )
+    anchor_to_schedule_delay_sec = _safe_float(
+        fields.get("scanner_prune_observer_anchor_to_schedule_delay_sec")
+    )
+    schedule_lag_sec = _safe_float(
+        fields.get("scanner_prune_observer_schedule_lag_sec")
+    )
+    scheduled_offset_sec = _safe_float(
+        fields.get("scanner_prune_observer_scheduled_offset_sec")
+    )
+    quote_age_ms = _safe_float(fields.get("scanner_prune_observer_quote_age_ms"))
+    bid = _safe_float(fields.get("scanner_prune_observer_best_bid"))
+    ask = _safe_float(fields.get("scanner_prune_observer_best_ask"))
+    bid_qty = _safe_float(fields.get("scanner_prune_observer_best_bid_qty"))
+    ask_qty = _safe_float(fields.get("scanner_prune_observer_best_ask_qty"))
+    if any(
+        value is None
+        for value in (
+            observed_epoch,
+            request_started_epoch,
+            request_completed_epoch,
+            anchor_to_schedule_delay_sec,
+            schedule_lag_sec,
+            scheduled_offset_sec,
+            quote_age_ms,
+            bid,
+            ask,
+            bid_qty,
+            ask_qty,
+        )
+    ):
+        return None, "required_numeric_field_missing"
+    assert observed_epoch is not None
+    assert request_started_epoch is not None
+    assert request_completed_epoch is not None
+    assert anchor_to_schedule_delay_sec is not None
+    assert schedule_lag_sec is not None
+    assert scheduled_offset_sec is not None
+    assert quote_age_ms is not None
+    assert bid is not None
+    assert ask is not None
+    assert bid_qty is not None
+    assert ask_qty is not None
+    if not (
+        request_started_epoch <= observed_epoch <= request_completed_epoch + 0.1
+        and request_started_epoch <= request_completed_epoch
+        and request_completed_epoch <= emitted_at.timestamp() + 0.1
+    ):
+        return None, "receipt_time_invalid"
+    if (
+        anchor_to_schedule_delay_sec < 0
+        or anchor_to_schedule_delay_sec > EX_POST_MAX_SCHEDULE_LAG_SEC
+    ):
+        return None, "anchor_to_schedule_delay_outside_bound"
+    if schedule_lag_sec < 0 or schedule_lag_sec > EX_POST_MAX_SCHEDULE_LAG_SEC:
+        return None, "schedule_lag_outside_bound"
+    if not scheduled_offset_sec.is_integer() or int(scheduled_offset_sec) not in {
+        0,
+        3,
+        10,
+        20,
+        30,
+        60,
+        180,
+        300,
+        600,
+        1200,
+    }:
+        return None, "scheduled_offset_outside_contract"
+    if quote_age_ms < 0 or quote_age_ms > EX_POST_MAX_QUOTE_AGE_MS:
+        return None, "quote_age_invalid_or_stale"
+    observed_age_ms = (request_completed_epoch - observed_epoch) * 1_000.0
+    if abs(observed_age_ms - quote_age_ms) > 100.0:
+        return None, "quote_age_timestamp_mismatch"
+    if bid <= 0 or ask < bid:
+        return None, "bbo_invalid_or_crossed"
+    if bid_qty < 0 or ask_qty < 0:
+        return None, "best_quantity_negative"
+    if any(not value.is_integer() for value in (bid, ask, bid_qty, ask_qty)):
+        return None, "bbo_price_or_quantity_not_integral"
+
+    explicit_venue_values = {
+        _normalize_event_venue(value)
+        for value in (
+            row.get("effective_venue"),
+            row.get("venue"),
+            fields.get("effective_venue"),
+            fields.get("venue"),
+        )
+        if str(value or "").strip()
+    }
+    if "UNKNOWN" in explicit_venue_values or len(explicit_venue_values) != 1:
+        return None, "explicit_venue_conflict_or_invalid"
+    venue = next(iter(explicit_venue_values))
+    if venue not in VENUE_REQUEST_CODES:
+        return None, "explicit_venue_invalid"
+    observed_at = datetime.fromtimestamp(observed_epoch, tz=KST)
+    if observed_at.date().isoformat() != target_date:
+        return None, "observation_target_date_mismatch"
+    session = _session_for_capture(venue=venue, captured_at=observed_at)
+    explicit_session = str(fields.get("market_session_bucket") or "").strip().upper()
+    if not explicit_session or explicit_session != session:
+        return None, "session_provenance_mismatch"
+    raw_effective_venue = str(fields.get("effective_venue") or "").strip().upper()
+    expected_request_code = (
+        f"{code}_NX"
+        if venue == "NXT" or raw_effective_venue == "PREMARKET_KRX_LIKE"
+        else code
+    )
+    if request_code != expected_request_code:
+        return None, "request_code_not_exact_for_venue"
+    expected_observed_venue = (
+        str(fields.get("scanner_prune_observer_expected_observed_venue") or "")
+        .strip()
+        .upper()
+    )
+    route_venue = "NXT" if request_code.endswith("_NX") else "KRX"
+    if expected_observed_venue != route_venue:
+        return None, "expected_observed_venue_mismatch"
+    observer_episode_id = str(
+        fields.get("scanner_prune_observer_episode_id") or ""
+    ).strip()
+    if not observer_episode_id:
+        return None, "observer_episode_id_missing"
+    return (
+        {
+            "stock_code": code,
+            "venue": venue,
+            "session": session,
+            "observed_at": observed_at,
+            "observed_epoch": observed_epoch,
+            "best_bid": bid,
+            "best_ask": ask,
+            "best_bid_qty": int(bid_qty),
+            "best_ask_qty": int(ask_qty),
+            "spread_bps": round((ask - bid) / ask * 10_000.0, 8),
+            "quote_age_ms": quote_age_ms,
+            "schedule_lag_sec": schedule_lag_sec,
+            "observer_episode_id": observer_episode_id,
+            "scheduled_offset_sec": int(scheduled_offset_sec),
+            "timeout_max_lag_sec": EX_POST_TIMEOUT_MAX_LAG_SEC,
+            "price_source": "ka10004_rest_orderbook_exact_request_code",
+        },
+        "pass",
+    )
+
+
+def _promoted_ws_bbo_observations(
+    row: dict[str, Any], *, target_date: str
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Validate a promoted-candidate exact-route WS BBO bundle.
+
+    This source is the scanner's already subscribed 0D stream. Reuse remains
+    source-only and does not imply market-data-request, scanner, or order
+    authority.
+    """
+
+    if str(row.get("stage") or "") != "rising_missed_entry_turn_pre_anchor_bbo_path":
+        return [], ["not_promoted_ws_bbo_bundle"]
+    emitted_at = _parse_ts(row.get("emitted_at"))
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    if emitted_at is None or emitted_at.date().isoformat() != target_date:
+        return [], ["promoted_ws_identity_or_target_date_invalid"]
+    for authority_field in (
+        "actual_order_submitted",
+        "runtime_effect",
+        "allowed_runtime_apply",
+    ):
+        if authority_field not in fields:
+            return [], [f"promoted_ws_{authority_field}_missing"]
+        if _boolish(fields.get(authority_field)):
+            return [], [f"promoted_ws_{authority_field}_authority_violation"]
+    if not _boolish(fields.get("broker_order_forbidden")):
+        return [], ["promoted_ws_broker_order_forbidden_not_proven"]
+    if str(fields.get("decision_authority") or "") != (
+        "entry_turn_pre_anchor_existing_ws_bbo_observation_only"
+    ):
+        return [], ["promoted_ws_decision_authority_invalid"]
+
+    observations, decode_gaps = decode_pre_anchor_ws_bbo_bundle(row)
+    normalized: list[dict[str, Any]] = []
+    gaps = [f"promoted_ws_{gap}" for gap in decode_gaps]
+    for observation in observations:
+        if observation.get("bundle_schema_version") != PRE_ANCHOR_BUNDLE_SCHEMA_VERSION:
+            gaps.append("promoted_ws_bundle_schema_version_missing_or_unsupported")
+            continue
+        bid_qty = _safe_float(observation.get("best_bid_qty"))
+        ask_qty = _safe_float(observation.get("best_ask_qty"))
+        if (
+            bid_qty is None
+            or ask_qty is None
+            or bid_qty < 0
+            or ask_qty < 0
+            or not bid_qty.is_integer()
+            or not ask_qty.is_integer()
+        ):
+            gaps.append("promoted_ws_best_quantity_missing_or_invalid")
+            continue
+        observed_at = _parse_ts(observation.get("observed_at"))
+        code = _safe_code(observation.get("stock_code"))
+        raw_venue = str(observation.get("venue") or "").strip().upper()
+        venue = "KRX" if raw_venue == "PREMARKET_KRX_LIKE" else raw_venue
+        if (
+            observed_at is None
+            or observed_at.date().isoformat() != target_date
+            or not code
+            or venue not in VENUE_REQUEST_CODES
+        ):
+            gaps.append("promoted_ws_scope_or_target_date_invalid")
+            continue
+        normalized.append(
+            {
+                "stock_code": code,
+                "venue": venue,
+                "session": _session_for_capture(
+                    venue=venue,
+                    captured_at=observed_at,
+                ),
+                "observed_at": observed_at,
+                "observed_epoch": observed_at.timestamp(),
+                "best_bid": observation["best_bid"],
+                "best_ask": observation["best_ask"],
+                "best_bid_qty": int(bid_qty),
+                "best_ask_qty": int(ask_qty),
+                "spread_bps": observation["spread_bps"],
+                "quote_age_ms": observation["quote_age_ms"],
+                "schedule_lag_sec": 0.0,
+                "observer_episode_id": str(
+                    observation.get("scanner_promotion_id") or ""
+                ),
+                "scheduled_offset_sec": None,
+                "timeout_max_lag_sec": EX_POST_TIMEOUT_MAX_LAG_SEC,
+                "price_source": "existing_ws_route_scoped_0d_snapshot",
+            }
+        )
+    return normalized, gaps
+
+
+def _external_snapshot_bbo_observation(
+    snapshot: dict[str, Any],
+    row: dict[str, Any],
+    *,
+    target_date: str,
+) -> tuple[dict[str, Any] | None, str]:
+    observation = row.get("executable_bbo_observation")
+    if not isinstance(observation, dict):
+        return None, "external_census_bbo_contract_missing"
+    if observation.get("schema_version") != EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION:
+        return None, "external_census_bbo_schema_version_missing_or_unsupported"
+    if observation.get("status") != "captured":
+        return None, str(
+            observation.get("gap_reason") or "external_census_bbo_not_captured"
+        )
+    if observation.get("request_attempted") is not True:
+        return None, "external_census_bbo_request_attempt_not_proven"
+    for authority_field in (
+        "runtime_effect",
+        "allowed_runtime_apply",
+        "actual_order_submitted",
+    ):
+        if authority_field not in observation:
+            return None, f"external_census_{authority_field}_missing"
+        if _boolish(observation.get(authority_field)):
+            return None, f"external_census_{authority_field}_authority_violation"
+    if not _boolish(observation.get("broker_order_forbidden")):
+        return None, "external_census_broker_order_forbidden_not_proven"
+    if not _boolish(observation.get("market_data_request_effect")):
+        return None, "external_census_market_data_request_effect_not_proven"
+    if not _boolish(observation.get("source_quality_pass")):
+        return None, "external_census_source_quality_pass_missing"
+    if observation.get("decision_authority") != (
+        "external_market_census_bbo_observation_only"
+    ):
+        return None, "external_census_decision_authority_invalid"
+    if observation.get("price_source") != (
+        "ka10004_external_market_census_exact_request_code"
+    ):
+        return None, "external_census_price_source_invalid"
+    reservation = observation.get("daily_budget_reservation")
+    reservation_ordinal = (
+        _safe_float(reservation.get("attempt_ordinal"))
+        if isinstance(reservation, dict)
+        else None
+    )
+    reservation_cap = (
+        _safe_float(reservation.get("daily_request_cap"))
+        if isinstance(reservation, dict)
+        else None
+    )
+    if (
+        not isinstance(reservation, dict)
+        or reservation.get("status") != "reserved"
+        or reservation.get("reserved") is not True
+        or reservation_ordinal is None
+        or not reservation_ordinal.is_integer()
+        or reservation_ordinal <= 0
+        or reservation_ordinal > EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
+        or reservation_cap != EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
+    ):
+        return None, "external_census_daily_budget_reservation_invalid"
+
+    code = _safe_code(row.get("stock_code"))
+    observation_code = _safe_code(observation.get("stock_code"))
+    venue = str(snapshot.get("venue") or "").strip().upper()
+    session = str(snapshot.get("session") or "").strip().upper()
+    request_code = str(observation.get("request_code") or "").strip().upper()
+    response_request_code = (
+        str(observation.get("response_request_code") or "").strip().upper()
+    )
+    expected_request_code = f"{code}_NX" if venue == "NXT" else code
+    expected_observed_venue = "NXT" if venue == "NXT" else "KRX"
+    if (
+        not code
+        or observation_code != code
+        or venue not in VENUE_REQUEST_CODES
+        or request_code != expected_request_code
+        or response_request_code != expected_request_code
+        or observation.get("expected_observed_venue") != expected_observed_venue
+    ):
+        return None, "external_census_exact_request_route_or_identity_mismatch"
+
+    observed_epoch = _safe_float(observation.get("observed_epoch"))
+    request_started_epoch = _safe_float(observation.get("request_started_epoch"))
+    request_completed_epoch = _safe_float(observation.get("request_completed_epoch"))
+    quote_age_ms = _safe_float(observation.get("quote_age_ms"))
+    bid = _safe_float(observation.get("best_bid"))
+    ask = _safe_float(observation.get("best_ask"))
+    bid_qty = _safe_float(observation.get("best_bid_qty"))
+    ask_qty = _safe_float(observation.get("best_ask_qty"))
+    if any(
+        value is None
+        for value in (
+            observed_epoch,
+            request_started_epoch,
+            request_completed_epoch,
+            quote_age_ms,
+            bid,
+            ask,
+            bid_qty,
+            ask_qty,
+        )
+    ):
+        return None, "external_census_required_numeric_field_missing"
+    assert observed_epoch is not None
+    assert request_started_epoch is not None
+    assert request_completed_epoch is not None
+    assert quote_age_ms is not None
+    assert bid is not None
+    assert ask is not None
+    assert bid_qty is not None
+    assert ask_qty is not None
+    if not (
+        request_started_epoch <= observed_epoch <= request_completed_epoch + 0.1
+        and request_started_epoch <= request_completed_epoch
+    ):
+        return None, "external_census_receipt_time_invalid"
+    if (
+        quote_age_ms < 0
+        or quote_age_ms > EX_POST_MAX_QUOTE_AGE_MS
+        or abs((request_completed_epoch - observed_epoch) * 1_000.0 - quote_age_ms)
+        > 100.0
+    ):
+        return None, "external_census_quote_age_invalid_or_stale"
+    if (
+        bid <= 0
+        or ask < bid
+        or bid_qty < 0
+        or ask_qty < 0
+        or any(not value.is_integer() for value in (bid, ask, bid_qty, ask_qty))
+    ):
+        return None, "external_census_bbo_price_or_quantity_invalid"
+    observed_at = datetime.fromtimestamp(observed_epoch, tz=KST)
+    if (
+        observed_at.date().isoformat() != target_date
+        or _session_for_capture(venue=venue, captured_at=observed_at) != session
+    ):
+        return None, "external_census_target_date_or_session_mismatch"
+    return (
+        {
+            "stock_code": code,
+            "venue": venue,
+            "session": session,
+            "observed_at": observed_at,
+            "observed_epoch": observed_epoch,
+            "best_bid": bid,
+            "best_ask": ask,
+            "best_bid_qty": int(bid_qty),
+            "best_ask_qty": int(ask_qty),
+            "spread_bps": round((ask - bid) / ask * 10_000.0, 8),
+            "quote_age_ms": quote_age_ms,
+            "schedule_lag_sec": 0.0,
+            "observer_episode_id": str(snapshot.get("capture_id") or ""),
+            "scheduled_offset_sec": None,
+            "timeout_max_lag_sec": CAPTURE_CADENCE_TOLERANCE_SEC,
+            "price_source": ("ka10004_external_market_census_exact_request_code"),
+        },
+        "pass",
+    )
+
+
+def _deduplicate_executable_bbo_index(
+    index: dict[str, dict[str, dict[str, list[dict[str, Any]]]]],
+) -> None:
+    for venue_index in index.values():
+        for session_index in venue_index.values():
+            for session, observations in session_index.items():
+                deduplicated = {
+                    (
+                        observation["observed_epoch"],
+                        observation["best_bid"],
+                        observation["best_ask"],
+                        observation["best_bid_qty"],
+                        observation["best_ask_qty"],
+                        observation["price_source"],
+                    ): observation
+                    for observation in observations
+                }
+                session_index[session] = sorted(
+                    deduplicated.values(),
+                    key=lambda item: item["observed_epoch"],
+                )
+
+
 def _load_stage_index(
-    pipeline_path: Path, ai_trace_path: Path, *, target_date: str
+    pipeline_path: Path,
+    ai_trace_path: Path,
+    *,
+    target_date: str,
+    executable_bbo_index: (
+        dict[str, dict[str, dict[str, list[dict[str, Any]]]]] | None
+    ) = None,
+    executable_bbo_gap_counts: Counter[str] | None = None,
+    observer_runtime_receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, list[dict[str, Any]]]]:
     index: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
         lambda: defaultdict(list)
@@ -734,6 +1676,81 @@ def _load_stage_index(
         logical_stages = reverse_stage.get(raw_stage, [])
         code = _safe_code(row.get("stock_code"))
         ts = _parse_ts(row.get("emitted_at"))
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if (
+            raw_stage == "scalping_scanner_prune_bbo_source_loaded"
+            and ts is not None
+            and ts.date().isoformat() == target_date
+            and observer_runtime_receipts is not None
+        ):
+            observer_runtime_receipts.append(
+                {
+                    "emitted_at": ts,
+                    "process_pid": int(
+                        _safe_float(fields.get("scanner_prune_observer_process_pid"))
+                        or 0
+                    ),
+                    "configuration_status": str(
+                        fields.get("scanner_prune_observer_configuration_status") or ""
+                    ),
+                    "configuration_receipt_status": str(
+                        fields.get(
+                            "scanner_prune_observer_configuration_receipt_status"
+                        )
+                        or ""
+                    ),
+                    "observation_schema_version": str(
+                        fields.get("observation_schema_version") or ""
+                    ),
+                    "decision_authority": str(fields.get("decision_authority") or ""),
+                    "authority_contract_fields_present": all(
+                        key in fields
+                        for key in (
+                            "runtime_effect",
+                            "allowed_runtime_apply",
+                            "actual_order_submitted",
+                            "broker_order_forbidden",
+                            "market_data_request_effect",
+                        )
+                    ),
+                    "runtime_effect": _boolish(fields.get("runtime_effect")),
+                    "allowed_runtime_apply": _boolish(
+                        fields.get("allowed_runtime_apply")
+                    ),
+                    "actual_order_submitted": _boolish(
+                        fields.get("actual_order_submitted")
+                    ),
+                    "broker_order_forbidden": _boolish(
+                        fields.get("broker_order_forbidden")
+                    ),
+                    "market_data_request_effect": _boolish(
+                        fields.get("market_data_request_effect")
+                    ),
+                }
+            )
+        if raw_stage == "scalping_scanner_prune_bbo_observation":
+            observation, gap_reason = _prune_bbo_observation(
+                row, target_date=target_date
+            )
+            if observation is not None and executable_bbo_index is not None:
+                executable_bbo_index.setdefault(code, {}).setdefault(
+                    observation["venue"], {}
+                ).setdefault(observation["session"], []).append(observation)
+            elif observation is None and executable_bbo_gap_counts is not None:
+                executable_bbo_gap_counts[gap_reason] += 1
+        if raw_stage == "rising_missed_entry_turn_pre_anchor_bbo_path":
+            observations, gap_reasons = _promoted_ws_bbo_observations(
+                row, target_date=target_date
+            )
+            if executable_bbo_index is not None:
+                for observation in observations:
+                    executable_bbo_index.setdefault(
+                        observation["stock_code"], {}
+                    ).setdefault(observation["venue"], {}).setdefault(
+                        observation["session"], []
+                    ).append(observation)
+            if executable_bbo_gap_counts is not None:
+                executable_bbo_gap_counts.update(gap_reasons)
         if (
             not logical_stages
             or not code
@@ -741,7 +1758,6 @@ def _load_stage_index(
             or ts.date().isoformat() != target_date
         ):
             continue
-        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         event_venue = _event_venue(row)
         if raw_stage == "scalping_scanner_candidate_pruned":
             reason = str(
@@ -824,6 +1840,8 @@ def _load_stage_index(
                 index[code]["entry_ai_provider_called"].append(ai_row)
     except FileNotFoundError:
         pass
+    if executable_bbo_index is not None:
+        _deduplicate_executable_bbo_index(executable_bbo_index)
     return index
 
 
@@ -944,6 +1962,177 @@ def _build_episodes(
     )
 
 
+def _ex_post_horizon_outcome(
+    observations: list[dict[str, Any]],
+    *,
+    entry: dict[str, Any],
+    horizon_sec: int,
+    round_trip_cost_pct: float,
+    observation_watermark: datetime | None,
+) -> dict[str, Any]:
+    entry_epoch = float(entry["observed_epoch"])
+    entry_ask = float(entry["best_ask"])
+    horizon_epoch = entry_epoch + horizon_sec
+    exit_row: dict[str, Any] | None = None
+    label = "right_censored"
+    for observation in observations:
+        observed_epoch = float(observation["observed_epoch"])
+        if observed_epoch <= entry_epoch or observed_epoch > horizon_epoch:
+            continue
+        move_pct = (float(observation["best_bid"]) - entry_ask) / entry_ask * 100.0
+        if move_pct >= EX_POST_TARGET_PCT:
+            label = "target_first"
+            exit_row = observation
+            break
+        if move_pct <= EX_POST_ADVERSE_PCT:
+            label = "adverse_first"
+            exit_row = observation
+            break
+    if exit_row is None and observation_watermark is not None:
+        if observation_watermark.timestamp() >= horizon_epoch:
+            timeout_rows = [
+                row
+                for row in observations
+                if horizon_epoch
+                <= float(row["observed_epoch"])
+                <= horizon_epoch
+                + float(row.get("timeout_max_lag_sec") or EX_POST_TIMEOUT_MAX_LAG_SEC)
+                and float(row.get("best_bid_qty") or 0) >= 1
+            ]
+            if timeout_rows:
+                label = "timeout_exit"
+                exit_row = timeout_rows[0]
+            else:
+                label = "right_censored_no_timeout_bbo"
+        else:
+            label = "pending_horizon"
+    result: dict[str, Any] = {
+        "horizon_sec": horizon_sec,
+        "target_pct": EX_POST_TARGET_PCT,
+        "adverse_pct": EX_POST_ADVERSE_PCT,
+        "label": label,
+        "gross_return_pct": None,
+        "cost_adjusted_return_pct": None,
+        "elapsed_sec": None,
+        "exit_at": None,
+        "exit_best_bid": None,
+        "exit_best_bid_qty": None,
+        "path_order_basis": "first_threshold_crossing_on_bounded_observations",
+        "continuous_first_hit_authority": False,
+        "actual_fill_claim": False,
+        "spread_realization_basis": "entry_ask_to_exit_bid",
+        "extra_slippage_model": "zero_extra_for_one_share_displayed_best_level",
+    }
+    if exit_row is None:
+        return result
+    gross_return_pct = (float(exit_row["best_bid"]) - entry_ask) / entry_ask * 100.0
+    result.update(
+        {
+            "gross_return_pct": round(gross_return_pct, 8),
+            "cost_adjusted_return_pct": round(
+                gross_return_pct - round_trip_cost_pct, 8
+            ),
+            "elapsed_sec": round(float(exit_row["observed_epoch"]) - entry_epoch, 6),
+            "exit_at": exit_row["observed_at"].isoformat(),
+            "exit_best_bid": exit_row["best_bid"],
+            "exit_best_bid_qty": exit_row["best_bid_qty"],
+        }
+    )
+    return result
+
+
+def _ex_post_executable_opportunity(
+    episode: dict[str, Any],
+    executable_bbo_index: dict[str, dict[str, dict[str, list[dict[str, Any]]]]],
+    *,
+    observation_watermark: datetime | None,
+    round_trip_cost_pct: float,
+) -> dict[str, Any]:
+    code = str(episode.get("stock_code") or "")
+    venue = str(episode.get("venue") or "")
+    session = str(episode.get("session") or "")
+    first_census_at = episode.get("first_census_at")
+    if not isinstance(first_census_at, datetime):
+        return {
+            "status": "source_quality_gap",
+            "gap_reason": "benchmark_crossing_time_missing",
+            "exact_bbo_joined": False,
+            "executable_entry_eligible": False,
+            "horizons": {},
+        }
+    all_observations = (
+        executable_bbo_index.get(code, {}).get(venue, {}).get(session, [])
+    )
+    validity_end = first_census_at + timedelta(seconds=OPPORTUNITY_VALIDITY_SEC)
+    joined = [
+        row
+        for row in all_observations
+        if first_census_at <= row["observed_at"] <= validity_end
+    ]
+    if not joined:
+        return {
+            "status": "source_quality_gap",
+            "gap_reason": "exact_route_bbo_not_joined_within_opportunity_validity",
+            "exact_bbo_joined": False,
+            "executable_entry_eligible": False,
+            "horizons": {},
+        }
+    entry = next(
+        (
+            row
+            for row in joined
+            if float(row["spread_bps"]) <= EX_POST_MAX_ENTRY_SPREAD_BPS
+            and float(row.get("best_ask_qty") or 0) >= 1
+        ),
+        None,
+    )
+    if entry is None:
+        return {
+            "status": "excluded_uneconomic_spread_or_fill",
+            "gap_reason": "no_fill_feasible_bbo_within_spread_bound",
+            "exact_bbo_joined": True,
+            "first_exact_bbo_at": joined[0]["observed_at"].isoformat(),
+            "executable_entry_eligible": False,
+            "horizons": {},
+        }
+    forward_observations = [
+        row
+        for row in all_observations
+        if row["observed_epoch"] >= entry["observed_epoch"]
+        and float(row.get("best_bid_qty") or 0) >= 1
+    ]
+    horizons = {
+        str(horizon_sec): _ex_post_horizon_outcome(
+            forward_observations,
+            entry=entry,
+            horizon_sec=horizon_sec,
+            round_trip_cost_pct=round_trip_cost_pct,
+            observation_watermark=observation_watermark,
+        )
+        for horizon_sec in EX_POST_HORIZONS_SEC
+    }
+    return {
+        "status": "source_quality_valid",
+        "gap_reason": "not_applicable",
+        "exact_bbo_joined": True,
+        "executable_entry_eligible": True,
+        "entry_at": entry["observed_at"].isoformat(),
+        "entry_delay_from_benchmark_sec": round(
+            (entry["observed_at"] - first_census_at).total_seconds(), 6
+        ),
+        "entry_best_bid": entry["best_bid"],
+        "entry_best_ask": entry["best_ask"],
+        "entry_best_ask_qty": entry["best_ask_qty"],
+        "entry_spread_bps": entry["spread_bps"],
+        "price_source": entry["price_source"],
+        "fill_feasibility_basis": "one_share_at_displayed_best_quantity",
+        "observer_episode_id": entry["observer_episode_id"],
+        "horizons": horizons,
+        "primary_horizon_sec": EX_POST_PRIMARY_HORIZON_SEC,
+        "primary_outcome": horizons[str(EX_POST_PRIMARY_HORIZON_SEC)],
+    }
+
+
 def _coverage_row(
     episode: dict[str, Any],
     stage_index: dict[str, dict[str, list[dict[str, Any]]]],
@@ -952,6 +2141,11 @@ def _coverage_row(
     require_venue: bool,
     before: datetime | None = None,
     require_lineage: bool = False,
+    executable_bbo_index: (
+        dict[str, dict[str, dict[str, list[dict[str, Any]]]]] | None
+    ) = None,
+    observation_watermark: datetime | None = None,
+    round_trip_cost_pct: float | None = None,
 ) -> dict[str, Any]:
     code = episode["stock_code"]
     venue = episode["venue"]
@@ -1197,6 +2391,23 @@ def _coverage_row(
     else:
         terminal_coverage_reason = no_ai_reason
 
+    ex_post_executable_opportunity = (
+        _ex_post_executable_opportunity(
+            episode,
+            executable_bbo_index,
+            observation_watermark=observation_watermark,
+            round_trip_cost_pct=round_trip_cost_pct,
+        )
+        if executable_bbo_index is not None and round_trip_cost_pct is not None
+        else {
+            "status": "not_requested_noncausal_or_cost_unavailable",
+            "gap_reason": "not_applicable",
+            "exact_bbo_joined": False,
+            "executable_entry_eligible": False,
+            "horizons": {},
+        }
+    )
+
     return {
         **{
             key: (value.isoformat() if isinstance(value, datetime) else value)
@@ -1236,6 +2447,7 @@ def _coverage_row(
         ),
         "opportunity_validity_sec": OPPORTUNITY_VALIDITY_SEC,
         "terminal_coverage_reason": terminal_coverage_reason,
+        "ex_post_executable_opportunity": ex_post_executable_opportunity,
     }
 
 
@@ -1323,6 +2535,66 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
         and (row.get("scanner_detection_sla_met") is True if has_sla_contract else True)
         for row in rows
     )
+    ex_post_rows = [row.get("ex_post_executable_opportunity") or {} for row in rows]
+    ex_post_exact_bbo_joined_count = sum(
+        outcome.get("exact_bbo_joined") is True for outcome in ex_post_rows
+    )
+    ex_post_entry_eligible_count = sum(
+        outcome.get("executable_entry_eligible") is True for outcome in ex_post_rows
+    )
+    ex_post_primary_outcomes = [
+        outcome.get("primary_outcome") or {}
+        for outcome in ex_post_rows
+        if outcome.get("executable_entry_eligible") is True
+    ]
+    ex_post_primary_label_counts = dict(
+        sorted(
+            Counter(
+                str(outcome.get("label") or "missing")
+                for outcome in ex_post_primary_outcomes
+            ).items()
+        )
+    )
+    ex_post_resolved_labels = {"target_first", "adverse_first", "timeout_exit"}
+    ex_post_right_censored_labels = {
+        "right_censored",
+        "right_censored_no_timeout_bbo",
+    }
+    ex_post_resolved = [
+        outcome
+        for outcome in ex_post_primary_outcomes
+        if outcome.get("label") in ex_post_resolved_labels
+        and outcome.get("cost_adjusted_return_pct") is not None
+    ]
+    ex_post_right_censored_count = sum(
+        outcome.get("label") in ex_post_right_censored_labels
+        for outcome in ex_post_primary_outcomes
+    )
+    ex_post_mature_count = len(ex_post_resolved) + ex_post_right_censored_count
+    ex_post_exact_bbo_join_coverage_pct = (
+        round(ex_post_exact_bbo_joined_count / total * 100.0, 2) if total else 0.0
+    )
+    ex_post_right_censored_pct = (
+        round(ex_post_right_censored_count / ex_post_mature_count * 100.0, 2)
+        if ex_post_mature_count
+        else None
+    )
+    ex_post_observed_ev = (
+        round(
+            sum(float(row["cost_adjusted_return_pct"]) for row in ex_post_resolved)
+            / len(ex_post_resolved),
+            8,
+        )
+        if ex_post_resolved
+        else None
+    )
+    ex_post_floor_met = bool(
+        total
+        and ex_post_exact_bbo_join_coverage_pct >= EX_POST_ENTRY_COVERAGE_FLOOR_PCT
+        and len(ex_post_resolved) >= EX_POST_MIN_RESOLVED_COUNT
+        and ex_post_right_censored_pct is not None
+        and ex_post_right_censored_pct <= EX_POST_RIGHT_CENSORED_MAX_PCT
+    )
     return {
         "episode_count": total,
         "denominator_unique_opportunity_episode_count": total,
@@ -1383,6 +2655,42 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for row in rows
         ),
         "stage_latency_from_scanner_promoted_sec": latency_by_stage,
+        "ex_post_executable_opportunity": {
+            "denominator_unique_opportunity_episode_count": total,
+            "exact_bbo_joined_count": ex_post_exact_bbo_joined_count,
+            "exact_bbo_not_joined_count": total - ex_post_exact_bbo_joined_count,
+            "exact_bbo_join_coverage_pct": ex_post_exact_bbo_join_coverage_pct,
+            "executable_entry_eligible_count": ex_post_entry_eligible_count,
+            "primary_horizon_sec": EX_POST_PRIMARY_HORIZON_SEC,
+            "primary_label_counts": ex_post_primary_label_counts,
+            "primary_label_count_sum": sum(ex_post_primary_label_counts.values()),
+            "resolved_outcome_count": len(ex_post_resolved),
+            "right_censored_count": ex_post_right_censored_count,
+            "right_censored_pct": ex_post_right_censored_pct,
+            "pending_horizon_count": ex_post_primary_label_counts.get(
+                "pending_horizon", 0
+            ),
+            "observed_cohort_source_quality_adjusted_ev_pct": (ex_post_observed_ev),
+            "source_quality_adjusted_ev_pct": (
+                ex_post_observed_ev if ex_post_floor_met else None
+            ),
+            "economic_evidence_floor_met": ex_post_floor_met,
+            "sample_floor": {
+                "exact_bbo_join_coverage_pct_min": (EX_POST_ENTRY_COVERAGE_FLOOR_PCT),
+                "resolved_outcome_count_min": EX_POST_MIN_RESOLVED_COUNT,
+                "right_censored_pct_max": EX_POST_RIGHT_CENSORED_MAX_PCT,
+            },
+            "full_external_population_ev_extrapolation_allowed": (False),
+            "path_order_basis": ("first_threshold_crossing_on_bounded_observations"),
+            "continuous_first_hit_authority": False,
+            "fill_feasibility_basis": "one_share_at_displayed_best_quantity",
+            "actual_fill_claim": False,
+            "spread_realization_basis": "entry_ask_to_exit_bid",
+            "extra_slippage_model": ("zero_extra_for_one_share_displayed_best_level"),
+            "ev_population_scope": (
+                "bounded_exact_bbo_joined_external_opportunity_cohort_only"
+            ),
+        },
     }
 
 
@@ -1393,6 +2701,29 @@ def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for venue in VENUE_REQUEST_CODES
     }
     return summary
+
+
+def _summarize_ex_post_by_scope(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    scope_rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        scope_rows[
+            (
+                str(row.get("venue") or "UNKNOWN"),
+                str(row.get("session") or "UNKNOWN"),
+            )
+        ].append(row)
+    summaries = {
+        f"{venue}|{session}": _summarize_rows_base(members)[
+            "ex_post_executable_opportunity"
+        ]
+        for (venue, session), members in sorted(scope_rows.items())
+    }
+    return summaries, bool(summaries) and all(
+        bool(summary.get("economic_evidence_floor_met"))
+        for summary in summaries.values()
+    )
 
 
 def _snapshot_contract_error(row: dict[str, Any], *, target_date: str) -> str:
@@ -1438,7 +2769,9 @@ def build_report(
     ai_trace_path: Path | None = None,
     symbol_master_path: Path | None = None,
     trigger_receipt_path: Path | None = None,
+    external_bbo_budget_path: Path | None = None,
 ) -> dict[str, Any]:
+    report_started_at = datetime.now(KST)
     snapshots_path = snapshot_path or (
         SNAPSHOT_DIR / f"{REPORT_TYPE}_{target_date}.jsonl"
     )
@@ -1461,17 +2794,142 @@ def build_report(
         for row, error in zip(target_date_snapshots, contract_errors, strict=True)
         if not error
     ]
-    stage_index = _load_stage_index(events_path, trace_path, target_date=target_date)
+    executable_bbo_index: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
+    executable_bbo_gap_counts: Counter[str] = Counter()
+    observer_runtime_receipts: list[dict[str, Any]] = []
+    stage_index = _load_stage_index(
+        events_path,
+        trace_path,
+        target_date=target_date,
+        executable_bbo_index=executable_bbo_index,
+        executable_bbo_gap_counts=executable_bbo_gap_counts,
+        observer_runtime_receipts=observer_runtime_receipts,
+    )
+    latest_observer_runtime_receipt = max(
+        observer_runtime_receipts,
+        key=lambda row: row["emitted_at"],
+        default=None,
+    )
+    observer_pid_contract_reflected = bool(
+        latest_observer_runtime_receipt
+        and latest_observer_runtime_receipt.get("process_pid")
+        and latest_observer_runtime_receipt.get("configuration_status")
+        == "collector_created"
+        and latest_observer_runtime_receipt.get("configuration_receipt_status")
+        == "emitted"
+        and latest_observer_runtime_receipt.get("observation_schema_version")
+        == PRUNE_BBO_OBSERVATION_SCHEMA_VERSION
+        and latest_observer_runtime_receipt.get("decision_authority")
+        == "scanner_prune_bbo_observation_only"
+        and latest_observer_runtime_receipt.get("authority_contract_fields_present")
+        is True
+        and latest_observer_runtime_receipt.get("runtime_effect") is False
+        and latest_observer_runtime_receipt.get("allowed_runtime_apply") is False
+        and latest_observer_runtime_receipt.get("actual_order_submitted") is False
+        and latest_observer_runtime_receipt.get("broker_order_forbidden") is True
+        and latest_observer_runtime_receipt.get("market_data_request_effect") is True
+    )
     valid_snapshots = [
         row for row in snapshots if row.get("source_quality_status") == "ok"
     ]
+    external_bbo_contract_row_count = 0
+    external_bbo_request_attempted_count = 0
+    external_bbo_reserved_contract_row_count = 0
+    external_bbo_max_reserved_ordinal = 0
+    for snapshot in valid_snapshots:
+        if snapshot.get("panel") != "liquid_common":
+            continue
+        for snapshot_row in snapshot.get("rows") or []:
+            if not isinstance(snapshot_row, dict):
+                executable_bbo_gap_counts["external_census_snapshot_row_invalid"] += 1
+                continue
+            rank = int(_safe_float(snapshot_row.get("rank")) or 0)
+            if rank <= 0 or rank > EXTERNAL_BBO_CAPTURE_TOP_N:
+                continue
+            raw_observation = snapshot_row.get("executable_bbo_observation")
+            if (
+                isinstance(raw_observation, dict)
+                and raw_observation.get("schema_version")
+                == EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION
+            ):
+                external_bbo_contract_row_count += 1
+                external_bbo_request_attempted_count += int(
+                    raw_observation.get("request_attempted") is True
+                )
+                reservation = raw_observation.get("daily_budget_reservation")
+                reservation_ordinal = (
+                    _safe_float(reservation.get("attempt_ordinal"))
+                    if isinstance(reservation, dict)
+                    and reservation.get("status") == "reserved"
+                    and reservation.get("reserved") is True
+                    else None
+                )
+            observation, gap_reason = _external_snapshot_bbo_observation(
+                snapshot,
+                snapshot_row,
+                target_date=target_date,
+            )
+            if observation is None:
+                executable_bbo_gap_counts[gap_reason] += 1
+                continue
+            # Count only reservations whose full observation contract passed.
+            # A malformed or out-of-range ordinal must not make the producer
+            # report that the durable daily-budget contract was reflected.
+            assert reservation_ordinal is not None
+            external_bbo_reserved_contract_row_count += 1
+            external_bbo_max_reserved_ordinal = max(
+                external_bbo_max_reserved_ordinal,
+                int(reservation_ordinal),
+            )
+            executable_bbo_index.setdefault(observation["stock_code"], {}).setdefault(
+                observation["venue"], {}
+            ).setdefault(observation["session"], []).append(observation)
+    _deduplicate_executable_bbo_index(executable_bbo_index)
+    selected_external_bbo_budget_path = external_bbo_budget_path or (
+        EXTERNAL_BBO_BUDGET_DIR / f"external_bbo_request_budget_{target_date}.json"
+    )
+    external_bbo_budget_contract = _load_external_bbo_budget_contract(
+        selected_external_bbo_budget_path,
+        target_date=target_date,
+        minimum_reserved_count=external_bbo_max_reserved_ordinal,
+    )
+    external_bbo_capture_contract_reflected = bool(
+        external_bbo_reserved_contract_row_count
+        and external_bbo_budget_contract.get("status") == "verified"
+    )
+    snapshot_capture_times = [
+        captured_at
+        for row in valid_snapshots
+        for captured_at in [_parse_ts(row.get("captured_at"))]
+        if captured_at is not None
+    ]
+    executable_bbo_times = [
+        observation["observed_at"]
+        for venue_index in executable_bbo_index.values()
+        for session_index in venue_index.values()
+        for observations in session_index.values()
+        for observation in observations
+    ]
+    observation_watermark = max(
+        [*snapshot_capture_times, *executable_bbo_times], default=None
+    )
+    try:
+        cost_contract = comparison_cost_contract(target_date)
+    except ValueError as exc:
+        cost_contract = {
+            "status": "invalid",
+            "trade_date": target_date,
+            "reason": str(exc),
+            "round_trip_cost_pct": None,
+        }
+    else:
+        cost_contract = {**cost_contract, "status": "verified"}
+    round_trip_cost_pct = _safe_float(cost_contract.get("round_trip_cost_pct"))
     missing_source_hash_snapshot_count = sum(
         not str(
-            (
-                row.get("source")
-                if isinstance(row.get("source"), dict)
-                else {}
-            ).get("normalized_source_payload_sha256")
+            (row.get("source") if isinstance(row.get("source"), dict) else {}).get(
+                "normalized_source_payload_sha256"
+            )
             or ""
         )
         for row in valid_snapshots
@@ -1480,11 +2938,9 @@ def build_report(
         str(row.get("capture_id") or "")
         for row in valid_snapshots
         if not str(
-            (
-                row.get("source")
-                if isinstance(row.get("source"), dict)
-                else {}
-            ).get("normalized_source_payload_sha256")
+            (row.get("source") if isinstance(row.get("source"), dict) else {}).get(
+                "normalized_source_payload_sha256"
+            )
             or ""
         )
     )
@@ -1557,6 +3013,7 @@ def build_report(
     coverage: dict[str, Any] = {}
     details: dict[str, Any] = {}
     raw_episode_counts: dict[str, dict[str, int]] = {}
+    primary_eligible_forward_rows: list[dict[str, Any]] = []
     primary_eligible_forward_summary = _summarize_rows([])
     for panel in PANEL_CONTRACTS:
         coverage[panel] = {}
@@ -1594,6 +3051,9 @@ def build_report(
                     ),
                     require_venue=True,
                     require_lineage=True,
+                    executable_bbo_index=executable_bbo_index,
+                    observation_watermark=observation_watermark,
+                    round_trip_cost_pct=round_trip_cost_pct,
                 )
                 for episode in episodes
             ]
@@ -1624,14 +3084,15 @@ def build_report(
                     primary_symbol_master_lookup_codes[master_status].add(
                         str(episode.get("stock_code") or "")
                     )
+                primary_eligible_forward_rows = [
+                    row
+                    for row in forward_rows
+                    if row.get("symbol_master_status") == "verified"
+                    and row.get("instrument_type") == "EQUITY"
+                    and row.get("listing_market") in {"KOSPI", "KOSDAQ"}
+                ]
                 primary_eligible_forward_summary = _summarize_rows(
-                    [
-                        row
-                        for row in forward_rows
-                        if row.get("symbol_master_status") == "verified"
-                        and row.get("instrument_type") == "EQUITY"
-                        and row.get("listing_market") in {"KOSPI", "KOSDAQ"}
-                    ]
+                    primary_eligible_forward_rows
                 )
             key = f"top_{top_n}"
             coverage[panel][key] = {
@@ -1647,12 +3108,24 @@ def build_report(
             }
 
     primary_episode_count = primary_eligible_forward_summary.get("episode_count", 0)
+    primary_ex_post_summary = dict(
+        primary_eligible_forward_summary.get("ex_post_executable_opportunity") or {}
+    )
+    (
+        primary_ex_post_by_venue_session,
+        primary_ex_post_scope_floor_met,
+    ) = _summarize_ex_post_by_scope(primary_eligible_forward_rows)
+    primary_ex_post_summary["by_venue_session"] = primary_ex_post_by_venue_session
+    primary_ex_post_summary["economic_evidence_floor_met"] = (
+        primary_ex_post_scope_floor_met
+    )
+    if not primary_ex_post_scope_floor_met:
+        primary_ex_post_summary["source_quality_adjusted_ev_pct"] = None
     primary_candidate_not_promoted_reason_missing_count = sum(
         int(
-            (
-                venue_summary.get("candidate_not_promoted_first_reason_counts")
-                or {}
-            ).get("reason_missing", 0)
+            (venue_summary.get("candidate_not_promoted_first_reason_counts") or {}).get(
+                "reason_missing", 0
+            )
         )
         for venue_summary in (
             primary_eligible_forward_summary.get("by_venue") or {}
@@ -1678,9 +3151,38 @@ def build_report(
         instrumentation_blockers.append("opportunity_episode_sample_floor_not_met")
     if primary_candidate_not_promoted_reason_missing_count:
         instrumentation_blockers.append("scanner_prune_first_reason_missing")
-    instrumentation_blockers.append(
-        "ex_post_executable_opportunity_label_not_available"
-    )
+    if round_trip_cost_pct is None:
+        instrumentation_blockers.append("ex_post_comparison_cost_contract_invalid")
+    if primary_episode_count and not external_bbo_capture_contract_reflected:
+        instrumentation_blockers.append(
+            "external_opportunity_bbo_capture_contract_not_reflected"
+        )
+    ex_post_floor_summaries = list(primary_ex_post_by_venue_session.values()) or [
+        primary_ex_post_summary
+    ]
+    if any(
+        float(summary.get("exact_bbo_join_coverage_pct") or 0.0)
+        < EX_POST_ENTRY_COVERAGE_FLOOR_PCT
+        for summary in ex_post_floor_summaries
+    ):
+        instrumentation_blockers.append(
+            "ex_post_executable_bbo_join_coverage_floor_not_met"
+        )
+    if any(
+        int(summary.get("resolved_outcome_count") or 0) < EX_POST_MIN_RESOLVED_COUNT
+        for summary in ex_post_floor_summaries
+    ):
+        instrumentation_blockers.append(
+            "ex_post_executable_resolved_outcome_floor_not_met"
+        )
+    if any(
+        summary.get("right_censored_pct") is not None
+        and float(summary["right_censored_pct"]) > EX_POST_RIGHT_CENSORED_MAX_PCT
+        for summary in ex_post_floor_summaries
+    ):
+        instrumentation_blockers.append(
+            "ex_post_executable_right_censored_ceiling_exceeded"
+        )
     scanner_recall_state = (
         "scanner_coverage_valid_submit_drought_downstream"
         if not instrumentation_blockers
@@ -1696,8 +3198,25 @@ def build_report(
         for status, count in primary_symbol_master_lookup_counts.items()
     ):
         source_quality_warnings.append("non_primary_symbol_master_lookup_gap")
+    generated_at = datetime.now(KST)
     primary_decision_by_venue = {}
     for venue, venue_summary in (primary_summary.get("by_venue") or {}).items():
+        venue_session_summaries = {
+            scope.split("|", 1)[1]: summary
+            for scope, summary in primary_ex_post_by_venue_session.items()
+            if scope.startswith(f"{venue}|")
+        }
+        venue_ex_post_summary = dict(
+            venue_summary.get("ex_post_executable_opportunity") or {}
+        )
+        venue_session_floor_met = bool(venue_session_summaries) and all(
+            bool(summary.get("economic_evidence_floor_met"))
+            for summary in venue_session_summaries.values()
+        )
+        venue_ex_post_summary["by_session"] = venue_session_summaries
+        venue_ex_post_summary["economic_evidence_floor_met"] = venue_session_floor_met
+        if not venue_session_floor_met:
+            venue_ex_post_summary["source_quality_adjusted_ev_pct"] = None
         denominator = int(
             venue_summary.get("denominator_unique_opportunity_episode_count", 0)
         )
@@ -1725,8 +3244,7 @@ def build_report(
                 "pass" if denominator == terminal_count_sum else "fail"
             ),
             "candidate_not_promoted_first_reason_counts": dict(
-                venue_summary.get("candidate_not_promoted_first_reason_counts")
-                or {}
+                venue_summary.get("candidate_not_promoted_first_reason_counts") or {}
             ),
             "candidate_not_promoted_first_reason_count_sum": venue_summary.get(
                 "candidate_not_promoted_first_reason_count_sum", 0
@@ -1742,13 +3260,15 @@ def build_report(
                     "unknown",
                 )
             ),
+            "ex_post_executable_opportunity": venue_ex_post_summary,
         }
 
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
-        "generated_at": datetime.now(KST).isoformat(),
+        "report_started_at": report_started_at.isoformat(),
+        "generated_at": generated_at.isoformat(),
         "status": (
             "ok"
             if valid_snapshots and not instrumentation_blockers
@@ -1774,6 +3294,7 @@ def build_report(
             ),
             "by_venue": primary_decision_by_venue,
             "cross_venue_summary_authority": "diagnostic_only",
+            "ex_post_executable_opportunity": primary_ex_post_summary,
         },
         "source_quality": {
             "snapshot_count": len(snapshots),
@@ -1790,9 +3311,7 @@ def build_report(
             "unavailable_snapshot_count": len(snapshots) - len(valid_snapshots),
             "missing_session_snapshot_count": missing_session_snapshot_count,
             "missing_session_capture_ids": missing_session_capture_ids,
-            "missing_source_hash_snapshot_count": (
-                missing_source_hash_snapshot_count
-            ),
+            "missing_source_hash_snapshot_count": (missing_source_hash_snapshot_count),
             "missing_source_hash_capture_ids": missing_source_hash_capture_ids,
             "verified_source_hash_snapshot_count": (
                 len(valid_snapshots) - missing_source_hash_snapshot_count
@@ -1820,6 +3339,98 @@ def build_report(
             "primary_candidate_not_promoted_reason_missing_count": (
                 primary_candidate_not_promoted_reason_missing_count
             ),
+            "ex_post_bbo_source": {
+                "stages": [
+                    "rising_missed_entry_turn_pre_anchor_bbo_path",
+                    "scalping_scanner_prune_bbo_observation",
+                ],
+                "price_sources": [
+                    "existing_ws_route_scoped_0d_snapshot",
+                    "ka10004_external_market_census_exact_request_code",
+                    "ka10004_rest_orderbook_exact_request_code",
+                ],
+                "valid_observation_count": len(executable_bbo_times),
+                "valid_observation_count_by_price_source": dict(
+                    sorted(
+                        Counter(
+                            observation["price_source"]
+                            for venue_index in executable_bbo_index.values()
+                            for session_index in venue_index.values()
+                            for observations in session_index.values()
+                            for observation in observations
+                        ).items()
+                    )
+                ),
+                "gap_reason_counts": dict(sorted(executable_bbo_gap_counts.items())),
+                "observation_watermark": (
+                    observation_watermark.isoformat()
+                    if observation_watermark is not None
+                    else None
+                ),
+                "full_external_population_ev_extrapolation_allowed": False,
+                "primary_floor_scope": "venue+session",
+                "primary_by_venue_session": primary_ex_post_by_venue_session,
+                "required_observation_schema_version": (
+                    PRUNE_BBO_OBSERVATION_SCHEMA_VERSION
+                ),
+                "required_promoted_ws_bundle_schema_version": (
+                    PRE_ANCHOR_BUNDLE_SCHEMA_VERSION
+                ),
+                "required_external_census_bbo_schema_version": (
+                    EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION
+                ),
+                "external_census_contract_row_count": (external_bbo_contract_row_count),
+                "external_census_request_attempted_count": (
+                    external_bbo_request_attempted_count
+                ),
+                "external_census_reserved_contract_row_count": (
+                    external_bbo_reserved_contract_row_count
+                ),
+                "external_census_max_reserved_ordinal": (
+                    external_bbo_max_reserved_ordinal
+                ),
+                "external_census_capture_contract_reflected": (
+                    external_bbo_capture_contract_reflected
+                ),
+                "external_census_budget_contract": external_bbo_budget_contract,
+                "producer_pid_contract_reflected": observer_pid_contract_reflected,
+                "latest_producer_runtime_receipt": (
+                    {
+                        **latest_observer_runtime_receipt,
+                        "emitted_at": latest_observer_runtime_receipt[
+                            "emitted_at"
+                        ].isoformat(),
+                    }
+                    if latest_observer_runtime_receipt is not None
+                    else None
+                ),
+            },
+            "comparison_cost_contract": cost_contract,
+            "report_freshness": {
+                "latest_valid_snapshot_at": (
+                    max(snapshot_capture_times).isoformat()
+                    if snapshot_capture_times
+                    else None
+                ),
+                "latest_exact_bbo_at": (
+                    max(executable_bbo_times).isoformat()
+                    if executable_bbo_times
+                    else None
+                ),
+                "observation_watermark": (
+                    observation_watermark.isoformat()
+                    if observation_watermark is not None
+                    else None
+                ),
+                "source_to_report_lag_sec": (
+                    round((generated_at - observation_watermark).total_seconds(), 6)
+                    if observation_watermark is not None
+                    else None
+                ),
+                "freshness_authority": (
+                    "artifact_generation_only_not_current_pid_runtime_acceptance"
+                ),
+            },
             "raw_opportunity_episode_counts_before_master_gate": raw_episode_counts,
             "installed_trigger_contract": trigger_contract,
             "funnel_instrumentation_contract": {
@@ -1901,8 +3512,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         terminal_reason_lines.append(
             f"- {venue} terminal coverage reasons: "
             + ", ".join(
-                f"`{reason}`={count}"
-                for reason, count in sorted(reason_counts.items())
+                f"`{reason}`={count}" for reason, count in sorted(reason_counts.items())
             )
         )
         first_reason_counts = (
@@ -1935,6 +3545,43 @@ def render_markdown(report: dict[str, Any]) -> str:
             "### Candidate Not Promoted First Reasons",
             "",
             *candidate_not_promoted_reason_lines,
+            "",
+            "## Ex-post Executable Opportunity (Source-only)",
+            "",
+            (
+                "- Direct external-census, promoted-WS, and bounded prune-observer "
+                "exact-route BBOs only; ka10027 mark prices are never substituted "
+                "for executable prices."
+            ),
+            (
+                "- comparison cost: `"
+                + str(
+                    (
+                        (report.get("source_quality") or {}).get(
+                            "comparison_cost_contract"
+                        )
+                        or {}
+                    ).get("round_trip_cost_pct")
+                )
+                + "%`"
+            ),
+            "",
+            "| Venue | Episodes | Exact BBO joined | Coverage % | Executable entry | Resolved 20m | Right-censored % | Observed cohort net EV % | Decision EV % | Floor |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+            *[
+                "| "
+                + f"{venue} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('denominator_unique_opportunity_episode_count', 0)} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('exact_bbo_joined_count', 0)} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('exact_bbo_join_coverage_pct', 0.0)} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('executable_entry_eligible_count', 0)} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('resolved_outcome_count', 0)} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('right_censored_pct')} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('observed_cohort_source_quality_adjusted_ev_pct')} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('source_quality_adjusted_ev_pct')} | "
+                + f"{(summary.get('ex_post_executable_opportunity') or {}).get('economic_evidence_floor_met', False)} |"
+                for venue, summary in (primary.get("by_venue") or {}).items()
+            ],
             "",
             "## Coverage",
             "",
@@ -2006,6 +3653,11 @@ def main() -> None:
     parser.add_argument("--ai-trace-path")
     parser.add_argument("--symbol-master-path")
     parser.add_argument("--trigger-receipt-path")
+    parser.add_argument(
+        "--skip-executable-bbo",
+        action="store_true",
+        help="Disable bounded source-only ka10004 capture for this invocation.",
+    )
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args()
     if args.capture_only and not args.capture:
@@ -2023,12 +3675,25 @@ def main() -> None:
         token = kiwoom_utils.get_kiwoom_token()
         if not token:
             raise SystemExit("Kiwoom token unavailable")
+        bbo_budget_path = EXTERNAL_BBO_BUDGET_DIR / (
+            f"external_bbo_request_budget_{args.target_date}.json"
+        )
+        pre_ledger_bbo_request_count = _count_external_bbo_requests(
+            snapshot_path,
+            target_date=args.target_date,
+        )
         records = capture_market_snapshots(
             token,
             target_date=args.target_date,
             venues=_parse_csv(args.venues),
             panels=_parse_csv(args.panels),
             limit=max(1, args.limit),
+            collect_executable_bbo=not args.skip_executable_bbo,
+            bbo_request_reserver=lambda: _reserve_external_bbo_request(
+                bbo_budget_path,
+                target_date=args.target_date,
+                initial_reserved_count=pre_ledger_bbo_request_count,
+            ),
         )
         captured_count = append_snapshot_records(snapshot_path, records)
 
@@ -2039,6 +3704,15 @@ def main() -> None:
                     "status": "captured_source_only",
                     "captured_records": captured_count,
                     "snapshot_path": str(snapshot_path),
+                    "external_bbo_budget_path": str(bbo_budget_path),
+                    "external_bbo_pre_ledger_request_count": (
+                        pre_ledger_bbo_request_count
+                    ),
+                    "external_bbo_daily_request_cap": (
+                        EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE
+                    ),
+                    "external_bbo_collection_enabled": (not args.skip_executable_bbo),
+                    "market_data_request_effect": (not args.skip_executable_bbo),
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                     "actual_order_submitted": False,

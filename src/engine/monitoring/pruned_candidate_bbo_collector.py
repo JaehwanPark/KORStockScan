@@ -45,8 +45,10 @@ MAX_PENDING_SAMPLES = MAX_ACTIVE_EPISODES * len(SAMPLE_OFFSETS_SEC)
 # This is not represented as an account-wide or host-wide Kiwoom quota.
 MAX_SCHEDULED_REQUESTS_PER_PROCESS_KST_DATE = 1200
 MAX_RETAINED_EPISODES = 512
+OBSERVATION_SCHEMA_VERSION = "scanner_prune_bbo_observation_v2"
 
 METRIC_CONTRACT = {
+    "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
     "metric_role": "source_quality_instrumentation",
     "decision_authority": "scanner_prune_bbo_observation_only",
     "window_policy": (
@@ -62,7 +64,7 @@ METRIC_CONTRACT = {
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
         "ka10004_exact_request_code_response_received_epoch_schedule_lag_"
-        "within_consumer_floor_valid_bbo_"
+        "within_consumer_floor_valid_bbo_and_best_bid_ask_quantity_"
         "same_venue_session_and_effective_dated_cost_contract"
     ),
     "forbidden_uses": (
@@ -708,16 +710,12 @@ class PrunedCandidateBBOCollector:
             "scanner_prune_observer_sample_index": int(sample_index),
             "scanner_prune_observer_scheduled_offset_sec": int(offset_sec),
             "scanner_prune_observer_due_epoch": round(float(due_epoch), 6),
-            "scanner_prune_observer_request_started_epoch": round(
-                failure_epoch, 6
-            ),
+            "scanner_prune_observer_request_started_epoch": round(failure_epoch, 6),
             "scanner_prune_observer_observed_epoch": round(failure_epoch, 6),
             "scanner_prune_observer_observed_at": datetime.fromtimestamp(
                 failure_epoch, tz=KST
             ).isoformat(),
-            "scanner_prune_observer_request_completed_epoch": round(
-                failure_epoch, 6
-            ),
+            "scanner_prune_observer_request_completed_epoch": round(failure_epoch, 6),
             "scanner_prune_observer_schedule_lag_sec": round(
                 max(0.0, failure_epoch - float(due_epoch)), 6
             ),
@@ -845,6 +843,8 @@ class PrunedCandidateBBOCollector:
 
         best_bid = snapshot.get("best_bid")
         best_ask = snapshot.get("best_ask")
+        best_bid_qty = snapshot.get("best_bid_qty")
+        best_ask_qty = snapshot.get("best_ask_qty")
         received_epoch = snapshot.get("rest_received_ts")
         try:
             bid = int(best_bid)
@@ -853,6 +853,13 @@ class PrunedCandidateBBOCollector:
         except (TypeError, ValueError, OverflowError):
             bid = ask = 0
             received = 0.0
+        try:
+            bid_qty = int(best_bid_qty)
+            ask_qty = int(best_ask_qty)
+            quantity_valid = bid_qty >= 0 and ask_qty >= 0
+        except (TypeError, ValueError, OverflowError):
+            bid_qty = ask_qty = 0
+            quantity_valid = False
         response_request_code = str(snapshot.get("request_code") or "").upper()
         response_stock_code = _valid_code(snapshot.get("stock_code"))
         source = str(snapshot.get("source") or "")
@@ -875,6 +882,8 @@ class PrunedCandidateBBOCollector:
             gap_reason = "ka10004_response_received_epoch_invalid"
         elif not bbo_valid:
             gap_reason = "ka10004_bbo_invalid_or_crossed"
+        elif not quantity_valid:
+            gap_reason = "ka10004_best_quantity_missing_or_invalid"
         else:
             status = "captured"
             gap_reason = "not_applicable_capture_pass"
@@ -948,6 +957,12 @@ class PrunedCandidateBBOCollector:
             ),
             "scanner_prune_observer_best_bid": bid if status == "captured" else None,
             "scanner_prune_observer_best_ask": ask if status == "captured" else None,
+            "scanner_prune_observer_best_bid_qty": (
+                bid_qty if status == "captured" and bid_qty >= 0 else None
+            ),
+            "scanner_prune_observer_best_ask_qty": (
+                ask_qty if status == "captured" and ask_qty >= 0 else None
+            ),
             "scanner_prune_observer_quote_age_ms": quote_age_ms,
             "scanner_prune_observer_bid_req_base_tm": str(
                 snapshot.get("bid_req_base_tm") or "absent_or_undocumented"
