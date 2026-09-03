@@ -739,6 +739,8 @@ parsed_complete = bool(
     and bool(orders)
     and int(review.get("reviewed_candidate_count") or 0) == len(orders)
     and all(item.get("ai_review_status") == "parsed" for item in orders)
+    and provider_status.get("status") in {"success", "reused"}
+    and provider_status.get("provider") == expected_provider
 )
 no_action_required = bool(
     review.get("status") == "not_required_no_actionable_candidate"
@@ -748,12 +750,14 @@ no_action_required = bool(
     and provider_status.get("new_provider_call") is False
 )
 valid = bool(
-    expected_provider != "none"
-    and review.get("provider") == expected_provider
+    review.get("provider") == expected_provider
     and review_contract.get("requested_provider") == expected_provider
     and candidate_change.get("semantic_digest") == current_actionable_digest
     and review_contract.get("semantic_digest") == current_ai_contract_digest
-    and (parsed_complete or no_action_required)
+    and (
+        (parsed_complete and expected_provider != "none")
+        or no_action_required
+    )
 )
 raise SystemExit(0 if valid else 1)
 PY

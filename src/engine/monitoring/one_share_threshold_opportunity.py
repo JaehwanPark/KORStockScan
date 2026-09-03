@@ -514,7 +514,16 @@ def _primary_blocker_precedes_force(
     if blocker_time is not None and forced_time is not None:
         if blocker_time != forced_time:
             return blocker_time < forced_time
-        return _event_order_key(blocker) <= _event_order_key(forced_entry)
+        if (
+            str(blocker.get("source_path") or "")
+            == str(forced_entry.get("source_path") or "")
+            and blocker.get("source_line_number")
+            and forced_entry.get("source_line_number")
+        ):
+            return int(blocker["source_line_number"]) <= int(
+                forced_entry["source_line_number"]
+            )
+        return False
     if (
         str(blocker.get("source_path") or "")
         == str(forced_entry.get("source_path") or "")
@@ -1758,6 +1767,11 @@ def _apply_ai_review(
         if isinstance((previous_report or {}).get("ai_review"), dict)
         else {}
     )
+    prior_provider_status = (
+        prior_review.get("provider_status")
+        if isinstance(prior_review.get("provider_status"), dict)
+        else {}
+    )
     prior_order_rows = [
         item
         for item in (previous_report or {}).get("code_improvement_orders") or []
@@ -1791,6 +1805,8 @@ def _apply_ai_review(
         and candidate_change.get("ai_review_contract_change_status") == "unchanged"
         and prior_review.get("status") == "parsed"
         and prior_review.get("provider") == provider
+        and prior_provider_status.get("status") in {"success", "reused"}
+        and prior_provider_status.get("provider") == provider
         and prior_review_complete
     )
     if str(coverage.get("status") or "") != "pass":
@@ -1847,6 +1863,12 @@ def _apply_ai_review(
             provider not in {"", "none", "off", "false", "0"},
         )
         status, payload, warnings = _parse_ai_review(raw)
+    if status == "parsed" and provider_status.get("status") not in {
+        "success",
+        "reused",
+    }:
+        status = "parse_rejected"
+        warnings = [*warnings, "ai_review_provider_receipt_not_terminal_success"]
     if status == "parsed":
         review_rows = [
             item

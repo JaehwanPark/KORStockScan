@@ -483,6 +483,8 @@ def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
     assert 'review.get("status") == "parsed"' in script
     assert 'review.get("status") == "not_required_no_actionable_candidate"' in script
     assert 'review.get("reviewed_candidate_count") or 0) == len(orders)' in script
+    assert 'provider_status.get("status") in {"success", "reused"}' in script
+    assert 'provider_status.get("provider") == expected_provider' in script
     assert 'provider_status.get("new_provider_call") is False' in script
     assert 'review.get("provider") == expected_provider' in script
     assert 'review_contract.get("requested_provider") == expected_provider' in script

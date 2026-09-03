@@ -584,6 +584,51 @@ def test_ai_review_annotations_are_source_only(tmp_path, monkeypatch):
     assert order["runtime_effect"] is False
 
 
+def test_ai_review_rejects_parsed_payload_without_successful_provider_receipt(
+    monkeypatch,
+):
+    def fake_ai_review(report, *, provider):
+        return json.dumps(
+            {
+                "schema_version": 1,
+                "reviewer": "one_share_threshold_opportunity_ai_review",
+                "candidate_reviews": [
+                    {
+                        "candidate_id": "candidate-1",
+                        "recommended_disposition": "keep_collecting",
+                        "confidence": "medium",
+                        "reason": "source-only sample",
+                        "required_followup": [],
+                    }
+                ],
+                "audit": {"status": "pass", "issues": [], "reason": "ok"},
+                "codex_directives": [],
+            }
+        ), {"provider": provider, "status": "failed"}
+
+    monkeypatch.setattr(mod, "_call_ai_review", fake_ai_review)
+    report = {
+        "target_date": "2026-07-01",
+        "window": {},
+        "summary": {},
+        "metric_contract": {},
+        "source_coverage_manifest": {"status": "pass"},
+        "candidate_change": {"status": "changed"},
+        "threshold_opportunities": [],
+        "code_improvement_orders": [
+            {"candidate_id": "candidate-1", "runtime_effect": False}
+        ],
+    }
+
+    reviewed = mod._apply_ai_review(report, provider="openai")
+
+    assert reviewed["ai_review"]["status"] == "parse_rejected"
+    assert (
+        "ai_review_provider_receipt_not_terminal_success"
+        in reviewed["ai_review"]["warnings"]
+    )
+
+
 def test_ai_review_reuses_parsed_result_when_actionable_digest_is_unchanged(
     tmp_path, monkeypatch
 ):
@@ -1594,6 +1639,71 @@ def test_primary_blocker_uses_event_time_and_rejects_post_force_only(tmp_path):
     assert examples["post-only"]["primary_blocker_attribution_status"] == (
         "post_force_or_unordered_blocker_only"
     )
+
+
+def test_same_timestamp_cross_file_blocker_is_not_treated_as_causal(tmp_path):
+    blocker_path = tmp_path / "pipeline_events_2026-07-01_a.jsonl"
+    forced_path = tmp_path / "pipeline_events_2026-07-01_b.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    assert (
+        mod._primary_blocker_precedes_force(
+            {
+                "emitted_at": "2026-07-01T09:00:00+09:00",
+                "source_path": str(blocker_path),
+                "source_line_number": 1,
+            },
+            {
+                "emitted_at": "2026-07-01T09:00:00+09:00",
+                "source_path": str(forced_path),
+                "source_line_number": 1,
+            },
+        )
+        is False
+    )
+    blocker_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "blocked_ai_score",
+                {"block_reason": "blocked_ai_score"},
+                emitted_at="2026-07-01T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+    forced_path.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+                emitted_at="2026-07-01T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps(
+            {
+                "recommendation_id": 1,
+                "stock_code": "000001",
+                "profit_rate": 0.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[blocker_path, forced_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    row = report["joined_examples"][0]
+    assert row["primary_threshold_group"] is None
+    assert row["primary_blocker_attribution_status"] == "missing_explicit_blocker"
+    assert report["threshold_opportunities"] == []
 
 
 def test_main_explicit_partition_cache_dir_enables_cache(tmp_path, monkeypatch):
