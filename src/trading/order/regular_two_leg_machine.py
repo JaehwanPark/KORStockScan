@@ -33,6 +33,7 @@ from src.trading.order.entry_liquidity_guard import (
     EntryExecutionVelocityDecision,
     EntryLiquidityDecision,
     evaluate_entry_execution_velocity,
+    evaluate_executable_micro_confirmation,
     evaluate_entry_liquidity,
     unavailable_entry_execution_velocity_snapshot,
     unavailable_entry_liquidity_snapshot,
@@ -471,6 +472,60 @@ class SamsungRegularTwoLegMachine:
             route=normalized_route,
             **decision.event_fields(),
         )
+        confirmation_delay_sec = int(features.get("entry_confirmation_delay_sec") or 0)
+        if confirmation_delay_sec > 0:
+            planned_entry_prices = [
+                int(leg.get("entry_price") or 0)
+                for leg in self._state.get("legs", [])
+                if leg.get("status") == "PLANNED"
+                and str(leg.get("route") or normalized_route).upper()
+                == normalized_route
+                and int(leg.get("entry_price") or 0) > 0
+            ]
+            maximum_entry_price = max(planned_entry_prices, default=0)
+            current_ask = int(decision.snapshot.best_ask)
+            target_price = (
+                self.policy.target_price(current_ask) if current_ask > 0 else 0
+            )
+            micro_decision = evaluate_executable_micro_confirmation(
+                anchor_snapshot=features.get("entry_confirmation_anchor_snapshot"),
+                current_snapshot=decision.snapshot,
+                requested_quantity=requested_quantity,
+                reference_price=int(
+                    features.get("signal_close")
+                    or features.get("opening_price")
+                    or self._state.get("signal_close")
+                    or 0
+                ),
+                maximum_entry_price=maximum_entry_price,
+                target_price=target_price,
+                policy=(features.get("entry_timing_policy_provenance") or {}).get(
+                    "executable_confirmation"
+                ),
+            )
+            features["entry_executable_micro_confirmation"] = (
+                micro_decision.event_fields()
+            )
+            self._state["signal_features"] = features
+            if not micro_decision.allowed:
+                for leg in self._state.get("legs", []):
+                    leg_route = str(leg.get("route") or normalized_route).upper()
+                    if leg.get("status") == "PLANNED" and leg_route == normalized_route:
+                        leg["status"] = "NO_FILL"
+                self._state["blocked_reason"] = micro_decision.reason
+                self._record(
+                    now,
+                    "entry_executable_micro_confirmation_blocked_before_buy",
+                    route=normalized_route,
+                    **micro_decision.event_fields(),
+                )
+                return False
+            self._record(
+                now,
+                "entry_executable_micro_confirmation_passed",
+                route=normalized_route,
+                **micro_decision.event_fields(),
+            )
         velocity_decision = self._entry_execution_velocity_decision(
             route=normalized_route,
             requested_quantity=requested_quantity,
@@ -1570,6 +1625,13 @@ class SamsungRegularTwoLegMachine:
             signal_decision_at = now.isoformat()
             if delay_sec > 0:
                 due_at = now + timedelta(seconds=delay_sec)
+                anchor_liquidity = self._entry_liquidity_decision(
+                    route=str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
+                    requested_quantity=EPISODE_TOTAL_QUANTITY,
+                )
+                anchor_snapshot = anchor_liquidity.event_fields()[
+                    "entry_liquidity_snapshot"
+                ]
                 self._state["pending_entry_confirmation"] = {
                     "signal_bar": latest_iso,
                     "signal_close": int(latest.close_price),
@@ -1577,6 +1639,7 @@ class SamsungRegularTwoLegMachine:
                     "due_at": due_at.isoformat(),
                     "delay_sec": delay_sec,
                     "policy_provenance": timing_policy_provenance,
+                    "anchor_liquidity_snapshot": anchor_snapshot,
                 }
                 self._record(
                     now,
@@ -1585,6 +1648,7 @@ class SamsungRegularTwoLegMachine:
                     delay_sec=delay_sec,
                     due_at=due_at.isoformat(),
                     timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                    anchor_liquidity_snapshot=anchor_snapshot,
                 )
                 return self.snapshot()
         self._state.update(
@@ -1607,6 +1671,11 @@ class SamsungRegularTwoLegMachine:
                     "signal_close": int(latest.close_price),
                     "entry_confirmation_delay_sec": delay_sec,
                     "entry_timing_policy_provenance": timing_policy_provenance,
+                    "entry_confirmation_anchor_snapshot": (
+                        pending_confirmation.get("anchor_liquidity_snapshot")
+                        if isinstance(pending_confirmation, dict)
+                        else None
+                    ),
                     "rolling_high": int(signal.rolling_high),
                     "rolling_low": int(signal.rolling_low),
                     "observed_drawdown_pct": float(signal.drawdown_pct),

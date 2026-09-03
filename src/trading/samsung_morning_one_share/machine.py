@@ -666,6 +666,13 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             )
             if confirmation_delay_sec > 0:
                 due_at = now + timedelta(seconds=confirmation_delay_sec)
+                anchor_liquidity = self._entry_liquidity_decision(
+                    route=route,
+                    requested_quantity=EPISODE_TOTAL_QUANTITY,
+                )
+                anchor_snapshot = anchor_liquidity.event_fields()[
+                    "entry_liquidity_snapshot"
+                ]
                 self._state["pending_entry_confirmation"] = {
                     "signal_bar": str(signal_bar),
                     "signal_close": open_price,
@@ -675,6 +682,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     "due_at": due_at.isoformat(),
                     "delay_sec": confirmation_delay_sec,
                     "policy_provenance": timing_policy_provenance,
+                    "anchor_liquidity_snapshot": anchor_snapshot,
                 }
                 self._record(
                     now,
@@ -684,6 +692,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     delay_sec=confirmation_delay_sec,
                     due_at=due_at.isoformat(),
                     timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                    anchor_liquidity_snapshot=anchor_snapshot,
                 )
                 return self.snapshot()
         signal_features = self._signal_features(
@@ -697,6 +706,11 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 "signal_decision_at": signal_decision_at,
                 "entry_confirmation_delay_sec": confirmation_delay_sec,
                 "entry_timing_policy_provenance": timing_policy_provenance,
+                "entry_confirmation_anchor_snapshot": (
+                    pending_confirmation.get("anchor_liquidity_snapshot")
+                    if isinstance(pending_confirmation, dict)
+                    else None
+                ),
             }
         )
         self._state.update(

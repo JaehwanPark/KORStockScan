@@ -321,7 +321,7 @@ promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved
 - 원주문번호별 지정가·부분체결·잔량취소·target 귀속
 - KRX entry와 NXT exit를 동일 lifecycle의 phase venue로 보존했는지
 - owner별 terminal sample, 실현비용, HELD·미해결 custody와 자본점유
-- machine entry timing 후보가 entry 확인 지연 단일 축만 바꾸고 수량·가격·target·holding/exit 권한을 만들지 않았는지
+- machine entry timing 후보가 `supportive_confirmation_candidate` 완료 outcome만 사용해 entry 확인 지연 단일 축만 바꾸고, `adverse_veto_candidate|recheck_required|source_quality_blocked`를 승격 근거로 쓰지 않았는지 확인한다. 선택된 exact-date v2 scope는 signal→due exact-route fresh `ka10004` BBO, 비악화 bid·ask와 정책 고정비용 차감 양의 modeled owner-target edge를 다시 통과해야 한다. 이 값은 broker receipt exact 비용이나 미래 target 체결이 아니며, 이 확인이 신호·수량·가격·target·holding/exit 권한을 만들지 않았는지 점검한다.
 
 ### 6.5 Micro-reversion·AI·Smoothing
 

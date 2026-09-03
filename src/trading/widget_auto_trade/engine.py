@@ -35,6 +35,7 @@ from src.trading.order.entry_liquidity_guard import (
     EntryExecutionVelocityDecision,
     EntryLiquidityDecision,
     evaluate_entry_execution_velocity,
+    evaluate_executable_micro_confirmation,
     evaluate_entry_liquidity,
     unavailable_entry_execution_velocity_snapshot,
     unavailable_entry_liquidity_snapshot,
@@ -1059,6 +1060,7 @@ class WidgetSignalAutoTrader:
         due_at = _timestamp(value.get("due_at"))
         delay = value.get("delay_sec")
         provenance = value.get("policy_provenance")
+        anchor_snapshot = value.get("anchor_liquidity_snapshot")
         return bool(
             armed_at is not None
             and due_at is not None
@@ -1076,6 +1078,12 @@ class WidgetSignalAutoTrader:
             and provenance.get("status") == "applied"
             and provenance.get("target_date") == target_date.isoformat()
             and len(str(provenance.get("policy_hash") or "")) == 64
+            and isinstance(provenance.get("executable_confirmation"), dict)
+            and isinstance(anchor_snapshot, dict)
+            and str(anchor_snapshot.get("symbol") or "")
+            and str(anchor_snapshot.get("route") or "") in {"KRX", "NXT"}
+            and _positive_int(anchor_snapshot.get("best_bid")) > 0
+            and _positive_int(anchor_snapshot.get("best_ask")) > 0
         )
 
     def _entry_signal(
@@ -3125,6 +3133,15 @@ class WidgetSignalAutoTrader:
                         active_policy_status=active_provenance.get("status"),
                     )
                     return
+        if (
+            symbol_state.get("last_entry_liquidity_block_identity")
+            == confirmation_identity
+            or symbol_state.get("last_entry_execution_velocity_block_identity")
+            == confirmation_identity
+            or symbol_state.get("last_entry_executable_micro_block_identity")
+            == confirmation_identity
+        ):
+            return
         if pending_confirmation is None:
             (
                 confirmation_delay_sec,
@@ -3139,6 +3156,14 @@ class WidgetSignalAutoTrader:
             )
             if confirmation_delay_sec > 0:
                 due_at = now + timedelta(seconds=confirmation_delay_sec)
+                anchor_liquidity = self._entry_liquidity_decision(
+                    spec=spec,
+                    route=route,
+                    requested_quantity=entry_quantity,
+                )
+                anchor_snapshot = anchor_liquidity.event_fields()[
+                    "entry_liquidity_snapshot"
+                ]
                 symbol_state["pending_entry_confirmation"] = {
                     "signal_id": signal_id,
                     "confirmation_identity": confirmation_identity,
@@ -3149,6 +3174,7 @@ class WidgetSignalAutoTrader:
                     "due_at": due_at.isoformat(),
                     "delay_sec": confirmation_delay_sec,
                     "policy_provenance": timing_policy_provenance,
+                    "anchor_liquidity_snapshot": anchor_snapshot,
                 }
                 self._save()
                 self._event(
@@ -3160,15 +3186,9 @@ class WidgetSignalAutoTrader:
                     due_at=due_at.isoformat(),
                     entry_confirmation_delay_sec=confirmation_delay_sec,
                     timing_policy_hash=timing_policy_provenance.get("policy_hash"),
+                    anchor_liquidity_snapshot=anchor_snapshot,
                 )
                 return
-        if (
-            symbol_state.get("last_entry_liquidity_block_identity")
-            == confirmation_identity
-            or symbol_state.get("last_entry_execution_velocity_block_identity")
-            == confirmation_identity
-        ):
-            return
         liquidity_decision = self._entry_liquidity_decision(
             spec=spec,
             route=route,
@@ -3202,6 +3222,68 @@ class WidgetSignalAutoTrader:
             actual_order_submitted=False,
             **liquidity_decision.event_fields(),
         )
+        executable_micro_decision = None
+        if confirmation_delay_sec > 0:
+            take_profit_bps = (
+                int(entry_policy["take_profit_bps_from_equal_share_average"])
+                if entry_policy is not None
+                else TAKE_PROFIT_BPS
+            )
+            executable_target_price = _take_profit_price(
+                int(liquidity_decision.snapshot.best_ask),
+                profit_bps=take_profit_bps,
+            )
+            anchor_snapshot = (
+                pending_confirmation.get("anchor_liquidity_snapshot")
+                if isinstance(pending_confirmation, dict)
+                else None
+            )
+            anchor_best_ask = _positive_int(
+                anchor_snapshot.get("best_ask")
+                if isinstance(anchor_snapshot, dict)
+                else None
+            )
+            executable_micro_decision = evaluate_executable_micro_confirmation(
+                anchor_snapshot=anchor_snapshot,
+                current_snapshot=liquidity_decision.snapshot,
+                requested_quantity=entry_quantity,
+                reference_price=counterfactual_reference_price,
+                maximum_entry_price=anchor_best_ask,
+                target_price=executable_target_price,
+                policy=timing_policy_provenance.get("executable_confirmation"),
+            )
+            symbol_state["last_entry_executable_micro_confirmation_check"] = (
+                executable_micro_decision.event_fields()
+            )
+            if not executable_micro_decision.allowed:
+                symbol_state["last_entry_executable_micro_block_identity"] = (
+                    confirmation_identity
+                )
+                self._save()
+                self._record_entry_block_once(
+                    spec=spec,
+                    symbol_state=symbol_state,
+                    signal_id=signal_id,
+                    reason="entry_blocked_executable_micro_confirmation",
+                    now=now,
+                    confirmation_identity=confirmation_identity,
+                    source_state=source_state,
+                    actual_order_submitted=False,
+                    **executable_micro_decision.event_fields(),
+                )
+                return
+            symbol_state.pop("last_entry_executable_micro_block_identity", None)
+            self._save()
+            self._event(
+                "entry_executable_micro_confirmation_passed",
+                spec,
+                now,
+                signal_id=signal_id,
+                confirmation_identity=confirmation_identity,
+                source_state=source_state,
+                actual_order_submitted=False,
+                **executable_micro_decision.event_fields(),
+            )
         velocity_decision = self._entry_execution_velocity_decision(
             spec=spec,
             route=route,
@@ -3282,6 +3364,11 @@ class WidgetSignalAutoTrader:
                 "entry_consumed_at": now.isoformat(),
                 "entry_confirmation_delay_sec": confirmation_delay_sec,
                 "entry_timing_policy_provenance": timing_policy_provenance,
+                "entry_executable_micro_confirmation": (
+                    executable_micro_decision.event_fields()
+                    if executable_micro_decision is not None
+                    else None
+                ),
                 "execution_policy_id": (
                     entry_policy["policy_id"] if entry_policy else None
                 ),

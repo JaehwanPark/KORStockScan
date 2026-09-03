@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 import pytest
@@ -9,11 +10,14 @@ from src.trading.low_price_two_leg.gateway import KiwoomLowPriceTwoLegGateway
 from src.trading.order.entry_liquidity_guard import (
     ENTRY_EXECUTION_VELOCITY_POLICY_CONTRACT,
     ENTRY_LIQUIDITY_POLICY_CONTRACT,
+    EXECUTABLE_MICRO_CONFIRMATION_MODE,
+    EXECUTABLE_MICRO_CONFIRMATION_POLICY_CONTRACT,
     KST,
     EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
     entry_liquidity_request_code,
     evaluate_entry_execution_velocity,
+    evaluate_executable_micro_confirmation,
     evaluate_entry_liquidity,
     parse_ka10003_entry_execution_velocity_snapshot,
     parse_ka10004_entry_liquidity_snapshot,
@@ -95,6 +99,132 @@ def test_stale_or_invalid_source_fails_closed():
     assert invalid.reason == "api"
     assert not stale.allowed
     assert not invalid.allowed
+
+
+def _executable_confirmation_policy() -> dict:
+    return {
+        "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
+        "supportive_confirmation_only": True,
+        "require_bid_non_deterioration": True,
+        "require_ask_non_deterioration": True,
+        "require_positive_net_edge_after_costs": True,
+        "broker_receipt_exact": False,
+        "round_trip_cost_pct": 0.23,
+        "cost_contract_sha256": "a" * 64,
+    }
+
+
+def test_selected_delay_requires_non_deteriorating_bbo_and_positive_net_edge():
+    anchor = _snapshot(bid_qty=1_000, ask_qty=1_000)
+    current = replace(anchor, best_bid=71_400, received_ts_ms=2)
+    passed = evaluate_executable_micro_confirmation(
+        anchor_snapshot=anchor,
+        current_snapshot=current,
+        requested_quantity=20,
+        reference_price=71_500,
+        maximum_entry_price=71_500,
+        target_price=72_000,
+        policy=_executable_confirmation_policy(),
+    )
+    bid_deteriorated = evaluate_executable_micro_confirmation(
+        anchor_snapshot=anchor,
+        current_snapshot=replace(current, best_bid=71_200),
+        requested_quantity=20,
+        reference_price=71_500,
+        maximum_entry_price=71_500,
+        target_price=72_000,
+        policy=_executable_confirmation_policy(),
+    )
+    negative_edge = evaluate_executable_micro_confirmation(
+        anchor_snapshot=anchor,
+        current_snapshot=current,
+        requested_quantity=20,
+        reference_price=71_500,
+        maximum_entry_price=71_500,
+        target_price=71_600,
+        policy=_executable_confirmation_policy(),
+    )
+
+    assert passed.allowed
+    assert passed.modeled_net_edge_pct is not None and passed.modeled_net_edge_pct > 0
+    assert bid_deteriorated.reason == (
+        "entry_executable_micro_confirmation_bid_deteriorated"
+    )
+    assert negative_edge.reason == (
+        "entry_executable_micro_confirmation_nonpositive_net_edge"
+    )
+    assert EXECUTABLE_MICRO_CONFIRMATION_POLICY_CONTRACT["decision_authority"] == (
+        "block_selected_widget_or_episode_new_buy_only"
+    )
+
+
+def test_executable_micro_confirmation_fails_closed_without_selected_policy():
+    snapshot = _snapshot(bid_qty=1_000, ask_qty=1_000)
+    decision = evaluate_executable_micro_confirmation(
+        anchor_snapshot=snapshot,
+        current_snapshot=snapshot,
+        requested_quantity=20,
+        reference_price=71_500,
+        maximum_entry_price=71_500,
+        target_price=72_000,
+        policy=None,
+    )
+
+    assert not decision.allowed
+    assert decision.reason == "entry_executable_micro_confirmation_policy_invalid"
+
+    boolean_cost_policy = {**_executable_confirmation_policy()}
+    boolean_cost_policy["round_trip_cost_pct"] = True
+    decision = evaluate_executable_micro_confirmation(
+        anchor_snapshot=snapshot,
+        current_snapshot=snapshot,
+        requested_quantity=20,
+        reference_price=71_500,
+        maximum_entry_price=71_500,
+        target_price=72_000,
+        policy=boolean_cost_policy,
+    )
+    assert not decision.allowed
+    assert decision.reason == "entry_executable_micro_confirmation_policy_invalid"
+
+
+def test_executable_micro_confirmation_blocks_invalid_typed_snapshot():
+    anchor = replace(
+        _snapshot(bid_qty=1_000, ask_qty=1_000),
+        best_bid=0,
+        best_ask=0,
+    )
+    current = replace(_snapshot(bid_qty=1_000, ask_qty=1_000), received_ts_ms=2)
+
+    decision = evaluate_executable_micro_confirmation(
+        anchor_snapshot=anchor,
+        current_snapshot=current,
+        requested_quantity=20,
+        reference_price=71_500,
+        maximum_entry_price=71_500,
+        target_price=72_000,
+        policy=_executable_confirmation_policy(),
+    )
+
+    assert not decision.allowed
+    assert decision.reason == (
+        "entry_executable_micro_confirmation_anchor_contract_invalid"
+    )
+
+    malformed = replace(anchor, best_bid="not-a-price")
+    malformed_decision = evaluate_executable_micro_confirmation(
+        anchor_snapshot=malformed,
+        current_snapshot=current,
+        requested_quantity=20,
+        reference_price=71_500,
+        maximum_entry_price=71_500,
+        target_price=72_000,
+        policy=_executable_confirmation_policy(),
+    )
+    assert not malformed_decision.allowed
+    assert malformed_decision.reason == (
+        "entry_executable_micro_confirmation_anchor_missing"
+    )
 
 
 def test_route_mapping_keeps_regular_sor_and_nxt_sessions_separate():

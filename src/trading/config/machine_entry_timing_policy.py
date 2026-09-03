@@ -14,10 +14,13 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
+from src.trading.order.entry_liquidity_guard import (
+    EXECUTABLE_MICRO_CONFIRMATION_MODE,
+)
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
-SCHEMA = "machine_entry_timing_policy_applied_v1"
+SCHEMA = "machine_entry_timing_policy_applied_v2"
 AUTHORITY = "explicit_user_directed_machine_entry_timing_tuning_v1"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 ALLOWED_DELAYS_SEC = frozenset({0, 1, 3, 5})
@@ -38,7 +41,7 @@ ENTRY_CONFIRMATION_MAX_LATE_SEC = 10
 REQUIRED_ROLLING_WINDOWS_DAYS = (5, 10, 20)
 DEFAULT_POLICY_DIR = DATA_DIR / "runtime" / "machine_entry_timing_policy"
 FILE_PREFIX = "machine_entry_timing_policy"
-SOURCE_REPORT_SCHEMA = "machine_entry_timing_tuning_report_v1"
+SOURCE_REPORT_SCHEMA = "machine_entry_timing_tuning_report_v2"
 DEFAULT_SOURCE_REPORT_DIR = DATA_DIR / "report" / "machine_entry_timing_tuning"
 SOURCE_REPORT_PREFIX = "machine_entry_timing_tuning"
 
@@ -143,6 +146,7 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
         session = str(row.get("session") or "")
         entry_state = str(row.get("entry_state") or "*")
         delay = row.get("entry_confirmation_delay_sec")
+        executable_confirmation = row.get("executable_confirmation")
         if (
             owner not in {"widget", "episode"}
             or not scope_id
@@ -166,6 +170,14 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
             or row.get("price_effect") is not False
             or row.get("target_effect") is not False
             or row.get("exit_effect") is not False
+            or not isinstance(executable_confirmation, dict)
+            or executable_confirmation.get("mode") != EXECUTABLE_MICRO_CONFIRMATION_MODE
+            or executable_confirmation.get("supportive_confirmation_only") is not True
+            or executable_confirmation.get("require_bid_non_deterioration") is not True
+            or executable_confirmation.get("require_ask_non_deterioration") is not True
+            or executable_confirmation.get("require_positive_net_edge_after_costs")
+            is not True
+            or executable_confirmation.get("broker_receipt_exact") is not False
         ):
             return False, "entry_timing_policy_scope_contract_invalid"
         if delay > 0:
@@ -217,6 +229,36 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
                     if isinstance(evidence, dict)
                     else 0
                 )
+                runtime_round_trip_cost_pct = float(
+                    evidence.get("runtime_round_trip_cost_pct")
+                    if isinstance(evidence, dict)
+                    else "nan"
+                )
+                runtime_round_trip_cost_raw = (
+                    evidence.get("runtime_round_trip_cost_pct")
+                    if isinstance(evidence, dict)
+                    else None
+                )
+                executable_round_trip_cost_pct = float(
+                    executable_confirmation.get("round_trip_cost_pct")
+                    if isinstance(executable_confirmation, dict)
+                    else "nan"
+                )
+                executable_round_trip_cost_raw = (
+                    executable_confirmation.get("round_trip_cost_pct")
+                    if isinstance(executable_confirmation, dict)
+                    else None
+                )
+                runtime_cost_contract_sha256 = str(
+                    evidence.get("runtime_cost_contract_sha256")
+                    if isinstance(evidence, dict)
+                    else ""
+                )
+                runtime_cost_trade_date = str(
+                    evidence.get("runtime_cost_trade_date")
+                    if isinstance(evidence, dict)
+                    else ""
+                )
                 if not isinstance(evidence, dict):
                     raise ValueError("evidence")
                 observed_trading_days = _evidence_integer(
@@ -227,6 +269,9 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
                 )
                 completed_outcome_count = _evidence_integer(
                     evidence, "completed_outcome_count"
+                )
+                supportive_confirmation_observation_count = _evidence_integer(
+                    evidence, "supportive_confirmation_observation_count"
                 )
                 latest_completed_observation_date = date.fromisoformat(
                     str(evidence.get("latest_completed_observation_date") or "")
@@ -251,6 +296,26 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
                 not isinstance(evidence, dict)
                 or evidence.get("ready") is not True
                 or evidence.get("entry_confirmation_delay_sec") != delay
+                or evidence.get("confirmation_classification")
+                != "supportive_confirmation_candidate"
+                or evidence.get("supportive_confirmation_only") is not True
+                or supportive_confirmation_observation_count != completed_outcome_count
+                or isinstance(runtime_round_trip_cost_raw, bool)
+                or not math.isfinite(runtime_round_trip_cost_pct)
+                or runtime_round_trip_cost_pct < 0
+                or isinstance(executable_round_trip_cost_raw, bool)
+                or not math.isfinite(executable_round_trip_cost_pct)
+                or executable_round_trip_cost_pct != runtime_round_trip_cost_pct
+                or len(runtime_cost_contract_sha256) != 64
+                or any(
+                    char not in "0123456789abcdef"
+                    for char in runtime_cost_contract_sha256
+                )
+                or executable_confirmation.get("cost_contract_sha256")
+                != runtime_cost_contract_sha256
+                or runtime_cost_trade_date != target_date.isoformat()
+                or executable_confirmation.get("cost_trade_date")
+                != runtime_cost_trade_date
                 or observed_trading_days < MIN_OBSERVED_DAYS
                 or unique_decision_lifecycles < MIN_UNIQUE_LIFECYCLES
                 or completed_outcome_count < MIN_COMPLETED_OUTCOMES
@@ -426,5 +491,6 @@ def resolve_entry_confirmation_delay(
                 "status": "applied",
                 "scope_key": key,
                 "evidence": row.get("evidence"),
+                "executable_confirmation": row.get("executable_confirmation"),
             }
     return 0, {**provenance, "status": "scope_not_selected_baseline_immediate"}

@@ -214,7 +214,7 @@ Smoothing은 순간 tick·호가·OFI/QI 흔들림으로 action이 왕복하는 
 - entry price, target tick, cooldown, 완료 episode 상한 후보를 동일 policy version의 Control과 비교한다.
 - source-quality, 미체결, partial fill, 미청산 custody와 실제 terminal sample을 분리한다.
 - exact-date policy와 rollback이 있는 단일 bounded axis만 다음 PREOPEN 후보가 될 수 있다.
-- `micro_entry_confirmation`은 clean-baseline exact owner·symbol·session·entry-state와 실제 완료 outcome을 누적해 `0/1/3/5초` 진입 확인 지연만 고를 수 있다. 당일 completed holdout, 20 completed outcome, 5/10/20일 비용차감 EV, BBO/depth·0B/0D source-quality, delayed-entry feasibility 90%, completed paired coverage 95%, right-censored 20% 이하 floor를 모두 통과한 전체 owner 중 한 scope만 다음 exact-date policy에 반영하고, 미달이면 즉시진입 `0초`를 유지한다. 지연 뒤에는 같은 원천 signal과 기존 entry guard를 전부 다시 확인하며 coarse steady poll도 pending deadline에는 짧게 깨운다.
+- `micro_entry_confirmation`은 clean-baseline exact owner·symbol·session·entry-state와 실제 완료 outcome 중 `supportive_confirmation_candidate`만 누적해 `0/1/3/5초` 진입 확인 지연을 고를 수 있다. `adverse_veto_candidate|recheck_required|source_quality_blocked`는 live 지연 근거에서 제외한다. 당일 completed holdout, 20 completed outcome, 5/10/20일 비용차감 EV, BBO/depth·0B/0D source-quality, delayed-entry feasibility 90%, completed paired coverage 95%, right-censored 20% 이하 floor를 모두 통과한 전체 owner 중 한 scope만 다음 exact-date v2 policy에 반영하고, 미달·v1/변조 policy이면 즉시진입 `0초`를 유지한다. 선택된 지연 뒤에는 같은 원천 signal과 기존 entry guard를 전부 다시 확인하고, signal 시점과 due 시점의 exact symbol·route `ka10004` BBO가 fresh하며 bid·ask가 매수자 관점에서 악화되지 않고 owner의 기존 가격·target 안에서 정책 고정비용 차감 modeled 순 edge가 양수일 때만 기존 BUY 경로로 진행한다. 이 값은 broker receipt exact 비용이나 미래 target 체결을 주장하지 않는다. 이 확인은 신호를 만들거나 수량·가격·target을 바꾸지 않으며 coarse steady poll도 pending deadline에는 짧게 깨운다.
 - 위젯 calibration은 메인 봇 또는 에피소드 runtime을 변경하지 않는다.
 
 ### 3.5 에피소드 튜닝

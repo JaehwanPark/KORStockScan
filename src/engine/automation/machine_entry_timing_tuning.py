@@ -27,6 +27,7 @@ from src.trading.config.machine_entry_timing_policy import (
     AUTHORITY,
     CLEAN_BASELINE_DATE,
     DEFAULT_POLICY_DIR,
+    EXECUTABLE_MICRO_CONFIRMATION_MODE,
     MAX_P10_DETERIORATION_PCT,
     MAX_RIGHT_CENSORED_RATE_PCT,
     MIN_ABSOLUTE_EV_UPLIFT_PCT,
@@ -50,7 +51,7 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
-REPORT_SCHEMA = "machine_entry_timing_tuning_report_v1"
+REPORT_SCHEMA = "machine_entry_timing_tuning_report_v2"
 SOURCE_REPORT_SCHEMA = "machine_microstructure_attribution_v1"
 SOURCE_DIR = DATA_DIR / "report" / "machine_microstructure_attribution"
 OUTPUT_DIR = DATA_DIR / "report" / "machine_entry_timing_tuning"
@@ -87,7 +88,7 @@ METRIC_CONTRACT = {
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": (
         "actual_decision_timestamp_exact_scope_realized_owner_outcome_"
-        "executable_bbo_depth_and_eligible_0b_0d_ask_depletion"
+        "executable_bbo_depth_and_supportive_eligible_0b_0d_ask_depletion"
     ),
     "forbidden_uses": [
         "same_day_entry_change",
@@ -97,6 +98,7 @@ METRIC_CONTRACT = {
         "cross_owner_scope_session_or_entry_state_pooling",
         "broker_guard_hard_safety_provider_bot_or_cap_change",
         "manual_operator_exit_as_machine_target_fill_success",
+        "comparison_cost_as_broker_receipt_exact_claim",
     ],
 }
 
@@ -408,8 +410,7 @@ def _candidate_observation(
     reported_net = _finite(outcome.get("cost_aware_net_return_pct"))
     exit_execution_class = str(outcome.get("exit_execution_class") or "")
     manual_operator_exit = bool(
-        row.get("owner") == "episode"
-        and exit_execution_class == "manual_operator_exit"
+        row.get("owner") == "episode" and exit_execution_class == "manual_operator_exit"
     )
     try:
         cost_contract = comparison_cost_contract(source_date)
@@ -428,7 +429,7 @@ def _candidate_observation(
         else None
     )
     if (
-        row.get("classification") == "source_quality_blocked"
+        row.get("classification") != "supportive_confirmation_candidate"
         or row.get("owner_policy_tuning_eligible") is not True
         or row.get("actual_order_submitted") is not True
         or not str(row.get("lifecycle_id") or "")
@@ -515,11 +516,15 @@ def _candidate_observation(
         "outcome_basis": (
             "manual_operator_exit_same_realized_exit_price"
             if manual_operator_exit
-            else "machine_target_tick_preserving_exit"
-            if row.get("owner") == "episode"
-            else "widget_realized_exit_contract"
+            else (
+                "machine_target_tick_preserving_exit"
+                if row.get("owner") == "episode"
+                else "widget_realized_exit_contract"
+            )
         ),
         "comparison_cost_contract_sha256": cost_contract.get("contract_sha256"),
+        "round_trip_cost_pct": cost_pct,
+        "confirmation_classification": str(row.get("classification") or ""),
     }
 
 
@@ -529,6 +534,39 @@ def _evaluate_cohort(
     delay_sec: int,
     target_date: date,
 ) -> dict[str, Any]:
+    try:
+        runtime_cost_contract = comparison_cost_contract(
+            _next_trading_date(target_date)
+        )
+    except ValueError:
+        runtime_cost_contract = None
+    runtime_round_trip_cost_pct = _finite(
+        runtime_cost_contract.get("round_trip_cost_pct")
+        if isinstance(runtime_cost_contract, dict)
+        else None
+    )
+    runtime_cost_contract_sha256 = str(
+        (
+            runtime_cost_contract.get("contract_sha256")
+            if isinstance(runtime_cost_contract, dict)
+            else ""
+        )
+        or ""
+    )
+    runtime_cost_trade_date = str(
+        (
+            runtime_cost_contract.get("trade_date")
+            if isinstance(runtime_cost_contract, dict)
+            else ""
+        )
+        or ""
+    )
+    runtime_cost_contract_ready = bool(
+        runtime_round_trip_cost_pct is not None
+        and runtime_cost_trade_date == _next_trading_date(target_date).isoformat()
+        and len(runtime_cost_contract_sha256) == 64
+        and all(char in "0123456789abcdef" for char in runtime_cost_contract_sha256)
+    )
     observations = [
         observation
         for source_date, row in cohort_rows
@@ -651,9 +689,13 @@ def _evaluate_cohort(
         and candidate_p10 is not None
         and candidate_p10 >= baseline_p10 - MAX_P10_DETERIORATION_PCT
         and rolling_ready
+        and runtime_cost_contract_ready
     )
     return {
         "entry_confirmation_delay_sec": delay_sec,
+        "confirmation_classification": "supportive_confirmation_candidate",
+        "supportive_confirmation_only": True,
+        "supportive_confirmation_observation_count": len(observations),
         "observed_trading_days": len(observed_dates),
         "latest_completed_observation_date": (
             observed_dates[-1].isoformat() if observed_dates else None
@@ -688,6 +730,9 @@ def _evaluate_cohort(
         "absolute_ev_uplift_pct": (
             round(absolute_uplift, 8) if absolute_uplift is not None else None
         ),
+        "runtime_round_trip_cost_pct": runtime_round_trip_cost_pct,
+        "runtime_cost_trade_date": runtime_cost_trade_date or None,
+        "runtime_cost_contract_sha256": runtime_cost_contract_sha256 or None,
         "baseline_p10_pct": baseline_p10,
         "candidate_p10_pct": candidate_p10,
         "rolling_windows": rolling,
@@ -1074,6 +1119,17 @@ def build_applied_policy(
             "axis": "entry_confirmation_delay_sec",
             "entry_confirmation_delay_sec": selected["entry_confirmation_delay_sec"],
             "evidence": selected,
+            "executable_confirmation": {
+                "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
+                "supportive_confirmation_only": True,
+                "require_bid_non_deterioration": True,
+                "require_ask_non_deterioration": True,
+                "require_positive_net_edge_after_costs": True,
+                "broker_receipt_exact": False,
+                "round_trip_cost_pct": selected["runtime_round_trip_cost_pct"],
+                "cost_trade_date": selected["runtime_cost_trade_date"],
+                "cost_contract_sha256": selected["runtime_cost_contract_sha256"],
+            },
             "quantity_effect": False,
             "price_effect": False,
             "target_effect": False,

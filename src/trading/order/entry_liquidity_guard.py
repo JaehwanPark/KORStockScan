@@ -9,11 +9,12 @@ orders unchanged.
 
 from __future__ import annotations
 
+import math
 import re
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
@@ -23,6 +24,10 @@ MIN_TOUCH_QUANTITY_EACH_SIDE = 100
 REQUEST_QUANTITY_MULTIPLIER = 5
 MAX_SNAPSHOT_AGE_MS = 2_000
 ENTRY_EXECUTION_VELOCITY_POLICY_ID = "entry_execution_velocity_guard_v1"
+EXECUTABLE_MICRO_CONFIRMATION_POLICY_ID = "entry_executable_micro_confirmation_v1"
+EXECUTABLE_MICRO_CONFIRMATION_MODE = (
+    "supportive_non_deteriorating_bbo_positive_net_edge_v1"
+)
 REQUIRED_RECENT_PRINT_COUNT = 10
 MAX_RECENT_PRINT_SPAN_MS = 20_000
 MAX_LATEST_PRINT_AGE_MS = 5_000
@@ -72,10 +77,35 @@ ENTRY_EXECUTION_VELOCITY_POLICY_CONTRACT = {
     ],
 }
 
+EXECUTABLE_MICRO_CONFIRMATION_POLICY_CONTRACT = {
+    "metric_role": "exact_date_delayed_entry_executable_micro_confirmation",
+    "decision_authority": "block_selected_widget_or_episode_new_buy_only",
+    "window_policy": "selected_delay_anchor_to_due_point_fresh_bbo",
+    "sample_floor": (
+        "exact_date_entry_timing_policy_with_supportive_0b_0d_and_positive_"
+        "cost_adjusted_ev"
+    ),
+    "primary_decision_metric": "entry_ask_to_owner_target_modeled_net_edge_pct",
+    "source_quality_gate": (
+        "exact_symbol_route;fresh_anchor_and_due_ka10004;non_deteriorating_bbo;"
+        "owner_target_above_due_ask_after_effective_cost"
+    ),
+    "forbidden_uses": [
+        "standalone_signal_creation",
+        "same_day_or_unselected_scope_activation",
+        "price_quantity_target_exit_or_stop_mutation",
+        "sell_cancel_reprice_or_existing_custody_authority",
+        "main_bot_order_authority",
+        "broker_guard_or_hard_safety_bypass",
+        "missing_bbo_or_cost_imputation",
+        "broker_receipt_exact_cost_claim",
+    ],
+}
+
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "9180debf7aea0074715dd8f7a15af432afbfc403",
-    "retrieved_at_kst": "2026-08-28T14:31:24+09:00",
+    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
+    "retrieved_at_kst": "2026-09-03T15:11:43+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
@@ -235,6 +265,58 @@ class EntryExecutionVelocityDecision:
                 ENTRY_EXECUTION_VELOCITY_POLICY_CONTRACT
             ),
             "entry_execution_velocity_snapshot": asdict(self.snapshot),
+        }
+
+
+@dataclass(frozen=True)
+class ExecutableMicroConfirmationDecision:
+    allowed: bool
+    reason: str
+    requested_quantity: int
+    reference_price: int
+    maximum_entry_price: int
+    target_price: int
+    round_trip_cost_pct: float | None
+    modeled_gross_edge_pct: float | None
+    modeled_net_edge_pct: float | None
+    anchor_snapshot: EntryLiquiditySnapshot | None
+    current_snapshot: EntryLiquiditySnapshot | None
+    policy_id: str = EXECUTABLE_MICRO_CONFIRMATION_POLICY_ID
+
+    def event_fields(self) -> dict[str, Any]:
+        return {
+            "entry_executable_micro_confirmation_policy_id": self.policy_id,
+            "entry_executable_micro_confirmation_allowed": self.allowed,
+            "entry_executable_micro_confirmation_reason": self.reason,
+            "entry_executable_micro_confirmation_requested_quantity": (
+                self.requested_quantity
+            ),
+            "entry_executable_micro_confirmation_reference_price": (
+                self.reference_price
+            ),
+            "entry_executable_micro_confirmation_maximum_entry_price": (
+                self.maximum_entry_price
+            ),
+            "entry_executable_micro_confirmation_target_price": self.target_price,
+            "entry_executable_micro_confirmation_round_trip_cost_pct": (
+                self.round_trip_cost_pct
+            ),
+            "entry_executable_micro_confirmation_broker_receipt_exact": False,
+            "entry_executable_micro_confirmation_modeled_gross_edge_pct": (
+                self.modeled_gross_edge_pct
+            ),
+            "entry_executable_micro_confirmation_modeled_net_edge_pct": (
+                self.modeled_net_edge_pct
+            ),
+            "entry_executable_micro_confirmation_anchor_snapshot": (
+                asdict(self.anchor_snapshot) if self.anchor_snapshot else None
+            ),
+            "entry_executable_micro_confirmation_current_snapshot": (
+                asdict(self.current_snapshot) if self.current_snapshot else None
+            ),
+            "entry_executable_micro_confirmation_policy_contract": deepcopy(
+                EXECUTABLE_MICRO_CONFIRMATION_POLICY_CONTRACT
+            ),
         }
 
 
@@ -480,6 +562,185 @@ def evaluate_entry_liquidity(
         requested_quantity=requested,
         required_each_side_quantity=required,
         snapshot=snapshot,
+    )
+
+
+def _coerce_liquidity_snapshot(
+    value: EntryLiquiditySnapshot | Mapping[str, Any] | None,
+) -> EntryLiquiditySnapshot | None:
+    if isinstance(value, EntryLiquiditySnapshot):
+        raw: Mapping[str, Any] = asdict(value)
+    elif isinstance(value, Mapping):
+        raw = value
+    else:
+        return None
+
+    def contract_int(field: str, default: object | None = None) -> int:
+        candidate = raw.get(field, default)
+        if isinstance(candidate, bool):
+            raise ValueError(f"boolean_is_not_{field}")
+        return int(candidate)
+
+    try:
+        return EntryLiquiditySnapshot(
+            source_ok=raw.get("source_ok") is True,
+            symbol=str(raw.get("symbol") or ""),
+            route=str(raw.get("route") or "").upper(),
+            request_code=str(raw.get("request_code") or ""),
+            source=str(raw.get("source") or "ka10004_rest_orderbook"),
+            best_bid=contract_int("best_bid"),
+            best_ask=contract_int("best_ask"),
+            best_bid_qty=contract_int("best_bid_qty"),
+            best_ask_qty=contract_int("best_ask_qty"),
+            bid_total_qty=contract_int("bid_total_qty", 0),
+            ask_total_qty=contract_int("ask_total_qty", 0),
+            age_ms=contract_int("age_ms", 0),
+            received_ts_ms=contract_int("received_ts_ms"),
+            error=str(raw.get("error") or ""),
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def evaluate_executable_micro_confirmation(
+    *,
+    anchor_snapshot: EntryLiquiditySnapshot | Mapping[str, Any] | None,
+    current_snapshot: EntryLiquiditySnapshot | Mapping[str, Any] | None,
+    requested_quantity: int,
+    reference_price: int,
+    maximum_entry_price: int,
+    target_price: int,
+    policy: Mapping[str, Any] | None,
+) -> ExecutableMicroConfirmationDecision:
+    """Confirm one selected delayed entry without creating a new signal.
+
+    The exact-date timing policy is selected from supportive 0B/0D and
+    cost-adjusted completed outcomes.  At the due point this guard requires a
+    fresh executable book that has not deteriorated from the signal anchor and
+    still leaves positive owner-target edge after the policy-pinned comparison
+    cost.  Missing source or policy evidence always blocks the selected entry.
+    """
+
+    try:
+        requested = _positive_int(requested_quantity)
+    except (TypeError, ValueError):
+        requested = 0
+    try:
+        reference = _positive_int(reference_price)
+    except (TypeError, ValueError):
+        reference = 0
+    try:
+        maximum_entry = _positive_int(maximum_entry_price)
+    except (TypeError, ValueError):
+        maximum_entry = 0
+    try:
+        target = _positive_int(target_price)
+    except (TypeError, ValueError):
+        target = 0
+    anchor = _coerce_liquidity_snapshot(anchor_snapshot)
+    current = _coerce_liquidity_snapshot(current_snapshot)
+    cost_pct: float | None = None
+    if isinstance(policy, Mapping):
+        raw_cost = policy.get("round_trip_cost_pct")
+        try:
+            parsed_cost = float(raw_cost)
+        except (TypeError, ValueError):
+            parsed_cost = math.nan
+        if (
+            not isinstance(raw_cost, bool)
+            and math.isfinite(parsed_cost)
+            and parsed_cost >= 0
+        ):
+            cost_pct = parsed_cost
+
+    gross_edge_pct: float | None = None
+    net_edge_pct: float | None = None
+    reason = "entry_executable_micro_confirmation_passed"
+    if (
+        not isinstance(policy, Mapping)
+        or policy.get("mode") != EXECUTABLE_MICRO_CONFIRMATION_MODE
+        or policy.get("supportive_confirmation_only") is not True
+        or policy.get("require_bid_non_deterioration") is not True
+        or policy.get("require_ask_non_deterioration") is not True
+        or policy.get("require_positive_net_edge_after_costs") is not True
+        or policy.get("broker_receipt_exact") is not False
+        or cost_pct is None
+    ):
+        reason = "entry_executable_micro_confirmation_policy_invalid"
+    elif requested <= 0 or reference <= 0:
+        reason = "entry_executable_micro_confirmation_input_invalid"
+    elif anchor is None:
+        reason = "entry_executable_micro_confirmation_anchor_missing"
+    elif current is None:
+        reason = "entry_executable_micro_confirmation_current_missing"
+    elif not anchor.source_ok:
+        reason = anchor.error or "entry_executable_micro_confirmation_anchor_invalid"
+    elif not current.source_ok:
+        reason = current.error or "entry_executable_micro_confirmation_current_invalid"
+    elif (
+        anchor.best_bid <= 0
+        or anchor.best_ask <= 0
+        or anchor.best_ask < anchor.best_bid
+        or anchor.best_bid_qty < 0
+        or anchor.best_ask_qty < 0
+        or anchor.age_ms < 0
+        or anchor.received_ts_ms <= 0
+    ):
+        reason = "entry_executable_micro_confirmation_anchor_contract_invalid"
+    elif (
+        current.best_bid <= 0
+        or current.best_ask <= 0
+        or current.best_ask < current.best_bid
+        or current.best_bid_qty < 0
+        or current.best_ask_qty < 0
+        or current.age_ms < 0
+        or current.received_ts_ms <= 0
+    ):
+        reason = "entry_executable_micro_confirmation_current_contract_invalid"
+    elif anchor.age_ms > MAX_SNAPSHOT_AGE_MS:
+        reason = "entry_executable_micro_confirmation_anchor_stale"
+    elif current.age_ms > MAX_SNAPSHOT_AGE_MS:
+        reason = "entry_executable_micro_confirmation_current_stale"
+    elif (
+        anchor.symbol != current.symbol
+        or anchor.route != current.route
+        or anchor.request_code != current.request_code
+    ):
+        reason = "entry_executable_micro_confirmation_scope_mismatch"
+    elif current.received_ts_ms < anchor.received_ts_ms:
+        reason = "entry_executable_micro_confirmation_time_regression"
+    elif current.best_bid < anchor.best_bid:
+        reason = "entry_executable_micro_confirmation_bid_deteriorated"
+    elif current.best_ask > anchor.best_ask:
+        reason = "entry_executable_micro_confirmation_ask_deteriorated"
+    elif current.best_ask_qty < requested:
+        reason = "entry_executable_micro_confirmation_ask_depth_insufficient"
+    elif maximum_entry <= 0 or current.best_ask > maximum_entry:
+        reason = "entry_executable_micro_confirmation_not_executable_at_owner_limit"
+    elif target <= current.best_ask:
+        reason = "entry_executable_micro_confirmation_target_not_above_ask"
+    else:
+        gross_edge_pct = (target / current.best_ask - 1.0) * 100.0
+        net_edge_pct = gross_edge_pct - cost_pct
+        if net_edge_pct <= 0:
+            reason = "entry_executable_micro_confirmation_nonpositive_net_edge"
+
+    return ExecutableMicroConfirmationDecision(
+        allowed=reason == "entry_executable_micro_confirmation_passed",
+        reason=reason,
+        requested_quantity=requested,
+        reference_price=reference,
+        maximum_entry_price=maximum_entry,
+        target_price=target,
+        round_trip_cost_pct=cost_pct,
+        modeled_gross_edge_pct=(
+            round(gross_edge_pct, 8) if gross_edge_pct is not None else None
+        ),
+        modeled_net_edge_pct=(
+            round(net_edge_pct, 8) if net_edge_pct is not None else None
+        ),
+        anchor_snapshot=anchor,
+        current_snapshot=current,
     )
 
 

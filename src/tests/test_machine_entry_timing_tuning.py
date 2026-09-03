@@ -14,6 +14,7 @@ from src.engine.automation.machine_entry_timing_tuning import (
 )
 from src.trading.config.machine_entry_timing_policy import (
     AUTHORITY,
+    EXECUTABLE_MICRO_CONFIRMATION_MODE,
     policy_hash,
     resolve_entry_confirmation_delay,
     scope_key,
@@ -76,6 +77,34 @@ def _entry_row(source_date: date, index: int) -> dict:
     }
 
 
+def _executable_confirmation() -> dict:
+    return {
+        "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
+        "supportive_confirmation_only": True,
+        "require_bid_non_deterioration": True,
+        "require_ask_non_deterioration": True,
+        "require_positive_net_edge_after_costs": True,
+        "broker_receipt_exact": False,
+        "round_trip_cost_pct": 0.23,
+        "cost_trade_date": "2026-08-28",
+        "cost_contract_sha256": "b" * 64,
+    }
+
+
+def _add_supportive_confirmation_evidence(evidence: dict) -> dict:
+    evidence.update(
+        {
+            "confirmation_classification": "supportive_confirmation_candidate",
+            "supportive_confirmation_only": True,
+            "supportive_confirmation_observation_count": 20,
+            "runtime_round_trip_cost_pct": 0.23,
+            "runtime_cost_trade_date": "2026-08-28",
+            "runtime_cost_contract_sha256": "b" * 64,
+        }
+    )
+    return evidence
+
+
 def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
     tmp_path: Path,
 ) -> None:
@@ -118,6 +147,20 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
     assert report["decision"] == "select_one_next_session_entry_confirmation_delay"
     assert report["winner"]["selected"]["entry_confirmation_delay_sec"] == 1
     assert len(applied["scopes"]) == 1
+    applied_scope = next(iter(applied["scopes"].values()))
+    assert applied_scope["executable_confirmation"] == {
+        "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
+        "supportive_confirmation_only": True,
+        "require_bid_non_deterioration": True,
+        "require_ask_non_deterioration": True,
+        "require_positive_net_edge_after_costs": True,
+        "broker_receipt_exact": False,
+        "round_trip_cost_pct": 0.23,
+        "cost_trade_date": applied_scope["evidence"]["runtime_cost_trade_date"],
+        "cost_contract_sha256": applied_scope["evidence"][
+            "runtime_cost_contract_sha256"
+        ],
+    }
     effective_date = date.fromisoformat(applied["target_date"])
     assert validate_applied_policy(applied, target_date=effective_date) == (
         True,
@@ -139,6 +182,9 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
     )
     assert delay == 1
     assert provenance["status"] == "applied"
+    assert provenance["executable_confirmation"]["mode"] == (
+        EXECUTABLE_MICRO_CONFIRMATION_MODE
+    )
 
     source_report_path.write_text(json.dumps({**report, "decision": "tampered"}))
     delay, provenance = resolve_entry_confirmation_delay(
@@ -155,30 +201,47 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
     assert provenance["status"] == "entry_timing_source_report_contract_invalid"
 
 
+def test_adverse_or_recheck_micro_classification_cannot_select_entry_delay() -> None:
+    source_date = date(2026, 8, 27)
+    for classification in ("adverse_veto_candidate", "recheck_required"):
+        row = _entry_row(source_date, 1)
+        row["classification"] = classification
+        assert (
+            _candidate_observation(
+                source_date=source_date,
+                row=row,
+                delay_sec=1,
+            )
+            is None
+        )
+
+
 def test_policy_rejects_multiple_same_stage_selected_scopes() -> None:
     target_date = date(2026, 8, 28)
-    evidence = {
-        "ready": True,
-        "entry_confirmation_delay_sec": 1,
-        "observed_trading_days": 20,
-        "unique_decision_lifecycles": 20,
-        "completed_outcome_count": 20,
-        "latest_completed_observation_date": "2026-08-27",
-        "target_date_in_completed_observations": True,
-        "source_quality_adjusted_ev_pct": 0.1,
-        "absolute_ev_uplift_pct": 0.01,
-        "baseline_p10_pct": 0.0,
-        "candidate_p10_pct": 0.01,
-        "bbo_complete_rate_pct": 100.0,
-        "depth_coverage_pct": 100.0,
-        "paired_completed_coverage_rate_pct": 100.0,
-        "delayed_entry_feasibility_rate_pct": 100.0,
-        "right_censored_rate_pct": 0.0,
-        "rolling_windows": {
-            str(window): {"complete": True, "positive_and_improved": True}
-            for window in (5, 10, 20)
-        },
-    }
+    evidence = _add_supportive_confirmation_evidence(
+        {
+            "ready": True,
+            "entry_confirmation_delay_sec": 1,
+            "observed_trading_days": 20,
+            "unique_decision_lifecycles": 20,
+            "completed_outcome_count": 20,
+            "latest_completed_observation_date": "2026-08-27",
+            "target_date_in_completed_observations": True,
+            "source_quality_adjusted_ev_pct": 0.1,
+            "absolute_ev_uplift_pct": 0.01,
+            "baseline_p10_pct": 0.0,
+            "candidate_p10_pct": 0.01,
+            "bbo_complete_rate_pct": 100.0,
+            "depth_coverage_pct": 100.0,
+            "paired_completed_coverage_rate_pct": 100.0,
+            "delayed_entry_feasibility_rate_pct": 100.0,
+            "right_censored_rate_pct": 0.0,
+            "rolling_windows": {
+                str(window): {"complete": True, "positive_and_improved": True}
+                for window in (5, 10, 20)
+            },
+        }
+    )
     scopes = {}
     for symbol in ("005930", "034020"):
         key = scope_key(
@@ -197,13 +260,14 @@ def test_policy_rejects_multiple_same_stage_selected_scopes() -> None:
             "axis": "entry_confirmation_delay_sec",
             "entry_confirmation_delay_sec": 1,
             "evidence": evidence,
+            "executable_confirmation": _executable_confirmation(),
             "quantity_effect": False,
             "price_effect": False,
             "target_effect": False,
             "exit_effect": False,
         }
     payload = {
-        "schema": "machine_entry_timing_policy_applied_v1",
+        "schema": "machine_entry_timing_policy_applied_v2",
         "target_date": target_date.isoformat(),
         "source_date": "2026-08-27",
         "clean_tuning_baseline_date": "2026-06-05",
@@ -224,6 +288,15 @@ def test_policy_rejects_multiple_same_stage_selected_scopes() -> None:
     )
 
 
+def test_policy_rejects_legacy_schema_before_selected_scope_consumption() -> None:
+    target_date = date(2026, 8, 28)
+
+    assert validate_applied_policy(
+        {"schema": "machine_entry_timing_policy_applied_v1"},
+        target_date=target_date,
+    ) == (False, "entry_timing_policy_schema_invalid")
+
+
 def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
     target_date = date(2026, 8, 28)
     key = scope_key(
@@ -233,27 +306,30 @@ def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
         session="KRX_REGULAR",
         entry_state="ENTRY_READY",
     )
-    evidence = {
-        "ready": True,
-        "entry_confirmation_delay_sec": 1,
-        "observed_trading_days": 20,
-        "unique_decision_lifecycles": 20,
-        "completed_outcome_count": 20,
-        "latest_completed_observation_date": "2026-08-27",
-        "target_date_in_completed_observations": True,
-        "source_quality_adjusted_ev_pct": 0.1,
-        "absolute_ev_uplift_pct": 0.01,
-        "baseline_p10_pct": 0.0,
-        "candidate_p10_pct": 0.01,
-        "bbo_complete_rate_pct": 100.0,
-        "depth_coverage_pct": 100.0,
-        "paired_completed_coverage_rate_pct": 100.0,
-        "right_censored_rate_pct": 0.0,
-        "rolling_windows": {
-            str(window): {"complete": True, "positive_and_improved": True}
-            for window in (5, 10, 20)
-        },
-    }
+    evidence = _add_supportive_confirmation_evidence(
+        {
+            "ready": True,
+            "entry_confirmation_delay_sec": 1,
+            "observed_trading_days": 20,
+            "unique_decision_lifecycles": 20,
+            "completed_outcome_count": 20,
+            "latest_completed_observation_date": "2026-08-27",
+            "target_date_in_completed_observations": True,
+            "source_quality_adjusted_ev_pct": 0.1,
+            "absolute_ev_uplift_pct": 0.01,
+            "baseline_p10_pct": 0.0,
+            "candidate_p10_pct": 0.01,
+            "bbo_complete_rate_pct": 100.0,
+            "depth_coverage_pct": 100.0,
+            "paired_completed_coverage_rate_pct": 100.0,
+            "delayed_entry_feasibility_rate_pct": 100.0,
+            "right_censored_rate_pct": 0.0,
+            "rolling_windows": {
+                str(window): {"complete": True, "positive_and_improved": True}
+                for window in (5, 10, 20)
+            },
+        }
+    )
     scopes = {
         key: {
             "owner": "widget",
@@ -264,6 +340,7 @@ def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
             "axis": "entry_confirmation_delay_sec",
             "entry_confirmation_delay_sec": 1,
             "evidence": evidence,
+            "executable_confirmation": _executable_confirmation(),
             "quantity_effect": False,
             "price_effect": False,
             "target_effect": False,
@@ -271,7 +348,7 @@ def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
         }
     }
     payload = {
-        "schema": "machine_entry_timing_policy_applied_v1",
+        "schema": "machine_entry_timing_policy_applied_v2",
         "target_date": target_date.isoformat(),
         "source_date": "2026-08-27",
         "clean_tuning_baseline_date": "2026-06-05",
@@ -279,11 +356,14 @@ def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
         "source_report": "unused.json",
         "source_report_canonical_sha256": "a" * 64,
         "scopes": scopes,
+        "policy_hash": policy_hash(scopes),
         "runtime_effect": True,
         "allowed_runtime_apply": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
+        "selection_status": "select_one_next_session_entry_confirmation_delay",
     }
+    assert validate_applied_policy(payload, target_date=target_date) == (True, "ready")
     for field in (
         "observed_trading_days",
         "unique_decision_lifecycles",
@@ -305,6 +385,20 @@ def test_policy_rejects_malformed_integer_evidence_without_raising() -> None:
         "entry_timing_policy_evidence_floor_invalid",
     )
 
+    for location in ("evidence", "executable_confirmation"):
+        malformed = json.loads(json.dumps(payload))
+        field = (
+            "runtime_round_trip_cost_pct"
+            if location == "evidence"
+            else "round_trip_cost_pct"
+        )
+        malformed["scopes"][key][location][field] = True
+        malformed["policy_hash"] = policy_hash(malformed["scopes"])
+        assert validate_applied_policy(malformed, target_date=target_date) == (
+            False,
+            "entry_timing_policy_evidence_floor_invalid",
+        )
+
 
 def test_policy_rejects_out_of_range_percentage_evidence() -> None:
     target_date = date(2026, 8, 28)
@@ -315,28 +409,30 @@ def test_policy_rejects_out_of_range_percentage_evidence() -> None:
         session="KRX_REGULAR",
         entry_state="ENTRY_READY",
     )
-    evidence = {
-        "ready": True,
-        "entry_confirmation_delay_sec": 1,
-        "observed_trading_days": 20,
-        "unique_decision_lifecycles": 20,
-        "completed_outcome_count": 20,
-        "latest_completed_observation_date": "2026-08-27",
-        "target_date_in_completed_observations": True,
-        "source_quality_adjusted_ev_pct": 0.1,
-        "absolute_ev_uplift_pct": 0.01,
-        "baseline_p10_pct": 0.0,
-        "candidate_p10_pct": 0.01,
-        "bbo_complete_rate_pct": 101.0,
-        "depth_coverage_pct": 100.0,
-        "paired_completed_coverage_rate_pct": 100.0,
-        "delayed_entry_feasibility_rate_pct": 100.0,
-        "right_censored_rate_pct": 0.0,
-        "rolling_windows": {
-            str(window): {"complete": True, "positive_and_improved": True}
-            for window in (5, 10, 20)
-        },
-    }
+    evidence = _add_supportive_confirmation_evidence(
+        {
+            "ready": True,
+            "entry_confirmation_delay_sec": 1,
+            "observed_trading_days": 20,
+            "unique_decision_lifecycles": 20,
+            "completed_outcome_count": 20,
+            "latest_completed_observation_date": "2026-08-27",
+            "target_date_in_completed_observations": True,
+            "source_quality_adjusted_ev_pct": 0.1,
+            "absolute_ev_uplift_pct": 0.01,
+            "baseline_p10_pct": 0.0,
+            "candidate_p10_pct": 0.01,
+            "bbo_complete_rate_pct": 101.0,
+            "depth_coverage_pct": 100.0,
+            "paired_completed_coverage_rate_pct": 100.0,
+            "delayed_entry_feasibility_rate_pct": 100.0,
+            "right_censored_rate_pct": 0.0,
+            "rolling_windows": {
+                str(window): {"complete": True, "positive_and_improved": True}
+                for window in (5, 10, 20)
+            },
+        }
+    )
     scopes = {
         key: {
             "owner": "widget",
@@ -347,6 +443,7 @@ def test_policy_rejects_out_of_range_percentage_evidence() -> None:
             "axis": "entry_confirmation_delay_sec",
             "entry_confirmation_delay_sec": 1,
             "evidence": evidence,
+            "executable_confirmation": _executable_confirmation(),
             "quantity_effect": False,
             "price_effect": False,
             "target_effect": False,
@@ -354,7 +451,7 @@ def test_policy_rejects_out_of_range_percentage_evidence() -> None:
         }
     }
     payload = {
-        "schema": "machine_entry_timing_policy_applied_v1",
+        "schema": "machine_entry_timing_policy_applied_v2",
         "target_date": target_date.isoformat(),
         "source_date": "2026-08-27",
         "clean_tuning_baseline_date": "2026-06-05",

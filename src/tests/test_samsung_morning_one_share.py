@@ -9,6 +9,7 @@ from src.engine.risk.market_weakness_entry_guard import (
 )
 from src.trading.order import regular_two_leg_machine as regular_machine_module
 from src.trading.order.entry_liquidity_guard import (
+    EXECUTABLE_MICRO_CONFIRMATION_MODE,
     EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
 )
@@ -55,6 +56,8 @@ class FakeGateway:
         self.liquidity_calls: list[str] = []
         self.execution_velocity_span_ms = 1_000
         self.execution_velocity_calls: list[str] = []
+        self.best_bid = 291_000
+        self.best_ask = 291_500
 
     def _accepted(self, prefix: str) -> SubmitResult:
         self.sequence += 1
@@ -72,8 +75,8 @@ class FakeGateway:
             "005930",
             route,
             f"005930_{suffix}",
-            best_bid=300_000,
-            best_ask=300_500,
+            best_bid=self.best_bid,
+            best_ask=self.best_ask,
             best_bid_qty=self.best_bid_qty,
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
@@ -136,6 +139,19 @@ class FakeGateway:
 
 def _at(day: int, hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 8, day, hour, minute, tzinfo=KST)
+
+
+def _executable_confirmation() -> dict:
+    return {
+        "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
+        "supportive_confirmation_only": True,
+        "require_bid_non_deterioration": True,
+        "require_ask_non_deterioration": True,
+        "require_positive_net_edge_after_costs": True,
+        "broker_receipt_exact": False,
+        "round_trip_cost_pct": 0.23,
+        "cost_contract_sha256": "c" * 64,
+    }
 
 
 def _machine(tmp_path: Path, gateway: FakeGateway, *, live: bool = True):
@@ -326,6 +342,7 @@ def test_nxt_entry_confirmation_delay_changes_only_submission_time(
                 "status": "applied",
                 "policy_hash": "a" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         )
 
@@ -343,6 +360,7 @@ def test_nxt_entry_confirmation_delay_changes_only_submission_time(
     assert armed["attempt_consumed"] is False
     assert armed["pending_entry_confirmation"]["delay_sec"] == 3
     assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
+    assert gateway.liquidity_calls == ["NXT", "NXT"]
     assert submitted["signal_features"]["signal_decision_at"] == armed_at.isoformat()
     assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
     assert all(call["session"] == "NXT_PREMARKET" for call in calls)

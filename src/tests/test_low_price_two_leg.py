@@ -38,6 +38,7 @@ from src.trading.low_price_two_leg.gateway import (
 )
 from src.trading.low_price_two_leg.machine import LowPriceTwoLegMachine
 from src.trading.order.entry_liquidity_guard import (
+    EXECUTABLE_MICRO_CONFIRMATION_MODE,
     EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
 )
@@ -212,6 +213,19 @@ def _episode_market_weakness_decision(now: datetime, *, mode: str):
     )
 
 
+def _executable_confirmation() -> dict:
+    return {
+        "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
+        "supportive_confirmation_only": True,
+        "require_bid_non_deterioration": True,
+        "require_ask_non_deterioration": True,
+        "require_positive_net_edge_after_costs": True,
+        "broker_receipt_exact": False,
+        "round_trip_cost_pct": 0.23,
+        "cost_contract_sha256": "c" * 64,
+    }
+
+
 class FakeGateway:
     def __init__(self, profile_id: str) -> None:
         self.profile_id = profile_id
@@ -228,6 +242,8 @@ class FakeGateway:
         self.execution_velocity_latest_age_ms = 0
         self.execution_velocity_recent_volume = 1_000
         self.execution_velocity_calls: list[str] = []
+        self.best_bid = int(self.bars[-1].close_price)
+        self.best_ask = int(self.bars[-1].close_price)
 
     def completed_sor_minute_bars(self, *, trade_date, now):
         return MinuteBarsSnapshot(True, self.bars)
@@ -239,8 +255,8 @@ class FakeGateway:
             PROFILES[self.profile_id].symbol,
             route,
             f"{PROFILES[self.profile_id].symbol}_AL",
-            best_bid=100_000,
-            best_ask=100_100,
+            best_bid=self.best_bid,
+            best_ask=self.best_ask,
             best_bid_qty=self.best_bid_qty,
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
@@ -1713,6 +1729,7 @@ def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkey
                 "status": "applied",
                 "policy_hash": "a" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         ),
     )
@@ -1732,8 +1749,55 @@ def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkey
     assert armed["pending_entry_confirmation"]["delay_sec"] == 3
     assert waiting["status"] == "READY"
     assert gateway.buy_calls == [22_650, 22_600]
+    assert gateway.liquidity_calls == ["SOR", "SOR"]
     assert submitted["signal_features"]["signal_decision_at"] == first_at.isoformat()
     assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
+    assert (
+        submitted["signal_features"]["entry_executable_micro_confirmation"][
+            "entry_executable_micro_confirmation_allowed"
+        ]
+        is True
+    )
+
+
+def test_machine_selected_delay_blocks_deteriorating_executable_bbo(
+    tmp_path, monkeypatch
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    gateway = FakeGateway(profile.profile_id)
+    monkeypatch.setattr(
+        "src.trading.order.regular_two_leg_machine.resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "a" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
+            },
+        ),
+    )
+    machine = LowPriceTwoLegMachine(
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "state.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+    first_at = _profile_run_at(profile.profile_id)
+
+    machine.run_once(first_at)
+    gateway.best_bid = move_price_by_ticks(gateway.best_bid, -1)
+    blocked = machine.run_once(first_at + timedelta(seconds=3))
+
+    assert gateway.buy_calls == []
+    assert blocked["status"] == "NO_TRADE"
+    assert blocked["blocked_reason"] == (
+        "entry_executable_micro_confirmation_bid_deteriorated"
+    )
+    assert blocked["audit"][-1]["action"] == (
+        "entry_executable_micro_confirmation_blocked_before_buy"
+    )
 
 
 def test_machine_one_second_delay_survives_six_second_live_poll(tmp_path, monkeypatch):
@@ -1747,6 +1811,7 @@ def test_machine_one_second_delay_survives_six_second_live_poll(tmp_path, monkey
                 "status": "applied",
                 "policy_hash": "a" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         ),
     )
@@ -1786,6 +1851,7 @@ def test_machine_discards_entry_confirmation_after_recheck_window(
                 "status": "applied",
                 "policy_hash": "a" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         ),
     )
@@ -1818,6 +1884,7 @@ def test_machine_blocks_malformed_persisted_entry_confirmation(tmp_path, monkeyp
                 "status": "applied",
                 "policy_hash": "a" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         ),
     )

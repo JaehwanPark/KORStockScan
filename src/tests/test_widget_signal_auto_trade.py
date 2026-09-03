@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.trading.order.entry_liquidity_guard import (
+    EXECUTABLE_MICRO_CONFIRMATION_MODE,
     EntryExecutionVelocitySnapshot,
     EntryLiquiditySnapshot,
 )
@@ -106,6 +107,8 @@ class FakeGateway:
         self.sequence = 0
         self.best_bid_qty = 1_000
         self.best_ask_qty = 1_000
+        self.best_bid = 100_000
+        self.best_ask = 100_100
         self.liquidity_calls = []
         self.execution_velocity_span_ms = 1_000
         self.execution_velocity_latest_age_ms = 0
@@ -124,8 +127,8 @@ class FakeGateway:
             code,
             route,
             f"{code}_{suffix}",
-            best_bid=100_000,
-            best_ask=100_100,
+            best_bid=self.best_bid,
+            best_ask=self.best_ask,
             best_bid_qty=self.best_bid_qty,
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
@@ -201,6 +204,7 @@ def _payload(now, *, entry_id=None, entry_state="ENTRY_CAUTION", exit_id=None):
         "status": "ok",
         "symbol": "999999",
         "market_venue": "KRX",
+        "current_price": 100_100,
         "strategy_profile": FakeContract.STRATEGY_PROFILE,
         "observed_at_kst": now.isoformat(),
         "advisory": {},
@@ -219,6 +223,19 @@ def _payload(now, *, entry_id=None, entry_state="ENTRY_CAUTION", exit_id=None):
             if exit_id
             else None
         ),
+    }
+
+
+def _executable_confirmation() -> dict:
+    return {
+        "mode": EXECUTABLE_MICRO_CONFIRMATION_MODE,
+        "supportive_confirmation_only": True,
+        "require_bid_non_deterioration": True,
+        "require_ask_non_deterioration": True,
+        "require_positive_net_edge_after_costs": True,
+        "broker_receipt_exact": False,
+        "round_trip_cost_pct": 0.23,
+        "cost_contract_sha256": "c" * 64,
     }
 
 
@@ -498,6 +515,7 @@ def test_widget_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkeyp
                 "status": "applied",
                 "policy_hash": "b" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         ),
     )
@@ -509,11 +527,69 @@ def test_widget_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkeyp
     assert armed["symbols"]["999999"]["pending_entry_confirmation"]["delay_sec"] == 3
     assert waiting["symbols"]["999999"]["entry_episode_open"] is False
     assert gateway.buy_calls == [("999999", 1, "SOR")]
+    assert gateway.liquidity_calls == [("999999", "KRX"), ("999999", "KRX")]
     symbol_state = submitted["symbols"]["999999"]
     assert symbol_state["entry_episode_open"] is True
     assert symbol_state["entry_confirmation_delay_sec"] == 3
     assert any(
         event["event_type"] == "entry_confirmation_armed" for event in recorder.events
+    )
+    assert any(
+        event["event_type"] == "entry_executable_micro_confirmation_passed"
+        for event in recorder.events
+    )
+
+
+def test_widget_selected_delay_blocks_deteriorating_executable_bbo(
+    tmp_path, monkeypatch
+):
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="ENTRY-1")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
+    monkeypatch.setattr(
+        engine,
+        "resolve_entry_confirmation_delay",
+        lambda **kwargs: (
+            3,
+            {
+                "status": "applied",
+                "policy_hash": "b" * 64,
+                "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
+            },
+        ),
+    )
+
+    trader.run_once(now)
+    gateway.best_bid = 99_900
+    blocked = trader.run_once(now + timedelta(seconds=3))
+
+    assert gateway.buy_calls == []
+    state = blocked["symbols"]["999999"]
+    assert state["pending_entry_confirmation"] is None
+    assert any(
+        event["event_type"] == "entry_blocked_executable_micro_confirmation"
+        and event["entry_executable_micro_confirmation_reason"]
+        == "entry_executable_micro_confirmation_bid_deteriorated"
+        for event in recorder.events
+    )
+
+    trader.run_once(now + timedelta(seconds=4))
+
+    assert gateway.buy_calls == []
+    assert (
+        sum(
+            event["event_type"] == "entry_blocked_executable_micro_confirmation"
+            for event in recorder.events
+        )
+        == 1
+    )
+    assert (
+        sum(
+            event["event_type"] == "entry_confirmation_armed"
+            for event in recorder.events
+        )
+        == 1
     )
 
 
@@ -530,6 +606,7 @@ def test_widget_discards_entry_confirmation_after_recheck_window(tmp_path, monke
                 "status": "applied",
                 "policy_hash": "b" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         ),
     )
@@ -558,6 +635,7 @@ def test_widget_discards_malformed_persisted_entry_confirmation(tmp_path, monkey
                 "status": "applied",
                 "policy_hash": "b" * 64,
                 "target_date": kwargs["target_date"].isoformat(),
+                "executable_confirmation": _executable_confirmation(),
             },
         ),
     )
