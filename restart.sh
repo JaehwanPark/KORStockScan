@@ -32,7 +32,24 @@ START_TIMEOUT_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_START_TIMEOUT_SEC:-150}"
 POLL_SEC="${KORSTOCKSCAN_GRACEFUL_RESTART_POLL_SEC:-2}"
 BOT_TMUX_SESSION="${KORSTOCKSCAN_BOT_TMUX_SESSION:-bot}"
 RUN_BOT_PATH="$PROJECT_DIR/src/run_bot.sh"
-trap 'rm -f "$RESTART_REQUEST_TMP"' EXIT
+SAMSUNG_HANDOFF_CONFIRM="SAMSUNG_MAIN_BOT_RESTART_HANDOFF"
+SAMSUNG_HANDOFF_PLAN="$PROJECT_DIR/data/runtime/samsung_morning_main_bot_restart_handoff_plan.json"
+HANDOFF_OLD_PID=""
+
+cleanup_restart_request() {
+    rm -f "$RESTART_REQUEST_TMP"
+    if [ -n "$HANDOFF_OLD_PID" ] \
+        && [ -f "$SAMSUNG_HANDOFF_PLAN" ] \
+        && kill -0 "$HANDOFF_OLD_PID" 2>/dev/null; then
+        PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
+            -m src.trading.samsung_morning_one_share.authority_handoff \
+            --action abort \
+            --old-main-bot-pid "$HANDOFF_OLD_PID" \
+            --confirm "$SAMSUNG_HANDOFF_CONFIRM" >/dev/null 2>&1 || true
+    fi
+}
+
+trap cleanup_restart_request EXIT
 
 bot_pids() {
     pgrep -f "$BOT_PATTERN" 2>/dev/null | sort -n || true
@@ -107,6 +124,26 @@ if [ "${#OLD_PIDS[@]}" -eq 0 ]; then
     echo "Start the supervised bot with: cd $PROJECT_DIR/src && ./run_bot.sh"
     exit 1
 fi
+if [ "${#OLD_PIDS[@]}" -ne 1 ]; then
+    echo "Refusing graceful restart because bot_main.py singleton count is ${#OLD_PIDS[@]}: ${OLD_PIDS[*]}" >&2
+    exit 1
+fi
+
+echo "Validating Samsung morning owner continuity before restart ..."
+HANDOFF_OLD_PID="${OLD_PIDS[0]}"
+set +e
+HANDOFF_PREPARE_RC=0
+PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
+    -m src.trading.samsung_morning_one_share.authority_handoff \
+    --action prepare \
+    --old-main-bot-pid "${OLD_PIDS[0]}" \
+    --confirm "$SAMSUNG_HANDOFF_CONFIRM" \
+    --write || HANDOFF_PREPARE_RC=$?
+set -e
+if [ "$HANDOFF_PREPARE_RC" -ne 0 ]; then
+    echo "Samsung morning authority/custody continuity is not safe; restart blocked (rc=$HANDOFF_PREPARE_RC)." >&2
+    exit "$HANDOFF_PREPARE_RC"
+fi
 
 CURRENT_LAUNCHER_SHA256="$(current_launcher_sha256)"
 LOADED_LAUNCHER_SHA256="$(pid_env_value "${OLD_PIDS[0]}" KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256 || true)"
@@ -148,6 +185,13 @@ done
 
 if [ "$elapsed" -ge "$STOP_TIMEOUT_SEC" ]; then
     echo "Timed out waiting for previous bot PID to exit. Leaving restart.flag in place for bot_main.py."
+    set +e
+    PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
+        -m src.trading.samsung_morning_one_share.authority_handoff \
+        --action abort \
+        --old-main-bot-pid "${OLD_PIDS[0]}" \
+        --confirm "$SAMSUNG_HANDOFF_CONFIRM"
+    set -e
     exit 2
 fi
 
@@ -174,6 +218,23 @@ while [ "$elapsed" -lt "$START_TIMEOUT_SEC" ]; do
                 exit "$VERIFY_RC"
             fi
             echo "Runtime env handoff verification passed."
+            echo "Committing Samsung morning same-date PID handoff when required ..."
+            set +e
+            HANDOFF_COMMIT_RC=0
+            PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
+                -m src.trading.samsung_morning_one_share.authority_handoff \
+                --action commit \
+                --new-main-bot-pid "$pid" \
+                --confirm "$SAMSUNG_HANDOFF_CONFIRM" \
+                --write || HANDOFF_COMMIT_RC=$?
+            set -e
+            if [ "$HANDOFF_COMMIT_RC" -ne 0 ]; then
+                echo "[FAIL] Samsung morning PID handoff commit failed (rc=$HANDOFF_COMMIT_RC)." >&2
+                echo "[FAIL] New BUY remains fail-closed; do not delete the handoff plan manually." >&2
+                exit "$HANDOFF_COMMIT_RC"
+            fi
+            HANDOFF_OLD_PID=""
+            echo "Samsung morning authority/custody continuity verified."
             exit 0
         fi
     done

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -34,6 +35,7 @@ _SAMSUNG_MORNING_LIVE_UNIT = "korstockscan-samsung-morning-one-share.service"
 _SAMSUNG_MORNING_PREFLIGHT_UNIT = "korstockscan-samsung-one-share-preflight.service"
 _SAMSUNG_MORNING_TIMER_UNIT = "korstockscan-samsung-morning-one-share.timer"
 _SAMSUNG_MORNING_AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v7"
+_SAMSUNG_MORNING_HANDOFF_SCHEMA = "samsung_morning_main_bot_pid_handoff_v1"
 
 
 def reset_heartbeat():
@@ -463,9 +465,9 @@ class ProcessHealthDetector(BaseDetector):
             details.setdefault("thread_alive", {})[tname] = talive
             terminal_reason = str(tdata.get("terminal_reason") or "").strip()
             if terminal_reason:
-                details.setdefault("thread_terminal_reason", {})[
-                    tname
-                ] = terminal_reason
+                details.setdefault("thread_terminal_reason", {})[tname] = (
+                    terminal_reason
+                )
             if not talive:
                 if _is_expected_thread_terminal(
                     tname,
@@ -899,6 +901,16 @@ def _load_samsung_morning_authority() -> tuple[dict, str | None]:
     return payload, None
 
 
+def _canonical_json_sha256(value: object) -> str:
+    raw = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _samsung_authority_contract_ready(
     authority: dict,
     *,
@@ -983,6 +995,104 @@ def _samsung_authority_contract_ready(
         or main_bot_pid <= 0
     ):
         return False, "exact_date_authority_decision_invalid"
+    handoffs = authority.get("main_bot_pid_handoffs", [])
+    if handoffs is None:
+        handoffs = []
+    if not isinstance(handoffs, list) or len(handoffs) > 16:
+        return False, "exact_date_authority_handoff_history_invalid"
+    if handoffs:
+        root_pid = authority.get("preopen_main_bot_pid")
+        if isinstance(root_pid, bool) or not isinstance(root_pid, int) or root_pid <= 0:
+            return False, "exact_date_authority_handoff_root_invalid"
+        expected_previous_pid = root_pid
+        policy_sha256 = _canonical_json_sha256(policy)
+        previous_rebound_at: datetime | None = None
+        for sequence, handoff in enumerate(handoffs, start=1):
+            if (
+                not isinstance(handoff, dict)
+                or handoff.get("schema") != _SAMSUNG_MORNING_HANDOFF_SCHEMA
+                or handoff.get("status") != "committed"
+                or handoff.get("sequence") != sequence
+                or handoff.get("target_date") != target_date
+                or handoff.get("previous_main_bot_pid") != expected_previous_pid
+                or handoff.get("new_order_authority_created") is not False
+                or handoff.get("authority_deadline_bypassed") is not False
+                or handoff.get("policy_changed") is not False
+                or handoff.get("quantity_changed") is not False
+                or handoff.get("custody_changed_by_handoff") is not False
+                or handoff.get("new_buy_order_nos_during_handoff") != []
+                or handoff.get("handoff_mode")
+                not in {
+                    "prepared_graceful_restart",
+                    "explicit_custody_only_post_restart_recovery",
+                }
+            ):
+                return False, "exact_date_authority_handoff_history_invalid"
+            service_pid = handoff.get("live_service_pid")
+            expected_previous_pid = handoff.get("replacement_main_bot_pid")
+            if (
+                isinstance(expected_previous_pid, bool)
+                or not isinstance(expected_previous_pid, int)
+                or expected_previous_pid <= 0
+                or isinstance(service_pid, bool)
+                or not isinstance(service_pid, int)
+                or service_pid <= 0
+            ):
+                return False, "exact_date_authority_handoff_history_invalid"
+            runtime_verification = handoff.get("runtime_verification_after")
+            state_before = handoff.get("state_snapshot_before")
+            state_after = handoff.get("state_snapshot_after")
+            authority_sha256_before = str(handoff.get("authority_sha256_before") or "")
+            try:
+                rebound_at = datetime.fromisoformat(
+                    str(handoff.get("rebound_at_kst") or "")
+                )
+            except ValueError:
+                return False, "exact_date_authority_handoff_time_invalid"
+            if (
+                rebound_at.tzinfo is None
+                or rebound_at.astimezone(now.tzinfo).date().isoformat() != target_date
+                or (
+                    previous_rebound_at is not None
+                    and rebound_at.astimezone(now.tzinfo) < previous_rebound_at
+                )
+            ):
+                return False, "exact_date_authority_handoff_time_invalid"
+            rebound_at = rebound_at.astimezone(now.tzinfo)
+            record_seed = {
+                "sequence": sequence,
+                "target_date": target_date,
+                "previous_main_bot_pid": handoff.get("previous_main_bot_pid"),
+                "replacement_main_bot_pid": expected_previous_pid,
+                "rebound_at_kst": handoff.get("rebound_at_kst"),
+                "authority_sha256_before": handoff.get("authority_sha256_before"),
+            }
+            if (
+                len(authority_sha256_before) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in authority_sha256_before
+                )
+                or handoff.get("policy_sha256_before") != policy_sha256
+                or handoff.get("policy_sha256_after") != policy_sha256
+                or not isinstance(runtime_verification, dict)
+                or runtime_verification.get("status") != "pass"
+                or runtime_verification.get("pid") != expected_previous_pid
+                or runtime_verification.get("target_date") != target_date
+                or len(str(runtime_verification.get("artifact_sha256") or "")) != 64
+                or runtime_verification.get("runtime_policy_fail_count") != 0
+                or runtime_verification.get("dated_runtime_override_fail_count") != 0
+                or runtime_verification.get("unverified_selected_family_count") != 0
+                or not isinstance(state_before, dict)
+                or state_before.get("target_date") != target_date
+                or not isinstance(state_after, dict)
+                or state_after.get("target_date") != target_date
+                or handoff.get("handoff_id") != _canonical_json_sha256(record_seed)
+            ):
+                return False, "exact_date_authority_handoff_evidence_invalid"
+            previous_rebound_at = rebound_at
+        if main_bot_pid != expected_previous_pid:
+            return False, "exact_date_authority_handoff_current_pid_mismatch"
     if require_bound_main_bot_active and not _pid_cmdline_contains_bot_main(
         main_bot_pid
     ):

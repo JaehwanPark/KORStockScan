@@ -69,6 +69,7 @@ OFFICIAL_REFERENCE = {
 KST = ZoneInfo("Asia/Seoul")
 
 TokenLoader = Callable[[], str | None]
+NewBuyAuthorityGuard = Callable[[], tuple[bool, str]]
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,7 @@ class KiwoomOneShareGateway:
         read_pacing_enabled: bool | None = None,
         read_pacer: KiwoomEpisodeReadPacer | None = None,
         read_retry_sleep: Callable[[float], None] | None = None,
+        new_buy_authority_guard: NewBuyAuthorityGuard | None = None,
     ) -> None:
         self.session = request_session or requests.Session()
         self.token_loader = token_loader or (
@@ -170,6 +172,7 @@ class KiwoomOneShareGateway:
         )
         self.read_pacer = read_pacer
         self.read_retry_sleep = read_retry_sleep
+        self.new_buy_authority_guard = new_buy_authority_guard
         self._minute_bars_cache = SameMinuteSnapshotCache()
         self._account_read_cache = ShortTtlSnapshotCache(ttl_sec=1.0)
 
@@ -424,6 +427,14 @@ class KiwoomOneShareGateway:
         route = self._validate_route(route)
         price = self._validate_price(price)
         quantity = validate_owned_leg_quantity(quantity)
+        if self.new_buy_authority_guard is not None:
+            authority_ready, authority_reason = self.new_buy_authority_guard()
+            if not authority_ready:
+                return SubmitResult(
+                    False,
+                    return_code="AUTHORITY_BLOCKED",
+                    return_msg=str(authority_reason or "new_buy_authority_unavailable"),
+                )
         if is_buy_side_paused():
             return SubmitResult(False, return_code="TRADING_PAUSED")
         response, body = self._post(

@@ -860,6 +860,128 @@ def test_samsung_runtime_passes_with_exact_authority_and_live_pid(
     assert result["status"] == "healthy_active"
 
 
+def test_samsung_authority_accepts_contiguous_same_date_pid_handoff():
+    target_date = "2026-09-02"
+    now = datetime.fromisoformat(f"{target_date}T10:00:00+09:00")
+    authority = {
+        "schema": process_health_module._SAMSUNG_MORNING_AUTHORITY_SCHEMA,
+        "target_date": target_date,
+        "status": "ready",
+        "observed_at_kst": f"{target_date}T07:57:00+09:00",
+        "valid_until_kst": f"{target_date}T23:59:59+09:00",
+        "decision_authority": "explicit_user_directed_morning_two_episode_live_start",
+        "source_quality_gate": "PASS",
+        "runtime_effect": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "policy": {
+            "symbol": "005930",
+            "quantity": 20,
+            "allocation": "ten_shares_base_limit_and_ten_shares_base_plus_1tick",
+            "maximum_episodes_per_day": 2,
+            "unfilled_target": "hold_position_without_forced_exit",
+        },
+        "rollback": {
+            "action": "fail_closed_and_disable_only_morning_two_leg_timer_and_services",
+            "widget_service_effect": "none",
+        },
+        "decision": {
+            "ready": True,
+            "target_date": target_date,
+            "main_bot_active": True,
+            "main_bot_runtime_env_verified": True,
+            "main_bot_pid": 300,
+            "shared_token_available": True,
+            "operator_exclusion_source": "manual_operator",
+            "prior_reentry_state_clear": True,
+            "parallel_widget_trading_allowed": True,
+            "independent_order_ledger_required": True,
+            "blockers": [],
+        },
+        "preopen_main_bot_pid": 100,
+        "main_bot_pid_handoffs": [
+            {
+                "schema": process_health_module._SAMSUNG_MORNING_HANDOFF_SCHEMA,
+                "status": "committed",
+                "sequence": 1,
+                "target_date": target_date,
+                "previous_main_bot_pid": 100,
+                "replacement_main_bot_pid": 200,
+                "new_order_authority_created": False,
+                "authority_deadline_bypassed": False,
+                "policy_changed": False,
+                "quantity_changed": False,
+                "custody_changed_by_handoff": False,
+                "new_buy_order_nos_during_handoff": [],
+            },
+            {
+                "schema": process_health_module._SAMSUNG_MORNING_HANDOFF_SCHEMA,
+                "status": "committed",
+                "sequence": 2,
+                "target_date": target_date,
+                "previous_main_bot_pid": 200,
+                "replacement_main_bot_pid": 300,
+                "new_order_authority_created": False,
+                "authority_deadline_bypassed": False,
+                "policy_changed": False,
+                "quantity_changed": False,
+                "custody_changed_by_handoff": False,
+                "new_buy_order_nos_during_handoff": [],
+            },
+        ],
+    }
+    policy_sha256 = process_health_module._canonical_json_sha256(authority["policy"])
+    for handoff in authority["main_bot_pid_handoffs"]:
+        handoff.update(
+            {
+                "handoff_mode": "prepared_graceful_restart",
+                "rebound_at_kst": f"{target_date}T09:40:00+09:00",
+                "live_service_pid": 400,
+                "authority_sha256_before": "a" * 64,
+                "policy_sha256_before": policy_sha256,
+                "policy_sha256_after": policy_sha256,
+                "runtime_verification_after": {
+                    "status": "pass",
+                    "pid": handoff["replacement_main_bot_pid"],
+                    "target_date": target_date,
+                    "artifact_sha256": "b" * 64,
+                    "runtime_policy_fail_count": 0,
+                    "dated_runtime_override_fail_count": 0,
+                    "unverified_selected_family_count": 0,
+                },
+                "state_snapshot_before": {"target_date": target_date},
+                "state_snapshot_after": {"target_date": target_date},
+            }
+        )
+        handoff["handoff_id"] = process_health_module._canonical_json_sha256(
+            {
+                "sequence": handoff["sequence"],
+                "target_date": target_date,
+                "previous_main_bot_pid": handoff["previous_main_bot_pid"],
+                "replacement_main_bot_pid": handoff["replacement_main_bot_pid"],
+                "rebound_at_kst": handoff["rebound_at_kst"],
+                "authority_sha256_before": handoff["authority_sha256_before"],
+            }
+        )
+
+    assert process_health_module._samsung_authority_contract_ready(
+        authority,
+        authority_error=None,
+        target_date=target_date,
+        now=now,
+        require_bound_main_bot_active=False,
+    ) == (True, "ready")
+
+    authority["main_bot_pid_handoffs"][1]["previous_main_bot_pid"] = 999
+    assert process_health_module._samsung_authority_contract_ready(
+        authority,
+        authority_error=None,
+        target_date=target_date,
+        now=now,
+        require_bound_main_bot_active=False,
+    ) == (False, "exact_date_authority_handoff_history_invalid")
+
+
 def test_samsung_runtime_rejects_corrupt_authority_schema(monkeypatch, tmp_path):
     authority_path = tmp_path / "authority.json"
     monkeypatch.setattr(

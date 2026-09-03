@@ -5,16 +5,18 @@ import src.bot_main as bot_main
 from src.engine import kiwoom_sniper_v2
 
 
-def test_bot_main_restart_flag_unlink_is_race_safe():
+def test_bot_main_restart_flag_consumption_is_owner_guarded():
     source = inspect.getsource(bot_main)
-    assert "RESTART_FLAG_PATH.unlink(missing_ok=True)" in source
+    assert "consume_guarded_restart_request(" in source
+    assert "restart_guard_decision(main_bot_pid=os.getpid())" in source
     assert "source=unknown_legacy_touch" in source
-    assert "RESTART_FLAG_PATH.read_text" in source
+    assert "record_scheduled_restart_block(" in source
 
 
-def test_sniper_engine_restart_flag_unlink_is_race_safe():
+def test_sniper_engine_restart_flag_claim_terminates_the_whole_process():
     source = inspect.getsource(kiwoom_sniper_v2)
-    assert "RESTART_FLAG_PATH.unlink(missing_ok=True)" in source
+    assert "consume_guarded_restart_request(" in source
+    assert "os.kill(os.getpid(), signal.SIGTERM)" in source
 
 
 def test_restart_script_publishes_request_metadata_atomically():
@@ -27,6 +29,13 @@ def test_restart_script_publishes_request_metadata_atomically():
     assert 'RESTART_REQUEST_TMP="${RESTART_FLAG}.$$"' in source
     assert 'mv -f "$RESTART_REQUEST_TMP" "$RESTART_FLAG"' in source
     assert "requested_at_utc=" in source
+    assert "--action prepare" in source
+    assert "--action commit" in source
+    assert "--action abort" in source
+    assert "SAMSUNG_MAIN_BOT_RESTART_HANDOFF" in source
+    assert "cleanup_restart_request" in source
+    assert 'kill -0 "$HANDOFF_OLD_PID"' in source
+    assert '[ -f "$SAMSUNG_HANDOFF_PLAN" ]' in source
 
 
 def test_restart_script_reloads_stale_supervisor_only_after_child_drain():

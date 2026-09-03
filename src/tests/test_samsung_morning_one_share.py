@@ -284,6 +284,34 @@ def test_nxt_fills_submit_independent_two_tick_targets_and_complete(tmp_path):
     assert len(gateway.buy_calls) == 2
 
 
+def test_authority_block_keeps_morning_leg_planned_for_bounded_retry(tmp_path):
+    gateway = FakeGateway()
+    original_submit = gateway.submit_limit_buy
+    attempts = {"count": 0}
+
+    def guarded_submit(**kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return SubmitResult(
+                False,
+                return_code="AUTHORITY_BLOCKED",
+                return_msg="main_bot_pid_handoff_pending",
+            )
+        return original_submit(**kwargs)
+
+    gateway.submit_limit_buy = guarded_submit
+    machine = _machine(tmp_path, gateway)
+
+    waiting = machine.run_once(_at(11, 8, 1))
+    submitted = machine.run_once(_at(11, 8, 2))
+
+    assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
+    assert waiting["legs"][0]["status"] == "PLANNED"
+    assert waiting["last_action"] == "new_buy_authority_wait"
+    assert waiting["audit"][-1]["reason"] == "main_bot_pid_handoff_pending"
+    assert submitted["status"] == "BUY_OPEN"
+
+
 def test_nxt_entry_confirmation_delay_changes_only_submission_time(
     tmp_path, monkeypatch
 ):
@@ -685,6 +713,28 @@ def test_gateway_supports_sor_regular_limit_orders(monkeypatch):
     assert session.calls[0][1]["json"]["dmst_stex_tp"] == "SOR"
 
 
+def test_gateway_rechecks_new_buy_authority_without_blocking_owned_sell(monkeypatch):
+    monkeypatch.setattr(gateway_module, "is_buy_side_paused", lambda: False)
+    session = FakeSession([FakeResponse({"return_code": 0, "ord_no": "125"})])
+    gateway = KiwoomOneShareGateway(
+        request_session=session,
+        token_loader=lambda: "SHARED_TOKEN",
+        order_authority=True,
+        new_buy_authority_guard=lambda: (False, "main_bot_pid_handoff_pending"),
+        base_url="https://api.kiwoom.com",
+    )
+
+    buy = gateway.submit_limit_buy(route="SOR", price=297_500, quantity=10)
+    sell = gateway.submit_limit_sell(route="SOR", price=298_000, quantity=10)
+
+    assert buy.accepted is False
+    assert buy.return_code == "AUTHORITY_BLOCKED"
+    assert buy.return_msg == "main_bot_pid_handoff_pending"
+    assert sell.accepted is True
+    assert len(session.calls) == 1
+    assert session.calls[0][1]["headers"]["api-id"] == "kt10001"
+
+
 def test_gateway_write_is_disabled_without_both_authority_and_production():
     disabled = KiwoomOneShareGateway(
         token_loader=lambda: "token", order_authority=False
@@ -848,26 +898,26 @@ def test_live_service_fails_closed_without_daily_authority(monkeypatch):
     monkeypatch.setenv(service_module.ENABLE_ENV, "true")
     monkeypatch.setattr(
         service_module,
-        "validate_authority",
-        lambda path, **kwargs: validation_calls.append((path, kwargs))
-        or (False, "authority_target_date_mismatch"),
+        "validate_new_buy_authority",
+        lambda **kwargs: (
+            validation_calls.append(kwargs) or (False, "authority_target_date_mismatch")
+        ),
     )
     result = service_module.main(
         ["--live", "--confirm", service_module.LIVE_CONFIRMATION]
     )
     assert result == 4
     assert validation_calls == [
-        (
-            service_module.DEFAULT_AUTHORITY_PATH,
-            {"require_live_main_bot_runtime": True},
-        )
+        {"authority_path": service_module.DEFAULT_AUTHORITY_PATH}
     ]
 
 
 def test_live_service_fails_closed_without_exact_date_applied_policy(monkeypatch):
     monkeypatch.setenv(service_module.ENABLE_ENV, "true")
     monkeypatch.setattr(
-        service_module, "validate_authority", lambda path, **kwargs: (True, "ready")
+        service_module,
+        "validate_new_buy_authority",
+        lambda **kwargs: (True, "ready"),
     )
     monkeypatch.setattr(
         service_module,
@@ -917,7 +967,9 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
 
     monkeypatch.setenv(service_module.ENABLE_ENV, "true")
     monkeypatch.setattr(
-        service_module, "validate_authority", lambda path, **kwargs: (True, "ready")
+        service_module,
+        "validate_new_buy_authority",
+        lambda **kwargs: (True, "ready"),
     )
     monkeypatch.setattr(
         service_module,

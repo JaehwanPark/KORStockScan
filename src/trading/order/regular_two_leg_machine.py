@@ -1351,6 +1351,15 @@ class SamsungRegularTwoLegMachine:
                 self._block(now, f"buy_submit_ambiguous:{leg['leg_id']}")
                 return
             if not result.accepted:
+                if result.return_code == "AUTHORITY_BLOCKED":
+                    leg["status"] = "PLANNED"
+                    self._record(
+                        now,
+                        "new_buy_authority_wait",
+                        leg_id=leg["leg_id"],
+                        reason=result.return_msg,
+                    )
+                    return
                 leg["status"] = "NO_FILL"
                 self._record(
                     now,

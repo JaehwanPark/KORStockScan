@@ -69,6 +69,11 @@ from src.engine.error_detector import (
     ErrorDetectionEngine,
     REPORT_DIR as ERROR_REPORT_DIR,
 )
+from src.trading.samsung_morning_one_share.authority_handoff import (
+    consume_guarded_restart_request,
+    record_scheduled_restart_block,
+    restart_guard_decision,
+)
 
 
 # ==========================================
@@ -527,6 +532,21 @@ if __name__ == "__main__":
 
             # [스케줄러 2] 야간(23:50) 시스템 자동 재시작
             if now.hour == 23 and now.minute == 50:
+                restart_guard = restart_guard_decision(main_bot_pid=os.getpid())
+                if not restart_guard.get("allowed"):
+                    print(
+                        "🛑 삼성 모닝 독립 owner custody/authority가 남아 있어 "
+                        "야간 봇 재기동을 차단합니다. "
+                        f"reason={restart_guard.get('reason')}"
+                    )
+                    record_scheduled_restart_block(
+                        main_bot_pid=os.getpid(),
+                        request="source=bot_main_nightly_2350",
+                        decision=restart_guard,
+                        now=now.astimezone(),
+                    )
+                    time.sleep(65)
+                    continue
                 print("🌙 시스템 일일 초기화 및 메모리 정리를 위해 봇을 재가동합니다.")
                 event_bus.publish(
                     "TELEGRAM_BROADCAST",
@@ -540,17 +560,24 @@ if __name__ == "__main__":
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
             if RESTART_FLAG_PATH.exists():
-                try:
-                    restart_request = RESTART_FLAG_PATH.read_text(
-                        encoding="utf-8"
-                    ).strip()[:512]
-                except OSError as exc:
-                    restart_request = f"unreadable:{exc}"
+                restart_guard = consume_guarded_restart_request(
+                    RESTART_FLAG_PATH,
+                    main_bot_pid=os.getpid(),
+                )
+                if not restart_guard.get("claimed"):
+                    continue
+                restart_request = str(restart_guard.get("request") or "")
+                if not restart_guard.get("allowed"):
+                    print(
+                        "🛑 [시스템] 우아한 재시작 요청을 fail-closed했습니다. "
+                        f"reason={restart_guard.get('reason')} "
+                        f"request={restart_request or 'source=unknown_legacy_touch'}"
+                    )
+                    continue
                 print(
                     "🔄 [시스템] 수동 재시작 플래그 감지. 관제탑을 종료합니다. "
                     f"request={restart_request or 'source=unknown_legacy_touch'}"
                 )
-                RESTART_FLAG_PATH.unlink(missing_ok=True)
                 time.sleep(3)  # 다른 쓰레드들이 종료될 시간을 잠시 부여
                 os.kill(os.getpid(), signal.SIGTERM)
 

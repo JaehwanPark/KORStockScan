@@ -31,7 +31,9 @@ from src.trading.order.samsung_entry_policy import (
 )
 from src.trading.samsung_morning_one_share.preflight import (
     DEFAULT_AUTHORITY_PATH,
-    validate_authority,
+)
+from src.trading.samsung_morning_one_share.authority_handoff import (
+    validate_new_buy_authority,
 )
 
 ENABLE_ENV = "KORSTOCKSCAN_SAMSUNG_MORNING_ONE_SHARE_ENABLED"
@@ -90,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     if live_enabled and (args.state_path is not None or args.lock_path is not None):
         raise SystemExit("live mode forbids custom state or lock paths")
     if live_enabled:
-        authority_ok, authority_reason = validate_authority(
-            DEFAULT_AUTHORITY_PATH, require_live_main_bot_runtime=True
+        authority_ok, authority_reason = validate_new_buy_authority(
+            authority_path=DEFAULT_AUTHORITY_PATH
         )
         if not authority_ok:
             print(f"live authority artifact blocked: {authority_reason}")
@@ -144,7 +146,10 @@ def main(argv: list[str] | None = None) -> int:
     lock_handle = _acquire_lock(lock_path)
     if lock_handle is None:
         return 3
-    gateway = KiwoomOneShareGateway(order_authority=live_enabled)
+    gateway = KiwoomOneShareGateway(
+        order_authority=live_enabled,
+        new_buy_authority_guard=(validate_new_buy_authority if live_enabled else None),
+    )
     machine = SamsungMorningOneShareMachine(
         gateway=gateway,
         state_path=state_path,

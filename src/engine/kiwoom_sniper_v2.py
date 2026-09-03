@@ -29,6 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 import os
+import signal
 import shlex
 import socket
 import time
@@ -47,6 +48,9 @@ from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
+from src.trading.samsung_morning_one_share.authority_handoff import (
+    consume_guarded_restart_request,
+)
 from src.database.db_manager import (
     DBManager,
     SWING_REAL_WATCHING_ENABLED_ENV,
@@ -12144,6 +12148,18 @@ def run_sniper(is_test_mode=False):
             _sn_whb("sniper_engine")
 
             if RESTART_FLAG_PATH.exists():
+                restart_guard = consume_guarded_restart_request(
+                    RESTART_FLAG_PATH,
+                    main_bot_pid=os.getpid(),
+                )
+                if not restart_guard.get("claimed"):
+                    continue
+                if not restart_guard.get("allowed"):
+                    log_error(
+                        "[MAIN_BOT_RESTART_BLOCKED] Samsung morning authority/custody "
+                        f"guard reason={restart_guard.get('reason')}"
+                    )
+                    continue
                 print(
                     "🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다."
                 )
@@ -12153,8 +12169,8 @@ def run_sniper(is_test_mode=False):
                         "message": "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."
                     },
                 )
-                RESTART_FLAG_PATH.unlink(missing_ok=True)
                 _sn_whb("sniper_engine", alive=False)
+                os.kill(os.getpid(), signal.SIGTERM)
                 break
 
             today_key = now.date().isoformat()

@@ -237,6 +237,42 @@ def test_reentry_arms_only_after_both_first_episode_legs_complete(tmp_path):
     assert state["prerequisite"]["required_completed_leg_count"] == 2
 
 
+def test_authority_block_keeps_reentry_leg_planned_for_bounded_retry(tmp_path):
+    first_state = tmp_path / "first.json"
+    _write_first_episode(first_state)
+    gateway = ReentryGateway(_signal_bars())
+    original_submit = gateway.submit_limit_buy
+    attempts = {"count": 0}
+
+    def guarded_submit(**kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            return SubmitResult(
+                False,
+                return_code="AUTHORITY_BLOCKED",
+                return_msg="main_bot_pid_handoff_pending",
+            )
+        return original_submit(**kwargs)
+
+    gateway.submit_limit_buy = guarded_submit
+    machine = SamsungMorningSORReentryMachine(
+        gateway=gateway,
+        state_path=tmp_path / "reentry.json",
+        first_episode_state_path=first_state,
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
+    )
+
+    waiting = machine.run_once(_at(9, 18))
+    submitted = machine.run_once(_at(9, 18) + timedelta(seconds=1))
+
+    assert gateway.buy_calls == [100_200, 100_100]
+    assert waiting["legs"][0]["status"] == "PLANNED"
+    assert waiting["last_action"] == "new_buy_authority_wait"
+    assert waiting["audit"][-1]["reason"] == "main_bot_pid_handoff_pending"
+    assert submitted["status"] == "BUY_OPEN"
+
+
 def test_reentry_uses_durable_leg_completion_when_bounded_audit_was_evicted(
     tmp_path,
 ):

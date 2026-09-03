@@ -68,6 +68,26 @@ hard/protect/emergency safety. A newly observed field that is absent from the
 official contract remains raw/source-quality provenance until its semantics
 are confirmed and the local producer-to-consumer contract is reviewed.
 
+### 2026-09-03 Samsung Morning New-BUY PID Handoff Guard
+
+- Re-verified at `2026-09-03T10:18:31+09:00` against upstream commit
+  `234560d213acd8871ae344b5481aecd2f30287fa`.
+- Inspected `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
+  `kiwoom/core`, and `postman/kiwoom-openapi.postman_collection.json` for the
+  `kt10000` order envelope. The current checkout did not contain a
+  `kiwoom_docs` tree, so no missing document semantics were inferred.
+- `kt10000` remains `POST /api/dostk/ordr` with `api-id=kt10000` and the
+  existing `dmst_stex_tp`, `stk_cd`, `ord_qty`, `ord_uv`, `trde_tp`, and
+  `cond_uv` body. This change adds only a local same-date authority/PID handoff
+  guard immediately before Samsung morning and reentry BUY submission; it does
+  not change the endpoint, request fields, route, price, quantity, retry, token,
+  or broker response interpretation.
+- A pending, missing, expired, discontinuous, or unverified main-bot PID
+  handoff returns local `AUTHORITY_BLOCKED` before any broker request. The leg
+  remains planned only inside its existing entry-validity window. Existing
+  target SELL, cancel, receipt reconciliation, and custody ownership are not
+  gated by the new-BUY check.
+
 ### 2026-09-03 Limit-Down Ordered 0B/0D Observation Gate
 
 - Re-verified at `2026-09-03T01:16:11+09:00` against current upstream commit
