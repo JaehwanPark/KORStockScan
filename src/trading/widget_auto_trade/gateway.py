@@ -219,12 +219,18 @@ class KiwoomSharedTokenOrderGateway:
         request_session: requests.Session | None = None,
         token_loader: TokenLoader | None = None,
         timeout_sec: float = 5.0,
+        shared_read_control_enabled: bool | None = None,
     ) -> None:
         self.session = request_session or requests.Session()
         self.token_loader = token_loader or (
             lambda: kiwoom_utils.get_cached_kiwoom_token(CONF)
         )
         self.timeout_sec = max(1.0, float(timeout_sec))
+        self.shared_read_control_enabled = (
+            request_session is None
+            if shared_read_control_enabled is None
+            else bool(shared_read_control_enabled)
+        )
 
     def _token(self) -> str:
         token = str(self.token_loader() or "").strip()
@@ -241,11 +247,31 @@ class KiwoomSharedTokenOrderGateway:
         cont_yn: str = "N",
         next_key: str = "",
     ) -> tuple[requests.Response, dict[str, Any]]:
+        active_token = (
+            str(kiwoom_utils.resolve_kiwoom_request_token(self._token()) or "")
+            .replace("Bearer ", "")
+            .strip()
+        )
+        request_url = kiwoom_utils.get_api_url(endpoint)
+        read_api = api_id == "kt00007"
+        if read_api and self.shared_read_control_enabled:
+            admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+                token=active_token,
+                endpoint=request_url,
+                request_owner="widget_auto_trade.execution_reconciliation",
+                request_class="execution_critical",
+                api_id=api_id,
+                request_code=payload.get("stk_cd", "not_applicable"),
+            )
+            if not admission.admitted:
+                raise RuntimeError(
+                    f"widget_shared_read_rate_deferred:{admission.reason}"
+                )
         response = self.session.post(
-            kiwoom_utils.get_api_url(endpoint),
+            request_url,
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
-                "authorization": f"Bearer {self._token()}",
+                "authorization": f"Bearer {active_token}",
                 "cont-yn": cont_yn,
                 "next-key": next_key,
                 "api-id": api_id,
@@ -257,6 +283,24 @@ class KiwoomSharedTokenOrderGateway:
             body = response.json()
         except Exception:
             body = {}
+        if (
+            read_api
+            and self.shared_read_control_enabled
+            and kiwoom_utils.is_kiwoom_read_rate_limit(
+                http_status_code=getattr(response, "status_code", None),
+                response_body=body,
+            )
+        ):
+            kiwoom_utils.record_kiwoom_read_rate_limit(
+                token=active_token,
+                endpoint=request_url,
+                request_owner="widget_auto_trade.execution_reconciliation",
+                request_class="execution_critical",
+                api_id=api_id,
+                request_code=payload.get("stk_cd", "not_applicable"),
+                http_status_code=getattr(response, "status_code", None),
+                response_code=body.get("return_code", body.get("rt_cd")),
+            )
         return response, body if isinstance(body, dict) else {}
 
     def entry_liquidity_snapshot(
@@ -265,7 +309,10 @@ class KiwoomSharedTokenOrderGateway:
         try:
             request_code = entry_liquidity_request_code(code, route)
             payload = kiwoom_utils.get_stock_orderbook_ka10004(
-                self._token(), request_code
+                self._token(),
+                request_code,
+                request_owner="widget_auto_trade_entry_liquidity",
+                request_class="execution_critical",
             )
         except Exception as exc:
             return unavailable_entry_liquidity_snapshot(

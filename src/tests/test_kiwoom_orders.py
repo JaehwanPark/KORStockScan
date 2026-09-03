@@ -14,6 +14,19 @@ import src.engine.sniper_config as sniper_config
 @pytest.fixture(autouse=True)
 def reset_deposit_cache(monkeypatch):
     monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "acquire_kiwoom_read_capacity",
+        lambda **_kwargs: types.SimpleNamespace(
+            admitted=True,
+            reason="test_shared_read_rate_admitted",
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "record_kiwoom_read_rate_limit",
+        lambda **_kwargs: {"recorded": True},
+    )
+    monkeypatch.setattr(
         kiwoom_orders,
         "TRADING_RULES",
         replace(
@@ -1240,6 +1253,81 @@ def test_order_helper_uses_registered_token_handoff_before_first_post(
 
     assert data == {"return_code": "0"}
     assert posts == [{"authorization": "Bearer FRESH_TOKEN", "api-id": "kt00001"}]
+
+
+def test_order_write_does_not_consume_shared_read_bucket(monkeypatch):
+    acquisitions = []
+
+    class DummyResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"return_code": "0"}
+
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "acquire_kiwoom_read_capacity",
+        lambda **kwargs: acquisitions.append(kwargs),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *_args, **_kwargs: DummyResponse(),
+    )
+
+    _response, data = kiwoom_orders._post_kiwoom_with_auth_retry(
+        "https://api.kiwoom.com/api/dostk/ordr",
+        {"authorization": "Bearer TOKEN", "api-id": "kt10000"},
+        {"stk_cd": "005930", "ord_qty": "1"},
+        "kt10000",
+    )
+
+    assert data == {"return_code": "0"}
+    assert acquisitions == []
+
+
+def test_account_read_records_non_json_http_429(monkeypatch):
+    acquisitions = []
+    rate_limits = []
+
+    class Admission:
+        admitted = True
+        reason = "test_admitted"
+
+    class DummyResponse:
+        status_code = 429
+
+        @staticmethod
+        def json():
+            raise ValueError("not json")
+
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "acquire_kiwoom_read_capacity",
+        lambda **kwargs: acquisitions.append(kwargs) or Admission(),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "record_kiwoom_read_rate_limit",
+        lambda **kwargs: rate_limits.append(kwargs) or {"recorded": True},
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *_args, **_kwargs: DummyResponse(),
+    )
+
+    _response, data = kiwoom_orders._post_kiwoom_with_auth_retry(
+        "https://api.kiwoom.com/api/dostk/acnt",
+        {"authorization": "Bearer TOKEN", "api-id": "kt00018"},
+        {"qry_tp": "1"},
+        "kt00018",
+    )
+
+    assert data == {}
+    assert acquisitions[0]["request_class"] == "execution_critical"
+    assert rate_limits[0]["http_status_code"] == 429
 
 
 def test_order_helper_does_not_publish_failed_retry_token(monkeypatch, tmp_path):

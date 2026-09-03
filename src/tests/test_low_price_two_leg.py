@@ -3262,9 +3262,12 @@ def test_ka10073_loader_uses_official_path_headers_fields_and_normalizes(monkeyp
             "stk_cd": "017670",
             "strt_dt": "20260820",
             "end_dt": "20260820",
-        },
-        "use_continuous": True,
-    }
+            },
+            "use_continuous": True,
+            "request_owner": "low_price_two_leg_tuning.realized_pnl",
+            "request_class": "source_only",
+            "request_code": "017670",
+        }
     assert rows[0]["realized_net_profit_krw"] == -73
     assert rows[0]["commission_krw"] == 100
     assert rows[0]["tax_krw"] == 773

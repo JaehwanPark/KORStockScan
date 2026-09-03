@@ -173,6 +173,93 @@ def test_kospi_backfill_uses_official_ka20005_contract_and_raw_x100_prices():
     assert meta["source_quality_status"] == "PASS"
 
 
+def test_backfill_shared_read_control_is_source_only_and_persisted_in_meta(
+    monkeypatch,
+):
+    admissions = []
+    request_headers = []
+
+    class Admission:
+        admitted = True
+        reason = "shared_read_rate_admitted"
+
+        @staticmethod
+        def as_dict():
+            return {"admitted": True, "scope_digest": "digest"}
+
+    monkeypatch.setattr(
+        backfill.kiwoom_utils,
+        "acquire_kiwoom_read_capacity",
+        lambda **kwargs: admissions.append(kwargs) or Admission(),
+    )
+    monkeypatch.setattr(
+        backfill.kiwoom_utils,
+        "resolve_kiwoom_request_token",
+        lambda _token: "HANDOFF_TOKEN",
+    )
+
+    def post(_url, **kwargs):
+        request_headers.append(kwargs["headers"])
+        return _Response(
+            {
+                "return_code": 0,
+                "stk_min_pole_chart_qry": [_row("20260604152900")],
+            }
+        )
+
+    bars, meta = backfill.fetch_ka10080_history(
+        token="shared-token",
+        venue="KRX",
+        start_date=date(2026, 6, 5),
+        end_date=date(2026, 6, 5),
+        post=post,
+        shared_read_control_enabled=True,
+    )
+
+    assert bars == []
+    assert admissions[0]["api_id"] == "ka10080"
+    assert admissions[0]["request_class"] == "source_only"
+    assert admissions[0]["token"] == "HANDOFF_TOKEN"
+    assert request_headers[0]["authorization"] == "Bearer HANDOFF_TOKEN"
+    assert meta["shared_read_control_enabled"] is True
+    assert meta["shared_read_control_last_admission"]["scope_digest"] == "digest"
+
+
+def test_backfill_http_429_publishes_shared_cooldown(monkeypatch):
+    rate_limits = []
+
+    class Admission:
+        admitted = True
+        reason = "shared_read_rate_admitted"
+
+        @staticmethod
+        def as_dict():
+            return {"admitted": True}
+
+    monkeypatch.setattr(
+        backfill.kiwoom_utils,
+        "acquire_kiwoom_read_capacity",
+        lambda **_kwargs: Admission(),
+    )
+    monkeypatch.setattr(
+        backfill.kiwoom_utils,
+        "record_kiwoom_read_rate_limit",
+        lambda **kwargs: rate_limits.append(kwargs) or {"recorded": True},
+    )
+
+    with pytest.raises(backfill.BackfillError, match="ka20005_http_429"):
+        backfill.fetch_ka20005_history(
+            token="shared-token",
+            start_date=date(2026, 6, 5),
+            end_date=date(2026, 6, 5),
+            post=lambda *_args, **_kwargs: _Response({}, status_code=429),
+            shared_read_control_enabled=True,
+        )
+
+    assert rate_limits[0]["api_id"] == "ka20005"
+    assert rate_limits[0]["http_status_code"] == 429
+
+
 def test_backfill_manifest_marks_partial_source(tmp_path):
     paths = backfill.write_backfill(
         [],

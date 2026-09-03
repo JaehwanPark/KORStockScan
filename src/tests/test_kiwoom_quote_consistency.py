@@ -1,6 +1,18 @@
 from __future__ import annotations
 
 from src.utils import kiwoom_utils
+from src.utils.kiwoom_read_request_control import KiwoomReadRequestCoordinator
+
+
+class _Response:
+    def __init__(self, status_code, payload):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = str(payload)
+        self.headers = {}
+
+    def json(self):
+        return self._payload
 
 
 def test_ka10004_orderbook_does_not_publish_best_ask_as_curr(monkeypatch):
@@ -100,6 +112,101 @@ def test_ka10004_explicit_request_code_bypasses_implicit_db_route(monkeypatch):
     assert calls[0]["max_retries"] == 1
     assert snapshot["request_code"] == "005930"
     assert snapshot["explicit_request_code"] is True
+
+
+def test_ka10004_http_429_is_structured_and_shares_source_only_cooldown(
+    monkeypatch, tmp_path
+):
+    calls = []
+    coordinator = KiwoomReadRequestCoordinator(state_dir=tmp_path)
+    monkeypatch.setattr(
+        kiwoom_utils.requests,
+        "post",
+        lambda *_args, **_kwargs: calls.append(1) or _Response(429, {}),
+    )
+    monkeypatch.setattr(
+        kiwoom_utils.time,
+        "sleep",
+        lambda _delay: (_ for _ in ()).throw(
+            AssertionError("the exhausted final attempt must not sleep")
+        ),
+    )
+
+    first_results, first_meta = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url="https://api.kiwoom.com/api/dostk/mrkcond",
+        token="RATE-LIMIT-TOKEN",
+        api_id="ka10004",
+        payload={"stk_cd": "005930"},
+        max_retries=1,
+        return_meta=True,
+        request_owner="test_source_owner",
+        request_class="source_only",
+        read_rate_coordinator=coordinator,
+    )
+    second_results, second_meta = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url="https://api.kiwoom.com/api/dostk/mrkcond",
+        token="RATE-LIMIT-TOKEN",
+        api_id="ka10004",
+        payload={"stk_cd": "000660"},
+        max_retries=1,
+        return_meta=True,
+        request_owner="test_source_owner",
+        request_class="source_only",
+        read_rate_coordinator=coordinator,
+    )
+
+    assert first_results == []
+    assert first_meta["rate_limit_detected"] is True
+    assert first_meta["rate_limit_http_status_code"] == 429
+    assert first_meta["rate_limit_retry_exhausted"] is True
+    assert first_meta["request_owner"] == "test_source_owner"
+    assert first_meta["request_pid"] > 0
+    assert first_meta["request_code"] == "005930"
+    assert second_results == []
+    assert second_meta["read_rate_control_status"] == "deferred"
+    assert second_meta["read_rate_control_reason"] == (
+        "shared_read_rate_server_cooldown"
+    )
+    assert calls == [1]
+
+
+def test_ka10004_body_1700_is_not_published_as_a_quote(monkeypatch, tmp_path):
+    coordinator = KiwoomReadRequestCoordinator(state_dir=tmp_path)
+    monkeypatch.setattr(
+        kiwoom_utils.requests,
+        "post",
+        lambda *_args, **_kwargs: _Response(
+            200,
+            {
+                "return_code": 1700,
+                "return_msg": "허용된 API 요청 개수를 초과하였습니다.",
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_utils.time,
+        "sleep",
+        lambda _delay: (_ for _ in ()).throw(
+            AssertionError("the exhausted final attempt must not sleep")
+        ),
+    )
+
+    results, meta = kiwoom_utils.fetch_kiwoom_api_continuous(
+        url="https://api.kiwoom.com/api/dostk/mrkcond",
+        token="BODY-LIMIT-TOKEN",
+        api_id="ka10004",
+        payload={"stk_cd": "005930"},
+        max_retries=1,
+        return_meta=True,
+        request_owner="test_runtime_owner",
+        request_class="runtime_required",
+        read_rate_coordinator=coordinator,
+    )
+
+    assert results == []
+    assert meta["rate_limit_detected"] is True
+    assert meta["rate_limit_response_code"] == "1700"
+    assert meta["rate_limit_retry_exhausted"] is True
 
 
 def test_effective_kiwoom_code_preserves_explicit_market_suffix():

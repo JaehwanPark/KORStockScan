@@ -33,6 +33,9 @@
 - REST는 path, `api-id`, header, request/response field, sign/unit/time, `cont-yn`/`next-key`, real/demo를 확인한다. WS는 URL, login/control packet, realtime type/FID, item/suffix/route, REG/REMOVE, reconnect/resubscribe와 공식 limit를 확인한다.
 - 공식 `examples`는 샘플이다. 주문 예제를 검증 목적으로 실행하지 않고, 샘플을 근거로 stale/conflict, broker/account/order/quantity/cooldown 또는 hard-safety를 완화하지 않는다.
 - 공식 문서, SDK/spec, portal 또는 실수신 evidence가 충돌하면 추정으로 semantic authority를 만들지 않는다. raw provenance와 `source_quality_gap`을 남기고 관련 contract/parser test가 닫힐 때까지 fail-closed한다.
+- 국내주식 REST는 운영 계좌/토큰별 주문 TR 5회/초와 조회 TR 5회/초를 서로 다른 버킷으로 취급한다. `src.utils.kiwoom_read_request_control`은 조회에만 적용하며 주문 제출·정정·취소를 pacing/retry하지 않는다. 운영 조회는 같은 token+Kiwoom origin의 모든 process가 sliding 1초 버킷을 공유하고, source-only는 최대 4회로 제한해 required/critical 조회 슬롯 하나를 보존한다. 모의투자는 `api-id`별 1회/초다. producer별 0.25초·분당·일일 cap은 이 상한을 대체하거나 높이지 못한다.
+- 공통 조회 상태는 `data/runtime/kiwoom_read_rate_control/<token미포함 digest>.json`의 mode 0600 파일과 advisory file lock으로 직렬화한다. HTTP 429 또는 `1700|1701|1702` 응답은 3초 shared cooldown으로 전파한다. source-only는 cooldown·대기예산 소진을 `shared_read_rate_server_cooldown|shared_read_rate_wait_budget_exhausted`로 즉시 보류하고, `ka10004_rate_limited|ka10004_shared_read_budget_deferred`를 서로 다른 source-quality gap으로 남긴다. 상태 malformed/schema mismatch는 호출하지 않고 fail-closed한다.
+- 조회 한도 대응으로 retry 수·일일 예산·요청 밀도를 올리거나 주문 버킷을 빌리지 않는다. 코드 반영은 fresh PID부터 인정하며 기존 PID의 자동 재기동 권한을 만들지 않는다. 다음 자연 표본에서 owner/PID/class/api-id/request code/attempt/wait/control reason과 exact response 또는 gap receipt를 확인한다.
 
 ## 역할/권한 경계
 

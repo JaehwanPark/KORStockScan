@@ -20,7 +20,6 @@ from pathlib import Path
 from statistics import median
 from zoneinfo import ZoneInfo
 
-import requests
 from flask import Blueprint, jsonify, request
 
 from src.engine.monitoring import samsung_widget_contract
@@ -41,7 +40,6 @@ _WIDGET_SNAPSHOT_PATH_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_SNAPSHOT_PATH"
 _WIDGET_WS_SNAPSHOT_PATH_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH"
 _SAMSUNG_CODE = "005930"
 _SAMSUNG_NAME = "삼성전자"
-_REQUEST_TIMEOUT_SEC = 5
 _MINUTE_CHART_BAR_COUNT = 20
 _MINUTE_TREND_HORIZONS = (1, 3, 5)
 _MINUTE_TREND_TICK_MULTIPLIERS = {1: 1, 3: 2, 5: 3}
@@ -349,24 +347,21 @@ def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
         ("/api/dostk/acnt", "kt00018"),
     }:
         return None
-    headers = {
-        "Content-Type": "application/json;charset=UTF-8",
-        "authorization": f"Bearer {token}",
-        "api-id": api_id,
-    }
-    if api_id == "kt00018":
-        headers.update({"cont-yn": "N", "next-key": ""})
     try:
-        response = requests.post(
-            kiwoom_utils.get_api_url(path),
-            headers=headers,
-            json=payload,
-            timeout=_REQUEST_TIMEOUT_SEC,
+        responses = kiwoom_utils.fetch_kiwoom_api_continuous(
+            url=kiwoom_utils.get_api_url(path),
+            token=token,
+            api_id=api_id,
+            payload=payload,
+            max_retries=1,
+            use_continuous=False,
+            request_owner="samsung_price_widget_http_fallback",
+            request_class="runtime_required",
+            request_code=payload.get("stk_cd", "not_applicable"),
+            request_timeout=5,
         )
-        response_payload = response.json() if response.content else {}
-    except (requests.RequestException, ValueError):
-        return None
-    if response.status_code != 200:
+        response_payload = responses[0] if responses else {}
+    except (TypeError, ValueError):
         return None
     try:
         if int(response_payload["return_code"]) != 0:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,14 @@ class RateLimitResponse:
 
     def json(self):
         return {}
+
+
+class BodyRateLimitResponse:
+    status_code = 200
+    headers = {}
+
+    def json(self):
+        return {"return_code": 1702, "return_msg": "허용된 전체 요청 개수 초과"}
 
 
 def test_completed_research_date_uses_previous_session_before_krx_close():
@@ -160,6 +169,98 @@ def test_widget_source_retries_429_without_auth_or_owner_fallback(monkeypatch):
     assert len(bars) == len(dates)
     assert sleeps == [0.2]
     assert meta["request_count"] == 2
+    assert meta["rate_limit_retry_count"] == 1
+
+
+def test_widget_source_uses_shared_source_only_read_capacity(monkeypatch):
+    started = date(2026, 6, 5)
+    dates = [started + timedelta(days=index) for index in range(17)]
+    rows = [
+        {
+            "cntr_tm": f"{item.strftime('%Y%m%d')}131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "100",
+        }
+        for item in dates
+    ]
+    rows.append(
+        {
+            "cntr_tm": "20260604131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "100",
+        }
+    )
+    admissions = []
+
+    def acquire(**kwargs):
+        admissions.append(kwargs)
+        return SimpleNamespace(admitted=True, reason="shared_read_rate_admitted")
+
+    monkeypatch.setattr(research.kiwoom_utils, "acquire_kiwoom_read_capacity", acquire)
+
+    research.fetch_krx_history(
+        symbol="006800",
+        token="CACHED",
+        start_date=started,
+        end_date=dates[-1],
+        expected_trading_day_count=len(dates),
+        page_delay_sec=0,
+        post=lambda *args, **kwargs: FakeResponse(rows),
+        shared_read_control_enabled=True,
+    )
+
+    assert len(admissions) == 1
+    assert admissions[0]["request_owner"] == "widget_symbol_signal_policy_research"
+    assert admissions[0]["request_class"] == "source_only"
+    assert admissions[0]["api_id"] == "ka10080"
+
+
+def test_widget_source_retries_body_level_rate_limit(monkeypatch):
+    started = date(2026, 6, 5)
+    dates = [started + timedelta(days=index) for index in range(17)]
+    rows = [
+        {
+            "cntr_tm": f"{item.strftime('%Y%m%d')}131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "100",
+        }
+        for item in dates
+    ]
+    rows.append(
+        {
+            "cntr_tm": "20260604131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "100",
+        }
+    )
+    responses = [BodyRateLimitResponse(), FakeResponse(rows)]
+    sleeps = []
+    monkeypatch.setattr(research.time_module, "sleep", sleeps.append)
+
+    bars, meta = research.fetch_krx_history(
+        symbol="006800",
+        token="CACHED",
+        start_date=started,
+        end_date=dates[-1],
+        expected_trading_day_count=len(dates),
+        page_delay_sec=0,
+        post=lambda *args, **kwargs: responses.pop(0),
+    )
+
+    assert len(bars) == len(dates)
+    assert sleeps == [1.0]
     assert meta["rate_limit_retry_count"] == 1
 
 

@@ -27,6 +27,11 @@ from src.utils.constants import (
     TRADING_RULES,
     DATA_DIR,
 )  # 필요에 따라 상수를 추가/수정해서 사용
+from src.utils.kiwoom_read_request_control import (
+    DEFAULT_COORDINATOR as _DEFAULT_KIWOOM_READ_COORDINATOR,
+    REQUEST_CLASS_RUNTIME_REQUIRED,
+    is_kiwoom_read_rate_limit,
+)
 
 _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
@@ -1970,7 +1975,69 @@ def _empty_kiwoom_source_meta(api_id, requested_limit=None):
         "page_count": 0,
         "continuous_page_limit_reached": False,
         "continuous_next_key_missing": False,
+        "request_owner": None,
+        "request_class": None,
+        "request_pid": os.getpid(),
+        "request_code": None,
+        "request_attempt_count": 0,
+        "last_http_status_code": None,
+        "rate_limit_detected": False,
+        "rate_limit_http_status_code": None,
+        "rate_limit_response_code": None,
+        "rate_limit_retry_exhausted": False,
+        "read_rate_control_status": "not_configured",
+        "read_rate_control_reason": None,
+        "read_rate_control_waited_sec": 0.0,
+        "read_rate_control_scope_digest": None,
     }
+
+
+def acquire_kiwoom_read_capacity(
+    *,
+    token,
+    endpoint,
+    request_owner,
+    request_class,
+    api_id,
+    request_code="",
+    max_wait_sec=None,
+):
+    """Reserve only the domestic-stock read-TR bucket; never order capacity."""
+
+    return _DEFAULT_KIWOOM_READ_COORDINATOR.acquire(
+        token=resolve_kiwoom_request_token(token),
+        endpoint=endpoint,
+        request_owner=request_owner,
+        request_class=request_class,
+        api_id=api_id,
+        request_code=request_code,
+        max_wait_sec=max_wait_sec,
+    )
+
+
+def record_kiwoom_read_rate_limit(
+    *,
+    token,
+    endpoint,
+    request_owner,
+    request_class,
+    api_id,
+    request_code="",
+    http_status_code=None,
+    response_code=None,
+):
+    """Share an explicit HTTP/body read-limit response with other processes."""
+
+    return _DEFAULT_KIWOOM_READ_COORDINATOR.record_rate_limit(
+        token=resolve_kiwoom_request_token(token),
+        endpoint=endpoint,
+        request_owner=request_owner,
+        request_class=request_class,
+        api_id=api_id,
+        request_code=request_code,
+        http_status_code=http_status_code,
+        response_code=response_code,
+    )
 
 
 def _normalize_kiwoom_source_meta(meta, api_id, requested_limit=None):
@@ -2523,6 +2590,10 @@ def get_top_fluctuation_ka10027(
     pric_cnd="0",
     trde_prica_cnd="0",
     pure_equity_only=False,
+    request_owner="kiwoom_utils.get_top_fluctuation_ka10027",
+    request_class=REQUEST_CLASS_RUNTIME_REQUIRED,
+    read_rate_max_wait_sec=None,
+    return_meta=False,
 ):
     """
     [ka10027] 전일대비등락률상위요청
@@ -2533,7 +2604,10 @@ def get_top_fluctuation_ka10027(
     """
     output_limit = max(0, int(limit))
     if output_limit == 0:
-        return []
+        empty_meta = _empty_kiwoom_source_meta("ka10027", requested_limit=0)
+        empty_meta["read_rate_control_status"] = "not_attempted"
+        empty_meta["read_rate_control_reason"] = "output_limit_zero"
+        return ([], empty_meta) if return_meta else []
 
     url = get_api_url("/api/dostk/rkinfo")
     payload = {
@@ -2554,14 +2628,36 @@ def get_top_fluctuation_ka10027(
     # pages to let scanner-side source caps inspect beyond the first top-20 page.
     # The official example caps continuous retrieval at 10 pages.
     max_pages = max(1, min(10, (output_limit + 19) // 20))
-    results = fetch_kiwoom_api_continuous(
+    fetch_result = fetch_kiwoom_api_continuous(
         url=url,
         token=token,
         api_id="ka10027",
         payload=payload,
         use_continuous=True,
         max_pages=max_pages,
+        request_owner=request_owner,
+        request_class=request_class,
+        request_code="not_applicable",
+        read_rate_max_wait_sec=read_rate_max_wait_sec,
+        return_meta=True,
     )
+    if (
+        isinstance(fetch_result, tuple)
+        and len(fetch_result) == 2
+        and isinstance(fetch_result[1], dict)
+    ):
+        results, source_meta = fetch_result
+    else:
+        results = fetch_result
+        source_meta = _empty_kiwoom_source_meta("ka10027")
+        source_meta.update(
+            {
+                "request_owner": str(request_owner),
+                "request_class": str(request_class),
+                "request_code": "not_applicable",
+                "read_rate_control_status": "wrapper_meta_unavailable",
+            }
+        )
 
     cleaned_list = []
     if results:
@@ -2613,7 +2709,7 @@ def get_top_fluctuation_ka10027(
             if len(cleaned_list) >= output_limit:
                 break
 
-    return cleaned_list
+    return (cleaned_list, source_meta) if return_meta else cleaned_list
 
 
 def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd=None, limit=50):
@@ -3275,6 +3371,10 @@ def get_stock_orderbook_ka10004(
     *,
     explicit_request_code=False,
     max_retries=3,
+    request_owner="kiwoom_utils.get_stock_orderbook_ka10004",
+    request_class=REQUEST_CLASS_RUNTIME_REQUIRED,
+    read_rate_max_wait_sec=None,
+    return_meta=False,
 ):
     """
     [ka10004] 주식호가요청.
@@ -3284,7 +3384,10 @@ def get_stock_orderbook_ka10004(
     snapshot is missing or stale; callers must still enforce age/spread guards.
     """
     if not token or not code:
-        return {}
+        empty_meta = _empty_kiwoom_source_meta("ka10004")
+        empty_meta["read_rate_control_status"] = "not_attempted"
+        empty_meta["read_rate_control_reason"] = "token_or_code_missing"
+        return ({}, empty_meta) if return_meta else {}
     url = get_api_url("/api/dostk/mrkcond")
     raw_code, explicit_suffix = _split_kiwoom_market_suffix(str(code))
     request_code = (
@@ -3296,21 +3399,54 @@ def get_stock_orderbook_ka10004(
     received_ts = time.time()
 
     try:
-        results = fetch_kiwoom_api_continuous(
+        fetch_result = fetch_kiwoom_api_continuous(
             url=url,
             token=token,
             api_id="ka10004",
             payload=payload,
             max_retries=max(1, int(max_retries)),
             use_continuous=False,
+            return_meta=True,
+            request_owner=request_owner,
+            request_class=request_class,
+            request_code=request_code,
+            read_rate_max_wait_sec=read_rate_max_wait_sec,
         )
+        if (
+            isinstance(fetch_result, tuple)
+            and len(fetch_result) == 2
+            and isinstance(fetch_result[1], dict)
+        ):
+            results, source_meta = fetch_result
+        else:
+            # Backward-compatible test/custom wrappers may not implement meta.
+            results = fetch_result
+            source_meta = _empty_kiwoom_source_meta("ka10004")
+            source_meta.update(
+                {
+                    "request_owner": str(request_owner),
+                    "request_class": str(request_class),
+                    "request_code": request_code,
+                    "read_rate_control_status": "wrapper_meta_unavailable",
+                }
+            )
         received_ts = time.time()
     except Exception as e:
         log_info(f"⚠️ [ka10004] 주식호가 조회 실패 [{code}]: {e}")
-        return {}
+        empty_meta = _empty_kiwoom_source_meta("ka10004")
+        empty_meta.update(
+            {
+                "request_owner": str(request_owner),
+                "request_class": str(request_class),
+                "request_code": request_code,
+                "read_rate_control_status": "request_exception",
+                "read_rate_control_reason": type(e).__name__,
+            }
+        )
+        return ({}, empty_meta) if return_meta else {}
 
     if not results or not isinstance(results[0], dict):
-        return {}
+        return ({}, source_meta) if return_meta else {}
     row = results[0]
 
     asks = []
@@ -3342,7 +3478,7 @@ def get_stock_orderbook_ka10004(
     rest_mid_price = (
         int(round((best_ask + best_bid) / 2.0)) if best_ask > 0 and best_bid > 0 else 0
     )
-    return {
+    snapshot = {
         "source": "ka10004_rest_orderbook",
         "stock_code": normalize_stock_code(code),
         "request_code": payload["stk_cd"],
@@ -3371,12 +3507,42 @@ def get_stock_orderbook_ka10004(
         "rest_received_ts": received_ts,
         "rest_received_ts_ms": int(received_ts * 1000),
         "age_ms": 0,
+        "request_control": {
+            "request_owner": source_meta.get("request_owner"),
+            "request_class": source_meta.get("request_class"),
+            "request_pid": source_meta.get("request_pid"),
+            "request_code": source_meta.get("request_code"),
+            "request_attempt_count": source_meta.get("request_attempt_count"),
+            "read_rate_control_status": source_meta.get(
+                "read_rate_control_status"
+            ),
+            "read_rate_control_reason": source_meta.get(
+                "read_rate_control_reason"
+            ),
+            "read_rate_control_waited_sec": source_meta.get(
+                "read_rate_control_waited_sec"
+            ),
+            "read_rate_control_scope_digest": source_meta.get(
+                "read_rate_control_scope_digest"
+            ),
+            "rate_limit_detected": source_meta.get("rate_limit_detected"),
+            "rate_limit_http_status_code": source_meta.get(
+                "rate_limit_http_status_code"
+            ),
+            "rate_limit_response_code": source_meta.get(
+                "rate_limit_response_code"
+            ),
+            "rate_limit_retry_exhausted": source_meta.get(
+                "rate_limit_retry_exhausted"
+            ),
+        },
         "orderbook": {
             "asks": asks,
             "bids": bids,
         },
         "raw": row,
     }
+    return (snapshot, source_meta) if return_meta else snapshot
 
 
 def get_bid_balance_surge_ka10021(
@@ -4440,6 +4606,12 @@ def fetch_kiwoom_api_continuous(
     use_continuous: bool = False,
     max_pages: int | None = None,
     return_meta: bool = False,
+    request_owner: str | None = None,
+    request_class: str = REQUEST_CLASS_RUNTIME_REQUIRED,
+    request_code: str | None = None,
+    read_rate_max_wait_sec: float | None = None,
+    read_rate_coordinator=None,
+    request_timeout: float | tuple[float, float] | None = None,
 ) -> list:
     """
     키움 오픈API 공통 호출 함수 (연속조회 지원)
@@ -4447,19 +4619,70 @@ def fetch_kiwoom_api_continuous(
     - use_continuous=False: 1회성 조회만 수행합니다. (ka10001 등에 사용)
     """
     all_results = []
+    max_attempts = max(1, int(max_retries))
     meta = _empty_kiwoom_source_meta(api_id)
+    normalized_owner = str(request_owner or f"kiwoom_utils.{api_id}").strip()
+    normalized_request_code = str(
+        request_code
+        or payload.get("stk_cd")
+        or payload.get("upjong_cd")
+        or "not_applicable"
+    ).strip()
+    meta.update(
+        {
+            "request_owner": normalized_owner,
+            "request_class": str(request_class),
+            "request_pid": os.getpid(),
+            "request_code": normalized_request_code,
+        }
+    )
     cont_yn = "N"
     next_key = ""
     active_token = resolve_kiwoom_request_token(token)
     auth_retry_used = False
     pending_failed_token = ""
+    body_rate_limit_retry_count = 0
+    coordinator = read_rate_coordinator or _DEFAULT_KIWOOM_READ_COORDINATOR
 
     while True:
         retry_count = 0
         response = None
 
         # 💡 [핵심 방어] 429 에러 발생 시 백오프(Back-off) 후 재시도
-        while retry_count < max_retries:
+        while retry_count < max_attempts:
+            admission = coordinator.acquire(
+                token=active_token,
+                endpoint=url,
+                request_owner=normalized_owner,
+                request_class=request_class,
+                api_id=api_id,
+                request_code=normalized_request_code,
+                max_wait_sec=read_rate_max_wait_sec,
+            )
+            admission_meta = admission.as_dict()
+            meta.update(
+                {
+                    "read_rate_control_status": (
+                        "admitted" if admission.admitted else "deferred"
+                    ),
+                    "read_rate_control_reason": admission.reason,
+                    "read_rate_control_waited_sec": round(
+                        float(meta.get("read_rate_control_waited_sec") or 0.0)
+                        + admission.waited_sec,
+                        6,
+                    ),
+                    "read_rate_control_scope_digest": admission.scope_digest,
+                    "read_rate_control_last_admission": admission_meta,
+                }
+            )
+            if not admission.admitted:
+                log_info(
+                    f"⚠️ [{api_id}] 조회 TR 공유 한도에서 요청 보류 "
+                    f"owner={normalized_owner} pid={os.getpid()} "
+                    f"request_code={normalized_request_code} reason={admission.reason}"
+                )
+                response = None
+                break
             headers = {
                 "Content-Type": "application/json;charset=UTF-8",
                 "authorization": f"Bearer {active_token}",
@@ -4472,26 +4695,56 @@ def fetch_kiwoom_api_continuous(
                     url,
                     headers=headers,
                     json=payload,
-                    timeout=(KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC),
+                    timeout=(
+                        (KIWOOM_CONNECT_TIMEOUT_SEC, KIWOOM_READ_TIMEOUT_SEC)
+                        if request_timeout is None
+                        else request_timeout
+                    ),
                 )
+                meta["request_attempt_count"] = int(
+                    meta.get("request_attempt_count") or 0
+                ) + 1
+                meta["last_http_status_code"] = response.status_code
 
                 if response.status_code == 200:
                     break  # 성공 시 재시도 루프 탈출
                 elif response.status_code == 429:
                     wait_sec = (retry_count + 1) * 3
-                    print(
-                        f"⚠️ [{api_id}] 429 요청 제한! {wait_sec}초 대기 후 재시도... ({retry_count+1}/{max_retries})"
+                    meta.update(
+                        {
+                            "rate_limit_detected": True,
+                            "rate_limit_http_status_code": 429,
+                            "rate_limit_response_code": None,
+                        }
                     )
-                    time.sleep(wait_sec)
+                    coordinator.record_rate_limit(
+                        token=active_token,
+                        endpoint=url,
+                        request_owner=normalized_owner,
+                        request_class=request_class,
+                        api_id=api_id,
+                        request_code=normalized_request_code,
+                        http_status_code=429,
+                    )
+                    print(
+                        f"⚠️ [{api_id}] 429 요청 제한! owner={normalized_owner} "
+                        f"pid={os.getpid()} request_code={normalized_request_code} "
+                        f"({retry_count+1}/{max_attempts})"
+                    )
                     retry_count += 1
+                    if retry_count < max_attempts:
+                        time.sleep(wait_sec)
+                    else:
+                        meta["rate_limit_retry_exhausted"] = True
                 elif 500 <= response.status_code < 600:
                     wait_sec = min(2 * (retry_count + 1), 6)
                     log_info(
                         f"⚠️ [{api_id}] Kiwoom gateway/server HTTP {response.status_code}. "
-                        f"{wait_sec}초 후 재시도... ({retry_count+1}/{max_retries})"
+                        f"{wait_sec}초 후 재시도... ({retry_count+1}/{max_attempts})"
                     )
-                    time.sleep(wait_sec)
                     retry_count += 1
+                    if retry_count < max_attempts:
+                        time.sleep(wait_sec)
                 else:
                     log_error(
                         f"❌ [{api_id}] HTTP 에러 {response.status_code}: {response.text}"
@@ -4503,26 +4756,29 @@ def fetch_kiwoom_api_continuous(
                 log_info(
                     f"⚠️ [{api_id}] 응답 지연으로 읽기 타임아웃 "
                     f"({KIWOOM_READ_TIMEOUT_SEC:.0f}초). {wait_sec}초 후 재시도... "
-                    f"({retry_count+1}/{max_retries})"
+                    f"({retry_count+1}/{max_attempts})"
                 )
-                time.sleep(wait_sec)
                 retry_count += 1
+                if retry_count < max_attempts:
+                    time.sleep(wait_sec)
             except requests.exceptions.ConnectTimeout:
                 wait_sec = min(2 * (retry_count + 1), 6)
                 log_info(
                     f"⚠️ [{api_id}] 연결 타임아웃 "
                     f"({KIWOOM_CONNECT_TIMEOUT_SEC:.0f}초). {wait_sec}초 후 재시도... "
-                    f"({retry_count+1}/{max_retries})"
+                    f"({retry_count+1}/{max_attempts})"
                 )
-                time.sleep(wait_sec)
                 retry_count += 1
+                if retry_count < max_attempts:
+                    time.sleep(wait_sec)
             except requests.exceptions.ConnectionError:
                 wait_sec = min(2 * (retry_count + 1), 6)
                 log_info(
-                    f"⚠️ [{api_id}] 연결 끊김. {wait_sec}초 대기 후 재접속... ({retry_count+1}/{max_retries})"
+                    f"⚠️ [{api_id}] 연결 끊김. {wait_sec}초 대기 후 재접속... ({retry_count+1}/{max_attempts})"
                 )
-                time.sleep(wait_sec)
                 retry_count += 1
+                if retry_count < max_attempts:
+                    time.sleep(wait_sec)
             except Exception as e:
                 log_error(f"🚨 [{api_id}] 알 수 없는 예외: {e}")
                 break
@@ -4536,6 +4792,42 @@ def fetch_kiwoom_api_continuous(
 
         # return_code 체크 (정상이 아니면 경고 후 응답값 저장)
         response_code = str(res_json.get("return_code", res_json.get("rt_cd", "0")))
+        if is_kiwoom_read_rate_limit(
+            http_status_code=response.status_code,
+            response_body=res_json,
+        ):
+            body_rate_limit_retry_count += 1
+            wait_sec = body_rate_limit_retry_count * 3
+            meta.update(
+                {
+                    "rate_limit_detected": True,
+                    "rate_limit_http_status_code": response.status_code,
+                    "rate_limit_response_code": response_code,
+                }
+            )
+            coordinator.record_rate_limit(
+                token=active_token,
+                endpoint=url,
+                request_owner=normalized_owner,
+                request_class=request_class,
+                api_id=api_id,
+                request_code=normalized_request_code,
+                http_status_code=response.status_code,
+                response_code=response_code,
+            )
+            log_info(
+                f"⚠️ [{api_id}] 조회 TR 요청 제한 응답 "
+                f"owner={normalized_owner} pid={os.getpid()} "
+                f"request_code={normalized_request_code} code={response_code} "
+                f"({body_rate_limit_retry_count}/{max_attempts})"
+            )
+            if body_rate_limit_retry_count < max_attempts:
+                time.sleep(wait_sec)
+                response = None
+                continue
+            meta["rate_limit_retry_exhausted"] = True
+            break
+        body_rate_limit_retry_count = 0
         if response_code != "0":
             log_info(
                 f"⚠️ [{api_id}] API 거절 사유: {res_json.get('return_msg', '알 수 없는 에러')}"

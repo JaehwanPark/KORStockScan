@@ -3585,10 +3585,16 @@ class KiwoomReadOnlyClient:
         *,
         session: requests.Session | None = None,
         budget: "ReadOnlyRequestBudget | None" = None,
+        shared_read_control_enabled: bool | None = None,
     ) -> None:
         self.token = token
         self.session = session or requests.Session()
         self.budget = budget
+        self.shared_read_control_enabled = (
+            session is None
+            if shared_read_control_enabled is None
+            else bool(shared_read_control_enabled)
+        )
 
     def post(
         self,
@@ -3605,8 +3611,23 @@ class KiwoomReadOnlyClient:
         active_token = kiwoom_utils.resolve_kiwoom_request_token(self.token)
         if active_token:
             self.token = active_token
+        endpoint = kiwoom_utils.get_api_url(path)
+        if self.shared_read_control_enabled:
+            admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+                token=active_token,
+                endpoint=endpoint,
+                request_owner="widget_monitoring_read_only_client",
+                request_class="source_only",
+                api_id=api_id,
+                request_code=payload.get("stk_cd", "not_applicable"),
+                max_wait_sec=1.25,
+            )
+            if not admission.admitted:
+                raise RuntimeError(
+                    f"widget_kiwoom_shared_read_rate_deferred:{admission.reason}"
+                )
         response = self.session.post(
-            kiwoom_utils.get_api_url(path),
+            endpoint,
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
                 "authorization": f"Bearer {active_token}",
@@ -3617,12 +3638,39 @@ class KiwoomReadOnlyClient:
         )
         if getattr(response, "status_code", None) == 429 and self.budget is not None:
             self.budget.note_rate_limited()
+        if (
+            self.shared_read_control_enabled
+            and getattr(response, "status_code", None) == 429
+        ):
+            kiwoom_utils.record_kiwoom_read_rate_limit(
+                token=active_token,
+                endpoint=endpoint,
+                request_owner="widget_monitoring_read_only_client",
+                request_class="source_only",
+                api_id=api_id,
+                request_code=payload.get("stk_cd", "not_applicable"),
+                http_status_code=429,
+            )
         response.raise_for_status()
         data = response.json()
         try:
             return_code = int(data["return_code"])
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(f"{api_id}_return_code_missing") from exc
+        if self.shared_read_control_enabled and kiwoom_utils.is_kiwoom_read_rate_limit(
+            http_status_code=getattr(response, "status_code", None),
+            response_body=data,
+        ):
+            kiwoom_utils.record_kiwoom_read_rate_limit(
+                token=active_token,
+                endpoint=endpoint,
+                request_owner="widget_monitoring_read_only_client",
+                request_class="source_only",
+                api_id=api_id,
+                request_code=payload.get("stk_cd", "not_applicable"),
+                http_status_code=getattr(response, "status_code", None),
+                response_code=return_code,
+            )
         if return_code != 0:
             raise RuntimeError(f"{api_id}_rejected_{return_code}")
         return data

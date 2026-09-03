@@ -622,14 +622,27 @@ def _capture_external_bbo_observation(
     expected_observed_venue = "NXT" if venue == "NXT" else "KRX"
     request_started_epoch = float(clock())
     source_error = ""
+    request_meta: dict[str, Any] = {}
     try:
         raw = fetcher(
             token,
             request_code,
             explicit_request_code=True,
             max_retries=1,
+            request_owner="market_opportunity_census.external_bbo",
+            request_class="source_only",
+            read_rate_max_wait_sec=1.25,
+            return_meta=True,
         )
-        snapshot = raw if isinstance(raw, dict) else {}
+        if (
+            isinstance(raw, tuple)
+            and len(raw) == 2
+            and isinstance(raw[1], dict)
+        ):
+            raw_snapshot, request_meta = raw
+        else:
+            raw_snapshot = raw
+        snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else {}
     except Exception as exc:
         snapshot = {}
         source_error = type(exc).__name__
@@ -646,6 +659,12 @@ def _capture_external_bbo_observation(
     gap_reason = "empty_or_invalid_ka10004_response"
     if source_error:
         gap_reason = f"ka10004_request_exception:{source_error}"
+    elif request_meta.get("rate_limit_retry_exhausted") is True or (
+        request_meta.get("rate_limit_detected") is True and not snapshot
+    ):
+        gap_reason = "ka10004_rate_limited"
+    elif request_meta.get("read_rate_control_status") == "deferred":
+        gap_reason = "ka10004_shared_read_budget_deferred"
     elif response_source != "ka10004_rest_orderbook":
         gap_reason = "ka10004_source_provenance_invalid"
     elif (
@@ -700,6 +719,26 @@ def _capture_external_bbo_observation(
         "expected_observed_venue": expected_observed_venue,
         "request_started_epoch": round(request_started_epoch, 6),
         "request_completed_epoch": round(request_completed_epoch, 6),
+        "request_owner": str(
+            request_meta.get("request_owner")
+            or "market_opportunity_census.external_bbo"
+        ),
+        "request_pid": request_meta.get("request_pid"),
+        "request_class": str(request_meta.get("request_class") or "source_only"),
+        "request_attempt_count": int(request_meta.get("request_attempt_count") or 0),
+        "read_rate_control_status": str(
+            request_meta.get("read_rate_control_status") or "meta_unavailable"
+        ),
+        "read_rate_control_reason": str(
+            request_meta.get("read_rate_control_reason") or "meta_unavailable"
+        ),
+        "read_rate_control_waited_sec": float(
+            request_meta.get("read_rate_control_waited_sec") or 0.0
+        ),
+        "rate_limit_detected": bool(request_meta.get("rate_limit_detected") is True),
+        "rate_limit_retry_exhausted": bool(
+            request_meta.get("rate_limit_retry_exhausted") is True
+        ),
         "observed_epoch": (
             round(received_epoch, 6) if received_epoch is not None else None
         ),
@@ -803,8 +842,9 @@ def capture_market_snapshots(
                 **PANEL_CONTRACTS[panel],
             }
             source_error = ""
+            source_request_meta: dict[str, Any] = {}
             try:
-                fetched = fetch(
+                fetch_result = fetch(
                     token,
                     mrkt_tp=request_contract["mrkt_tp"],
                     trde_qty_cnd=request_contract["trde_qty_cnd"],
@@ -816,10 +856,33 @@ def capture_market_snapshots(
                     updown_incls=request_contract["updown_incls"],
                     pric_cnd=request_contract["pric_cnd"],
                     trde_prica_cnd=request_contract["trde_prica_cnd"],
+                    request_owner="market_opportunity_census.ka10027",
+                    request_class="source_only",
+                    read_rate_max_wait_sec=1.25,
+                    return_meta=True,
                 )
+                if (
+                    isinstance(fetch_result, tuple)
+                    and len(fetch_result) == 2
+                    and isinstance(fetch_result[1], dict)
+                ):
+                    fetched, source_request_meta = fetch_result
+                else:
+                    fetched = fetch_result
             except Exception as exc:  # preserve sanitized source-unavailable evidence
                 fetched = []
                 source_error = type(exc).__name__
+
+            if source_request_meta.get("rate_limit_retry_exhausted") is True or (
+                source_request_meta.get("rate_limit_detected") is True
+                and not fetched
+            ):
+                source_error = "ka10027_rate_limited"
+            elif source_request_meta.get("read_rate_control_status") == "deferred":
+                source_error = "ka10027_shared_read_budget_deferred"
+            if not isinstance(fetched, list):
+                fetched = []
+                source_error = source_error or "ka10027_response_not_list"
 
             rows = []
             for rank, item in enumerate(fetched[:limit], start=1):
@@ -944,6 +1007,36 @@ def capture_market_snapshots(
                             "sanitized_request_contract_plus_normalized_response_rows"
                         ),
                         "credential_fields_stored": [],
+                        "request_control": {
+                            "request_owner": source_request_meta.get(
+                                "request_owner"
+                            ),
+                            "request_pid": source_request_meta.get("request_pid"),
+                            "request_class": source_request_meta.get(
+                                "request_class"
+                            ),
+                            "request_attempt_count": source_request_meta.get(
+                                "request_attempt_count"
+                            ),
+                            "read_rate_control_status": source_request_meta.get(
+                                "read_rate_control_status"
+                            ),
+                            "read_rate_control_reason": source_request_meta.get(
+                                "read_rate_control_reason"
+                            ),
+                            "read_rate_control_waited_sec": source_request_meta.get(
+                                "read_rate_control_waited_sec"
+                            ),
+                            "read_rate_control_scope_digest": source_request_meta.get(
+                                "read_rate_control_scope_digest"
+                            ),
+                            "rate_limit_detected": source_request_meta.get(
+                                "rate_limit_detected"
+                            ),
+                            "rate_limit_retry_exhausted": source_request_meta.get(
+                                "rate_limit_retry_exhausted"
+                            ),
+                        },
                         "executable_bbo_collection": {
                             "enabled": bool(
                                 collect_executable_bbo and panel == "liquid_common"

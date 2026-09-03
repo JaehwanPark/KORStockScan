@@ -821,6 +821,7 @@ class PrunedCandidateBBOCollector:
         status = "source_quality_gap"
         gap_reason = "request_not_attempted"
         snapshot: Mapping[str, Any] = {}
+        request_meta: Mapping[str, Any] = {}
         session_end_epoch = float(episode.get("session_end_epoch") or 0.0)
         request_attempted = bool(
             session_end_epoch > 0 and request_started_epoch < session_end_epoch
@@ -834,8 +835,20 @@ class PrunedCandidateBBOCollector:
                     request_code,
                     explicit_request_code=True,
                     max_retries=1,
+                    request_owner="scalping_scanner_prune_bbo_observation",
+                    request_class="source_only",
+                    read_rate_max_wait_sec=1.25,
+                    return_meta=True,
                 )
-                snapshot = raw if isinstance(raw, Mapping) else {}
+                if (
+                    isinstance(raw, tuple)
+                    and len(raw) == 2
+                    and isinstance(raw[1], Mapping)
+                ):
+                    raw_snapshot, request_meta = raw
+                else:
+                    raw_snapshot = raw
+                snapshot = raw_snapshot if isinstance(raw_snapshot, Mapping) else {}
                 gap_reason = "empty_or_invalid_ka10004_response"
             except Exception as exc:
                 gap_reason = f"ka10004_request_exception:{type(exc).__name__}"
@@ -874,6 +887,12 @@ class PrunedCandidateBBOCollector:
         bbo_valid = bool(bid > 0 and ask >= bid)
         if not request_attempted:
             pass
+        elif request_meta.get("rate_limit_retry_exhausted") is True or (
+            request_meta.get("rate_limit_detected") is True and not snapshot
+        ):
+            gap_reason = "ka10004_rate_limited"
+        elif request_meta.get("read_rate_control_status") == "deferred":
+            gap_reason = "ka10004_shared_read_budget_deferred"
         elif source != "ka10004_rest_orderbook":
             gap_reason = "ka10004_source_provenance_invalid"
         elif not route_match:
@@ -937,6 +956,32 @@ class PrunedCandidateBBOCollector:
             "scanner_prune_observer_request_elapsed_ms": round(
                 max(0.0, request_completed_epoch - request_started_epoch) * 1000.0,
                 3,
+            ),
+            "scanner_prune_observer_request_owner": str(
+                request_meta.get("request_owner")
+                or "scalping_scanner_prune_bbo_observation"
+            ),
+            "scanner_prune_observer_request_pid": request_meta.get("request_pid"),
+            "scanner_prune_observer_request_class": str(
+                request_meta.get("request_class") or "source_only"
+            ),
+            "scanner_prune_observer_request_attempt_count": int(
+                request_meta.get("request_attempt_count") or 0
+            ),
+            "scanner_prune_observer_read_rate_control_status": str(
+                request_meta.get("read_rate_control_status") or "meta_unavailable"
+            ),
+            "scanner_prune_observer_read_rate_control_reason": str(
+                request_meta.get("read_rate_control_reason") or "meta_unavailable"
+            ),
+            "scanner_prune_observer_read_rate_control_waited_sec": float(
+                request_meta.get("read_rate_control_waited_sec") or 0.0
+            ),
+            "scanner_prune_observer_rate_limit_detected": bool(
+                request_meta.get("rate_limit_detected") is True
+            ),
+            "scanner_prune_observer_rate_limit_retry_exhausted": bool(
+                request_meta.get("rate_limit_retry_exhausted") is True
             ),
             "scanner_prune_observer_request_code": request_code,
             "scanner_prune_observer_response_request_code": (

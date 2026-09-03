@@ -217,19 +217,59 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
     resolved_token = kiwoom_utils.resolve_kiwoom_request_token(provided_token)
     if resolved_token and resolved_token != provided_token:
         active_headers["authorization"] = f"Bearer {resolved_token}"
+    api_label = str(api_id or active_headers.get("api-id") or "unknown")
+    read_api = api_label in {"kt00001", "kt00018"}
+    if read_api:
+        admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+            token=resolved_token or provided_token,
+            endpoint=url,
+            request_owner=f"kiwoom_orders.{api_label}",
+            request_class="execution_critical",
+            api_id=api_label,
+            request_code=payload.get("stk_cd", "not_applicable"),
+        )
+        if not admission.admitted:
+            raise RuntimeError(
+                f"account_read_shared_rate_deferred:{admission.reason}"
+            )
     response = requests.post(url, headers=active_headers, json=payload, timeout=timeout)
+    http_rate_limit_recorded = False
+    if read_api and response.status_code == 429:
+        kiwoom_utils.record_kiwoom_read_rate_limit(
+            token=resolved_token or provided_token,
+            endpoint=url,
+            request_owner=f"kiwoom_orders.{api_label}",
+            request_class="execution_critical",
+            api_id=api_label,
+            request_code=payload.get("stk_cd", "not_applicable"),
+            http_status_code=429,
+        )
+        http_rate_limit_recorded = True
     try:
         data = response.json()
     except Exception:
         return response, {}
 
     is_success = str(data.get("rt_cd", data.get("return_code", ""))) == "0"
+    if read_api and not http_rate_limit_recorded and kiwoom_utils.is_kiwoom_read_rate_limit(
+        http_status_code=response.status_code,
+        response_body=data,
+    ):
+        kiwoom_utils.record_kiwoom_read_rate_limit(
+            token=resolved_token or provided_token,
+            endpoint=url,
+            request_owner=f"kiwoom_orders.{api_label}",
+            request_class="execution_critical",
+            api_id=api_label,
+            request_code=payload.get("stk_cd", "not_applicable"),
+            http_status_code=response.status_code,
+            response_code=data.get("return_code", data.get("rt_cd")),
+        )
     if response.status_code == 200 and is_success:
         return response, data
     if not is_auth_failure_error(data):
         return response, data
 
-    api_label = str(api_id or active_headers.get("api-id") or "unknown")
     try:
         failed_token = (
             str(active_headers.get("authorization") or "")
@@ -255,9 +295,34 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
     log_info(
         f"🔐 [{api_label}] 8005 감지 후 Kiwoom token force refresh 성공 (주문/계좌 API 1회 retry)"
     )
+    if read_api:
+        retry_admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+            token=refreshed_token,
+            endpoint=url,
+            request_owner=f"kiwoom_orders.{api_label}.auth_retry",
+            request_class="execution_critical",
+            api_id=api_label,
+            request_code=payload.get("stk_cd", "not_applicable"),
+        )
+        if not retry_admission.admitted:
+            raise RuntimeError(
+                f"account_read_shared_rate_deferred:{retry_admission.reason}"
+            )
     retry_response = requests.post(
         url, headers=retry_headers, json=payload, timeout=timeout
     )
+    retry_http_rate_limit_recorded = False
+    if read_api and retry_response.status_code == 429:
+        kiwoom_utils.record_kiwoom_read_rate_limit(
+            token=refreshed_token,
+            endpoint=url,
+            request_owner=f"kiwoom_orders.{api_label}.auth_retry",
+            request_class="execution_critical",
+            api_id=api_label,
+            request_code=payload.get("stk_cd", "not_applicable"),
+            http_status_code=429,
+        )
+        retry_http_rate_limit_recorded = True
     try:
         retry_data = retry_response.json()
     except Exception:
@@ -266,6 +331,20 @@ def _post_kiwoom_with_auth_retry(url, headers, payload, api_id, *, timeout=5):
         retry_response.status_code == 200
         and str(retry_data.get("rt_cd", retry_data.get("return_code", ""))) == "0"
     )
+    if read_api and not retry_http_rate_limit_recorded and kiwoom_utils.is_kiwoom_read_rate_limit(
+        http_status_code=retry_response.status_code,
+        response_body=retry_data,
+    ):
+        kiwoom_utils.record_kiwoom_read_rate_limit(
+            token=refreshed_token,
+            endpoint=url,
+            request_owner=f"kiwoom_orders.{api_label}.auth_retry",
+            request_class="execution_critical",
+            api_id=api_label,
+            request_code=payload.get("stk_cd", "not_applicable"),
+            http_status_code=retry_response.status_code,
+            response_code=retry_data.get("return_code", retry_data.get("rt_cd")),
+        )
     if retry_success:
         kiwoom_utils.register_kiwoom_token_replacement(
             failed_token,

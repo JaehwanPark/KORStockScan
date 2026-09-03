@@ -157,7 +157,14 @@ def test_collector_uses_exact_route_and_emits_source_only_bbo_receipt() -> None:
         (
             "TOKEN",
             "005930",
-            {"explicit_request_code": True, "max_retries": 1},
+            {
+                "explicit_request_code": True,
+                "max_retries": 1,
+                "request_owner": "scalping_scanner_prune_bbo_observation",
+                "request_class": "source_only",
+                "read_rate_max_wait_sec": 1.25,
+                "return_meta": True,
+            },
         )
     ]
     event = emitted[0]
@@ -241,6 +248,91 @@ def test_collector_fails_closed_when_best_quantity_is_missing() -> None:
     )
     assert emitted[0]["scanner_prune_observer_best_bid"] is None
     assert emitted[0]["scanner_prune_observer_best_ask"] is None
+
+
+def test_collector_preserves_ka10004_rate_limit_as_first_gap_reason() -> None:
+    clock = _Clock(_epoch(9, 10))
+    emitted: list[dict] = []
+    collector = PrunedCandidateBBOCollector(
+        "TOKEN",
+        fetch_quote=lambda *_args, **_kwargs: (
+            {},
+            {
+                "request_owner": "scalping_scanner_prune_bbo_observation",
+                "request_class": "source_only",
+                "request_pid": 123,
+                "request_attempt_count": 1,
+                "read_rate_control_status": "admitted",
+                "read_rate_control_reason": "shared_read_rate_admitted",
+                "read_rate_control_waited_sec": 0.2,
+                "rate_limit_detected": True,
+            },
+        ),
+        emit_event=lambda *_args, **kwargs: emitted.append(kwargs["fields"]),
+        clock=clock,
+        autostart=False,
+    )
+    collector.offer(
+        _target(),
+        reason="general_slot_limit",
+        scan_generation_id="SCANGEN-429",
+        scan_rank=1,
+        ranked_candidate_count=1,
+        venue_fields=_venue(),
+    )
+
+    assert collector.run_due_once(now_epoch=clock.value) is True
+    assert emitted[0]["scanner_prune_observer_gap_reason"] == "ka10004_rate_limited"
+    assert emitted[0]["scanner_prune_observer_request_pid"] == 123
+    assert emitted[0]["scanner_prune_observer_request_attempt_count"] == 1
+    assert emitted[0]["scanner_prune_observer_rate_limit_detected"] is True
+
+
+def test_collector_keeps_valid_snapshot_after_rate_limit_recovery() -> None:
+    clock = _Clock(_epoch(9, 10))
+    emitted: list[dict] = []
+    collector = PrunedCandidateBBOCollector(
+        "TOKEN",
+        fetch_quote=lambda *_args, **_kwargs: (
+            {
+                "source": "ka10004_rest_orderbook",
+                "stock_code": "005930",
+                "request_code": "005930",
+                "rest_received_ts": clock.value,
+                "best_bid": 70000,
+                "best_ask": 70100,
+                "best_bid_qty": 200,
+                "best_ask_qty": 180,
+            },
+            {
+                "request_owner": "scalping_scanner_prune_bbo_observation",
+                "request_class": "source_only",
+                "request_attempt_count": 2,
+                "read_rate_control_status": "admitted",
+                "rate_limit_detected": True,
+                "rate_limit_retry_exhausted": False,
+            },
+        ),
+        emit_event=lambda *_args, **kwargs: emitted.append(kwargs["fields"]),
+        clock=clock,
+        autostart=False,
+    )
+    collector.offer(
+        _target(),
+        reason="general_slot_limit",
+        scan_generation_id="SCANGEN-RECOVERED-429",
+        scan_rank=1,
+        ranked_candidate_count=1,
+        venue_fields=_venue(),
+    )
+
+    assert collector.run_due_once(now_epoch=clock.value) is True
+    assert emitted[0]["scanner_prune_observer_status"] == "captured"
+    assert emitted[0]["scanner_prune_observer_gap_reason"] == (
+        "not_applicable_capture_pass"
+    )
+    assert emitted[0]["scanner_prune_observer_rate_limit_detected"] is True
+    assert emitted[0]["scanner_prune_observer_rate_limit_retry_exhausted"] is False
 
 
 def test_collector_rotates_episode_only_after_observation_absence() -> None:

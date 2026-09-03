@@ -232,7 +232,7 @@ def test_samsung_widget_uses_cached_token_only_and_returns_quote(monkeypatch):
             }
         return response
 
-    monkeypatch.setattr(routes.requests, "post", fake_post)
+    monkeypatch.setattr(routes.kiwoom_utils.requests, "post", fake_post)
 
     response = client.get(
         "/api/widget/samsung-price",
@@ -320,7 +320,7 @@ def test_samsung_widget_uses_nxt_route_after_krx_close(monkeypatch):
             }
         return response
 
-    monkeypatch.setattr(routes.requests, "post", fake_post)
+    monkeypatch.setattr(routes.kiwoom_utils.requests, "post", fake_post)
 
     response = client.get(
         "/api/widget/samsung-price",
@@ -370,7 +370,7 @@ def test_samsung_widget_uses_nxt_route_during_premarket(monkeypatch):
             }
         return response
 
-    monkeypatch.setattr(routes.requests, "post", fake_post)
+    monkeypatch.setattr(routes.kiwoom_utils.requests, "post", fake_post)
 
     response = client.get(
         "/api/widget/samsung-price",
@@ -685,7 +685,9 @@ def test_samsung_widget_requires_kiwoom_return_code(monkeypatch):
         routes.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
     )
     monkeypatch.setattr(
-        routes.requests, "post", lambda *args, **kwargs: _MissingReturnCodeResponse()
+        routes.kiwoom_utils.requests,
+        "post",
+        lambda *args, **kwargs: _MissingReturnCodeResponse(),
     )
 
     response = client.get(

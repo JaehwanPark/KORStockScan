@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -177,6 +178,54 @@ def test_fetch_uses_integrated_sor_and_cached_token_without_other_api_calls():
     }
     assert len(bars) == 46
     assert meta["source_quality_status"] == "PASS"
+
+
+def test_fetch_uses_shared_source_only_read_capacity(monkeypatch):
+    start = date(2026, 6, 5)
+    dates = [start + timedelta(days=index) for index in range(46)]
+    rows = [
+        {
+            "cntr_tm": f"{item.strftime('%Y%m%d')}131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+        }
+        for item in dates
+    ]
+    rows.append(
+        {
+            "cntr_tm": "20260604131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+        }
+    )
+    admissions = []
+
+    def acquire(**kwargs):
+        admissions.append(kwargs)
+        return SimpleNamespace(admitted=True, reason="shared_read_rate_admitted")
+
+    monkeypatch.setattr(research.kiwoom_utils, "acquire_kiwoom_read_capacity", acquire)
+
+    fetch_sor_history(
+        symbol="010140",
+        token="CACHED",
+        start_date=start,
+        end_date=dates[-1],
+        post=lambda *args, **kwargs: FakeResponse(
+            {"return_code": 0, "stk_min_pole_chart_qry": rows}
+        ),
+        page_delay_sec=0,
+        shared_read_control_enabled=True,
+    )
+
+    assert len(admissions) == 1
+    assert admissions[0]["request_owner"] == ("low_price_two_leg_entry_spot_research")
+    assert admissions[0]["request_class"] == "source_only"
+    assert admissions[0]["request_code"] == "010140_AL"
 
 
 def test_fetch_accepts_expanding_clean_baseline_trading_day_count():

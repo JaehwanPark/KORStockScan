@@ -371,6 +371,9 @@ def load_realized_pnl_ka10073(
             "end_dt": api_date,
         },
         use_continuous=True,
+        request_owner="low_price_two_leg_tuning.realized_pnl",
+        request_class="source_only",
+        request_code=normalized_symbol,
     )
     normalized: list[dict[str, Any]] = []
     for response in responses or []:

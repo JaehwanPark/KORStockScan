@@ -119,7 +119,7 @@ def test_signal_radar_fallback_resolves_registered_token_before_request(
             return {"rows": [{"cur_prc": str(100 + index)} for index in range(20)]}
 
     monkeypatch.setattr(
-        "src.engine.signal_radar.requests.post",
+        "src.utils.kiwoom_utils.requests.post",
         lambda *args, **kwargs: posts.append(dict(kwargs.get("headers") or {}))
         or Response(),
     )

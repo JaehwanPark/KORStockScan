@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 import pandas_ta as ta
 import FinanceDataReader as fdr
@@ -448,16 +447,19 @@ class SniperRadar:
             try:
                 active_token = kiwoom_utils.resolve_kiwoom_request_token(token)
                 url = kiwoom_utils.get_api_url("/api/dostk/mrkcond")
-                headers = {
-                    "Content-Type": "application/json;charset=UTF-8",
-                    "authorization": f"Bearer {active_token}",
-                    "cont-yn": "N",
-                    "api-id": "ka20006",
-                }
                 payload = {"upjong_cd": "001"}  # 001: 코스피
-                res = requests.post(url, headers=headers, json=payload, timeout=10)
-                if res.status_code == 200:
-                    res_json = res.json()
+                responses = kiwoom_utils.fetch_kiwoom_api_continuous(
+                    url=url,
+                    token=active_token,
+                    api_id="ka20006",
+                    payload=payload,
+                    use_continuous=False,
+                    request_owner="signal_radar_market_regime_fallback",
+                    request_class="runtime_required",
+                    request_code="001",
+                )
+                if responses:
+                    res_json = responses[0]
                     for key, val in res_json.items():
                         if (
                             isinstance(val, list)

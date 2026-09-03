@@ -86,7 +86,9 @@ submit drought의 AI·latency·spread·stale·broker 차단 근거가 적정하�
 promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved_full|general_slot_limit`로 탈락한 후보는 전수 `scalping_scanner_candidate_pruned` census와 별도로, 선택된 episode만 `scalping_scanner_prune_bbo_schedule → scalping_scanner_prune_bbo_observation` source-only 경로에서 확인한다. 이 observer는 기존 Kiwoom REST `ka10004`를 exact KRX/NXT route로 조회하며 scanner 선정·slot·cooldown·threshold를 바꾸지 않는다.
 
 - 기본 bound는 process-local active episode 8개, pending sample 80개, KST 거래일당 최대 1,200 request, request 시작 간격 최소 0.25초다. 표본 시점은 anchor 후 `0·3·10·20·30·60·180·300·600·1200초`이며 anchor→schedule delay는 2초 이하여야 한다.
+- 이 local bound와 별도로 운영 국내주식 계좌/토큰별 조회 TR 5회/초 cross-process gate를 확인한다. scanner-prune·external-census·widget research/advisory·pure-market backfill은 `source_only`로 합산 최대 4/5 slot까지만 사용해 `runtime_required|execution_critical` 조회 한 slot을 보존한다. 주문 TR 5회/초는 별도 버킷이고, 모의투자 조회는 token+origin+`api-id`별 1회/초다. local 0.25초·분당·일일 cap은 공통 상한을 대체하지 않는다.
 - 각 schedule/observation은 `scanner_prune_observer_episode_id`, scan generation/rank, prune reason, code·venue·session, request/response code, due/request/observed 시각, schedule lag, best bid/ask, quote age와 gap reason을 보존한다. exact response route가 다르거나 BBO가 invalid/crossed/nonpositive이면 captured로 정규화하지 않는다.
+- HTTP 429와 `1700|1701|1702`는 shared cooldown으로 전파하고, bounded retry가 소진되거나 유효 응답이 끝내 없으면 `ka10004_rate_limited`, local admission/cooldown defer는 `ka10004_shared_read_budget_deferred`로 분리한다. 한도 감지 뒤 exact valid 응답으로 복구된 요청은 `rate_limit_detected=true`, `rate_limit_retry_exhausted=false` warning provenance를 보존하되 실패 표본으로 버리지 않는다. owner/PID/class/api-id/request code/attempt/wait/scope digest를 남기며 bearer token은 저장·로그하지 않는다. retry·일일 budget·호출 밀도 상향을 복구로 사용하지 않는다.
 - full prune census와 bounded observer denominator를 분리한다. observer의 EV나 coverage를 전체 탈락 모집단으로 외삽하지 않고 `full_funnel_population_ev_extrapolation_allowed=false`를 유지한다.
 - implementation 존재만으로 완료라고 하지 않는다. 당일 fresh PID가 collector를 구성하고 자연 prune에서 `new_episode_scheduled|existing_episode_reused`와 exact-route capture 또는 명시적 source-quality gap receipt를 생성해야 runtime hook이 확인된다. eligible prune은 있었지만 schedule receipt가 0이면 `runtime_hook|process_reflection`, schedule은 있었지만 observation이 없으면 queue/worker/REST/source gap의 최초 결손을 분리한다. eligible prune 자체가 없으면 별도 PID import/configure receipt가 있을 때만 `healthy_no_natural_sample`이며, 그 receipt도 없으면 `pending_declared_window|blocked_missing_evidence`로 둔다.
 - decision contract는 `scanner_prune_bbo_observation_only`, `runtime_effect=false`, `market_data_request_effect=true`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`다. resolved outcome 20건, BBO episode coverage 95% 이상, right-censored 20% 이하의 선언 floor가 닫히기 전에는 선택 surface나 실주문 근거로 사용하지 않는다.
@@ -235,6 +237,7 @@ Smoothing은 순간 tick·호가·OFI/QI 흔들림으로 action이 왕복하는 
 - 공식 보통주 master에 결속된 독립 시장 전체 `as_of rising benchmark`의 source path·hash·수집 시각·선정 정의·전체 census와 scanner 외부 미관측 종목 재현 가능성
 - scanner source fetch/normalize → candidate pool/rank/limit → universe/source guard → watch budget/slot → promotion/WATCHING → runtime attach → fast/heavy evaluation → AI/authority gate의 unique-key count·dedup·unmatched·지연과 최초 미도달 원인 보존식
 - scanner-pruned 전수 census와 bounded BBO schedule/observation의 분리, collector active/pending/daily bound, worker/receipt failure, exact route와 full-population 외삽 금지
+- Kiwoom 국내주식 token-wide 조회 5회/초, source-only 4/5 reservation, 주문 버킷 분리, HTTP/body-limit shared cooldown과 owner/PID/request-code별 admission/gap provenance
 - 현재 계좌 보유, owner별 ledger/custody, 미체결 주문, 주문가능금액과 broker reconciliation
 - 재기동이 별도로 허용된 실행에서만 재기동 전후 broker 미체결·전시장 잔고가 동일한지, `manual_operator` 및 독립 machine 주문을 취소·중복제출·흡수하지 않았는지
 - KRX, `PREMARKET_KRX_LIKE`, NXT의 source·route·session 분리
@@ -317,7 +320,7 @@ Swing과 은퇴한 opening-rotation·upper-limit rotation·panic-buying 경로�
 마지막에는 반드시 다음을 분리한다.
 
 - 종목탐색: 독립 `as_of rising benchmark`의 정의·source/hash·분모, discovery·post-promotion consumption·downstream conversion의 독립 분모, scanner source/watch/promotion/fast·heavy evaluation/AI/candidate 단계별 recall·지연·최초 미도달 원인, scanner 밖 미관측 종목의 executable outcome과 최종 판정 상태
-- scanner-pruned observer: 전수 prune census와 bounded schedule/observation 표본, active/pending/request bound, exact route·BBO freshness·gap, resolved/right-censor/coverage floor와 full-population 외삽 금지
+- scanner-pruned observer: 전수 prune census와 bounded schedule/observation 표본, active/pending/request bound, token-wide 5/sec·source-only 4/5 reservation, exact route·BBO freshness·rate-limit/local-defer gap, resolved/right-censor/coverage floor와 full-population 외삽 금지
 - 메인 봇: 상위 탐색 결과와 후단 submit drought를 분리한 놓친 수익기회, 적정 차단, probe/residual/scale-in, 매도와 post-sell
 - 위젯: signal·episode·fill·target·terminal, 비용 차감 EV, owner/custody 정합성
 - 에피소드: profile/leg별 제출·체결·target·COMPLETE/HELD/BLOCKED와 실현비용

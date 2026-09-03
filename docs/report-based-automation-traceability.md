@@ -282,6 +282,27 @@ The current R3 axis `prompt_contract_effect_on_ask_depletion_context` has no reg
 
 In addition, the legacy main-AI PREOPEN/live consumer is disabled under `main_ai_quality_legacy_runtime_authority_fail_closed`. Source-only R0-R3 production remains enabled; neither the legacy axis nor the ask-depletion-conditioned axis can currently publish PREOPEN activation or obtain live prompt authority.
 
+### Domestic read-TR shared-capacity trace
+
+Every participating Kiwoom domestic read producer passes through
+`src.utils.kiwoom_read_request_control` before the HTTP request. Production
+scope is token+origin across processes at five starts per sliding second;
+`source_only` owners may consume four so one slot remains available to
+`runtime_required|execution_critical`. Mock scope is token+origin+`api-id` at
+one request per second. The read coordinator is not an order-TR consumer and
+must never retry a broker write.
+
+Scanner-prune `ka10004`, market-opportunity `ka10027` and exact-route
+`ka10004`, widget research/advisory, pure-market backfill, low-price-machine
+realized-PnL tuning, and market-panic breadth collection are `source_only`.
+Their producer-local request interval, minute/day budget, and continuation
+delay remain additional lower bounds. HTTP 429 or body
+`1700|1701|1702` publishes a shared cooldown. Admission defer and server limit
+remain distinct source-quality receipts containing owner, PID, class,
+`api-id`, request code, attempts, wait, and a token-free scope digest. A fresh
+PID receipt is required for process reflection; implementation alone does not
+authorize restart or any runtime/order/threshold change.
+
 ## 2.1 Postclose Chain Contract
 
 Scanner prune observer의 full funnel census와 bounded observation denominator는 분리한다. Coverage, resolved outcome, right-censor와 cost-adjusted EV gate는 명시적으로 스케줄된 `bounded_observer_selected_episode`만 소유하며, 선택되지 않은 prune row는 funnel 보존용이다. Bounded 표본 EV를 full prune population으로 외삽하거나 이 분모 차이를 source-capture repair 결함으로 바꾸지 않는다.

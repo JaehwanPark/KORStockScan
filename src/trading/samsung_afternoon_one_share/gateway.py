@@ -173,12 +173,14 @@ class KiwoomAfternoonOneShareGateway:
         cont_yn: str = "N",
         next_key: str = "",
     ) -> tuple[requests.Response, dict[str, Any]]:
+        active_token = self._token()
+
         def post_once() -> tuple[requests.Response, dict[str, Any]]:
             response = self.session.post(
                 f"{self.base_url}{endpoint}",
                 headers={
                     "Content-Type": "application/json;charset=UTF-8",
-                    "authorization": f"Bearer {self._token()}",
+                    "authorization": f"Bearer {active_token}",
                     "cont-yn": cont_yn,
                     "next-key": next_key,
                     "api-id": api_id,
@@ -214,6 +216,9 @@ class KiwoomAfternoonOneShareGateway:
             post_once=post_once,
             pacing_enabled=self.read_pacing_enabled,
             pacer=self.read_pacer,
+            token=active_token,
+            endpoint=f"{self.base_url}{endpoint}",
+            request_owner="samsung_afternoon_episode_read",
             **kwargs,
         )
 
@@ -333,7 +338,10 @@ class KiwoomAfternoonOneShareGateway:
         try:
             request_code = entry_liquidity_request_code("005930", route)
             payload = kiwoom_utils.get_stock_orderbook_ka10004(
-                self._token(), request_code
+                self._token(),
+                request_code,
+                request_owner="samsung_afternoon_entry_liquidity",
+                request_class="execution_critical",
             )
         except Exception as exc:
             return unavailable_entry_liquidity_snapshot(

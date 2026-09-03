@@ -926,9 +926,10 @@ def test_daily_reset_preserves_older_unmanaged_inventory_across_flat_day(
     rolled_day_three = trader.run_once(day_three)
 
     assert rolled_day_three["symbols"]["999999"]["prior_day_unmanaged_qty"] == 1
-    assert rolled_day_three["history"][-1]["symbols"]["999999"][
-        "unmanaged_overnight_qty"
-    ] == 1
+    assert (
+        rolled_day_three["history"][-1]["symbols"]["999999"]["unmanaged_overnight_qty"]
+        == 1
+    )
     assert len(gateway.buy_calls) == 1
 
 
@@ -2524,11 +2525,71 @@ def test_gateway_uses_documented_order_contract_without_cash_or_token_issue(
     assert all(call[1]["headers"]["api-id"] != "kt00001" for call in session.calls)
 
 
+def test_gateway_joins_shared_read_bucket_only_for_execution_reconciliation(
+    monkeypatch,
+):
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {"return_code": 0}
+
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response()
+
+    admissions = []
+
+    def acquire(**kwargs):
+        admissions.append(kwargs)
+        return SimpleNamespace(admitted=True, reason="shared_read_rate_admitted")
+
+    monkeypatch.setattr(
+        gateway_module.kiwoom_utils, "acquire_kiwoom_read_capacity", acquire
+    )
+    monkeypatch.setattr(
+        gateway_module.kiwoom_utils,
+        "resolve_kiwoom_request_token",
+        lambda _token: "replacement-token",
+    )
+    session = RecordingSession()
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=session,
+        token_loader=lambda: "cached-token",
+        shared_read_control_enabled=True,
+    )
+
+    gateway._post(
+        endpoint="/api/dostk/acnt",
+        api_id="kt00007",
+        payload={"stk_cd": "005930"},
+    )
+    gateway._post(
+        endpoint="/api/dostk/ordr",
+        api_id="kt10000",
+        payload={"stk_cd": "005930"},
+    )
+
+    assert len(admissions) == 1
+    assert admissions[0]["token"] == "replacement-token"
+    assert admissions[0]["api_id"] == "kt00007"
+    assert admissions[0]["request_class"] == "execution_critical"
+    assert session.calls[0][1]["headers"]["authorization"] == (
+        "Bearer replacement-token"
+    )
+
+
 def test_gateway_liquidity_read_uses_explicit_integrated_or_nxt_book(monkeypatch):
     calls = []
 
-    def fake_orderbook(token, code):
-        calls.append((token, code))
+    def fake_orderbook(token, code, **kwargs):
+        calls.append((token, code, kwargs))
         return {
             "source": "ka10004_rest_orderbook",
             "stock_code": "181710",
@@ -2557,8 +2618,22 @@ def test_gateway_liquidity_read_uses_explicit_integrated_or_nxt_book(monkeypatch
     nxt = gateway.entry_liquidity_snapshot(code="181710", route="NXT")
 
     assert calls == [
-        ("cached-token", "181710_AL"),
-        ("cached-token", "181710_NX"),
+        (
+            "cached-token",
+            "181710_AL",
+            {
+                "request_owner": "widget_auto_trade_entry_liquidity",
+                "request_class": "execution_critical",
+            },
+        ),
+        (
+            "cached-token",
+            "181710_NX",
+            {
+                "request_owner": "widget_auto_trade_entry_liquidity",
+                "request_class": "execution_critical",
+            },
+        ),
     ]
     assert regular.source_ok and regular.route == "KRX"
     assert nxt.source_ok and nxt.route == "NXT"

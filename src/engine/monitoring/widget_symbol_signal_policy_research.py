@@ -110,13 +110,12 @@ METRIC_CONTRACT = {
 
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-12T12:09:57+09:00",
+    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
+    "retrieved_at_kst": "2026-09-03T12:04:23+09:00",
     "inspected_paths": [
-        "kiwoom_docs/차트.md",
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
-        "kiwoom/core",
+        "kiwoom/core/errors.py",
         "postman/kiwoom-openapi.postman_collection.json",
     ],
     "request_contract": "POST /api/dostk/chart; api-id=ka10080",
@@ -203,6 +202,7 @@ def fetch_krx_history(
     max_pages: int = 120,
     page_delay_sec: float = 0.2,
     post: Callable[..., requests.Response] = requests.post,
+    shared_read_control_enabled: bool | None = None,
 ) -> tuple[list[Bar], dict[str, Any]]:
     """Fetch widget-owned research OHLCV without auth/account/order mutation."""
     if symbol not in SYMBOLS:
@@ -211,7 +211,11 @@ def fetch_krx_history(
         raise ValueError("invalid_clean_baseline_date_range")
     if int(expected_trading_day_count) <= HOLDOUT_DAYS:
         raise ValueError("expected_trading_day_count_below_research_minimum")
-    clean_token = str(token or "").replace("Bearer ", "").strip()
+    clean_token = (
+        str(kiwoom_utils.resolve_kiwoom_request_token(token) or "")
+        .replace("Bearer ", "")
+        .strip()
+    )
     if not clean_token:
         raise ResearchError("cached_token_missing")
 
@@ -227,11 +231,30 @@ def fetch_krx_history(
     page_count = 0
     request_count = 0
     rate_limit_retry_count = 0
+    shared_read_control = (
+        post is requests.post
+        if shared_read_control_enabled is None
+        else bool(shared_read_control_enabled)
+    )
     start_date_fully_bracketed = False
     continuation_exhausted = False
     for page_index in range(max(1, int(max_pages))):
         response: requests.Response | None = None
         for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            if shared_read_control:
+                admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+                    token=clean_token,
+                    endpoint=url,
+                    request_owner="widget_symbol_signal_policy_research",
+                    request_class="source_only",
+                    api_id="ka10080",
+                    request_code=request_code,
+                    max_wait_sec=1.25,
+                )
+                if not admission.admitted:
+                    raise ResearchError(
+                        f"ka10080_shared_read_rate_deferred:{admission.reason}"
+                    )
             response = post(
                 url,
                 headers={
@@ -249,8 +272,31 @@ def fetch_krx_history(
                 timeout=(5, 30),
             )
             request_count += 1
-            if response.status_code != 429:
+            try:
+                response_body = response.json()
+            except ValueError:
+                response_body = {}
+            rate_limited = kiwoom_utils.is_kiwoom_read_rate_limit(
+                http_status_code=response.status_code,
+                response_body=response_body,
+            )
+            if not rate_limited:
                 break
+            if shared_read_control:
+                kiwoom_utils.record_kiwoom_read_rate_limit(
+                    token=clean_token,
+                    endpoint=url,
+                    request_owner="widget_symbol_signal_policy_research",
+                    request_class="source_only",
+                    api_id="ka10080",
+                    request_code=request_code,
+                    http_status_code=response.status_code,
+                    response_code=(
+                        response_body.get("return_code", response_body.get("rt_cd"))
+                        if isinstance(response_body, dict)
+                        else None
+                    ),
+                )
             if attempt >= MAX_RATE_LIMIT_RETRIES:
                 raise ResearchError("ka10080_rate_limit_retry_exhausted")
             rate_limit_retry_count += 1

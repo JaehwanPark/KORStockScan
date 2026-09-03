@@ -1,8 +1,9 @@
 """Bounded Kiwoom read request control for episode machines.
 
-The official Kiwoom contract identifies ``1700`` as a request-count error but
-does not publish a pacing interval.  This module therefore owns a conservative
-local guard shared by episode-machine ``ka10080`` market-data reads and
+The official Kiwoom contract identifies ``1700``/``1701``/``1702`` as
+request-count errors and publishes the domestic-stock token-level ceiling.
+This module therefore joins the shared guard for episode-machine ``ka10080``
+market-data reads and
 ``kt00007`` dated order/execution plus ``ka10075`` current-unfilled
 reconciliation reads.  Broker writes must not use this retry path because
 replaying an ambiguous order can duplicate it.
@@ -17,13 +18,17 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
 from src.utils.constants import DATA_DIR
+from src.utils.kiwoom_read_request_control import (
+    DEFAULT_COORDINATOR,
+    REQUEST_CLASS_RUNTIME_REQUIRED,
+    ReadRequestAdmission,
+    is_kiwoom_read_rate_limit,
+)
 
 KA10080_API_ID = "ka10080"
 KA10075_API_ID = "ka10075"
 KT00007_API_ID = "kt00007"
-EPISODE_READ_API_IDS = frozenset(
-    {KA10080_API_ID, KA10075_API_ID, KT00007_API_ID}
-)
+EPISODE_READ_API_IDS = frozenset({KA10080_API_ID, KA10075_API_ID, KT00007_API_ID})
 DEFAULT_MIN_INTERVAL_SEC = 0.4
 DEFAULT_PACER_PATH = DATA_DIR / "runtime" / "kiwoom_episode_ka10080.lock"
 MAX_RATE_LIMIT_RETRIES = 2
@@ -37,8 +42,13 @@ def is_kiwoom_request_limit(response: object, body: dict[str, Any] | object) -> 
     """Return whether a Kiwoom response is an explicit request-limit failure."""
 
     status_code = int(getattr(response, "status_code", 0) or 0)
+    if is_kiwoom_read_rate_limit(
+        http_status_code=status_code,
+        response_body=body,
+    ):
+        return True
     if not isinstance(body, dict):
-        return status_code == 429
+        return False
     code = str(body.get("return_code", body.get("rt_cd", "")) or "")
     message = str(body.get("return_msg") or body.get("err_msg") or "")
     return bool(
@@ -65,9 +75,33 @@ class KiwoomEpisodeReadPacer:
         self.clock = clock
         self.sleep = sleep
 
-    def wait(self, api_id: str) -> None:
-        if str(api_id) not in EPISODE_READ_API_IDS or self.min_interval_sec <= 0:
-            return
+    def wait(
+        self,
+        api_id: str,
+        *,
+        token: str = "",
+        endpoint: str = "",
+        request_owner: str = "episode_machine_read",
+        request_class: str = REQUEST_CLASS_RUNTIME_REQUIRED,
+    ) -> ReadRequestAdmission | None:
+        if str(api_id) not in EPISODE_READ_API_IDS:
+            return None
+        if token and endpoint:
+            admission = DEFAULT_COORDINATOR.acquire(
+                token=token,
+                endpoint=endpoint,
+                request_owner=request_owner,
+                request_class=request_class,
+                api_id=api_id,
+                request_code="not_applicable",
+            )
+            if not admission.admitted:
+                raise RuntimeError(
+                    f"episode_shared_read_rate_deferred:{admission.reason}"
+                )
+            return admission
+        if self.min_interval_sec <= 0:
+            return None
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         with self.state_path.open("a+", encoding="ascii") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -89,6 +123,7 @@ class KiwoomEpisodeReadPacer:
             handle.write(f"{reserved_at:.9f}\n")
             handle.flush()
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return None
 
 
 class SameMinuteSnapshotCache:
@@ -158,6 +193,10 @@ def post_kiwoom_episode_read(
     sleep: Callable[[float], None] = time.sleep,
     cache: ShortTtlSnapshotCache | None = None,
     cache_key: object | None = None,
+    token: str = "",
+    endpoint: str = "",
+    request_owner: str = "episode_machine_read",
+    request_class: str = REQUEST_CLASS_RUNTIME_REQUIRED,
 ) -> PostResult[ResponseT]:
     """POST one read with bounded 1700 recovery; reject non-read retry use."""
 
@@ -170,7 +209,13 @@ def post_kiwoom_episode_read(
     active_pacer = pacer or _DEFAULT_PACER
     for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
         if pacing_enabled:
-            active_pacer.wait(api_id)
+            active_pacer.wait(
+                api_id,
+                token=token,
+                endpoint=endpoint,
+                request_owner=request_owner,
+                request_class=request_class,
+            )
         response, body = post_once()
         if not is_kiwoom_request_limit(response, body):
             code = str(body.get("return_code", body.get("rt_cd", "")))
@@ -182,6 +227,21 @@ def post_kiwoom_episode_read(
             ):
                 cache.put(cache_key, (response, body))
             return response, body
+        if token and endpoint:
+            DEFAULT_COORDINATOR.record_rate_limit(
+                token=token,
+                endpoint=endpoint,
+                request_owner=request_owner,
+                request_class=request_class,
+                api_id=api_id,
+                request_code="not_applicable",
+                http_status_code=getattr(response, "status_code", None),
+                response_code=(
+                    body.get("return_code", body.get("rt_cd"))
+                    if isinstance(body, dict)
+                    else None
+                ),
+            )
         if attempt >= MAX_RATE_LIMIT_RETRIES:
             return response, body
         sleep(_RATE_LIMIT_BACKOFF_SEC[attempt])

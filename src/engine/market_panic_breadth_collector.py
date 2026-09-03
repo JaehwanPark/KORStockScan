@@ -1236,6 +1236,9 @@ def fetch_kiwoom_market_breadth(
             api_id="ka20003",
             payload={"inds_cd": inds_cd},
             use_continuous=False,
+            request_owner="market_panic_breadth_collector",
+            request_class="source_only",
+            request_code=inds_cd,
         )
         parsed_rows.extend(
             parse_kiwoom_industry_rows(payloads, source_market=source_market)
@@ -1247,11 +1250,13 @@ def fetch_kiwoom_market_breadth(
         "request_payloads": [{"inds_cd": "001"}, {"inds_cd": "101"}],
         "doc_basis": {
             "rest_api": "https://openapi.kiwoom.com/m/guide/apiguide",
-            "official_repository_commit": ("9180debf7aea0074715dd8f7a15af432afbfc403"),
-            "official_repository_retrieved_at": "2026-08-31T07:50:26+09:00",
+            "official_repository_commit": ("234560d213acd8871ae344b5481aecd2f30287fa"),
+            "official_repository_retrieved_at": "2026-09-03T12:04:23+09:00",
             "official_repository_paths": [
                 "kiwoom/_data/kiwoom_api_spec.json#ka20003",
-                "examples/국내주식/업종/get_domestic_all_sector_indices.py",
+                "kiwoom/specs.py",
+                "kiwoom/core/errors.py",
+                "postman/kiwoom-openapi.postman_collection.json",
             ],
             "ws_types": ["0J 업종지수", "0U 업종등락"],
         },

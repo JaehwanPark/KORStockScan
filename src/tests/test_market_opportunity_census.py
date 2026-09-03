@@ -261,6 +261,31 @@ def test_ka10027_flattens_continuous_pages_until_requested_raw_depth(monkeypatch
     assert rows[20]["SourceUniverseSize"] == 60
 
 
+def test_ka10027_can_return_shared_read_control_meta(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: (
+            [],
+            {
+                "read_rate_control_status": "deferred",
+                "read_rate_control_reason": "shared_read_rate_wait_budget_exhausted",
+                "request_owner": "market_opportunity_census.ka10027",
+            },
+        ),
+    )
+
+    rows, meta = kiwoom_utils.get_top_fluctuation_ka10027(
+        "token",
+        return_meta=True,
+        request_class="source_only",
+    )
+
+    assert rows == []
+    assert meta["read_rate_control_status"] == "deferred"
+    assert meta["request_owner"] == "market_opportunity_census.ka10027"
+
+
 def test_ka10027_zero_limit_returns_no_rows(monkeypatch):
     monkeypatch.setattr(
         kiwoom_utils,
@@ -323,6 +348,69 @@ def test_capture_is_sanitized_source_only_and_separates_venues():
     assert "secret-token" not in json.dumps(rows, ensure_ascii=False)
 
 
+def test_capture_distinguishes_ka10027_shared_budget_defer_from_natural_empty():
+    def fake_fetch(_token, **kwargs):
+        assert kwargs["request_class"] == "source_only"
+        assert kwargs["return_meta"] is True
+        return (
+            [],
+            {
+                "request_owner": "market_opportunity_census.ka10027",
+                "request_pid": 123,
+                "request_class": "source_only",
+                "request_attempt_count": 0,
+                "read_rate_control_status": "deferred",
+                "read_rate_control_reason": "shared_read_rate_wait_budget_exhausted",
+                "read_rate_control_waited_sec": 1.25,
+                "read_rate_control_scope_digest": "token-free-digest",
+                "rate_limit_detected": False,
+            },
+        )
+
+    rows = census.capture_market_snapshots(
+        "secret-token",
+        target_date="2026-07-30",
+        captured_at=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=fake_fetch,
+    )
+
+    assert rows[0]["source_quality_status"] == "source_unavailable"
+    assert rows[0]["source_error"] == "ka10027_shared_read_budget_deferred"
+    assert rows[0]["source"]["request_control"]["request_pid"] == 123
+    assert "secret-token" not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_capture_keeps_valid_ka10027_rows_after_bounded_rate_limit_recovery():
+    def fake_fetch(_token, **_kwargs):
+        return (
+            [{"Code": "005930", "Name": "삼성전자", "Price": 100000}],
+            {
+                "request_owner": "market_opportunity_census.ka10027",
+                "request_class": "source_only",
+                "request_attempt_count": 2,
+                "read_rate_control_status": "admitted",
+                "rate_limit_detected": True,
+                "rate_limit_retry_exhausted": False,
+            },
+        )
+
+    rows = census.capture_market_snapshots(
+        "secret-token",
+        target_date="2026-07-30",
+        captured_at=datetime.fromisoformat("2026-07-30T10:00:00+09:00"),
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=fake_fetch,
+    )
+
+    assert rows[0]["source_quality_status"] == "ok"
+    assert rows[0]["source_error"] == ""
+    assert rows[0]["source"]["request_control"]["rate_limit_detected"] is True
+    assert rows[0]["source"]["request_control"]["rate_limit_retry_exhausted"] is False
+
+
 def test_capture_collects_bounded_exact_route_external_bbo():
     captured_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
     bbo_calls = []
@@ -376,10 +464,17 @@ def test_capture_collects_bounded_exact_route_external_bbo():
     observation = records[0]["rows"][0]["executable_bbo_observation"]
     assert bbo_calls == [
         (
-            "secret-token",
-            "005930_NX",
-            {"explicit_request_code": True, "max_retries": 1},
-        )
+                "secret-token",
+                "005930_NX",
+                {
+                    "explicit_request_code": True,
+                    "max_retries": 1,
+                    "request_owner": "market_opportunity_census.external_bbo",
+                    "request_class": "source_only",
+                    "read_rate_max_wait_sec": 1.25,
+                    "return_meta": True,
+                },
+            )
     ]
     assert observation["status"] == "captured"
     assert observation["best_bid_qty"] == 12
@@ -411,6 +506,98 @@ def test_external_bbo_per_run_budget_records_gap_without_request():
     observation = records[0]["rows"][0]["executable_bbo_observation"]
     assert observation["request_attempted"] is False
     assert observation["gap_reason"] == "per_run_bbo_request_budget_exhausted"
+
+
+def test_external_bbo_preserves_shared_rate_limit_gap_and_caller_provenance():
+    captured_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
+    clock_values = iter([captured_at.timestamp(), captured_at.timestamp() + 0.1])
+    records = census.capture_market_snapshots(
+        "token",
+        target_date="2026-07-30",
+        captured_at=captured_at,
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {"Code": "005930", "Name": "삼성전자", "Price": 100000}
+        ],
+        collect_executable_bbo=True,
+        bbo_fetcher=lambda *_args, **_kwargs: (
+            {},
+            {
+                "request_owner": "market_opportunity_census.external_bbo",
+                "request_class": "source_only",
+                "request_pid": 456,
+                "request_attempt_count": 1,
+                "read_rate_control_status": "admitted",
+                "read_rate_control_reason": "shared_read_rate_admitted",
+                "read_rate_control_waited_sec": 0.1,
+                "rate_limit_detected": True,
+            },
+        ),
+        bbo_request_reserver=lambda: {
+            "status": "reserved",
+            "reserved": True,
+            "attempt_ordinal": 1,
+            "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+        },
+        clock=lambda: next(clock_values),
+    )
+
+    observation = records[0]["rows"][0]["executable_bbo_observation"]
+    assert observation["gap_reason"] == "ka10004_rate_limited"
+    assert observation["request_pid"] == 456
+    assert observation["request_attempt_count"] == 1
+    assert observation["rate_limit_detected"] is True
+
+
+def test_external_bbo_keeps_valid_snapshot_after_rate_limit_recovery():
+    captured_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
+    clock_values = iter([captured_at.timestamp(), captured_at.timestamp() + 0.1])
+    records = census.capture_market_snapshots(
+        "token",
+        target_date="2026-07-30",
+        captured_at=captured_at,
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *_args, **_kwargs: [
+            {"Code": "005930", "Name": "삼성전자", "Price": 100000}
+        ],
+        collect_executable_bbo=True,
+        bbo_fetcher=lambda *_args, **_kwargs: (
+            {
+                "source": "ka10004_rest_orderbook",
+                "stock_code": "005930",
+                "request_code": "005930",
+                "explicit_request_code": True,
+                "rest_received_ts": captured_at.timestamp() + 0.05,
+                "best_bid": 99900,
+                "best_ask": 100000,
+                "best_bid_qty": 12,
+                "best_ask_qty": 10,
+            },
+            {
+                "request_owner": "market_opportunity_census.external_bbo",
+                "request_class": "source_only",
+                "request_attempt_count": 2,
+                "read_rate_control_status": "admitted",
+                "rate_limit_detected": True,
+                "rate_limit_retry_exhausted": False,
+            },
+        ),
+        bbo_request_reserver=lambda: {
+            "status": "reserved",
+            "reserved": True,
+            "attempt_ordinal": 1,
+            "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+        },
+        clock=lambda: next(clock_values),
+    )
+
+    observation = records[0]["rows"][0]["executable_bbo_observation"]
+    assert observation["status"] == "captured"
+    assert observation["gap_reason"] == "not_applicable_capture_pass"
+    assert observation["rate_limit_detected"] is True
+    assert observation["rate_limit_retry_exhausted"] is False
 
 
 def test_external_bbo_without_daily_reservation_never_calls_kiwoom():

@@ -49,15 +49,13 @@ MAX_MANAGEABLE_HELD_LEG_RATE = 0.25
 MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT = 3.0
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-11T21:27:49+09:00",
+    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
+    "retrieved_at_kst": "2026-09-03T12:04:23+09:00",
     "inspected_paths": [
-        "kiwoom_docs/차트.md",
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
-        "kiwoom/core",
+        "kiwoom/core/errors.py",
         "postman/kiwoom-openapi.postman_collection.json",
-        "examples/국내주식/차트/get_domestic_stock_minute_chart.py",
     ],
     "request_contract": "POST /api/dostk/chart; api-id=ka10080",
 }
@@ -195,6 +193,7 @@ def fetch_sor_history(
     post: Callable[..., requests.Response] = requests.post,
     allowed_symbols: frozenset[str] | None = None,
     expected_trading_day_count: int = CALIBRATION_DAYS + HOLDOUT_DAYS,
+    shared_read_control_enabled: bool | None = None,
 ) -> tuple[list[Bar], dict[str, Any]]:
     """Fetch fully bracketed integrated-SOR regular bars without auth mutation."""
     symbol_allowlist = allowed_symbols or frozenset(
@@ -206,7 +205,11 @@ def fetch_sor_history(
         raise ValueError("invalid_clean_baseline_date_range")
     if int(expected_trading_day_count) < CALIBRATION_DAYS + HOLDOUT_DAYS:
         raise ValueError("expected_trading_day_count_below_research_minimum")
-    clean_token = str(token or "").replace("Bearer ", "").strip()
+    clean_token = (
+        str(kiwoom_utils.resolve_kiwoom_request_token(token) or "")
+        .replace("Bearer ", "")
+        .strip()
+    )
     if not clean_token:
         raise ResearchError("cached_token_missing")
     request_code = f"{symbol}_AL"
@@ -218,7 +221,26 @@ def fetch_sor_history(
     page_count = 0
     start_date_fully_bracketed = False
     continuation_exhausted = False
+    shared_read_control = (
+        post is requests.post
+        if shared_read_control_enabled is None
+        else bool(shared_read_control_enabled)
+    )
     for page_index in range(max(1, int(max_pages))):
+        if shared_read_control:
+            admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+                token=clean_token,
+                endpoint=url,
+                request_owner="low_price_two_leg_entry_spot_research",
+                request_class="source_only",
+                api_id="ka10080",
+                request_code=request_code,
+                max_wait_sec=1.25,
+            )
+            if not admission.admitted:
+                raise ResearchError(
+                    f"ka10080_shared_read_rate_deferred:{admission.reason}"
+                )
         response = post(
             url,
             headers={
@@ -235,6 +257,28 @@ def fetch_sor_history(
             },
             timeout=(5, 30),
         )
+        try:
+            response_body = response.json()
+        except ValueError:
+            response_body = {}
+        if shared_read_control and kiwoom_utils.is_kiwoom_read_rate_limit(
+            http_status_code=response.status_code,
+            response_body=response_body,
+        ):
+            kiwoom_utils.record_kiwoom_read_rate_limit(
+                token=clean_token,
+                endpoint=url,
+                request_owner="low_price_two_leg_entry_spot_research",
+                request_class="source_only",
+                api_id="ka10080",
+                request_code=request_code,
+                http_status_code=response.status_code,
+                response_code=(
+                    response_body.get("return_code", response_body.get("rt_cd"))
+                    if isinstance(response_body, dict)
+                    else None
+                ),
+            )
         page_count += 1
         payload = _parse_response(response)
         rows = payload.get("stk_min_pole_chart_qry")

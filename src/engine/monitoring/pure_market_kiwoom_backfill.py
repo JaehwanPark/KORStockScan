@@ -29,16 +29,19 @@ DEFAULT_OUTPUT_DIR = Path("data/market_data/pure_market_reversal")
 CLEAN_TUNING_BASELINE_DATE = date(2026, 6, 5)
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-11T10:10:15+09:00",
+    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
+    "retrieved_at_kst": "2026-09-03T12:04:23+09:00",
     "inspected_paths": [
-        "kiwoom_docs/차트.md",
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
-        "kiwoom/core/client.py",
+        "kiwoom/core/errors.py",
         "postman/kiwoom-openapi.postman_collection.json",
+        "https://openapi.kiwoom.com/intro?dummyVal=0",
     ],
-    "request_contract": "POST /api/dostk/chart; api-id=ka10080|ka20005",
+    "request_contract": (
+        "POST /api/dostk/chart; api-id=ka10080|ka20005; production domestic "
+        "read TR <=5 requests/sec per token; mock <=1 request/sec per TR"
+    ),
 }
 METRIC_CONTRACT = {
     "metric_role": "source_quality_and_market_data_backfill",
@@ -63,6 +66,60 @@ METRIC_CONTRACT = {
 
 class BackfillError(RuntimeError):
     """Raised when a read-only backfill cannot preserve its source contract."""
+
+
+def _shared_read_control_enabled(
+    *, post: Callable[..., requests.Response], configured: bool | None
+) -> bool:
+    if configured is not None:
+        return bool(configured)
+    return post is requests.post
+
+
+def _acquire_backfill_read(
+    *, token: str, url: str, api_id: str, request_code: str
+) -> dict[str, Any]:
+    admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+        token=token,
+        endpoint=url,
+        request_owner=f"pure_market_kiwoom_backfill.{api_id}",
+        request_class="source_only",
+        api_id=api_id,
+        request_code=request_code,
+        max_wait_sec=1.25,
+    )
+    if not admission.admitted:
+        raise BackfillError(f"{api_id}_shared_read_rate_deferred:{admission.reason}")
+    return admission.as_dict()
+
+
+def _record_backfill_rate_limit(
+    *,
+    token: str,
+    url: str,
+    api_id: str,
+    request_code: str,
+    response: object,
+    body: object,
+) -> None:
+    if not kiwoom_utils.is_kiwoom_read_rate_limit(
+        http_status_code=getattr(response, "status_code", None),
+        response_body=body,
+    ):
+        return
+    response_code = None
+    if isinstance(body, dict):
+        response_code = body.get("return_code", body.get("rt_cd"))
+    kiwoom_utils.record_kiwoom_read_rate_limit(
+        token=token,
+        endpoint=url,
+        request_owner=f"pure_market_kiwoom_backfill.{api_id}",
+        request_class="source_only",
+        api_id=api_id,
+        request_code=request_code,
+        http_status_code=getattr(response, "status_code", None),
+        response_code=response_code,
+    )
 
 
 @dataclass(frozen=True)
@@ -245,6 +302,7 @@ def fetch_ka10080_history(
     max_pages: int = 120,
     page_delay_sec: float = 0.5,
     post: Callable[..., requests.Response] = requests.post,
+    shared_read_control_enabled: bool | None = None,
 ) -> tuple[list[MarketBar], dict[str, Any]]:
     """Fetch oldest-needed 1m OHLCV without mutating shared auth state."""
     normalized_venue = venue.strip().upper()
@@ -252,7 +310,12 @@ def fetch_ka10080_history(
         raise ValueError("venue must be KRX or NXT")
     if start_date > end_date:
         raise ValueError("start_date must not be after end_date")
-    if not str(token or "").strip():
+    active_token = (
+        str(kiwoom_utils.resolve_kiwoom_request_token(token) or "")
+        .replace("Bearer ", "")
+        .strip()
+    )
+    if not active_token:
         raise BackfillError("cached_token_missing")
     request_code = SAMSUNG_CODE if normalized_venue == "KRX" else f"{SAMSUNG_CODE}_NX"
     url = kiwoom_utils.get_api_url("/api/dostk/chart")
@@ -266,13 +329,24 @@ def fetch_ka10080_history(
     page_count = 0
     target_reached = False
     continuation_exhausted = False
+    shared_control = _shared_read_control_enabled(
+        post=post, configured=shared_read_control_enabled
+    )
+    last_admission: dict[str, Any] | None = None
 
     for page_index in range(max(1, int(max_pages))):
+        if shared_control:
+            last_admission = _acquire_backfill_read(
+                token=active_token,
+                url=url,
+                api_id="ka10080",
+                request_code=request_code,
+            )
         response = post(
             url,
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
-                "authorization": f"Bearer {str(token).replace('Bearer ', '').strip()}",
+                "authorization": f"Bearer {active_token}",
                 "cont-yn": cont_yn,
                 "next-key": next_key,
                 "api-id": "ka10080",
@@ -285,9 +359,27 @@ def fetch_ka10080_history(
             timeout=(5, 30),
         )
         page_count += 1
+        if response.status_code == 429 and shared_control:
+            _record_backfill_rate_limit(
+                token=active_token,
+                url=url,
+                api_id="ka10080",
+                request_code=request_code,
+                response=response,
+                body={},
+            )
         if response.status_code != 200:
             raise BackfillError(f"ka10080_http_{response.status_code}")
         payload = _response_json(response, api_id="ka10080")
+        if shared_control:
+            _record_backfill_rate_limit(
+                token=active_token,
+                url=url,
+                api_id="ka10080",
+                request_code=request_code,
+                response=response,
+                body=payload,
+            )
         try:
             return_code = int(payload.get("return_code", -1))
         except (TypeError, ValueError):
@@ -359,6 +451,8 @@ def fetch_ka10080_history(
         "invalid_row_count": invalid_row_count,
         "out_of_session_row_count": out_of_session_row_count,
         "duplicate_row_count": duplicate_row_count,
+        "shared_read_control_enabled": shared_control,
+        "shared_read_control_last_admission": last_admission,
         "source_quality_status": (
             "PASS" if target_reached and bars and invalid_row_count == 0 else "PARTIAL"
         ),
@@ -374,11 +468,17 @@ def fetch_ka20005_history(
     max_pages: int = 120,
     page_delay_sec: float = 0.5,
     post: Callable[..., requests.Response] = requests.post,
+    shared_read_control_enabled: bool | None = None,
 ) -> tuple[list[IndexBar], dict[str, Any]]:
     """Fetch fully bracketed KOSPI 1m context without auth mutation."""
     if start_date > end_date:
         raise ValueError("start_date must not be after end_date")
-    if not str(token or "").strip():
+    active_token = (
+        str(kiwoom_utils.resolve_kiwoom_request_token(token) or "")
+        .replace("Bearer ", "")
+        .strip()
+    )
+    if not active_token:
         raise BackfillError("cached_token_missing")
     url = kiwoom_utils.get_api_url("/api/dostk/chart")
     cont_yn = "N"
@@ -391,13 +491,24 @@ def fetch_ka20005_history(
     page_count = 0
     target_reached = False
     continuation_exhausted = False
+    shared_control = _shared_read_control_enabled(
+        post=post, configured=shared_read_control_enabled
+    )
+    last_admission: dict[str, Any] | None = None
 
     for page_index in range(max(1, int(max_pages))):
+        if shared_control:
+            last_admission = _acquire_backfill_read(
+                token=active_token,
+                url=url,
+                api_id="ka20005",
+                request_code="001",
+            )
         response = post(
             url,
             headers={
                 "Content-Type": "application/json;charset=UTF-8",
-                "authorization": f"Bearer {str(token).replace('Bearer ', '').strip()}",
+                "authorization": f"Bearer {active_token}",
                 "cont-yn": cont_yn,
                 "next-key": next_key,
                 "api-id": "ka20005",
@@ -406,9 +517,27 @@ def fetch_ka20005_history(
             timeout=(5, 30),
         )
         page_count += 1
+        if response.status_code == 429 and shared_control:
+            _record_backfill_rate_limit(
+                token=active_token,
+                url=url,
+                api_id="ka20005",
+                request_code="001",
+                response=response,
+                body={},
+            )
         if response.status_code != 200:
             raise BackfillError(f"ka20005_http_{response.status_code}")
         payload = _response_json(response, api_id="ka20005")
+        if shared_control:
+            _record_backfill_rate_limit(
+                token=active_token,
+                url=url,
+                api_id="ka20005",
+                request_code="001",
+                response=response,
+                body=payload,
+            )
         try:
             return_code = int(payload.get("return_code", -1))
         except (TypeError, ValueError):
@@ -473,6 +602,8 @@ def fetch_ka20005_history(
         "invalid_row_count": invalid_row_count,
         "out_of_session_row_count": out_of_session_row_count,
         "duplicate_row_count": duplicate_row_count,
+        "shared_read_control_enabled": shared_control,
+        "shared_read_control_last_admission": last_admission,
         "source_quality_status": (
             "PASS" if target_reached and bars and invalid_row_count == 0 else "PARTIAL"
         ),

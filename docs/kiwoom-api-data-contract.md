@@ -56,6 +56,46 @@ paths, and retrieval time in the change/review evidence. Verify at least:
 3. Account/order code against the relevant official account/order document,
    while preserving KORStockScan broker, account, order, quantity, cooldown,
    stale/conflict, and hard-safety guards.
+
+### 2026-09-03 Domestic Read-TR Shared Rate Gate
+
+- Re-verified at `2026-09-03T12:04:23+09:00` against upstream `main` commit
+  `234560d213acd8871ae344b5481aecd2f30287fa`; inspected
+  `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`,
+  `kiwoom/core/errors.py`, `postman/kiwoom-openapi.postman_collection.json`,
+  and the official OpenAPI introduction page. The published domestic-stock
+  limits are account/token-level `order TR <= 5 requests/sec` and
+  `read TR <= 5 requests/sec`; mock investment is `1 request/sec per TR`.
+- `src.utils.kiwoom_read_request_control` owns only domestic read TR
+  admission. Production requests sharing one token and Kiwoom origin use one
+  cross-process sliding one-second bucket. `source_only` may use at most four
+  of the five slots so `runtime_required|execution_critical` reads retain one
+  slot. Mock requests use a separate one-per-second bucket for each `api-id`.
+  Order APIs retain their independent Kiwoom order-TR contract and must never
+  be paced, replayed, or inferred safe through this read controller.
+- Each admitted or deferred request records sanitized `request_owner`, PID,
+  class, `api-id`, request code, attempts, wait, scope digest, and control
+  reason without persisting or logging the bearer token. HTTP 429 and official
+  request-limit codes `1700|1701|1702` publish a three-second shared cooldown.
+  Source-only requests defer during that cooldown; required reads wait only
+  within their bounded budget and otherwise fail closed.
+- Producer-local intervals, per-minute budgets, daily ledgers, continuation
+  delays, and request caps remain lower limits for cost and fairness. They do
+  not replace the token-wide gate and cannot raise its ceiling. In particular,
+  scanner-prune BBO, external opportunity census, widget research/advisory,
+  pure-market backfill, low-price-machine realized-PnL tuning, and market-panic
+  breadth collection are source-only; pre-submit/entry-liquidity and account
+  reconciliation reads are required or execution-critical.
+- `ka10004_rate_limited` and
+  `ka10004_shared_read_budget_deferred` are distinct source-quality gaps, not
+  empty market responses. A bounded retry that later returns an exact valid
+  response keeps `rate_limit_detected=true` as warning provenance but is not
+  labeled retry-exhausted or discarded solely for the earlier limit. Raising
+  retries, daily budgets, or request density is not an allowed recovery. The
+  next fresh process must prove shared-control
+  admission plus an exact response/gap receipt; this contract alone creates no
+  bot restart, provider, threshold, broker/order, quantity, cap, or hard-safety
+  authority.
 4. Parser/request tests for the documented happy path, missing/unknown fields,
    sign and unit preservation, continuation, venue/session routing, and
    redaction of credentials/account identifiers.
@@ -343,10 +383,12 @@ are confirmed and the local producer-to-consumer contract is reviewed.
   `kiwoom/specs.py`, `kiwoom/core`, and Postman for `kt00007`, `ord_dt`,
   `ord_no`, `ord_qty`, `cntr_qty`, `ord_remnq`, `cntr_uv`, `cont-yn`, and
   `next-key`.
-- Episode `ka10080` and `kt00007` reads share the 0.4-second cross-process
-  pacer and bounded `1700`/HTTP 429 backoff. Successful identical `kt00007`
-  pages may be reused inside one process for at most one second. `kt10000`,
-  `kt10001`, and `kt10003` writes remain outside retry/cache paths.
+- Episode `ka10080` and `kt00007` reads join the token-wide read-TR gate and
+  retain bounded `1700|1701|1702`/HTTP 429 recovery. The legacy 0.4-second
+  pacer remains only for an explicitly tokenless test/compatibility call.
+  Successful identical `kt00007` pages may be reused inside one process for at
+  most one second. `kt10000`, `kt10001`, and `kt10003` writes remain outside
+  read pacing, retry, and cache paths.
 - Manual-exit state reconciliation requires one unique completed `kt00007`
   SELL receipt matching the explicit episode owner symbol, order date, order
   number, exact whole held quantity, and zero remainder. It refuses an active
@@ -933,6 +975,14 @@ reactivate it.
   `bounded_observer_selected_episode` rows. Unselected prune rows remain in the
   funnel census, and sampled EV must never be extrapolated to that full
   population.
+- `ka10004` calls from all local owners also pass the shared domestic read-TR
+  gate above. The scanner-prune and external-census BBO owners use
+  `source_only`, so their combined production admissions cannot exceed four
+  starts in one sliding second even when their independent process-local
+  0.25-second schedules align. A fifth token-wide slot remains available for
+  required/critical reads. Explicit HTTP/body request-limit responses and
+  local admission deferrals must remain separate gap reasons with owner, PID,
+  request code, attempt count, wait, and scope-digest provenance.
 
 ## Realtime Freshness And Snapshot Backfill
 

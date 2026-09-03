@@ -54,6 +54,68 @@ class MutableClock:
         self.value += delay
 
 
+@pytest.mark.parametrize(
+    "gateway_factory",
+    [
+        lambda session, loader, pacer: KiwoomLowPriceTwoLegGateway(
+            symbol="475150",
+            request_session=session,
+            token_loader=loader,
+            read_pacing_enabled=True,
+            read_pacer=pacer,
+        ),
+        lambda session, loader, pacer: KiwoomOneShareGateway(
+            request_session=session,
+            token_loader=loader,
+            read_pacing_enabled=True,
+            read_pacer=pacer,
+        ),
+        lambda session, loader, pacer: KiwoomMiddayOneShareGateway(
+            request_session=session,
+            token_loader=loader,
+            read_pacing_enabled=True,
+            read_pacer=pacer,
+        ),
+        lambda session, loader, pacer: KiwoomAfternoonOneShareGateway(
+            request_session=session,
+            token_loader=loader,
+            read_pacing_enabled=True,
+            read_pacer=pacer,
+        ),
+    ],
+)
+def test_episode_gateway_binds_admission_and_authorization_to_one_token(
+    gateway_factory,
+) -> None:
+    loaded_tokens = iter(["TOKEN_A", "TOKEN_B"])
+    load_count = 0
+    waits = []
+
+    def load_token():
+        nonlocal load_count
+        load_count += 1
+        return next(loaded_tokens)
+
+    class Pacer:
+        @staticmethod
+        def wait(api_id, **kwargs):
+            waits.append((api_id, kwargs))
+
+    session = FakeSession([FakeResponse({"return_code": 0})])
+    gateway = gateway_factory(session, load_token, Pacer())
+
+    _response, body = gateway._post(
+        endpoint="/api/dostk/chart",
+        api_id="ka10080",
+        payload={"stk_cd": "005930", "tic_scope": "1"},
+    )
+
+    assert body == {"return_code": 0}
+    assert load_count == 1
+    assert waits[0][1]["token"] == "TOKEN_A"
+    assert session.calls[0][1]["headers"]["authorization"] == "Bearer TOKEN_A"
+
+
 def _minute_response(timestamp: str) -> FakeResponse:
     return FakeResponse(
         {
@@ -107,6 +169,32 @@ def test_ka10080_retries_only_explicit_1700_with_bounded_backoff() -> None:
     )
 
     assert response.status_code == 200
+    assert body == {"return_code": 0}
+    assert sleeps == [0.8]
+
+
+@pytest.mark.parametrize("return_code", [1701, 1702])
+def test_episode_read_retries_other_official_request_limit_codes(
+    return_code: int,
+) -> None:
+    responses = iter(
+        [
+            (
+                FakeResponse({"return_code": return_code}),
+                {"return_code": return_code},
+            ),
+            (FakeResponse({"return_code": 0}), {"return_code": 0}),
+        ]
+    )
+    sleeps: list[float] = []
+
+    _response, body = post_kiwoom_episode_read(
+        api_id="ka10080",
+        post_once=lambda: next(responses),
+        pacing_enabled=False,
+        sleep=sleeps.append,
+    )
+
     assert body == {"return_code": 0}
     assert sleeps == [0.8]
 

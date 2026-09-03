@@ -3791,7 +3791,7 @@ def test_real_pre_submit_rest_orderbook_refresh_uses_ka10004_fresh_snapshot(
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
             "rest_received_ts": received_ts,
@@ -3844,7 +3844,7 @@ def test_pre_submit_rest_orderbook_refresh_force_ignores_disabled_env(monkeypatc
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
             "rest_received_ts": received_ts,
@@ -3884,7 +3884,7 @@ def test_real_pre_submit_rest_orderbook_refresh_blocks_stale_ka10004_snapshot(
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "bid_req_base_tm": stale_hhmmss,
             "rest_received_ts": stale_received_ts,
             "curr": 10_030,
@@ -3920,7 +3920,7 @@ def test_real_pre_submit_rest_orderbook_refresh_ignores_bid_req_base_tm_for_fres
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": stale_hhmmss,
             "rest_received_ts": received_ts,
@@ -3958,7 +3958,7 @@ def test_real_pre_submit_rest_orderbook_refresh_rejects_ka10004_age_ms_without_r
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
             "bid_req_base_tm_authority": "raw_not_freshness_input",
@@ -4000,7 +4000,7 @@ def test_holding_ai_rest_orderbook_refresh_reuses_fresh_ka10004_snapshot(monkeyp
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,
             "rest_received_ts": received_ts,
@@ -4042,7 +4042,7 @@ def test_holding_ai_rest_orderbook_refresh_keeps_stale_snapshot_blocked(monkeypa
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: {
+        lambda token, code, **_kwargs: {
             "bid_req_base_tm": stale_hhmmss,
             "rest_received_ts": stale_received_ts,
             "rest_mid_price": 10_025,
@@ -4075,7 +4075,7 @@ def test_holding_ai_rest_orderbook_refresh_skips_existing_usable_quote(monkeypat
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: calls.append((token, code)) or {},
+        lambda token, code, **_kwargs: calls.append((token, code)) or {},
     )
 
     refreshed, fields = state_handlers._holding_ai_refresh_rest_orderbook_snapshot(
@@ -4106,7 +4106,7 @@ def test_holding_ai_rest_orderbook_refresh_rechecks_stale_usable_quote(monkeypat
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_stock_orderbook_ka10004",
-        lambda token, code: calls.append((token, code))
+        lambda token, code, **_kwargs: calls.append((token, code))
         or {
             "source": "ka10004_rest_orderbook",
             "bid_req_base_tm": now_hhmmss,

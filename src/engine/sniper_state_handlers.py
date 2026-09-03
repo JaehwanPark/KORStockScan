@@ -29621,7 +29621,13 @@ def _fetch_rest_orderbook_snapshot_bounded(
         try:
             results.put(
                 (
-                    kiwoom_utils.get_stock_orderbook_ka10004(KIWOOM_TOKEN, code) or {},
+                    kiwoom_utils.get_stock_orderbook_ka10004(
+                        KIWOOM_TOKEN,
+                        code,
+                        request_owner="scalping_bounded_rest_orderbook_refresh",
+                        request_class="runtime_required",
+                    )
+                    or {},
                     "ok",
                     started,
                 ),
@@ -29691,7 +29697,15 @@ def _pre_submit_refresh_rest_orderbook_snapshot(
         fields["pre_submit_rest_orderbook_refresh_reason"] = "token_missing"
         return base, fields
     try:
-        snapshot = kiwoom_utils.get_stock_orderbook_ka10004(KIWOOM_TOKEN, code) or {}
+        snapshot = (
+            kiwoom_utils.get_stock_orderbook_ka10004(
+                KIWOOM_TOKEN,
+                code,
+                request_owner="scalping_pre_submit_orderbook_refresh",
+                request_class="execution_critical",
+            )
+            or {}
+        )
     except Exception as exc:
         fields["pre_submit_rest_orderbook_refresh_reason"] = "rest_orderbook_error"
         fields["pre_submit_rest_orderbook_refresh_error"] = str(exc)[:120]
