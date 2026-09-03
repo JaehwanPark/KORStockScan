@@ -659,11 +659,7 @@ def _dynamic_baseline_observation(
     )
     required_quantity = _finite(row.get("owner_requested_quantity"))
     target_hit_evidence_valid = bool(
-        (
-            target_at is None
-            and target_hit_bid is None
-            and target_hit_quantity is None
-        )
+        (target_at is None and target_hit_bid is None and target_hit_quantity is None)
         or (
             target_at is not None
             and expected_first_hit_target is not None
@@ -1097,10 +1093,10 @@ def _evaluate_dynamic_cohort(
         anchor_id = str(row.get("anchor_id") or "")
         if anchor_id:
             anchor_counts[(source_date, anchor_id)] += 1
-    duplicate_anchor_keys = {
-        key for key, count in anchor_counts.items() if count > 1
-    }
-    duplicate_anchor_row_count = sum(anchor_counts[key] for key in duplicate_anchor_keys)
+    duplicate_anchor_keys = {key for key, count in anchor_counts.items() if count > 1}
+    duplicate_anchor_row_count = sum(
+        anchor_counts[key] for key in duplicate_anchor_keys
+    )
     invalid_anchor_identity_count = sum(
         not str(row.get("anchor_id") or "") for _, row in source_owner_rows
     )

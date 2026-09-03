@@ -507,6 +507,10 @@ def test_dynamic_confirmation_first_hit_starts_at_exact_checkpoint_bbo() -> None
     assert checkpoint["entry"]["ask_price"] == 10_000
     assert checkpoint["target_adverse_first_hit"]["target_price"] == 10_020
     assert checkpoint["target_adverse_first_hit"]["state"] == "target_first"
+    assert checkpoint["target_adverse_first_hit"]["target_executable_bid"] == 10_020
+    assert (
+        checkpoint["target_adverse_first_hit"]["target_available_bid_quantity"] == 100
+    )
     assert (
         checkpoint["target_adverse_first_hit"]["target_at"]
         == (anchor_at + timedelta(seconds=2)).isoformat()

@@ -263,12 +263,8 @@ def _entry_row(source_date: date, index: int) -> dict:
                     "target_at": (
                         anchor_at + timedelta(seconds=checkpoint + 1)
                     ).isoformat(),
-                    "target_executable_bid": (
-                        101.0 if checkpoint == 0 else 100.0
-                    ),
-                    "target_available_bid_quantity": row[
-                        "owner_requested_quantity"
-                    ],
+                    "target_executable_bid": (101.0 if checkpoint == 0 else 100.0),
+                    "target_available_bid_quantity": row["owner_requested_quantity"],
                     "adverse_at": None,
                     "adverse_executable_bid": None,
                     "adverse_available_bid_quantity": None,
@@ -498,16 +494,16 @@ def test_dynamic_reject_counts_zero_exposure_without_dropping_loss() -> None:
     ].update(
         {
             "state": "adverse_first",
-                "target_price": 101.0,
-                "target_at": None,
-                "target_executable_bid": None,
-                "target_available_bid_quantity": None,
-                "adverse_at": (
-                    datetime.fromisoformat(row["anchor_at"]) + timedelta(seconds=1)
-                ).isoformat(),
-                "adverse_executable_bid": 99.0,
-                "adverse_available_bid_quantity": row["owner_requested_quantity"],
-            }
+            "target_price": 101.0,
+            "target_at": None,
+            "target_executable_bid": None,
+            "target_available_bid_quantity": None,
+            "adverse_at": (
+                datetime.fromisoformat(row["anchor_at"]) + timedelta(seconds=1)
+            ).isoformat(),
+            "adverse_executable_bid": 99.0,
+            "adverse_available_bid_quantity": row["owner_requested_quantity"],
+        }
     )
     result = _evaluate_dynamic_cohort(
         cohort_rows=[(source_date, row)],
@@ -587,7 +583,9 @@ def test_dynamic_confirmation_rejects_tampered_timeout_economics() -> None:
     assert result["source_only_candidate_ready"] is False
 
 
-def test_dynamic_confirmation_duplicate_anchor_does_not_inflate_ev_denominator() -> None:
+def test_dynamic_confirmation_duplicate_anchor_does_not_inflate_ev_denominator() -> (
+    None
+):
     source_date = date(2026, 8, 27)
     row = _entry_row(source_date, 1)
 
