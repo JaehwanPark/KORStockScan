@@ -1,14 +1,96 @@
-import os
+import fcntl
+import hashlib
 import inspect
 import logging
+import os
+import stat
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from src.utils.constants import LEGACY_LOGS_DIR, LOGS_DIR, TRADING_RULES
 
 _MODULE_LOGGERS = {}
 _MAINTENANCE_RAN_AT = 0.0
+
+
+class ProcessSafeRotatingFileHandler(RotatingFileHandler):
+    """Serialize rotation and never retain a stale archive file descriptor.
+
+    ``RotatingFileHandler`` is process-local.  Several KORStockScan services use
+    the same module log, so one process can rotate the path while another keeps
+    appending to the renamed numeric archive.  A path-scoped flock makes the
+    rollover decision and write one transaction.  Closing the stream after
+    every record also gives the postclose writer-owner a real quiescent window
+    and prevents a process from retaining the pre-rollover inode.
+    """
+
+    def __init__(
+        self,
+        filename,
+        mode="a",
+        maxBytes=0,
+        backupCount=0,
+        encoding=None,
+        delay=True,
+        errors=None,
+    ):
+        super().__init__(
+            filename,
+            mode=mode,
+            maxBytes=maxBytes,
+            backupCount=backupCount,
+            encoding=encoding,
+            delay=True,
+            errors=errors,
+        )
+        lock_root = Path(self.baseFilename).parent / ".writer_locks"
+        lock_root.mkdir(parents=True, exist_ok=True)
+        identity = hashlib.sha256(
+            os.path.abspath(self.baseFilename).encode("utf-8")
+        ).hexdigest()
+        self._process_lock_path = lock_root / f"{identity}.lock"
+
+    def _open_process_lock(self) -> int:
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(self._process_lock_path, flags, 0o600)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            raise OSError("module log process lock must be a regular file")
+        return fd
+
+    def _close_stream(self) -> None:
+        if self.stream is None:
+            return
+        try:
+            self.flush()
+        finally:
+            self.stream.close()
+            self.stream = None
+
+    def emit(self, record):
+        lock_fd = -1
+        try:
+            lock_fd = self._open_process_lock()
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if self.shouldRollover(record):
+                self.doRollover()
+            logging.FileHandler.emit(self, record)
+        except Exception:
+            self.handleError(record)
+        finally:
+            try:
+                self._close_stream()
+            except Exception:
+                self.handleError(record)
+            finally:
+                if lock_fd >= 0:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    finally:
+                        os.close(lock_fd)
 
 
 def _resolve_caller_filename(explicit: str | None = None) -> str:
@@ -72,7 +154,7 @@ def _get_module_logger(caller_filename: str, level: str):
     logger.propagate = False
 
     if not logger.handlers:
-        handler = RotatingFileHandler(
+        handler = ProcessSafeRotatingFileHandler(
             log_filepath,
             maxBytes=int(
                 getattr(TRADING_RULES, "MODULE_LOG_MAX_BYTES", 20 * 1024 * 1024)

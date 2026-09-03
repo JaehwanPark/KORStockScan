@@ -3545,6 +3545,112 @@ def test_pattern_lab_ai_review_resolves_ldm_policy_floor_alias_with_collection_p
     assert details["allowed_runtime_apply"] is False
 
 
+def test_pattern_lab_ai_review_resolves_ldm_partial_policy_sample_maturity():
+    payload = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "sample_floor": 20,
+        "joined_sample_floor": 10,
+        "window_policy": "same_day_source_bundle_plus_rolling_threshold_cycle_consumer",
+        "summary": {
+            "status": "pass",
+            "total_rows": 2922,
+            "joined_rows": 1629,
+            "join_contract_blocked": False,
+        },
+        "source_quality_preflight_gate": {
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+        },
+        "policy_entries": [
+            {
+                "policy_key": "entry:weighted_adm_v1",
+                "stage": "entry",
+                "sample": 622,
+                "joined_sample": 9,
+                "source_quality_gate": "hold_sample",
+                "promote_ready": False,
+            },
+            {
+                "policy_key": "holding:weighted_adm_v1",
+                "stage": "holding",
+                "sample": 15,
+                "joined_sample": 15,
+                "source_quality_gate": "hold_sample",
+                "promote_ready": False,
+            },
+            {
+                "policy_key": "exit:weighted_adm_v1",
+                "stage": "exit",
+                "sample": 626,
+                "joined_sample": 626,
+                "source_quality_gate": "pass",
+                "promote_ready": False,
+            },
+        ],
+    }
+    context = {
+        "sources": {"lifecycle_decision_matrix": {"summary": mod._summary_for(payload)}}
+    }
+    item = {
+        "review_id": "lifecycle_decision_matrix_policy_sample_maturity",
+        "final_state": "source_quality_gap",
+        "final_decision": "block_runtime_use",
+    }
+
+    status, contract_id, details = mod._source_maturity_resolution(item, context)
+
+    assert status == "resolved_as_observed_partial_sample_maturity_hold"
+    assert contract_id == "lifecycle_decision_matrix_policy_sample_maturity"
+    assert details["policy_entry_count"] == 3
+    assert details["policy_pass_count"] == 1
+    assert details["policy_hold_count"] == 2
+    assert details["classification"] == "sample_maturity_not_source_quality_gap"
+    assert details["runtime_effect"] is False
+    assert details["allowed_runtime_apply"] is False
+
+
+def test_pattern_lab_ai_review_resolves_sim_policy_approval_as_source_only():
+    payload = {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "summary": {
+            "status": "pass",
+            "source_contract_status": "pass",
+            "source_quality_blocker_count": 0,
+            "code_patch_required_count": 0,
+            "automation_handoff_gap_count": 0,
+            "sim_policy_approved_total_count": 9,
+            "lifecycle_flow_sim_probe_candidate_count": 9,
+            "live_auto_apply_ready_count": 0,
+        },
+    }
+    context = {
+        "sources": {
+            "lifecycle_bucket_discovery_rolling10d": {
+                "summary": mod._summary_for(payload)
+            }
+        }
+    }
+    item = {
+        "review_id": "lifecycle_bucket_discovery_rolling10d_sim_auto_approved",
+        "final_state": "source_quality_gap",
+        "final_decision": "block_runtime_use",
+    }
+
+    status, contract_id, details = mod._source_maturity_resolution(item, context)
+
+    assert status == "resolved_by_existing_lifecycle_bucket_source_only_contract"
+    assert contract_id == (
+        "lifecycle_bucket_discovery_rolling10d_sim_auto_approved_source_only"
+    )
+    assert details["sim_policy_approved_total_count"] == 9
+    assert details["live_auto_apply_ready_count"] == 0
+    assert details["classification"] == (
+        "sim_policy_approved_source_only_not_live_validation_gap"
+    )
+
+
 def test_pattern_lab_ai_review_marks_recursive_workorder_review_id_as_implemented_source_only():
     status, provenance = mod._implementation_marker_for_conclusion(
         {
@@ -4112,6 +4218,42 @@ def test_pattern_lab_ai_review_resolves_ldm_gap_after_final_source_revalidation(
     assert details["tuning_input_allowed"] is True
     assert details["runtime_effect"] is False
     assert details["allowed_runtime_apply"] is False
+
+
+def test_pattern_lab_ai_review_resolves_preflight_warning_after_row_exclusion_revalidation():
+    audit_payload = {
+        "status": "warning",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "summary": {
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+            "pre_exclusion_hard_blocking_excluded_row_count": 31,
+            "post_exclusion_hard_blocking_excluded_row_count": 0,
+            "raw_row_exclusion_revalidation_required": False,
+        },
+    }
+    context = {
+        "sources": {
+            "observation_source_quality_audit": {
+                "summary": mod._summary_for(audit_payload),
+                "path": "/tmp/observation_source_quality_audit.json",
+            }
+        }
+    }
+    item = {
+        "review_id": "source_quality_preflight_gate_warning",
+        "final_state": "source_quality_gap",
+        "final_decision": "block_runtime_use",
+    }
+
+    status, contract_id, details = mod._source_maturity_resolution(item, context)
+
+    assert status == "resolved_by_final_source_quality_revalidation"
+    assert contract_id == "observation_source_quality_audit_post_exclusion_gate"
+    assert details["pre_exclusion_hard_blocking_excluded_row_count"] == 31
+    assert details["post_exclusion_hard_blocking_excluded_row_count"] == 0
+    assert details["tuning_input_allowed"] is True
 
 
 def test_resolved_ldm_conclusion_appends_final_audit_source_path():

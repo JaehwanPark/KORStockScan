@@ -1114,6 +1114,22 @@ def _lifecycle_bucket_source_only_resolution(
             "warning_count": len(source.get("warnings") or []),
             "classification": "ai_proposal_rejected_deterministic_owner_retained",
         }
+    elif diagnostic_id == "sim_auto_approved" and (
+        _safe_int(summary.get("sim_policy_approved_total_count")) > 0
+        and _safe_int(summary.get("live_auto_apply_ready_count")) == 0
+        and _safe_int(summary.get("lifecycle_flow_sim_probe_candidate_count"))
+        == _safe_int(summary.get("sim_policy_approved_total_count"))
+    ):
+        details = {
+            "sim_policy_approved_total_count": _safe_int(
+                summary.get("sim_policy_approved_total_count")
+            ),
+            "lifecycle_flow_sim_probe_candidate_count": _safe_int(
+                summary.get("lifecycle_flow_sim_probe_candidate_count")
+            ),
+            "live_auto_apply_ready_count": 0,
+            "classification": "sim_policy_approved_source_only_not_live_validation_gap",
+        }
     else:
         return None
     return (
@@ -1152,6 +1168,7 @@ def _source_maturity_resolution(
     if review_id in {
         "lifecycle_decision_matrix_status",
         "lifecycle_decision_matrix_source_quality_blocked",
+        "source_quality_preflight_gate_warning",
     }:
         audit_source = _source_summary(context, "observation_source_quality_audit")
         audit_summary = _nested_report_summary(audit_source)
@@ -1176,6 +1193,50 @@ def _source_maturity_resolution(
                     "post_exclusion_hard_blocking_excluded_row_count": 0,
                     "hard_blocking_contract_gap_count": 0,
                     "tuning_input_allowed": True,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+            )
+
+    if review_id == "lifecycle_decision_matrix_policy_sample_maturity":
+        source = _source_summary(context, "lifecycle_decision_matrix")
+        summary = _nested_report_summary(source)
+        maturity = (
+            source.get("policy_sample_maturity")
+            if isinstance(source.get("policy_sample_maturity"), dict)
+            else {}
+        )
+        preflight = (
+            source.get("source_quality_preflight_gate")
+            if isinstance(source.get("source_quality_preflight_gate"), dict)
+            else {}
+        )
+        policy_count = _safe_int(maturity.get("policy_entry_count"))
+        policy_pass_count = _safe_int(maturity.get("policy_pass_count"))
+        if (
+            source.get("runtime_effect") is False
+            and source.get("allowed_runtime_apply") is not True
+            and summary.get("status") == "pass"
+            and summary.get("join_contract_blocked") is False
+            and preflight.get("tuning_input_allowed") is True
+            and _safe_int(preflight.get("hard_blocking_contract_gap_count")) == 0
+            and policy_count > 0
+            and policy_pass_count < policy_count
+        ):
+            return (
+                "resolved_as_observed_partial_sample_maturity_hold",
+                "lifecycle_decision_matrix_policy_sample_maturity",
+                {
+                    "policy_entry_count": policy_count,
+                    "policy_pass_count": policy_pass_count,
+                    "policy_hold_count": policy_count - policy_pass_count,
+                    "sample_floor": _safe_int(maturity.get("sample_floor")),
+                    "joined_sample_floor": _safe_int(
+                        maturity.get("joined_sample_floor")
+                    ),
+                    "collection_priority": maturity.get("collection_priority") or [],
+                    "window_policy": maturity.get("window_policy"),
+                    "classification": "sample_maturity_not_source_quality_gap",
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                 },

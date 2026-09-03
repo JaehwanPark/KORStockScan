@@ -345,8 +345,12 @@ def _artifact_generation_lock(
     lock_suffix: str,
     exclusive: bool = True,
     blocking: bool = True,
+    create_parent: bool = True,
 ) -> Iterator[ArtifactGenerationLease]:
-    parent_descriptor = _open_directory_tree_nofollow(logical.parent, create=True)
+    parent_descriptor = _open_directory_tree_nofollow(
+        logical.parent,
+        create=create_parent,
+    )
     parent_metadata = os.fstat(parent_descriptor)
     parent_identity = _directory_identity(parent_metadata)
     lease = ArtifactGenerationLease(
@@ -397,6 +401,7 @@ def jsonl_artifact_generation_lock(
     *,
     exclusive: bool = True,
     blocking: bool = True,
+    create_parent: bool = True,
 ) -> Iterator[ArtifactGenerationLease]:
     """Lock one logical JSONL generation under one pinned real parent fd."""
 
@@ -407,6 +412,7 @@ def jsonl_artifact_generation_lock(
         lock_suffix=JSONL_GENERATION_LOCK_SUFFIX,
         exclusive=exclusive,
         blocking=blocking,
+        create_parent=create_parent,
     ) as lease:
         yield lease
 
@@ -1350,9 +1356,15 @@ def iter_jsonl_objects_strict(
         )
         return
     try:
-        with _pinned_read_generation(
+        # Readers and compactors share the same generation lock.  Without the
+        # shared lease, a verified archive can atomically replace plain JSONL
+        # with its gzip sibling during a long replay scan and make an otherwise
+        # valid source look corrupt.  Explicit-generation callers already own
+        # the corresponding lease and therefore bypass this acquisition above.
+        with jsonl_artifact_generation_lock(
             logical,
-            error_prefix="jsonl_artifact",
+            exclusive=False,
+            create_parent=False,
         ) as read_generation:
             yield from _iter_jsonl_objects_strict_pinned(
                 logical,

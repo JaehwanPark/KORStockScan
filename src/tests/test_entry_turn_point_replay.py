@@ -660,6 +660,14 @@ def test_runtime_bbo_ring_is_bounded_source_only_and_evaluation_deduped(monkeypa
     assert path["fields"]["rising_missed_entry_turn_bbo_bundle_schema_version"] == (
         mod.PRE_ANCHOR_BUNDLE_SCHEMA_VERSION
     )
+    assert path["fields"]["rising_missed_nxt_metric_role"] == "source_quality_gate"
+    assert path["fields"]["rising_missed_nxt_decision_authority"] == (
+        "observe_only_no_runtime_mutation"
+    )
+    assert path["fields"]["rising_missed_nxt_observation_only"] is True
+    assert path["fields"]["rising_missed_nxt_source_quality_gate"] == (
+        "absolute_type_receive_ts_and_actual_ws_item_route"
+    )
     assert path["fields"]["runtime_effect"] is False
     assert path["fields"]["allowed_runtime_apply"] is False
     assert path["fields"]["actual_order_submitted"] is False

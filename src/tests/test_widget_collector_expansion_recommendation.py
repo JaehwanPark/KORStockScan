@@ -652,6 +652,24 @@ def test_wait_for_source_artifacts_retries_without_transient_service_failure(
     assert clock == 20.0
 
 
+def test_main_returns_terminal_source_not_ready_exit_code(tmp_path, capsys):
+    exit_code = rec.main(
+        [
+            "--target-date",
+            "2026-08-06",
+            "--payload-dir",
+            str(tmp_path / "payload"),
+            "--label-dir",
+            str(tmp_path / "label"),
+            "--source-wait-sec",
+            "0",
+        ]
+    )
+
+    assert exit_code == rec.SOURCE_NOT_READY_EXIT_CODE == 42
+    assert "widget_expansion_source_not_ready:" in capsys.readouterr().err
+
+
 def test_systemd_service_waits_for_postclose_label_contract():
     service = Path(
         "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
@@ -666,4 +684,5 @@ def test_systemd_service_waits_for_postclose_label_contract():
     )
     assert "--source-wait-sec 900" in wrapper
     assert "--source-poll-sec 30" in wrapper
-    assert "TimeoutStartSec=1200" in service
+    assert "TimeoutStartSec=3600" in service
+    assert "RestartPreventExitStatus=42" in service

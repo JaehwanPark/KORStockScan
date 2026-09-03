@@ -313,6 +313,15 @@ remain distinct source-quality receipts containing owner, PID, class,
 PID receipt is required for process reflection; implementation alone does not
 authorize restart or any runtime/order/threshold change.
 
+The 21:15 machine final-refresh service reserves 900 seconds for immutable
+outcome-label arrival and 3600 seconds for the complete fallback chain. When
+only expansion exhausts that source wait, the expansion producer returns its
+dedicated terminal exit 42. The wrapper preserves that code after
+attribution/policy/checklist fallback, and the unit suppresses restart for that
+code. Other expansion or downstream producer failures preserve their original
+codes, documented failure priority, and restart policy. Repository-unit review
+does not constitute installation or process-state authority.
+
 ## 2.1 Postclose Chain Contract
 
 Scanner prune observer의 full funnel census와 bounded observation denominator는 분리한다. Coverage, resolved outcome, right-censor와 cost-adjusted EV gate는 명시적으로 스케줄된 `bounded_observer_selected_episode`만 소유하며, 선택되지 않은 prune row는 funnel 보존용이다. Bounded 표본 EV를 full prune population으로 외삽하거나 이 분모 차이를 source-capture repair 결함으로 바꾸지 않는다.

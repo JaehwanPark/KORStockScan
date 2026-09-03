@@ -8034,7 +8034,7 @@ def build_report(
                 "runtime_registration_receipt_required"
             ],
             "active_owner_full_coverage": collection_targets["budget"][
-                "active_owner_full_coverage"
+                "active_owner_exact_route_full_coverage"
             ],
             "active_owner_candidate_count": collection_targets["budget"][
                 "active_owner_candidate_count"

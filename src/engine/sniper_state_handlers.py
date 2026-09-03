@@ -18984,6 +18984,17 @@ def _emit_rising_missed_entry_turn_pre_anchor_bbo_path(
         "scanner_promotion_id": promotion_id,
         "rising_missed_effective_venue": event_venue,
         "rising_missed_market_session_bucket": event_session,
+        # Keep an explicit provenance contract even when the upstream NXT
+        # eligibility lookup cannot resolve a tradable venue.  The generic
+        # source-only contract below is sufficient for safety, but these
+        # namespaced fields let the source-quality audit distinguish a
+        # reviewed not-available observation from an untraced UNKNOWN token.
+        "rising_missed_nxt_metric_role": "source_quality_gate",
+        "rising_missed_nxt_decision_authority": ("observe_only_no_runtime_mutation"),
+        "rising_missed_nxt_observation_only": True,
+        "rising_missed_nxt_source_quality_gate": (
+            "absolute_type_receive_ts_and_actual_ws_item_route"
+        ),
         "rising_missed_entry_turn_bbo_bundle_schema_version": (
             "entry_turn_pre_anchor_bbo_bundle_v2_json"
         ),

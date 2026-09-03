@@ -2749,7 +2749,7 @@ def test_nontrading_attribution_skips_collection_feedback_write_contract(tmp_pat
     )
 
     assert report["collection_feedback"] == {
-        "schema": "scalp_micro_reversion_collection_targets_v2",
+        "schema": "scalp_micro_reversion_collection_targets_v3",
         "effective_date": None,
         "status": "source_date_not_krx_trading_day_write_skipped",
         "coverage_policy": (

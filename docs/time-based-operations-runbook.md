@@ -159,6 +159,8 @@ threshold 재튜닝이 아니며, family별 실제 호출·실주문 영향·EV�
 
 21:15 final-refresh wrapper는 시작 시 `resolve_completed_machine_target_date()`를 정확히 한 번 호출하고, 그 explicit target date를 expansion·attribution·market-weakness-hysteresis·entry-timing·approval·completed-refresh checklist builder 여섯 단계에 동일하게 전달한다. Persistent timer catch-up이 20:00 경계를 지나더라도 단계별 default date를 다시 계산하거나 서로 다른 거래일 산출물을 한 체인으로 소비하지 않는다.
 
+이 service의 bounded expansion source wait는 900초이고 전체 `TimeoutStartSec`는 3600초다. Immutable outcome label이 끝내 없으면 expansion producer가 source-not-ready 전용 terminal exit `42`를 반환하고, 나머지 fallback 단계까지 성공한 경우 wrapper가 그 코드를 보존하며 unit의 `RestartPreventExitStatus=42`가 같은 대용량 attribution 체인을 반복하지 않게 한다. 다른 expansion 오류와 attribution·policy·builder 실패는 원래 exit code, 기존 실패 우선순위와 `Restart=on-failure`를 유지한다. repository unit 수정은 현재 실행 중이거나 설치된 unit에 자동 반영되지 않는다.
+
 Repository unit 변경만으로 설치된 systemd unit이 자동 교체되지는 않는다. `systemctl cat korstockscan-widget-expansion-recommendation.service`가 단일 final-refresh wrapper를 가리키고 daemon-reload가 끝난 상태를 확인하기 전에는 objective 알림/checklist finalization이 운영 반영됐다고 판정하지 않는다. unit 반영은 bot 재기동이나 매매권한 변경이 아니지만 별도 운영 변경이므로 code review/commit만으로 실행하지 않는다.
 
 각 Samsung PREOPEN wrapper는 7일 이내 최신 prior candidate를 `data/threshold_cycle/samsung_machine_entry_policy/applied/samsung_machine_entry_policy_YYYY-MM-DD.json`으로 최초 한 번 고정한다. 후보 없음/기간 만료는 baseline, 최신 후보 또는 당일 artifact 손상은 fail-closed다. 이후 같은 날 preflight는 검증된 artifact를 재사용하고 덮어쓰지 않으며 service는 exact-date schema/hash를 읽은 뒤에만 broker gateway를 만든다. 신규 진입 수량 10주×2 leg(20주), 50:50 leg, 사용자 승인 +3틱, five-bar validity, 무손절·미청산 보유, provider/bot/cap/broker guard는 자동 튜닝으로 변경하지 않는다.

@@ -51,6 +51,40 @@ def test_iter_jsonl_objects_strict_streams_plain_with_provenance(tmp_path):
     assert provenance["source_snapshot_stable"] is True
 
 
+def test_iter_jsonl_objects_strict_holds_shared_generation_lock(tmp_path, monkeypatch):
+    path = tmp_path / "events.jsonl"
+    path.write_text('{"sequence":1}\n', encoding="utf-8")
+    original_parser = jsonl_io._json_object_from_bytes
+    competing_writer_blocked = False
+
+    def parser_with_competing_writer(raw_line, *, source):
+        nonlocal competing_writer_blocked
+        try:
+            with jsonl_io.jsonl_artifact_generation_lock(
+                path, exclusive=True, blocking=False
+            ):
+                pass
+        except OSError as exc:
+            competing_writer_blocked = "jsonl_generation_lock_busy" in str(exc)
+        return original_parser(raw_line, source=source)
+
+    monkeypatch.setattr(
+        jsonl_io, "_json_object_from_bytes", parser_with_competing_writer
+    )
+
+    assert list(iter_jsonl_objects_strict(path)) == [{"sequence": 1}]
+    assert competing_writer_blocked is True
+
+
+def test_iter_jsonl_objects_strict_does_not_create_missing_parent(tmp_path):
+    path = tmp_path / "missing" / "events.jsonl"
+
+    with pytest.raises(FileNotFoundError):
+        list(iter_jsonl_objects_strict(path))
+
+    assert not path.parent.exists()
+
+
 def test_iter_jsonl_objects_strict_parses_single_representation_once(
     tmp_path,
     monkeypatch,

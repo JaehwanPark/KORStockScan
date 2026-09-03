@@ -655,6 +655,8 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     assert "KORSTOCKSCAN_WIDGET_EXPANSION_TELEGRAM_ENABLED=true" in (
         widget_expansion_service
     )
+    assert "TimeoutStartSec=3600" in widget_expansion_service
+    assert "RestartPreventExitStatus=42" in widget_expansion_service
 
     final_refresh = Path(
         "deploy/run_machine_microstructure_final_refresh.sh"
@@ -813,6 +815,7 @@ def test_machine_microstructure_final_refresh_fails_before_children_when_date_re
     ("expansion_rc", "attribution_rc", "policy_rc", "expected_rc"),
     [
         (5, 0, 0, 5),
+        (42, 0, 0, 42),
         (5, 4, 0, 4),
         (5, 4, 3, 3),
     ],

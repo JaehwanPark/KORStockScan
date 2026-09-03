@@ -3813,6 +3813,7 @@ def test_widget_evaluation_wrapper_reuses_one_completed_date(
     fake_python.chmod(0o755)
     monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(Path.cwd()))
     monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD", "false")
     monkeypatch.setenv("CALL_LOG", str(call_log))
 
     completed = subprocess.run(
@@ -3831,6 +3832,98 @@ def test_widget_evaluation_wrapper_reuses_one_completed_date(
         "-m src.engine.monitoring.widget_symbol_runtime_policy --target-date 2026-08-14 --write",
     ]
     assert "completed target_date=2026-08-14" in completed.stdout
+
+
+def test_widget_evaluation_wrapper_requires_completed_same_date_eod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    call_log = tmp_path / "calls.log"
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        'if [[ "${1:-}" == "-c" ]]; then\n'
+        "  printf '2026-08-14\\n'\n"
+        "else\n"
+        '  printf \'%s\\n\' "$*" >> "$CALL_LOG"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    status_path = (
+        tmp_path
+        / "data/runtime/update_kospi_status/update_kospi_2026-08-14.json"
+    )
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "target_date": "2026-08-14",
+                "db_state": {
+                    "latest_quote_date": "2026-08-14",
+                    "rows_on_latest_date": 2500,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
+    monkeypatch.setenv("CALL_LOG", str(call_log))
+
+    completed = subprocess.run(
+        ["bash", str(Path.cwd() / "deploy/run_widget_evaluation.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "EOD ready target_date=2026-08-14 waited=0s rows=2500" in completed.stdout
+    assert "widget_symbol_signal_policy_research" in call_log.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_widget_evaluation_wrapper_fails_closed_when_eod_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    call_log = tmp_path / "calls.log"
+    fake_python = tmp_path / "fake-python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        'if [[ "${1:-}" == "-c" ]]; then\n'
+        "  printf '2026-08-14\\n'\n"
+        "else\n"
+        '  printf \'%s\\n\' "$*" >> "$CALL_LOG"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    status_path = (
+        tmp_path
+        / "data/runtime/update_kospi_status/update_kospi_2026-08-14.json"
+    )
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+    monkeypatch.setenv("KORSTOCKSCAN_PROJECT_DIR", str(tmp_path))
+    monkeypatch.setenv("KORSTOCKSCAN_PYTHON_BIN", str(fake_python))
+    monkeypatch.setenv("CALL_LOG", str(call_log))
+
+    completed = subprocess.run(
+        ["bash", str(Path.cwd() / "deploy/run_widget_evaluation.sh")],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "EOD failed target_date=2026-08-14 status=failed" in completed.stderr
+    calls = call_log.read_text(encoding="utf-8")
+    assert "widget_auto_trade_policy_calibration" in calls
+    assert "widget_symbol_signal_policy_research" not in calls
 
 
 def test_calibrated_widget_symbol_collector_is_exact_date_policy_gated():

@@ -3880,6 +3880,25 @@ def _reviewed_unknown_reason_for_stage_field(
             and _field_text("rising_missed_nxt_positive_micro_authority")
             == "trusted_signed_ws_0b_existing_tp1_contract"
         )
+        legacy_pre_anchor_source_only_contract_present = (
+            stage == "rising_missed_entry_turn_pre_anchor_bbo_path"
+            and str(key or "") == "rising_missed_effective_venue"
+            and effective_venue == "NXT_ELIGIBILITY_UNKNOWN"
+            and _field_text("metric_role") == "source_quality_instrumentation"
+            and _field_text("decision_authority")
+            == "entry_turn_pre_anchor_existing_ws_bbo_observation_only"
+            and _field_text("runtime_effect").lower() in {"false", "0", "no"}
+            and _field_text("allowed_runtime_apply").lower() in {"false", "0", "no"}
+            and _field_text("actual_order_submitted").lower() in {"false", "0", "no"}
+            and _field_text("broker_order_forbidden").lower() in {"true", "1", "yes"}
+            and _field_text("source_quality_gate")
+            == (
+                "existing_subscription_exact_route_0d_bbo_with_nonnegative_integer_"
+                "displayed_best_quantities_and_age_le_1000ms"
+            )
+            and _field_text("rising_missed_entry_turn_bbo_capture_status")
+            == "no_fresh_exact_route_pre_anchor_samples"
+        )
         derived_probability_band_not_applied = str(
             key or ""
         ) != "latency_true_ofi_nxt_probability_band_effective_venue" or (
@@ -3889,16 +3908,23 @@ def _reviewed_unknown_reason_for_stage_field(
             in {"false", "0", "no"}
         )
         return (
-            standard_contract_present
-            and derived_probability_band_not_applied
-            and effective_venue
-            in {
-                "NXT_ELIGIBILITY_UNKNOWN",
-                "OFF_SESSION",
-                "KRX",
-                "PREMARKET_KRX_LIKE",
-            }
-        ) or legacy_context_provenance_present
+            (
+                standard_contract_present
+                and derived_probability_band_not_applied
+                and effective_venue
+                in {
+                    "NXT_ELIGIBILITY_UNKNOWN",
+                    "OFF_SESSION",
+                    "KRX",
+                    "PREMARKET_KRX_LIKE",
+                }
+            )
+            or legacy_context_provenance_present
+            or (
+                legacy_pre_anchor_source_only_contract_present
+                and derived_probability_band_not_applied
+            )
+        )
 
     def _is_reviewed_rising_missed_nxt_post_block_route_not_available() -> bool:
         if str(key or "") not in {

@@ -145,6 +145,7 @@ def test_run_compresses_pipeline_events_only_after_parquet_verification(
     assert stats["pipeline"]["verified"] == 1
     assert stats["pipeline"]["compressed"] == 1
     assert stats["pipeline"]["saved_bytes"] == raw_path.stat().st_size
+    assert raw_path.with_name(f".{raw_path.name}.generation.lock").is_file()
 
 
 def test_run_skips_pipeline_events_without_parquet_verification(tmp_path, monkeypatch):

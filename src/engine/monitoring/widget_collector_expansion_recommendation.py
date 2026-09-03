@@ -12,6 +12,7 @@ import argparse
 import gzip
 import json
 import os
+import sys
 import time
 from collections import defaultdict
 from datetime import date, datetime
@@ -59,6 +60,7 @@ MAX_RECOMMENDATIONS = 20
 MAX_ACTIVE_RESEARCH_WATCH_SYMBOLS = 15
 SHARED_COLLECTOR_REQUESTS_PER_MINUTE = 15
 SHARED_COLLECTOR_MEMORY_CAP_MB = 256
+SOURCE_NOT_READY_EXIT_CODE = 42
 IMPLEMENTATION_REVIEW_MIN_SAMPLES = 5
 IMPLEMENTATION_REVIEW_MIN_TRADING_DATES = 3
 IMPLEMENTATION_REVIEW_MAX_MEDIAN_SPREAD_BP = 25.0
@@ -1032,9 +1034,11 @@ def main(argv: list[str] | None = None) -> int:
         poll_sec=args.source_poll_sec,
     )
     if source_issues:
-        raise RuntimeError(
-            "widget_expansion_source_not_ready:" + ",".join(source_issues)
+        print(
+            "widget_expansion_source_not_ready:" + ",".join(source_issues),
+            file=sys.stderr,
         )
+        return SOURCE_NOT_READY_EXIT_CODE
     replay_report = mechanical_replay.build_report_for_date(
         target_date,
         payload_dir=args.payload_dir,

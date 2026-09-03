@@ -10,6 +10,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR
+from src.utils.jsonl_io import jsonl_artifact_generation_lock
 
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 CANONICAL_CONTEXT_DIR = DATA_DIR / "ai_canonical_context_candidates"
@@ -215,7 +216,16 @@ def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
     return True, original_size
 
 
-def _gzip_jsonl_file(
+def _gzip_file_with_jsonl_generation_lock(
+    path: Path, *, dry_run: bool
+) -> tuple[bool, int]:
+    """Compact one JSONL generation without racing strict replay readers."""
+
+    with jsonl_artifact_generation_lock(path, exclusive=True):
+        return _gzip_file(path, dry_run=dry_run)
+
+
+def _gzip_jsonl_file_unlocked(
     path: Path,
     *,
     dry_run: bool,
@@ -273,6 +283,24 @@ def _gzip_jsonl_file(
             destination.close()
 
 
+def _gzip_jsonl_file(
+    path: Path,
+    *,
+    dry_run: bool,
+    expected_schema: str | None = None,
+    expected_row_count: int | None = None,
+) -> tuple[bool, int, int]:
+    """Validate and compact JSONL under its exclusive generation lease."""
+
+    with jsonl_artifact_generation_lock(path, exclusive=True):
+        return _gzip_jsonl_file_unlocked(
+            path,
+            dry_run=dry_run,
+            expected_schema=expected_schema,
+            expected_row_count=expected_row_count,
+        )
+
+
 def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
     cutoff = today - timedelta(days=retention_days)
     stats = {
@@ -322,7 +350,9 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
                 stats["skipped_unverified"] += 1
                 continue
             stats["pipeline"]["verified"] += 1
-            compressed, saved = _gzip_file(path, dry_run=dry_run)
+            compressed, saved = _gzip_file_with_jsonl_generation_lock(
+                path, dry_run=dry_run
+            )
             if compressed:
                 stats["pipeline"]["compressed"] += 1
                 stats["pipeline"]["saved_bytes"] += saved
@@ -368,7 +398,9 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
                 stats["skipped_unverified"] += 1
                 continue
             stats["threshold_snapshots"]["verified"] += 1
-            compressed, saved = _gzip_file(path, dry_run=dry_run)
+            compressed, saved = _gzip_file_with_jsonl_generation_lock(
+                path, dry_run=dry_run
+            )
             if compressed:
                 stats["threshold_snapshots"]["compressed"] += 1
                 stats["threshold_snapshots"]["saved_bytes"] += saved

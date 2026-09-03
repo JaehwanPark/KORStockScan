@@ -2193,6 +2193,37 @@ def test_observation_source_quality_audit_reviews_rising_missed_nxt_unknown_prov
     )
 
 
+def test_observation_source_quality_audit_reviews_legacy_pre_anchor_unknown_venue():
+    fields = {
+        "rising_missed_effective_venue": "NXT_ELIGIBILITY_UNKNOWN",
+        "rising_missed_entry_turn_bbo_capture_status": (
+            "no_fresh_exact_route_pre_anchor_samples"
+        ),
+        "metric_role": "source_quality_instrumentation",
+        "decision_authority": (
+            "entry_turn_pre_anchor_existing_ws_bbo_observation_only"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_quality_gate": (
+            "existing_subscription_exact_route_0d_bbo_with_nonnegative_integer_"
+            "displayed_best_quantities_and_age_le_1000ms"
+        ),
+    }
+
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "rising_missed_entry_turn_pre_anchor_bbo_path",
+            "rising_missed_effective_venue",
+            "NXT_ELIGIBILITY_UNKNOWN",
+            fields,
+        )
+        == "reviewed_rising_missed_nxt_eligibility_not_available"
+    )
+
+
 def test_observation_source_quality_audit_does_not_review_applied_nxt_probability_band_unknown(
     monkeypatch,
     tmp_path,
