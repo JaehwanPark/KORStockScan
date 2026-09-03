@@ -50,8 +50,11 @@ SUPPORTED_REPORT_SCHEMAS = frozenset(
 CLEAN_BASELINE_DATE = date.fromisoformat("2026-06-05")
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 ROLLING_WINDOWS = {"rolling_10d": 10, "rolling_20d": 20}
-SAMPLE_FLOOR = 20
-AUTO_MIN_COMPLETED_LEGS = 20
+BOUNDED_MIN_OBSERVED_DAYS = 5
+SAMPLE_FLOOR = 8
+AUTO_MIN_COMPLETED_LEGS = 8
+ROLLING_10D_MIN_COMPLETED_EPISODES = 4
+MIN_NOTIONAL_EV_UPLIFT_PCT = 0.005
 MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
 MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
@@ -98,9 +101,12 @@ METRIC_CONTRACT = {
         "daily_clean_baseline_cumulative_and_rolling_10d_20d_actual_observations"
     ),
     "sample_floor": {
+        "candidate_observed_trading_days": BOUNDED_MIN_OBSERVED_DAYS,
         "clean_baseline_cumulative_completed_signal_episodes": SAMPLE_FLOOR,
         "clean_baseline_cumulative_completed_legs": AUTO_MIN_COMPLETED_LEGS,
         "broker_priced_completed_legs": AUTO_MIN_COMPLETED_LEGS,
+        "rolling_10d_completed_signal_episodes": (ROLLING_10D_MIN_COMPLETED_EPISODES),
+        "minimum_notional_ev_uplift_pct": MIN_NOTIONAL_EV_UPLIFT_PCT,
     },
     "primary_decision_metric": [
         "completed_signal_episodes",
@@ -122,6 +128,7 @@ METRIC_CONTRACT = {
         "prebaseline_and_nontrading_reports_excluded",
         "historical_replay_not_mixed_with_actual_outcomes",
         "positive_rolling_10d_20d_and_cumulative_notional_ev",
+        "candidate_improves_same_policy_cohort_cumulative_and_rolling_10d_ev",
         "exact_date_applied_policy_hash_and_fields",
         "verified_manual_operator_exit_is_realized_pnl_not_machine_target_success",
     ],
@@ -451,9 +458,7 @@ def _normalize_historical_machine_row(row: dict[str, Any]) -> dict[str, Any]:
                     exit_execution_class == "machine_target_fill"
                 ),
                 "realized_loss": bool(
-                    leg.get("completed")
-                    and net_profit is not None
-                    and net_profit < 0.0
+                    leg.get("completed") and net_profit is not None and net_profit < 0.0
                 ),
             }
         )
@@ -1227,6 +1232,34 @@ def build_policy_candidate(
             is True
         )
         axis_items = clean_window_axes.items() if machine_gate_ready else ()
+
+        def matches_current_entry_axes(candidate_policy: Any) -> bool:
+            return bool(
+                isinstance(candidate_policy, dict)
+                and all(
+                    _as_float(candidate_policy.get(key))
+                    == _as_float(current_policy.get(key))
+                    for key in (
+                        "rolling_high_drawdown_pct",
+                        "rolling_low_proximity_pct",
+                    )
+                )
+            )
+
+        current_clean_item = next(
+            (
+                item
+                for item in clean_window_axes.values()
+                if matches_current_entry_axes(item.get("resulting_policy"))
+            ),
+            None,
+        )
+        current_clean_outcome = (
+            current_clean_item.get("outcome")
+            if isinstance(current_clean_item, dict)
+            and isinstance(current_clean_item.get("outcome"), dict)
+            else None
+        )
         for axis, item in axis_items:
             outcome = item["outcome"]
             resulting_policy = item["resulting_policy"]
@@ -1244,7 +1277,7 @@ def build_policy_candidate(
                 )
                 if float(resulting_policy[key]) != float(current_policy[key])
             ]
-            if len(changed_axes) > 1:
+            if len(changed_axes) != 1:
                 continue
             if outcome.get("candidate_status") != "operator_review_candidate":
                 continue
@@ -1257,16 +1290,82 @@ def build_policy_candidate(
                 window_name: (axes.get(axis) or {}).get("outcome")
                 for window_name, axes in rolling_window_axes.items()
             }
-            rolling_positive = all(
-                isinstance(window_outcome, dict)
-                and window_outcome.get("notional_weighted_ev_pct") is not None
-                and float(window_outcome["notional_weighted_ev_pct"]) > 0
-                for window_outcome in rolling_outcomes.values()
+            rolling_current_outcomes = {
+                window_name: next(
+                    (
+                        candidate_item.get("outcome")
+                        for candidate_item in axes.values()
+                        if matches_current_entry_axes(
+                            candidate_item.get("resulting_policy")
+                        )
+                        and isinstance(candidate_item.get("outcome"), dict)
+                    ),
+                    None,
+                )
+                for window_name, axes in rolling_window_axes.items()
+            }
+            current_ev = (
+                current_clean_outcome.get("notional_weighted_ev_pct")
+                if isinstance(current_clean_outcome, dict)
+                else None
             )
-            if ev is not None and float(ev) > 0 and rolling_positive:
+            cumulative_uplift = (
+                float(ev) - float(current_ev)
+                if ev is not None and current_ev is not None
+                else None
+            )
+            rolling_10d = rolling_outcomes.get("rolling_10d")
+            rolling_10d_current = rolling_current_outcomes.get("rolling_10d")
+            rolling_10d_ev = (
+                rolling_10d.get("notional_weighted_ev_pct")
+                if isinstance(rolling_10d, dict)
+                else None
+            )
+            rolling_10d_current_ev = (
+                rolling_10d_current.get("notional_weighted_ev_pct")
+                if isinstance(rolling_10d_current, dict)
+                else None
+            )
+            rolling_10d_uplift = (
+                float(rolling_10d_ev) - float(rolling_10d_current_ev)
+                if rolling_10d_ev is not None and rolling_10d_current_ev is not None
+                else None
+            )
+            rolling_20d = rolling_outcomes.get("rolling_20d")
+            rolling_20d_ev = (
+                rolling_20d.get("notional_weighted_ev_pct")
+                if isinstance(rolling_20d, dict)
+                else None
+            )
+            evidence_ready = bool(
+                isinstance(current_clean_outcome, dict)
+                and outcome.get("eligible_report_days", 0) >= BOUNDED_MIN_OBSERVED_DAYS
+                and outcome.get("completed_signal_episodes", 0) >= SAMPLE_FLOOR
+                and outcome.get("completed_legs", 0) >= AUTO_MIN_COMPLETED_LEGS
+                and outcome.get("broker_priced_completed_legs", 0)
+                >= AUTO_MIN_COMPLETED_LEGS
+                and cumulative_uplift is not None
+                and cumulative_uplift >= MIN_NOTIONAL_EV_UPLIFT_PCT
+                and isinstance(rolling_10d, dict)
+                and rolling_10d.get("completed_signal_episodes", 0)
+                >= ROLLING_10D_MIN_COMPLETED_EPISODES
+                and rolling_10d_ev is not None
+                and float(rolling_10d_ev) > 0
+                and rolling_10d_uplift is not None
+                and rolling_10d_uplift >= MIN_NOTIONAL_EV_UPLIFT_PCT
+                and rolling_20d_ev is not None
+                and float(rolling_20d_ev) > 0
+            )
+            if ev is not None and float(ev) > 0 and evidence_ready:
                 item = dict(item)
                 item["rolling_outcomes"] = rolling_outcomes
-                eligible.append((float(ev), axis, item))
+                item["current_policy_outcomes"] = {
+                    CLEAN_WINDOW_NAME: current_clean_outcome,
+                    **rolling_current_outcomes,
+                }
+                item["notional_ev_uplift_pct"] = cumulative_uplift
+                item["rolling_10d_notional_ev_uplift_pct"] = rolling_10d_uplift
+                eligible.append((float(cumulative_uplift), axis, item))
         if eligible:
             selection_ev, selected_axis, selected = max(
                 eligible,
@@ -1284,6 +1383,11 @@ def build_policy_candidate(
             evidence = {
                 CLEAN_WINDOW_NAME: selected["outcome"],
                 **selected["rolling_outcomes"],
+                "current_policy_outcomes": selected["current_policy_outcomes"],
+                "notional_ev_uplift_pct": selected["notional_ev_uplift_pct"],
+                "rolling_10d_notional_ev_uplift_pct": selected[
+                    "rolling_10d_notional_ev_uplift_pct"
+                ],
             }
         else:
             selection_ev = None
@@ -1668,8 +1772,10 @@ def build_report(
             "no_entry_threshold_or_runtime_change"
         ),
         "next_action": (
-            "collect_clean_two_leg_episodes_until_auto_apply_floors; "
-            "require_positive_rolling_10d_20d_and_cumulative_broker_priced_ev; "
+            "collect_clean_two_leg_episodes_until_rare_machine_bounded_floors; "
+            "require_5_observed_days_8_completed_episodes_8_broker_priced_legs; "
+            "require_positive_rolling_10d_20d_and_cumulative_broker_priced_ev_and_"
+            "same_policy_cohort_ev_uplift; "
             "eligible_tightening_is_materialized_only_for_next_preopen; "
             "held_or_unresolved_inventory_must_close_naturally_before_candidate_readiness"
         ),

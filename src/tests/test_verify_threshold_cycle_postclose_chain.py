@@ -3929,6 +3929,69 @@ def test_ai_correction_status_reads_current_provider_status_key(tmp_path, monkey
     assert report["provider_status"]["provider"] == "openai"
 
 
+@pytest.mark.parametrize(
+    ("allowed_runtime_apply", "expected_status"),
+    [(False, "warning"), (True, "fail")],
+)
+def test_ai_correction_status_exposes_incomplete_family_coverage(
+    tmp_path, monkeypatch, allowed_runtime_apply, expected_status
+):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    review_dir = report_dir / "threshold_cycle_ai_review"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    review_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    (review_dir / "threshold_cycle_ai_review_2026-09-03_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "ai_coverage": {
+                    "status": "incomplete",
+                    "all_expected_families_reviewed_once": False,
+                    "missing_families": ["family_a"],
+                    "duplicate_families": [],
+                    "unexpected_families": [],
+                },
+                "items": [
+                    {
+                        "family": "family_a",
+                        "guard_reject_reason": "ai_proposal_missing_for_family",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-09-03_postclose.json"
+    ).write_text(
+        json.dumps(
+            {
+                "calibration_candidates": [
+                    {
+                        "family": "family_a",
+                        "calibration_state": "hold",
+                        "allowed_runtime_apply": allowed_runtime_apply,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod._ai_correction_status("2026-09-03")
+
+    assert report["status"] == expected_status
+    assert report["ai_coverage_status"] == "incomplete"
+    assert report["missing_families"] == ["family_a"]
+    assert report["incomplete_runtime_candidate_families"] == (
+        ["family_a"] if allowed_runtime_apply else []
+    )
+
+
 def test_producer_gap_discovery_handoff_fails_sim_first_coverage_gap_without_workorder():
     producer_gap = {
         "status": "warning",

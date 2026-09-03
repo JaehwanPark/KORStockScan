@@ -3728,6 +3728,86 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     assert blocked["same_stage_owner_guard"]["mutation_present"] is True
 
 
+def test_tuning_rare_profile_uses_five_days_and_eight_broker_legs(tmp_path):
+    target = "samsung_heavy_midday"
+    rows = [_tuning_row(target, index, strong=True) for index in range(5)]
+    rows.append(_tuning_row(target, 5, strong=False))
+    for leg in rows[0]["legs"]:
+        leg.update(
+            {
+                "status": "NO_FILL",
+                "fill_price": None,
+                "target_fill_price": None,
+                "completed": False,
+                "buy_filled_qty": 0,
+                "net_profit_pct": None,
+                "profit_price_source": None,
+            }
+        )
+
+    def report_for(candidate_rows: list[dict]) -> dict:
+        windows = {CLEAN_WINDOW_NAME: {}}
+        for profile_id in PROFILES_20260824_PRIOR:
+            profile_rows = candidate_rows if profile_id == target else []
+            windows[CLEAN_WINDOW_NAME][profile_id] = {
+                "summary": _aggregate(profile_rows),
+                "rows": profile_rows,
+            }
+        return {
+            "target_date": "2026-08-21",
+            "generated_at_kst": "2026-08-21T20:10:00+09:00",
+            "clean_tuning_baseline_date": "2026-06-05",
+            "target_date_is_krx_trading_day": True,
+            "source_quality_preflight": {"tuning_input_allowed": True},
+            "daily": {
+                "profiles": {
+                    profile_id: {"source_quality": "pass"}
+                    for profile_id in PROFILES_20260824_PRIOR
+                }
+            },
+            "windows": windows,
+        }
+
+    ready = build_candidate(
+        report_for(rows),
+        candidate_dir=tmp_path / "ready-low-price",
+        samsung_candidate_dir=tmp_path / "ready-samsung",
+    )
+    assert ready["policy_mutations"] == [
+        {
+            "profile_id": target,
+            "axis": "rolling_high_drawdown_pct",
+            "before": 0.75,
+            "after": 1.0,
+        }
+    ]
+    evaluation = ready["profiles"][target]["evaluation"]
+    selected_evidence = next(
+        item for item in evaluation["alternatives"] if item["ready"]
+    )
+    assert selected_evidence["clean_baseline_cumulative_outcome"]["eligible_days"] == 5
+    assert selected_evidence["clean_baseline_cumulative_outcome"]["completed_legs"] == 8
+
+    below_floor_rows = json.loads(json.dumps(rows))
+    below_floor_rows[1]["legs"][0].update(
+        {
+            "status": "NO_FILL",
+            "fill_price": None,
+            "target_fill_price": None,
+            "completed": False,
+            "buy_filled_qty": 0,
+            "net_profit_pct": None,
+            "profit_price_source": None,
+        }
+    )
+    blocked = build_candidate(
+        report_for(below_floor_rows),
+        candidate_dir=tmp_path / "blocked-low-price",
+        samsung_candidate_dir=tmp_path / "blocked-samsung",
+    )
+    assert blocked["policy_mutations"] == []
+
+
 def test_profile_inventory_blocks_tuning_even_when_held_row_has_no_axis_features(
     tmp_path,
 ):

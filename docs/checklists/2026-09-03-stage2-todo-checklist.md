@@ -83,6 +83,12 @@
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
 
+- [ ] `[IndependentMachineTuningAndAICorrectionAcceptance0903] 삼성·저가주 독립 머신과 AI 보정 리뷰 보완 장후 acceptance` (`Due: 2026-09-03`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:50`, `Track: RuntimeStability`)
+  - Source: [samsung_machine_entry_tuning.py](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_machine_entry_tuning.py), [low_price_two_leg_tuning.py](/home/ubuntu/KORStockScan/src/engine/monitoring/low_price_two_leg_tuning.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py)
+  - 판정 기준: Samsung midday/afternoon은 5 eligible report days·8 complete episodes/legs·8 broker-priced legs, rolling 10d 4 complete episodes, 누적·rolling 10d/20d 양의 비용차감 EV와 동일 현행-policy cohort 대비 누적·rolling 10d 각각 최소 `+0.005%p` uplift를 확인한다. 저가주 profile은 5 eligible days·8 completed/broker-priced legs와 동일 profile 현행-policy 대비 최소 `+0.005%p` uplift를 확인한다. AI 입력은 전 후보 family가 `required_family_manifest`와 `calibration_candidates`에 보존되고 누락분은 최대 8개씩 재검토되어 최종 `ai_coverage.status=complete`인지 확인한다.
+  - 권한 경계: 기존 operator lock과 하루 동일 entry stage 한 machine/profile·한 tightening axis 규칙을 유지한다. 수량·target·validity·entry offset·provider/bot/cap·broker/order/hard-safety와 장중 runtime을 변경하지 않고, AI는 proposal-only·`runtime_change=false`다.
+  - 다음 액션: `machine_candidate_ready_or_collecting`, `ai_coverage_complete`, `ai_nonruntime_family_coverage_warning`, `ai_runtime_family_coverage_failed`, `source_quality_or_inventory_blocked`를 분리 기록한다. 보완 전 산출물은 재사용하지 않고 input hash와 완전성 검사를 모두 통과한 artifact만 다음 PREOPEN guard 입력으로 인정한다.
+
 - [ ] `[HumanInterventionSummary0903] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-09-03`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-09-02.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-02.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

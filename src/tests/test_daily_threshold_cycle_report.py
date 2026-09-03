@@ -2080,6 +2080,219 @@ def test_ai_correction_clamps_out_of_bounds_value_without_runtime_change():
     assert item["final_source_of_truth"] == "deterministic_calibration_guard"
 
 
+def _ai_review_proposal(family: str) -> dict:
+    return {
+        "family": family,
+        "anomaly_type": "normal_drift",
+        "ai_review_state": "agree",
+        "correction_proposal": {
+            "proposed_state": "hold",
+            "proposed_value": None,
+            "anomaly_route": "normal_drift",
+            "sample_window": "cumulative",
+        },
+        "correction_reason": "bounded evidence reviewed",
+        "required_evidence": [],
+        "risk_flags": [],
+    }
+
+
+def test_ai_correction_context_keeps_every_family_when_inventory_is_large():
+    candidates = [
+        {
+            "family": f"family_{index:02d}",
+            "stage": "entry",
+            "threshold_version": f"family_{index:02d}:ready",
+            "current_value": index,
+            "recommended_value": index,
+            "calibration_state": "hold",
+            "calibration_reason": "evidence " + ("x" * 500),
+            "source_metrics": {f"metric_{metric}": "y" * 300 for metric in range(20)},
+        }
+        for index in range(20)
+    ]
+    context = report_mod._build_ai_correction_input_context(
+        {"date": "2026-09-03", "calibration_candidates": candidates}
+    )
+
+    assert isinstance(context["calibration_candidates"], list)
+    assert len(context["calibration_candidates"]) == 20
+    assert context["required_family_manifest"] == [
+        f"family_{index:02d}" for index in range(20)
+    ]
+    assert report_mod._json_chars(context) <= (
+        report_mod.AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT
+    )
+
+
+def test_ai_correction_retries_eighteen_missing_families_in_bounded_shards(
+    monkeypatch,
+):
+    families = [f"family_{index:02d}" for index in range(20)]
+    context = {
+        "required_family_manifest": families,
+        "calibration_candidates": [
+            {"family": family, "stage": "entry"} for family in families
+        ],
+        "threshold_cycle_cumulative": {},
+        "trade_lifecycle_attribution": {},
+        "_context_budget": {},
+    }
+    requested_shards = []
+
+    def fake_call(shard_context, *, run_phase):
+        requested = list(shard_context["required_family_manifest"])
+        requested_shards.append(requested)
+        return (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "corrections": [
+                        _ai_review_proposal(family) for family in requested
+                    ],
+                }
+            ),
+            {
+                "provider": "openai",
+                "status": "success",
+                "new_provider_call": True,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "estimated_cost_usd": 0.01,
+            },
+        )
+
+    monkeypatch.setattr(report_mod, "_call_openai_threshold_ai_correction", fake_call)
+    raw_response, provider_status = report_mod._repair_ai_correction_family_coverage(
+        context,
+        {
+            "schema_version": 1,
+            "corrections": [_ai_review_proposal(family) for family in families[:2]],
+        },
+        {
+            "provider": "openai",
+            "status": "success",
+            "input_tokens": 3,
+            "output_tokens": 2,
+            "total_tokens": 5,
+            "estimated_cost_usd": 0.02,
+        },
+        provider="openai",
+        run_phase="postclose",
+    )
+    ai_status, proposals, warnings = report_mod._parse_ai_correction_response(
+        raw_response
+    )
+    coverage = report_mod._ai_correction_family_coverage(
+        context, proposals, ai_status=ai_status
+    )
+
+    assert warnings == []
+    assert coverage["status"] == "complete"
+    assert len(proposals) == 20
+    assert [len(shard) for shard in requested_shards] == [8, 8, 2]
+    assert provider_status["coverage_repair"]["repair_shard_count"] == 3
+    assert provider_status["coverage_repair"]["runtime_change"] is False
+    assert provider_status["aggregate_input_tokens"] == 33
+    assert provider_status["aggregate_output_tokens"] == 17
+    assert provider_status["aggregate_total_tokens"] == 50
+    assert provider_status["aggregate_estimated_cost_usd"] == 0.05
+
+
+def test_ai_correction_coverage_repair_runs_only_after_live_provider_success():
+    assert report_mod._ai_correction_coverage_repair_allowed(
+        "openai",
+        {
+            "provider": "openai",
+            "status": "success",
+            "new_provider_call": True,
+        },
+    )
+    assert not report_mod._ai_correction_coverage_repair_allowed(
+        "openai",
+        {"provider": "file", "status": "loaded", "new_provider_call": False},
+    )
+    assert not report_mod._ai_correction_coverage_repair_allowed(
+        "openai",
+        {
+            "provider": "openai",
+            "status": "reused_valid_artifact",
+            "new_provider_call": False,
+        },
+    )
+
+
+def test_ai_correction_parse_rejection_recovers_through_bounded_repair(monkeypatch):
+    families = ["family_a", "family_b"]
+    context = {
+        "required_family_manifest": families,
+        "calibration_candidates": [{"family": family} for family in families],
+        "_context_budget": {},
+    }
+
+    def fake_call(shard_context, *, run_phase):
+        return (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "corrections": [
+                        _ai_review_proposal(family)
+                        for family in shard_context["required_family_manifest"]
+                    ],
+                }
+            ),
+            {"provider": "openai", "status": "success"},
+        )
+
+    monkeypatch.setattr(report_mod, "_call_openai_threshold_ai_correction", fake_call)
+    repaired_raw, provider_status = report_mod._repair_ai_correction_family_coverage(
+        context,
+        "{truncated",
+        {"provider": "openai", "status": "success"},
+        provider="openai",
+        run_phase="postclose",
+    )
+    ai_status, proposals, warnings = report_mod._parse_ai_correction_response(
+        repaired_raw
+    )
+
+    assert ai_status == "parsed"
+    assert warnings == []
+    assert [proposal["family"] for proposal in proposals] == families
+    assert provider_status["coverage_repair"]["status"] == "complete"
+
+
+def test_ai_correction_duplicate_and_missing_family_are_fail_closed():
+    calibration_report = {
+        "date": "2026-09-03",
+        "calibration_candidates": [
+            {"family": "family_a", "calibration_state": "hold"},
+            {"family": "family_b", "calibration_state": "hold"},
+        ],
+    }
+    review = report_mod.build_threshold_cycle_ai_correction_report(
+        calibration_report,
+        ai_raw_response={
+            "schema_version": 1,
+            "corrections": [
+                _ai_review_proposal("family_a"),
+                _ai_review_proposal("family_a"),
+            ],
+        },
+        ai_input_context={"calibration_candidates": [{"family": "family_a"}]},
+    )
+
+    assert review["ai_status"] == "parsed"
+    assert review["ai_coverage"]["status"] == "incomplete"
+    assert review["ai_coverage"]["duplicate_families"] == ["family_a"]
+    assert review["ai_coverage"]["missing_families"] == ["family_b"]
+    assert [item["guard_reject_reason"] for item in review["items"]] == [
+        "ai_duplicate_proposal_for_family",
+        "ai_proposal_missing_for_family",
+    ]
+
+
 def test_ai_correction_keeps_soft_stop_single_sample_as_hold_sample():
     report_sources = {
         "schema_version": 1,
@@ -2491,6 +2704,41 @@ def test_reuse_ai_review_requires_matching_input_hash(tmp_path):
     assert (
         report_mod._load_reusable_threshold_ai_review(
             path, input_context_hash="different"
+        )
+        is None
+    )
+
+    complete = json.loads(path.read_text(encoding="utf-8"))
+    complete["candidate_count"] = 0
+    complete["ai_coverage"] = {
+        "status": "complete",
+        "expected_family_count": 0,
+        "reviewed_unique_family_count": 0,
+        "missing_families": [],
+        "duplicate_families": [],
+        "unexpected_families": [],
+        "all_expected_families_reviewed_once": True,
+    }
+    path.write_text(json.dumps(complete), encoding="utf-8")
+    assert (
+        report_mod._load_reusable_threshold_ai_review(
+            path, input_context_hash=input_hash
+        )
+        is not None
+    )
+
+    incomplete = json.loads(path.read_text(encoding="utf-8"))
+    incomplete["candidate_count"] = 1
+    incomplete["items"] = [
+        {
+            "family": "family_a",
+            "guard_reject_reason": "ai_proposal_missing_for_family",
+        }
+    ]
+    path.write_text(json.dumps(incomplete), encoding="utf-8")
+    assert (
+        report_mod._load_reusable_threshold_ai_review(
+            path, input_context_hash=input_hash
         )
         is None
     )

@@ -68,7 +68,9 @@ MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
 MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
-SAMPLE_FLOOR_COMPLETED_LEGS = 20
+BOUNDED_MIN_OBSERVED_DAYS = 5
+SAMPLE_FLOOR_COMPLETED_LEGS = 8
+MIN_NOTIONAL_EV_UPLIFT_PCT = 0.005
 APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -143,7 +145,10 @@ METRIC_CONTRACT = {
         "profile_separated_daily_and_all_available_actual_observations_since_clean_baseline"
     ),
     "sample_floor": {
+        "candidate_observed_trading_days": BOUNDED_MIN_OBSERVED_DAYS,
         "clean_baseline_cumulative_completed_legs": SAMPLE_FLOOR_COMPLETED_LEGS,
+        "broker_priced_completed_legs": SAMPLE_FLOOR_COMPLETED_LEGS,
+        "minimum_notional_ev_uplift_pct": MIN_NOTIONAL_EV_UPLIFT_PCT,
     },
     "primary_decision_metric": "notional_weighted_ev_pct",
     "profit_cost_model": (
@@ -203,6 +208,7 @@ METRIC_CONTRACT = {
         "historical_replay_not_mixed_with_actual_outcomes",
         "ka10073_symbol_day_quantity_and_average_price_unique_match",
         "verified_manual_operator_exit_is_realized_pnl_not_machine_target_success",
+        "candidate_improves_same_profile_current_policy_cost_adjusted_ev",
     ],
     "forbidden_uses": [
         "historical_market_data_requery",
@@ -1201,10 +1207,7 @@ def _aggregate(rows: list[dict]) -> dict:
         ),
         "target_reconciliation_completion_within_180s_ratio": (
             round(
-                sum(
-                    duration <= 180.0
-                    for duration in machine_target_holding_durations
-                )
+                sum(duration <= 180.0 for duration in machine_target_holding_durations)
                 / len(machine_target_holding_durations),
                 6,
             )
@@ -1669,19 +1672,27 @@ def build_candidate(
             )
             current_ev = current_outcome["notional_weighted_ev_pct"]
             candidate_ev = clean_outcome["notional_weighted_ev_pct"]
+            ev_uplift = (
+                float(candidate_ev) - float(current_ev)
+                if candidate_ev is not None and current_ev is not None
+                else None
+            )
             ready = bool(
                 report.get("target_date_is_krx_trading_day") is True
                 and report["source_quality_preflight"]["tuning_input_allowed"]
                 and report["daily"]["profiles"][profile_id].get("source_quality")
                 == "pass"
                 and profile_inventory_clear
+                and clean_outcome["eligible_days"] >= BOUNDED_MIN_OBSERVED_DAYS
                 and clean_outcome["completed_legs"] >= SAMPLE_FLOOR_COMPLETED_LEGS
                 and clean_outcome["broker_priced_completed_legs"]
                 >= SAMPLE_FLOOR_COMPLETED_LEGS
                 and clean_outcome["held_or_unresolved_legs"] == 0
                 and candidate_ev is not None
                 and current_ev is not None
-                and float(candidate_ev) > max(0.0, float(current_ev))
+                and float(candidate_ev) > 0
+                and ev_uplift is not None
+                and ev_uplift >= MIN_NOTIONAL_EV_UPLIFT_PCT
             )
             evaluated_alternatives.append(
                 {
@@ -1689,14 +1700,14 @@ def build_candidate(
                     "resulting_drawdown_pct": drawdown,
                     "resulting_near_low_pct": near_low,
                     "clean_baseline_cumulative_outcome": clean_outcome,
+                    "current_policy_outcome": current_outcome,
+                    "notional_ev_uplift_pct": ev_uplift,
                     "ready": ready,
                 }
             )
             if ready:
                 after = drawdown if axis == "rolling_high_drawdown_pct" else near_low
-                eligible.append(
-                    (float(candidate_ev) - float(current_ev), profile_id, axis, after)
-                )
+                eligible.append((float(ev_uplift), profile_id, axis, after))
         evaluations[profile_id] = {
             "current_policy": current,
             "current_clean_baseline_cumulative_outcome": current_outcome,

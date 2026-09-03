@@ -5951,11 +5951,97 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
     parse_warnings = ai_review.get("parse_warnings")
     if not isinstance(parse_warnings, list):
         parse_warnings = []
+    expected_families = list(
+        dict.fromkeys(
+            str(item.get("family") or "")
+            for item in calibration_report.get("calibration_candidates") or []
+            if isinstance(item, dict) and str(item.get("family") or "")
+        )
+    )
+    expected_set = set(expected_families)
+    review_items = (
+        ai_review.get("items") if isinstance(ai_review.get("items"), list) else []
+    )
+    item_counts = Counter(
+        str(item.get("family") or "")
+        for item in review_items
+        if isinstance(item, dict) and str(item.get("family") or "")
+    )
+    incomplete_reasons = {
+        "ai_unavailable",
+        "ai_proposal_missing_for_family",
+        "ai_duplicate_proposal_for_family",
+    }
+    derived_missing = [
+        family
+        for family in expected_families
+        if item_counts.get(family, 0) == 0
+        or any(
+            str(item.get("guard_reject_reason") or "") in incomplete_reasons
+            for item in review_items
+            if isinstance(item, dict) and str(item.get("family") or "") == family
+        )
+    ]
+    derived_duplicates = sorted(
+        family
+        for family, count in item_counts.items()
+        if family in expected_set and count > 1
+    )
+    derived_unexpected = sorted(set(item_counts) - expected_set)
+    coverage = (
+        ai_review.get("ai_coverage")
+        if isinstance(ai_review.get("ai_coverage"), dict)
+        else {}
+    )
+    explicit_missing = (
+        coverage.get("missing_families")
+        if isinstance(coverage.get("missing_families"), list)
+        else []
+    )
+    explicit_duplicates = (
+        coverage.get("duplicate_families")
+        if isinstance(coverage.get("duplicate_families"), list)
+        else []
+    )
+    explicit_unexpected = (
+        coverage.get("unexpected_families")
+        if isinstance(coverage.get("unexpected_families"), list)
+        else []
+    )
+    missing_families = list(
+        dict.fromkeys([str(value) for value in explicit_missing] + derived_missing)
+    )
+    duplicate_families = sorted(
+        set(str(value) for value in explicit_duplicates) | set(derived_duplicates)
+    )
+    unexpected_families = sorted(
+        set(str(value) for value in explicit_unexpected) | set(derived_unexpected)
+    )
+    coverage_complete = bool(
+        ai_status == "parsed"
+        and not missing_families
+        and not duplicate_families
+        and not unexpected_families
+        and (
+            not coverage
+            or (
+                str(coverage.get("status") or "") == "complete"
+                and coverage.get("all_expected_families_reviewed_once") is True
+            )
+        )
+    )
+    incomplete_runtime_families = sorted(
+        set(blocking_families) & (set(missing_families) | set(duplicate_families))
+    )
 
-    if ai_status == "parsed":
+    if coverage_complete:
         status = "pass"
-    elif blocking_families:
+    elif ai_status != "parsed" and blocking_families:
         status = "fail"
+    elif incomplete_runtime_families:
+        status = "fail"
+    elif ai_status == "parsed":
+        status = "warning"
     elif ai_path.exists() and ai_status not in {"", "missing"}:
         status = "warning"
     else:
@@ -5968,15 +6054,24 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
         "calibration_path": str(calibration_path),
         "provider_status": provider_status,
         "parse_warnings": parse_warnings,
+        "ai_coverage_status": "complete" if coverage_complete else "incomplete",
+        "expected_family_count": len(expected_families),
+        "reviewed_unique_family_count": len(
+            expected_set - set(missing_families) - set(duplicate_families)
+        ),
+        "missing_families": missing_families,
+        "duplicate_families": duplicate_families,
+        "unexpected_families": unexpected_families,
         "blocking_runtime_candidate_families": blocking_families,
+        "incomplete_runtime_candidate_families": incomplete_runtime_families,
         "interpretation": (
-            "AI correction parsed successfully"
+            "AI correction parsed with exactly one review for every candidate family"
             if status == "pass"
             else (
-                "AI correction unavailable blocks runtime-applicable threshold candidates"
+                "AI correction unavailable or incomplete for runtime-applicable threshold candidates"
                 if status == "fail"
                 else (
-                    "AI correction unavailable but no runtime-applicable candidate was detected"
+                    "AI correction is incomplete, but no runtime-applicable candidate is uncovered"
                     if status == "warning"
                     else "AI correction artifact missing or unreadable"
                 )
@@ -6448,7 +6543,12 @@ def build_threshold_cycle_postclose_verification(
         log_issues.extend(scalp_sim_overnight_quality.get("missing") or [])
     ai_correction = _ai_correction_status(target_date)
     if ai_correction.get("status") == "fail":
-        log_issues.append("ai_correction_unavailable_blocks_runtime_candidates")
+        log_issues.append(
+            "ai_correction_incomplete_blocks_runtime_candidates"
+            if ai_correction.get("ai_status") == "parsed"
+            and ai_correction.get("incomplete_runtime_candidate_families")
+            else "ai_correction_unavailable_blocks_runtime_candidates"
+        )
     clean_policy = clean_baseline_policy()
     clean_baseline_report_residue = (
         _clean_baseline_report_residue_status(REPORT_DIR)
@@ -8382,8 +8482,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
             "## AI Correction",
             f"- status: `{ai_correction.get('status') or '-'}`",
             f"- ai_status: `{ai_correction.get('ai_status') or '-'}`",
+            f"- ai_coverage_status: `{ai_correction.get('ai_coverage_status') or '-'}`",
+            f"- family_coverage: reviewed=`{ai_correction.get('reviewed_unique_family_count', 0)}` / expected=`{ai_correction.get('expected_family_count', 0)}`",
+            f"- missing_families: `{ai_correction.get('missing_families') or []}`",
+            f"- duplicate_families: `{ai_correction.get('duplicate_families') or []}`",
             f"- provider_status: `{ai_correction.get('provider_status') or '-'}`",
             f"- blocking_runtime_candidate_families: `{ai_correction.get('blocking_runtime_candidate_families') or []}`",
+            f"- incomplete_runtime_candidate_families: `{ai_correction.get('incomplete_runtime_candidate_families') or []}`",
             f"- parse_warnings: `{ai_correction.get('parse_warnings') or []}`",
             f"- interpretation: `{ai_correction.get('interpretation') or '-'}`",
             "",

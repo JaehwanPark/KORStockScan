@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import gzip
 import hashlib
 import json
@@ -57,6 +58,7 @@ SCALE_IN_SPLIT_ORDER_PLAN_DIR = REPORT_DIR / "scale_in_split_order_plan"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 3
 THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
+AI_CORRECTION_REPAIR_SHARD_MAX_FAMILIES = 8
 RUNTIME_HANDOFF_CONTRACT_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 THRESHOLD_APPLY_PLAN_DIR = THRESHOLD_CYCLE_DIR / "apply_plans"
@@ -324,7 +326,7 @@ AI_CORRECTION_FORBIDDEN_FIELDS = {
 }
 AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT = 120_000
 AI_CORRECTION_CONTEXT_SECTION_LIMITS = {
-    "calibration_candidates": 48_000,
+    "calibration_candidates": 64_000,
     "calibration_source_bundle": 16_000,
     "trade_lifecycle_attribution": 14_000,
     "threshold_cycle_cumulative": 42_000,
@@ -14659,6 +14661,249 @@ def _parse_ai_correction_response(
     return ("parsed", parsed, [])
 
 
+def _ai_correction_family_coverage(
+    input_context: dict, proposals: list[dict], *, ai_status: str
+) -> dict[str, Any]:
+    manifest = input_context.get("required_family_manifest")
+    if isinstance(manifest, list):
+        expected_families = [
+            str(family or "").strip()
+            for family in manifest
+            if str(family or "").strip()
+        ]
+    else:
+        candidate_rows = input_context.get("calibration_candidates")
+        if isinstance(candidate_rows, dict):
+            candidate_rows = candidate_rows.get("items")
+        candidate_rows = candidate_rows if isinstance(candidate_rows, list) else []
+        expected_families = [
+            str(item.get("family") or "").strip()
+            for item in candidate_rows
+            if isinstance(item, dict) and str(item.get("family") or "").strip()
+        ]
+    expected_families = list(dict.fromkeys(expected_families))
+    expected_set = set(expected_families)
+    proposal_families = [
+        str(item.get("family") or "").strip()
+        for item in proposals
+        if isinstance(item, dict) and str(item.get("family") or "").strip()
+    ]
+    proposal_counts = Counter(proposal_families)
+    reviewed_families = [
+        family for family in expected_families if proposal_counts.get(family, 0) == 1
+    ]
+    missing_families = [
+        family for family in expected_families if proposal_counts.get(family, 0) == 0
+    ]
+    duplicate_families = sorted(
+        family
+        for family, count in proposal_counts.items()
+        if family in expected_set and count > 1
+    )
+    unexpected_families = sorted(set(proposal_families) - expected_set)
+    complete = bool(
+        ai_status == "parsed"
+        and not missing_families
+        and not duplicate_families
+        and not unexpected_families
+    )
+    return {
+        "status": "complete" if complete else "incomplete",
+        "expected_family_count": len(expected_families),
+        "reviewed_unique_family_count": len(reviewed_families),
+        "missing_family_count": len(missing_families),
+        "missing_families": missing_families,
+        "duplicate_families": duplicate_families,
+        "unexpected_families": unexpected_families,
+        "all_expected_families_reviewed_once": complete,
+    }
+
+
+def _build_ai_correction_repair_context(
+    input_context: dict, families: list[str]
+) -> dict:
+    selected = set(families)
+    context = copy.deepcopy(input_context)
+    candidate_rows = context.get("calibration_candidates")
+    if isinstance(candidate_rows, dict):
+        candidate_rows = candidate_rows.get("items")
+    candidate_rows = candidate_rows if isinstance(candidate_rows, list) else []
+    context["calibration_candidates"] = [
+        item
+        for item in candidate_rows
+        if isinstance(item, dict) and str(item.get("family") or "") in selected
+    ]
+    context["required_family_manifest"] = list(families)
+    cumulative = context.get("threshold_cycle_cumulative")
+    family_window_context = (
+        cumulative.get("family_window_context")
+        if isinstance(cumulative, dict)
+        and isinstance(cumulative.get("family_window_context"), dict)
+        else {}
+    )
+    snapshots = family_window_context.get("threshold_snapshot_by_window")
+    if isinstance(snapshots, dict):
+        family_window_context["threshold_snapshot_by_window"] = {
+            window_name: {
+                family: value
+                for family, value in window_values.items()
+                if family in selected
+            }
+            for window_name, window_values in snapshots.items()
+            if isinstance(window_values, dict)
+        }
+    lifecycle = context.get("trade_lifecycle_attribution")
+    if isinstance(lifecycle, dict) and isinstance(lifecycle.get("family_views"), dict):
+        lifecycle["family_views"] = {
+            family: value
+            for family, value in lifecycle["family_views"].items()
+            if family in selected
+        }
+    context["coverage_repair_request"] = {
+        "required_family_ids": families,
+        "required_response_count": len(families),
+        "authority": "proposal_only_no_runtime_change",
+    }
+    _refresh_ai_context_budget_counts(context, hard_cap_applied=False)
+    return context
+
+
+def _repair_ai_correction_family_coverage(
+    input_context: dict,
+    ai_raw_response: Any,
+    ai_provider_status: dict,
+    *,
+    provider: str,
+    run_phase: str,
+) -> tuple[Any, dict]:
+    ai_status, proposals, initial_parse_warnings = _parse_ai_correction_response(
+        ai_raw_response
+    )
+    initial_coverage = _ai_correction_family_coverage(
+        input_context, proposals, ai_status=ai_status
+    )
+    missing = list(initial_coverage["missing_families"])
+    provider_status = dict(ai_provider_status or {})
+    repair_records: list[dict[str, Any]] = []
+    merged_proposals = list(proposals)
+    if missing and provider in {"openai", "gemini"}:
+        for offset in range(0, len(missing), AI_CORRECTION_REPAIR_SHARD_MAX_FAMILIES):
+            shard_families = missing[
+                offset : offset + AI_CORRECTION_REPAIR_SHARD_MAX_FAMILIES
+            ]
+            shard_context = _build_ai_correction_repair_context(
+                input_context, shard_families
+            )
+            if provider == "openai":
+                shard_raw, shard_provider_status = _call_openai_threshold_ai_correction(
+                    shard_context,
+                    run_phase=run_phase,
+                )
+            else:
+                shard_raw, shard_provider_status = _call_gemini_threshold_ai_correction(
+                    shard_context
+                )
+            shard_status, shard_proposals, shard_warnings = (
+                _parse_ai_correction_response(shard_raw)
+            )
+            shard_family_set = set(shard_families)
+            accepted = [
+                item
+                for item in shard_proposals
+                if str(item.get("family") or "") in shard_family_set
+            ]
+            merged_proposals.extend(accepted)
+            repair_records.append(
+                {
+                    "families": shard_families,
+                    "ai_status": shard_status,
+                    "provider_status": shard_provider_status,
+                    "parse_warnings": shard_warnings,
+                    "accepted_family_count": len(accepted),
+                }
+            )
+    final_coverage = _ai_correction_family_coverage(
+        input_context,
+        merged_proposals,
+        ai_status="parsed" if repair_records else ai_status,
+    )
+    usage_fields = (
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "elapsed_ms",
+        "estimated_cost",
+        "estimated_cost_usd",
+    )
+    additional_usage: dict[str, float | int] = {}
+    aggregate_usage: dict[str, float | int] = {}
+    for field in usage_fields:
+        shard_values = [
+            record["provider_status"].get(field)
+            for record in repair_records
+            if isinstance(record.get("provider_status"), dict)
+            and isinstance(record["provider_status"].get(field), (int, float))
+            and not isinstance(record["provider_status"].get(field), bool)
+        ]
+        if shard_values:
+            additional_usage[field] = sum(shard_values)
+        initial_value = provider_status.get(field)
+        if isinstance(initial_value, (int, float)) and not isinstance(
+            initial_value, bool
+        ):
+            aggregate_usage[field] = initial_value + additional_usage.get(field, 0)
+        elif field in additional_usage:
+            aggregate_usage[field] = additional_usage[field]
+    provider_status["coverage_repair"] = {
+        "status": (
+            "not_needed"
+            if initial_coverage["status"] == "complete"
+            else (
+                "complete"
+                if repair_records and final_coverage["status"] == "complete"
+                else "incomplete" if repair_records else "not_attempted"
+            )
+        ),
+        "initial_ai_status": ai_status,
+        "initial_parse_warnings": initial_parse_warnings,
+        "initial_missing_families": initial_coverage["missing_families"],
+        "initial_duplicate_families": initial_coverage["duplicate_families"],
+        "initial_unexpected_families": initial_coverage["unexpected_families"],
+        "repair_shard_count": len(repair_records),
+        "repair_shards": repair_records,
+        "remaining_missing_families": final_coverage["missing_families"],
+        "additional_provider_usage": additional_usage,
+        "aggregate_provider_usage": aggregate_usage,
+        "runtime_change": False,
+    }
+    provider_status.update(
+        {f"aggregate_{field}": value for field, value in aggregate_usage.items()}
+    )
+    if not repair_records:
+        return ai_raw_response, provider_status
+    return (
+        json.dumps(
+            {
+                "schema_version": THRESHOLD_AI_CORRECTION_SCHEMA_VERSION,
+                "corrections": merged_proposals,
+            },
+            ensure_ascii=True,
+        ),
+        provider_status,
+    )
+
+
+def _ai_correction_coverage_repair_allowed(
+    requested_provider: str, provider_status: dict
+) -> bool:
+    return bool(
+        requested_provider in {"openai", "gemini"}
+        and provider_status.get("provider") == requested_provider
+        and provider_status.get("new_provider_call") is True
+        and provider_status.get("status") == "success"
+    )
+
+
 def _current_numeric_step_bounds(candidate: dict) -> tuple[float | None, float | None]:
     lower = _safe_float(candidate.get("min_value"), None)
     upper = _safe_float(candidate.get("max_value"), None)
@@ -14931,6 +15176,63 @@ def _cap_ai_context_section(section_name: str, value: Any) -> Any:
     }
 
 
+def _cap_ai_candidate_context(candidates: list[dict]) -> list[dict]:
+    max_chars = AI_CORRECTION_CONTEXT_SECTION_LIMITS["calibration_candidates"]
+    if _json_chars(candidates) <= max_chars:
+        return candidates
+    compact: list[dict] = []
+    for item in candidates:
+        compact.append(
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "threshold_version": item.get("threshold_version"),
+                "current_value": item.get("current_value"),
+                "recommended_value": item.get("recommended_value"),
+                "current_values": _compact_json_value(
+                    item.get("current_values") or {}, max_chars=500
+                ),
+                "recommended_values": _compact_json_value(
+                    item.get("recommended_values") or {}, max_chars=500
+                ),
+                "calibration_state": item.get("calibration_state"),
+                "calibration_reason": str(item.get("calibration_reason") or "")[:600],
+                "sample_count": item.get("sample_count"),
+                "source_sample_count": item.get("source_sample_count"),
+                "sample_floor": item.get("sample_floor"),
+                "sample_window": item.get("sample_window"),
+                "window_policy": _compact_json_value(
+                    item.get("window_policy") or {}, max_chars=700
+                ),
+                "bounds": _compact_json_value(item.get("bounds") or {}, max_chars=700),
+                "max_step_per_day": item.get("max_step_per_day"),
+                "safety_revert_required": item.get("safety_revert_required"),
+                "allowed_runtime_apply": item.get("allowed_runtime_apply"),
+                "runtime_handoff_contract": _compact_json_value(
+                    item.get("runtime_handoff_contract") or {}, max_chars=800
+                ),
+                "source_metrics_summary": _compact_json_value(
+                    item.get("source_metrics_summary") or {},
+                    max_chars=800,
+                    max_dict_keys=8,
+                    max_list_items=4,
+                ),
+                "source_metrics_full_hash": item.get("source_metrics_full_hash"),
+            }
+        )
+    if _json_chars(compact) <= max_chars:
+        return compact
+    for item in compact:
+        item["source_metrics_summary"] = {
+            "_truncated": True,
+            "full_hash": item.get("source_metrics_full_hash"),
+        }
+        item["runtime_handoff_contract"] = _compact_json_value(
+            item.get("runtime_handoff_contract") or {}, max_chars=400
+        )
+    return compact
+
+
 def _source_availability_summary(sources: Any) -> dict:
     if not isinstance(sources, dict):
         return {"source_count": 0, "sources": {}}
@@ -14962,6 +15264,28 @@ def _candidate_source_metrics_summary(source_metrics: Any) -> Any:
         max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
         max_list_items=6,
     )
+
+
+def _ai_runtime_handoff_summary(runtime_handoff_contract: Any) -> dict:
+    contract = (
+        runtime_handoff_contract if isinstance(runtime_handoff_contract, dict) else {}
+    )
+    keys = (
+        "decision_authority",
+        "runtime_effect",
+        "recommended_state_source",
+        "operator_lock_resolution",
+        "preopen_selection_state",
+        "same_day_preopen_handoff_state",
+        "same_day_preopen_handoff_selected",
+        "same_day_preopen_handoff_verified",
+        "same_day_selection_change_class",
+        "same_day_selection_reason",
+        "recommendation_delta_class",
+        "quantity_change_authority",
+        "hard_safety_bypass_forbidden",
+    )
+    return {key: contract.get(key) for key in keys if key in contract}
 
 
 def _cumulative_family_window_context(
@@ -15084,6 +15408,7 @@ def _build_ai_correction_input_context(
             continue
         candidate_item = {
             "family": candidate.get("family"),
+            "stage": candidate.get("stage"),
             "threshold_version": candidate.get("threshold_version"),
             "current_value": candidate.get("current_value"),
             "recommended_value": candidate.get("recommended_value"),
@@ -15097,11 +15422,9 @@ def _build_ai_correction_input_context(
             "bounds": candidate.get("bounds"),
             "max_step_per_day": candidate.get("max_step_per_day"),
             "safety_revert_required": candidate.get("safety_revert_required"),
-            "runtime_handoff_contract": _compact_json_value(
-                candidate.get("runtime_handoff_contract") or {},
-                max_chars=2_000,
-                max_dict_keys=24,
-                max_list_items=4,
+            "allowed_runtime_apply": candidate.get("allowed_runtime_apply"),
+            "runtime_handoff_contract": _ai_runtime_handoff_summary(
+                candidate.get("runtime_handoff_contract")
             ),
             "source_metrics_summary": _candidate_source_metrics_summary(
                 candidate.get("source_metrics")
@@ -15174,9 +15497,12 @@ def _build_ai_correction_input_context(
     )
     context = {
         "context_schema_version": 2,
-        "calibration_candidates": _cap_ai_context_section(
-            "calibration_candidates", candidate_context
-        ),
+        "required_family_manifest": [
+            str(item.get("family") or "")
+            for item in candidate_context
+            if str(item.get("family") or "")
+        ],
+        "calibration_candidates": _cap_ai_candidate_context(candidate_context),
         "calibration_source_bundle": _cap_ai_context_section(
             "calibration_source_bundle",
             {
@@ -15458,7 +15784,8 @@ def _build_ai_correction_prompt(input_context: dict) -> str:
         "Your authority is proposal-only. You must not command env, code, runtime, restart, "
         "or intraday threshold mutation.\n"
         "The deterministic calibration guard remains the final source of truth.\n\n"
-        "Return exactly one correction object for every family listed in calibration_candidates.\n"
+        "Return exactly one correction object for every family listed in required_family_manifest. "
+        "Use calibration_candidates for the matching evidence.\n"
         "Allowed proposals:\n"
         "- proposed_state: adjust_up|adjust_down|hold|hold_sample|freeze\n"
         "- proposed_value: a candidate value that will be validated against family bounds and max_step_per_day\n"
@@ -15506,7 +15833,7 @@ def _build_openai_ai_correction_instructions(run_phase: str) -> str:
         "Your authority is proposal-only. You must not command env, code, runtime, restart, or intraday threshold mutation.\n"
         "The deterministic calibration guard remains the final source of truth.\n\n"
         "Control rules:\n"
-        "- Return exactly one correction object for every family listed in calibration_candidates.\n"
+        "- Return exactly one correction object for every family listed in required_family_manifest; use calibration_candidates for matching evidence.\n"
         "- Propose only adjust_up, adjust_down, hold, hold_sample, or freeze.\n"
         "- Propose threshold values only as candidates; guard will clamp/reject by family bounds and max_step_per_day.\n"
         "- Route anomalies only as threshold_candidate, incident, instrumentation_gap, or normal_drift.\n"
@@ -15889,16 +16216,38 @@ def build_threshold_cycle_ai_correction_report(
     ai_status, proposals, parse_warnings = _parse_ai_correction_response(
         ai_raw_response
     )
-    proposals_by_family = {
-        str(item.get("family")): item for item in proposals if isinstance(item, dict)
+    coverage_context = dict(input_context)
+    coverage_context["required_family_manifest"] = [
+        str(candidate.get("family") or "")
+        for candidate in candidates
+        if isinstance(candidate, dict) and str(candidate.get("family") or "")
+    ]
+    coverage = _ai_correction_family_coverage(
+        coverage_context, proposals, ai_status=ai_status
+    )
+    coverage["repair"] = (
+        provider_status.get("coverage_repair")
+        if isinstance(provider_status.get("coverage_repair"), dict)
+        else {"status": "not_attempted", "runtime_change": False}
+    )
+    expected_families = {
+        str(candidate.get("family") or "")
+        for candidate in candidates
+        if isinstance(candidate, dict) and str(candidate.get("family") or "")
     }
+    proposals_by_family: dict[str, list[dict]] = defaultdict(list)
+    for proposal in proposals:
+        family = str(proposal.get("family") or "")
+        if family in expected_families:
+            proposals_by_family[family].append(proposal)
 
     items: list[dict] = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
         family = str(candidate.get("family") or "")
-        proposal_item = proposals_by_family.get(family)
+        family_proposals = proposals_by_family.get(family) or []
+        proposal_item = family_proposals[0] if len(family_proposals) == 1 else None
         if proposal_item:
             correction_proposal = proposal_item.get("correction_proposal") or {}
             guard_decision = _guard_ai_correction_proposal(
@@ -15913,13 +16262,15 @@ def build_threshold_cycle_ai_correction_report(
             risk_flags = proposal_item.get("risk_flags") or []
         else:
             correction_proposal = {}
+            if len(family_proposals) > 1:
+                reject_reason = "ai_duplicate_proposal_for_family"
+            elif ai_status != "parsed":
+                reject_reason = "ai_unavailable"
+            else:
+                reject_reason = "ai_proposal_missing_for_family"
             guard_decision = {
                 "guard_accepted": False,
-                "guard_reject_reason": (
-                    "ai_unavailable"
-                    if ai_status == "unavailable"
-                    else "ai_proposal_missing_for_family"
-                ),
+                "guard_reject_reason": reject_reason,
                 "effective_state": candidate.get("calibration_state"),
                 "effective_value": candidate.get("current_value"),
                 "clamped": False,
@@ -15968,6 +16319,7 @@ def build_threshold_cycle_ai_correction_report(
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "runtime_change": False,
         "ai_status": ai_status,
+        "ai_coverage": coverage,
         "ai_provider_status": provider_status,
         "input_context_hash": input_context_hash,
         "ai_input_context_hash": input_context_hash,
@@ -16029,6 +16381,8 @@ def build_threshold_cycle_ai_correction_report(
             ),
         },
         "candidate_count": len(candidates),
+        "reviewed_candidate_count": coverage["reviewed_unique_family_count"],
+        "missing_candidate_count": coverage["missing_family_count"],
         "items": items,
     }
 
@@ -16039,17 +16393,24 @@ def render_threshold_cycle_ai_correction_markdown(report: dict) -> str:
         if isinstance(report.get("ai_provider_status"), dict)
         else {}
     )
+    coverage = (
+        report.get("ai_coverage") if isinstance(report.get("ai_coverage"), dict) else {}
+    )
     lines = [
         f"# Threshold Cycle AI Correction - {report.get('date')} {report.get('run_phase')}",
         "",
         f"- AI status: `{report.get('ai_status')}`",
+        f"- Family coverage: `{coverage.get('status') or '-'}` "
+        f"(reviewed `{coverage.get('reviewed_unique_family_count', 0)}` / "
+        f"expected `{coverage.get('expected_family_count', report.get('candidate_count', 0))}`)",
+        f"- Missing families: `{', '.join(coverage.get('missing_families') or []) or '-'}`",
         "- Authority: proposal-only; deterministic calibration guard is the source of truth.",
         "- Runtime change: `false`",
         f"- Input context chars: `{report.get('ai_input_context_chars') or provider_status.get('input_context_chars') or '-'}`",
         f"- Input context hash: `{report.get('ai_input_context_hash') or provider_status.get('input_context_hash') or '-'}`",
         f"- Provider status: `{provider_status.get('provider') or '-'} / {provider_status.get('status') or '-'}`",
-        f"- Usage: input_tokens=`{provider_status.get('input_tokens')}`, output_tokens=`{provider_status.get('output_tokens')}`, total_tokens=`{provider_status.get('total_tokens')}`, elapsed_ms=`{provider_status.get('elapsed_ms')}`",
-        f"- Cost: estimated_cost_usd=`{provider_status.get('estimated_cost_usd')}`, status=`{provider_status.get('cost_estimate_status') or provider_status.get('incremental_cost_status') or '-'}`",
+        f"- Usage: input_tokens=`{provider_status.get('aggregate_input_tokens', provider_status.get('input_tokens'))}`, output_tokens=`{provider_status.get('aggregate_output_tokens', provider_status.get('output_tokens'))}`, total_tokens=`{provider_status.get('aggregate_total_tokens', provider_status.get('total_tokens'))}`, elapsed_ms=`{provider_status.get('aggregate_elapsed_ms', provider_status.get('elapsed_ms'))}`",
+        f"- Cost: estimated_cost_usd=`{provider_status.get('aggregate_estimated_cost_usd', provider_status.get('estimated_cost_usd'))}`, status=`{provider_status.get('cost_estimate_status') or provider_status.get('incremental_cost_status') or '-'}`",
         "",
         "| family | ai_state | route | proposal | guard | reason |",
         "| --- | --- | --- | --- | --- | --- |",
@@ -16116,6 +16477,42 @@ def _load_reusable_threshold_ai_review(
         return None
     if str(payload.get("ai_status") or "").lower() != "parsed":
         return None
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    candidate_count = _safe_int(payload.get("candidate_count"), 0) or 0
+    item_families = [
+        str(item.get("family") or "")
+        for item in items
+        if isinstance(item, dict) and str(item.get("family") or "")
+    ]
+    incomplete_reasons = {
+        "ai_unavailable",
+        "ai_proposal_missing_for_family",
+        "ai_duplicate_proposal_for_family",
+    }
+    if (
+        len(item_families) != candidate_count
+        or len(set(item_families)) != candidate_count
+        or any(
+            str(item.get("guard_reject_reason") or "") in incomplete_reasons
+            for item in items
+            if isinstance(item, dict)
+        )
+    ):
+        return None
+    coverage = payload.get("ai_coverage")
+    if isinstance(coverage, dict):
+        if (
+            str(coverage.get("status") or "").lower() != "complete"
+            or coverage.get("all_expected_families_reviewed_once") is not True
+            or (_safe_int(coverage.get("expected_family_count"), 0) or 0)
+            != candidate_count
+            or (_safe_int(coverage.get("reviewed_unique_family_count"), 0) or 0)
+            != candidate_count
+            or bool(coverage.get("missing_families"))
+            or bool(coverage.get("duplicate_families"))
+            or bool(coverage.get("unexpected_families"))
+        ):
+            return None
     if str(payload.get("schema_name") or payload.get("schema_version") or "") not in {
         str(THRESHOLD_AI_CORRECTION_SCHEMA_VERSION),
         "threshold_ai_correction_v1",
@@ -17954,6 +18351,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.ai_correction_provider == "openai":
         ai_raw_response, ai_provider_status = _call_openai_threshold_ai_correction(
             ai_input_context,
+            run_phase=args.calibration_run_phase,
+        )
+    if ai_correction_report is None and _ai_correction_coverage_repair_allowed(
+        args.ai_correction_provider, ai_provider_status
+    ):
+        ai_raw_response, ai_provider_status = _repair_ai_correction_family_coverage(
+            ai_input_context,
+            ai_raw_response,
+            ai_provider_status,
+            provider=args.ai_correction_provider,
             run_phase=args.calibration_run_phase,
         )
     if ai_correction_report is None:

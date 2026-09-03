@@ -900,12 +900,13 @@ def test_candidate_carries_prior_tightening_when_new_evidence_is_blocked(
 
 
 def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines():
-    def outcome(ev: float) -> dict:
+    def outcome(ev: float, *, sample_count: int = 8) -> dict:
         return {
             "candidate_status": "operator_review_candidate",
-            "completed_signal_episodes": 20,
-            "completed_legs": 20,
-            "broker_priced_completed_legs": 20,
+            "eligible_report_days": 5,
+            "completed_signal_episodes": sample_count,
+            "completed_legs": sample_count,
+            "broker_priced_completed_legs": sample_count,
             "notional_weighted_ev_pct": ev,
         }
 
@@ -923,8 +924,10 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
             "outcome": outcome(ev),
         }
 
+    midday_current = axis("midday", drawdown=1.25, near_low=0.20, ev=0.04)
     midday_single = axis("midday", drawdown=1.50, near_low=0.20, ev=0.10)
     midday_combined = axis("midday", drawdown=1.50, near_low=0.10, ev=0.90)
+    afternoon_current = axis("afternoon", drawdown=1.25, near_low=0.20, ev=0.05)
     afternoon_single = axis("afternoon", drawdown=1.25, near_low=0.10, ev=0.20)
     report = {
         "target_date": "2026-08-11",
@@ -940,18 +943,51 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
         "windows": {
             CLEAN_WINDOW_NAME: {
                 "morning": {"entry_axis_observations": []},
-                "midday": {"entry_axis_observations": [midday_single, midday_combined]},
-                "afternoon": {"entry_axis_observations": [afternoon_single]},
+                "midday": {
+                    "entry_axis_observations": [
+                        midday_current,
+                        midday_single,
+                        midday_combined,
+                    ]
+                },
+                "afternoon": {
+                    "entry_axis_observations": [
+                        afternoon_current,
+                        afternoon_single,
+                    ]
+                },
             },
             "rolling_10d": {
                 "morning": {"entry_axis_observations": []},
-                "midday": {"entry_axis_observations": [midday_single, midday_combined]},
-                "afternoon": {"entry_axis_observations": [afternoon_single]},
+                "midday": {
+                    "entry_axis_observations": [
+                        midday_current,
+                        midday_single,
+                        midday_combined,
+                    ]
+                },
+                "afternoon": {
+                    "entry_axis_observations": [
+                        afternoon_current,
+                        afternoon_single,
+                    ]
+                },
             },
             "rolling_20d": {
                 "morning": {"entry_axis_observations": []},
-                "midday": {"entry_axis_observations": [midday_single, midday_combined]},
-                "afternoon": {"entry_axis_observations": [afternoon_single]},
+                "midday": {
+                    "entry_axis_observations": [
+                        midday_current,
+                        midday_single,
+                        midday_combined,
+                    ]
+                },
+                "afternoon": {
+                    "entry_axis_observations": [
+                        afternoon_current,
+                        afternoon_single,
+                    ]
+                },
             },
         },
     }
@@ -985,6 +1021,16 @@ def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines()
             "after": 1.5,
         }
     ]
+
+    below_floor = json.loads(json.dumps(report))
+    for window in below_floor["windows"].values():
+        for machine in ("midday", "afternoon"):
+            for item in window[machine]["entry_axis_observations"]:
+                if item["resulting_policy"] != BASELINE_POLICIES[machine]:
+                    item["outcome"]["completed_signal_episodes"] = 7
+                    item["outcome"]["completed_legs"] = 7
+                    item["outcome"]["broker_priced_completed_legs"] = 7
+    assert build_policy_candidate(below_floor)["policy_mutations"] == []
 
 
 def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path: Path):
