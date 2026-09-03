@@ -308,13 +308,11 @@ def evaluate_main_bot_control_exclusion(
                     )
 
                     registry = default_order_owner_registry()
-                    if not registry.contains_event_hash(
-                        owner_policy.migration_registry_tail_hash
-                    ):
+                    if not registry.decision_activation_matches(owner_policy):
                         return ManualControlExclusionDecision(
                             True,
                             decision.code,
-                            "coexistence_migration_registry_generation_missing",
+                            "coexistence_policy_activation_missing_or_mismatched",
                             owner_policy.source_path,
                         )
             except OwnerRegistryError as exc:
@@ -385,9 +383,7 @@ def independent_machine_ownership_source(
                     )
 
                     registry = default_order_owner_registry()
-                    if not registry.contains_event_hash(
-                        owner_policy.migration_registry_tail_hash
-                    ):
+                    if not registry.decision_activation_matches(owner_policy):
                         return ""
             except OwnerRegistryError:
                 return ""

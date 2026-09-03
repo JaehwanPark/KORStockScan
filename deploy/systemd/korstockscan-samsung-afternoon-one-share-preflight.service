@@ -8,6 +8,7 @@ Type=oneshot
 User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
+EnvironmentFile=-/home/ubuntu/KORStockScan/data/runtime/symbol_owner_policy/owner_custody.env
 ExecStart=/home/ubuntu/KORStockScan/deploy/run_samsung_afternoon_one_share_preflight.sh
 TimeoutStartSec=180
 UMask=0077

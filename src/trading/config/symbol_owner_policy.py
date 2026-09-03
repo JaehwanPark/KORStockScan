@@ -21,20 +21,17 @@ from zoneinfo import ZoneInfo
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
-POLICY_SCHEMA = "symbol_owner_policy_v1"
+POLICY_SCHEMA = "symbol_owner_policy_v2"
+ACTIVATION_SCHEMA = "owner_custody_policy_activation_v1"
 POLICY_FILE_ENV = "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE"
 BROKER_ACCOUNT_KEY_ENV = "KORSTOCKSCAN_BROKER_ACCOUNT_KEY"
 DEFAULT_POLICY_DIR = DATA_DIR / "runtime" / "symbol_owner_policy"
 
-MAIN_ONLY = "MAIN_ONLY"
-MACHINE_EXCLUSIVE = "MACHINE_EXCLUSIVE"
 COEXIST_ENTRY_ENABLED = "COEXIST_ENTRY_ENABLED"
 COEXIST_EXIT_ONLY = "COEXIST_EXIT_ONLY"
 EXCLUSIVE_MANUAL = "EXCLUSIVE_MANUAL"
 VALID_MODES = frozenset(
     {
-        MAIN_ONLY,
-        MACHINE_EXCLUSIVE,
         COEXIST_ENTRY_ENABLED,
         COEXIST_EXIT_ONLY,
         EXCLUSIVE_MANUAL,
@@ -91,11 +88,47 @@ def policy_path(target_date: date | datetime | str | None = None) -> Path:
     return DEFAULT_POLICY_DIR / f"symbol_owner_policy_{day.isoformat()}.json"
 
 
-def _broker_account_key() -> str:
-    value = str(os.getenv(BROKER_ACCOUNT_KEY_ENV, "default") or "default").strip()
+def _broker_account_key(*, require_explicit: bool = False) -> str:
+    configured = os.getenv(BROKER_ACCOUNT_KEY_ENV)
+    value = str(configured or "default").strip()
     if not value or len(value) > 80 or any(ch in value for ch in "\r\n\t"):
         raise SymbolOwnerPolicyError("symbol_owner_policy_broker_account_key_invalid")
+    if require_explicit and (configured is None or value.lower() == "default"):
+        raise SymbolOwnerPolicyError(
+            "symbol_owner_policy_explicit_broker_account_key_required"
+        )
     return value
+
+
+def symbol_owner_entry_authority_hash(
+    *,
+    active_date: date | datetime | str,
+    policy_id: str,
+    symbol: object,
+    entry: dict[str, Any],
+) -> str:
+    """Hash the exact per-symbol authority before its activation receipt.
+
+    The registry activation event binds this digest while holding the journal
+    lock.  The final top-level policy hash then binds the activation receipt.
+    This two-step contract avoids a circular policy/event hash dependency.
+    """
+
+    day = _target_date(active_date)
+    clean_symbol = normalize_symbol(symbol)
+    content = dict(entry)
+    content.pop("activation_receipt", None)
+    payload = {
+        "active_date": day.isoformat(),
+        "policy_id": str(policy_id or "").strip(),
+        "symbol": clean_symbol,
+        "entry": content,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -111,21 +144,24 @@ class SymbolOwnerDecision:
     source_path: str
     reason: str
     migration_registry_tail_hash: str = ""
+    activation_event_hash: str = ""
+    entry_authority_hash: str = ""
+    broker_snapshot_sha256: str = ""
 
     def owner_allowed(self, owner: str, *, new_entry: bool = True) -> bool:
         normalized_owner = str(owner or "").strip().lower()
-        if not self.policy_present or not self.migration_completed:
+        if not self.policy_present:
             return False
         if normalized_owner not in self.allowed_owners:
+            return False
+        if self.mode in {COEXIST_ENTRY_ENABLED, COEXIST_EXIT_ONLY} and not (
+            self.migration_completed
+        ):
             return False
         if self.mode == COEXIST_ENTRY_ENABLED:
             return True
         if self.mode == COEXIST_EXIT_ONLY:
             return not new_entry
-        if self.mode == MAIN_ONLY:
-            return normalized_owner == "main_scalping"
-        if self.mode == MACHINE_EXCLUSIVE:
-            return normalized_owner in {"widget_auto_trade", "episode"}
         if self.mode == EXCLUSIVE_MANUAL:
             return normalized_owner == "manual_operator"
         return False
@@ -159,12 +195,23 @@ class SymbolOwnerDecision:
             "symbol_owner_policy_migration_registry_tail_hash": (
                 self.migration_registry_tail_hash or "-"
             ),
+            "symbol_owner_policy_activation_event_hash": (
+                self.activation_event_hash or "-"
+            ),
+            "symbol_owner_policy_entry_authority_hash": (
+                self.entry_authority_hash or "-"
+            ),
+            "symbol_owner_policy_broker_snapshot_sha256": (
+                self.broker_snapshot_sha256 or "-"
+            ),
             "metric_role": "order_owner_runtime_guard",
             "decision_authority": "exact_date_same_symbol_owner_policy",
             "window_policy": "one_exact_kst_trade_date",
             "sample_floor": "not_applicable_owner_authority",
             "primary_decision_metric": "owner_and_action_authorized",
-            "source_quality_gate": "exact_date_hash_schema_migration_complete",
+            "source_quality_gate": (
+                "exact_date_hash_schema_migration_and_activation_complete"
+            ),
             "runtime_effect": True,
             "forbidden_uses": (
                 "cross_owner_cancel|cross_owner_sell|aggregate_balance_owner_inference|"
@@ -174,8 +221,12 @@ class SymbolOwnerDecision:
 
 
 def _validate_symbol_entry(
-    raw: object, *, normalized_symbol: str, day: date
-) -> tuple[str, tuple[str, ...], bool, str]:
+    raw: object,
+    *,
+    normalized_symbol: str,
+    day: date,
+    policy_id: str,
+) -> tuple[str, tuple[str, ...], bool, str, str, str, str]:
     if not (normalized_symbol.isdigit() and len(normalized_symbol) == 6):
         raise SymbolOwnerPolicyError("symbol_owner_policy_symbol_invalid")
     if not isinstance(raw, dict):
@@ -191,7 +242,14 @@ def _validate_symbol_entry(
         raise SymbolOwnerPolicyError("symbol_owner_policy_unknown_owner")
     migration_completed = raw.get("migration_completed") is True
     registry_tail_hash = ""
+    activation_event_hash = ""
+    entry_authority_hash = ""
+    broker_snapshot_hash = ""
     if mode in {COEXIST_ENTRY_ENABLED, COEXIST_EXIT_ONLY}:
+        if not migration_completed:
+            raise SymbolOwnerPolicyError(
+                "symbol_owner_policy_coexist_migration_incomplete"
+            )
         if "main_scalping" not in owners or not {
             "widget_auto_trade",
             "episode",
@@ -211,7 +269,8 @@ def _validate_symbol_entry(
             migration.get("schema") != "owner_custody_migration_receipt_v1"
             or migration.get("symbol") != normalized_symbol
             or migration.get("active_date") != day.isoformat()
-            or migration.get("broker_account_key") != _broker_account_key()
+            or migration.get("broker_account_key")
+            != _broker_account_key(require_explicit=True)
             or migration.get("validated") is not True
         ):
             raise SymbolOwnerPolicyError(
@@ -280,7 +339,58 @@ def _validate_symbol_entry(
             raise SymbolOwnerPolicyError(
                 "symbol_owner_policy_migration_broker_snapshot_hash_invalid"
             )
-    return mode, owners, migration_completed, registry_tail_hash
+        activation = raw.get("activation_receipt")
+        if not isinstance(activation, dict):
+            raise SymbolOwnerPolicyError(
+                "symbol_owner_policy_activation_receipt_missing"
+            )
+        activation_event_hash = str(
+            activation.get("activation_event_hash") or ""
+        ).strip().lower()
+        entry_authority_hash = str(
+            activation.get("entry_authority_hash") or ""
+        ).strip().lower()
+        expected_entry_hash = symbol_owner_entry_authority_hash(
+            active_date=day,
+            policy_id=policy_id,
+            symbol=normalized_symbol,
+            entry=raw,
+        )
+        if (
+            activation.get("schema") != ACTIVATION_SCHEMA
+            or activation.get("symbol") != normalized_symbol
+            or activation.get("active_date") != day.isoformat()
+            or activation.get("policy_id") != policy_id
+            or activation.get("broker_account_key")
+            != _broker_account_key(require_explicit=True)
+            or activation.get("migration_registry_tail_hash")
+            != registry_tail_hash
+            or activation.get("broker_snapshot_sha256") != broker_snapshot_hash
+            or entry_authority_hash != expected_entry_hash
+            or len(activation_event_hash) != 64
+            or any(ch not in "0123456789abcdef" for ch in activation_event_hash)
+        ):
+            raise SymbolOwnerPolicyError(
+                "symbol_owner_policy_activation_receipt_invalid"
+            )
+    elif mode == EXCLUSIVE_MANUAL:
+        if owners != ("manual_operator",):
+            raise SymbolOwnerPolicyError(
+                "symbol_owner_policy_exclusive_manual_owner_set_invalid"
+            )
+        if migration_completed:
+            raise SymbolOwnerPolicyError(
+                "symbol_owner_policy_exclusive_manual_migration_invalid"
+            )
+    return (
+        mode,
+        owners,
+        migration_completed,
+        registry_tail_hash,
+        activation_event_hash,
+        entry_authority_hash,
+        broker_snapshot_hash,
+    )
 
 
 def resolve_symbol_owner_policy(
@@ -340,7 +450,10 @@ def resolve_symbol_owner_policy(
         if str(policy_symbol) != clean_policy_symbol:
             raise SymbolOwnerPolicyError("symbol_owner_policy_symbol_key_invalid")
         validated_entries[clean_policy_symbol] = _validate_symbol_entry(
-            policy_entry, normalized_symbol=clean_policy_symbol, day=day
+            policy_entry,
+            normalized_symbol=clean_policy_symbol,
+            day=day,
+            policy_id=policy_id,
         )
     raw = symbols.get(normalized_symbol)
     if raw is None:
@@ -356,9 +469,15 @@ def resolve_symbol_owner_policy(
             str(path),
             "symbol_not_selected_legacy_exclusion_retained",
         )
-    mode, owners, migration_completed, registry_tail_hash = validated_entries[
-        normalized_symbol
-    ]
+    (
+        mode,
+        owners,
+        migration_completed,
+        registry_tail_hash,
+        activation_event_hash,
+        entry_authority_hash,
+        broker_snapshot_hash,
+    ) = validated_entries[normalized_symbol]
     return SymbolOwnerDecision(
         normalized_symbol,
         day.isoformat(),
@@ -371,6 +490,9 @@ def resolve_symbol_owner_policy(
         str(path),
         "exact_date_policy_resolved",
         registry_tail_hash,
+        activation_event_hash,
+        entry_authority_hash,
+        broker_snapshot_hash,
     )
 
 
@@ -414,7 +536,12 @@ def build_symbol_owner_policy_payload(
             raise SymbolOwnerPolicyError(
                 "symbol_owner_policy_builder_symbol_collision_or_invalid"
             )
-        _validate_symbol_entry(raw, normalized_symbol=clean_symbol, day=day)
+        _validate_symbol_entry(
+            raw,
+            normalized_symbol=clean_symbol,
+            day=day,
+            policy_id=clean_policy_id,
+        )
         normalized_entries[clean_symbol] = dict(raw)
     payload: dict[str, Any] = {
         "schema": POLICY_SCHEMA,

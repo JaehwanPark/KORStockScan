@@ -11,6 +11,7 @@ User=ubuntu
 # group makes the same-UID procfs read fail closed on this host.
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/KORStockScan
+EnvironmentFile=-/home/ubuntu/KORStockScan/data/runtime/symbol_owner_policy/owner_custody.env
 ExecStart=/home/ubuntu/KORStockScan/deploy/run_samsung_morning_one_share_preflight.sh
 TimeoutStartSec=5400
 UMask=0077

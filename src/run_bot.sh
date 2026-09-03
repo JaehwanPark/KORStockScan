@@ -464,6 +464,16 @@ while true; do
     unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC
     unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC
     unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS
+    # Load custody identity after every general runtime/operator layer so none
+    # can silently replace the account/registry bound by the apply receipt.
+    OWNER_CUSTODY_RUNTIME_ENV="../data/runtime/symbol_owner_policy/owner_custody.env"
+    if [ -f "$OWNER_CUSTODY_RUNTIME_ENV" ]; then
+        echo "📌 same-symbol owner custody env 적용: $OWNER_CUSTODY_RUNTIME_ENV"
+        set -a
+        # shellcheck source=/dev/null
+        . "$OWNER_CUSTODY_RUNTIME_ENV"
+        set +a
+    fi
     export_runtime_source_provenance
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)

@@ -157,12 +157,12 @@ def _reserve_owner_registry_intent(
             None,
             _owner_registry_block_response("coexistence_owner_action_forbidden"),
         )
-    if not registry.contains_event_hash(policy.migration_registry_tail_hash):
+    if not registry.decision_activation_matches(policy):
         return (
             None,
             None,
             _owner_registry_block_response(
-                "coexistence_migration_registry_generation_missing"
+                "coexistence_policy_activation_missing_or_mismatched"
             ),
         )
     try:

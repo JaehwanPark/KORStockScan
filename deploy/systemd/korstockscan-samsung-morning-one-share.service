@@ -15,6 +15,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+EnvironmentFile=-/home/ubuntu/KORStockScan/data/runtime/symbol_owner_policy/owner_custody.env
 Environment="KORSTOCKSCAN_SAMSUNG_MORNING_ONE_SHARE_ENABLED=true"
 Environment="KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED=1"
 ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.samsung_morning_one_share.service --live --confirm 005930_MORNING_TWO_EPISODE_LIVE --interval-sec 2

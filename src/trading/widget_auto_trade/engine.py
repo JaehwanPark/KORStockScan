@@ -110,8 +110,8 @@ def _widget_order_ownership_source(code: str, *, target_date: date) -> str:
         if owner_policy.owner_allowed("widget_auto_trade", new_entry=True):
             try:
                 if owner_policy.coexistence_enabled and not (
-                    default_order_owner_registry().contains_event_hash(
-                        owner_policy.migration_registry_tail_hash
+                    default_order_owner_registry().decision_activation_matches(
+                        owner_policy
                     )
                 ):
                     return ""
@@ -1365,11 +1365,9 @@ class WidgetSignalAutoTrader:
                     "registered_coexistence_symbol_requires_exact_date_policy"
                 )
             return ""
-        if not self.owner_registry.contains_event_hash(
-            policy.migration_registry_tail_hash
-        ):
+        if not self.owner_registry.decision_activation_matches(policy):
             raise OwnerRegistryError(
-                "coexistence_migration_registry_generation_missing"
+                "coexistence_policy_activation_missing_or_mismatched"
             )
         is_new_entry = side == "BUY"
         if not policy.owner_allowed("widget_auto_trade", new_entry=is_new_entry):

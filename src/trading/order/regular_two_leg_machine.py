@@ -401,11 +401,9 @@ class SamsungRegularTwoLegMachine:
                     "registered_coexistence_symbol_requires_exact_date_policy"
                 )
             return "", context
-        if not self.owner_registry.contains_event_hash(
-            policy.migration_registry_tail_hash
-        ):
+        if not self.owner_registry.decision_activation_matches(policy):
             raise OwnerRegistryError(
-                "coexistence_migration_registry_generation_missing"
+                "coexistence_policy_activation_missing_or_mismatched"
             )
         if not policy.owner_allowed(
             "episode", new_entry=side == "BUY" and action == "NEW"

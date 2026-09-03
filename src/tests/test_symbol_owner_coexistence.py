@@ -18,6 +18,7 @@ from src.trading.config.symbol_owner_policy import (
     build_symbol_owner_policy_payload,
     policy_content_hash,
     resolve_symbol_owner_policy,
+    symbol_owner_entry_authority_hash,
 )
 from src.trading.order.owner_custody_registry import (
     OrderOwnerRegistry,
@@ -31,6 +32,15 @@ TARGET_DATE = date(2026, 9, 3)
 SYMBOL = "005930"
 
 
+@pytest.fixture(autouse=True)
+def _explicit_owner_account(tmp_path, monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-account")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH",
+        str(tmp_path / "registry.jsonl"),
+    )
+
+
 def _write_policy(
     path,
     *,
@@ -38,40 +48,56 @@ def _write_policy(
     active_date=TARGET_DATE,
     mode=COEXIST_ENTRY_ENABLED,
 ):
-    payload = {
-        "schema": "symbol_owner_policy_v1",
-        "active_date": active_date.isoformat(),
-        "policy_id": f"same_symbol_owner_{active_date.isoformat()}",
-        "generated_at_kst": f"{active_date.isoformat()}T07:00:00+09:00",
-        "symbols": {
-            SYMBOL: {
-                "mode": mode,
-                "allowed_owners": [
-                    "main_scalping",
-                    "widget_auto_trade",
-                    "episode",
-                ],
-                "migration_completed": migration_completed,
-                "rollback_mode": "COEXIST_EXIT_ONLY",
-                "migration_receipt": {
-                    "schema": "owner_custody_migration_receipt_v1",
-                    "symbol": SYMBOL,
-                    "active_date": active_date.isoformat(),
-                    "broker_account_key": "default",
-                    "broker_quantity": 0,
-                    "registered_owner_quantity": 0,
-                    "external_manual_remainder": 0,
-                    "registry_tail_hash": "0" * 64,
-                    "verified_exchanges": ["KRX", "NXT"],
-                    "broker_open_order_nos": [],
-                    "registered_open_order_nos": [],
-                    "broker_snapshot_sha256": "d" * 64,
-                    "validated": True,
-                },
-            }
-        },
-    }
-    payload["policy_hash"] = policy_content_hash(payload)
+    policy_id = f"same_symbol_owner_{active_date.isoformat()}"
+    if mode == EXCLUSIVE_MANUAL:
+        entry = {
+            "mode": mode,
+            "allowed_owners": ["manual_operator"],
+            "migration_completed": False,
+        }
+    else:
+        assert migration_completed is True
+        registry = OrderOwnerRegistry()
+        receipt = registry.migration_receipt(
+            symbol=SYMBOL,
+            broker_quantity=0,
+            active_date=active_date,
+            verified_exchanges={"KRX", "NXT"},
+            broker_open_order_nos=set(),
+            broker_snapshot_sha256="d" * 64,
+        )
+        entry = {
+            "mode": mode,
+            "allowed_owners": [
+                "main_scalping",
+                "widget_auto_trade",
+                "episode",
+            ],
+            "migration_completed": True,
+            "rollback_mode": "COEXIST_EXIT_ONLY",
+            "migration_receipt": receipt,
+        }
+        entry_hash = symbol_owner_entry_authority_hash(
+            active_date=active_date,
+            policy_id=policy_id,
+            symbol=SYMBOL,
+            entry=entry,
+        )
+        entry["activation_receipt"] = registry.activate_policy_entry(
+            active_date=active_date,
+            policy_id=policy_id,
+            symbol=SYMBOL,
+            mode=mode,
+            allowed_owners=entry["allowed_owners"],
+            migration_receipt=receipt,
+            entry_authority_hash=entry_hash,
+        )
+    payload = build_symbol_owner_policy_payload(
+        active_date=active_date,
+        policy_id=policy_id,
+        generated_at_kst=f"{active_date.isoformat()}T07:00:00+09:00",
+        symbol_entries={SYMBOL: entry},
+    )
     path.write_text(json.dumps(payload), encoding="utf-8")
     return payload
 
@@ -163,12 +189,14 @@ def test_coexistence_never_bypasses_file_auto_safety_when_operator_env_matches(
 
 def test_policy_requires_migration_and_exact_hash(tmp_path, monkeypatch):
     path = tmp_path / "policy.json"
-    _write_policy(path, migration_completed=False)
+    payload = _write_policy(path)
+    payload["symbols"][SYMBOL]["migration_completed"] = False
+    payload["policy_hash"] = policy_content_hash(payload)
+    path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(path))
-    decision = resolve_symbol_owner_policy(SYMBOL, target_date=TARGET_DATE)
-    assert decision.coexistence_enabled is False
+    with pytest.raises(SymbolOwnerPolicyError, match="migration_incomplete"):
+        resolve_symbol_owner_policy(SYMBOL, target_date=TARGET_DATE)
 
-    payload = json.loads(path.read_text())
     payload["symbols"][SYMBOL]["migration_completed"] = True
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(SymbolOwnerPolicyError, match="hash_mismatch"):
@@ -272,7 +300,7 @@ def test_preflight_ownership_sources_require_reachable_registry_tail(
     )
 
     assert main.excluded is True
-    assert main.reason == "coexistence_migration_registry_generation_missing"
+    assert main.reason == "symbol_owner_policy_fail_closed:SymbolOwnerPolicyError"
     assert episode_source == ""
 
 
@@ -604,7 +632,7 @@ def test_registry_migrates_existing_position_with_evidence_and_preserves_owner_q
     )
     assert receipt["registered_owner_quantity"] == 20
     assert receipt["external_manual_remainder"] == 5
-    assert receipt["broker_account_key"] == "default"
+    assert receipt["broker_account_key"] == "test-account"
 
 
 def test_migration_receipt_uses_one_locked_registry_generation(tmp_path, monkeypatch):
@@ -1259,13 +1287,13 @@ def test_policy_builder_is_deterministic_and_does_not_publish(tmp_path):
     entry = _write_policy(tmp_path / "source.json")["symbols"][SYMBOL]
     first = build_symbol_owner_policy_payload(
         active_date=TARGET_DATE,
-        policy_id="candidate",
+        policy_id="same_symbol_owner_2026-09-03",
         symbol_entries={SYMBOL: entry},
         generated_at_kst="2026-09-03T07:00:00+09:00",
     )
     second = build_symbol_owner_policy_payload(
         active_date=TARGET_DATE,
-        policy_id="candidate",
+        policy_id="same_symbol_owner_2026-09-03",
         symbol_entries={SYMBOL: entry},
         generated_at_kst="2026-09-03T07:00:00+09:00",
     )

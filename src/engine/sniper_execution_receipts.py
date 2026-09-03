@@ -11707,11 +11707,11 @@ def handle_real_execution(exec_data):
                 raise OwnerRegistryError(
                     "owner_registry_cumulative_fill_quantity_inconsistent"
                 )
-            if owner_policy.coexistence_enabled and not registry.contains_event_hash(
-                owner_policy.migration_registry_tail_hash
+            if owner_policy.coexistence_enabled and not (
+                registry.decision_activation_matches(owner_policy)
             ):
                 raise OwnerRegistryError(
-                    "coexistence_migration_registry_generation_missing"
+                    "coexistence_policy_activation_missing_or_mismatched"
                 )
             owner_row = registry.order_owner(
                 order_date=received_at.date(), broker_order_no=order_no

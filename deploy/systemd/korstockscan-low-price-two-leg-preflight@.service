@@ -8,6 +8,7 @@ Type=oneshot
 User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
+EnvironmentFile=-/home/ubuntu/KORStockScan/data/runtime/symbol_owner_policy/owner_custody.env
 ExecStart=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_preflight.sh %i
 TimeoutStartSec=180
 UMask=0077

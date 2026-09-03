@@ -11,6 +11,7 @@ Type=simple
 User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
+EnvironmentFile=-/home/ubuntu/KORStockScan/data/runtime/symbol_owner_policy/owner_custody.env
 Environment="KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED=1"
 ExecStart=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh %i
 Restart=on-failure

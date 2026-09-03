@@ -993,9 +993,9 @@ def _preserve_coexistence_owner_inventory(
     reconciliation = None
     try:
         if decision is not None and decision.coexistence_enabled:
-            if not registry.contains_event_hash(decision.migration_registry_tail_hash):
+            if not registry.decision_activation_matches(decision):
                 raise OwnerRegistryError(
-                    "coexistence_migration_registry_generation_missing"
+                    "coexistence_policy_activation_missing_or_mismatched"
                 )
         reconciliation = registry.reconcile_symbol_quantity(
             symbol=code, broker_quantity=real_qty

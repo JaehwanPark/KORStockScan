@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from src.trading.config.symbol_owner_policy import normalize_symbol
+from src.trading.config.symbol_owner_policy import ACTIVATION_SCHEMA, normalize_symbol
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
@@ -31,15 +31,25 @@ _ACTIVE_UNBOUND_STATES = frozenset({"INTENT_RESERVED", "INTENT_AMBIGUOUS"})
 KIWOOM_OWNER_REGISTRY_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
-    "retrieved_at_kst": "2026-09-03T15:52:01+09:00",
+    "retrieved_at_kst": "2026-09-03T18:41:14+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
         "postman/kiwoom-openapi.postman_collection.json",
     ],
-    "request_scope": ["kt10000", "kt10001", "kt10002", "kt10003"],
+    "request_scope": [
+        "kt00018",
+        "kt00007",
+        "ka10075",
+        "kt10000",
+        "kt10001",
+        "kt10002",
+        "kt10003",
+    ],
     "verified_contract": (
-        "seven_digit_order_number,share_quantity,original_order_number_cancel_binding"
+        "all_venue_inventory_and_unfilled_order_snapshot,seven_digit_order_number,"
+        "share_quantity,completed_buy_execution_price_and_remainder,"
+        "original_order_number_cancel_binding"
     ),
 }
 
@@ -86,10 +96,13 @@ class OwnerOrderContext:
             raise OwnerRegistryError("main_owner_position_identity_invalid")
 
 
-def broker_account_key() -> str:
-    value = str(os.getenv(ACCOUNT_KEY_ENV, "default") or "default").strip()
+def broker_account_key(*, require_explicit: bool = False) -> str:
+    configured = os.getenv(ACCOUNT_KEY_ENV)
+    value = str(configured or "default").strip()
     if not value or len(value) > 80 or any(ch in value for ch in "\r\n\t"):
         raise OwnerRegistryError("broker_account_key_invalid")
+    if require_explicit and (configured is None or value.lower() == "default"):
+        raise OwnerRegistryError("owner_registry_explicit_broker_account_key_required")
     return value
 
 
@@ -237,6 +250,58 @@ class OrderOwnerRegistry:
         lock = self.lock_path.open("a+", encoding="utf-8")
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         return lock
+
+    @staticmethod
+    def _matching_migration_intent(
+        state: dict[str, dict[str, Any]],
+        *,
+        account_key: str,
+        context: OwnerOrderContext,
+        symbol: str,
+        quantity: int,
+        average_price: int,
+        route: str,
+        order_date: str,
+        broker_order_no: str,
+        evidence_sha256: str,
+    ) -> str | None:
+        """Return an exact prior migration or reject conflicting identity reuse."""
+
+        same_order = [
+            row
+            for row in state.values()
+            if row.get("account_key") == account_key
+            and row.get("order_date") == order_date
+            and row.get("broker_order_no") == broker_order_no
+        ]
+        exact = [
+            row
+            for row in same_order
+            if row.get("event") == "MIGRATED_POSITION_REGISTERED"
+            and row.get("state") == "ORDER_TERMINAL"
+            and row.get("symbol") == symbol
+            and row.get("side") == "BUY"
+            and row.get("action") == "NEW"
+            and int(row.get("quantity") or 0) == quantity
+            and int(row.get("filled_qty") or 0) == quantity
+            and int(row.get("fill_amount") or 0) == quantity * average_price
+            and row.get("route") == route
+            and row.get("owner_type") == context.owner_type
+            and row.get("owner_id") == context.owner_id
+            and row.get("position_id") == context.position_id
+            and row.get("client_intent_id") == context.client_intent_id
+            and row.get("migration_evidence_sha256") == evidence_sha256
+        ]
+        if len(exact) == 1 and len(same_order) == 1:
+            return str(exact[0]["intent_id"])
+        if same_order:
+            raise OwnerRegistryConflict("owner_registry_broker_order_no_conflict")
+        if any(
+            row.get("client_intent_id") == context.client_intent_id
+            for row in state.values()
+        ):
+            raise OwnerRegistryConflict("owner_registry_client_intent_reused")
+        return None
 
     def reserve(
         self,
@@ -546,18 +611,30 @@ class OrderOwnerRegistry:
         try:
             events = self._read_locked()
             state = self._state(events)
+            account_key = broker_account_key(require_explicit=True)
+            existing_intent = self._matching_migration_intent(
+                state,
+                account_key=account_key,
+                context=context,
+                symbol=clean_symbol,
+                quantity=migrated_qty,
+                average_price=migrated_price,
+                route=clean_route,
+                order_date=clean_date,
+                broker_order_no=order_no,
+                evidence_sha256=evidence_hash,
+            )
+            if existing_intent is not None:
+                return existing_intent
             if any(
-                row.get("account_key") == broker_account_key()
-                and row.get("order_date") == clean_date
-                and row.get("broker_order_no") == order_no
+                row.get("account_key") == account_key
+                and row.get("symbol") == clean_symbol
+                and row.get("event") == "POLICY_ACTIVATED"
                 for row in state.values()
             ):
-                raise OwnerRegistryConflict("owner_registry_broker_order_no_conflict")
-            if any(
-                row.get("client_intent_id") == context.client_intent_id
-                for row in state.values()
-            ):
-                raise OwnerRegistryConflict("owner_registry_client_intent_reused")
+                raise OwnerRegistryConflict(
+                    "owner_registry_migration_after_policy_activation_forbidden"
+                )
             intent_id = uuid.uuid4().hex
             self._append_locked(
                 events,
@@ -565,7 +642,7 @@ class OrderOwnerRegistry:
                     "event": "MIGRATED_POSITION_REGISTERED",
                     "state": "ORDER_TERMINAL",
                     "intent_id": intent_id,
-                    "account_key": broker_account_key(),
+                    "account_key": account_key,
                     "order_date": clean_date,
                     "symbol": clean_symbol,
                     "side": "BUY",
@@ -584,6 +661,62 @@ class OrderOwnerRegistry:
                 },
             )
             return intent_id
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+    def matched_migrated_position_quantity(
+        self,
+        *,
+        context: OwnerOrderContext,
+        symbol: object,
+        quantity: int,
+        average_price: int,
+        route: str,
+        order_date: date | str,
+        broker_order_no: str,
+        evidence_sha256: str,
+    ) -> int:
+        """Return quantity already registered for one exact migration request.
+
+        This read-only lookup makes an interrupted apply resumable without
+        counting a migration twice. Conflicting order or intent reuse remains
+        a hard failure instead of being interpreted as an absent migration.
+        """
+
+        context.validate()
+        clean_symbol = _registry_symbol(symbol)
+        clean_date = _registry_order_date(order_date)
+        clean_route = str(route or "").strip().upper()
+        order_no = str(broker_order_no or "").strip()
+        evidence_hash = str(evidence_sha256 or "").strip().lower()
+        migrated_qty = int(quantity)
+        migrated_price = int(average_price)
+        if migrated_qty <= 0 or migrated_price <= 0:
+            raise OwnerRegistryError("owner_registry_migration_position_invalid")
+        if clean_route not in {"KRX", "NXT", "SOR"}:
+            raise OwnerRegistryError("owner_registry_route_invalid")
+        if not (order_no.isdigit() and len(order_no) == 7):
+            raise OwnerRegistryError("owner_registry_broker_order_no_invalid")
+        if len(evidence_hash) != 64 or any(
+            ch not in "0123456789abcdef" for ch in evidence_hash
+        ):
+            raise OwnerRegistryError("owner_registry_migration_evidence_invalid")
+        lock = self._locked()
+        try:
+            intent_id = self._matching_migration_intent(
+                self._state(self._read_locked()),
+                account_key=broker_account_key(require_explicit=True),
+                context=context,
+                symbol=clean_symbol,
+                quantity=migrated_qty,
+                average_price=migrated_price,
+                route=clean_route,
+                order_date=clean_date,
+                broker_order_no=order_no,
+                evidence_sha256=evidence_hash,
+            )
+            return migrated_qty if intent_id is not None else 0
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
@@ -992,11 +1125,19 @@ class OrderOwnerRegistry:
         clean_symbol = _registry_symbol(symbol)
         lock = self._locked()
         try:
-            return any(
-                row.get("account_key") == broker_account_key()
-                and row.get("symbol") == clean_symbol
+            rows = [
+                row
                 for row in self._state(self._read_locked()).values()
-            )
+                if row.get("symbol") == clean_symbol
+            ]
+            current_account = broker_account_key()
+            if rows and not any(
+                row.get("account_key") == current_account for row in rows
+            ):
+                raise OwnerRegistryConflict(
+                    "owner_registry_account_identity_missing_or_mismatched"
+                )
+            return bool(rows)
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
@@ -1067,7 +1208,7 @@ class OrderOwnerRegistry:
         try:
             events = self._read_locked()
             state = self._state(events)
-            account_key = broker_account_key()
+            account_key = broker_account_key(require_explicit=True)
             reconciliation = self._reconcile_symbol_quantity_from_state(
                 state,
                 account_key=account_key,
@@ -1137,6 +1278,335 @@ class OrderOwnerRegistry:
             "broker_snapshot_sha256": snapshot_hash,
             "validated": True,
         }
+
+    def activate_policy_entry(
+        self,
+        *,
+        active_date: date | str,
+        policy_id: str,
+        symbol: object,
+        mode: str,
+        allowed_owners: tuple[str, ...] | list[str] | set[str],
+        migration_receipt: dict[str, Any],
+        entry_authority_hash: str,
+    ) -> dict[str, Any]:
+        """Bind one exact policy entry to the current reconciled registry tail.
+
+        Activation is the serialization point between migration/reconciliation
+        and policy publication.  A receipt built from an ancestor registry tail
+        cannot activate after any intervening journal mutation.
+        """
+
+        clean_date = _registry_order_date(active_date)
+        clean_symbol = _registry_symbol(symbol)
+        clean_policy_id = str(policy_id or "").strip()
+        clean_mode = str(mode or "").strip().upper()
+        clean_owners = tuple(
+            sorted({str(owner or "").strip().lower() for owner in allowed_owners})
+        )
+        clean_entry_hash = str(entry_authority_hash or "").strip().lower()
+        if (
+            not clean_policy_id
+            or len(clean_policy_id) > 240
+            or any(ch in clean_policy_id for ch in "\r\n\t")
+            or clean_mode not in {"COEXIST_ENTRY_ENABLED", "COEXIST_EXIT_ONLY"}
+            or "main_scalping" not in clean_owners
+            or not {"widget_auto_trade", "episode"}.intersection(clean_owners)
+        ):
+            raise OwnerRegistryError("owner_registry_policy_activation_input_invalid")
+        if len(clean_entry_hash) != 64 or any(
+            ch not in "0123456789abcdef" for ch in clean_entry_hash
+        ):
+            raise OwnerRegistryError(
+                "owner_registry_policy_activation_entry_hash_invalid"
+            )
+        if not isinstance(migration_receipt, dict):
+            raise OwnerRegistryError(
+                "owner_registry_policy_activation_migration_receipt_invalid"
+            )
+
+        account_key = broker_account_key(require_explicit=True)
+        migration_tail = str(
+            migration_receipt.get("registry_tail_hash") or ""
+        ).strip().lower()
+        snapshot_hash = str(
+            migration_receipt.get("broker_snapshot_sha256") or ""
+        ).strip().lower()
+        broker_orders = sorted(
+            {str(value or "").strip() for value in migration_receipt.get(
+                "broker_open_order_nos", []
+            )}
+        )
+        registered_orders = sorted(
+            {str(value or "").strip() for value in migration_receipt.get(
+                "registered_open_order_nos", []
+            )}
+        )
+        if (
+            migration_receipt.get("schema")
+            != "owner_custody_migration_receipt_v1"
+            or migration_receipt.get("validated") is not True
+            or migration_receipt.get("active_date") != clean_date
+            or migration_receipt.get("symbol") != clean_symbol
+            or migration_receipt.get("broker_account_key") != account_key
+            or len(migration_tail) != 64
+            or any(ch not in "0123456789abcdef" for ch in migration_tail)
+            or len(snapshot_hash) != 64
+            or any(ch not in "0123456789abcdef" for ch in snapshot_hash)
+            or broker_orders != registered_orders
+            or any(
+                not (order_no.isdigit() and len(order_no) == 7)
+                for order_no in broker_orders
+            )
+            or not {"KRX", "NXT"}.issubset(
+                {
+                    str(value or "").strip().upper()
+                    for value in migration_receipt.get("verified_exchanges", [])
+                }
+            )
+        ):
+            raise OwnerRegistryError(
+                "owner_registry_policy_activation_migration_receipt_invalid"
+            )
+
+        lock = self._locked()
+        try:
+            events = self._read_locked()
+            state = self._state(events)
+            existing = [
+                row
+                for row in events
+                if row.get("event") == "POLICY_ACTIVATED"
+                and row.get("account_key") == account_key
+                and row.get("order_date") == clean_date
+                and row.get("symbol") == clean_symbol
+            ]
+            exact = [
+                row
+                for row in existing
+                if row.get("policy_id") == clean_policy_id
+                and row.get("mode") == clean_mode
+                and tuple(row.get("allowed_owners") or ()) == clean_owners
+                and row.get("migration_registry_tail_hash") == migration_tail
+                and row.get("broker_snapshot_sha256") == snapshot_hash
+                and row.get("entry_authority_hash") == clean_entry_hash
+            ]
+            if len(exact) == 1 and len(existing) == 1:
+                activation = exact[0]
+                return {
+                    "schema": ACTIVATION_SCHEMA,
+                    "active_date": clean_date,
+                    "policy_id": clean_policy_id,
+                    "symbol": clean_symbol,
+                    "broker_account_key": account_key,
+                    "migration_registry_tail_hash": migration_tail,
+                    "broker_snapshot_sha256": snapshot_hash,
+                    "entry_authority_hash": clean_entry_hash,
+                    "activation_event_hash": activation["event_hash"],
+                }
+            if existing:
+                raise OwnerRegistryConflict(
+                    "owner_registry_policy_activation_conflict"
+                )
+
+            current_tail = (
+                str(events[-1].get("event_hash")) if events else "0" * 64
+            )
+            if current_tail != migration_tail:
+                raise OwnerRegistryConflict(
+                    "owner_registry_policy_activation_stale_migration_tail"
+                )
+            reconciliation = self._reconcile_symbol_quantity_from_state(
+                state,
+                account_key=account_key,
+                symbol=clean_symbol,
+                broker_quantity=int(migration_receipt.get("broker_quantity")),
+            )
+            if (
+                reconciliation["registered_owner_quantity"]
+                != int(migration_receipt.get("registered_owner_quantity"))
+                or reconciliation["external_manual_remainder"]
+                != int(migration_receipt.get("external_manual_remainder"))
+            ):
+                raise OwnerRegistryConflict(
+                    "owner_registry_policy_activation_quantity_drift"
+                )
+            current_open_orders = sorted(
+                {
+                    str(row.get("broker_order_no") or "").strip()
+                    for row in state.values()
+                    if row.get("account_key") == account_key
+                    and row.get("order_date") == clean_date
+                    and row.get("symbol") == clean_symbol
+                    and row.get("action") == "NEW"
+                    and row.get("state") == "ORDER_BOUND"
+                    and int(row.get("filled_qty") or 0)
+                    < int(row.get("quantity") or 0)
+                    and str(row.get("broker_order_no") or "").strip()
+                }
+            )
+            if current_open_orders != registered_orders:
+                raise OwnerRegistryConflict(
+                    "owner_registry_policy_activation_open_order_drift"
+                )
+            activation = self._append_locked(
+                events,
+                {
+                    "event": "POLICY_ACTIVATED",
+                    "state": "POLICY_ACTIVE",
+                    "intent_id": (
+                        f"policy-activation:{clean_date}:{clean_symbol}:"
+                        f"{clean_policy_id}"
+                    ),
+                    "account_key": account_key,
+                    "order_date": clean_date,
+                    "symbol": clean_symbol,
+                    "side": "",
+                    "action": "POLICY_ACTIVATION",
+                    "quantity": 0,
+                    "route": "ALL",
+                    "original_order_no": "",
+                    "owner_type": "manual_operator",
+                    "owner_id": "manual_operator:preopen_policy_apply",
+                    "position_id": (
+                        f"policy:{clean_date}:{clean_symbol}:{clean_policy_id}"
+                    ),
+                    "client_intent_id": (
+                        f"policy-activation:{clean_date}:{clean_symbol}:"
+                        f"{clean_policy_id}"
+                    ),
+                    "policy_id": clean_policy_id,
+                    "mode": clean_mode,
+                    "allowed_owners": list(clean_owners),
+                    "migration_registry_tail_hash": migration_tail,
+                    "broker_snapshot_sha256": snapshot_hash,
+                    "entry_authority_hash": clean_entry_hash,
+                    "migration_receipt": dict(migration_receipt),
+                },
+            )
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+        return {
+            "schema": ACTIVATION_SCHEMA,
+            "active_date": clean_date,
+            "policy_id": clean_policy_id,
+            "symbol": clean_symbol,
+            "broker_account_key": account_key,
+            "migration_registry_tail_hash": migration_tail,
+            "broker_snapshot_sha256": snapshot_hash,
+            "entry_authority_hash": clean_entry_hash,
+            "activation_event_hash": activation["event_hash"],
+        }
+
+    def policy_activation_record(
+        self,
+        *,
+        active_date: date | str,
+        policy_id: str,
+        symbol: object,
+    ) -> dict[str, Any] | None:
+        """Return the unique activation used to resume an interrupted publish."""
+
+        clean_date = _registry_order_date(active_date)
+        clean_symbol = _registry_symbol(symbol)
+        clean_policy_id = str(policy_id or "").strip()
+        lock = self._locked()
+        try:
+            matches = [
+                row
+                for row in self._read_locked()
+                if row.get("event") == "POLICY_ACTIVATED"
+                and row.get("state") == "POLICY_ACTIVE"
+                and row.get("account_key")
+                == broker_account_key(require_explicit=True)
+                and row.get("order_date") == clean_date
+                and row.get("symbol") == clean_symbol
+                and row.get("policy_id") == clean_policy_id
+            ]
+            if len(matches) > 1:
+                raise OwnerRegistryConflict(
+                    "owner_registry_policy_activation_ambiguous"
+                )
+            return dict(matches[0]) if matches else None
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+    def policy_activation_matches(
+        self,
+        *,
+        activation_event_hash: str,
+        active_date: date | str,
+        policy_id: str,
+        symbol: object,
+        mode: str,
+        allowed_owners: tuple[str, ...] | list[str] | set[str],
+        migration_registry_tail_hash: str,
+        broker_snapshot_sha256: str,
+        entry_authority_hash: str,
+    ) -> bool:
+        """Verify that runtime authority is the exact immutable activation."""
+
+        clean_symbol = _registry_symbol(symbol)
+        clean_date = _registry_order_date(active_date)
+        expected_hash = str(activation_event_hash or "").strip().lower()
+        expected_owners = tuple(
+            sorted({str(owner or "").strip().lower() for owner in allowed_owners})
+        )
+        if len(expected_hash) != 64:
+            return False
+        lock = self._locked()
+        try:
+            matches = [
+                row
+                for row in self._read_locked()
+                if str(row.get("event_hash") or "").strip().lower() == expected_hash
+            ]
+            if len(matches) != 1:
+                return False
+            row = matches[0]
+            return bool(
+                row.get("event") == "POLICY_ACTIVATED"
+                and row.get("state") == "POLICY_ACTIVE"
+                and row.get("account_key")
+                == broker_account_key(require_explicit=True)
+                and row.get("order_date") == clean_date
+                and row.get("symbol") == clean_symbol
+                and row.get("policy_id") == str(policy_id or "").strip()
+                and row.get("mode") == str(mode or "").strip().upper()
+                and tuple(row.get("allowed_owners") or ()) == expected_owners
+                and row.get("migration_registry_tail_hash")
+                == str(migration_registry_tail_hash or "").strip().lower()
+                and row.get("broker_snapshot_sha256")
+                == str(broker_snapshot_sha256 or "").strip().lower()
+                and row.get("entry_authority_hash")
+                == str(entry_authority_hash or "").strip().lower()
+            )
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+    def decision_activation_matches(self, decision: Any) -> bool:
+        """Verify a resolved coexistence decision without duplicating fields."""
+
+        if not bool(getattr(decision, "coexistence_enabled", False)):
+            return False
+        return self.policy_activation_matches(
+            activation_event_hash=getattr(decision, "activation_event_hash", ""),
+            active_date=getattr(decision, "target_date", ""),
+            policy_id=getattr(decision, "policy_id", ""),
+            symbol=getattr(decision, "symbol", ""),
+            mode=getattr(decision, "mode", ""),
+            allowed_owners=getattr(decision, "allowed_owners", ()),
+            migration_registry_tail_hash=getattr(
+                decision, "migration_registry_tail_hash", ""
+            ),
+            broker_snapshot_sha256=getattr(
+                decision, "broker_snapshot_sha256", ""
+            ),
+            entry_authority_hash=getattr(decision, "entry_authority_hash", ""),
+        )
 
     def contains_event_hash(self, event_hash: str) -> bool:
         expected = str(event_hash or "").strip().lower()

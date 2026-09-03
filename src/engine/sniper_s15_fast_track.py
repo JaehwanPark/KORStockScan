@@ -810,11 +810,11 @@ def _s15_registry_scoped_inventory_and_orders(
     if not registered and not decision.coexistence_enabled:
         return None
     try:
-        if decision.coexistence_enabled and not registry.contains_event_hash(
-            decision.migration_registry_tail_hash
+        if decision.coexistence_enabled and not (
+            registry.decision_activation_matches(decision)
         ):
             raise OwnerRegistryError(
-                "coexistence_migration_registry_generation_missing"
+                "coexistence_policy_activation_missing_or_mismatched"
             )
         registry.reconcile_symbol_quantity(
             symbol=code, broker_quantity=int(broker_quantity)
