@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import tempfile
 from collections import defaultdict
@@ -116,6 +117,61 @@ DEPTH_CONTEXT_MAX_AGE_SEC = 5
 TIMEOUT_RESEARCH_HORIZONS_SEC = (60, 120, 180)
 TIMEOUT_RESEARCH_MAX_QUOTE_AGE_SEC = 5
 CANARY_COMPLETE_AFTER_KST = time(20, 0)
+TIMESTAMP_REGRESSION_ROW_EXCLUSION_PATTERN = re.compile(
+    r"^raw_row_exclusion_required:"
+    r"path_exchange_timestamp_regression_exceeded_count=(\d+)$"
+)
+CANARY_LOSS_COUNTERS = (
+    "adapter_isolated_error_count",
+    "observation_dropped_envelope_count",
+    "observation_queue_full_count",
+    "worker_error_count",
+    "writer_capture_degraded_count",
+    "writer_dropped_envelope_count",
+    "writer_error_count",
+    "writer_manifest_error_count",
+    "writer_projection_breach_count",
+    "writer_queue_full_count",
+    "writer_storage_self_disabled_count",
+    "depth_dropped_envelope_count",
+    "depth_queue_full_count",
+    "depth_worker_error_count",
+    "depth_writer_dropped_envelope_count",
+    "depth_writer_error_count",
+    "depth_writer_manifest_error_count",
+    "depth_writer_projection_breach_count",
+    "depth_writer_queue_full_count",
+    "depth_writer_storage_self_disabled_count",
+    "event_reference_error_count",
+    "orphan_reference_count",
+    "unreferenced_segment_count",
+    "duplicate_event_reference_count",
+    "duplicate_event_id_count",
+    "duplicate_path_reference_pair_count",
+    "path_duplicate_sequence_count",
+    "path_out_of_order_sequence_count",
+    "path_local_receive_timestamp_regression_count",
+    "path_point_dropped_count",
+    "reference_reconciliation_error_count",
+    "unexplained_sequence_gap_count",
+    "writer_restart_count",
+    "canonical_stream_duplicate_count",
+    "collector_close_failure_count",
+    "collector_worker_alive_after_close_count",
+    "writer_alive_after_close_count",
+    "event_symbol_mismatch_count",
+)
+CANARY_FORBIDDEN_TRUE_FIELDS = (
+    "p2_real_data_discovery_run",
+    "research_policy_selected",
+    "selection_authority",
+    "sim_position_effect",
+    "trading_runtime_effect",
+    "trading_decision_effect",
+    "threshold_effect",
+    "broker_effect",
+    "actual_order_submitted",
+)
 GROSS_PROFIT_TOUCH_BPS = (1, 3, 5, 10, 20, 30, 50)
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 REGISTRATION_RECEIPT_REQUIRED_FROM_DATE = date(2026, 9, 4)
@@ -149,6 +205,7 @@ METRIC_CONTRACT = {
         "source_only_authority_flags",
         "physical_partition_venue_session_matches_row_contract",
         "exact_date_complete_fresh_canary_when_requested",
+        "fully_accounted_timestamp_regression_rows_remain_consumer_ineligible",
         "valid_symbol_timestamp_and_trade_price",
     ],
     "forbidden_uses": [
@@ -4559,6 +4616,176 @@ def _validate_reference_row(
     return False, None
 
 
+def _timestamp_regression_row_quarantine_validation(
+    guard: Mapping[str, Any], collector: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Allow only fully accounted, consumer-ineligible timestamp rows.
+
+    The canary's generic ``raw_row_exclusion_required`` flag also covers real
+    capture loss.  That state must remain fail-closed.  Timestamp-regression
+    rows are different: the V3 producer marks each affected row consumer
+    ineligible and this consumer independently skips it.  We therefore keep
+    the remaining date usable only when the producer proves exact accounting,
+    lossless persistence, and the dedicated row-quarantine authority contract.
+    """
+
+    base = {
+        "eligible": False,
+        "status": "not_applicable",
+        "quarantined_row_count": None,
+    }
+    if guard.get("raw_row_exclusion_required") is not True:
+        return base
+    exclusions = guard.get("source_quality_row_exclusions")
+    if (
+        not isinstance(exclusions, (list, tuple))
+        or isinstance(exclusions, (str, bytes))
+        or len(exclusions) != 1
+        or not isinstance(exclusions[0], str)
+    ):
+        return {**base, "status": "mixed_or_invalid_row_exclusion_reasons"}
+    match = TIMESTAMP_REGRESSION_ROW_EXCLUSION_PATTERN.fullmatch(exclusions[0])
+    if match is None:
+        return {**base, "status": "non_timestamp_row_exclusion_present"}
+    quarantined_count = int(match.group(1))
+    if quarantined_count <= 0:
+        return {**base, "status": "invalid_timestamp_quarantine_count"}
+
+    def exact_nonnegative_int(field: str) -> int | None:
+        value = collector.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
+
+    if guard.get("status") != "stopped_clean" or guard.get("stop_required") is not False:
+        return {
+            **base,
+            "status": "row_quarantine_requires_stopped_clean_canary",
+            "quarantined_row_count": quarantined_count,
+        }
+    if (
+        collector.get("collector_lifecycle") != "closed"
+        or collector.get("reference_reconciliation_completed") is not True
+    ):
+        return {
+            **base,
+            "status": "row_quarantine_requires_closed_reconciled_collector",
+            "quarantined_row_count": quarantined_count,
+        }
+    if exact_nonnegative_int("path_exchange_timestamp_regression_exceeded_count") != quarantined_count:
+        return {
+            **base,
+            "status": "timestamp_quarantine_count_mismatch",
+            "quarantined_row_count": quarantined_count,
+        }
+    regression_total = exact_nonnegative_int("path_exchange_timestamp_regression_count")
+    tolerated_count = exact_nonnegative_int(
+        "path_exchange_timestamp_regression_quarantined_count"
+    )
+    if (
+        regression_total is None
+        or tolerated_count is None
+        or regression_total != tolerated_count + quarantined_count
+    ):
+        return {
+            **base,
+            "status": "timestamp_regression_accounting_mismatch",
+            "quarantined_row_count": quarantined_count,
+        }
+    invalid_loss_fields = [
+        field
+        for field in CANARY_LOSS_COUNTERS
+        if exact_nonnegative_int(field) != 0
+    ]
+    if invalid_loss_fields:
+        return {
+            **base,
+            "status": "capture_loss_or_missing_counter",
+            "quarantined_row_count": quarantined_count,
+            "invalid_loss_fields": invalid_loss_fields,
+        }
+    invalid_authority_fields = [
+        field
+        for field in CANARY_FORBIDDEN_TRUE_FIELDS
+        if collector.get(field) is not False
+    ]
+    if invalid_authority_fields or collector.get("broker_order_forbidden") is not True:
+        return {
+            **base,
+            "status": "row_quarantine_authority_contract_invalid",
+            "quarantined_row_count": quarantined_count,
+            "invalid_authority_fields": invalid_authority_fields,
+        }
+    observation_counts = [
+        exact_nonnegative_int(field)
+        for field in (
+            "enqueued_count",
+            "worker_processed_count",
+            "writer_persisted_envelope_count",
+            "path_point_submitted_count",
+        )
+    ]
+    if any(value is None for value in observation_counts) or len(
+        set(observation_counts)
+    ) != 1:
+        return {
+            **base,
+            "status": "observation_persistence_accounting_mismatch",
+            "quarantined_row_count": quarantined_count,
+        }
+    if collector.get("depth_capture_requested") is True:
+        depth_counts = [
+            exact_nonnegative_int(field)
+            for field in (
+                "depth_enqueued_count",
+                "depth_worker_processed_count",
+                "depth_writer_persisted_envelope_count",
+            )
+        ]
+        if any(value is None for value in depth_counts) or len(set(depth_counts)) != 1:
+            return {
+                **base,
+                "status": "depth_persistence_accounting_mismatch",
+                "quarantined_row_count": quarantined_count,
+            }
+    metric_contracts = collector.get("metric_contracts")
+    quarantine_contract = (
+        metric_contracts.get("exchange_timestamp_regression_canary")
+        if isinstance(metric_contracts, Mapping)
+        else None
+    )
+    if not isinstance(quarantine_contract, Mapping) or not all(
+        (
+            quarantine_contract.get("metric_role")
+            == "source_quality_incident_and_raw_row_exclusion",
+            quarantine_contract.get("decision_authority")
+            == "observer_row_quarantine_only",
+            quarantine_contract.get("primary_decision_metric")
+            == "path_exchange_timestamp_regression_exceeded_count",
+            quarantine_contract.get("source_quality_gate")
+            == (
+                "affected_rows_remain_path_consumer_ineligible_and_are_skipped_by_"
+                "p2_reconstruction_without_imputation"
+            ),
+            "detector_or_path_consumption_of_quarantined_row"
+            in (quarantine_contract.get("forbidden_uses") or ()),
+            "broker_order_submission"
+            in (quarantine_contract.get("forbidden_uses") or ()),
+        )
+    ):
+        return {
+            **base,
+            "status": "timestamp_quarantine_metric_contract_invalid",
+            "quarantined_row_count": quarantined_count,
+        }
+    return {
+        "eligible": True,
+        "status": "fully_accounted_consumer_ineligible_rows",
+        "quarantined_row_count": quarantined_count,
+        "invalid_loss_fields": [],
+    }
+
+
 def _micro_context(
     target_date: str,
     observation_root: Path,
@@ -4657,6 +4884,12 @@ def _micro_context(
             and collector.get("collector_lifecycle") == "closed"
             and collector.get("reference_reconciliation_completed") is True
         )
+        row_quarantine_validation = _timestamp_regression_row_quarantine_validation(
+            guard, collector
+        )
+        isolated_row_quarantine = bool(
+            row_quarantine_validation.get("eligible") is True
+        )
         live_freshness_valid = bool(
             stopped_clean_closed
             or (
@@ -4681,7 +4914,10 @@ def _micro_context(
                 or stopped_clean_closed
             )
             and guard.get("stop_required") is False
-            and guard.get("raw_row_exclusion_required") is False
+            and (
+                guard.get("raw_row_exclusion_required") is False
+                or isolated_row_quarantine
+            )
             and isinstance(collector, dict)
             and collector.get("selection_authority") is False
             and collector.get("trading_runtime_effect") is False
@@ -4694,7 +4930,11 @@ def _micro_context(
             and canary_freshness_valid
         )
         canary_status = (
-            "loaded_pass"
+            (
+                "loaded_pass_with_row_quarantine"
+                if isolated_row_quarantine
+                else "loaded_pass"
+            )
             if canary_valid
             else (
                 "target_date_evidence_unavailable"
@@ -4738,6 +4978,7 @@ def _micro_context(
                 if isinstance(guard, dict)
                 else None
             ),
+            "row_quarantine_validation": row_quarantine_validation,
             "sequence_epoch": (
                 collector.get("sequence_epoch") if isinstance(collector, dict) else None
             ),
@@ -4980,7 +5221,12 @@ def _micro_context(
     )
     source_contract_ready = bool(
         exclusion_manifest_status == "loaded"
-        and canary_status in {"not_requested", "loaded_pass"}
+        and canary_status
+        in {
+            "not_requested",
+            "loaded_pass",
+            "loaded_pass_with_row_quarantine",
+        }
         and shard_discovery_error_count == 0
         and read_diagnostics["malformed_relevant_json_line_count"] == 0
         and read_diagnostics["source_file_read_error_count"] == 0
@@ -5351,6 +5597,7 @@ def _anchor_result(
     partition_loaded: bool,
     source_contract_gap: str | None,
     clean_baseline_allowed: bool,
+    registration_receipt_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     rows = sorted(window["rows"], key=lambda row: row["timestamp"])
     depth_points_by_epoch: dict[int, list[dict[str, Any]]] = defaultdict(list)
@@ -5372,6 +5619,11 @@ def _anchor_result(
         status = source_contract_gap
     elif anchor.get("owner_lifecycle_contract_valid") is False:
         status = "owner_anchor_contract_invalid"
+    elif (
+        isinstance(registration_receipt_binding, Mapping)
+        and registration_receipt_binding.get("source_gap_reason")
+    ):
+        status = str(registration_receipt_binding["source_gap_reason"])
     elif _invalid_contract_count_for_scope(
         symbol_inventory,
         expected_venues=anchor.get("expected_venues") or (),
@@ -6429,6 +6681,11 @@ def _anchor_result(
                 and anchor.get("owner_policy_tuning_eligible") is not False
             ),
             "base_owner_tuning_effect": False,
+            "runtime_registration_receipt_binding": (
+                dict(registration_receipt_binding)
+                if isinstance(registration_receipt_binding, Mapping)
+                else None
+            ),
             "metrics": metrics,
         }
     )
@@ -6590,6 +6847,9 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "session": result.get("session"),
         "expected_venues": result.get("expected_venues"),
         "expected_session_buckets": result.get("expected_session_buckets"),
+        "runtime_registration_receipt_binding": result.get(
+            "runtime_registration_receipt_binding"
+        ),
         "anchor_at": result.get("anchor_at"),
         "entry_state": str(result.get("entry_state") or "UNSPECIFIED"),
         "source_entry_event_id": result.get("source_entry_event_id"),
@@ -6610,6 +6870,9 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "owner_requested_quantity": result.get("owner_requested_quantity"),
         "owner_target_price": result.get("owner_target_price"),
         "owner_round_trip_cost_pct": result.get("owner_round_trip_cost_pct"),
+        "owner_lifecycle_contract_valid": result.get(
+            "owner_lifecycle_contract_valid"
+        ),
         "owner_policy_tuning_eligible": (
             result.get("owner_policy_tuning_eligible") is True
         ),
@@ -7563,13 +7826,25 @@ def _runtime_registration_receipt_status(
     *,
     collection_target_root: Path,
     receipt_root: Path,
+    evaluated_at: datetime | None = None,
 ) -> dict[str, Any]:
     target_day = date.fromisoformat(target_date)
+    evaluation_time = evaluated_at or datetime.now(KST)
+    if evaluation_time.tzinfo is None:
+        evaluation_time = evaluation_time.replace(tzinfo=KST)
+    evaluation_time = evaluation_time.astimezone(KST)
+    evaluation_epoch = evaluation_time.timestamp()
     if target_day < REGISTRATION_RECEIPT_REQUIRED_FROM_DATE:
         return {
             "status": "not_required_before_activation",
             "ready": True,
+            "global_contract_ready": True,
+            "route_isolation_allowed": True,
             "activation_date": REGISTRATION_RECEIPT_REQUIRED_FROM_DATE.isoformat(),
+            "expected_registration_items": [],
+            "complete_registration_items": [],
+            "incomplete_registration_items": [],
+            "incomplete_active_registration_items": [],
             "runtime_effect": False,
         }
     target_manifest = load_exact_date_collection_targets(
@@ -7579,8 +7854,14 @@ def _runtime_registration_receipt_status(
         return {
             "status": "target_manifest_missing_or_invalid",
             "ready": False,
+            "global_contract_ready": False,
+            "route_isolation_allowed": False,
             "target_manifest_status": target_manifest.get("status"),
             "target_manifest_path": target_manifest.get("path"),
+            "expected_registration_items": [],
+            "complete_registration_items": [],
+            "incomplete_registration_items": [],
+            "incomplete_active_registration_items": [],
             "runtime_effect": False,
         }
     expected_items = sorted(
@@ -7615,8 +7896,13 @@ def _runtime_registration_receipt_status(
         return {
             "status": "receipt_missing_or_invalid",
             "ready": False,
+            "global_contract_ready": False,
+            "route_isolation_allowed": False,
             "receipt_path": str(receipt_path),
             "expected_registration_items": expected_items,
+            "complete_registration_items": [],
+            "incomplete_registration_items": expected_items,
+            "incomplete_active_registration_items": required_active_items,
             "runtime_effect": False,
         }
     requested_items_raw = [
@@ -7624,6 +7910,28 @@ def _runtime_registration_receipt_status(
     ]
     requested_items = sorted(set(requested_items_raw))
     item_rows = receipt.get("items") if isinstance(receipt.get("items"), dict) else {}
+    configured_at = _parse_owner_ts(receipt.get("configured_at"))
+    configured_at_epoch = _finite_float(receipt.get("configured_at_epoch"))
+    registration_transport_epoch = receipt.get("registration_transport_epoch")
+    temporal_contract_valid = bool(
+        configured_at is not None
+        and configured_at.astimezone(KST).date() == target_day
+        and configured_at_epoch is not None
+        and configured_at_epoch > 0
+        and abs(configured_at.timestamp() - configured_at_epoch) <= 1.0
+        and configured_at_epoch <= evaluation_epoch + 1.0
+        and isinstance(registration_transport_epoch, int)
+        and not isinstance(registration_transport_epoch, bool)
+        and registration_transport_epoch >= 0
+        and isinstance(receipt.get("source"), str)
+        and bool(str(receipt.get("source") or "").strip())
+    )
+
+    def epoch_is_on_target_day(value: float) -> bool:
+        try:
+            return datetime.fromtimestamp(value, KST).date() == target_day
+        except (OverflowError, OSError, ValueError):
+            return False
 
     def item_receipt_complete(item: str) -> bool:
         row = item_rows.get(item)
@@ -7634,6 +7942,13 @@ def _runtime_registration_receipt_status(
         counts = row.get("receipt_count_by_type")
         transport_epochs = row.get("transport_epochs")
         max_gap_sec = _finite_float(row.get("max_interarrival_gap_sec"))
+        first_epochs = [
+            _finite_float(first_by_type.get(value))
+            if isinstance(first_by_type, dict)
+            else None
+            for value in ("0B", "0D")
+        ]
+        last_epoch = _finite_float(row.get("last_received_at_epoch"))
 
         def positive_int(value: Any) -> bool:
             return bool(
@@ -7653,16 +7968,22 @@ def _runtime_registration_receipt_status(
             row.get("required_realtime_types") == ["0B", "0D"]
             and received_types >= {"0B", "0D"}
             and isinstance(first_by_type, dict)
-            and all(
-                (_finite_float(first_by_type.get(value)) or 0.0) > 0.0
-                for value in ("0B", "0D")
-            )
+            and all(value is not None and value > 0 for value in first_epochs)
+            and configured_at_epoch is not None
+            and all(value >= configured_at_epoch for value in first_epochs)
+            and all(value <= evaluation_epoch + 1.0 for value in first_epochs)
+            and all(epoch_is_on_target_day(value) for value in first_epochs)
             and isinstance(counts, dict)
             and all(positive_int(counts.get(value)) for value in ("0B", "0D"))
-            and (_finite_float(row.get("last_received_at_epoch")) or 0.0) > 0.0
+            and last_epoch is not None
+            and last_epoch >= max(first_epochs)
+            and last_epoch <= evaluation_epoch + 1.0
+            and epoch_is_on_target_day(last_epoch)
             and isinstance(transport_epochs, list)
             and bool(transport_epochs)
             and all(nonnegative_int(value) for value in transport_epochs)
+            and isinstance(registration_transport_epoch, int)
+            and all(value >= registration_transport_epoch for value in transport_epochs)
             and max_gap_sec is not None
             and max_gap_sec >= 0.0
         )
@@ -7686,18 +8007,43 @@ def _runtime_registration_receipt_status(
     )
     exact_manifest_match = requested_items_raw == expected_items
     item_census_match = sorted(item_rows) == expected_items
-    ready = bool(
+    global_contract_ready = bool(
         authority_valid
+        and temporal_contract_valid
         and exact_manifest_match
         and item_census_match
-        and not incomplete_active_items
+    )
+    ready = bool(global_contract_ready and not incomplete_active_items)
+    incomplete_item_set = set(incomplete_items)
+    complete_items = [
+        item for item in expected_items if item not in incomplete_item_set
+    ]
+    status = (
+        "complete"
+        if ready and not incomplete_items
+        else (
+            "complete_with_prospective_route_gaps"
+            if ready
+            else (
+                "active_route_receipt_incomplete"
+                if global_contract_ready
+                else "contract_invalid"
+            )
+        )
     )
     return {
-        "status": "complete" if ready else "incomplete_or_contract_invalid",
+        "status": status,
         "ready": ready,
+        "global_contract_ready": global_contract_ready,
+        "route_isolation_allowed": global_contract_ready,
         "receipt_path": str(receipt_path),
         "target_manifest_path": target_manifest.get("path"),
         "authority_valid": authority_valid,
+        "temporal_contract_valid": temporal_contract_valid,
+        "configured_at": receipt.get("configured_at"),
+        "configured_at_epoch": configured_at_epoch,
+        "evaluated_at": evaluation_time.isoformat(),
+        "registration_transport_epoch": registration_transport_epoch,
         "exact_manifest_match": exact_manifest_match,
         "item_census_match": item_census_match,
         "expected_registration_item_count": len(expected_items),
@@ -7705,6 +8051,8 @@ def _runtime_registration_receipt_status(
         "requested_registration_item_count": len(requested_items),
         "complete_registration_item_count": len(expected_items)
         - len(incomplete_items),
+        "expected_registration_items": expected_items,
+        "complete_registration_items": complete_items,
         "incomplete_registration_items": incomplete_items,
         "incomplete_active_registration_items": incomplete_active_items,
         "max_interarrival_gap_sec": (receipt.get("summary") or {}).get(
@@ -7713,6 +8061,86 @@ def _runtime_registration_receipt_status(
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+    }
+
+
+def _registration_item_for_exact_route(symbol: Any, venue: Any) -> str:
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_venue = str(venue or "").strip().upper()
+    if len(normalized_symbol) != 6 or not normalized_symbol.isdigit():
+        return ""
+    if normalized_venue == "KRX":
+        return normalized_symbol
+    if normalized_venue == "NXT":
+        return f"{normalized_symbol}_NX"
+    if normalized_venue == "SOR":
+        return f"{normalized_symbol}_AL"
+    return ""
+
+
+def _runtime_registration_receipt_binding(
+    anchor: Mapping[str, Any], receipt: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Bind receipt quality to one exact symbol-route anchor.
+
+    A missing or structurally invalid receipt remains a date-wide source gap.
+    Once the manifest, authority, and item census are valid, however, a quiet
+    item that did not receive both 0B and 0D is isolatable. Only anchors that
+    require that exact item are excluded; unrelated routes remain eligible.
+    """
+
+    if receipt.get("status") == "not_required_before_activation":
+        return {
+            "status": "not_required_before_activation",
+            "expected_registration_items": [],
+            "complete_registration_items": [],
+            "incomplete_registration_items": [],
+            "source_gap_reason": None,
+            "route_isolated": False,
+        }
+    if receipt.get("global_contract_ready") is not True:
+        return {
+            "status": "global_receipt_contract_blocked",
+            "expected_registration_items": [],
+            "complete_registration_items": [],
+            "incomplete_registration_items": [],
+            "source_gap_reason": None,
+            "route_isolated": False,
+        }
+    expected_items = sorted(
+        {
+            item
+            for venue in anchor.get("expected_venues") or ()
+            if (item := _registration_item_for_exact_route(anchor.get("symbol"), venue))
+        }
+    )
+    manifest_items = set(receipt.get("expected_registration_items") or ())
+    complete_items = set(receipt.get("complete_registration_items") or ())
+    not_registered = [item for item in expected_items if item not in manifest_items]
+    incomplete = [item for item in expected_items if item not in complete_items]
+    source_gap_reason = (
+        "micro_runtime_registration_receipt_exact_route_incomplete"
+        if not expected_items or incomplete
+        else None
+    )
+    return {
+        "status": (
+            "exact_route_complete"
+            if source_gap_reason is None
+            else (
+                "exact_route_not_registered"
+                if not expected_items or not_registered
+                else "exact_route_receipt_incomplete"
+            )
+        ),
+        "expected_registration_items": expected_items,
+        "complete_registration_items": [
+            item for item in expected_items if item in complete_items
+        ],
+        "incomplete_registration_items": incomplete,
+        "not_registered_items": not_registered,
+        "source_gap_reason": source_gap_reason,
+        "route_isolated": source_gap_reason is not None,
     }
 
 
@@ -7746,6 +8174,7 @@ def build_report(
         target_date,
         collection_target_root=collection_target_root,
         receipt_root=runtime_root / "scalp_micro_reversion_registration_receipt",
+        evaluated_at=generated,
     )
     canary_snapshot_path = resolve_target_canary_snapshot(
         target_date=target_day,
@@ -7809,7 +8238,10 @@ def build_report(
                                 if micro_source.get("source_contract_ready") is not True
                                 else (
                                     "micro_runtime_registration_receipt_missing_or_incomplete"
-                                    if registration_receipt.get("ready") is not True
+                                    if registration_receipt.get(
+                                        "global_contract_ready"
+                                    )
+                                    is not True
                                     else None
                                 )
                             )
@@ -7819,17 +8251,22 @@ def build_report(
             )
         )
     )
-    results = [
-        _anchor_result(
-            anchor,
-            micro_inventory[anchor["symbol"]],
-            windows[anchor["anchor_id"]],
-            partition_loaded=micro_source["partition_status"] == "loaded",
-            source_contract_gap=source_contract_gap,
-            clean_baseline_allowed=clean_baseline_allowed,
+    results: list[dict[str, Any]] = []
+    for anchor in anchors:
+        receipt_binding = _runtime_registration_receipt_binding(
+            anchor, registration_receipt
         )
-        for anchor in anchors
-    ]
+        results.append(
+            _anchor_result(
+                anchor,
+                micro_inventory[anchor["symbol"]],
+                windows[anchor["anchor_id"]],
+                partition_loaded=micro_source["partition_status"] == "loaded",
+                source_contract_gap=source_contract_gap,
+                clean_baseline_allowed=clean_baseline_allowed,
+                registration_receipt_binding=receipt_binding,
+            )
+        )
     micro_entry_confirmation = _micro_entry_confirmation_summary(
         results,
         widget_sources=widget_sources,
@@ -8060,12 +8497,35 @@ def build_report(
     objective_alignment = _lifecycle_objective_summary(results)
     rolling_policy_source_contract = {
         "ready": bool(clean_baseline_allowed and source_contract_gap is None),
+        "status": (
+            "ready_with_exact_route_exclusions"
+            if source_contract_gap is None
+            and any(
+                (row.get("runtime_registration_receipt_binding") or {}).get(
+                    "route_isolated"
+                )
+                is True
+                for row in results
+            )
+            else (
+                "ready"
+                if clean_baseline_allowed and source_contract_gap is None
+                else "blocked"
+            )
+        ),
         "gap": source_contract_gap,
         "recovery": _rolling_source_contract_recovery(source_contract_gap),
         "required": (
             "clean_baseline_exact_date_partition_manifest_canary_stream_and_runtime_registration_receipt_contract"
         ),
         "runtime_registration_receipt": registration_receipt,
+        "exact_route_excluded_anchor_count": sum(
+            (row.get("runtime_registration_receipt_binding") or {}).get(
+                "route_isolated"
+            )
+            is True
+            for row in results
+        ),
     }
     research_input_report = {
         "schema": REPORT_SCHEMA,

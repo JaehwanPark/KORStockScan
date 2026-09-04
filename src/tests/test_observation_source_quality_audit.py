@@ -2866,6 +2866,17 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
                 record_id=5,
             ),
             _event(
+                "entry_ai_price_canary_skip_order",
+                {
+                    "entry_order_flow_status": "unknown",
+                    "entry_context_quality": "partial",
+                    "entry_context_missing_features": "order_flow_pressure",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                record_id=8,
+            ),
+            _event(
                 "entry_ai_price_feature_packet_source_block",
                 {
                     "entry_order_flow_status": "unknown",
@@ -2914,6 +2925,24 @@ def test_observation_source_quality_audit_reviews_20260722_explicit_unknown_prov
     )
     assert reviewed["entry_ai_price_canary_applied"]["entry_order_flow_status"] == (
         "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        reviewed["entry_ai_price_canary_skip_order"]["entry_order_flow_status"]
+        == "reviewed_entry_order_flow_not_available"
+    )
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            "entry_ai_price_canary_skip_order",
+            "entry_order_flow_status",
+            "unknown",
+            {
+                "entry_context_quality": "partial",
+                "entry_context_missing_features": "order_flow_pressure",
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+            },
+        )
+        is None
     )
     assert (
         reviewed["entry_ai_price_feature_packet_source_block"][
@@ -3266,6 +3295,18 @@ def test_observation_source_quality_audit_reviews_20260724_fail_closed_unknown_p
                 record_id=5,
             ),
             _event(
+                "probe_timeout",
+                {
+                    "probe_confirmation_last_state": "UNKNOWN",
+                    "probe_confirmation_count": 0,
+                    "decision_authority": (
+                        "dynamic_entry_price_resolver_p1_post_probe"
+                    ),
+                    "allowed_runtime_apply": False,
+                },
+                record_id=7,
+            ),
+            _event(
                 "probe_continuation_deferred",
                 {
                     **order_forbidden,
@@ -3338,6 +3379,9 @@ def test_observation_source_quality_audit_reviews_20260724_fail_closed_unknown_p
         "reviewed_canonical_unknown_flow_state"
     )
     assert reviewed["probe_filled"]["probe_confirmation_last_state"] == (
+        "reviewed_probe_confirmation_not_evaluated"
+    )
+    assert reviewed["probe_timeout"]["probe_confirmation_last_state"] == (
         "reviewed_probe_confirmation_not_evaluated"
     )
     assert reviewed["probe_continuation_deferred"]["post_probe_direction_state"] == (

@@ -420,6 +420,9 @@ def test_bundled_pre_anchor_path_is_scope_checked_and_replayed():
         "entry_turn_pre_anchor_bbo_ring"
     )
     assert report["exact_ws_bbo_join_coverage_pct"] == 100.0
+    assert report["runtime_instrumentation_reflected"] is True
+    assert report["pre_anchor_bbo_path_event_count"] == 1
+    assert report["pre_anchor_bbo_path_observation_count"] == 5
     assert report["bbo_extraction_gap_counts"] == {}
 
 
@@ -480,12 +483,12 @@ def test_exact_bbo_freshness_uses_persisted_reference_epoch_not_emit_delay():
         bid=1000,
         ask=1001,
     )
-    row["fields"]["market_data_effective_quote_observed_epoch"] = (
-        observed_at.timestamp()
-    )
-    row["fields"]["market_data_effective_quote_reference_epoch"] = (
-        observed_at.timestamp()
-    )
+    row["fields"][
+        "market_data_effective_quote_observed_epoch"
+    ] = observed_at.timestamp()
+    row["fields"][
+        "market_data_effective_quote_reference_epoch"
+    ] = observed_at.timestamp()
 
     observation, reason = mod._executable_ws_bbo(row)
 
@@ -1050,6 +1053,10 @@ def test_rising_missed_report_connects_projected_milestones_to_turn_replay(
             bid=100.3,
             ask=100.4,
         ),
+        _event(
+            "rising_missed_entry_turn_pre_anchor_bbo_path",
+            start + timedelta(seconds=20),
+        ),
         _event("fixture_bbo", start + timedelta(seconds=25), bid=101.0, ask=101.1),
     ]
     pipeline_path = tmp_path / "pipeline.jsonl"
@@ -1085,8 +1092,20 @@ def test_rising_missed_report_connects_projected_milestones_to_turn_replay(
     ]
     assert len(coverage_orders) == 1
     assert coverage_orders[0]["implementation_status"] == (
-        "implemented_but_waiting_sample"
+        "implemented_source_quality_contract_waiting_sample"
     )
     assert coverage_orders[0]["implementation_provenance"]["sample_status"] == (
-        "waiting_next_pid_natural_sample"
+        "runtime_reflected_source_quality_floor_pending"
+    )
+    assert (
+        coverage_orders[0]["implementation_provenance"][
+            "runtime_instrumentation_reflected"
+        ]
+        is True
+    )
+    assert (
+        coverage_orders[0]["implementation_provenance"][
+            "pre_anchor_bbo_path_event_count"
+        ]
+        == 1
     )

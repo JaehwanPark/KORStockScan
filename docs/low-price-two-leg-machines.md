@@ -2,7 +2,7 @@
 
 ## Scope
 
-Forty-five independent regular-session profiles implement the user-selected active
+Fifty-three independent regular-session profiles implement the user-selected active
 scope. Every profile owns its process, lock, durable state,
 authority artifact, and exact broker-order ledger.
 
@@ -25,34 +25,42 @@ authority artifact, and exact broker-order ledger.
 | `doosan_enerbility_late_morning` | 두산에너빌리티 `034020` | SOR regular | 10:15 through 10:34 |
 | `kakao_midday` | 카카오 `035720` | SOR regular | 13:20 through 13:39 |
 | `sk_telecom_afternoon` | SK텔레콤 `017670` | SOR regular | 14:25 through 14:34 |
-| `samsung_ea_morning` | 삼성E&A `028050` | SOR regular | 09:45 through 09:59 |
 | `samsung_ea_late_morning` | 삼성E&A `028050` | SOR regular | 10:05 through 10:14 |
-| `samsung_ea_afternoon` | 삼성E&A `028050` | SOR regular | 14:05 through 14:34 |
+| `samsung_ea_afternoon` | 삼성E&A `028050` | SOR regular | 14:20 through 14:34 |
+| `samsung_ea_morning` | 삼성E&A `028050` | SOR regular | 09:45 through 09:59 |
 | `sk_telecom_late_morning` | SK텔레콤 `017670` | SOR regular | 10:45 through 10:54 |
-| `hanse_morning` | 한세실업 `105630` | SOR regular | 09:15 through 09:44 |
 | `hanse_afternoon` | 한세실업 `105630` | SOR regular | 14:20 through 14:29 |
-| `cj_cgv_midday` | CJ CGV `079160` | SOR regular | 13:20 through 13:49 |
+| `hanse_morning` | 한세실업 `105630` | SOR regular | 09:30 through 09:44 |
+| `cj_cgv_midday` | CJ CGV `079160` | SOR regular | 13:20 through 13:29 |
 | `cj_cgv_afternoon` | CJ CGV `079160` | SOR regular | 14:15 through 14:24 |
-| `tym_midday` | TYM `002900` | SOR regular | 13:15 through 13:44 |
+| `tym_midday` | TYM `002900` | SOR regular | 13:15 through 13:34 |
 | `tym_afternoon` | TYM `002900` | SOR regular | 14:30 through 14:39 |
-| `cj_cgv_late_morning` | CJ CGV `079160` | SOR regular | 10:00 through 10:09 |
-| `kepco_late_morning` | 한국전력 `015760` | SOR regular | 10:00 through 10:59 |
-| `kepco_midday` | 한국전력 `015760` | SOR regular | 13:30 through 13:49 |
-| `hanse_late_morning` | 한세실업 `105630` | SOR regular | 10:00 through 10:19 |
-| `hanse_midday` | 한세실업 `105630` | SOR regular | 13:20 through 13:49 |
-| `nhn_afternoon` | NHN `181710` | SOR regular | 14:00 through 14:40 |
 | `youngone_morning` | 영원무역 `111770` | SOR regular | 09:20 through 09:39 |
-| `youngone_afternoon` | 영원무역 `111770` | SOR regular | 14:30 through 14:40 |
+| `hanse_midday` | 한세실업 `105630` | SOR regular | 13:20 through 13:49 |
+| `hanse_late_morning` | 한세실업 `105630` | SOR regular | 10:00 through 10:19 |
+| `kepco_midday` | 한국전력 `015760` | SOR regular | 13:30 through 13:49 |
+| `kepco_late_morning` | 한국전력 `015760` | SOR regular | 10:00 through 10:59 |
+| `youngone_afternoon` | 영원무역 `111770` | SOR regular | 14:30 through 14:39 |
+| `cj_cgv_late_morning` | CJ CGV `079160` | SOR regular | 10:00 through 10:09 |
+| `nhn_afternoon` | NHN `181710` | SOR regular | 14:00 through 14:40 |
 | `sk_eternix_late_morning` | SK이터닉스 `475150` | SOR regular | 10:45 through 10:54 |
-| `mirae_asset_late_morning` | 미래에셋증권 `006800` | SOR regular | 10:00 through 10:29 |
+| `mirae_asset_late_morning` | 미래에셋증권 `006800` | SOR regular | 10:00 through 10:19 |
 | `kepco_morning` | 한국전력 `015760` | SOR regular | 09:35 through 09:59 |
 | `nhn_morning` | NHN `181710` | SOR regular | 09:40 through 09:49 |
-| `nhn_late_morning` | NHN `181710` | SOR regular | 10:30 through 10:49 |
-| `sd_biosensor_morning` | 에스디바이오센서 `137310` | SOR regular | 09:30 through 09:49 |
+| `nhn_late_morning` | NHN `181710` | SOR regular | 10:35 through 10:49 |
+| `sd_biosensor_morning` | 에스디바이오센서 `137310` | SOR regular | 09:30 through 09:39 |
 | `sd_biosensor_late_morning` | 에스디바이오센서 `137310` | SOR regular | 10:40 through 10:59 |
 | `sd_biosensor_midday` | 에스디바이오센서 `137310` | SOR regular | 13:25 through 13:54 |
-| `doosan_enerbility_afternoon` | 두산에너빌리티 `034020` | SOR regular | 14:10 through 14:29 |
-| `samsung_ea_midday` | 삼성E&A `028050` | SOR regular | 13:20 through 13:49 |
+| `doosan_enerbility_afternoon` | 두산에너빌리티 `034020` | SOR regular | 14:20 through 14:29 |
+| `samsung_ea_midday` | 삼성E&A `028050` | SOR regular | 13:25 through 13:44 |
+| `sk_telecom_morning` | SK텔레콤 `017670` | SOR regular | 09:10 through 09:29 |
+| `fan_ocean_morning` | 팬오션 `028670` | SOR regular | 09:35 through 09:59 |
+| `fan_ocean_late_morning` | 팬오션 `028670` | SOR regular | 10:05 through 10:14 |
+| `samsung_heavy_late_morning` | 삼성중공업 `010140` | SOR regular | 10:15 through 10:34 |
+| `cj_cgv_morning` | CJ CGV `079160` | SOR regular | 09:10 through 09:39 |
+| `fan_ocean_afternoon` | 팬오션 `028670` | SOR regular | 14:05 through 14:40 |
+| `youngone_midday` | 영원무역 `111770` | SOR regular | 13:15 through 13:44 |
+| `sk_telecom_midday` | SK텔레콤 `017670` | SOR regular | 13:15 through 13:24 |
 
 The original 30-day calibration and 16-day untouched holdout selected independent entry
 contracts: Samsung Heavy midday uses 30 bars, drawdown at least 0.75%, and
@@ -463,7 +471,7 @@ profile may propose one tightening axis for the next PREOPEN:
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all forty-eight profiles and the existing Samsung regular machines, at most one
+Across all fifty-three profiles and the existing Samsung regular machines, at most one
 profile/machine and one entry axis may change per day.  The Samsung candidate is
 produced first; if it owns a valid mutation, or its same-date candidate is
 invalid, the lower-price family carries all policies forward. Quantity is fixed
@@ -514,6 +522,14 @@ to canonical SHA-256
 Target dates from 2026-08-28 through 2026-08-30 continue to resolve the
 immutable 46-profile generation; existing orders and held custody retain their
 original signal-date policy snapshot across the 48-profile transition.
+
+The 2026-09-04 user-approved recommendation set becomes the 2026-09-07
+53-profile generation. It replaces eight existing profile policies and adds
+five time-extension profiles. PREOPEN revalidates the frozen 13-row evidence
+and its source-report hash, while the five new timers are enabled separately.
+Every new signal still uses two independent ten-share legs. Existing orders
+and held inventory retain their signal-date policy and are never canceled,
+resized, or retargeted by this generation transition.
 
 ## Daily implementation-candidate recommendation
 

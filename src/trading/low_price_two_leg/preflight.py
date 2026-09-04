@@ -22,6 +22,7 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILE_REVISION_20260827_EFFECTIVE_DATE,
     PROFILE_REVISION_20260828_EFFECTIVE_DATE,
     PROFILE_REVISION_20260831_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260907_EFFECTIVE_DATE,
     PROFILES,
     MachineProfile,
     get_profile,
@@ -268,11 +269,53 @@ RECOMMENDATION_20260828_PROFILE_MAP = {
     "fan_ocean_morning": "candidate_028670_morning",
     "fan_ocean_late_morning": "candidate_028670_late_morning",
 }
+RECOMMENDATION_20260904_EVIDENCE_PATH = (
+    DATA_DIR / "config" / "low_price_two_leg_expanded_profile_evidence_2026-09-04.json"
+)
+RECOMMENDATION_20260904_EVIDENCE_SHA256 = (
+    "aee6d554c5aeaaf69484ac9e90d978174f66adca2a7b5cc88108c8686e3339bd"
+)
+RECOMMENDATION_20260904_SOURCE_SHA256 = (
+    "4ce2c4070f38048e322e1244afe82bdae3a806fc4ac1b948168652d02975d2d1"
+)
+RECOMMENDATION_20260904_PROFILE_MAP = {
+    "sd_biosensor_midday": "logic_sd_biosensor_midday",
+    "nhn_late_morning": "logic_nhn_late_morning",
+    "nhn_afternoon": "logic_nhn_afternoon",
+    "samsung_ea_midday": "logic_samsung_ea_midday",
+    "hanwha_ocean_late_morning": "logic_hanwha_ocean_late_morning",
+    "samsung_heavy_late_morning": "existing_010140_late_morning",
+    "samsung_ea_afternoon": "logic_samsung_ea_afternoon",
+    "doosan_enerbility_afternoon": "logic_doosan_enerbility_afternoon",
+    "hanse_morning": "logic_hanse_morning",
+    "cj_cgv_morning": "existing_079160_morning",
+    "fan_ocean_afternoon": "existing_028670_afternoon",
+    "youngone_midday": "existing_111770_midday",
+    "sk_telecom_midday": "existing_017670_midday",
+}
 
 
 def _research_evidence_contract(
     profile: MachineProfile, *, target_date: date | None = None
 ) -> dict:
+    recommendation_20260904_profile_id = (
+        RECOMMENDATION_20260904_PROFILE_MAP.get(profile.profile_id)
+        if target_date is None
+        or target_date >= PROFILE_REVISION_20260907_EFFECTIVE_DATE
+        else None
+    )
+    if recommendation_20260904_profile_id:
+        return {
+            "path": RECOMMENDATION_20260904_EVIDENCE_PATH,
+            "sha256": RECOMMENDATION_20260904_EVIDENCE_SHA256,
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v6",
+            "start_date": "2026-06-05",
+            "end_date": "2026-09-04",
+            "trading_date_count": 64,
+            "window": "2026-06-05_through_2026-09-04_64_trading_days",
+            "report_profile_id": recommendation_20260904_profile_id,
+            "source_report_sha256": RECOMMENDATION_20260904_SOURCE_SHA256,
+        }
     recommendation_20260828_profile_id = (
         RECOMMENDATION_20260828_PROFILE_MAP.get(profile.profile_id)
         if target_date is None

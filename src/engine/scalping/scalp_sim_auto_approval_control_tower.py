@@ -160,8 +160,8 @@ def _rising_missed_prior_contract_ok(payload: dict[str, Any]) -> bool:
     return (
         payload.get("report_type") == "rising_missed_classifier_prior"
         and payload.get("runtime_effect") is False
-        and payload.get("actual_order_submitted") in {None, False}
-        and payload.get("broker_order_forbidden") in {None, True}
+        and payload.get("actual_order_submitted") is False
+        and payload.get("broker_order_forbidden") is True
         and payload.get("allowed_runtime_apply") is False
         and payload.get("decision_authority")
         == "rising_missed_classifier_prior_source_only"
@@ -201,11 +201,48 @@ def _rising_missed_prior_metric(row: dict[str, Any]) -> dict[str, Any]:
         row.get("window_metrics") if isinstance(row.get("window_metrics"), dict) else {}
     )
     metric = metrics.get(window) if isinstance(metrics.get(window), dict) else {}
+    joined_sample = (
+        metric.get("joined_sample")
+        if metric.get("joined_sample") not in (None, "")
+        else metric.get("sample")
+    )
     return {
         "selected_window": window or None,
         "ev_pct": metric.get("ev_pct"),
-        "joined_sample": metric.get("joined_sample") or metric.get("sample"),
+        "ev_metric": metric.get("ev_metric"),
+        "joined_sample": joined_sample,
+        "sample_floor_met": row.get("selected_window_sample_floor_met") is True,
+        "ev_metric_authoritative": row.get("selected_ev_metric_authoritative") is True,
     }
+
+
+def _rising_missed_priority_row_contract_ok(
+    recommendation: str, metric: dict[str, Any]
+) -> bool:
+    if recommendation not in {"positive_prior", "recheck_prior"}:
+        return True
+    window = str(metric.get("selected_window") or "")
+    try:
+        joined_sample = int(float(metric.get("joined_sample") or 0))
+        ev_pct = float(metric.get("ev_pct"))
+    except (TypeError, ValueError):
+        return False
+    if (
+        window not in rising_missed_classifier_prior.CONFIRMATION_WINDOWS
+        or joined_sample <= 0
+        or ev_pct <= 0
+    ):
+        return False
+    if recommendation == "positive_prior":
+        return bool(
+            joined_sample
+            >= rising_missed_classifier_prior.CONFIRMED_PRIOR_MIN_JOINED_SAMPLE
+            and metric.get("ev_metric")
+            == rising_missed_classifier_prior.CONFIRMED_PRIOR_EV_METRIC
+            and metric.get("sample_floor_met") is True
+            and metric.get("ev_metric_authoritative") is True
+        )
+    return True
 
 
 def _rising_missed_prior_seed_id(row: dict[str, Any], prefix: dict[str, str]) -> str:
@@ -245,7 +282,10 @@ def _rising_missed_prior_policy_item(
             "reason": row.get("reason"),
             "selected_window": metric.get("selected_window"),
             "ev_pct": metric.get("ev_pct"),
+            "ev_metric": metric.get("ev_metric"),
             "joined_sample": metric.get("joined_sample"),
+            "sample_floor_met": metric.get("sample_floor_met"),
+            "ev_metric_authoritative": metric.get("ev_metric_authoritative"),
             "observable_prefix": (
                 row.get("observable_prefix")
                 if isinstance(row.get("observable_prefix"), dict)
@@ -255,6 +295,11 @@ def _rising_missed_prior_policy_item(
             "allowed_runtime_apply": False,
         }
         observation_lanes.append(lane)
+        if not _rising_missed_priority_row_contract_ok(recommendation, metric):
+            lane["active_seed_excluded_reason"] = (
+                "rising_missed_priority_row_contract_invalid"
+            )
+            continue
         if not prefix_key:
             continue
         if recommendation in {"source_quality_blocked", "loss_filter", "quality_risk"}:

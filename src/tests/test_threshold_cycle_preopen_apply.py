@@ -190,7 +190,6 @@ def test_limit_down_watch_preopen_selects_exact_date_hashed_sim_and_live(
     decision, env = mod._limit_down_watch_standalone_decision(
         source_date,
         target_date,
-        selected_live_candidates=[],
     )
 
     assert decision["sim_selected"] is True
@@ -208,7 +207,7 @@ def test_limit_down_watch_preopen_selects_exact_date_hashed_sim_and_live(
     assert {item["status"] for item in audit["mode_audits"]} == {"pass"}
 
 
-def test_limit_down_watch_preopen_keeps_sim_but_blocks_same_entry_stage_live(
+def test_limit_down_watch_preopen_keeps_sim_but_blocks_competing_entry_live_owner(
     tmp_path, monkeypatch
 ):
     source_date = "2026-09-03"
@@ -283,7 +282,7 @@ def test_limit_down_watch_preopen_keeps_sim_but_blocks_same_entry_stage_live(
     decision, env = mod._limit_down_watch_standalone_decision(
         source_date,
         target_date,
-        selected_live_candidates=[{"family": "another_entry", "stage": "entry"}],
+        entry_live_owner_family="another_entry",
     )
 
     assert decision["sim_selected"] is True
@@ -291,6 +290,42 @@ def test_limit_down_watch_preopen_keeps_sim_but_blocks_same_entry_stage_live(
     assert env["KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ENABLED"] == "true"
     assert env["KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED"] == "false"
     assert "same_stage_owner_conflict:another_entry" in decision["blockers"]
+
+
+def test_limit_down_watch_owner_resolution_only_ignores_allowlisted_controls():
+    selected = [
+        {
+            "family": mod.SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
+            "stage": "entry",
+            "calibration_state": "operator_locked",
+        },
+        {
+            "family": "score65_74_recovery_probe",
+            "stage": "entry",
+            "operator_runtime_env_lock": {"lock_id": "standing-probe"},
+        },
+        {
+            "family": mod.ENTRY_OPPORTUNITY_RECHECK_FAMILY,
+            "stage": "entry",
+            "calibration_state": "operator_locked",
+        },
+    ]
+
+    assert mod._limit_down_watch_entry_live_owner_family(selected) == ""
+    assert (
+        mod._limit_down_watch_entry_live_owner_family(
+            selected,
+            [
+                {
+                    "family": "future_entry_live_bucket",
+                    "stage": "entry",
+                    "calibration_state": "operator_locked",
+                    "operator_runtime_env_lock": {"applied": True},
+                }
+            ],
+        )
+        == "future_entry_live_bucket"
+    )
 
 
 def test_entry_cancel_wait_only_explicit_operator_lock_turns_off(tmp_path, monkeypatch):

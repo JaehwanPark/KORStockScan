@@ -157,6 +157,8 @@ def _render_markdown(report: Mapping[str, Any]) -> str:
         f"- status: `{report.get('status')}`",
         f"- decision: `{report.get('decision')}`",
         f"- exact request fingerprints: `{report.get('request_count')}`",
+        "- natural_empty_holding_observation: "
+        f"`{report.get('natural_empty_holding_observation')}`",
         f"- provider_call_performed: `{report.get('provider_call_performed')}`",
         "",
         "## Cohorts",
@@ -221,13 +223,19 @@ def build_report(
     ):
         blockers.append("optimizer_prepared_request_hash_binding_mismatch")
 
+    prepared_rows = [
+        row
+        for row in prepared.get("prepared_requests") or []
+        if isinstance(row, Mapping)
+        and str(row.get("stage") or "").lower() == "holding"
+    ]
     holding_optimizer = (
         (optimizer_report.get("stage_optimizers") or {}).get("holding") or {}
         if not blockers
         else {}
     )
     optimizer_cohorts = holding_optimizer.get("cohort_optimizers") or []
-    if not optimizer_cohorts and not blockers:
+    if prepared_rows and not optimizer_cohorts and not blockers:
         blockers.append("holding_optimizer_cohort_missing")
 
     promotion: dict[str, Any] = {}
@@ -244,11 +252,6 @@ def build_report(
             quality.PAYLOAD_DIR, "ai_decision_payloads", [target_date]
         )
 
-    prepared_rows = [
-        row
-        for row in prepared.get("prepared_requests") or []
-        if isinstance(row, Mapping) and str(row.get("stage") or "").lower() == "holding"
-    ]
     cohorts: list[dict[str, Any]] = []
     for optimizer_cohort in optimizer_cohorts:
         if not isinstance(optimizer_cohort, Mapping):
@@ -454,6 +457,9 @@ def build_report(
             row.get("path_status")
             == "intentionally_blocked_with_owner_and_acceptance_test"
             for row in cohorts
+        ),
+        "natural_empty_holding_observation": bool(
+            not prepared_rows and not optimizer_cohorts and not blockers
         ),
         "unclassified_request_path_count": unclassified,
         "blockers": sorted(set(blockers)),

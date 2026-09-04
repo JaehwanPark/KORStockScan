@@ -4622,14 +4622,7 @@ def test_runtime_iteration_targets_demotes_under_10000_scanner_for_heavy_eval():
     ]
 
 
-def test_runtime_iteration_targets_applies_rising_missed_selection_prior_delta(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        kiwoom_sniper_v2,
-        "rising_missed_selection_rank_delta",
-        lambda target: 20.0 if target.get("id") == "positive_prior" else -20.0,
-    )
+def test_runtime_iteration_targets_does_not_apply_source_only_rising_missed_prior():
     targets = [
         {
             "id": "risk_prior",
@@ -4653,7 +4646,7 @@ def test_runtime_iteration_targets_applies_rising_missed_selection_prior_delta(
 
     ordered = kiwoom_sniper_v2._runtime_iteration_targets(targets, now_ts=1600.0)
 
-    assert [target["id"] for target in ordered] == ["positive_prior", "risk_prior"]
+    assert [target["id"] for target in ordered] == ["risk_prior", "positive_prior"]
 
 
 def test_runtime_iteration_targets_prioritizes_due_rising_recheck():

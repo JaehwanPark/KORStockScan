@@ -244,6 +244,31 @@ case "$PROFILE" in
     CONFIRM="028670_LATE_MORNING_TWO_LEG_LIVE"
     INTERVAL_SEC="6"
     ;;
+  samsung_heavy_late_morning)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_SAMSUNG_HEAVY_LATE_MORNING_ENABLED=true
+    CONFIRM="010140_LATE_MORNING_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
+  cj_cgv_morning)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_CJ_CGV_MORNING_ENABLED=true
+    CONFIRM="079160_MORNING_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
+  fan_ocean_afternoon)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_FAN_OCEAN_AFTERNOON_ENABLED=true
+    CONFIRM="028670_AFTERNOON_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
+  youngone_midday)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_YOUNGONE_MIDDAY_ENABLED=true
+    CONFIRM="111770_MIDDAY_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
+  sk_telecom_midday)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_SK_TELECOM_MIDDAY_ENABLED=true
+    CONFIRM="017670_MIDDAY_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
   *)
     echo "unsupported low-price two-leg profile: $PROFILE" >&2
     exit 2

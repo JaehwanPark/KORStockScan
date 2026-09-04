@@ -1209,6 +1209,7 @@ def test_latest_cumulative_blocked_artifact_withdraws_prior_live_policy(
     ready = limit_down_watch_research.build_bounded_live_candidate(
         "2026-08-02",
         {
+            "status": "pass",
             "source_quality_status": "pass",
             "source_quality_preflight_gate": _source_quality_binding("2026-08-02"),
             "policy_cells": [positive_cell],
@@ -1218,6 +1219,7 @@ def test_latest_cumulative_blocked_artifact_withdraws_prior_live_policy(
     blocked = limit_down_watch_research.build_bounded_live_candidate(
         "2026-08-03",
         {
+            "status": "pass",
             "source_quality_status": "pass",
             "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
             "policy_cells": [
@@ -1884,6 +1886,7 @@ def test_sim_policy_is_independent_by_cohort_and_price_band():
     counterfactual = {
         "policy_cells": cells,
         "target_date": "2026-08-03",
+        "status": "pass",
         "source_quality_status": "pass",
         "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
     }
@@ -1901,8 +1904,37 @@ def test_sim_policy_is_independent_by_cohort_and_price_band():
     assert catalog["allowed_runtime_apply"] is False
 
 
+def test_sim_policy_rejects_positive_cell_when_counterfactual_is_not_ready():
+    counterfactual = {
+        "target_date": "2026-08-03",
+        "status": "insufficient_sample",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
+        "policy_cells": [
+            {
+                "policy_key": "single_limit_down|5000_9999",
+                "cohort": "single_limit_down",
+                "price_band": "5000_9999",
+                "sample_count": 5,
+                "observation_date_count": 3,
+                "eligible_for_sim": True,
+                "source_quality_adjusted_ev_pct": 1.0,
+            }
+        ],
+    }
+
+    catalog = limit_down_watch_research.build_sim_policy_catalog(
+        "2026-08-03", counterfactual
+    )
+
+    assert catalog["status"] == "insufficient_sample"
+    assert catalog["active_policy_count"] == 0
+    assert catalog["allowed_sim_apply"] is False
+
+
 def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
     counterfactual = {
+        "status": "pass",
         "source_quality_status": "pass",
         "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
         "policy_cells": [
@@ -1945,10 +1977,43 @@ def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
     assert artifact["allowed_runtime_apply"] is True
 
 
+def test_bounded_live_candidate_rejects_insufficient_counterfactual():
+    counterfactual = {
+        "status": "insufficient_sample",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
+        "policy_cells": [
+            {
+                "policy_key": "near_limit_rebound|5000_9999",
+                "cohort": "near_limit_rebound",
+                "price_band": "5000_9999",
+                "sample_count": 1,
+                "observation_date_count": 1,
+                "source_quality_adjusted_ev_pct": 1.0,
+                "downside_p10_pct": 1.0,
+                "mae_p10_pct": -0.5,
+                "relock_rate_pct": 0.0,
+                "entry_bbo_coverage_pct": 100.0,
+            }
+        ],
+    }
+
+    artifact = limit_down_watch_research.build_bounded_live_candidate(
+        "2026-08-03",
+        counterfactual,
+        _real_attribution_payload("2026-08-03"),
+    )
+
+    assert artifact["status"] == "blocked"
+    assert artifact["ready_candidate_count"] == 0
+    assert artifact["allowed_runtime_apply"] is False
+
+
 def test_bounded_live_candidate_fails_closed_without_source_quality_binding():
     artifact = limit_down_watch_research.build_bounded_live_candidate(
         "2026-08-03",
         {
+            "status": "pass",
             "source_quality_status": "pass",
             "policy_cells": [
                 {

@@ -1,8 +1,9 @@
 """Source-only rising-missed selection prior adapter.
 
-This module consumes the PREOPEN-verified scalp sim policy catalog and returns
-ranking hints for scanner candidate ordering. It never changes order authority,
-thresholds, one-share scout allow/block decisions, or broker guards.
+This module consumes the PREOPEN-verified scalp sim policy catalog and exposes
+diagnostic fields for sim-observation attribution.  The score delta is retained
+for artifact compatibility only; real scanner candidate ordering must not
+consume it.
 """
 
 from __future__ import annotations
@@ -408,5 +409,11 @@ def rising_missed_selection_rank_delta(
     *,
     policy_file: str | os.PathLike[str] | None = None,
 ) -> float:
+    """Return the source-only diagnostic delta stored in report provenance.
+
+    This compatibility helper has no real-scanner consumer.  Sim collection
+    priority is owned by ``active_sim_priority_seeds`` in the verified policy
+    catalog, not by this numeric value.
+    """
     fields = rising_missed_selection_prior_fields(stock, policy_file=policy_file)
     return float(fields.get("rising_missed_selection_score_delta") or 0.0)

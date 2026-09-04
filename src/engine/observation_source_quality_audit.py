@@ -2905,6 +2905,7 @@ def _reviewed_unknown_reason_for_stage_field(
             "blocked_ai_score",
             "entry_ai_price_canary_applied",
             "entry_ai_price_canary_fallback",
+            "entry_ai_price_canary_skip_order",
             "entry_ai_price_feature_packet_source_block",
             "order_bundle_failed",
             "order_bundle_submitted",
@@ -2926,6 +2927,7 @@ def _reviewed_unknown_reason_for_stage_field(
         if str(value or "").strip().lower() != "unknown":
             return False
         if stage in {
+            "entry_ai_price_canary_skip_order",
             "entry_ai_price_feature_packet_source_block",
             "order_bundle_failed",
             "pre_submit_micro_unavailable_block",
@@ -3594,7 +3596,12 @@ def _reviewed_unknown_reason_for_stage_field(
         )
 
     def _is_reviewed_probe_confirmation_not_evaluated() -> bool:
-        if stage not in {"probe_filled", "probe_submitted", "residual_blocked"}:
+        if stage not in {
+            "probe_filled",
+            "probe_submitted",
+            "probe_timeout",
+            "residual_blocked",
+        }:
             return False
         if (
             str(key or "") != "probe_confirmation_last_state"

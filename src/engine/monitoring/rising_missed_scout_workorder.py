@@ -29,6 +29,7 @@ SCALE_IN_FORBIDDEN_USES = [
     "position_cap_release",
     "real_scale_in_submit_approval",
 ]
+OUTCOME_ECONOMIC_INFERENCE_MIN_JOINED_SAMPLE = 10
 
 
 def _safe_float(value: Any) -> float | None:
@@ -1040,7 +1041,7 @@ def _build_operational_workorders(
                 "forbidden_uses": SCALE_IN_FORBIDDEN_USES,
             }
         )
-    if winners:
+    if winners and losers:
         orders.append(
             {
                 "order_id": "order_rising_missed_scout_post_sell_bridge",
@@ -1052,7 +1053,7 @@ def _build_operational_workorders(
                 "mapped_family": "rising_missed_scout_post_sell_bridge",
                 "threshold_family": "rising_missed_scout_post_sell_bridge",
                 "improvement_type": "source_only_operational_workorder",
-                "confidence": "same_day_source_only",
+                "confidence": "same_day_contrast_source_only",
                 "priority": 2,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -1363,6 +1364,21 @@ def _build_operational_workorders(
                 "forbidden_uses": FORBIDDEN_USES,
             }
         )
+    for order in orders:
+        order["runtime_effect"] = False
+        order["allowed_runtime_apply"] = False
+        order["actual_order_submitted"] = False
+        order["broker_order_forbidden"] = True
+        provenance = order.get("implementation_provenance")
+        if not isinstance(provenance, dict):
+            provenance = {}
+        order["implementation_provenance"] = {
+            **provenance,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
     return orders
 
 
@@ -1519,6 +1535,13 @@ def build_report(
             else "complete" if joined_forced_count == len(forced) else "partial"
         )
     )
+    outcome_join_ready = bool(outcomes)
+    outcome_contrast_ready = bool(winners and losers)
+    outcome_economic_inference_ready = bool(
+        outcome_contrast_ready
+        and len(outcomes) >= OUTCOME_ECONOMIC_INFERENCE_MIN_JOINED_SAMPLE
+        and forced_initial_entry_ev_summary.get("net_pnl_unavailable_reason") is None
+    )
     return {
         "schema_version": 1,
         "report_type": "rising_missed_scout_workorder",
@@ -1526,6 +1549,8 @@ def build_report(
         "generated_at": generated_at,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
         "decision_authority": "source_only_operational_workorder",
         "forbidden_uses": FORBIDDEN_USES,
         "metric_contracts": {
@@ -1569,9 +1594,27 @@ def build_report(
                 "metric_role": "source_quality_gate",
                 "decision_authority": "source_only_join_coverage_diagnostic",
                 "window_policy": "same_day_forced_scout_to_post_sell_record_id_join",
-                "sample_floor": "at_least_one_closed_outcome_for_outcome_analysis",
+                "sample_floor": "at_least_one_closed_outcome_for_mechanical_join_observation",
                 "primary_decision_metric": False,
                 "source_quality_gate": "explicit_record_id_join_and_valid_profit_rate",
+                "forbidden_uses": FORBIDDEN_USES,
+            },
+            "outcome_contrast_readiness": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_only_winner_loser_contrast",
+                "window_policy": "same_day_forced_scout_to_post_sell_record_id_join",
+                "sample_floor": "at_least_one_profitable_and_one_loss_or_flat_closed_outcome",
+                "primary_decision_metric": False,
+                "source_quality_gate": "explicit_record_id_join_valid_profit_rate_and_both_outcome_classes",
+                "forbidden_uses": FORBIDDEN_USES,
+            },
+            "outcome_economic_inference_readiness": {
+                "metric_role": "source_quality_gate",
+                "decision_authority": "source_only_economic_inference_gate",
+                "window_policy": "same_day_forced_scout_to_post_sell_record_id_join",
+                "sample_floor": "10_joined_closed_outcomes_with_both_outcome_classes_and_net_cost_fields",
+                "primary_decision_metric": "notional_weighted_ev_pct",
+                "source_quality_gate": "contrast_ready_and_fee_tax_cost_fields_available",
                 "forbidden_uses": FORBIDDEN_USES,
             },
         },
@@ -1581,7 +1624,12 @@ def build_report(
             "forced_scout_with_post_sell_count": joined_forced_count,
             "forced_scout_post_sell_join_coverage_pct": outcome_join_coverage_pct,
             "forced_scout_outcome_coverage_state": outcome_coverage_state,
-            "forced_scout_outcome_analysis_ready": bool(outcomes),
+            "forced_scout_outcome_join_ready": outcome_join_ready,
+            "forced_scout_outcome_contrast_ready": outcome_contrast_ready,
+            "forced_scout_outcome_analysis_ready": outcome_contrast_ready,
+            "forced_scout_outcome_economic_inference_ready": (
+                outcome_economic_inference_ready
+            ),
             "profitable_forced_scout_count": len(winners),
             "loss_or_flat_forced_scout_count": len(losers),
             "winner_profit": _profit_summary(winners),
@@ -1684,6 +1732,9 @@ def write_outputs(
         f"- forced_scout_with_post_sell_count: {summary.get('forced_scout_with_post_sell_count')}",
         f"- forced_scout_post_sell_join_coverage_pct: {summary.get('forced_scout_post_sell_join_coverage_pct')}",
         f"- forced_scout_outcome_coverage_state: {summary.get('forced_scout_outcome_coverage_state')}",
+        f"- forced_scout_outcome_join_ready: {summary.get('forced_scout_outcome_join_ready')}",
+        f"- forced_scout_outcome_contrast_ready: {summary.get('forced_scout_outcome_contrast_ready')}",
+        f"- forced_scout_outcome_economic_inference_ready: {summary.get('forced_scout_outcome_economic_inference_ready')}",
         f"- profitable_forced_scout_count: {summary.get('profitable_forced_scout_count')}",
         f"- loss_or_flat_forced_scout_count: {summary.get('loss_or_flat_forced_scout_count')}",
         f"- winner_avg_profit_rate: {(summary.get('winner_profit') or {}).get('avg_profit_rate')}",

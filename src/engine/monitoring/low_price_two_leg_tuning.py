@@ -123,6 +123,11 @@ PROFILE_FIRST_OPERATIONAL_DATES = {
     "sk_telecom_morning": date(2026, 8, 28),
     "fan_ocean_morning": date(2026, 8, 31),
     "fan_ocean_late_morning": date(2026, 8, 31),
+    "samsung_heavy_late_morning": date(2026, 9, 7),
+    "cj_cgv_morning": date(2026, 9, 7),
+    "fan_ocean_afternoon": date(2026, 9, 7),
+    "youngone_midday": date(2026, 9, 7),
+    "sk_telecom_midday": date(2026, 9, 7),
 }
 TERMINAL_LEG_STATUSES = {"COMPLETE", "NO_FILL"}
 KNOWN_LEG_STATUSES = {

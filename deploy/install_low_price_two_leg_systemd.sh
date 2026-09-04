@@ -105,6 +105,16 @@ UNITS=(
   korstockscan-low-price-two-leg-fan-ocean-morning.timer
   korstockscan-low-price-two-leg-fan-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-fan-ocean-late-morning.timer
+  korstockscan-low-price-two-leg-samsung-heavy-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-samsung-heavy-late-morning.timer
+  korstockscan-low-price-two-leg-cj-cgv-morning-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-morning.timer
+  korstockscan-low-price-two-leg-fan-ocean-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-fan-ocean-afternoon.timer
+  korstockscan-low-price-two-leg-youngone-midday-preflight.timer
+  korstockscan-low-price-two-leg-youngone-midday.timer
+  korstockscan-low-price-two-leg-sk-telecom-midday-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-midday.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -203,6 +213,16 @@ TIMERS=(
   korstockscan-low-price-two-leg-fan-ocean-morning.timer
   korstockscan-low-price-two-leg-fan-ocean-late-morning-preflight.timer
   korstockscan-low-price-two-leg-fan-ocean-late-morning.timer
+  korstockscan-low-price-two-leg-samsung-heavy-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-samsung-heavy-late-morning.timer
+  korstockscan-low-price-two-leg-cj-cgv-morning-preflight.timer
+  korstockscan-low-price-two-leg-cj-cgv-morning.timer
+  korstockscan-low-price-two-leg-fan-ocean-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-fan-ocean-afternoon.timer
+  korstockscan-low-price-two-leg-youngone-midday-preflight.timer
+  korstockscan-low-price-two-leg-youngone-midday.timer
+  korstockscan-low-price-two-leg-sk-telecom-midday-preflight.timer
+  korstockscan-low-price-two-leg-sk-telecom-midday.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -263,4 +283,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed forty-eight lower-price profile timers; retired Daewoo units were removed"
+echo "installed fifty-three lower-price profile timers; retired Daewoo units were removed"

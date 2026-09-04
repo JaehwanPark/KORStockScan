@@ -25,12 +25,26 @@ if ! [[ "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
+run_entry_batch() {
+  nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+    --date "$TARGET_DATE" \
+    --max-new-requests-per-cohort "$MAX_NEW_PER_COHORT" \
+    --candidate-workers "$CANDIDATE_WORKERS" \
+    --predecessor-wait-sec "$PREDECESSOR_WAIT_SEC" \
+    --write
+}
+
 refresh_main_ai_consumer() {
+  # The optimizer consumes the first batch's new results. Re-publish the batch
+  # from its checkpoint so its selection-source hash binds that refreshed
+  # optimizer generation before the exact-hash consumer validates the chain.
   nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer \
     --target-date "$TARGET_DATE" \
     --write \
     --print-summary && \
+  run_entry_batch && \
   nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.main_ai_holding_base_replay_batch \
     --date "$TARGET_DATE" \
@@ -47,13 +61,7 @@ refresh_main_ai_consumer() {
 for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
   batch_rc=0
   failure_stage="entry_batch"
-  if nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" \
-    --max-new-requests-per-cohort "$MAX_NEW_PER_COHORT" \
-    --candidate-workers "$CANDIDATE_WORKERS" \
-    --predecessor-wait-sec "$PREDECESSOR_WAIT_SEC" \
-    --write; then
+  if run_entry_batch; then
     if refresh_main_ai_consumer; then
       exit 0
     else

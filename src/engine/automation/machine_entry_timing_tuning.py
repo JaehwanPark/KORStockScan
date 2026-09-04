@@ -1910,6 +1910,7 @@ def _report_sample_floor_assessment(
         for row in target_actual_rows
         if row.get("classification") == "source_quality_blocked"
     ]
+    target_eligible_anchor_count = len(target_actual_rows) - len(target_blocked_rows)
     gap_reasons: set[str] = set()
     for row in target_blocked_rows:
         raw_reasons = row.get("source_gap_reasons")
@@ -1923,6 +1924,38 @@ def _report_sample_floor_assessment(
         str((cohort.get("sample_floor_assessment") or {}).get("state") or "")
         for cohort in cohorts
     ]
+    receipt_gap_reasons = {
+        "micro_runtime_registration_receipt_missing_or_incomplete",
+        "micro_runtime_registration_receipt_exact_route_incomplete",
+    }
+    repairable_anchor_contract_gap_reasons = {
+        "actual_signal_decision_timestamp_missing",
+        "source_entry_event_id_missing",
+        "decision_anchor_timestamp_invalid",
+        "owner_anchor_contract_invalid",
+        "micro_scope_source_contract_invalid",
+        "micro_stream_source_contract_invalid",
+        "micro_source_exclusion_manifest_missing_or_invalid",
+    }
+    receipt_gap_present = bool(gap_reasons & receipt_gap_reasons)
+    repairable_receipt_companion_gaps = sorted(
+        gap_reasons & repairable_anchor_contract_gap_reasons
+    )
+    invalid_owner_contract_anchor_count = sum(
+        row.get("owner_lifecycle_contract_valid") is False
+        for row in target_blocked_rows
+    )
+    policy_ineligible_anchor_count = sum(
+        row.get("owner_policy_tuning_eligible") is False
+        for row in target_blocked_rows
+    )
+    immutable_source_date_quarantine_eligible = bool(
+        target_actual_rows
+        and len(target_blocked_rows) == len(target_actual_rows)
+        and receipt_gap_present
+        and not repairable_receipt_companion_gaps
+        and invalid_owner_contract_anchor_count == 0
+    )
     if winner is not None:
         state = "candidate_ready"
         blocker_class = None
@@ -1938,23 +1971,31 @@ def _report_sample_floor_assessment(
             else "source_quality_blocked"
         )
         blocker_class = "source_quality"
-        next_action = "repair_exact_entry_anchor_market_join_and_rerun"
-    elif "source_quality_blocked" in cohort_states:
-        state = "source_quality_blocked"
-        blocker_class = "source_quality"
-        next_action = "repair_blocked_exact_scope_source_and_rerun"
-    elif "eligibility_contract_gap" in cohort_states:
-        state = "eligibility_contract_gap"
-        blocker_class = "source_quality"
-        next_action = "repair_exact_scope_eligibility_lineage_before_waiting"
-    elif "outcome_or_executable_gap" in cohort_states:
-        state = "terminal_or_right_censored_gap"
-        blocker_class = "terminal_outcome"
-        next_action = "reconcile_terminal_or_executable_pair_before_waiting"
+        next_action = (
+            "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+            if immutable_source_date_quarantine_eligible
+            else "repair_exact_entry_anchor_market_join_and_rerun"
+        )
     elif not target_actual_rows:
         state = "no_natural_sample"
         blocker_class = "sample_floor"
         next_action = "continue_exact_date_collection_without_imputation"
+    elif "outcome_or_executable_gap" in cohort_states:
+        state = "terminal_or_right_censored_gap"
+        blocker_class = "terminal_outcome"
+        next_action = "reconcile_terminal_or_executable_pair_before_waiting"
+    elif "natural_sample_wait" in cohort_states:
+        state = "natural_sample_wait"
+        blocker_class = "sample_floor"
+        next_action = "continue_exact_scope_collection_and_recheck_projection"
+    elif "eligibility_contract_gap" in cohort_states:
+        state = "partial_scope_eligibility_gap"
+        blocker_class = "sample_floor"
+        next_action = "repair_blocked_scopes_while_preserving_eligible_inflow"
+    elif "source_quality_blocked" in cohort_states:
+        state = "partial_scope_source_quality_gap"
+        blocker_class = "sample_floor"
+        next_action = "repair_blocked_scopes_while_preserving_eligible_inflow"
     else:
         state = "natural_sample_wait"
         blocker_class = "sample_floor"
@@ -1992,7 +2033,14 @@ def _report_sample_floor_assessment(
         "blocker_class": blocker_class,
         "target_actual_entry_anchor_count": len(target_actual_rows),
         "target_source_quality_blocked_anchor_count": len(target_blocked_rows),
+        "target_source_quality_eligible_anchor_count": target_eligible_anchor_count,
         "target_source_gap_reasons": sorted(gap_reasons),
+        "immutable_source_date_quarantine_eligible": (
+            immutable_source_date_quarantine_eligible
+        ),
+        "repairable_receipt_companion_gaps": repairable_receipt_companion_gaps,
+        "invalid_owner_contract_anchor_count": invalid_owner_contract_anchor_count,
+        "policy_ineligible_anchor_count": policy_ineligible_anchor_count,
         "cohort_state_counts": {
             value: cohort_states.count(value) for value in sorted(set(cohort_states))
         },

@@ -506,6 +506,37 @@ def _machine_entry_timing_postclose_contract_status(
     )
 
     issues: list[str] = []
+    sample_floor_assessment = (
+        report.get("sample_floor_assessment")
+        if isinstance(report.get("sample_floor_assessment"), dict)
+        else {}
+    )
+    shortage_classification_status = str(
+        sample_floor_assessment.get("shortage_classification_status") or "not_reported"
+    )
+    shortage_class = sample_floor_assessment.get("shortage_class")
+    shortage_id = sample_floor_assessment.get("shortage_id")
+    shortage_next_action = sample_floor_assessment.get("next_action")
+    structural_shortage = bool(
+        shortage_classification_status == "classified"
+        and shortage_class == "structural_population_exhaustion"
+    )
+    immutable_source_date_quarantine = bool(
+        structural_shortage
+        and sample_floor_assessment.get(
+            "immutable_source_date_quarantine_eligible"
+        )
+        is True
+        and shortage_next_action
+        == "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+    )
+    if structural_shortage and (
+        not isinstance(shortage_id, str)
+        or not shortage_id.strip()
+        or not isinstance(shortage_next_action, str)
+        or not shortage_next_action.strip()
+    ):
+        issues.append("structural_shortage_contract_incomplete")
     effective_date = _next_krx_trading_day(target_date)
     if not report:
         issues.append("report_missing_or_invalid")
@@ -564,6 +595,29 @@ def _machine_entry_timing_postclose_contract_status(
         "runtime_effect": bool(loaded is not None and (loaded.get("scopes") or {})),
         "baseline_immediate": bool(loaded is not None and not loaded.get("scopes")),
         "effective_date": effective_date,
+        "sample_floor_state": sample_floor_assessment.get("state"),
+        "shortage_classification_status": shortage_classification_status,
+        "shortage_class": shortage_class,
+        "shortage_id": shortage_id,
+        "shortage_next_action": shortage_next_action,
+        "source_date_quarantined": immutable_source_date_quarantine,
+        "waiting_resolution_status": (
+            "terminal_source_date_quarantine"
+            if immutable_source_date_quarantine
+            else (
+                "requires_structural_repair"
+                if structural_shortage
+                else (
+                    "time_resolvable"
+                    if shortage_class == "time_resolvable_shortage"
+                    else (
+                        "classification_evidence_incomplete"
+                        if shortage_classification_status == "blocked_missing_evidence"
+                        else "not_applicable_or_not_reported"
+                    )
+                )
+            )
+        ),
     }
 
 
@@ -8354,6 +8408,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         if isinstance(report.get("warning_followup_summary"), dict)
         else {}
     )
+    machine_entry_timing = (
+        report.get("machine_entry_timing_postclose")
+        if isinstance(report.get("machine_entry_timing_postclose"), dict)
+        else {}
+    )
     gap_provenance = (
         report.get("gap_provenance")
         if isinstance(report.get("gap_provenance"), dict)
@@ -8493,6 +8552,14 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- scanner_lookup_attention_status: `{scanner_lookup_attention.get('status') or '-'}`",
         f"- scanner_lookup_attention_promotion_state: `{scanner_lookup_attention.get('promotion_state') or '-'}`",
         f"- scanner_lookup_attention_allowed_runtime_apply: `{scanner_lookup_attention.get('allowed_runtime_apply')}`",
+        "",
+        "## Machine Entry Timing Waiting Classification",
+        f"- contract_status: `{machine_entry_timing.get('status') or '-'}`",
+        f"- sample_floor_state: `{machine_entry_timing.get('sample_floor_state') or '-'}`",
+        f"- waiting_resolution_status: `{machine_entry_timing.get('waiting_resolution_status') or '-'}`",
+        f"- shortage_class: `{machine_entry_timing.get('shortage_class') or '-'}`",
+        f"- shortage_id: `{machine_entry_timing.get('shortage_id') or '-'}`",
+        f"- next_action: `{machine_entry_timing.get('shortage_next_action') or '-'}`",
         "",
         "## Warning Follow-Up Summary",
         f"- status: `{warning_followup.get('status') or '-'}`",

@@ -188,6 +188,107 @@ def test_holding_base_manifest_fails_closed_on_optimizer_hash_mismatch(
     assert report["provider_call_performed"] is False
 
 
+def test_holding_base_manifest_accepts_exact_date_natural_empty_observation(
+    monkeypatch, tmp_path: Path
+):
+    target_date = "2026-09-04"
+    optimizer_path = tmp_path / "optimizer.json"
+    prepared_path = tmp_path / "prepared.json"
+    prepared_body = {
+        "schema": "main_ai_quality_micro_prepared_requests_v1",
+        "target_date": target_date,
+        "status": "prepared_requests_ready",
+        "prepared_requests": [],
+        **_source_only(),
+    }
+    prepared = {
+        **prepared_body,
+        "artifact_content_sha256": optimizer._canonical_sha256(prepared_body),
+    }
+    optimizer_body = _optimizer_report(
+        target_date,
+        source_bindings={
+            "prepared_request_sha256": optimizer._canonical_sha256(prepared)
+        },
+    )
+    optimizer_body["stage_optimizers"] = {}
+    optimizer_body["artifact_content_sha256"] = optimizer._canonical_sha256(
+        {
+            key: value
+            for key, value in optimizer_body.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+    optimizer_path.write_text(json.dumps(optimizer_body))
+    prepared_path.write_text(json.dumps(prepared))
+    monkeypatch.setattr(
+        optimizer, "report_paths", lambda _date: (optimizer_path, tmp_path / "x.md")
+    )
+    monkeypatch.setattr(
+        holding.quality,
+        "micro_reversion_prepared_request_path",
+        lambda _date: prepared_path,
+    )
+    monkeypatch.setattr(
+        holding.quality, "control_path", lambda _date: tmp_path / "control.json"
+    )
+    monkeypatch.setattr(
+        holding.quality,
+        "load_promotion_for_target_date",
+        lambda _date: ({}, None, None),
+    )
+    monkeypatch.setattr(holding.quality, "_load_json", lambda _path: {})
+    monkeypatch.setattr(holding.coverage, "_load_rows", lambda *_args: [])
+
+    report = holding.build_report(target_date)
+
+    assert report["status"] == "ready_source_only_holding_base_manifest"
+    assert report["natural_empty_holding_observation"] is True
+    assert report["request_count"] == 0
+    assert report["cohorts"] == []
+    assert report["blockers"] == []
+    assert report["provider_call_performed"] is False
+
+
+def test_holding_base_manifest_rejects_missing_optimizer_cohort_with_requests(
+    monkeypatch, tmp_path: Path
+):
+    target_date = "2026-09-04"
+    optimizer_path = tmp_path / "optimizer.json"
+    prepared_path = tmp_path / "prepared.json"
+    prepared = _prepared_report(target_date)
+    optimizer_body = _optimizer_report(
+        target_date,
+        source_bindings={
+            "prepared_request_sha256": optimizer._canonical_sha256(prepared)
+        },
+    )
+    optimizer_body["stage_optimizers"] = {}
+    optimizer_body["artifact_content_sha256"] = optimizer._canonical_sha256(
+        {
+            key: value
+            for key, value in optimizer_body.items()
+            if key != "artifact_content_sha256"
+        }
+    )
+    optimizer_path.write_text(json.dumps(optimizer_body))
+    prepared_path.write_text(json.dumps(prepared))
+    monkeypatch.setattr(
+        optimizer, "report_paths", lambda _date: (optimizer_path, tmp_path / "x.md")
+    )
+    monkeypatch.setattr(
+        holding.quality,
+        "micro_reversion_prepared_request_path",
+        lambda _date: prepared_path,
+    )
+
+    report = holding.build_report(target_date)
+
+    assert report["status"] == "blocked_source_contract"
+    assert report["natural_empty_holding_observation"] is False
+    assert report["blockers"] == ["holding_optimizer_cohort_missing"]
+
+
 def test_factorial_router_retires_exact_r0_cells_and_connects_only_p1d0():
     trace_id = "holding-trace"
     optimizer_report = _optimizer_report("2026-09-03")
@@ -359,3 +460,95 @@ def test_consumer_report_keeps_runtime_blocked_and_detects_unclassified(
         report["request_paths"]["optional_micro_enriched_2x2"]["path_status"]
         == consumer.BLOCKED
     )
+
+
+def test_consumer_isolates_optional_micro_contract_from_base_paths(
+    monkeypatch, tmp_path: Path
+):
+    target_date = "2026-09-04"
+    paths = {
+        "optimizer": tmp_path / "optimizer.json",
+        "prepared": tmp_path / "prepared.json",
+        "bridge": tmp_path / "bridge.json",
+        "materialized": tmp_path / "materialized.json",
+        "execution": tmp_path / "execution.json",
+    }
+    prepared = _prepared_report(target_date)
+    bridge = {
+        "schema": "micro_reversion_ai_quality_bridge_v1",
+        "target_date": target_date,
+        "status": "warning",
+        "rows": [],
+        **_source_only(),
+    }
+    optimizer_report = _optimizer_report(
+        target_date,
+        source_bindings={
+            "prepared_request_sha256": optimizer._canonical_sha256(prepared),
+            "micro_bridge_sha256": optimizer._canonical_sha256(bridge),
+        },
+    )
+    paths["optimizer"].write_text(json.dumps(optimizer_report))
+    paths["prepared"].write_text(json.dumps(prepared))
+    paths["bridge"].write_text(json.dumps(bridge))
+    monkeypatch.setattr(
+        optimizer,
+        "report_paths",
+        lambda _date: (paths["optimizer"], tmp_path / "optimizer.md"),
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_prepared_request_path",
+        lambda _date: paths["prepared"],
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_bridge_report_path",
+        lambda _date: paths["bridge"],
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_materialized_request_path",
+        lambda _date: paths["materialized"],
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_execution_result_path",
+        lambda _date: paths["execution"],
+    )
+    connected = {
+        "path_status": consumer.CONNECTED,
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "owner": "test-owner",
+        "acceptance_test": "test-pass",
+    }
+    monkeypatch.setattr(
+        consumer, "_entry_base_paths", lambda *_args, **_kwargs: ([connected], {})
+    )
+    monkeypatch.setattr(
+        consumer, "_holding_base_paths", lambda *_args, **_kwargs: ([], {})
+    )
+    monkeypatch.setattr(
+        consumer,
+        "_factorial_cells",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid optional input must not enter factorial routing")
+        ),
+    )
+
+    report = consumer.build_report(target_date)
+
+    assert report["status"] == "ready_source_only_consumer_closure"
+    assert report["entry_followup_terminal_ready"] is True
+    assert report["blockers"] == []
+    assert report["optional_input_blockers"] == [
+        "micro_bridge_artifact_missing_or_invalid"
+    ]
+    optional_path = report["request_paths"]["optional_micro_enriched_2x2"]
+    assert optional_path["path_status"] == consumer.BLOCKED
+    assert optional_path["cell_count"] == 1
+    assert optional_path["cells"][0]["owner"] == (
+        "MainAIMicroReversionSourceContract"
+    )
+    assert report["runtime_effect"] is False

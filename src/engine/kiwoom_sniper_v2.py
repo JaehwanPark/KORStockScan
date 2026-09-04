@@ -64,9 +64,6 @@ from src.engine.risk.manual_control_exclusion import (
     evaluate_main_bot_control_exclusion,
     normalize_manual_control_exclusion_code,
 )
-from src.engine.scalping.rising_missed_selection_prior import (
-    rising_missed_selection_rank_delta,
-)
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
     LIMIT_DOWN_ROTATION,
@@ -6226,7 +6223,6 @@ def _runtime_iteration_targets(targets, now_ts):
                 0.0,
             )
             positive_delta = _scanner_positive_delta_value(target)
-            selection_delta = rising_missed_selection_rank_delta(target)
             watch_budget_score = _scanner_common_watch_budget_priority_score(target)
             owner_rank = 0
             if _scalping_watch_budget_reallocation_enabled():
@@ -6252,7 +6248,6 @@ def _runtime_iteration_targets(targets, now_ts):
                 owner_rank,
                 under_10000_priority,
                 -watch_budget_score,
-                -selection_delta,
                 0 if last_full_eval <= 0 else 1,
                 -positive_delta,
                 (

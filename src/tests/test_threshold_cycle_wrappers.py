@@ -1942,6 +1942,17 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "src.engine.scalping.main_ai_holding_base_replay_batch" in runner
     assert "src.engine.scalping.main_ai_prompt_consumer" in runner
     assert "refresh_main_ai_consumer" in runner
+    assert "run_entry_batch" in runner
+    optimizer_refresh_index = runner.index(
+        "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
+    )
+    rebound_batch_index = runner.index(
+        "run_entry_batch", optimizer_refresh_index
+    )
+    holding_manifest_index = runner.index(
+        "-m src.engine.scalping.main_ai_holding_base_replay_batch"
+    )
+    assert optimizer_refresh_index < rebound_batch_index < holding_manifest_index
     assert "--max-new-requests-per-cohort" in runner
     assert "--candidate-workers" in runner
     assert "--write" in runner

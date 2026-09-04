@@ -375,6 +375,19 @@ def _structural_blockers(verification: dict[str, Any], issues: list[str]) -> lis
             blockers.append(
                 "requires_policy_lineage_fix:active_sim_priority_unknown_key_observed"
             )
+    machine_timing = verification.get("machine_entry_timing_postclose")
+    if (
+        isinstance(machine_timing, dict)
+        and machine_timing.get("waiting_resolution_status")
+        == "requires_structural_repair"
+    ):
+        shortage_id = str(machine_timing.get("shortage_id") or "").strip()
+        blocker = (
+            f"requires_code_fix:{shortage_id}"
+            if shortage_id
+            else "requires_code_fix:machine_entry_timing_structural_shortage"
+        )
+        blockers.append(blocker)
     issue_set = set(str(item) for item in issues if str(item))
     if "source_quality_hard_block_handoff_missing" in issue_set:
         blockers.append("requires_code_fix:source_quality_hard_block_handoff_missing")
@@ -385,8 +398,21 @@ def _structural_blockers(verification: dict[str, Any], issues: list[str]) -> lis
     return list(dict.fromkeys(blockers))
 
 
-def _structural_next_actions(blockers: list[str]) -> list[str]:
+def _structural_next_actions(
+    blockers: list[str], verification: dict[str, Any]
+) -> list[str]:
     actions: list[str] = []
+    machine_timing = verification.get("machine_entry_timing_postclose")
+    machine_declared_action = (
+        str(machine_timing.get("shortage_next_action") or "").strip()
+        if isinstance(machine_timing, dict)
+        else ""
+    )
+    allowed_machine_actions = {
+        "repair_exact_entry_anchor_market_join_and_rerun",
+        "repair_blocked_exact_scope_source_and_rerun",
+        "repair_exact_scope_eligibility_lineage_before_waiting",
+    }
     for blocker in blockers:
         if blocker.startswith("requires_code_fix:source_quality"):
             actions.append(
@@ -396,6 +422,14 @@ def _structural_next_actions(blockers: list[str]) -> list[str]:
             actions.append(
                 "fix_active_sim_priority_seed_lineage_and_verify_no_inactive_runtime_key"
             )
+        elif blocker.startswith("requires_code_fix:machine_entry_timing:"):
+            actions.append(
+                machine_declared_action
+                if machine_declared_action in allowed_machine_actions
+                else "classify_machine_entry_source_repairability_before_rerun"
+            )
+        elif blocker == "requires_code_fix:machine_entry_timing_structural_shortage":
+            actions.append("repair_machine_entry_timing_shortage_contract_and_rerun")
     return list(dict.fromkeys(actions))
 
 
@@ -1387,6 +1421,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- root_cause: `{report.get('root_cause')}`",
         f"- selected_recovery_action: `{report.get('selected_recovery_action')}`",
         f"- full_wrapper_rerun_used: `{report.get('full_wrapper_rerun_used')}`",
+        "- machine_entry_timing_source_date_quarantined: "
+        f"`{report.get('machine_entry_timing_source_date_quarantined')}`",
+        "- machine_entry_timing_quarantine_next_action: "
+        f"`{report.get('machine_entry_timing_quarantine_next_action')}`",
         f"- attempts: `{len(report.get('attempts') or [])}`",
         f"- dry_run: `{report.get('dry_run')}`",
         "",
@@ -1549,7 +1587,9 @@ def build_postclose_done_controller(
     final_status = str(final_verifier.get("status") or "missing")
     final_issues = _flatten_issues(final_verifier)
     structural_blockers = _structural_blockers(final_verifier, final_issues)
-    structural_next_actions = _structural_next_actions(structural_blockers)
+    structural_next_actions = _structural_next_actions(
+        structural_blockers, final_verifier
+    )
     latest_failed_tail_stage = _latest_failed_tail_stage(
         target_date
     ) or _tail_stage_from_actions(actions_done)
@@ -1570,9 +1610,24 @@ def build_postclose_done_controller(
         if item.get("action") != "rerun_threshold_cycle_postclose"
         and item.get("command")
     ]
+    machine_timing = final_verifier.get("machine_entry_timing_postclose")
+    machine_source_date_quarantined = bool(
+        isinstance(machine_timing, dict)
+        and machine_timing.get("waiting_resolution_status")
+        == "terminal_source_date_quarantine"
+        and machine_timing.get("source_date_quarantined") is True
+    )
     root_cause_items = list(
         dict.fromkeys(
-            observed_root_causes or final_issues or [f"verifier_status={final_status}"]
+            observed_root_causes
+            or final_issues
+            or structural_blockers
+            or (
+                ["machine_entry_timing_exact_source_date_quarantined"]
+                if machine_source_date_quarantined
+                else []
+            )
+            or [f"verifier_status={final_status}"]
         )
     )
     root_cause = ",".join(root_cause_items)
@@ -1596,7 +1651,9 @@ def build_postclose_done_controller(
             )
         )
 
-    if _is_done_verifier_status(target_date, final_verifier, final_issues) and not (
+    if structural_blockers:
+        status = "blocked_structural_contract_gap"
+    elif _is_done_verifier_status(target_date, final_verifier, final_issues) and not (
         require_codex_completed and not dry_run and not runner_completed
     ):
         status = "done"
@@ -1607,8 +1664,6 @@ def build_postclose_done_controller(
         status = "dry_run_planned"
     elif require_codex_completed and not dry_run and not runner_completed:
         status = "blocked_uncompleted_implementation"
-    elif structural_blockers:
-        status = "blocked_structural_contract_gap"
     elif blocked_reasons and _has_non_recoverable_issue(blocked_reasons):
         status = "blocked_non_recoverable"
     elif any(str(reason).startswith("verifier_status=") for reason in blocked_reasons):
@@ -1643,6 +1698,14 @@ def build_postclose_done_controller(
             for item in structural_blockers
         ),
         "structural_next_actions": structural_next_actions,
+        "machine_entry_timing_source_date_quarantined": (
+            machine_source_date_quarantined
+        ),
+        "machine_entry_timing_quarantine_next_action": (
+            machine_timing.get("shortage_next_action")
+            if machine_source_date_quarantined and isinstance(machine_timing, dict)
+            else None
+        ),
         "require_codex_completed": require_codex_completed,
         "max_attempts": max_attempts,
         "predecessor_wait_sec": predecessor_wait_sec,

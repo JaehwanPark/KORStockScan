@@ -3686,6 +3686,39 @@ def _entry_live_tuning_owner_family(*selected_groups: list[dict[str, Any]]) -> s
     return ""
 
 
+def _limit_down_watch_entry_live_owner_family(
+    *selected_groups: list[dict[str, Any]],
+) -> str:
+    """Resolve only verified-compatible entry controls away from Limit-down.
+
+    Unlike the general entry-owner resolver, this intentionally does not exempt
+    an unknown family merely because it is operator-locked.  New entry families
+    therefore remain a same-stage conflict until their manipulation point and
+    cohort separation are explicitly reviewed and allowlisted here.
+    """
+
+    compatible_entry_controls = {
+        LIMIT_DOWN_WATCH_FAMILY,
+        AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
+        SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
+        "score65_74_recovery_probe",
+        SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
+        EARLY_ACCEL_RECHECK_FAMILY,
+        ENTRY_OPPORTUNITY_RECHECK_FAMILY,
+        AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
+        PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
+        WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
+    }
+    for group in selected_groups:
+        for item in group or []:
+            if not isinstance(item, dict) or str(item.get("stage") or "") != "entry":
+                continue
+            family = str(item.get("family") or "").strip()
+            if family and family not in compatible_entry_controls:
+                return family
+    return ""
+
+
 def _close_scalping_scanner_real_source_guard_for_live_owner(
     *,
     selected: list[dict[str, Any]],
@@ -6500,10 +6533,16 @@ def _limit_down_watch_standalone_decision(
     source_date: str,
     target_date: str,
     *,
-    selected_live_candidates: list[dict[str, Any]],
+    entry_live_owner_family: str = "",
     include_families: set[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    """Create an exact-date PREOPEN handoff for limit-down sim/live policies."""
+    """Create an exact-date PREOPEN handoff for limit-down sim/live policies.
+
+    The caller separates a true entry tuning owner from explicitly allowlisted
+    source guards and bounded rechecks.  Reuse that resolved owner here so
+    compatible controls do not make the limit-down candidate-source lane
+    permanently unreachable while unknown entry families still fail closed.
+    """
 
     sim_path = (
         LIMIT_DOWN_SIM_POLICY_DIR
@@ -6534,14 +6573,12 @@ def _limit_down_watch_standalone_decision(
     family_included = rollout_active and (
         include_families is None or LIMIT_DOWN_WATCH_FAMILY in include_families
     )
-    entry_conflicts = sorted(
-        {
-            str(item.get("family") or "unknown")
-            for item in selected_live_candidates
-            if isinstance(item, dict)
-            and str(item.get("stage") or "") == "entry"
-            and str(item.get("family") or "") != LIMIT_DOWN_WATCH_FAMILY
-        }
+    resolved_entry_live_owner = str(entry_live_owner_family or "").strip()
+    entry_conflicts = (
+        [resolved_entry_live_owner]
+        if resolved_entry_live_owner
+        and resolved_entry_live_owner != LIMIT_DOWN_WATCH_FAMILY
+        else []
     )
     sim_selected = bool(
         family_included and source_fresh and not preflight_blocked and sim_valid
@@ -6600,6 +6637,8 @@ def _limit_down_watch_standalone_decision(
         {
             "family": LIMIT_DOWN_WATCH_FAMILY,
             "stage": "entry",
+            "manipulation_point": "scalping_scanner_candidate_source_admission",
+            "cohort_tag": "limit_down_rotation",
             "family_type": "bounded_live_with_sim_observation",
             "selected": sim_selected or live_selected,
             "sim_selected": sim_selected,
@@ -6628,6 +6667,7 @@ def _limit_down_watch_standalone_decision(
             "sim_policy_sha256": _file_sha256(sim_path),
             "live_policy_file": str(live_path),
             "live_policy_sha256": _file_sha256(live_path),
+            "entry_live_owner_family": resolved_entry_live_owner or None,
             "entry_stage_conflicts": entry_conflicts,
             "blockers": list(dict.fromkeys(blockers)),
             "env_overrides": env_overrides,
@@ -6942,6 +6982,12 @@ def build_preopen_apply_manifest(
                 selected,
                 runtime_bridge_selected,
             )
+            limit_down_entry_live_owner_family = (
+                _limit_down_watch_entry_live_owner_family(
+                    selected,
+                    runtime_bridge_selected,
+                )
+            )
             holding_exit_live_owner_family = _holding_exit_live_owner_family(
                 selected,
                 runtime_bridge_selected,
@@ -7036,11 +7082,7 @@ def build_preopen_apply_manifest(
             ) = _limit_down_watch_standalone_decision(
                 report_source_date,
                 target_date,
-                selected_live_candidates=[
-                    *selected,
-                    *runtime_bridge_selected,
-                    *swing_selected,
-                ],
+                entry_live_owner_family=limit_down_entry_live_owner_family,
                 include_families=include_families,
             )
             env_overrides = {

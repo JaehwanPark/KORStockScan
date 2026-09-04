@@ -2399,6 +2399,111 @@ def test_postclose_done_controller_classifies_structural_source_quality_gap(
     assert "Structural Blockers" in md_path.read_text(encoding="utf-8")
 
 
+def test_postclose_done_controller_does_not_hide_machine_structural_shortage(
+    monkeypatch, tmp_path
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    verification = _pass_verification()
+    verification["machine_entry_timing_postclose"] = {
+        "status": "pass",
+        "waiting_resolution_status": "requires_structural_repair",
+        "shortage_id": (
+            "machine_entry_timing:all_exact_scopes:entry_confirmation_delay"
+        ),
+        "shortage_next_action": "repair_exact_entry_anchor_market_join_and_rerun",
+    }
+    _write_json(
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
+        verification,
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "blocked_structural_contract_gap"
+    assert report["final_verifier_status"] == "pass"
+    assert report["structural_blockers"] == [
+        "requires_code_fix:machine_entry_timing:all_exact_scopes:"
+        "entry_confirmation_delay"
+    ]
+    assert report["structural_next_actions"] == [
+        "repair_exact_entry_anchor_market_join_and_rerun"
+    ]
+    assert report["requires_code_fix"] is True
+
+
+def test_machine_structural_action_preserves_allowlisted_repair_action():
+    actions = mod._structural_next_actions(
+        [
+            "requires_code_fix:machine_entry_timing:all_exact_scopes:"
+            "entry_confirmation_delay"
+        ],
+        {
+            "machine_entry_timing_postclose": {
+                "shortage_next_action": (
+                    "repair_exact_entry_anchor_market_join_and_rerun"
+                )
+            }
+        },
+    )
+
+    assert actions == [
+        "repair_exact_entry_anchor_market_join_and_rerun"
+    ]
+
+
+def test_postclose_done_controller_closes_immutable_receipt_quarantine(
+    monkeypatch, tmp_path
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    verification = _pass_verification()
+    verification["machine_entry_timing_postclose"] = {
+        "status": "pass",
+        "waiting_resolution_status": "terminal_source_date_quarantine",
+        "source_date_quarantined": True,
+        "shortage_id": (
+            "machine_entry_timing:all_exact_scopes:entry_confirmation_delay"
+        ),
+        "shortage_next_action": (
+            "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+        ),
+    }
+    _write_json(
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
+        verification,
+    )
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03",
+        max_attempts=1,
+        command_runner=lambda cmd, env=None: 0,
+    )
+
+    assert report["status"] == "done"
+    assert report["structural_blockers"] == []
+    assert report["requires_code_fix"] is False
+    assert report["machine_entry_timing_source_date_quarantined"] is True
+    assert report["machine_entry_timing_quarantine_next_action"] == (
+        "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+    )
+    assert report["root_cause"] == (
+        "machine_entry_timing_exact_source_date_quarantined"
+    )
+
+
 def test_postclose_done_controller_classifies_active_priority_lineage_gap(
     monkeypatch, tmp_path
 ):

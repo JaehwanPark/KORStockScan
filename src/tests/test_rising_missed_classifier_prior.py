@@ -281,6 +281,92 @@ def test_prior_report_merges_daily_rolling_mtd_and_blocks_child_conflict(tmp_pat
     )
     assert report["runtime_effect"] is False
     assert report["allowed_runtime_apply"] is False
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+
+
+def test_thin_or_fallback_positive_prior_is_sim_recheck_not_confirmed_positive():
+    prior = mod._new_prior(mod._empty_prefix())
+    prior["lineage_status"] = {"lineage_blockers": {}}
+    prior["window_metrics"] = {
+        "rolling10d": {
+            "joined_sample": 1,
+            "ev_pct": 2.0,
+            "ev_metric": "source_quality_adjusted_ev_pct",
+        },
+        "rolling5d": {
+            "joined_sample": 15,
+            "ev_pct": 1.0,
+            "ev_metric": "equal_weight_avg_profit_pct_fallback",
+        },
+    }
+
+    mod._classify_prior(prior)
+
+    assert prior["selected_window"] == "rolling10d"
+    assert prior["recommendation"] == "recheck_prior"
+    assert prior["confidence"] == "low"
+    assert prior["selected_window_sample_floor_met"] is False
+    assert prior["selected_ev_metric_authoritative"] is True
+
+
+def test_mature_authoritative_shorter_window_beats_thin_long_window():
+    prior = mod._new_prior(mod._empty_prefix())
+    prior["lineage_status"] = {"lineage_blockers": {}}
+    prior["window_metrics"] = {
+        "rolling10d": {
+            "joined_sample": 1,
+            "ev_pct": 2.0,
+            "ev_metric": "source_quality_adjusted_ev_pct",
+        },
+        "rolling5d": {
+            "joined_sample": 10,
+            "ev_pct": 0.8,
+            "ev_metric": "source_quality_adjusted_ev_pct",
+        },
+    }
+
+    mod._classify_prior(prior)
+
+    assert prior["selected_window"] == "rolling5d"
+    assert prior["recommendation"] == "positive_prior"
+    assert prior["selected_window_sample_floor_met"] is True
+
+
+def test_explicit_zero_join_cannot_fall_back_to_unjoined_sample():
+    metric = mod._bucket_metric(
+        {
+            "sample": 20,
+            "joined_sample": 0,
+            "source_quality_adjusted_ev_pct": 1.2,
+        }
+    )
+    prior = mod._new_prior(mod._empty_prefix())
+    prior["lineage_status"] = {"lineage_blockers": {}}
+    prior["window_metrics"] = {"rolling10d": metric}
+
+    mod._classify_prior(prior)
+
+    assert metric["joined_sample"] == 0
+    assert prior["selected_window"] is None
+    assert prior["recommendation"] == "hold_sample"
+
+
+def test_zero_profit_scout_outcome_is_preserved_as_loss_or_flat():
+    priors = {}
+
+    mod._merge_scout_metrics(
+        priors,
+        {
+            "loss_or_flat_forced_scout_examples": [
+                {"source_signature": "ZERO_RETURN", "profit_rate": 0.0}
+            ]
+        },
+    )
+
+    prior = next(iter(priors.values()))
+    assert prior["rising_missed_metrics"]["loser_count"] == 1
+    assert prior["rising_missed_metrics"]["avg_profit_rate"] == 0.0
 
 
 def test_write_outputs_renders_prior_report(tmp_path):

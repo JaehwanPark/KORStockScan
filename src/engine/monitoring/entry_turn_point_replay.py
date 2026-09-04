@@ -263,8 +263,7 @@ def _executable_ws_bbo(row: Mapping[str, Any]) -> tuple[dict[str, Any] | None, s
             continue
         if (
             freshness_state_key
-            and str(fields.get(freshness_state_key) or "").strip().lower()
-            != "fresh_ws"
+            and str(fields.get(freshness_state_key) or "").strip().lower() != "fresh_ws"
         ):
             gaps.append(f"{source}:fresh_ws_state_unproven")
             continue
@@ -444,9 +443,7 @@ def _bundled_pre_anchor_ws_bbos(
             route_scope_status = str(sample.get("route_scope_status") or "").strip()
             if venue == "KRX":
                 route_identity_valid = bool(
-                    code
-                    and market_route == "krx_regular"
-                    and observed_item == code
+                    code and market_route == "krx_regular" and observed_item == code
                 )
             elif venue == "NXT":
                 route_identity_valid = bool(
@@ -495,7 +492,9 @@ def _bundled_pre_anchor_ws_bbos(
             or not bid_qty.is_integer()
             or not ask_qty.is_integer()
         ):
-            gaps.append("pre_anchor_bundle:displayed_best_quantity_missing_or_not_fillable")
+            gaps.append(
+                "pre_anchor_bundle:displayed_best_quantity_missing_or_not_fillable"
+            )
             continue
         if age_ms is None or age_ms < 0 or age_ms > MAX_QUOTE_AGE_MS:
             gaps.append("pre_anchor_bundle:quote_age_invalid_or_stale")
@@ -1010,6 +1009,8 @@ def build_entry_turn_point_replay(
         list
     )
     bbo_gap_reasons: Counter[str] = Counter()
+    pre_anchor_bbo_path_event_count = 0
+    pre_anchor_bbo_path_observation_count = 0
     for row in event_rows:
         fields = _fields(row)
         stage = str(row.get("stage") or "")
@@ -1023,7 +1024,9 @@ def build_entry_turn_point_replay(
             if current is None or epoch < current:
                 milestones_by_promotion[promotion_id][stage] = epoch
         if stage == "rising_missed_entry_turn_pre_anchor_bbo_path":
+            pre_anchor_bbo_path_event_count += 1
             observations, gap_reasons = _bundled_pre_anchor_ws_bbos(row)
+            pre_anchor_bbo_path_observation_count += len(observations)
             for gap_reason in gap_reasons:
                 bbo_gap_reasons[gap_reason] += 1
         else:
@@ -1465,6 +1468,11 @@ def build_entry_turn_point_replay(
         "candidate_count": len(candidates),
         "candidate_evaluation_count": candidate_evaluation_count,
         "candidate_unit": "scanner_promotion_symbol_venue_session",
+        "runtime_instrumentation_reflected": pre_anchor_bbo_path_event_count > 0,
+        "pre_anchor_bbo_path_event_count": pre_anchor_bbo_path_event_count,
+        "pre_anchor_bbo_path_observation_count": (
+            pre_anchor_bbo_path_observation_count
+        ),
         "verified_official_common_stock_candidate_count": verified_candidate_count,
         "exact_ws_bbo_joined_count": exact_bbo_joined_count,
         "exact_ws_bbo_join_coverage_pct": exact_join_pct,
@@ -1501,6 +1509,7 @@ def build_entry_turn_point_replay(
             "right_censored_max_pct": RIGHT_CENSORED_MAX_PCT,
             "minimum_resolved_sample_count": MIN_RESOLVED_SAMPLE_COUNT,
             "official_symbol_master_hash_verified": symbol_master_hash_verified,
+            "runtime_instrumentation_reflected": pre_anchor_bbo_path_event_count > 0,
             "all_floors_met": floor_met,
         },
         "turn_definition": {

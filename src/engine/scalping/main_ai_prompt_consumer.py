@@ -838,6 +838,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     materialized = _read_json(materialized_path)
     execution = _read_json(execution_path)
     blockers: list[str] = []
+    optional_input_blockers: list[str] = []
     if not (
         optimizer_report.get("schema") == optimizer.SCHEMA
         and optimizer_report.get("target_date") == target_date
@@ -862,7 +863,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         and bridge.get("status") == "pass"
         and _valid_source_only(bridge)
     ):
-        blockers.append("micro_bridge_artifact_missing_or_invalid")
+        optional_input_blockers.append("micro_bridge_artifact_missing_or_invalid")
     optimizer_sources = optimizer_report.get("source_bindings")
     optimizer_sources = (
         optimizer_sources if isinstance(optimizer_sources, Mapping) else {}
@@ -874,19 +875,26 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     if bridge and optimizer_sources.get("micro_bridge_sha256") != (
         optimizer._canonical_sha256(bridge)
     ):
-        blockers.append("optimizer_micro_bridge_hash_binding_mismatch")
+        optional_input_blockers.append(
+            "optimizer_micro_bridge_hash_binding_mismatch"
+        )
     if materialized and not (
         materialized.get("schema") == quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA
         and materialized.get("target_date") == target_date
         and _valid_source_only(materialized)
         and materialized.get("provider_call_performed") is False
     ):
-        blockers.append("r0_r3_materialized_artifact_invalid")
-    if materialized and "r0_r3_materialized_artifact_invalid" not in blockers:
+        optional_input_blockers.append("r0_r3_materialized_artifact_invalid")
+    if (
+        materialized
+        and "r0_r3_materialized_artifact_invalid" not in optional_input_blockers
+    ):
         try:
             quality._validate_micro_reversion_materialized_report(materialized)
         except (TypeError, ValueError):
-            blockers.append("r0_r3_materialized_deep_contract_invalid")
+            optional_input_blockers.append(
+                "r0_r3_materialized_deep_contract_invalid"
+            )
     if execution and not (
         execution.get("schema") == quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
         and execution.get("target_date") == target_date
@@ -900,7 +908,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
             }
         )
     ):
-        blockers.append("r0_r3_execution_artifact_invalid")
+        optional_input_blockers.append("r0_r3_execution_artifact_invalid")
 
     entry_paths: list[dict[str, Any]] = []
     holding_paths: list[dict[str, Any]] = []
@@ -914,15 +922,30 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         holding_paths, holding_index = _holding_base_paths(
             target_date, optimizer_report=optimizer_report
         )
-        cells = _factorial_cells(
-            optimizer_report=optimizer_report,
-            prepared=prepared,
-            bridge=bridge,
-            materialized=materialized,
-            execution=execution,
-            entry_request_index=entry_index,
-            holding_request_index=holding_index,
-        )
+        if optional_input_blockers:
+            cells = [
+                _blocked(
+                    reason=reason,
+                    owner="MainAIMicroReversionSourceContract",
+                    acceptance_test=(
+                        "regenerate the exact-date optional micro-reversion source "
+                        "artifact with a valid source-only contract"
+                    ),
+                    cell="optional_micro_source_contract",
+                    stage="optional_micro_enriched_2x2",
+                )
+                for reason in sorted(set(optional_input_blockers))
+            ]
+        else:
+            cells = _factorial_cells(
+                optimizer_report=optimizer_report,
+                prepared=prepared,
+                bridge=bridge,
+                materialized=materialized,
+                execution=execution,
+                entry_request_index=entry_index,
+                holding_request_index=holding_index,
+            )
 
     all_terminal_rows: list[Mapping[str, Any]] = [
         *entry_paths,
@@ -1043,6 +1066,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         ),
         "entry_followup_terminal_ready": entry_followup_terminal_ready,
         "blockers": sorted(set(blockers)),
+        "optional_input_blockers": sorted(set(optional_input_blockers)),
         "performance_evidence": {
             "connected_entry_result_cohort_count": connected_entry_count,
             "connected_holding_manifest_cohort_count": (

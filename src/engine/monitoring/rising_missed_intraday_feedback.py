@@ -3736,9 +3736,7 @@ def _build_tp1_first_hit_labels(
                     ),
                 )
                 notional = entry_price * quantity
-                actual_cost_pct = (
-                    (actual_fee_krw + actual_tax_krw) / notional
-                ) * 100.0
+                actual_cost_pct = ((actual_fee_krw + actual_tax_krw) / notional) * 100.0
                 actual_cost_net_label = _tp1_cost_adjusted_label(
                     label,
                     first_hit_move_pct,
@@ -7095,6 +7093,21 @@ def build_report(
     entry_turn_acceptance = (
         entry_turn_acceptance if isinstance(entry_turn_acceptance, dict) else {}
     )
+    entry_turn_runtime_reflected = bool(
+        _boolish(entry_turn_point_replay.get("runtime_instrumentation_reflected"))
+        and _safe_int(entry_turn_point_replay.get("pre_anchor_bbo_path_event_count"))
+        > 0
+    )
+    entry_turn_implementation_status = (
+        "implemented_source_quality_contract_waiting_sample"
+        if entry_turn_runtime_reflected
+        else "implemented_but_waiting_sample"
+    )
+    entry_turn_sample_status = (
+        "runtime_reflected_source_quality_floor_pending"
+        if entry_turn_runtime_reflected
+        else "runtime_receipt_not_observed"
+    )
     if _safe_int(entry_turn_point_replay.get("candidate_count")) > 0 and not _boolish(
         entry_turn_acceptance.get("all_floors_met")
     ):
@@ -7118,7 +7131,7 @@ def build_report(
                 "decision_authority": (
                     "source_only_entry_turn_bbo_coverage_no_runtime_mutation"
                 ),
-                "implementation_status": "implemented_but_waiting_sample",
+                "implementation_status": entry_turn_implementation_status,
                 "implementation_provenance": {
                     "implementation_type": (
                         "bounded_existing_subscription_exact_route_0d_bbo_ring"
@@ -7131,10 +7144,22 @@ def build_report(
                     "allowed_runtime_apply": False,
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
-                    "sample_status": "waiting_next_pid_natural_sample",
-                    "root_cause_closure_status_hint": (
-                        "implementation_done_current_pid_not_reflected"
+                    "runtime_instrumentation_reflected": (entry_turn_runtime_reflected),
+                    "pre_anchor_bbo_path_event_count": _safe_int(
+                        entry_turn_point_replay.get("pre_anchor_bbo_path_event_count")
                     ),
+                    "pre_anchor_bbo_path_observation_count": _safe_int(
+                        entry_turn_point_replay.get(
+                            "pre_anchor_bbo_path_observation_count"
+                        )
+                    ),
+                    "sample_status": entry_turn_sample_status,
+                    "remaining_gap": (
+                        "source_quality_and_economic_sample_floors"
+                        if entry_turn_runtime_reflected
+                        else "runtime_reflection_or_natural_sample_pending"
+                    ),
+                    "root_cause_closure_status_hint": "implementation_done",
                 },
                 "expected_ev_effect": (
                     "Separate discovery delay, watch/evaluation delay, late turn "
@@ -7146,6 +7171,13 @@ def build_report(
                     + str(entry_turn_point_replay.get("status") or "unknown"),
                     "candidate_count="
                     + str(entry_turn_point_replay.get("candidate_count") or 0),
+                    "runtime_instrumentation_reflected="
+                    + str(entry_turn_runtime_reflected).lower(),
+                    "pre_anchor_bbo_path_event_count="
+                    + str(
+                        entry_turn_point_replay.get("pre_anchor_bbo_path_event_count")
+                        or 0
+                    ),
                     "exact_ws_bbo_join_coverage_pct="
                     + str(
                         entry_turn_point_replay.get("exact_ws_bbo_join_coverage_pct")

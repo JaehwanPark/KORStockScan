@@ -1158,7 +1158,8 @@ def build_sim_policy_catalog(
         _binding_allowed(source_quality, target_date)
         and counterfactual.get("source_quality_status") == "pass"
     )
-    if not source_quality_allowed:
+    counterfactual_ready = counterfactual.get("status") == "pass"
+    if not source_quality_allowed or not counterfactual_ready:
         policies = []
     return {
         "schema_version": 1,
@@ -1527,6 +1528,7 @@ def build_bounded_live_candidate(
         _binding_allowed(source_quality, target_date)
         and counterfactual.get("source_quality_status") == "pass"
     )
+    counterfactual_ready = counterfactual.get("status") == "pass"
     real_attribution = real_attribution or {}
     real_attribution_valid = bool(
         real_attribution.get("schema_version") == 1
@@ -1560,7 +1562,8 @@ def build_bounded_live_candidate(
         )
     )
     if (
-        not source_quality_allowed
+        not counterfactual_ready
+        or not source_quality_allowed
         or not real_attribution_valid
         or real_rollback_required
     ):

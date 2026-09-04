@@ -305,7 +305,19 @@ def test_build_report_joins_forced_scout_post_sell_and_creates_workorders(tmp_pa
     )
     assert report["summary"]["forced_scout_post_sell_join_coverage_pct"] == 100.0
     assert report["summary"]["forced_scout_outcome_coverage_state"] == "complete"
+    assert report["summary"]["forced_scout_outcome_join_ready"] is True
+    assert report["summary"]["forced_scout_outcome_contrast_ready"] is True
     assert report["summary"]["forced_scout_outcome_analysis_ready"] is True
+    assert report["summary"]["forced_scout_outcome_economic_inference_ready"] is False
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+    assert all(
+        order["actual_order_submitted"] is False
+        and order["broker_order_forbidden"] is True
+        and order["implementation_provenance"]["actual_order_submitted"] is False
+        and order["implementation_provenance"]["broker_order_forbidden"] is True
+        for order in report["code_improvement_orders"]
+    )
 
 
 def test_write_outputs_renders_json_and_markdown(tmp_path):
@@ -409,6 +421,13 @@ def test_build_report_streams_pipeline_jsonl_without_full_text_read(
 
     assert report["summary"]["forced_scout_record_count"] == 1
     assert report["summary"]["scale_in_executed_record_count"] == 1
+    assert report["summary"]["forced_scout_outcome_join_ready"] is True
+    assert report["summary"]["forced_scout_outcome_contrast_ready"] is False
+    assert report["summary"]["forced_scout_outcome_analysis_ready"] is False
+    assert all(
+        order["order_id"] != "order_rising_missed_scout_post_sell_bridge"
+        for order in report["code_improvement_orders"]
+    )
 
 
 def test_build_report_reads_gzip_pipeline_fallback(tmp_path, monkeypatch):

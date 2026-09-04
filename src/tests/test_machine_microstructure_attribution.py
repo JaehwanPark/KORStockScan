@@ -20,7 +20,10 @@ from src.engine.monitoring.machine_microstructure_attribution import (
     _episode_inventory,
     _lifecycle_objective_summary,
     _micro_entry_confirmation_summary,
+    _micro_context,
+    _runtime_registration_receipt_binding,
     _rolling_source_contract_recovery,
+    _timestamp_regression_row_quarantine_validation,
     _validate_stream_row,
     _widget_advisory_event_index,
     _widget_actual_execution_inventory,
@@ -2772,7 +2775,13 @@ def test_nontrading_attribution_skips_collection_feedback_write_contract(tmp_pat
         "current_runtime_registration_receipt": {
             "status": "not_required_before_activation",
             "ready": True,
+            "global_contract_ready": True,
+            "route_isolation_allowed": True,
             "activation_date": "2026-09-04",
+            "expected_registration_items": [],
+            "complete_registration_items": [],
+            "incomplete_registration_items": [],
+            "incomplete_active_registration_items": [],
             "runtime_effect": False,
         },
         "active_owner_full_coverage": False,
@@ -2792,6 +2801,10 @@ def test_nontrading_attribution_skips_collection_feedback_write_contract(tmp_pat
 def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
     monkeypatch, tmp_path
 ):
+    configured_at = datetime(2026, 9, 4, 7, 55, tzinfo=KST)
+    first_0b = configured_at.timestamp() + 1
+    first_0d = configured_at.timestamp() + 2
+    last_received = configured_at.timestamp() + 3
     monkeypatch.setattr(
         attribution_module,
         "load_exact_date_collection_targets",
@@ -2809,6 +2822,10 @@ def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
     receipt = {
         "schema": "scalp_micro_reversion_registration_receipt_v1",
         "effective_date": "2026-09-04",
+        "configured_at": configured_at.isoformat(),
+        "configured_at_epoch": configured_at.timestamp(),
+        "registration_transport_epoch": 1,
+        "source": "test_exact_manifest",
         "decision_authority": "market_data_source_quality_only",
         "runtime_effect": False,
         "trading_runtime_effect": False,
@@ -2820,8 +2837,8 @@ def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
             "005930": {
                 "required_realtime_types": ["0B", "0D"],
                 "received_realtime_types": ["0B", "0D"],
-                "first_received_at_epoch_by_type": {"0B": 100.0, "0D": 101.0},
-                "last_received_at_epoch": 102.0,
+                "first_received_at_epoch_by_type": {"0B": first_0b, "0D": first_0d},
+                "last_received_at_epoch": last_received,
                 "receipt_count_by_type": {"0B": 1, "0D": 1},
                 "transport_epochs": [1],
                 "max_interarrival_gap_sec": 1.0,
@@ -2829,8 +2846,8 @@ def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
             "005930_NX": {
                 "required_realtime_types": ["0B", "0D"],
                 "received_realtime_types": ["0B"],
-                "first_received_at_epoch_by_type": {"0B": 100.0},
-                "last_received_at_epoch": 100.0,
+                "first_received_at_epoch_by_type": {"0B": first_0b},
+                "last_received_at_epoch": first_0b,
                 "receipt_count_by_type": {"0B": 1},
                 "transport_epochs": [1],
                 "max_interarrival_gap_sec": 0.0,
@@ -2846,13 +2863,32 @@ def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
         receipt_root=receipt_root,
     )
     assert blocked["ready"] is False
+    assert blocked["global_contract_ready"] is True
+    assert blocked["route_isolation_allowed"] is True
+    assert blocked["status"] == "active_route_receipt_incomplete"
+    assert blocked["complete_registration_items"] == ["005930"]
     assert blocked["incomplete_registration_items"] == ["005930_NX"]
+
+    krx_binding = _runtime_registration_receipt_binding(
+        {"symbol": "005930", "expected_venues": ["KRX"]}, blocked
+    )
+    nxt_binding = _runtime_registration_receipt_binding(
+        {"symbol": "005930", "expected_venues": ["NXT"]}, blocked
+    )
+    assert krx_binding["status"] == "exact_route_complete"
+    assert krx_binding["source_gap_reason"] is None
+    assert krx_binding["route_isolated"] is False
+    assert nxt_binding["status"] == "exact_route_receipt_incomplete"
+    assert nxt_binding["source_gap_reason"] == (
+        "micro_runtime_registration_receipt_exact_route_incomplete"
+    )
+    assert nxt_binding["route_isolated"] is True
 
     receipt["items"]["005930_NX"] = {
         "required_realtime_types": ["0B", "0D"],
         "received_realtime_types": ["0B", "0D"],
-        "first_received_at_epoch_by_type": {"0B": 100.0, "0D": 101.0},
-        "last_received_at_epoch": 102.0,
+        "first_received_at_epoch_by_type": {"0B": first_0b, "0D": first_0d},
+        "last_received_at_epoch": last_received,
         "receipt_count_by_type": {"0B": 1, "0D": 1},
         "transport_epochs": [1],
         "max_interarrival_gap_sec": 1.0,
@@ -2866,10 +2902,74 @@ def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
     assert ready["status"] == "complete"
     assert ready["ready"] is True
 
+    receipt["configured_at"] = "2026-09-03T07:55:00+09:00"
+    receipt["configured_at_epoch"] -= 86400
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    stale = attribution_module._runtime_registration_receipt_status(
+        "2026-09-04",
+        collection_target_root=tmp_path / "targets",
+        receipt_root=receipt_root,
+    )
+    assert stale["ready"] is False
+    assert stale["global_contract_ready"] is False
+    assert stale["temporal_contract_valid"] is False
+    assert stale["status"] == "contract_invalid"
+
+    receipt["configured_at"] = configured_at.isoformat()
+    receipt["configured_at_epoch"] = configured_at.timestamp()
+    receipt["items"]["005930_NX"]["first_received_at_epoch_by_type"]["0D"] = 1e300
+    receipt["items"]["005930_NX"]["last_received_at_epoch"] = 1e300
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    invalid_epoch = attribution_module._runtime_registration_receipt_status(
+        "2026-09-04",
+        collection_target_root=tmp_path / "targets",
+        receipt_root=receipt_root,
+    )
+    assert invalid_epoch["global_contract_ready"] is True
+    assert invalid_epoch["ready"] is False
+    assert invalid_epoch["incomplete_active_registration_items"] == ["005930_NX"]
+
+    receipt["items"]["005930_NX"]["first_received_at_epoch_by_type"] = {
+        "0B": first_0b,
+        "0D": first_0d,
+    }
+    receipt["items"]["005930_NX"]["last_received_at_epoch"] = last_received
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    future_at_evaluation = attribution_module._runtime_registration_receipt_status(
+        "2026-09-04",
+        collection_target_root=tmp_path / "targets",
+        receipt_root=receipt_root,
+        evaluated_at=configured_at + timedelta(seconds=1),
+    )
+    assert future_at_evaluation["global_contract_ready"] is True
+    assert future_at_evaluation["ready"] is False
+    assert future_at_evaluation["incomplete_active_registration_items"] == [
+        "005930",
+        "005930_NX",
+    ]
+
+    receipt["configured_at"] = (configured_at + timedelta(minutes=1)).isoformat()
+    receipt["configured_at_epoch"] = (
+        configured_at + timedelta(minutes=1)
+    ).timestamp()
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    future_configuration = attribution_module._runtime_registration_receipt_status(
+        "2026-09-04",
+        collection_target_root=tmp_path / "targets",
+        receipt_root=receipt_root,
+        evaluated_at=configured_at,
+    )
+    assert future_configuration["global_contract_ready"] is False
+    assert future_configuration["temporal_contract_valid"] is False
+
 
 def test_runtime_registration_receipt_does_not_block_on_prospective_receive_gap(
     monkeypatch, tmp_path
 ):
+    configured_at = datetime(2026, 9, 4, 7, 55, tzinfo=KST)
+    first_0b = configured_at.timestamp() + 1
+    first_0d = configured_at.timestamp() + 2
+    last_received = configured_at.timestamp() + 3
     monkeypatch.setattr(
         attribution_module,
         "load_exact_date_collection_targets",
@@ -2896,6 +2996,10 @@ def test_runtime_registration_receipt_does_not_block_on_prospective_receive_gap(
     receipt = {
         "schema": "scalp_micro_reversion_registration_receipt_v1",
         "effective_date": "2026-09-04",
+        "configured_at": configured_at.isoformat(),
+        "configured_at_epoch": configured_at.timestamp(),
+        "registration_transport_epoch": 1,
+        "source": "test_prospective_gap",
         "decision_authority": "market_data_source_quality_only",
         "runtime_effect": False,
         "trading_runtime_effect": False,
@@ -2907,8 +3011,8 @@ def test_runtime_registration_receipt_does_not_block_on_prospective_receive_gap(
             "005930": {
                 "required_realtime_types": ["0B", "0D"],
                 "received_realtime_types": ["0B", "0D"],
-                "first_received_at_epoch_by_type": {"0B": 100.0, "0D": 101.0},
-                "last_received_at_epoch": 102.0,
+                "first_received_at_epoch_by_type": {"0B": first_0b, "0D": first_0d},
+                "last_received_at_epoch": last_received,
                 "receipt_count_by_type": {"0B": 1, "0D": 1},
                 "transport_epochs": [1],
                 "max_interarrival_gap_sec": 1.0,
@@ -2934,8 +3038,79 @@ def test_runtime_registration_receipt_does_not_block_on_prospective_receive_gap(
     )
 
     assert status["ready"] is True
+    assert status["global_contract_ready"] is True
+    assert status["status"] == "complete_with_prospective_route_gaps"
     assert status["incomplete_registration_items"] == ["000660_NX"]
     assert status["incomplete_active_registration_items"] == []
+
+
+def test_registration_receipt_route_gap_excludes_only_bound_anchor():
+    receipt = {
+        "status": "active_route_receipt_incomplete",
+        "global_contract_ready": True,
+        "expected_registration_items": ["005930", "005930_NX"],
+        "complete_registration_items": ["005930"],
+    }
+    krx_anchor = {
+        "anchor_id": "krx-entry",
+        "symbol": "005930",
+        "expected_venues": ["KRX"],
+        "anchor_at": "2026-09-04T10:00:00+09:00",
+        "owner_lifecycle_contract_valid": True,
+        "owner_policy_tuning_eligible": True,
+    }
+    nxt_anchor = {
+        **krx_anchor,
+        "anchor_id": "nxt-entry",
+        "expected_venues": ["NXT"],
+    }
+    inventory = {"observed_row_count": 1, "invalid_contract_scope_counts": {}}
+    window = {
+        "rows": [
+            {
+                "timestamp": datetime(2026, 9, 4, 10, 0, tzinfo=KST),
+                "price": 10000,
+                "best_bid": 9990,
+                "best_ask": 10000,
+                "sequence_epoch": 1,
+            }
+        ],
+        "depth_points": [],
+        "depth_rows": 0,
+        "shock_reference_count": 0,
+        "raw_market_rows": [],
+        "raw_depth_rows": [],
+    }
+
+    krx_result = _anchor_result(
+        krx_anchor,
+        inventory,
+        window,
+        partition_loaded=True,
+        source_contract_gap=None,
+        clean_baseline_allowed=True,
+        registration_receipt_binding=_runtime_registration_receipt_binding(
+            krx_anchor, receipt
+        ),
+    )
+    nxt_result = _anchor_result(
+        nxt_anchor,
+        inventory,
+        window,
+        partition_loaded=True,
+        source_contract_gap=None,
+        clean_baseline_allowed=True,
+        registration_receipt_binding=_runtime_registration_receipt_binding(
+            nxt_anchor, receipt
+        ),
+    )
+
+    assert krx_result["micro_context_status"] == "matched"
+    assert krx_result["micro_tuning_input_allowed"] is True
+    assert nxt_result["micro_context_status"] == (
+        "micro_runtime_registration_receipt_exact_route_incomplete"
+    )
+    assert nxt_result["micro_tuning_input_allowed"] is False
 
 
 def test_registration_receipt_gap_is_terminal_for_same_date_rerun():
@@ -3515,6 +3690,116 @@ def test_queue_loss_canary_is_archived_without_promotion_authority(tmp_path):
     ]
     assert archive_validation["diagnostic_only"] is True
     assert archive_validation["promotion_evidence_eligible"] is False
+
+
+def _timestamp_quarantine_canary_payload(target_date: str) -> dict:
+    zero_fields = {
+        field: 0 for field in attribution_module.CANARY_LOSS_COUNTERS
+    }
+    forbidden_true_fields = {
+        field: False for field in attribution_module.CANARY_FORBIDDEN_TRUE_FIELDS
+    }
+    return {
+        "schema": "scalp_micro_reversion_canary_monitor_v1",
+        "generated_at": f"{target_date}T20:10:00+09:00",
+        "canary_guard": {
+            "status": "stopped_clean",
+            "stop_required": False,
+            "stop_reasons": [],
+            "raw_row_exclusion_required": True,
+            "source_quality_row_exclusions": [
+                "raw_row_exclusion_required:"
+                "path_exchange_timestamp_regression_exceeded_count=5"
+            ],
+        },
+        "collector_snapshot": {
+            **zero_fields,
+            **forbidden_true_fields,
+            "collector_lifecycle": "closed",
+            "reference_reconciliation_completed": True,
+            "sequence_epoch": 1,
+            "selection_authority": False,
+            "trading_runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "depth_capture_requested": True,
+            "path_exchange_timestamp_regression_count": 116,
+            "path_exchange_timestamp_regression_quarantined_count": 111,
+            "path_exchange_timestamp_regression_exceeded_count": 5,
+            "enqueued_count": 100,
+            "worker_processed_count": 100,
+            "writer_persisted_envelope_count": 100,
+            "path_point_submitted_count": 100,
+            "depth_enqueued_count": 200,
+            "depth_worker_processed_count": 200,
+            "depth_writer_persisted_envelope_count": 200,
+            "metric_contracts": {
+                "exchange_timestamp_regression_canary": {
+                    "metric_role": (
+                        "source_quality_incident_and_raw_row_exclusion"
+                    ),
+                    "decision_authority": "observer_row_quarantine_only",
+                    "primary_decision_metric": (
+                        "path_exchange_timestamp_regression_exceeded_count"
+                    ),
+                    "source_quality_gate": (
+                        "affected_rows_remain_path_consumer_ineligible_and_are_"
+                        "skipped_by_p2_reconstruction_without_imputation"
+                    ),
+                    "forbidden_uses": [
+                        "detector_or_path_consumption_of_quarantined_row",
+                        "broker_order_submission",
+                    ],
+                }
+            },
+        },
+    }
+
+
+def test_timestamp_regression_only_row_quarantine_preserves_remaining_date_source(
+    tmp_path,
+):
+    target_date = "2026-09-04"
+    payload = _timestamp_quarantine_canary_payload(target_date)
+    canary_path = tmp_path / "canary.json"
+    _write_json(canary_path, payload)
+
+    validation = _timestamp_regression_row_quarantine_validation(
+        payload["canary_guard"], payload["collector_snapshot"]
+    )
+    source, _, _ = _micro_context(
+        target_date,
+        tmp_path / "observations",
+        set(),
+        [],
+        attribution_module.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
+        canary_path,
+        datetime(2026, 9, 4, 20, 20, tzinfo=KST),
+    )
+
+    assert validation == {
+        "eligible": True,
+        "status": "fully_accounted_consumer_ineligible_rows",
+        "quarantined_row_count": 5,
+        "invalid_loss_fields": [],
+    }
+    assert source["canary_source_quality"]["status"] == (
+        "loaded_pass_with_row_quarantine"
+    )
+    assert source["source_contract_ready"] is True
+
+
+def test_timestamp_row_quarantine_never_masks_capture_loss():
+    payload = _timestamp_quarantine_canary_payload("2026-09-04")
+    payload["collector_snapshot"]["observation_queue_full_count"] = 1
+
+    validation = _timestamp_regression_row_quarantine_validation(
+        payload["canary_guard"], payload["collector_snapshot"]
+    )
+
+    assert validation["eligible"] is False
+    assert validation["status"] == "capture_loss_or_missing_counter"
+    assert validation["invalid_loss_fields"] == ["observation_queue_full_count"]
 
 
 def test_v3_stream_requires_aware_full_contract_while_v2_is_legacy_compatible():

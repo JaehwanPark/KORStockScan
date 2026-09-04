@@ -9,6 +9,7 @@ from src.engine.automation.machine_entry_timing_tuning import (
     _candidate_observation,
     _evaluate_cohort,
     _evaluate_dynamic_cohort,
+    _report_sample_floor_assessment,
     _same_stage_owner_guard,
     build_applied_policy,
     build_report,
@@ -1288,6 +1289,7 @@ def test_report_classifies_blocked_actual_anchors_as_join_gap(
     assert assessment["shortage_class"] == "structural_population_exhaustion"
     assert assessment["target_actual_entry_anchor_count"] == 1
     assert assessment["target_source_quality_blocked_anchor_count"] == 1
+    assert assessment["target_source_quality_eligible_anchor_count"] == 0
     assert assessment["target_source_gap_reasons"] == [
         "actual_signal_decision_timestamp_missing",
         "canonical_0b_market_anchor_within_1s_missing",
@@ -1297,6 +1299,169 @@ def test_report_classifies_blocked_actual_anchors_as_join_gap(
     )
     assert assessment["runtime_effect"] is False
     assert assessment["allowed_runtime_apply"] is False
+
+
+def test_report_does_not_classify_mixed_valid_inflow_as_population_exhaustion():
+    target_date = date(2026, 9, 3)
+    eligible = _entry_row(target_date, 1)
+    blocked = _entry_row(target_date, 2)
+    blocked["classification"] = "source_quality_blocked"
+    blocked["source_gap_reasons"] = ["canonical_0b_market_anchor_within_1s_missing"]
+    report_payload = {
+        "micro_entry_confirmation": {"entry_anchors": [eligible, blocked]}
+    }
+    cohorts = [
+        {"sample_floor_assessment": {"state": "source_quality_blocked"}},
+        {"sample_floor_assessment": {"state": "outcome_or_executable_gap"}},
+    ]
+
+    assessment = _report_sample_floor_assessment(
+        target_date=target_date,
+        reports=[(target_date, Path("unused.json"), report_payload)],
+        target_source_ready=True,
+        cohorts=cohorts,
+        winner=None,
+    )
+
+    assert assessment["state"] == "terminal_or_right_censored_gap"
+    assert assessment["shortage_classification_status"] == (
+        "blocked_missing_evidence"
+    )
+    assert assessment["shortage_class"] is None
+    assert assessment["target_actual_entry_anchor_count"] == 2
+    assert assessment["target_source_quality_blocked_anchor_count"] == 1
+    assert assessment["target_source_quality_eligible_anchor_count"] == 1
+
+
+def test_report_quarantines_missing_runtime_receipt_instead_of_blind_rerun():
+    target_date = date(2026, 9, 4)
+    blocked = _entry_row(target_date, 1)
+    blocked["classification"] = "source_quality_blocked"
+    blocked["source_gap_reasons"] = [
+        "micro_runtime_registration_receipt_missing_or_incomplete"
+    ]
+
+    assessment = _report_sample_floor_assessment(
+        target_date=target_date,
+        reports=[
+            (
+                target_date,
+                Path("unused.json"),
+                {"micro_entry_confirmation": {"entry_anchors": [blocked]}},
+            )
+        ],
+        target_source_ready=True,
+        cohorts=[
+            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
+        ],
+        winner=None,
+    )
+
+    assert assessment["shortage_class"] == "structural_population_exhaustion"
+    assert assessment["next_action"] == (
+        "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+    )
+    assert assessment["immutable_source_date_quarantine_eligible"] is True
+
+
+def test_report_quarantines_exact_route_receipt_gap_instead_of_blind_rerun():
+    target_date = date(2026, 9, 4)
+    blocked = _entry_row(target_date, 1)
+    blocked["classification"] = "source_quality_blocked"
+    blocked["source_gap_reasons"] = [
+        "micro_runtime_registration_receipt_exact_route_incomplete"
+    ]
+
+    assessment = _report_sample_floor_assessment(
+        target_date=target_date,
+        reports=[
+            (
+                target_date,
+                Path("unused.json"),
+                {"micro_entry_confirmation": {"entry_anchors": [blocked]}},
+            )
+        ],
+        target_source_ready=True,
+        cohorts=[
+            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
+        ],
+        winner=None,
+    )
+
+    assert assessment["shortage_class"] == "structural_population_exhaustion"
+    assert assessment["next_action"] == (
+        "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+    )
+    assert assessment["immutable_source_date_quarantine_eligible"] is True
+
+
+def test_report_does_not_quarantine_receipt_gap_that_masks_repairable_contract_gap():
+    target_date = date(2026, 9, 7)
+    blocked = _entry_row(target_date, 1)
+    blocked["classification"] = "source_quality_blocked"
+    blocked["source_gap_reasons"] = [
+        "micro_runtime_registration_receipt_missing_or_incomplete",
+        "source_entry_event_id_missing",
+    ]
+
+    assessment = _report_sample_floor_assessment(
+        target_date=target_date,
+        reports=[
+            (
+                target_date,
+                Path("unused.json"),
+                {"micro_entry_confirmation": {"entry_anchors": [blocked]}},
+            )
+        ],
+        target_source_ready=True,
+        cohorts=[
+            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
+        ],
+        winner=None,
+    )
+
+    assert assessment["shortage_class"] == "structural_population_exhaustion"
+    assert assessment["immutable_source_date_quarantine_eligible"] is False
+    assert assessment["repairable_receipt_companion_gaps"] == [
+        "source_entry_event_id_missing"
+    ]
+    assert assessment["next_action"] == (
+        "repair_exact_entry_anchor_market_join_and_rerun"
+    )
+
+
+def test_report_receipt_quarantine_allows_normal_policy_ineligible_anchor():
+    target_date = date(2026, 9, 4)
+    blocked = _entry_row(target_date, 1)
+    blocked["classification"] = "source_quality_blocked"
+    blocked["owner_lifecycle_contract_valid"] = True
+    blocked["owner_policy_tuning_eligible"] = False
+    blocked["source_gap_reasons"] = [
+        "micro_runtime_registration_receipt_missing_or_incomplete"
+    ]
+
+    assessment = _report_sample_floor_assessment(
+        target_date=target_date,
+        reports=[
+            (
+                target_date,
+                Path("unused.json"),
+                {"micro_entry_confirmation": {"entry_anchors": [blocked]}},
+            )
+        ],
+        target_source_ready=True,
+        cohorts=[
+            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
+        ],
+        winner=None,
+    )
+
+    assert assessment["immutable_source_date_quarantine_eligible"] is True
+    assert assessment["invalid_owner_contract_anchor_count"] == 0
+    assert assessment["policy_ineligible_anchor_count"] == 1
+    assert assessment["next_action"] == (
+        "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+    )
 
 
 def test_cohort_sample_projection_uses_all_source_days_since_first_seen(

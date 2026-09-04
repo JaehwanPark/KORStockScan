@@ -222,12 +222,20 @@ def test_scalp_control_tower_adds_rising_missed_prior_active_seed(tmp_path):
                 "recommendation": "positive_prior",
                 "confidence": "high",
                 "selected_window": "rolling10d",
+                "selected_window_sample_floor_met": True,
+                "selected_ev_metric_authoritative": True,
                 "reason": "rolling10d_positive_ev_prior",
                 "observable_prefix": {
                     "entry_score_parent": "score_watch_recovery",
                     "entry_source_parent": "entry_source_wait6579",
                 },
-                "window_metrics": {"rolling10d": {"joined_sample": 33, "ev_pct": 2.97}},
+                "window_metrics": {
+                    "rolling10d": {
+                        "joined_sample": 33,
+                        "ev_pct": 2.97,
+                        "ev_metric": "source_quality_adjusted_ev_pct",
+                    }
+                },
             }
         ],
     }
@@ -258,6 +266,88 @@ def test_scalp_control_tower_adds_rising_missed_prior_active_seed(tmp_path):
     )
     assert catalog_payload["runtime_effect"] is False
     assert catalog_payload["broker_order_forbidden"] is True
+
+
+def test_scalp_control_tower_rejects_rising_missed_prior_without_explicit_order_ban(
+    tmp_path,
+):
+    prior = {
+        "report_type": "rising_missed_classifier_prior",
+        "target_date": "2026-07-02",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "rising_missed_classifier_prior_source_only",
+        "summary": {"prior_count": 1},
+        "priors": [
+            {
+                "prior_key": "thin-contract",
+                "recommendation": "positive_prior",
+                "observable_prefix": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_wait6579",
+                },
+            }
+        ],
+    }
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-07-02",
+        lifecycle_sim_approval={},
+        lifecycle_bucket_catalog_path=tmp_path / "missing_catalog.json",
+        scale_in_approval={},
+        runtime_apply_bridge={},
+        rising_missed_prior=prior,
+    )
+
+    assert approval["approved"] is False
+    assert (
+        "rising_missed_classifier_prior_contract_invalid" in approval["blocked_reasons"]
+    )
+
+
+def test_scalp_control_tower_rejects_unconfirmed_positive_prior_row(tmp_path):
+    prior = {
+        "report_type": "rising_missed_classifier_prior",
+        "target_date": "2026-07-02",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "rising_missed_classifier_prior_source_only",
+        "summary": {"prior_count": 1},
+        "priors": [
+            {
+                "prior_key": "invalid-positive-row",
+                "recommendation": "positive_prior",
+                "selected_window": "rolling10d",
+                "selected_window_sample_floor_met": False,
+                "selected_ev_metric_authoritative": True,
+                "observable_prefix": {
+                    "entry_score_parent": "score_watch_recovery",
+                    "entry_source_parent": "entry_source_wait6579",
+                },
+                "window_metrics": {
+                    "rolling10d": {
+                        "joined_sample": 1,
+                        "ev_pct": 2.0,
+                        "ev_metric": "source_quality_adjusted_ev_pct",
+                    }
+                },
+            }
+        ],
+    }
+
+    approval = mod.build_scalp_sim_auto_approval(
+        "2026-07-02",
+        lifecycle_sim_approval={},
+        lifecycle_bucket_catalog_path=tmp_path / "missing_catalog.json",
+        scale_in_approval={},
+        runtime_apply_bridge={},
+        rising_missed_prior=prior,
+    )
+
+    assert approval["approved"] is False
+    assert "sim_policy_candidate_missing" in approval["blocked_reasons"]
 
 
 def test_scalp_control_tower_rising_missed_prior_cools_down_blocked_existing_seed(

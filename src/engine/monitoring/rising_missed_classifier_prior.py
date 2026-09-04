@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +33,9 @@ PREFIX_KEYS = (
     "chosen_action",
 )
 WINDOW_PRIORITY = ("rolling10d", "rolling5d", "mtd", "daily")
+CONFIRMATION_WINDOWS = frozenset({"rolling10d", "rolling5d", "mtd"})
+CONFIRMED_PRIOR_MIN_JOINED_SAMPLE = 10
+CONFIRMED_PRIOR_EV_METRIC = "source_quality_adjusted_ev_pct"
 FORBIDDEN_USES = [
     "real_order_submission",
     "runtime_threshold_mutation",
@@ -222,9 +225,12 @@ def _bucket_metric(item: dict[str, Any]) -> dict[str, Any]:
         or item.get("joined_sample")
         or item.get("parent_joined_sample")
     )
-    joined_sample = _safe_int(
-        item.get("joined_sample") or item.get("parent_joined_sample") or sample
-    )
+    joined_raw = None
+    for key in ("joined_sample", "parent_joined_sample"):
+        if key in item and item.get(key) not in (None, ""):
+            joined_raw = item.get(key)
+            break
+    joined_sample = _safe_int(joined_raw) if joined_raw is not None else sample
     return {
         "sample": sample,
         "joined_sample": joined_sample,
@@ -307,13 +313,15 @@ def _merge_window_metric(
 ) -> None:
     current = prior["window_metrics"].get(window)
     if current:
+        current_ev = _safe_float(current.get("ev_pct"), None)
+        next_ev = _safe_float(metric.get("ev_pct"), None)
         current_rank = (
             _safe_int(current.get("joined_sample")),
-            _safe_float(current.get("ev_pct"), -9999.0) or -9999.0,
+            current_ev if current_ev is not None else -9999.0,
         )
         next_rank = (
             _safe_int(metric.get("joined_sample")),
-            _safe_float(metric.get("ev_pct"), -9999.0) or -9999.0,
+            next_ev if next_ev is not None else -9999.0,
         )
         if current_rank >= next_rank:
             return
@@ -386,9 +394,9 @@ def _merge_scout_metrics(
             prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
             metrics = prior["rising_missed_metrics"]
             metrics["forced_scout_count"] += 1
-            profit = _safe_float(
-                item.get("profit_rate") or item.get("profit_pct"), None
-            )
+            profit = _safe_float(item.get("profit_rate"), None)
+            if profit is None:
+                profit = _safe_float(item.get("profit_pct"), None)
             if outcome == "winner" or (
                 outcome == "outcome" and profit is not None and profit > 0
             ):
@@ -643,12 +651,20 @@ def _lineage_status(source_payloads: dict[str, dict[str, Any]]) -> dict[str, Any
 
 
 def _select_window(prior: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
+    # A thin long window must not mask a mature shorter rolling/MTD window.
     for window in WINDOW_PRIORITY:
         metric = prior["window_metrics"].get(window)
         if (
-            isinstance(metric, dict)
-            and _safe_int(metric.get("joined_sample") or metric.get("sample")) > 0
+            window in CONFIRMATION_WINDOWS
+            and isinstance(metric, dict)
+            and _safe_int(metric.get("joined_sample"))
+            >= CONFIRMED_PRIOR_MIN_JOINED_SAMPLE
+            and metric.get("ev_metric") == CONFIRMED_PRIOR_EV_METRIC
         ):
+            return window, metric
+    for window in WINDOW_PRIORITY:
+        metric = prior["window_metrics"].get(window)
+        if isinstance(metric, dict) and _safe_int(metric.get("joined_sample")) > 0:
             return window, metric
     return None, None
 
@@ -658,8 +674,19 @@ def _classify_prior(prior: dict[str, Any]) -> None:
     conflicts = prior["conflict_status"]
     metrics = prior["rising_missed_metrics"]
     ev_pct = _safe_float((metric or {}).get("ev_pct"), None)
-    rolling_positive = (
-        selected_window in {"rolling10d", "rolling5d"}
+    selected_sample = _safe_int((metric or {}).get("joined_sample"))
+    authoritative_ev_metric = bool(
+        (metric or {}).get("ev_metric") == CONFIRMED_PRIOR_EV_METRIC
+    )
+    selected_sample_floor_met = bool(
+        selected_window in CONFIRMATION_WINDOWS
+        and selected_sample >= CONFIRMED_PRIOR_MIN_JOINED_SAMPLE
+        and authoritative_ev_metric
+    )
+    confirmed_positive = selected_sample_floor_met and ev_pct is not None and ev_pct > 0
+    exploratory_positive = (
+        selected_window in CONFIRMATION_WINDOWS
+        and not selected_sample_floor_met
         and ev_pct is not None
         and ev_pct > 0
     )
@@ -699,16 +726,20 @@ def _classify_prior(prior: dict[str, Any]) -> None:
         reason = "daily_positive_without_rolling_confirmation"
         confidence = "low"
     elif (
-        rolling_positive
+        confirmed_positive
         and prior["observable_prefix"].get("chosen_action") == "wait_requote"
     ):
         recommendation = "recheck_prior"
         reason = f"{selected_window}_positive_wait_requote_prior"
         confidence = "medium" if lineage_blocked else "high"
-    elif rolling_positive:
+    elif confirmed_positive:
         recommendation = "positive_prior"
         reason = f"{selected_window}_positive_ev_prior"
         confidence = "medium" if lineage_blocked else "high"
+    elif exploratory_positive:
+        recommendation = "recheck_prior"
+        reason = f"{selected_window}_positive_thin_or_fallback_sim_recheck"
+        confidence = "low"
     elif counterfactual_missed > counterfactual_avoided:
         recommendation = "hold_sample"
         reason = "counterfactual_missed_winner_waiting_rolling_confirmation"
@@ -721,9 +752,14 @@ def _classify_prior(prior: dict[str, Any]) -> None:
     prior["recommendation"] = recommendation
     prior["confidence"] = confidence
     prior["selected_window"] = selected_window
+    prior["selected_window_joined_sample"] = selected_sample
+    prior["selected_window_sample_floor_met"] = selected_sample_floor_met
+    prior["selected_ev_metric_authoritative"] = authoritative_ev_metric
     prior["reason"] = reason
     prior["runtime_effect"] = False
     prior["allowed_runtime_apply"] = False
+    prior["actual_order_submitted"] = False
+    prior["broker_order_forbidden"] = True
 
 
 def _strip_private_metrics(prior: dict[str, Any]) -> dict[str, Any]:
@@ -752,11 +788,15 @@ def _build_code_improvement_orders(summary: dict[str, Any]) -> list[dict[str, An
             "priority": 3,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
             "implementation_status": "implemented",
             "implementation_provenance": {
                 "implementation_type": "rising_missed_classifier_prior_source_only",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
                 "root_cause_closure_status_hint": "implementation_done",
             },
             "evidence": [
@@ -875,7 +915,11 @@ def build_report(
                 "metric_role": "source_only_classifier_prior",
                 "decision_authority": "rising_missed_classifier_prior_source_only",
                 "window_policy": "rolling10d_gt_rolling5d_gt_mtd_gt_daily",
-                "sample_floor": "daily_positive_is_hold_sample_until_rolling_confirmation",
+                "sample_floor": (
+                    "10_joined_samples_with_source_quality_adjusted_ev_in_"
+                    "rolling10d_or_rolling5d_or_mtd_for_confirmed_positive_prior;_"
+                    "thin_or_fallback_positive_is_sim_recheck_only"
+                ),
                 "primary_decision_metric": "source_quality_adjusted_ev_pct",
                 "source_quality_gate": "clean_baseline_after_2026_06_04_and_contract_quality",
                 "forbidden_uses": list(FORBIDDEN_USES),
@@ -904,6 +948,8 @@ def build_report(
         "code_improvement_orders": orders,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
         "decision_authority": "rising_missed_classifier_prior_source_only",
         "forbidden_uses": list(FORBIDDEN_USES),
     }

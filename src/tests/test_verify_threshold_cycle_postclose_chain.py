@@ -430,6 +430,186 @@ def test_machine_entry_timing_postclose_contract_binds_report_and_applied_policy
     )
 
 
+def test_machine_entry_timing_verifier_exports_structural_waiting_state(
+    tmp_path: Path,
+):
+    from src.engine.automation.machine_entry_timing_tuning import (
+        REPORT_SCHEMA,
+        build_applied_policy,
+    )
+
+    target_date = "2026-09-04"
+    effective_date = "2026-09-07"
+    report_path = tmp_path / f"machine_entry_timing_tuning_{target_date}.json"
+    policy_dir = tmp_path / "policy"
+    report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "effective_date": effective_date,
+        "decision": "baseline_immediate_entry_carry_forward",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "target_source_ready": True,
+        "winner": None,
+        "runtime_winner": None,
+        "same_stage_owner_guard": {"mutation_present": False},
+        "sample_floor_assessment": {
+            "state": "source_quality_blocked",
+            "shortage_classification_status": "classified",
+            "shortage_class": "structural_population_exhaustion",
+            "shortage_id": (
+                "machine_entry_timing:all_exact_scopes:entry_confirmation_delay"
+            ),
+            "next_action": "repair_exact_entry_anchor_market_join_and_rerun",
+        },
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    applied = build_applied_policy(report, source_report_path=report_path)
+    policy_dir.mkdir()
+    (policy_dir / f"machine_entry_timing_policy_{effective_date}.json").write_text(
+        json.dumps(applied), encoding="utf-8"
+    )
+
+    status = mod._machine_entry_timing_postclose_contract_status(
+        report,
+        applied,
+        target_date=target_date,
+        report_path=report_path,
+        policy_dir=policy_dir,
+    )
+
+    assert status["status"] == "pass"
+    assert status["waiting_resolution_status"] == "requires_structural_repair"
+    assert status["source_date_quarantined"] is False
+    assert status["shortage_id"] == (
+        "machine_entry_timing:all_exact_scopes:entry_confirmation_delay"
+    )
+    assert status["shortage_next_action"] == (
+        "repair_exact_entry_anchor_market_join_and_rerun"
+    )
+    rendered = mod._render_markdown({"machine_entry_timing_postclose": status})
+    assert "Machine Entry Timing Waiting Classification" in rendered
+    assert "`requires_structural_repair`" in rendered
+
+
+def test_machine_entry_timing_verifier_closes_immutable_receipt_gap_as_quarantine(
+    tmp_path: Path,
+):
+    from src.engine.automation.machine_entry_timing_tuning import (
+        REPORT_SCHEMA,
+        build_applied_policy,
+    )
+
+    target_date = "2026-09-04"
+    effective_date = "2026-09-07"
+    report_path = tmp_path / f"machine_entry_timing_tuning_{target_date}.json"
+    policy_dir = tmp_path / "policy"
+    report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "effective_date": effective_date,
+        "decision": "baseline_immediate_entry_carry_forward",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "target_source_ready": True,
+        "winner": None,
+        "runtime_winner": None,
+        "same_stage_owner_guard": {"mutation_present": False},
+        "sample_floor_assessment": {
+            "state": "source_quality_blocked",
+            "shortage_classification_status": "classified",
+            "shortage_class": "structural_population_exhaustion",
+            "shortage_id": (
+                "machine_entry_timing:all_exact_scopes:entry_confirmation_delay"
+            ),
+            "next_action": (
+                "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+            ),
+            "immutable_source_date_quarantine_eligible": True,
+        },
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    applied = build_applied_policy(report, source_report_path=report_path)
+    policy_dir.mkdir()
+    (policy_dir / f"machine_entry_timing_policy_{effective_date}.json").write_text(
+        json.dumps(applied), encoding="utf-8"
+    )
+
+    status = mod._machine_entry_timing_postclose_contract_status(
+        report,
+        applied,
+        target_date=target_date,
+        report_path=report_path,
+        policy_dir=policy_dir,
+    )
+
+    assert status["status"] == "pass"
+    assert status["waiting_resolution_status"] == "terminal_source_date_quarantine"
+    assert status["source_date_quarantined"] is True
+
+
+def test_machine_entry_timing_verifier_rejects_unproven_receipt_quarantine(
+    tmp_path: Path,
+):
+    from src.engine.automation.machine_entry_timing_tuning import (
+        REPORT_SCHEMA,
+        build_applied_policy,
+    )
+
+    target_date = "2026-09-04"
+    effective_date = "2026-09-07"
+    report_path = tmp_path / f"machine_entry_timing_tuning_{target_date}.json"
+    policy_dir = tmp_path / "policy"
+    report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "effective_date": effective_date,
+        "decision": "baseline_immediate_entry_carry_forward",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "target_source_ready": True,
+        "winner": None,
+        "runtime_winner": None,
+        "same_stage_owner_guard": {"mutation_present": False},
+        "sample_floor_assessment": {
+            "state": "source_quality_blocked",
+            "shortage_classification_status": "classified",
+            "shortage_class": "structural_population_exhaustion",
+            "shortage_id": (
+                "machine_entry_timing:all_exact_scopes:entry_confirmation_delay"
+            ),
+            "next_action": (
+                "quarantine_exact_source_date_and_verify_next_runtime_receipt"
+            ),
+            "immutable_source_date_quarantine_eligible": False,
+            "repairable_receipt_companion_gaps": ["source_entry_event_id_missing"],
+        },
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    applied = build_applied_policy(report, source_report_path=report_path)
+    policy_dir.mkdir()
+    (policy_dir / f"machine_entry_timing_policy_{effective_date}.json").write_text(
+        json.dumps(applied), encoding="utf-8"
+    )
+
+    status = mod._machine_entry_timing_postclose_contract_status(
+        report,
+        applied,
+        target_date=target_date,
+        report_path=report_path,
+        policy_dir=policy_dir,
+    )
+
+    assert status["waiting_resolution_status"] == "requires_structural_repair"
+    assert status["source_date_quarantined"] is False
+
+
 def test_machine_entry_timing_verifier_uses_v3_runtime_winner_for_scope_count(
     tmp_path: Path, monkeypatch
 ):
