@@ -132,12 +132,14 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
+    decision_quality_v2_15_bounded_recovery_system_prompt,
     decision_quality_entry_price_v2_5_live_krx_system_prompt,
 )
 
@@ -437,6 +439,9 @@ OPENAI_METADATA_PRIORITY_KEYS = (
     "broker_route",
     "market_data_route",
     "snapshot_id",
+    # The invalid-prompt retry must preserve the exact setup-risk contract.
+    # Otherwise a V2.15 request can silently retry with the V2.14 prompt.
+    "entry_setup_live_policy_selected_prompt_version",
     "invalid_prompt_retry",
     "original_endpoint_name",
 )
@@ -2021,6 +2026,16 @@ class GPTSniperEngine:
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     "watching",
                 )
+            if (
+                selected_version
+                == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+            ):
+                return (
+                    decision_quality_v2_15_bounded_recovery_system_prompt("entry"),
+                    "scalping_entry",
+                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    "watching",
+                )
             if selected_version == DECISION_QUALITY_DETAILED_PROMPT_VERSION:
                 return (
                     decision_quality_v2_detailed_system_prompt(
@@ -2061,12 +2076,19 @@ class GPTSniperEngine:
         exact_payload,
         setup_evidence,
         live_policy,
+        prompt_version=DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     ):
-        """Map the risk-only V2.14 response to the canonical WAIT probe path."""
+        """Map a registered setup-risk response to the bounded WAIT probe path."""
 
         risk = dict(result or {}) if isinstance(result, dict) else {}
         setup = dict(setup_evidence or {}) if isinstance(setup_evidence, dict) else {}
         policy = dict(live_policy or {}) if isinstance(live_policy, dict) else {}
+        selected_prompt_version = str(prompt_version or "").strip()
+        bounded_recovery_policy = bool(
+            selected_prompt_version
+            == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+        )
+        version_token = "v2_15" if bounded_recovery_policy else "v2_14"
         contract_errors = validate_entry_risk_adjudication(
             risk,
             setup_evidence=setup,
@@ -2076,12 +2098,13 @@ class GPTSniperEngine:
             policy.get("enabled") is not True
             or policy.get("status") != "active_bounded_krx_canary"
             or policy.get("selected_prompt_version")
-            != DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            != selected_prompt_version
         ):
-            contract_errors.append("entry_setup_v2_14_live_policy_invalid")
+            contract_errors.append(f"entry_setup_{version_token}_live_policy_invalid")
         composed = compose_entry_decision(
             setup_evidence=setup,
             risk_adjudication=risk,
+            bounded_recovery_policy=bounded_recovery_policy,
         )
         composed_for_live = {
             key: value
@@ -2212,7 +2235,7 @@ class GPTSniperEngine:
                 "action": fail_closed_action,
                 "score": 0,
                 "confidence": 0,
-                "reason": "entry_setup_v2_14_semantic_rejected",
+                "reason": f"entry_setup_{version_token}_semantic_rejected",
                 "edge_state": fail_closed_edge_state,
                 "evidence": {
                     "setup": (composed.get("evidence") or {}).get("setup", "no_setup"),
@@ -2227,7 +2250,7 @@ class GPTSniperEngine:
                 "decision_quality_contract_repair_applied": False,
                 "decision_quality_contract_repair_codes": [],
                 "decision_quality_live_adapter": (
-                    "entry_setup_v2_14_krx_bounded_probe_v1"
+                    f"entry_setup_{version_token}_krx_bounded_probe_v1"
                 ),
                 "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
                 "decision_quality_score_semantics": (
@@ -2236,7 +2259,7 @@ class GPTSniperEngine:
                 "entry_probe_intent": False,
                 "entry_probe_intent_status": "semantic_rejected",
                 "entry_probe_intent_prompt_version": (
-                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                    selected_prompt_version
                 ),
                 "entry_probe_intent_submit_guard_required": True,
                 "entry_probe_intent_actual_order_submitted": False,
@@ -2335,7 +2358,9 @@ class GPTSniperEngine:
             "decision_quality_contract_errors": [],
             "decision_quality_contract_repair_applied": False,
             "decision_quality_contract_repair_codes": [],
-            "decision_quality_live_adapter": ("entry_setup_v2_14_krx_bounded_probe_v1"),
+            "decision_quality_live_adapter": (
+                f"entry_setup_{version_token}_krx_bounded_probe_v1"
+            ),
             "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
             "decision_quality_score_semantics": (
                 "fixed_compatibility_prior_not_ai_quality_gate"
@@ -2343,9 +2368,9 @@ class GPTSniperEngine:
                 else "deterministic_setup_veto_or_insufficient"
             ),
             "decision_quality_runtime_action_mapping": (
-                "v2_14_probe_candidate_to_bounded_wait_probe"
+                f"{version_token}_probe_candidate_to_bounded_wait_probe"
                 if probe_intent
-                else "v2_14_composed_non_exposure_preserved"
+                else f"{version_token}_composed_non_exposure_preserved"
             ),
             "entry_probe_intent": probe_intent,
             "entry_probe_intent_status": (
@@ -2358,10 +2383,10 @@ class GPTSniperEngine:
                 )
             ),
             "entry_probe_intent_prompt_version": (
-                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                selected_prompt_version
             ),
             "entry_probe_intent_eligibility_path": (
-                f"v2_14_krx_bounded:{setup_family.lower()}:{verdict.lower()}"
+                f"{version_token}_krx_bounded:{setup_family.lower()}:{verdict.lower()}"
             ),
             "entry_probe_intent_authority": (
                 "bounded_krx_canary_existing_submit_guard_required"
@@ -2405,15 +2430,16 @@ class GPTSniperEngine:
             str(prompt_version or DECISION_QUALITY_DETAILED_PROMPT_VERSION).strip()
             or DECISION_QUALITY_DETAILED_PROMPT_VERSION
         )
-        if (
-            normalized_prompt_version
-            == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-        ):
+        if normalized_prompt_version in {
+            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+        }:
             return self._normalize_entry_setup_v2_14_result(
                 result,
                 exact_payload=exact_payload,
                 setup_evidence=entry_setup_evidence,
                 live_policy=live_policy,
+                prompt_version=normalized_prompt_version,
             )
         v2_7_probe_prompt_selected = (
             normalized_prompt_version == DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION
@@ -4147,8 +4173,19 @@ class GPTSniperEngine:
                     "entry", live_entry=True
                 )
             elif request.schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA:
+                selected_setup_prompt = str(
+                    (request.metadata or {}).get(
+                        "entry_setup_live_policy_selected_prompt_version"
+                    )
+                    or ""
+                ).strip()
                 safe_prompt = (
-                    decision_quality_v2_14_setup_risk_adjudicator_system_prompt("entry")
+                    decision_quality_v2_15_bounded_recovery_system_prompt("entry")
+                    if selected_setup_prompt
+                    == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+                    else decision_quality_v2_14_setup_risk_adjudicator_system_prompt(
+                        "entry"
+                    )
                 )
             else:
                 safe_prompt = (
@@ -8054,6 +8091,7 @@ class GPTSniperEngine:
                     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
                     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
                 }
                 and prompt_type == "scalping_entry"
                 and normalized_profile == "watching"
@@ -8065,9 +8103,18 @@ class GPTSniperEngine:
             )
             decision_quality_v2_14_selected = bool(
                 prompt_version
-                == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                in {
+                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                }
                 and decision_quality_v2_7_selected
                 and entry_setup_live_policy.get("enabled") is True
+            )
+            entry_setup_live_input_schema = (
+                "entry_setup_v2_15_live_input"
+                if prompt_version
+                == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+                else "entry_setup_v2_14_live_input"
             )
             matrix_runtime = build_holding_exit_matrix_runtime_context(
                 prompt_profile=normalized_profile,
@@ -8123,6 +8170,7 @@ class GPTSniperEngine:
             decision_quality_v2_7_selected = False
             decision_quality_v2_13_selected = False
             decision_quality_v2_14_selected = False
+            entry_setup_live_input_schema = "entry_setup_v2_14_live_input"
         use_hot_entry_input = (
             strategy not in ["KOSPI_ML", "KOSDAQ_ML"]
             and prompt_type == "scalping_entry"
@@ -8155,7 +8203,7 @@ class GPTSniperEngine:
         else:
             input_contract_fields = {
                 "ai_input_schema": (
-                    "entry_setup_v2_14_live_input"
+                    entry_setup_live_input_schema
                     if decision_quality_v2_14_selected
                     else (
                         "decision_quality_v2_13_entry_input"
@@ -8524,7 +8572,7 @@ class GPTSniperEngine:
                                 ).encode("utf-8")
                             ).hexdigest()
                             decision_quality_input = {
-                                "input_schema": "entry_setup_v2_14_live_input",
+                                "input_schema": entry_setup_live_input_schema,
                                 "entry_setup_evidence_v1": entry_setup_evidence,
                                 "exact_replay_context_sha256": (replay_context_sha256),
                                 "provider_input_authority": (
@@ -8629,7 +8677,7 @@ class GPTSniperEngine:
                 input_contract_fields = self._resolve_ai_input_contract_fields(
                     formatted_data,
                     default_schema=(
-                        "entry_setup_v2_14_live_input"
+                        entry_setup_live_input_schema
                         if decision_quality_v2_14_selected
                         else (
                             "decision_quality_v2_13_entry_input"
@@ -8741,6 +8789,9 @@ class GPTSniperEngine:
                         ),
                         "entry_setup_live_policy_candidate_contract_sha256": (
                             entry_setup_live_policy.get("candidate_contract_sha256")
+                        ),
+                        "entry_setup_live_policy_selected_prompt_version": (
+                            entry_setup_live_policy.get("selected_prompt_version")
                         ),
                     }
                 )

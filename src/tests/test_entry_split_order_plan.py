@@ -59,7 +59,10 @@ def test_runtime_apply_authority_contract_rejects_malformed_authority_classes():
     assert reason == "runtime_apply_authority_classes_not_string_list"
 
 
-def test_report_policy_generation_binding_detects_independent_overwrite(tmp_path):
+def test_report_policy_generation_binding_uses_and_validates_immutable_report(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(split_plan, "REPORT_DIR", tmp_path / "reports")
     report_path = tmp_path / "entry_split_order_plan_2026-09-04.json"
     policy = {
         "schema_version": split_plan.POLICY_SCHEMA_VERSION,
@@ -75,6 +78,9 @@ def test_report_policy_generation_binding_detects_independent_overwrite(tmp_path
     }
     report, policy = split_plan.bind_report_policy_generation(report, policy)
     report_path.write_text(json.dumps(report), encoding="utf-8")
+    generation_id = report["artifact_generation_binding"]["generation_id"]
+    immutable_path = split_plan.generation_report_path("2026-09-04", generation_id)
+    split_plan._write_json(immutable_path, report)
 
     assert split_plan.validate_report_policy_generation(report, policy) == (
         True,
@@ -90,6 +96,11 @@ def test_report_policy_generation_binding_detects_independent_overwrite(tmp_path
         "recommended_policy": {"policy_version": "different-generation"},
     }
     report_path.write_text(json.dumps(independently_overwritten), encoding="utf-8")
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        True,
+        "generation_binding_valid",
+    )
+    immutable_path.write_text(json.dumps(independently_overwritten), encoding="utf-8")
     assert split_plan.policy_report_generation_contract_status(policy) == (
         False,
         "generation_binding_digest_mismatch",
@@ -358,7 +369,7 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert report["recommended_policy"]["post_apply_attribution"]["required"] is True
     assert (
         report["recommended_policy"]["rollback_guard"]["action"]
-        == "carry_forward_previous_runtime_policy"
+        == "fail_closed_to_existing_operator_or_runtime_fallback"
     )
     assert (
         report["recommended_policy"]["candidates"][0]["runtime_apply_scope"]
@@ -377,6 +388,149 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert policy["explicit_bucket_count"] == 0
     assert policy["buckets"] == {}
     assert split_plan.policy_path(target_date).exists()
+    generation_id = report["artifact_generation_binding"]["generation_id"]
+    immutable_report_path = split_plan.generation_report_path(
+        target_date, generation_id
+    )
+    immutable_policy_path = split_plan.generation_policy_path(
+        target_date, generation_id
+    )
+    assert immutable_report_path.is_file()
+    assert immutable_policy_path.is_file()
+    assert json.loads(immutable_policy_path.read_text(encoding="utf-8")) == policy
+    monkeypatch.setattr(daily_report, "ENTRY_SPLIT_ORDER_PLAN_DIR", split_plan.REPORT_DIR)
+    family = daily_report._build_entry_split_order_plan_family(
+        target_date=target_date
+    )
+    assert family["recommended"]["policy_file"] == str(immutable_policy_path)
+    split_plan.report_paths(target_date)[0].write_text("{}", encoding="utf-8")
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        True,
+        "generation_binding_valid",
+    )
+
+
+def test_split_candidate_freezes_after_mature_negative_early_ev():
+    grid = split_plan._build_candidate_grid(
+        {"balanced_normal": {"real_sample_count": 20}},
+        {},
+        {},
+        {
+            ("balanced_normal", split_plan.BASELINE_SPLIT_VARIANT_ID): [-0.2] * 10
+        },
+    )
+
+    candidate = grid[0]
+    assert candidate["candidate_passed"] is False
+    assert candidate["sample_floor_status"] == (
+        "hold_early_split_variant_edge_not_positive"
+    )
+    assert candidate["post_apply_continuation_gate"]["action"] == (
+        "freeze_new_policy_generation"
+    )
+
+
+def test_split_candidate_holds_observation_before_real_submit_floor():
+    grid = split_plan._build_candidate_grid(
+        {"balanced_normal": {"real_sample_count": 19}},
+        {},
+        {},
+        {},
+    )
+
+    candidate = grid[0]
+    assert candidate["candidate_passed"] is False
+    assert candidate["sample_floor_status"] == "hold_sample"
+    assert candidate["post_apply_continuation_gate"]["action"] == (
+        "hold_observation"
+    )
+    assert candidate["post_apply_continuation_gate"]["pass"] is False
+    assert (
+        candidate["post_apply_continuation_gate"]["economic_evidence_pass"] is True
+    )
+    assert candidate["post_apply_continuation_gate"]["reason"] == (
+        "real_submit_sample_floor_not_reached"
+    )
+
+
+def test_generation_snapshot_path_rejects_non_iso_date():
+    report = {
+        "date": "../2026-09-04",
+        "artifact_generation_binding": {"generation_id": "a" * 64},
+    }
+
+    assert split_plan.generation_policy_snapshot_path(report) is None
+
+
+def test_current_generation_contract_requires_immutable_report(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        split_plan, "GENERATION_BINDING_REQUIRED_FROM_DATE", date(2026, 9, 4)
+    )
+    target_date = "2026-09-04"
+    report = {"schema_version": split_plan.SCHEMA_VERSION, "date": target_date}
+    policy = {
+        "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+        "source_date": target_date,
+        "source_report": str(split_plan.report_paths(target_date)[0]),
+    }
+    report["recommended_policy"] = {"policy_version": "policy-test"}
+    policy["policy_version"] = "policy-test"
+    report, policy = split_plan.bind_report_policy_generation(report, policy)
+    split_plan._write_json(split_plan.report_paths(target_date)[0], report)
+
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        False,
+        "immutable_generation_source_report_missing",
+    )
+
+
+def test_split_candidate_does_not_seed_against_mature_parent_tail_evidence():
+    grid = split_plan._build_candidate_grid(
+        {"balanced_normal": {"real_sample_count": 20}},
+        {},
+        {},
+        {("balanced_normal", "prior_split_variant"): [-0.4] * 20},
+    )
+
+    candidate = grid[0]
+    assert candidate["candidate_passed"] is False
+    assert candidate["post_apply_continuation_gate"][
+        "mature_parent_evidence_contradictory"
+    ] is True
+    assert candidate["sample_floor_status"] == (
+        "hold_mature_parent_split_edge_contradicted"
+    )
+
+
+def test_runtime_loader_rejects_preopen_policy_version_mismatch(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    path = split_plan.policy_path(target_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+                "policy_version": "entry-split-selected",
+                "source_date": target_date,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION", "entry-split-stale"
+    )
+
+    loaded, status = split_plan._load_policy_from_env()
+
+    assert loaded == {}
+    assert status == "policy_version_mismatch"
 
 
 def test_build_report_suppresses_policy_candidates_when_source_quality_blocked(
@@ -1385,6 +1539,71 @@ def test_post_submit_tick_band_excludes_source_quality_hard_blocked_rows(
     assert balanced["post_submit_low_tick_band"] == {}
     assert balanced["policy_mode"] == "bounded_equal_split_baseline"
     assert balanced["price_offsets_ticks"] == [0, 1]
+
+
+def test_post_submit_tick_band_stream_prefilters_unrelated_price_rows(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    target_date = "2026-07-07"
+    submit = {
+        "date": target_date,
+        "emitted_at": f"{target_date}T09:00:00+09:00",
+        "stage": "order_bundle_submitted",
+        "record_id": 4000,
+        "stock_code": "T04000",
+        "actual_order_submitted": True,
+        "broker_order_submitted": True,
+        "requested_qty": 2,
+        "order_price": 10000,
+        "spread_bps": 18,
+        "buy_pressure_10t": 55,
+    }
+    rows = [submit]
+    rows.extend(
+        {
+            "date": target_date,
+            "emitted_at": f"{target_date}T09:00:10+09:00",
+            "stage": "holding_price_observed",
+            "record_id": 5000 + index,
+            "stock_code": f"U{index:05d}"[:6],
+            "current_price_observed": 9990,
+        }
+        for index in range(100)
+    )
+    rows.append(
+        {
+            "date": target_date,
+            "emitted_at": f"{target_date}T09:00:30+09:00",
+            "stage": "holding_price_observed",
+            "record_id": 4000,
+            "stock_code": "T04000",
+            "current_price_observed": 9980,
+        }
+    )
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+        rows,
+    )
+
+    events, _summary = split_plan._iter_input_events(target_date)
+    bands, scan = split_plan._build_post_submit_low_tick_bands_from_sources(
+        target_date,
+        events,
+    )
+
+    assert len(events) == 1
+    assert bands["balanced_normal"]["sample_count"] == 1
+    assert bands["balanced_normal"]["p75_down_ticks"] == 2.0
+    assert bands["balanced_normal"]["p50_down_pct"] == 0.2
+    assert bands["balanced_normal"]["p90_down_pct"] == 0.2
+    assert bands["balanced_normal"]["touch_0_3pct_rate"] == 0.0
+    assert bands["balanced_normal"]["no_pullback_rate"] == 0.0
+    assert scan["raw_line_count"] == 102
+    assert scan["price_token_line_count"] == 101
+    assert scan["record_candidate_line_count"] == 1
+    assert scan["parsed_observation_count"] == 1
+    assert scan["retained_price_event_count"] == 0
 
 
 def test_post_sell_candidate_preserves_entry_split_variant_metadata(

@@ -22,6 +22,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
@@ -29,6 +30,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
+    decision_quality_v2_15_bounded_recovery_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
     decision_quality_v2_system_prompt,
 )
@@ -3903,7 +3905,6 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert blocked_reentry["entry_probe_intent"] is False
     assert blocked_reentry["entry_recent_exit_probe_blocked"] is True
     assert blocked_reentry["entry_recent_exit_price_vs_exit_pct"] == 1.0
-
     rejected = engine._normalize_decision_quality_entry_result(
         {
             **risk_response,
@@ -4009,6 +4010,78 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert malformed_rejected["entry_ai_raw_supporting_fact_ids"] == []
     assert malformed_rejected["entry_ai_raw_contradicting_fact_ids"] == []
     assert malformed_rejected["entry_ai_raw_confidence"] == "{'normalized': 0.74}"
+
+
+def test_decision_quality_v2_15_live_adapter_preserves_bounded_recovery_scope():
+    engine = _build_engine()
+    prompt, prompt_type, prompt_version, profile = engine._resolve_scalping_prompt(
+        "watching",
+        prompt_version_override=(
+            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+        ),
+    )
+    assert prompt == decision_quality_v2_15_bounded_recovery_system_prompt("entry")
+    assert prompt_type == "scalping_entry"
+    assert prompt_version == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    assert profile == "watching"
+
+    setup_evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={
+            "schema": "exact_payload_analysis_v1",
+            "source_quality": {"status": "pass", "completed_bar_count": 20},
+            "executable_liquidity": {"execution_cost_state": "low"},
+            "contradictions": [],
+            "deterministic_contract_facts": {
+                "structural_edge_floor": True,
+                "early_session_structural_edge_floor": False,
+                "early_session_probe_candidate": False,
+                "orderly_pullback_recovery": False,
+                "trusted_supportive_trigger": True,
+                "adverse_distribution_no_edge": False,
+                "blocking_overextension": False,
+                "ask_wall_wide_spread": False,
+            },
+        },
+        recovery_analysis={
+            "schema": "anticipatory_reversal_analysis_v1",
+            "source_mode": "fresh_dual",
+            "hard_blockers": [],
+            "clean_continuation_probe": {"eligible": True},
+            "recovery_confirmation_probe": {"eligible": False},
+        },
+    )
+    result = engine._normalize_decision_quality_entry_result(
+        {
+            "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
+            "risk_verdict": "PASS",
+            "risk_codes": ["NO_BLOCKING_RISK"],
+            "supporting_fact_ids": ["structural_edge_floor"],
+            "contradicting_fact_ids": [],
+            "confidence": 80,
+        },
+        exact_payload={"current": {"price": 10000}},
+        prompt_version=DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+        entry_setup_evidence=setup_evidence,
+        live_policy={
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "canary_mode": "one_share_exploration",
+            "maximum_daily_exploration_probes": 3,
+            "selected_prompt_version": (
+                DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+            ),
+        },
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["entry_probe_intent"] is False
+    assert result["decision_quality_live_adapter"] == (
+        "entry_setup_v2_15_krx_bounded_probe_v1"
+    )
+    assert result["entry_probe_intent_prompt_version"] == (
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
 
 
 def test_decision_quality_v2_13_clean_wait_maps_to_guarded_probe(monkeypatch):
@@ -7197,6 +7270,47 @@ def test_openai_invalid_prompt_retries_with_minimal_numeric_prompt(monkeypatch):
     assert calls[1]["metadata"]["invalid_prompt_retry"] == "true"
     assert "Use only the numeric fields" in calls[1]["instructions"]
     assert "원본 프롬프트" not in calls[1]["instructions"]
+
+
+def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(monkeypatch):
+    engine = _build_engine()
+    calls = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise Exception("invalid_prompt")
+        return SimpleNamespace(
+            output_text=(
+                '{"schema":"entry_risk_adjudication_v1",'
+                '"risk_verdict":"INSUFFICIENT","risk_codes":[],'
+                '"supporting_fact_ids":[],"contradicting_fact_ids":[],'
+                '"confidence":0}'
+            )
+        )
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+    metadata = {f"diagnostic_{index}": index for index in range(24)}
+    metadata["entry_setup_live_policy_selected_prompt_version"] = (
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+
+    engine._call_openai_safe(
+        "original V2.15 prompt",
+        "{}",
+        require_json=True,
+        context_name="v2_15_retry",
+        schema_name=ENTRY_RISK_ADJUDICATION_SCHEMA,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        metadata_extra=metadata,
+    )
+
+    assert len(calls) == 2
+    assert calls[1]["metadata"][
+        "entry_setup_live_policy_selected_prompt_version"
+    ] == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    assert "V2.15 bounded-recovery addendum" in calls[1]["instructions"]
 
 
 def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkeypatch):

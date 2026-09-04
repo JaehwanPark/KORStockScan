@@ -1,8 +1,9 @@
 """Run a full-day cohort-isolated entry prompt replay as an offline batch.
 
 The optimizer may advance an offline cohort from V2.14 to a supported later
-candidate.  Live candidate publication remains explicitly limited to the
-separately registered V2.14 family.
+candidate.  V2.14 and the bounded-recovery V2.15 candidate share the registered
+one-share KRX exploration bridge.  Sequential-recovery V2.16 remains offline
+until its later-snapshot runtime actuator is separately registered.
 """
 
 from __future__ import annotations
@@ -192,10 +193,14 @@ def _selection_checkpoint_contract_pass(
     )
 
 
-def _publish_unregistered_prompt_blocker(
-    *, source_date: str, candidate_prompt_version: str, write: bool
+def _publish_prompt_blocker(
+    *,
+    source_date: str,
+    candidate_prompt_version: str,
+    write: bool,
+    blocking_reason: str,
 ) -> dict[str, Any]:
-    """Replace any same-date V2.14 candidate with a fail-closed marker."""
+    """Replace any same-date candidate alias with a fail-closed marker."""
 
     generated_at = datetime.now(quality.KST)
     path = live_policy.live_candidate_path(source_date)
@@ -213,18 +218,22 @@ def _publish_unregistered_prompt_blocker(
         "generated_at": generated_at.isoformat(),
         "status": "blocked",
         "canary_mode": None,
-        "blocking_reasons": ["unregistered_dynamic_prompt_for_live"],
-        "performance_promotion_blocking_reasons": [
-            "unregistered_dynamic_prompt_for_live"
-        ],
+        "blocking_reasons": [blocking_reason],
+        "performance_promotion_blocking_reasons": [blocking_reason],
         "selected_prompt_version": candidate_prompt_version,
-        "registered_live_prompt_version": DEFAULT_CANDIDATE_PROMPT_VERSION,
+        "registered_live_prompt_versions": list(
+            live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
+        ),
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
         "activation_mode": "first_available_krx_trading_date_preopen_only",
         "next_action": (
-            "complete isolated rolling quality and register an exact bounded "
-            "runtime family before any PREOPEN apply"
+            "finish the full-day isolated replay and republish a verified candidate"
+            if blocking_reason == "full_day_candidate_refresh_pending"
+            else (
+                "complete isolated rolling quality and register an exact bounded "
+                "runtime family before any PREOPEN apply"
+            )
         ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -243,9 +252,11 @@ def _publish_unregistered_prompt_blocker(
         _atomic_write_json(path, candidate)
     return {
         "path": str(path),
-        "status": "blocked_unregistered_dynamic_prompt_for_live",
+        "status": f"blocked_{blocking_reason}",
         "candidate_prompt_version": candidate_prompt_version,
-        "registered_live_prompt_version": DEFAULT_CANDIDATE_PROMPT_VERSION,
+        "registered_live_prompt_versions": list(
+            live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
+        ),
         "effective_date": body["effective_date"],
         "artifact_sha256": candidate["artifact_sha256"],
         "next_action": body["next_action"],
@@ -433,7 +444,7 @@ def run_batch(
         "generated_at": started_at.isoformat(),
         "outcome_as_of": as_of.astimezone(quality.KST).isoformat(),
         "status": "running",
-        "candidate_prompt_version": (DEFAULT_CANDIDATE_PROMPT_VERSION),
+        "candidate_prompt_version": candidate_plan[("KRX", "KRX_REGULAR")],
         "candidate_prompt_versions_by_cohort": {
             f"{venue}/{session}": candidate_plan[(venue, session)]
             for venue, session in DEFAULT_COHORTS
@@ -448,13 +459,23 @@ def run_batch(
     if write:
         _atomic_write_json(path, report)
     krx_candidate = candidate_plan[("KRX", "KRX_REGULAR")]
-    if krx_candidate != DEFAULT_CANDIDATE_PROMPT_VERSION:
-        # Invalidate a same-date V2.14 artifact before any maturity,
+    if krx_candidate not in live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
+        # Invalidate a same-date candidate alias before any maturity,
         # predecessor, credential, provider, or report-write early return.
-        report["krx_bounded_live_candidate"] = _publish_unregistered_prompt_blocker(
+        report["krx_bounded_live_candidate"] = _publish_prompt_blocker(
             source_date=target_date,
             candidate_prompt_version=krx_candidate,
             write=write,
+            blocking_reason="unregistered_dynamic_prompt_for_live",
+        )
+        if write:
+            _atomic_write_json(path, report)
+    else:
+        report["krx_bounded_live_candidate"] = _publish_prompt_blocker(
+            source_date=target_date,
+            candidate_prompt_version=krx_candidate,
+            write=write,
+            blocking_reason="full_day_candidate_refresh_pending",
         )
         if write:
             _atomic_write_json(path, report)
@@ -525,11 +546,12 @@ def run_batch(
             if cohort_failure_count == 0
             else "completed_offline_only_with_cohort_failures"
         )
-        if krx_candidate == DEFAULT_CANDIDATE_PROMPT_VERSION:
+        if krx_candidate in live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
             report["krx_bounded_live_candidate"] = publish_live_candidate(
                 source_date=target_date,
                 batch_report=report,
                 write=write,
+                candidate_prompt_version=krx_candidate,
             )
     except Exception as exc:
         report["status"] = "failed_offline_batch"

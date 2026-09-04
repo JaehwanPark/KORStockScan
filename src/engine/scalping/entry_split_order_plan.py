@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 from collections import defaultdict
@@ -41,8 +42,21 @@ SAMPLE_FLOOR_REAL = 20
 SAMPLE_FLOOR_SIM = 10
 CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
 SPLIT_VARIANT_OUTCOME_FLOOR_REAL = 20
+SPLIT_VARIANT_CONTINUATION_FLOOR_REAL = 10
 POST_SUBMIT_TICK_BAND_FLOOR_REAL = 20
 POST_SUBMIT_LOW_WINDOW_MINUTES = 10
+POST_SUBMIT_PRICE_TOKENS = (
+    '"current_price_observed"',
+    '"current_price"',
+    '"latest_price"',
+    '"holding_ws_recovered_curr"',
+    '"curr_price"',
+    '"mark_price_at_submit"',
+    '"submitted_mark_price"',
+)
+RAW_RECORD_ID_PATTERN = re.compile(
+    r'"record_id"\s*:\s*(?:"([^"\\]*(?:\\.[^"\\]*)*)"|([^,}\s]+))'
+)
 POLICY_MODE_REAL_PRIMARY_EV = "real_primary_ev_optimized"
 POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
 POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
@@ -1134,6 +1148,34 @@ def policy_path(target_date: str) -> Path:
     return POLICY_DIR / f"entry_split_order_policy_{target_date}.json"
 
 
+def generation_report_path(target_date: str, generation_id: str) -> Path:
+    """Return the immutable report snapshot path for one bound generation."""
+
+    return REPORT_DIR / "generations" / (
+        f"{REPORT_TYPE}_{target_date}_{generation_id}.json"
+    )
+
+
+def generation_policy_path(target_date: str, generation_id: str) -> Path:
+    """Return the immutable policy snapshot path for one bound generation."""
+
+    return POLICY_DIR / "generations" / (
+        f"entry_split_order_policy_{target_date}_{generation_id}.json"
+    )
+
+
+def generation_policy_snapshot_path(report: dict[str, Any]) -> Path | None:
+    """Resolve a generated report's immutable policy without trusting an alias."""
+
+    binding = report.get("artifact_generation_binding")
+    binding = binding if isinstance(binding, dict) else {}
+    target_date = str(report.get("date") or "").strip()
+    generation_id = str(binding.get("generation_id") or "").strip()
+    if not _valid_iso_date(target_date) or not _valid_generation_id(generation_id):
+        return None
+    return generation_policy_path(target_date, generation_id)
+
+
 def _pipeline_events_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
 
@@ -1195,6 +1237,16 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
             os.unlink(temporary)
 
 
+def _write_immutable_json(path: Path, payload: dict[str, Any]) -> None:
+    """Create a content-addressed snapshot, rejecting an identity collision."""
+
+    if path.exists():
+        if _load_json(path) != payload:
+            raise RuntimeError(f"immutable_generation_collision:{path}")
+        return
+    _write_json(path, payload)
+
+
 def _canonical_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -1205,6 +1257,21 @@ def _canonical_sha256(payload: dict[str, Any]) -> str:
             allow_nan=False,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _valid_generation_id(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(
+        len(text) == 64 and all(character in "0123456789abcdef" for character in text)
+    )
+
+
+def _valid_iso_date(value: Any) -> bool:
+    text = str(value or "").strip()
+    try:
+        return date.fromisoformat(text).isoformat() == text
+    except ValueError:
+        return False
 
 
 def _without_generation_binding(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1289,10 +1356,23 @@ def policy_report_generation_contract_status(
             if binding_required
             else (True, "legacy_policy_before_generation_binding_activation")
         )
+    binding = policy.get("artifact_generation_binding")
+    binding = binding if isinstance(binding, dict) else {}
+    generation_id = str(binding.get("generation_id") or "").strip()
+    if not _valid_generation_id(generation_id):
+        return False, "generation_id_invalid"
+    immutable_report = generation_report_path(source_date, generation_id)
     source_report = str(policy.get("source_report") or "").strip()
     if not source_report:
         return False, "generation_source_report_path_missing"
-    report = _load_json(Path(source_report))
+    # New generations must be consumed from the immutable snapshot.  The date
+    # alias fallback exists only for pre-migration evidence.
+    if immutable_report.is_file():
+        report = _load_json(immutable_report)
+    elif binding_required:
+        return False, "immutable_generation_source_report_missing"
+    else:
+        report = _load_json(Path(source_report))
     if not report:
         return False, "generation_source_report_missing_or_invalid"
     return validate_report_policy_generation(report, policy)
@@ -1495,22 +1575,6 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
                 excluded_pre_baseline += 1
                 continue
             stage = str(fields.get("stage") or fields.get("event") or "").strip()
-            has_post_submit_price = bool(
-                fields.get("record_id")
-                and fields.get("stock_code")
-                and any(
-                    _safe_int(fields.get(key), 0) > 0
-                    for key in (
-                        "current_price_observed",
-                        "current_price",
-                        "latest_price",
-                        "holding_ws_recovered_curr",
-                        "curr_price",
-                        "mark_price_at_submit",
-                        "submitted_mark_price",
-                    )
-                )
-            )
             calibration_relevant = bool(
                 stage.startswith("scalp_sim_")
                 or stage in hard_blocking_stages
@@ -1521,7 +1585,6 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
                     "order_leg_fail",
                     "order_bundle_failed",
                 }
-                or has_post_submit_price
             )
             if not calibration_relevant:
                 continue
@@ -1553,21 +1616,11 @@ def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
         "order_bundle_failed",
         *hard_blocking_stages,
     }
-    price_tokens = (
-        '"current_price_observed"',
-        '"current_price"',
-        '"latest_price"',
-        '"holding_ws_recovered_curr"',
-        '"curr_price"',
-        '"mark_price_at_submit"',
-        '"submitted_mark_price"',
-    )
     with open_text_auto(actual_path) as handle:
         for raw_line in handle:
             if (
                 "scalp_sim_" not in raw_line
                 and not any(token in raw_line for token in stage_tokens)
-                and not any(token in raw_line for token in price_tokens)
             ):
                 continue
             try:
@@ -2290,59 +2343,13 @@ def _submit_order_price(fields: dict[str, Any]) -> int:
     )
 
 
-def _build_post_submit_low_tick_bands(
-    events: list[dict[str, Any]],
+def _summarize_post_submit_low_tick_bands(
+    down_ticks_by_bucket: dict[str, list[int]],
+    down_pct_by_bucket: dict[str, list[float]],
     *,
-    source_quality: dict[str, Any] | None = None,
-    window_minutes: int = POST_SUBMIT_LOW_WINDOW_MINUTES,
+    window_minutes: int,
 ) -> dict[str, dict[str, Any]]:
-    blocked_stages = set((source_quality or {}).get("hard_blocking_stages") or [])
-    grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for fields in events:
-        stage = str(fields.get("stage") or fields.get("event") or "").strip()
-        if stage in blocked_stages:
-            continue
-        record_id = str(fields.get("record_id") or "").strip()
-        code = str(fields.get("stock_code") or "").strip()
-        if not record_id or not code:
-            continue
-        grouped[(record_id, code)].append(fields)
-
-    down_ticks_by_bucket: dict[str, list[int]] = defaultdict(list)
-    down_pct_by_bucket: dict[str, list[float]] = defaultdict(list)
-    for group in grouped.values():
-        dated = [(item, _event_dt(item)) for item in group]
-        for submit, submit_dt in dated:
-            stage = str(submit.get("stage") or submit.get("event") or "").strip()
-            if stage != "order_bundle_submitted":
-                continue
-            if not _safe_bool(submit.get("actual_order_submitted")):
-                continue
-            if not _has_split_eligible_quantity_or_provenance(submit):
-                continue
-            if submit_dt is None:
-                continue
-            submit_price = _submit_order_price(submit)
-            if submit_price <= 0:
-                continue
-            observed_prices: list[int] = []
-            for item, item_dt in dated:
-                if item_dt is None:
-                    continue
-                if item_dt < submit_dt:
-                    continue
-                if item_dt > submit_dt + timedelta(minutes=window_minutes):
-                    continue
-                observed_prices.extend(_post_submit_observed_prices(item))
-            if not observed_prices:
-                continue
-            low_price = min(observed_prices)
-            tick = max(1, int(get_tick_size(submit_price) or 1))
-            down_ticks = max(0, int(math.ceil((submit_price - low_price) / tick)))
-            down_pct = max(0.0, ((submit_price - low_price) / submit_price) * 100.0)
-            bucket = _context_bucket(submit)
-            down_ticks_by_bucket[bucket].append(down_ticks)
-            down_pct_by_bucket[bucket].append(down_pct)
+    """Preserve the established tick-band report schema for streamed inputs."""
 
     result: dict[str, dict[str, Any]] = {}
     for bucket, values in down_ticks_by_bucket.items():
@@ -2403,6 +2410,147 @@ def _build_post_submit_low_tick_bands(
             "no_pullback_rate": _pct(sum(1 for value in values if value <= 0), sample),
         }
     return result
+
+
+def _raw_record_id(raw_line: str) -> str:
+    match = RAW_RECORD_ID_PATTERN.search(raw_line)
+    if match is None:
+        return ""
+    raw_value = match.group(1) if match.group(1) is not None else match.group(2)
+    return _identifier(raw_value)
+
+
+def _build_post_submit_low_tick_bands_from_sources(
+    target_date: str,
+    submit_events: list[dict[str, Any]],
+    *,
+    source_quality: dict[str, Any] | None = None,
+    window_minutes: int = POST_SUBMIT_LOW_WINDOW_MINUTES,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Join submit lows without retaining every intraday price event in RAM."""
+
+    blocked_stages = set((source_quality or {}).get("hard_blocking_stages") or [])
+    submissions: list[dict[str, Any]] = []
+    submissions_by_record_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for fields in submit_events:
+        stage = str(fields.get("stage") or fields.get("event") or "").strip()
+        if stage != "order_bundle_submitted" or stage in blocked_stages:
+            continue
+        if not _safe_bool(fields.get("actual_order_submitted")):
+            continue
+        if not _has_split_eligible_quantity_or_provenance(fields):
+            continue
+        record_id = _identifier(fields.get("record_id"))
+        code = str(fields.get("stock_code") or "").strip()
+        submit_dt = _event_dt(fields)
+        submit_price = _submit_order_price(fields)
+        if not record_id or not code or submit_dt is None or submit_price <= 0:
+            continue
+        observed_prices = _post_submit_observed_prices(fields)
+        submission = {
+            "record_id": record_id,
+            "stock_code": code,
+            "submit_dt": submit_dt,
+            "submit_price": submit_price,
+            "context_bucket": _context_bucket(fields),
+            "observed_low": min(observed_prices) if observed_prices else None,
+        }
+        submissions.append(submission)
+        submissions_by_record_id[record_id].append(submission)
+
+    raw_line_count = 0
+    price_token_line_count = 0
+    record_candidate_line_count = 0
+    parsed_observation_count = 0
+    matched_observation_count = 0
+    if submissions_by_record_id:
+        source_paths = (
+            _pipeline_events_path(target_date),
+            _threshold_events_path(target_date),
+        )
+        for source_path in source_paths:
+            actual_path = existing_or_gzip_path(source_path)
+            if not actual_path.exists():
+                continue
+            with open_text_auto(actual_path) as handle:
+                for raw_line in handle:
+                    raw_line_count += 1
+                    if not any(token in raw_line for token in POST_SUBMIT_PRICE_TOKENS):
+                        continue
+                    price_token_line_count += 1
+                    record_id = _raw_record_id(raw_line)
+                    if record_id not in submissions_by_record_id:
+                        continue
+                    record_candidate_line_count += 1
+                    try:
+                        payload = json.loads(raw_line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, dict):
+                        continue
+                    fields = _event_fields(payload)
+                    parsed_observation_count += 1
+                    stage = str(
+                        fields.get("stage") or fields.get("event") or ""
+                    ).strip()
+                    if stage in blocked_stages:
+                        continue
+                    event_date = _event_date(fields) or target_date
+                    if event_date != target_date:
+                        continue
+                    code = str(fields.get("stock_code") or "").strip()
+                    observed_dt = _event_dt(fields)
+                    observed_prices = _post_submit_observed_prices(fields)
+                    if not code or observed_dt is None or not observed_prices:
+                        continue
+                    for submission in submissions_by_record_id[record_id]:
+                        if code != submission["stock_code"]:
+                            continue
+                        submit_dt = submission["submit_dt"]
+                        if not (
+                            submit_dt
+                            <= observed_dt
+                            <= submit_dt + timedelta(minutes=window_minutes)
+                        ):
+                            continue
+                        observed_low = min(observed_prices)
+                        current_low = submission.get("observed_low")
+                        submission["observed_low"] = (
+                            observed_low
+                            if current_low is None
+                            else min(int(current_low), observed_low)
+                        )
+                        matched_observation_count += 1
+
+    down_ticks_by_bucket: dict[str, list[int]] = defaultdict(list)
+    down_pct_by_bucket: dict[str, list[float]] = defaultdict(list)
+    for submission in submissions:
+        low_price = _safe_int(submission.get("observed_low"), 0)
+        submit_price = _safe_int(submission.get("submit_price"), 0)
+        if low_price <= 0 or submit_price <= 0:
+            continue
+        tick = max(1, int(get_tick_size(submit_price) or 1))
+        down_ticks = max(0, int(math.ceil((submit_price - low_price) / tick)))
+        down_pct = max(0.0, ((submit_price - low_price) / submit_price) * 100.0)
+        bucket = str(submission.get("context_bucket") or "balanced_normal")
+        down_ticks_by_bucket[bucket].append(down_ticks)
+        down_pct_by_bucket[bucket].append(down_pct)
+
+    result = _summarize_post_submit_low_tick_bands(
+        down_ticks_by_bucket,
+        down_pct_by_bucket,
+        window_minutes=window_minutes,
+    )
+    return result, {
+        "mode": "record_id_prefiltered_streaming_v1",
+        "submit_count": len(submissions),
+        "raw_line_count": raw_line_count,
+        "price_token_line_count": price_token_line_count,
+        "record_candidate_line_count": record_candidate_line_count,
+        "parsed_observation_count": parsed_observation_count,
+        "matched_observation_count": matched_observation_count,
+        "retained_price_event_count": 0,
+    }
 
 
 def _is_real_submit_event(fields: dict[str, Any]) -> bool:
@@ -2676,13 +2824,58 @@ def _build_candidate_grid(
             and split_variant_ev > 0
             and downside > -2.0
         )
+        mature_variant_quality = [
+            item
+            for item in split_variant_judgment_quality
+            if item.get("runtime_promotion_sample_ready") is True
+        ]
+        mature_parent_evidence_supportive = any(
+            item.get("runtime_evidence_ready") is True
+            for item in mature_variant_quality
+        )
+        mature_parent_evidence_contradictory = bool(
+            mature_variant_quality and not mature_parent_evidence_supportive
+        )
+        seed_observation_phase = (
+            "initial_seed"
+            if split_variant_outcome_count < SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
+            else (
+                "early_continuation"
+                if split_variant_outcome_count < SPLIT_VARIANT_OUTCOME_FLOOR_REAL
+                else "promotion_evaluation"
+            )
+        )
+        early_continuation_edge_pass = bool(
+            split_variant_outcome_count >= SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
+            and not split_variant_outcome_ready
+            and split_variant_ev is not None
+            and split_variant_ev > 0
+            and downside > -2.0
+            and not mature_parent_evidence_contradictory
+        )
+        initial_seed_evidence_pass = bool(
+            split_variant_outcome_count < SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
+            and not mature_parent_evidence_contradictory
+        )
+        continuation_gate_pass = bool(
+            initial_seed_evidence_pass or early_continuation_edge_pass
+        )
         execution_shape_seed_passed = (
             bucket != "guarded_or_stale"
             and real_count >= SAMPLE_FLOOR_REAL
             and not split_variant_outcome_ready
             and cancel_rate <= 20.0
             and late_fill_rate <= 20.0
+            and continuation_gate_pass
         )
+        if ev_passed:
+            continuation_action = "promote_ev_validated_variant"
+        elif execution_shape_seed_passed:
+            continuation_action = "continue_bounded_seed"
+        elif real_count < SAMPLE_FLOOR_REAL:
+            continuation_action = "hold_observation"
+        else:
+            continuation_action = "freeze_new_policy_generation"
         policy_mode = ""
         policy_generation_reason = ""
         if ev_passed:
@@ -2716,6 +2909,16 @@ def _build_candidate_grid(
         elif real_count < SAMPLE_FLOOR_REAL:
             floor_status = "hold_sample"
             primary_sample_book = "none"
+        elif mature_parent_evidence_contradictory:
+            floor_status = "hold_mature_parent_split_edge_contradicted"
+            primary_sample_book = "real_split_variant"
+        elif (
+            split_variant_outcome_count >= SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
+            and not split_variant_outcome_ready
+            and not early_continuation_edge_pass
+        ):
+            floor_status = "hold_early_split_variant_edge_not_positive"
+            primary_sample_book = "real_split_variant"
         elif split_variant_outcome_ready:
             floor_status = "hold_no_split_variant_edge"
             primary_sample_book = "real_split_variant"
@@ -2797,6 +3000,56 @@ def _build_candidate_grid(
                     },
                     "split_variant_quality": split_variant_judgment_quality,
                     "learning_floor_grants_runtime_promotion": False,
+                },
+                "post_apply_continuation_gate": {
+                    "phase": seed_observation_phase,
+                    "minimum_early_review_sample": (
+                        SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
+                    ),
+                    "minimum_promotion_sample": SPLIT_VARIANT_OUTCOME_FLOOR_REAL,
+                    "exact_variant_sample_count": split_variant_outcome_count,
+                    "exact_variant_equal_weight_avg_profit_pct": split_variant_ev,
+                    "exact_variant_downside_p10_profit_rate": (
+                        round(float(downside), 4)
+                        if split_variant_ev_list
+                        else None
+                    ),
+                    "mature_parent_variant_count": len(mature_variant_quality),
+                    "mature_parent_evidence_supportive": (
+                        mature_parent_evidence_supportive
+                    ),
+                    "mature_parent_evidence_contradictory": (
+                        mature_parent_evidence_contradictory
+                    ),
+                    "pass": passed,
+                    "economic_evidence_pass": (
+                        continuation_gate_pass if not ev_passed else True
+                    ),
+                    "runtime_candidate_pass": passed,
+                    "action": continuation_action,
+                    "reason": (
+                        "full_ev_and_tail_gate_passed"
+                        if ev_passed
+                        else (
+                            "bounded_seed_execution_and_edge_gates_passed"
+                            if execution_shape_seed_passed
+                            else (
+                                "real_submit_sample_floor_not_reached"
+                                if real_count < SAMPLE_FLOOR_REAL
+                                else (
+                                    "mature_parent_variants_have_no_positive_tail_safe_edge"
+                                    if mature_parent_evidence_contradictory
+                                    else (
+                                        "early_variant_ev_or_tail_gate_failed"
+                                        if split_variant_outcome_count
+                                        >= SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
+                                        else "execution_shape_gate_failed"
+                                    )
+                                )
+                            )
+                        )
+                    ),
+                    "negative_or_missing_edge_is_calibration_freeze_not_safety_rollback": True,
                 },
                 "split_variant_id": split_variant_id,
                 "optimization_basis": (
@@ -2889,15 +3142,32 @@ def _policy_payload(
         ],
         "separate_partial_and_full_fill": True,
     }
-    rollback_guard = {
-        "action": "carry_forward_previous_runtime_policy",
-        "triggers": [
-            "worse_fill_rate_without_ev_gain",
-            "higher_cancel_rate",
-            "higher_missed_upside_rate",
-            "negative_post_apply_source_quality_adjusted_ev_delta",
-            "source_quality_or_provenance_breach",
+    continuation_gate = {
+        "active": True,
+        "minimum_early_review_sample": SPLIT_VARIANT_CONTINUATION_FLOOR_REAL,
+        "minimum_promotion_sample": SPLIT_VARIANT_OUTCOME_FLOOR_REAL,
+        "negative_ev_or_tail_action": "freeze_new_policy_generation",
+        "mature_parent_contradiction_action": "freeze_new_policy_generation",
+        "freeze_is_not_safety_rollback": True,
+        "evaluated_bucket_count": len(candidate_grid),
+        "continued_bucket_count": len(passed),
+        "frozen_buckets": [
+            str(item.get("context_bucket") or "")
+            for item in candidate_grid
+            if (item.get("post_apply_continuation_gate") or {}).get("action")
+            == "freeze_new_policy_generation"
         ],
+    }
+    rollback_guard = {
+        "action": "fail_closed_to_existing_operator_or_runtime_fallback",
+        "triggers": [
+            "source_quality_or_provenance_breach",
+            "immutable_generation_contract_breach",
+            "hard_safety_or_submit_contract_breach",
+            "catastrophic_tail_loss",
+        ],
+        "ordinary_negative_ev_action": "freeze_new_policy_generation",
+        "ordinary_sample_shortfall_action": "hold_observation",
     }
     return {
         "schema_version": POLICY_SCHEMA_VERSION,
@@ -2925,6 +3195,7 @@ def _policy_payload(
         "preopen_guard_required": True,
         "runtime_apply_scope": runtime_apply_scopes,
         "post_apply_attribution": post_apply_attribution,
+        "post_apply_continuation_gate": continuation_gate,
         "rollback_guard": rollback_guard,
         "decision_authority": "next_preopen_bounded_entry_split_policy",
         "forbidden_uses": [
@@ -2968,6 +3239,9 @@ def _policy_payload(
                 "exploration_seed_allowed": item.get("exploration_seed_allowed"),
                 "ev_validated_runtime_apply_allowed": item.get(
                     "ev_validated_runtime_apply_allowed"
+                ),
+                "post_apply_continuation_gate": item.get(
+                    "post_apply_continuation_gate"
                 ),
                 "post_submit_low_tick_band": item.get("post_submit_low_tick_band"),
                 "source_quality_adjusted_ev_pct": item[
@@ -3161,9 +3435,13 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "excluded_pre_baseline_count": excluded_pre_baseline_count,
             "clean_tuning_baseline": clean_baseline_policy(),
         }
-    post_submit_low_tick_bands = _build_post_submit_low_tick_bands(
+    (
+        post_submit_low_tick_bands,
+        post_submit_low_tick_band_scan,
+    ) = _build_post_submit_low_tick_bands_from_sources(
+        target_date,
         daily_allowed_events,
-        source_quality={"hard_blocking_stages": []},
+        source_quality=source_quality,
     )
     candidate_grid = _build_candidate_grid(
         counts,
@@ -3352,6 +3630,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 else None
             ),
             "post_submit_low_tick_band_bucket_count": len(post_submit_low_tick_bands),
+            "post_submit_low_tick_band_scan": post_submit_low_tick_band_scan,
         },
         "candidate_grid": candidate_grid,
         "recommended_policy": {
@@ -3376,6 +3655,10 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             or [],
             "runtime_apply_scope": policy.get("runtime_apply_scope") or [],
             "post_apply_attribution": policy.get("post_apply_attribution") or {},
+            "post_apply_continuation_gate": policy.get(
+                "post_apply_continuation_gate"
+            )
+            or {},
             "rollback_guard": policy.get("rollback_guard") or {},
             "baseline_runtime_defaults_enabled": policy.get(
                 "baseline_runtime_defaults_enabled"
@@ -3391,6 +3674,14 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     }
     report, policy = bind_report_policy_generation(report, policy)
     if write:
+        generation_id = str(
+            (report.get("artifact_generation_binding") or {}).get("generation_id")
+            or ""
+        )
+        immutable_report = generation_report_path(target_date, generation_id)
+        immutable_policy = generation_policy_path(target_date, generation_id)
+        _write_immutable_json(immutable_report, report)
+        _write_immutable_json(immutable_policy, policy)
         _write_json(json_path, report)
         _write_json(policy_json, policy)
         md_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3497,6 +3788,16 @@ def _load_policy_from_env(
         return {}, "invalid_policy_schema"
     if not isinstance(payload.get("buckets"), dict):
         return {}, "invalid_policy_buckets"
+    version_key = (
+        "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_VERSION"
+        if daily_baseline
+        else "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION"
+    )
+    expected_version = str(os.environ.get(version_key) or "").strip()
+    # PREOPEN requires this version field.  Runtime independently compares it
+    # when present so a later alias rewrite cannot silently change selection.
+    if expected_version and payload.get("policy_version") != expected_version:
+        return {}, "policy_version_mismatch"
     authority_valid, authority_reason = runtime_apply_authority_contract_status(payload)
     if not authority_valid:
         return {}, f"invalid_policy_authority_contract:{authority_reason}"

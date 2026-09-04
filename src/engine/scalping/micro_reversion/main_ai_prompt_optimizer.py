@@ -47,6 +47,7 @@ ENTRY_CANDIDATE_PROMPT_SHA256 = {
         "74bbdc46ede54e2b5b5c3075ef387863a262b9d3f0ca9be3339027f95b8e303a"
     ),
 }
+ENTRY_REGISTERED_BOUNDED_LIVE_PROMPT_VERSIONS = ENTRY_CANDIDATE_ORDER[:2]
 
 SOURCE_ONLY_AUTHORITY = {
     "runtime_effect": False,
@@ -797,12 +798,12 @@ def build_report(
         cohort.get("effective_venue") == "KRX"
         and cohort.get("session_bucket") == "KRX_REGULAR"
         and (cohort.get("selected_challenger") or {}).get("prompt_version")
-        == ENTRY_CANDIDATE_ORDER[0]
+        in ENTRY_REGISTERED_BOUNDED_LIVE_PROMPT_VERSIONS
         for cohort in (stages.get("entry") or {}).get("cohort_optimizers") or []
         if cohort.get("prompt_search_ready") is True
     )
     runtime_bridge_gaps = [
-        "entry_candidates_after_v2_14_have_offline_replay_but_no_registered_live_family",
+        "entry_v2_16_sequential_recovery_requires_later_snapshot_runtime_actuator",
         "holding_stage_base_provider_and_runtime_candidate_consumer_not_registered",
         "optional_enriched_2x2_provider_and_R2_R3_consumer_not_yet_connected",
     ]
@@ -865,7 +866,8 @@ def build_report(
                     entry_krx_bridge_registered
                 ),
                 "entry_selected_prompt_versions": sorted(selected_entry_versions),
-                "entry_versions_after_v2_14_registered": False,
+                "entry_v2_15_bounded_recovery_registered": True,
+                "entry_v2_16_sequential_recovery_registered": False,
                 "entry_nxt_registered": False,
                 "holding_registered": False,
                 "optional_enriched_factorial_registered": False,

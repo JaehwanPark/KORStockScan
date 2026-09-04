@@ -3,10 +3,12 @@ from datetime import datetime
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
 )
 from src.engine.scalping import entry_setup_live_policy as policy
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_VERSION,
     ENTRY_SETUP_EVIDENCE_VERSION,
     STRUCTURE_PHASE_POLICY_VERSION,
 )
@@ -105,6 +107,9 @@ def _valid_detailed_report():
                 key: True for key in policy.CUMULATIVE_PROMOTION_CHECK_KEYS
             },
             "candidate_contract_sha256": "candidate-contract-sha",
+            "candidate_prompt_version": (
+                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ),
             "cohort_scope": {
                 "isolated": True,
                 "effective_venue": "KRX",
@@ -152,6 +157,9 @@ def _valid_batch_report():
                 "status": "completed_offline_only",
                 "evaluated_request_count": 1,
                 "promotion_quality_gate_pass": True,
+                "candidate_prompt_version": (
+                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                ),
                 "candidate_execution_selection": selection,
             },
             {
@@ -257,6 +265,69 @@ def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp
     assert nxt["enabled"] is False
     assert nxt["selected_prompt_version"] == (
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+    )
+
+
+def test_v2_15_uses_registered_one_share_exploration_bridge(monkeypatch, tmp_path):
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    detailed = _valid_detailed_report()
+    detailed["requests"][0]["candidate"].update(
+        {
+            "prompt_version": (
+                f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry"
+            ),
+            "entry_decision_composer_version": ENTRY_DECISION_COMPOSER_V2_15_VERSION,
+        }
+    )
+    detailed["entry_decision_composer_version"] = (
+        ENTRY_DECISION_COMPOSER_V2_15_VERSION
+    )
+    detailed["cumulative_learning"]["candidate_prompt_version"] = (
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+    detailed_path = policy.detailed_report_path(
+        SOURCE_DATE, DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+    policy._atomic_write_json(detailed_path, detailed)
+    batch = _valid_batch_report()
+    batch["candidate_prompt_version"] = (
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+    batch["cohorts"][0]["candidate_prompt_version"] = (
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+    policy._atomic_write_json(policy.batch_report_path(SOURCE_DATE), batch)
+
+    published = policy.publish_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        write=True,
+        candidate_prompt_version=(
+            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+        ),
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+    activation = policy.write_preopen_activation(target_date=TARGET_DATE)
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=(
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
+        now=datetime(2026, 8, 7, 8, 30, tzinfo=policy.KST),
+    )
+
+    assert published["status"] == "bounded_exploration_apply_ready"
+    assert activation["canary_mode"] == policy.EXPLORATION_CANARY_MODE
+    assert resolved["selected_prompt_version"] == (
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+    candidate = policy._read_json(policy.live_candidate_path(SOURCE_DATE))
+    assert candidate["risk_contract"]["residual_multi_leg_forbidden"] is True
+    assert candidate["entry_decision_composer_version"] == (
+        ENTRY_DECISION_COMPOSER_V2_15_VERSION
     )
 
 
@@ -551,6 +622,49 @@ def test_negative_performance_can_use_guarded_one_share_exploration(
     assert resolved["enabled"] is True
     assert resolved["canary_mode"] == policy.EXPLORATION_CANARY_MODE
     assert resolved["maximum_daily_exploration_probes"] == 3
+
+
+def test_mature_negative_exploration_stops_at_next_preopen(monkeypatch, tmp_path):
+    _configure_paths(monkeypatch, tmp_path)
+    detailed = _valid_detailed_report()
+    detailed["promotion_quality_gate_pass"] = False
+    cumulative = detailed["cumulative_learning"]
+    cumulative["promotion_quality_gate_pass"] = False
+    cumulative["promotion_quality_checks"] = {
+        key: False for key in policy.CUMULATIVE_PROMOTION_CHECK_KEYS
+    }
+    cumulative["candidate_exposure_decision_count"] = 10
+    cumulative["candidate_exposure_unique_symbol_count"] = 4
+    cumulative["candidate_primary_decision_ev_pct"] = -0.01
+    cumulative["candidate_exposure_probe_cost_adjusted_ev_pct"] = -0.2
+    cumulative["candidate_probe_risk_budget"] = {
+        "pass": True,
+        "catastrophic_loss_count": 0,
+    }
+    batch = _valid_batch_report()
+    batch["cohorts"][0]["promotion_quality_gate_pass"] = False
+    detailed_path = tmp_path / "detailed.json"
+    policy._atomic_write_json(detailed_path, detailed)
+
+    candidate = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        detailed_report=detailed,
+        detailed_path=detailed_path,
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+
+    assert candidate["status"] == "blocked"
+    assert candidate["allowed_runtime_apply"] is False
+    assert "exploration_continuation_primary_ev_not_positive" in candidate[
+        "blocking_reasons"
+    ]
+    assert "exploration_continuation_cost_adjusted_ev_not_positive" in candidate[
+        "blocking_reasons"
+    ]
+    assert candidate["promotion_metrics"]["exploration_continuation_gate"][
+        "action"
+    ] == "stop_and_fallback_at_next_preopen"
 
 
 def test_malformed_candidate_source_paths_fail_closed_without_exception(

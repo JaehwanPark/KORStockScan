@@ -16,6 +16,6 @@
   - `KRX/KRX_REGULAR` champion=`holding_score_v2` challenger=`decision_quality_holding_v2_3` action=`start_stage_specific_challenger_evaluation` base/full-factorial parents=`97/7`
 
 ## Runtime Bridge Gaps
-- `entry_candidates_after_v2_14_have_offline_replay_but_no_registered_live_family`
+- `entry_v2_16_sequential_recovery_requires_later_snapshot_runtime_actuator`
 - `holding_stage_base_provider_and_runtime_candidate_consumer_not_registered`
 - `optional_enriched_2x2_provider_and_R2_R3_consumer_not_yet_connected`

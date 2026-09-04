@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.scalping.entry_split_order_plan import (
+    generation_policy_snapshot_path,
     runtime_apply_authority_contract_status,
 )
 from src.engine.scalping.position_sizing_allocator import (
@@ -7832,7 +7833,12 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         if isinstance(input_summary.get("real_post_sell_join"), dict)
         else {}
     )
-    policy_file = str(recommended_policy.get("policy_file") or "")
+    immutable_policy_path = generation_policy_snapshot_path(payload)
+    policy_file = str(
+        immutable_policy_path
+        if immutable_policy_path is not None and immutable_policy_path.is_file()
+        else (recommended_policy.get("policy_file") or "")
+    )
     policy_version = str(recommended_policy.get("policy_version") or "")
     report_loaded = bool(payload)
     source_quality_blocked = source_quality.get("tuning_input_allowed") is False

@@ -9060,6 +9060,37 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     assert audits[0]["operator_fallback_authorized"] is True
 
 
+def test_split_runtime_policy_audit_requires_selected_policy_version(tmp_path):
+    entry_policy = tmp_path / "entry.json"
+    entry_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-current",
+                "source_date": "2026-07-13",
+                "runtime_apply_allowed": True,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    audits = mod._split_runtime_policy_audits(
+        "2026-07-14",
+        {
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE": "2026-07-14",
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": str(entry_policy),
+            "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "false",
+        },
+    )
+
+    entry_audit = next(
+        item for item in audits if item["family"] == "entry_split_order_plan"
+    )
+    assert entry_audit["status"] == "fail"
+    assert entry_audit["reason"] == "policy_version_missing"
+
+
 def test_split_runtime_policy_audit_rejects_post_activation_entry_generation_gap(
     tmp_path,
 ):

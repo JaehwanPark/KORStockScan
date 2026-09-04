@@ -378,7 +378,7 @@ def test_nxt_failure_does_not_cancel_completed_krx_candidate(monkeypatch):
     assert published[0]["batch_report"] is report
 
 
-def test_batch_executes_optimizer_selected_candidate_but_does_not_expand_live(
+def test_batch_executes_and_publishes_registered_v2_15_bounded_candidate(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(quality, "_offline_openai_api_keys", lambda: ["configured"])
@@ -442,16 +442,16 @@ def test_batch_executes_optimizer_selected_candidate_but_does_not_expand_live(
         ("KRX", optimizer_candidate),
         ("NXT", batch.DEFAULT_CANDIDATE_PROMPT_VERSION),
     ]
-    assert published == []
-    assert report["krx_bounded_live_candidate"]["status"] == (
-        "blocked_unregistered_dynamic_prompt_for_live"
-    )
-    assert report["krx_bounded_live_candidate"]["runtime_effect"] is False
+    assert report["candidate_prompt_version"] == optimizer_candidate
+    assert len(published) == 1
+    assert published[0]["candidate_prompt_version"] == optimizer_candidate
+    assert published[0]["source_date"] == "2026-09-04"
+    assert published[0]["write"] is True
     blocked_path = live_policy.live_candidate_path("2026-09-04")
     blocked = json.loads(blocked_path.read_text())
     assert blocked["status"] == "blocked"
     assert blocked["allowed_runtime_apply"] is False
-    assert blocked["blocking_reasons"] == ["unregistered_dynamic_prompt_for_live"]
+    assert blocked["blocking_reasons"] == ["full_day_candidate_refresh_pending"]
     assert blocked["artifact_sha256"] == live_policy._canonical_sha256(
         {key: value for key, value in blocked.items() if key != "artifact_sha256"}
     )

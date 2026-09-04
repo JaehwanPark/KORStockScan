@@ -1,4 +1,4 @@
-"""Bridge a verified V2.14 replay result into a next-day KRX canary.
+"""Bridge a verified entry setup-risk replay into a next-day KRX canary.
 
 The postclose producer emits a bounded-live candidate.  PREOPEN validates the
 candidate and its immutable source reports, then writes a date-scoped
@@ -24,9 +24,11 @@ from zoneinfo import ZoneInfo
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
 )
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_VERSION,
     ENTRY_SETUP_EVIDENCE_VERSION,
     STRUCTURE_PHASE_POLICY_VERSION,
 )
@@ -34,8 +36,8 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
-LIVE_CANDIDATE_SCHEMA = "entry_setup_v2_14_bounded_live_candidate_v2"
-PREOPEN_ACTIVATION_SCHEMA = "entry_setup_v2_14_preopen_activation_v2"
+LIVE_CANDIDATE_SCHEMA = "entry_setup_bounded_live_candidate_v3"
+PREOPEN_ACTIVATION_SCHEMA = "entry_setup_bounded_preopen_activation_v3"
 BATCH_SCHEMA = "ai_entry_setup_paired_replay_batch_v1"
 DETAILED_REPORT_SCHEMA = "ai_prompt_detailed_paired_replay_v1"
 LIVE_CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
@@ -53,6 +55,15 @@ EXPECTED_CANDIDATE_SELECTION_POLICY = (
     "deterministic_outcome_blind_setup_state_symbol_round_robin_v3"
 )
 EXPLORATION_MAX_DAILY_PROBES = 3
+EXPLORATION_CONTINUATION_MIN_EXPOSURES = 10
+EXPLORATION_CONTINUATION_MIN_SYMBOLS = 3
+SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS = (
+    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+)
+EXPLORATION_ONLY_PROMPT_VERSIONS = frozenset(
+    {DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}
+)
 PREOPEN_CANDIDATE_CUTOFF_KST = dt_time(7, 35)
 EFFECTIVE_DATE_POLICY = "first_available_krx_preopen_v1"
 PERFORMANCE_PROMOTION_ERROR_CODES = frozenset(
@@ -64,6 +75,7 @@ PERFORMANCE_PROMOTION_ERROR_CODES = frozenset(
         "cumulative_exposure_floor_not_passed",
         "cumulative_exposure_counts_below_floor",
         "cumulative_probe_risk_budget_not_passed",
+        "bounded_recovery_prompt_requires_one_share_exploration_mode",
     }
 )
 CUMULATIVE_PROMOTION_CHECK_KEYS = (
@@ -77,6 +89,15 @@ CUMULATIVE_PROMOTION_CHECK_KEYS = (
     "missed_upside_tradeoff_not_worse",
     "drawdown_recovery_capture_not_decreased",
 )
+
+
+def _expected_composer_version(prompt_version: Any) -> str:
+    return (
+        ENTRY_DECISION_COMPOSER_V2_15_VERSION
+        if str(prompt_version or "").strip()
+        == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+        else ENTRY_DECISION_COMPOSER_VERSION
+    )
 
 _CACHE_LOCK = threading.Lock()
 _ACTIVATION_CACHE: dict[str, Any] = {}
@@ -159,7 +180,7 @@ def _env_bool(name: str, default: bool, env: dict[str, str] | None = None) -> bo
 def _runtime_probe_contract_errors(
     *, target_date: str, env: dict[str, str] | None = None
 ) -> list[str]:
-    """Verify that V2.14 can only reach the existing one-share owner."""
+    """Verify that setup-risk canaries can only reach the one-share owner."""
 
     errors: list[str] = []
     required_true = (
@@ -460,10 +481,15 @@ def record_exploration_probe_submission(
             return len(signatures)
 
 
-def detailed_report_path(source_date: str) -> Path:
+def detailed_report_path(
+    source_date: str,
+    candidate_prompt_version: str = (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    ),
+) -> Path:
     return DETAILED_REPORT_DIR / (
         "ai_prompt_detailed_paired_replay_"
-        f"{source_date}_{DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}"
+        f"{source_date}_{candidate_prompt_version}"
         "_venue_krx_session_krx_regular.json"
     )
 
@@ -509,12 +535,19 @@ def _candidate_source_errors(
     source_date: str,
     batch_report: dict[str, Any],
     detailed_report: dict[str, Any],
+    candidate_prompt_version: str = (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    ),
 ) -> list[str]:
     errors: list[str] = []
+    if candidate_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
+        errors.append("candidate_prompt_version_not_registered_for_live")
     if batch_report.get("schema") != BATCH_SCHEMA:
         errors.append("batch_schema_invalid")
     if batch_report.get("target_date") != source_date:
         errors.append("batch_target_date_mismatch")
+    if batch_report.get("candidate_prompt_version") != candidate_prompt_version:
+        errors.append("batch_candidate_prompt_version_mismatch")
     if batch_report.get("status") not in {
         "completed_offline_only",
         "completed_offline_only_with_cohort_failures",
@@ -537,6 +570,8 @@ def _candidate_source_errors(
     if len(krx_rows) != 1 or krx_rows[0].get("status") != "completed_offline_only":
         errors.append("krx_cohort_not_completed")
     if len(krx_rows) == 1:
+        if krx_rows[0].get("candidate_prompt_version") != candidate_prompt_version:
+            errors.append("krx_candidate_prompt_version_mismatch")
         selection = krx_rows[0].get("candidate_execution_selection")
         if (
             not isinstance(selection, dict)
@@ -562,6 +597,10 @@ def _candidate_source_errors(
         errors.append("detailed_schema_invalid")
     if detailed_report.get("target_date") != source_date:
         errors.append("detailed_target_date_mismatch")
+    cumulative = detailed_report.get("cumulative_learning")
+    cumulative = cumulative if isinstance(cumulative, dict) else {}
+    if cumulative.get("candidate_prompt_version") != candidate_prompt_version:
+        errors.append("detailed_cumulative_prompt_version_mismatch")
     if (
         _normalize_venue(cohort_filter.get("effective_venue")) != CANARY_VENUE
         or _normalize_session(cohort_filter.get("session_bucket")) != CANARY_SESSION
@@ -572,9 +611,7 @@ def _candidate_source_errors(
         for row in detailed_report.get("requests") or []
         if isinstance(row, dict) and isinstance(row.get("candidate"), dict)
     }
-    expected_request_version = (
-        f"{DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry"
-    )
+    expected_request_version = f"{candidate_prompt_version}_entry"
     if request_versions != {expected_request_version}:
         errors.append("detailed_candidate_prompt_contract_mismatch")
     request_evidence_versions = {
@@ -601,10 +638,11 @@ def _candidate_source_errors(
         ENTRY_SETUP_EVIDENCE_VERSION
     }:
         errors.append("detailed_entry_setup_evidence_version_stale")
+    expected_composer_version = _expected_composer_version(candidate_prompt_version)
     if detailed_report.get(
         "entry_decision_composer_version"
-    ) != ENTRY_DECISION_COMPOSER_VERSION or request_composer_versions != {
-        ENTRY_DECISION_COMPOSER_VERSION
+    ) != expected_composer_version or request_composer_versions != {
+        expected_composer_version
     }:
         errors.append("detailed_entry_decision_composer_version_stale")
     if detailed_report.get(
@@ -737,7 +775,90 @@ def _exploration_source_errors(
         arm_symbols = 0
     if arm_rows < 10 or arm_symbols < 3:
         errors.append("cumulative_probe_arm_counts_below_floor")
+    continuation = _exploration_continuation_gate(detailed_report)
+    if continuation["floor_reached"] is True and continuation["pass"] is not True:
+        errors.extend(continuation["blocking_reasons"])
     return list(dict.fromkeys(errors))
+
+
+def _exploration_continuation_gate(
+    detailed_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Stop bounded live learning once mature evidence has non-positive edge."""
+
+    cumulative = detailed_report.get("cumulative_learning")
+    cumulative = cumulative if isinstance(cumulative, dict) else {}
+    try:
+        exposure_rows = int(cumulative.get("candidate_exposure_decision_count") or 0)
+        exposure_symbols = int(
+            cumulative.get("candidate_exposure_unique_symbol_count") or 0
+        )
+    except (TypeError, ValueError):
+        exposure_rows = 0
+        exposure_symbols = 0
+
+    def _finite_float(value: Any) -> float | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed == parsed and abs(parsed) != float("inf") else None
+
+    primary_ev = _finite_float(cumulative.get("candidate_primary_decision_ev_pct"))
+    cost_adjusted_ev = _finite_float(
+        cumulative.get("candidate_exposure_probe_cost_adjusted_ev_pct")
+    )
+    risk_budget = cumulative.get("candidate_probe_risk_budget")
+    risk_budget = risk_budget if isinstance(risk_budget, dict) else {}
+    try:
+        catastrophic_count = int(risk_budget.get("catastrophic_loss_count") or 0)
+    except (TypeError, ValueError):
+        catastrophic_count = -1
+    floor_reached = bool(
+        exposure_rows >= EXPLORATION_CONTINUATION_MIN_EXPOSURES
+        and exposure_symbols >= EXPLORATION_CONTINUATION_MIN_SYMBOLS
+    )
+    blocking_reasons: list[str] = []
+    if floor_reached:
+        if primary_ev is None or primary_ev <= 0.0:
+            blocking_reasons.append(
+                "exploration_continuation_primary_ev_not_positive"
+            )
+        if cost_adjusted_ev is None or cost_adjusted_ev <= 0.0:
+            blocking_reasons.append(
+                "exploration_continuation_cost_adjusted_ev_not_positive"
+            )
+        if risk_budget.get("pass") is not True:
+            blocking_reasons.append(
+                "exploration_continuation_bounded_risk_budget_not_passed"
+            )
+        if catastrophic_count != 0:
+            blocking_reasons.append(
+                "exploration_continuation_catastrophic_loss_observed"
+            )
+    return {
+        "minimum_exposure_rows": EXPLORATION_CONTINUATION_MIN_EXPOSURES,
+        "minimum_unique_symbols": EXPLORATION_CONTINUATION_MIN_SYMBOLS,
+        "exposure_rows": exposure_rows,
+        "unique_symbols": exposure_symbols,
+        "floor_reached": floor_reached,
+        "candidate_primary_decision_ev_pct": primary_ev,
+        "candidate_exposure_probe_cost_adjusted_ev_pct": cost_adjusted_ev,
+        "bounded_probe_risk_budget_pass": risk_budget.get("pass") is True,
+        "catastrophic_loss_count": catastrophic_count,
+        "pass": not blocking_reasons,
+        "blocking_reasons": blocking_reasons,
+        "action": (
+            "continue_bounded_collection"
+            if not floor_reached
+            else "continue_positive_edge_canary"
+            if not blocking_reasons
+            else "stop_and_fallback_at_next_preopen"
+        ),
+        "negative_ev_is_calibration_stop_not_hard_safety_relaxation": True,
+    }
 
 
 def build_live_candidate(
@@ -746,6 +867,9 @@ def build_live_candidate(
     batch_report: dict[str, Any],
     detailed_report: dict[str, Any],
     detailed_path: Path,
+    candidate_prompt_version: str = (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    ),
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     current = generated_at or datetime.now(KST)
@@ -758,11 +882,17 @@ def build_live_candidate(
         source_date=source_date,
         batch_report=batch_report,
         detailed_report=detailed_report,
+        candidate_prompt_version=candidate_prompt_version,
     )
     detailed_sha256 = _safe_file_sha256(detailed_path)
     if not detailed_sha256:
         errors.append("detailed_report_file_unreadable")
-    performance_ready = not errors
+    performance_ready = bool(
+        not errors
+        and candidate_prompt_version not in EXPLORATION_ONLY_PROMPT_VERSIONS
+    )
+    if not errors and candidate_prompt_version in EXPLORATION_ONLY_PROMPT_VERSIONS:
+        errors.append("bounded_recovery_prompt_requires_one_share_exploration_mode")
     exploration_errors = _exploration_source_errors(
         source_errors=errors,
         detailed_report=detailed_report,
@@ -782,6 +912,7 @@ def build_live_candidate(
     cumulative_opportunity = (
         cumulative_opportunity if isinstance(cumulative_opportunity, dict) else {}
     )
+    exploration_continuation = _exploration_continuation_gate(detailed_report)
     candidate = {
         "schema": LIVE_CANDIDATE_SCHEMA,
         "source_date": source_date,
@@ -801,7 +932,7 @@ def build_live_candidate(
         "blocking_reasons": exploration_errors if not ready else [],
         "performance_promotion_blocking_reasons": errors,
         "selected_prompt_version": (
-            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            candidate_prompt_version
         ),
         "rollback_prompt_version": (
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
@@ -810,7 +941,9 @@ def build_live_candidate(
         "session_bucket": CANARY_SESSION,
         "candidate_contract_sha256": detailed_report.get("candidate_contract_sha256"),
         "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
-        "entry_decision_composer_version": ENTRY_DECISION_COMPOSER_VERSION,
+        "entry_decision_composer_version": _expected_composer_version(
+            candidate_prompt_version
+        ),
         "entry_structure_phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
         "promotion_metrics": {
             "promotion_quality_gate_basis": detailed_report.get(
@@ -856,6 +989,7 @@ def build_live_candidate(
             "probe_arm_counterfactual_risk": cumulative.get(
                 "candidate_probe_arm_risk_budget"
             ),
+            "exploration_continuation_gate": exploration_continuation,
         },
         "source_provenance": {
             "batch_report_path": str(batch_report_path(source_date)),
@@ -891,17 +1025,23 @@ def build_live_candidate(
         "sample_floor": (
             "candidate_exposure_10_rows_3_symbols"
             if performance_ready
-            else "candidate_probe_arm_10_rows_3_symbols"
+            else (
+                "candidate_probe_arm_10_rows_3_symbols_then_candidate_exposure_"
+                "10_rows_3_symbols_positive_cost_adjusted_ev"
+            )
         ),
         "primary_decision_metric": (
             "candidate_probe_cost_adjusted_ev_pct"
             if performance_ready
-            else "guard_filtered_one_share_probe_outcome"
+            else "candidate_exposure_probe_cost_adjusted_ev_pct"
         ),
         "source_quality_gate": (
             "promotion_integrity_and_cumulative_quality_pass"
             if performance_ready
-            else "report_integrity_and_cumulative_probe_arm_floor_pass"
+            else (
+                "report_integrity_cumulative_probe_arm_floor_and_mature_"
+                "continuation_ev_risk_gate"
+            )
         ),
         "runtime_effect": False,
         "allowed_runtime_apply": ready,
@@ -925,14 +1065,18 @@ def publish_live_candidate(
     source_date: str,
     batch_report: dict[str, Any],
     write: bool,
+    candidate_prompt_version: str = (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    ),
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
-    detailed_path = detailed_report_path(source_date)
+    detailed_path = detailed_report_path(source_date, candidate_prompt_version)
     candidate = build_live_candidate(
         source_date=source_date,
         batch_report=batch_report,
         detailed_report=_read_json(detailed_path),
         detailed_path=detailed_path,
+        candidate_prompt_version=candidate_prompt_version,
         generated_at=generated_at,
     )
     path = live_candidate_path(source_date)
@@ -1013,9 +1157,8 @@ def _validate_candidate_artifact(
         or _normalize_session(candidate.get("session_bucket")) != CANARY_SESSION
     ):
         errors.append("candidate_cohort_invalid")
-    if candidate.get("selected_prompt_version") != (
-        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-    ):
+    selected_prompt_version = str(candidate.get("selected_prompt_version") or "")
+    if selected_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
         errors.append("candidate_selected_prompt_invalid")
     if candidate.get("rollback_prompt_version") != (
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
@@ -1023,9 +1166,8 @@ def _validate_candidate_artifact(
         errors.append("candidate_rollback_prompt_invalid")
     if candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION:
         errors.append("candidate_entry_setup_evidence_version_stale")
-    if (
-        candidate.get("entry_decision_composer_version")
-        != ENTRY_DECISION_COMPOSER_VERSION
+    if candidate.get("entry_decision_composer_version") != _expected_composer_version(
+        selected_prompt_version
     ):
         errors.append("candidate_entry_decision_composer_version_stale")
     if (
@@ -1049,7 +1191,7 @@ def _validate_candidate_artifact(
         _batch_evidence(batch)
     ) != provenance.get("batch_evidence_sha256"):
         errors.append("candidate_batch_evidence_mismatch")
-    if detailed_path != detailed_report_path(source_date):
+    if detailed_path != detailed_report_path(source_date, selected_prompt_version):
         errors.append("candidate_detailed_path_invalid")
     detailed_sha256 = _safe_file_sha256(detailed_path)
     if not detailed_sha256 or detailed_sha256 != provenance.get(
@@ -1061,6 +1203,7 @@ def _validate_candidate_artifact(
         source_date=source_date,
         batch_report=batch,
         detailed_report=detailed,
+        candidate_prompt_version=selected_prompt_version,
     )
     if canary_mode == EXPLORATION_CANARY_MODE:
         source_errors = _exploration_source_errors(
@@ -1083,6 +1226,7 @@ def _runtime_candidate_contract_errors(
     candidate: dict[str, Any], *, target_date: str
 ) -> list[str]:
     errors: list[str] = []
+    selected_prompt_version = str(candidate.get("selected_prompt_version") or "")
     expected_artifact_sha = _canonical_sha256(
         {key: value for key, value in candidate.items() if key != "artifact_sha256"}
     )
@@ -1103,13 +1247,12 @@ def _runtime_candidate_contract_errors(
         or not expected_status
         or candidate.get("status") != expected_status
         or candidate.get("effective_date") != target_date
-        or candidate.get("selected_prompt_version")
-        != DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        or selected_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
         or candidate.get("rollback_prompt_version")
         != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         or candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION
         or candidate.get("entry_decision_composer_version")
-        != ENTRY_DECISION_COMPOSER_VERSION
+        != _expected_composer_version(selected_prompt_version)
         or candidate.get("entry_structure_phase_policy_version")
         != STRUCTURE_PHASE_POLICY_VERSION
         or candidate.get("allowed_runtime_apply") is not True
@@ -1145,6 +1288,11 @@ def _runtime_candidate_contract_errors(
             errors.append(f"runtime_candidate_risk_contract_invalid:{key}")
     if risk_contract.get("same_stage_prompt_owner_count") != 1:
         errors.append("runtime_candidate_same_stage_owner_invalid")
+    if (
+        selected_prompt_version in EXPLORATION_ONLY_PROMPT_VERSIONS
+        and canary_mode != EXPLORATION_CANARY_MODE
+    ):
+        errors.append("runtime_candidate_prompt_requires_exploration_mode")
     if canary_mode == PERFORMANCE_CANARY_MODE:
         if risk_contract.get("residual_multi_leg_existing_owner_required") is not True:
             errors.append(
@@ -1219,7 +1367,7 @@ def build_preopen_activation(
         "canary_mode": canary_mode,
         "blocking_reasons": list(dict.fromkeys(errors)),
         "selected_prompt_version": (
-            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            candidate.get("selected_prompt_version")
             if active
             else DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         ),
@@ -1385,12 +1533,12 @@ def resolve_live_prompt_policy(
         or activation.get("actual_order_submitted") is not False
         or activation.get("broker_order_forbidden") is not True
         or activation.get("selected_prompt_version")
-        != DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
         or activation.get("rollback_prompt_version") != fallback
         or activation.get("entry_setup_evidence_version")
         != ENTRY_SETUP_EVIDENCE_VERSION
         or activation.get("entry_decision_composer_version")
-        != ENTRY_DECISION_COMPOSER_VERSION
+        != _expected_composer_version(activation.get("selected_prompt_version"))
         or activation.get("entry_structure_phase_policy_version")
         != STRUCTURE_PHASE_POLICY_VERSION
         or _normalize_venue(activation.get("effective_venue")) != CANARY_VENUE
@@ -1421,6 +1569,10 @@ def resolve_live_prompt_policy(
         "candidate_contract_sha256"
     ):
         candidate_errors.append("runtime_candidate_prompt_contract_sha_mismatch")
+    if candidate.get("selected_prompt_version") != activation.get(
+        "selected_prompt_version"
+    ):
+        candidate_errors.append("runtime_candidate_prompt_version_mismatch")
     if candidate.get("canary_mode") != canary_mode:
         candidate_errors.append("runtime_candidate_canary_mode_mismatch")
     if candidate.get("entry_setup_evidence_version") != activation.get(
@@ -1444,7 +1596,7 @@ def resolve_live_prompt_policy(
             "enabled": True,
             "status": "active_bounded_krx_canary",
             "selected_prompt_version": (
-                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+                activation.get("selected_prompt_version")
             ),
             "source_date": activation.get("source_date"),
             "candidate_contract_sha256": activation.get("candidate_contract_sha256"),
@@ -1472,7 +1624,7 @@ def resolve_live_prompt_policy(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Materialize the date-scoped V2.14 KRX PREOPEN activation."
+        description="Materialize the date-scoped bounded KRX PREOPEN activation."
     )
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--write", action="store_true")

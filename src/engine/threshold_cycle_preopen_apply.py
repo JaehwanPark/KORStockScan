@@ -4975,6 +4975,10 @@ def _split_runtime_policy_audits(
         if not enabled:
             audits.append(audit)
             continue
+        if not str(effective_env.get(version_key) or "").strip():
+            audit.update(status="fail", reason="policy_version_missing")
+            audits.append(audit)
+            continue
         active_date_key = str(spec.get("active_date_key") or "")
         if daily_baseline:
             active_date_key = "KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE"

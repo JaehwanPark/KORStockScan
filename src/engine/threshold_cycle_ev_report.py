@@ -39,6 +39,7 @@ from src.engine.scalping.microstructure_reaction_context import (
     report_paths as microstructure_reaction_report_paths,
 )
 from src.engine.scalping.entry_split_order_plan import (
+    generation_policy_snapshot_path,
     runtime_apply_authority_contract_status,
 )
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
@@ -2556,6 +2557,12 @@ def _entry_split_order_plan_summary(
         and runtime_apply_authority_contract_valid
     )
     warnings: list[str] = []
+    immutable_policy_path = generation_policy_snapshot_path(payload)
+    selected_policy_file = (
+        str(immutable_policy_path)
+        if immutable_policy_path is not None and immutable_policy_path.is_file()
+        else recommended.get("policy_file")
+    )
     if source_quality.get("tuning_input_allowed") is False:
         warnings.append("entry_split_order_plan_source_quality_blocked")
     if payload.get("schema_version") != "entry_split_order_plan_v1":
@@ -2588,7 +2595,7 @@ def _entry_split_order_plan_summary(
                 if real_primary_books
                 else (primary_books[0] if primary_books else "none")
             ),
-            "policy_file": recommended.get("policy_file"),
+            "policy_file": selected_policy_file,
             "policy_version": recommended.get("policy_version"),
             # Compatibility retains existing runtime behavior. The authority
             # split states whether the evidence is structural-only or EV-based.
