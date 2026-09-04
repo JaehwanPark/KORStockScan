@@ -1,6 +1,6 @@
 [Unit]
 Description=KORStockScan Samsung Midday One-Share Live Machine
-After=network-online.target korstockscan-samsung-midday-one-share-preflight.service
+After=network-online.target korstockscan-symbol-owner-policy-auto-apply.service korstockscan-samsung-midday-one-share-preflight.service
 Wants=network-online.target
 StartLimitIntervalSec=300
 StartLimitBurst=30

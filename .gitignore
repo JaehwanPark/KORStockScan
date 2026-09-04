@@ -45,6 +45,7 @@ dist/
 !data/config/low_price_two_leg_expanded_profile_evidence_2026-08-28.json
 !data/config/ofi_bucket_threshold_manifest.json
 !data/config/widget_research_watch_symbols.json
+!data/config/symbol_owner_policy_standing_authority.json
 !data/threshold_cycle/operator_runtime_env_locks/aggressive_entry_price_override_2026-06-13.json
 !data/threshold_cycle/operator_runtime_env_locks/score65_74_strong_micro_override_2026-06-15.json
 !data/threshold_cycle/operator_runtime_env_locks/early_accel_recheck_2026-06-15.json

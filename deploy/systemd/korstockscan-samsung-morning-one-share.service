@@ -1,6 +1,6 @@
 [Unit]
 Description=KORStockScan Samsung Morning Two-Episode Live Machine
-After=network-online.target korstockscan-samsung-one-share-preflight.service
+After=network-online.target korstockscan-symbol-owner-policy-auto-apply.service korstockscan-samsung-one-share-preflight.service
 Wants=network-online.target
 Requires=korstockscan-samsung-one-share-preflight.service
 StartLimitIntervalSec=300

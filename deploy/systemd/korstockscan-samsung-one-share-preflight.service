@@ -1,6 +1,6 @@
 [Unit]
 Description=KORStockScan Samsung One-Share PREOPEN Authority Gate
-After=network-online.target
+After=network-online.target korstockscan-symbol-owner-policy-auto-apply.service
 Wants=network-online.target
 
 [Service]
