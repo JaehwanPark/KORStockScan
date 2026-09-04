@@ -104,21 +104,23 @@ def test_s15_stop_cancel_fsyncs_intent_and_calls_broker_once(monkeypatch):
     monkeypatch.setattr(
         s15.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {
-            "return_code": "0",
-            "ord_no": "0000999",
-            "base_orig_ord_no": "0000456",
-            "cncl_qty": "5",
-            "broker_route_attempted": True,
-            "effective_dmst_stex_tp": "SOR",
-            "cancel_request_api_id": "kt10003",
-            "cancel_request_code": "123456",
-            "cancel_request_orig_ord_no": "0000456",
-            "cancel_request_qty": "0",
-            "cancel_request_route": "SOR",
-            "cancel_request_bound": True,
-        },
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {
+                "return_code": "0",
+                "ord_no": "0000999",
+                "base_orig_ord_no": "0000456",
+                "cncl_qty": "5",
+                "broker_route_attempted": True,
+                "effective_dmst_stex_tp": "SOR",
+                "cancel_request_api_id": "kt10003",
+                "cancel_request_code": "123456",
+                "cancel_request_orig_ord_no": "0000456",
+                "cancel_request_qty": "0",
+                "cancel_request_route": "SOR",
+                "cancel_request_bound": True,
+            }
+        ),
     )
 
     assert s15._submit_s15_stop_cancel(state, "123456", "0000456")
@@ -175,21 +177,23 @@ def test_s15_stop_cancel_pre_intent_failure_retries_then_calls_once(monkeypatch)
     monkeypatch.setattr(
         s15.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {
-            "return_code": "0",
-            "ord_no": "0000999",
-            "base_orig_ord_no": "0000456",
-            "cncl_qty": "5",
-            "broker_route_attempted": True,
-            "effective_dmst_stex_tp": "SOR",
-            "cancel_request_api_id": "kt10003",
-            "cancel_request_code": "123456",
-            "cancel_request_orig_ord_no": "0000456",
-            "cancel_request_qty": "0",
-            "cancel_request_route": "SOR",
-            "cancel_request_bound": True,
-        },
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {
+                "return_code": "0",
+                "ord_no": "0000999",
+                "base_orig_ord_no": "0000456",
+                "cncl_qty": "5",
+                "broker_route_attempted": True,
+                "effective_dmst_stex_tp": "SOR",
+                "cancel_request_api_id": "kt10003",
+                "cancel_request_code": "123456",
+                "cancel_request_orig_ord_no": "0000456",
+                "cancel_request_qty": "0",
+                "cancel_request_route": "SOR",
+                "cancel_request_bound": True,
+            }
+        ),
     )
 
     assert not s15._submit_s15_stop_cancel(state, "123456", "0000456")
@@ -264,21 +268,23 @@ def test_s15_stop_cancel_intent_failure_retries_then_calls_once(monkeypatch):
     monkeypatch.setattr(
         s15.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {
-            "return_code": "0",
-            "ord_no": "0000999",
-            "base_orig_ord_no": "0000456",
-            "cncl_qty": "5",
-            "broker_route_attempted": True,
-            "effective_dmst_stex_tp": "SOR",
-            "cancel_request_api_id": "kt10003",
-            "cancel_request_code": "123456",
-            "cancel_request_orig_ord_no": "0000456",
-            "cancel_request_qty": "0",
-            "cancel_request_route": "SOR",
-            "cancel_request_bound": True,
-        },
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {
+                "return_code": "0",
+                "ord_no": "0000999",
+                "base_orig_ord_no": "0000456",
+                "cncl_qty": "5",
+                "broker_route_attempted": True,
+                "effective_dmst_stex_tp": "SOR",
+                "cancel_request_api_id": "kt10003",
+                "cancel_request_code": "123456",
+                "cancel_request_orig_ord_no": "0000456",
+                "cancel_request_qty": "0",
+                "cancel_request_route": "SOR",
+                "cancel_request_bound": True,
+            }
+        ),
     )
 
     assert not s15._submit_s15_stop_cancel(state, "123456", "0000456")
@@ -404,21 +410,23 @@ def test_s15_stop_cancel_retry_reissues_exact_open_order_after_intent_crash(
     monkeypatch.setattr(
         s15.kiwoom_orders,
         "send_cancel_order",
-        lambda **kwargs: cancel_calls.append(kwargs)
-        or {
-            "return_code": "0",
-            "ord_no": "0000999",
-            "base_orig_ord_no": "0000456",
-            "cncl_qty": "5",
-            "broker_route_attempted": True,
-            "effective_dmst_stex_tp": "SOR",
-            "cancel_request_api_id": "kt10003",
-            "cancel_request_code": "123456",
-            "cancel_request_orig_ord_no": "0000456",
-            "cancel_request_qty": "0",
-            "cancel_request_route": "SOR",
-            "cancel_request_bound": True,
-        },
+        lambda **kwargs: (
+            cancel_calls.append(kwargs)
+            or {
+                "return_code": "0",
+                "ord_no": "0000999",
+                "base_orig_ord_no": "0000456",
+                "cncl_qty": "5",
+                "broker_route_attempted": True,
+                "effective_dmst_stex_tp": "SOR",
+                "cancel_request_api_id": "kt10003",
+                "cancel_request_code": "123456",
+                "cancel_request_orig_ord_no": "0000456",
+                "cancel_request_qty": "0",
+                "cancel_request_route": "SOR",
+                "cancel_request_bound": True,
+            }
+        ),
     )
 
     assert s15._retry_s15_stop_cancel_if_required("123456", state) is True
@@ -854,6 +862,7 @@ def test_s15_inventory_rejects_positive_unallocatable_blank_code_order(
 def test_s15_inventory_uses_only_exact_main_owner_for_registered_symbol(
     tmp_path, monkeypatch
 ):
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-account")
     code = "123456"
     order_date = s15.datetime.now(tz=s15.KST).date()
     registry_path = tmp_path / "owner-registry.jsonl"
@@ -1193,8 +1202,9 @@ def test_s15_partial_buy_inventory_reconciles_db_before_one_residual_sell(
     monkeypatch.setattr(
         s15,
         "_send_exit_best_ioc",
-        lambda code, qty, token: calls.append((code, qty))
-        or {"return_code": 0, "ord_no": "0000009"},
+        lambda code, qty, token: (
+            calls.append((code, qty)) or {"return_code": 0, "ord_no": "0000009"}
+        ),
     )
     monkeypatch.setattr(s15.time, "sleep", lambda _seconds: None)
 
@@ -1424,8 +1434,9 @@ def test_s15_pending_order_conflict_never_rebinds_or_submits(monkeypatch):
     monkeypatch.setattr(
         s15,
         "_persist_fast_state",
-        lambda _code, current: reasons.append(current.get("s15_recovery_reason"))
-        or True,
+        lambda _code, current: (
+            reasons.append(current.get("s15_recovery_reason")) or True
+        ),
     )
     monkeypatch.setattr(s15.time, "sleep", lambda _seconds: None)
 
@@ -1486,8 +1497,9 @@ def test_s15_stale_order_number_without_generation_never_claims_open_sell(
     monkeypatch.setattr(
         s15,
         "_persist_fast_state",
-        lambda _code, current: reasons.append(current.get("s15_recovery_reason"))
-        or True,
+        lambda _code, current: (
+            reasons.append(current.get("s15_recovery_reason")) or True
+        ),
     )
     monkeypatch.setattr(s15.time, "sleep", lambda _seconds: None)
 

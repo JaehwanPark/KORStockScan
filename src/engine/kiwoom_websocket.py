@@ -365,6 +365,7 @@ class KiwoomWSManager:
         self._micro_reversion_observation_items_by_code = {}
         self._micro_reversion_observation_only_items = set()
         self._micro_reversion_observation_route_data = {}
+        self._micro_reversion_registration_receipt = {}
         self._micro_reversion_observation_only_codes = set()
         self._micro_reversion_observation_notice_codes = set()
         self._market_data_transport_epoch = 0
@@ -2088,11 +2089,22 @@ class KiwoomWSManager:
                             self._micro_reversion_observation_route_data.items()
                         )
                     }
-                write_ws_snapshot(
+                    registration_receipt_snapshot = json.loads(
+                        json.dumps(self._micro_reversion_registration_receipt)
+                    )
+                written_snapshot = write_ws_snapshot(
                     realtime_snapshot,
                     observation_route_data=observation_route_snapshot,
+                    micro_reversion_registration_receipt=(
+                        registration_receipt_snapshot
+                    ),
                     now_ts=now_ts,
                 )
+                if written_snapshot is None:
+                    log_error(
+                        "[WS] dashboard snapshot or micro-reversion registration "
+                        "receipt persistence failed"
+                    )
             except Exception as e:
                 log_error(f"[WS] dashboard snapshot write failed: {e}")
             finally:
@@ -2819,9 +2831,6 @@ class KiwoomWSManager:
 
         if self.subscribed_codes:
             with self.lock:
-                observation_only_codes = set(
-                    self._micro_reversion_observation_only_codes
-                )
                 observation_item_set = set(self._micro_reversion_observation_only_items)
                 observation_items = sorted(observation_item_set)
                 trading_items = [
@@ -4016,6 +4025,11 @@ class KiwoomWSManager:
                             target["received_types"].add(real_type)
                             now_update_ts = time.time()
                             target["last_ws_update_ts"] = now_update_ts
+                            self._record_micro_reversion_registration_receipt(
+                                item=normalized_raw_item,
+                                realtime_type=real_type,
+                                observed_at_epoch=now_update_ts,
+                            )
                             market_suffix = self._ws_item_market_suffix(raw_item_code)
                             market_route = self._ws_item_route(raw_item_code)
                             target["last_ws_item"] = str(raw_item_code or "")
@@ -4831,11 +4845,148 @@ class KiwoomWSManager:
             code_items.append(item)
         return {code: tuple(code_items) for code, code_items in normalized.items()}
 
+    def _initialize_micro_reversion_registration_receipt(
+        self, *, items, effective_date, source
+    ):
+        now_ts = time.time()
+        existing = self._micro_reversion_registration_receipt
+        existing_items = (
+            existing.get("items")
+            if isinstance(existing, dict)
+            and existing.get("effective_date") == effective_date
+            and isinstance(existing.get("items"), dict)
+            else {}
+        )
+        item_rows = {}
+        for item in sorted(set(items)):
+            previous = existing_items.get(item)
+            row = dict(previous) if isinstance(previous, dict) else {}
+            row.setdefault("required_realtime_types", ["0B", "0D"])
+            row.setdefault("received_realtime_types", [])
+            row.setdefault("receipt_count_by_type", {})
+            row.setdefault("first_received_at_epoch_by_type", {})
+            row.setdefault("first_received_at_epoch", None)
+            row.setdefault("last_received_at_epoch", None)
+            row.setdefault("max_interarrival_gap_sec", 0.0)
+            row.setdefault("transport_epochs", [])
+            item_rows[item] = row
+        complete_count = sum(
+            set(row.get("received_realtime_types") or ()) >= {"0B", "0D"}
+            for row in item_rows.values()
+        )
+        self._micro_reversion_registration_receipt = {
+            "schema": "scalp_micro_reversion_registration_receipt_v1",
+            "effective_date": effective_date,
+            "configured_at_epoch": now_ts,
+            "configured_at": datetime.fromtimestamp(now_ts, KST).isoformat(),
+            "source": source,
+            "decision_authority": "market_data_source_quality_only",
+            "runtime_effect": False,
+            "trading_runtime_effect": False,
+            "trading_decision_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "requested_registration_items": sorted(item_rows),
+            "required_realtime_types": ["0B", "0D"],
+            "registration_transport_epoch": int(self._market_data_transport_epoch),
+            "items": item_rows,
+            "summary": {
+                "requested_item_count": len(item_rows),
+                "complete_item_count": complete_count,
+                "incomplete_item_count": max(0, len(item_rows) - complete_count),
+                "exact_route_receipt_complete": bool(
+                    item_rows and complete_count == len(item_rows)
+                ),
+                "max_interarrival_gap_sec": round(
+                    max(
+                        (
+                            self._safe_float(
+                                value.get("max_interarrival_gap_sec"), 0.0
+                            )
+                            for value in item_rows.values()
+                        ),
+                        default=0.0,
+                    ),
+                    6,
+                ),
+            },
+        }
+
+    def _record_micro_reversion_registration_receipt(
+        self, *, item, realtime_type, observed_at_epoch
+    ):
+        receipt = self._micro_reversion_registration_receipt
+        if not isinstance(receipt, dict):
+            return
+        normalized_item = str(item or "").strip().upper()
+        rows = receipt.get("items")
+        row = rows.get(normalized_item) if isinstance(rows, dict) else None
+        if not isinstance(row, dict) or realtime_type not in {"0B", "0D"}:
+            return
+        previous_at = self._safe_float(row.get("last_received_at_epoch"), 0.0)
+        observed_at = float(observed_at_epoch)
+        row["first_received_at_epoch"] = row.get("first_received_at_epoch") or (
+            observed_at
+        )
+        row["last_received_at_epoch"] = observed_at
+        first_by_type = row.setdefault("first_received_at_epoch_by_type", {})
+        if not isinstance(first_by_type, dict):
+            first_by_type = {}
+            row["first_received_at_epoch_by_type"] = first_by_type
+        first_by_type.setdefault(realtime_type, observed_at)
+        if previous_at > 0:
+            row["max_interarrival_gap_sec"] = round(
+                max(
+                    self._safe_float(row.get("max_interarrival_gap_sec"), 0.0),
+                    max(0.0, observed_at - previous_at),
+                ),
+                6,
+            )
+        received_types = set(row.get("received_realtime_types") or ())
+        received_types.add(realtime_type)
+        row["received_realtime_types"] = sorted(received_types)
+        counts = row.setdefault("receipt_count_by_type", {})
+        if not isinstance(counts, dict):
+            counts = {}
+            row["receipt_count_by_type"] = counts
+        counts[realtime_type] = self._safe_abs_int(counts.get(realtime_type), 0) + 1
+        transport_epochs = set(row.get("transport_epochs") or ())
+        transport_epochs.add(int(self._market_data_transport_epoch))
+        row["transport_epochs"] = sorted(transport_epochs)
+        item_rows = receipt.get("items") or {}
+        complete_count = sum(
+            set(value.get("received_realtime_types") or ()) >= {"0B", "0D"}
+            for value in item_rows.values()
+            if isinstance(value, dict)
+        )
+        receipt["summary"] = {
+            "requested_item_count": len(item_rows),
+            "complete_item_count": complete_count,
+            "incomplete_item_count": max(0, len(item_rows) - complete_count),
+            "exact_route_receipt_complete": bool(
+                item_rows and complete_count == len(item_rows)
+            ),
+            "max_interarrival_gap_sec": round(
+                max(
+                    (
+                        self._safe_float(
+                            value.get("max_interarrival_gap_sec"), 0.0
+                        )
+                        for value in item_rows.values()
+                        if isinstance(value, dict)
+                    ),
+                    default=0.0,
+                ),
+                6,
+            ),
+        }
+
     def _configure_micro_reversion_observation_items(
         self,
         items,
         *,
         source,
+        effective_date=None,
         protected_runtime_codes=(),
         protected_runtime_items=(),
     ):
@@ -4925,6 +5076,13 @@ class KiwoomWSManager:
             for code in removable_codes:
                 for item in old_items_by_code.get(code) or ():
                     self._micro_reversion_observation_route_data.pop(item, None)
+            self._initialize_micro_reversion_registration_receipt(
+                items=desired_items,
+                effective_date=str(
+                    effective_date or datetime.now(KST).date().isoformat()
+                ),
+                source=source,
+            )
 
         if subscribe_items:
             self.execute_subscribe(
@@ -4973,6 +5131,7 @@ class KiwoomWSManager:
         self._configure_micro_reversion_observation_items(
             payload.get("registration_items") or (),
             source=str(payload.get("source") or "micro_reversion_collection_feedback"),
+            effective_date=effective_date,
             protected_runtime_codes=payload.get("protected_runtime_codes") or (),
             protected_runtime_items=payload.get("protected_runtime_items") or (),
         )

@@ -97,9 +97,16 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
     manager._micro_reversion_observation_route_data["005930_NX"] = route_target
     captured = {}
 
-    def _capture(realtime_data, *, observation_route_data, now_ts):
+    def _capture(
+        realtime_data,
+        *,
+        observation_route_data,
+        micro_reversion_registration_receipt,
+        now_ts,
+    ):
         captured["main"] = realtime_data
         captured["routes"] = observation_route_data
+        captured["receipt"] = micro_reversion_registration_receipt
         captured["now_ts"] = now_ts
 
     class _ImmediateThread:
@@ -122,6 +129,7 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
     assert captured["routes"]["005930_NX"]["recent_trade_ticks"] == [
         {"price": 70010, "volume": 2}
     ]
+    assert captured["receipt"] == {}
     assert manager._dashboard_snapshot_write_inflight is False
 
 
@@ -1919,6 +1927,43 @@ def test_micro_collection_set_does_not_race_boot_runtime_registration(monkeypatc
         "222222": ("222222_NX",),
     }
     assert manager.is_micro_reversion_observation_only_subscription("111111") is False
+
+
+def test_micro_collection_receipt_tracks_exact_route_0b_and_0d():
+    manager = KiwoomWSManager("test-token")
+    manager._market_data_transport_epoch = 7
+    manager.execute_subscribe = lambda *args, **kwargs: None
+
+    assert manager._configure_micro_reversion_observation_items(
+        ["005930_NX"],
+        source="test",
+        effective_date="2026-09-04",
+    )
+    manager._record_micro_reversion_registration_receipt(
+        item="005930_NX", realtime_type="0B", observed_at_epoch=100.0
+    )
+    manager._record_micro_reversion_registration_receipt(
+        item="005930_NX", realtime_type="0D", observed_at_epoch=101.0
+    )
+
+    receipt = manager._micro_reversion_registration_receipt
+    assert receipt["effective_date"] == "2026-09-04"
+    assert receipt["items"]["005930_NX"]["received_realtime_types"] == [
+        "0B",
+        "0D",
+    ]
+    assert receipt["items"]["005930_NX"]["transport_epochs"] == [7]
+    assert receipt["items"]["005930_NX"]["first_received_at_epoch_by_type"] == {
+        "0B": 100.0,
+        "0D": 101.0,
+    }
+    assert receipt["items"]["005930_NX"]["receipt_count_by_type"] == {
+        "0B": 1,
+        "0D": 1,
+    }
+    assert receipt["summary"]["exact_route_receipt_complete"] is True
+    assert receipt["trading_runtime_effect"] is False
+    assert receipt["actual_order_submitted"] is False
 
 
 def test_real_subscription_stays_source_only_until_replacement_reg_is_sent():

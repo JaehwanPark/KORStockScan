@@ -6379,8 +6379,18 @@ def build_rolling_source_only_candidates(
             )
             if relevant_current_design_date(report.get("target_date")):
                 global_candidate_blockers.append(blocker)
+            repair_required = relevant_current_design_date(report.get("target_date"))
             exclusions.append(
-                {"reason": str(exc), "target_date": report.get("target_date")}
+                {
+                    "reason": str(exc),
+                    "target_date": report.get("target_date"),
+                    "repair_required": repair_required,
+                    "terminal_exclusion_reason": (
+                        None
+                        if repair_required
+                        else "pre_current_design_immutable_companion_gap"
+                    ),
+                }
             )
             continue
         report_date = str(report.get("target_date") or "")
@@ -6518,7 +6528,15 @@ def build_rolling_source_only_candidates(
                             if natural_entry_non_order_absence
                             else "required"
                         ),
-                        "repair_required": not natural_entry_non_order_absence,
+                        "repair_required": bool(
+                            post_activation_current_design
+                            and not natural_entry_non_order_absence
+                        ),
+                        "terminal_exclusion_reason": (
+                            "pre_current_design_immutable_lifecycle_gap"
+                            if not post_activation_current_design
+                            else None
+                        ),
                     }
                 )
                 continue
@@ -7520,10 +7538,13 @@ def _source_only_gap_diagnostics(
         for row in rolling_exclusions
         if isinstance(row, Mapping) and str(row.get("reason") or "")
     )
-    companion_binding_mismatch_count = int(
-        rolling_reason_counts.get(
-            "execution_report_materialized_companion_binding_mismatch", 0
-        )
+    companion_binding_mismatch_count = sum(
+        1
+        for row in rolling_exclusions
+        if isinstance(row, Mapping)
+        and row.get("reason")
+        == "execution_report_materialized_companion_binding_mismatch"
+        and row.get("repair_required") is not False
     )
     companion_binding_mismatch_dates = sorted(
         {
@@ -7532,8 +7553,15 @@ def _source_only_gap_diagnostics(
             if isinstance(row, Mapping)
             and row.get("reason")
             == "execution_report_materialized_companion_binding_mismatch"
+            and row.get("repair_required") is not False
             and str(row.get("target_date") or "")
         }
+    )
+    terminal_historical_exclusion_count = sum(
+        isinstance(row, Mapping)
+        and row.get("repair_required") is False
+        and bool(row.get("terminal_exclusion_reason"))
+        for row in rolling_exclusions
     )
     lifecycle_exact_join_missing_count = sum(
         1
@@ -7809,6 +7837,9 @@ def _source_only_gap_diagnostics(
         ),
         "lifecycle_exact_join_missing_count": lifecycle_exact_join_missing_count,
         "lifecycle_exact_join_missing_dates": lifecycle_exact_join_missing_dates,
+        "terminal_historical_exclusion_count": (
+            terminal_historical_exclusion_count
+        ),
         "natural_entry_non_order_lifecycle_not_applicable_count": (
             natural_entry_non_order_lifecycle_not_applicable_count
         ),

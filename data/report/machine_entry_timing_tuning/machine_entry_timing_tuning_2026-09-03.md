@@ -9,4 +9,5 @@
 - No scope passed its bounded fixed or dynamic floors; entry remains immediate.
 - Sample-floor state: `source_quality_blocked`; next action `repair_blocked_exact_scope_source_and_rerun`.
 - Per-signal dynamic confirmation: `source_only_evidence_accumulating` (selected for exact-date policy: `False`).
-- Applied scope count: `0`.
+- Policy publication: `blocked_effective_date_preopen_cutoff_elapsed`.
+- Candidate scope count: `0`.

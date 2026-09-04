@@ -930,6 +930,18 @@ def test_dynamic_widget_symbol_is_matched_without_changing_owner_policy(tmp_path
     assert row["anchor_results"][0]["metrics"]["mfe_bps"] == 100.0
     assert report["authority"]["runtime_effect"] is False
     assert report["authority"]["allowed_runtime_apply"] is False
+    assert report["decision_ownership"]["entry_confirmation_source"] == {
+        "owner": "machine_microstructure_attribution.micro_entry_confirmation",
+        "consumer": "machine_entry_timing_tuning",
+        "policy_selection_authority": False,
+        "runtime_effect": False,
+    }
+    assert report["decision_ownership"]["entry_timing_policy"][
+        "single_public_policy_owner"
+    ] is True
+    assert report["decision_ownership"]["lifecycle_turnover_research"][
+        "separate_from_entry_timing"
+    ] is True
     assert report["policy_promotion_candidates"] == []
     assert (
         report["promotion_candidate_intake_contract"]["consumer"]
@@ -2757,6 +2769,12 @@ def test_nontrading_attribution_skips_collection_feedback_write_contract(tmp_pat
         ),
         "coverage_stage": "exact_date_target_manifest_selection",
         "runtime_registration_receipt_required": True,
+        "current_runtime_registration_receipt": {
+            "status": "not_required_before_activation",
+            "ready": True,
+            "activation_date": "2026-09-04",
+            "runtime_effect": False,
+        },
         "active_owner_full_coverage": False,
         "active_owner_candidate_count": 0,
         "selected_active_owner_count": 0,
@@ -2769,6 +2787,165 @@ def test_nontrading_attribution_skips_collection_feedback_write_contract(tmp_pat
         "market_data_subscription_effect": False,
         "trading_runtime_effect": False,
     }
+
+
+def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        attribution_module,
+        "load_exact_date_collection_targets",
+        lambda target_date, root: {
+            "status": "loaded",
+            "path": str(root / f"targets-{target_date}.json"),
+            "registration_items": ["005930", "005930_NX"],
+        },
+    )
+    receipt_root = tmp_path / "receipts"
+    receipt_root.mkdir()
+    receipt_path = receipt_root / (
+        "scalp_micro_reversion_registration_receipt_2026-09-04.json"
+    )
+    receipt = {
+        "schema": "scalp_micro_reversion_registration_receipt_v1",
+        "effective_date": "2026-09-04",
+        "decision_authority": "market_data_source_quality_only",
+        "runtime_effect": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "requested_registration_items": ["005930", "005930_NX"],
+        "items": {
+            "005930": {
+                "required_realtime_types": ["0B", "0D"],
+                "received_realtime_types": ["0B", "0D"],
+                "first_received_at_epoch_by_type": {"0B": 100.0, "0D": 101.0},
+                "last_received_at_epoch": 102.0,
+                "receipt_count_by_type": {"0B": 1, "0D": 1},
+                "transport_epochs": [1],
+                "max_interarrival_gap_sec": 1.0,
+            },
+            "005930_NX": {
+                "required_realtime_types": ["0B", "0D"],
+                "received_realtime_types": ["0B"],
+                "first_received_at_epoch_by_type": {"0B": 100.0},
+                "last_received_at_epoch": 100.0,
+                "receipt_count_by_type": {"0B": 1},
+                "transport_epochs": [1],
+                "max_interarrival_gap_sec": 0.0,
+            },
+        },
+        "summary": {"max_interarrival_gap_sec": 3.0},
+    }
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    blocked = attribution_module._runtime_registration_receipt_status(
+        "2026-09-04",
+        collection_target_root=tmp_path / "targets",
+        receipt_root=receipt_root,
+    )
+    assert blocked["ready"] is False
+    assert blocked["incomplete_registration_items"] == ["005930_NX"]
+
+    receipt["items"]["005930_NX"] = {
+        "required_realtime_types": ["0B", "0D"],
+        "received_realtime_types": ["0B", "0D"],
+        "first_received_at_epoch_by_type": {"0B": 100.0, "0D": 101.0},
+        "last_received_at_epoch": 102.0,
+        "receipt_count_by_type": {"0B": 1, "0D": 1},
+        "transport_epochs": [1],
+        "max_interarrival_gap_sec": 1.0,
+    }
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    ready = attribution_module._runtime_registration_receipt_status(
+        "2026-09-04",
+        collection_target_root=tmp_path / "targets",
+        receipt_root=receipt_root,
+    )
+    assert ready["status"] == "complete"
+    assert ready["ready"] is True
+
+
+def test_runtime_registration_receipt_does_not_block_on_prospective_receive_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(
+        attribution_module,
+        "load_exact_date_collection_targets",
+        lambda target_date, root: {
+            "status": "loaded",
+            "path": str(root / f"targets-{target_date}.json"),
+            "registration_items": ["005930", "000660_NX"],
+            "payload": {
+                "selected_targets": [
+                    {
+                        "active_owner": True,
+                        "registration_items": ["005930"],
+                    },
+                    {
+                        "active_owner": False,
+                        "registration_items": ["000660_NX"],
+                    },
+                ]
+            },
+        },
+    )
+    receipt_root = tmp_path / "receipts"
+    receipt_root.mkdir()
+    receipt = {
+        "schema": "scalp_micro_reversion_registration_receipt_v1",
+        "effective_date": "2026-09-04",
+        "decision_authority": "market_data_source_quality_only",
+        "runtime_effect": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "requested_registration_items": ["000660_NX", "005930"],
+        "items": {
+            "005930": {
+                "required_realtime_types": ["0B", "0D"],
+                "received_realtime_types": ["0B", "0D"],
+                "first_received_at_epoch_by_type": {"0B": 100.0, "0D": 101.0},
+                "last_received_at_epoch": 102.0,
+                "receipt_count_by_type": {"0B": 1, "0D": 1},
+                "transport_epochs": [1],
+                "max_interarrival_gap_sec": 1.0,
+            },
+            "000660_NX": {
+                "received_realtime_types": [],
+                "first_received_at_epoch_by_type": {},
+                "last_received_at_epoch": None,
+                "receipt_count_by_type": {},
+                "transport_epochs": [],
+            },
+        },
+        "summary": {"max_interarrival_gap_sec": 3.0},
+    }
+    (receipt_root / "scalp_micro_reversion_registration_receipt_2026-09-04.json").write_text(
+        json.dumps(receipt), encoding="utf-8"
+    )
+
+    status = attribution_module._runtime_registration_receipt_status(
+        "2026-09-04",
+        collection_target_root=tmp_path / "targets",
+        receipt_root=receipt_root,
+    )
+
+    assert status["ready"] is True
+    assert status["incomplete_registration_items"] == ["000660_NX"]
+    assert status["incomplete_active_registration_items"] == []
+
+
+def test_registration_receipt_gap_is_terminal_for_same_date_rerun():
+    recovery = _rolling_source_contract_recovery(
+        "micro_runtime_registration_receipt_missing_or_incomplete"
+    )
+
+    assert recovery["disposition"] == "immutable_source_date_quarantine"
+    assert recovery["rerun_same_source_date_allowed"] is False
+    assert recovery["excluded_from_rolling_policy_evidence"] is True
 
 
 def test_prior_owner_diagnostic_handoff_is_exact_date_and_fail_closed(tmp_path):

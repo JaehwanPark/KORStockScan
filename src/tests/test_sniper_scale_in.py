@@ -34031,6 +34031,7 @@ def test_stage_buy_order_submission_persists_split_provenance_after_pending_clea
         "entry_split_order_bucket": "balanced_normal",
         "entry_split_order_policy_version": "entry_split_order_plan:test",
         "entry_split_order_policy_mode": "bounded_equal_split_baseline",
+        "entry_split_order_policy_variant_id": "equal_50_50_policy_parent",
         "entry_split_order_variant_id": "equal_50_50_offset_0pct_0_3pct",
         "entry_split_order_leg_count": 2,
         "entry_split_order_price_offsets_ticks": "0,1",
@@ -34062,6 +34063,9 @@ def test_stage_buy_order_submission_persists_split_provenance_after_pending_clea
 
     assert "pending_entry_orders" not in stock
     assert stock["entry_split_order_policy_applied"] is True
+    assert stock["entry_split_order_policy_variant_id"] == (
+        "equal_50_50_policy_parent"
+    )
     assert stock["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
     assert stock["entry_split_order_price_offsets_ticks"] == "0,1"
 
@@ -34076,6 +34080,7 @@ def test_stage_buy_order_submission_clears_stale_split_provenance_for_new_single
         "strategy": "SCALPING",
         "status": "WATCHING",
         "entry_split_order_policy_applied": True,
+        "entry_split_order_policy_variant_id": "stale-parent-variant",
         "entry_split_order_variant_id": "stale-variant",
     }
 
@@ -34100,6 +34105,7 @@ def test_stage_buy_order_submission_clears_stale_split_provenance_for_new_single
 
     assert "entry_split_order_policy_applied" not in stock
     assert "entry_split_order_variant_id" not in stock
+    assert "entry_split_order_policy_variant_id" not in stock
 
 
 def test_entry_ai_price_context_includes_orderbook_micro_when_enabled(monkeypatch):

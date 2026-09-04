@@ -1,4 +1,9 @@
-"""Run the full-day V2.14 entry paired replay as an offline bounded batch."""
+"""Run a full-day cohort-isolated entry prompt replay as an offline batch.
+
+The optimizer may advance an offline cohort from V2.14 to a supported later
+candidate.  Live candidate publication remains explicitly limited to the
+separately registered V2.14 family.
+"""
 
 from __future__ import annotations
 
@@ -16,13 +21,18 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
 )
 from src.engine.scalping import ai_decision_quality as quality
+from src.engine.scalping import entry_setup_live_policy as live_policy
 from src.engine.scalping.entry_setup_live_policy import publish_live_candidate
+from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
 
 BATCH_SCHEMA = "ai_entry_setup_paired_replay_batch_v1"
 BATCH_DIR = quality.DATA_DIR / "report" / "ai_entry_setup_paired_replay_batch"
 DEFAULT_COHORTS = (
     ("KRX", "KRX_REGULAR"),
     ("NXT", "NXT_AFTERMARKET"),
+)
+DEFAULT_CANDIDATE_PROMPT_VERSION = (
+    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
 )
 FULL_DAY_MATURITY_TIME_KST = dt_time(21, 0)
 
@@ -93,6 +103,77 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _optimizer_candidate_plan(
+    target_date: str,
+) -> tuple[dict[tuple[str, str], str], dict[str, Any]]:
+    """Resolve isolated offline candidates without expanding live authority."""
+
+    path, _markdown_path = optimizer.report_paths(target_date)
+    report = _read_json(path)
+    fallback = {cohort: DEFAULT_CANDIDATE_PROMPT_VERSION for cohort in DEFAULT_COHORTS}
+    source = {
+        "path": str(path),
+        "status": "fallback_default_candidate",
+        "reason": "optimizer_artifact_missing_or_invalid",
+        "artifact_content_sha256": None,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    artifact_hash = str(report.get("artifact_content_sha256") or "").strip()
+    content = {
+        key: value for key, value in report.items() if key != "artifact_content_sha256"
+    }
+    if (
+        report.get("schema") != optimizer.SCHEMA
+        or report.get("target_date") != target_date
+        or report.get("status") != "ready_source_only_continuous_search"
+        or not artifact_hash
+        or optimizer._canonical_sha256(content) != artifact_hash
+        or report.get("runtime_effect") is not False
+        or report.get("runtime_authority") is not False
+        or report.get("allowed_runtime_apply") is not False
+        or report.get("actual_order_submitted") is not False
+        or report.get("broker_order_forbidden") is not True
+    ):
+        return fallback, source
+    entry = (report.get("stage_optimizers") or {}).get("entry") or {}
+    rows = entry.get("cohort_optimizers") or []
+    selected: dict[tuple[str, str], str] = {}
+    for venue, session in DEFAULT_COHORTS:
+        matches = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("effective_venue") or "").upper() == venue
+            and str(row.get("session_bucket") or "").upper() == session
+            and row.get("prompt_search_ready") is True
+            and row.get("cross_cohort_selection_forbidden") is True
+        ]
+        if len(matches) != 1:
+            selected[(venue, session)] = DEFAULT_CANDIDATE_PROMPT_VERSION
+            continue
+        version = str(
+            (matches[0].get("selected_challenger") or {}).get("prompt_version") or ""
+        )
+        selected[(venue, session)] = (
+            version
+            if version in optimizer.ENTRY_CANDIDATE_ORDER
+            else DEFAULT_CANDIDATE_PROMPT_VERSION
+        )
+    fallback_cohorts = [
+        f"{venue}/{session}"
+        for venue, session in DEFAULT_COHORTS
+        if selected[(venue, session)] == DEFAULT_CANDIDATE_PROMPT_VERSION
+    ]
+    return selected, {
+        **source,
+        "status": "optimizer_candidate_plan_applied_offline_only",
+        "reason": "stage_venue_session_isolated_selection",
+        "artifact_content_sha256": artifact_hash,
+        "fallback_or_v2_14_cohorts": fallback_cohorts,
+    }
+
+
 def _selection_checkpoint_contract_pass(
     selection: dict[str, Any], *, evaluated_request_count: int
 ) -> bool:
@@ -109,6 +190,70 @@ def _selection_checkpoint_contract_pass(
         all(value >= 0 for value in normalized)
         and sum(normalized) == int(evaluated_request_count)
     )
+
+
+def _publish_unregistered_prompt_blocker(
+    *, source_date: str, candidate_prompt_version: str, write: bool
+) -> dict[str, Any]:
+    """Replace any same-date V2.14 candidate with a fail-closed marker."""
+
+    generated_at = datetime.now(quality.KST)
+    path = live_policy.live_candidate_path(source_date)
+    body = {
+        "schema": live_policy.LIVE_CANDIDATE_SCHEMA,
+        "source_date": source_date,
+        "effective_date": live_policy._candidate_effective_date(
+            source_date=source_date,
+            generated_at=generated_at,
+        ),
+        "effective_date_policy": live_policy.EFFECTIVE_DATE_POLICY,
+        "preopen_candidate_cutoff_kst": (
+            live_policy.PREOPEN_CANDIDATE_CUTOFF_KST.isoformat()
+        ),
+        "generated_at": generated_at.isoformat(),
+        "status": "blocked",
+        "canary_mode": None,
+        "blocking_reasons": ["unregistered_dynamic_prompt_for_live"],
+        "performance_promotion_blocking_reasons": [
+            "unregistered_dynamic_prompt_for_live"
+        ],
+        "selected_prompt_version": candidate_prompt_version,
+        "registered_live_prompt_version": DEFAULT_CANDIDATE_PROMPT_VERSION,
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "activation_mode": "first_available_krx_trading_date_preopen_only",
+        "next_action": (
+            "complete isolated rolling quality and register an exact bounded "
+            "runtime family before any PREOPEN apply"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "offline_dynamic_prompt_research_blocker_only",
+        "forbidden_uses": [
+            "live_prompt_apply",
+            "runtime_order_threshold_provider_model_quantity_or_cap_change",
+            "broker_or_safety_guard_bypass",
+            "bot_process_control",
+        ],
+    }
+    candidate = {**body, "artifact_sha256": live_policy._canonical_sha256(body)}
+    if write:
+        _atomic_write_json(path, candidate)
+    return {
+        "path": str(path),
+        "status": "blocked_unregistered_dynamic_prompt_for_live",
+        "candidate_prompt_version": candidate_prompt_version,
+        "registered_live_prompt_version": DEFAULT_CANDIDATE_PROMPT_VERSION,
+        "effective_date": body["effective_date"],
+        "artifact_sha256": candidate["artifact_sha256"],
+        "next_action": body["next_action"],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
 
 
 def _wait_for_predecessor(
@@ -135,7 +280,10 @@ def _cohort_result(
     max_new_requests: int,
     workers: int,
     timeout_sec: float,
+    candidate_prompt_version: str = DEFAULT_CANDIDATE_PROMPT_VERSION,
 ) -> dict[str, Any]:
+    if candidate_prompt_version not in optimizer.ENTRY_CANDIDATE_ORDER:
+        raise ValueError("unsupported_optimizer_candidate_prompt_version")
     common = [
         "--date",
         target_date,
@@ -164,6 +312,7 @@ def _cohort_result(
             "effective_venue": venue,
             "session_bucket": session_bucket,
             "status": "hold_no_exact_entry_control",
+            "candidate_prompt_version": candidate_prompt_version,
             "control_path": str(control_path),
             "entry_control_sample_count": 0,
         }
@@ -185,7 +334,7 @@ def _cohort_result(
             "--outcome-price-source",
             "auto",
             "--detailed-candidate-version",
-            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            candidate_prompt_version,
             "--execute-candidate",
             "--candidate-max-new-requests",
             str(max_new_requests),
@@ -197,9 +346,7 @@ def _cohort_result(
     )
     report_path = quality.detailed_paired_path(
         target_date,
-        candidate_prompt_version=(
-            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-        ),
+        candidate_prompt_version=(candidate_prompt_version),
         effective_venue=venue,
         session_bucket=session_bucket,
     )
@@ -235,6 +382,7 @@ def _cohort_result(
         "effective_venue": venue,
         "session_bucket": session_bucket,
         "status": status,
+        "candidate_prompt_version": candidate_prompt_version,
         "control_path": str(control_path),
         "report_path": str(report_path),
         "entry_control_sample_count": sum(
@@ -278,15 +426,19 @@ def run_batch(
     write: bool,
 ) -> dict[str, Any]:
     started_at = datetime.now(quality.KST)
+    candidate_plan, candidate_plan_source = _optimizer_candidate_plan(target_date)
     report: dict[str, Any] = {
         "schema": BATCH_SCHEMA,
         "target_date": target_date,
         "generated_at": started_at.isoformat(),
         "outcome_as_of": as_of.astimezone(quality.KST).isoformat(),
         "status": "running",
-        "candidate_prompt_version": (
-            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-        ),
+        "candidate_prompt_version": (DEFAULT_CANDIDATE_PROMPT_VERSION),
+        "candidate_prompt_versions_by_cohort": {
+            f"{venue}/{session}": candidate_plan[(venue, session)]
+            for venue, session in DEFAULT_COHORTS
+        },
+        "candidate_prompt_selection_source": candidate_plan_source,
         "full_day_maturity_time_kst": "21:00:00",
         "max_new_requests_per_cohort": max_new_requests,
         "cohorts": [],
@@ -295,6 +447,17 @@ def run_batch(
     path = batch_status_path(target_date)
     if write:
         _atomic_write_json(path, report)
+    krx_candidate = candidate_plan[("KRX", "KRX_REGULAR")]
+    if krx_candidate != DEFAULT_CANDIDATE_PROMPT_VERSION:
+        # Invalidate a same-date V2.14 artifact before any maturity,
+        # predecessor, credential, provider, or report-write early return.
+        report["krx_bounded_live_candidate"] = _publish_unregistered_prompt_blocker(
+            source_date=target_date,
+            candidate_prompt_version=krx_candidate,
+            write=write,
+        )
+        if write:
+            _atomic_write_json(path, report)
     if not _full_day_mature(target_date=target_date, as_of=as_of):
         report["status"] = "not_ready_full_day_outcome_maturity"
         report["finished_at"] = datetime.now(quality.KST).isoformat()
@@ -338,6 +501,7 @@ def run_batch(
                     max_new_requests=max_new_requests,
                     workers=workers,
                     timeout_sec=timeout_sec,
+                    candidate_prompt_version=candidate_plan[(venue, session_bucket)],
                 )
             except Exception as exc:
                 cohort = {
@@ -361,11 +525,12 @@ def run_batch(
             if cohort_failure_count == 0
             else "completed_offline_only_with_cohort_failures"
         )
-        report["krx_bounded_live_candidate"] = publish_live_candidate(
-            source_date=target_date,
-            batch_report=report,
-            write=write,
-        )
+        if krx_candidate == DEFAULT_CANDIDATE_PROMPT_VERSION:
+            report["krx_bounded_live_candidate"] = publish_live_candidate(
+                source_date=target_date,
+                batch_report=report,
+                write=write,
+            )
     except Exception as exc:
         report["status"] = "failed_offline_batch"
         report["error_type"] = type(exc).__name__
@@ -380,7 +545,7 @@ def run_batch(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run full-day cohort-isolated V2.14 paired replay offline."
+        description="Run full-day cohort-isolated entry prompt replay offline."
     )
     parser.add_argument("--date", required=True)
     parser.add_argument("--as-of")

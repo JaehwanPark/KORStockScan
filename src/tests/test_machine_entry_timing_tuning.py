@@ -12,6 +12,8 @@ from src.engine.automation.machine_entry_timing_tuning import (
     _same_stage_owner_guard,
     build_applied_policy,
     build_report,
+    policy_publication_gate,
+    write_outputs,
 )
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 from src.trading.market.micro_confirmation import evaluate_dynamic_micro_confirmation
@@ -1192,6 +1194,50 @@ def test_source_report_requires_explicit_clean_baseline_contract(
     assert report["rejected_source_artifacts"] == [
         {"source_date": target_date.isoformat(), "path": str(source_path)}
     ]
+
+
+def test_source_report_requires_single_entry_timing_owner_after_activation(
+    tmp_path: Path,
+) -> None:
+    target_date = date(2026, 9, 4)
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_path = source_dir / f"machine_microstructure_attribution_{target_date}.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "schema": "machine_microstructure_attribution_v1",
+                "target_date": target_date.isoformat(),
+                "clean_tuning_baseline_date": "2026-06-05",
+                "clean_baseline_allowed": True,
+                "authority": {
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                },
+                "micro_entry_confirmation": {"entry_anchors": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_report(
+        target_date=target_date,
+        source_dir=source_dir,
+        low_price_candidate_dir=tmp_path / "low-price-candidates",
+        samsung_candidate_dir=tmp_path / "samsung-candidates",
+        widget_policy_dir=tmp_path / "widget-policies",
+    )
+
+    assert report["target_source_ready"] is False
+    assert report["rejected_source_artifacts"] == [
+        {
+            "source_date": target_date.isoformat(),
+            "path": str(source_path),
+            "reason": "decision_ownership_contract_invalid",
+        }
+    ]
     assert report["status"] == "source_quality_blocked"
     assert report["sample_floor_assessment"]["state"] == "source_contract_blocked"
 
@@ -1202,7 +1248,7 @@ def test_report_classifies_blocked_actual_anchors_as_join_gap(
     target_date = date(2026, 8, 27)
     source_dir = tmp_path / "source"
     blocked = _entry_row(target_date, 1)
-    blocked["anchor_role"] = "episode_signal_bar"
+    blocked["anchor_role"] = "episode_signal_decision_leg"
     blocked["classification"] = "source_quality_blocked"
     blocked["source_gap_reasons"] = [
         "actual_signal_decision_timestamp_missing",
@@ -1626,3 +1672,59 @@ def test_malformed_next_widget_policy_fails_closed(tmp_path: Path) -> None:
             "reason": "next_exact_date_widget_entry_contract_invalid",
         }
     ]
+
+
+def test_policy_publication_gate_allows_staging_and_preopen_only() -> None:
+    report = {"target_date": "2026-09-03", "effective_date": "2026-09-04"}
+
+    assert policy_publication_gate(
+        report, now=datetime.fromisoformat("2026-09-03T21:15:00+09:00")
+    )["status"] == "allowed_next_session_staging"
+    assert policy_publication_gate(
+        report, now=datetime.fromisoformat("2026-09-04T07:59:59+09:00")
+    )["status"] == "allowed_effective_date_preopen"
+    blocked = policy_publication_gate(
+        report, now=datetime.fromisoformat("2026-09-04T08:00:00+09:00")
+    )
+    assert blocked["status"] == "blocked_effective_date_preopen_cutoff_elapsed"
+    assert blocked["allowed"] is False
+
+
+def test_late_report_regeneration_does_not_overwrite_runtime_policy(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "target_date": "2026-09-03",
+        "effective_date": "2026-09-04",
+        "decision": "baseline_immediate_entry_carry_forward",
+        "runtime_winner": None,
+        "winner": None,
+        "sample_floor_assessment": {},
+        "per_signal_dynamic_confirmation_source_only": {},
+    }
+    publication = policy_publication_gate(
+        report, now=datetime.fromisoformat("2026-09-04T12:00:00+09:00")
+    )
+    report["policy_publication"] = publication
+    applied = build_applied_policy(report)
+    policy_dir = tmp_path / "policy"
+    policy_dir.mkdir(parents=True)
+    existing_path = policy_dir / "machine_entry_timing_policy_2026-09-04.json"
+    existing_path.write_text('{"sentinel":"preserve"}\n', encoding="utf-8")
+
+    paths = write_outputs(
+        report,
+        applied,
+        output_dir=tmp_path / "report",
+        policy_dir=policy_dir,
+        publish_policy=publication["allowed"] is True,
+    )
+
+    assert paths[2] is None
+    assert json.loads(existing_path.read_text(encoding="utf-8")) == {
+        "sentinel": "preserve"
+    }
+    written_report = json.loads(paths[0].read_text(encoding="utf-8"))
+    assert written_report["policy_publication"]["status"] == (
+        "blocked_effective_date_preopen_cutoff_elapsed"
+    )

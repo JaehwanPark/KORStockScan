@@ -42,8 +42,10 @@ from src.engine.scalping.micro_reversion.depth_join import (
     validate_depth_row as validate_canonical_depth_row,
 )
 from src.engine.scalping.micro_reversion.collection_targets import (
+    COLLECTION_TARGET_ROOT,
     COLLECTION_TARGET_SCHEMA,
     build_collection_targets,
+    load_exact_date_collection_targets,
     write_collection_targets,
 )
 from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
@@ -74,6 +76,7 @@ KST_SUFFIX = "+09:00"
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "machine_microstructure_attribution"
 REPORT_SCHEMA = "machine_microstructure_attribution_v1"
+DECISION_OWNERSHIP_SCHEMA = "machine_microstructure_decision_ownership_v1"
 OBJECTIVE_FOLLOWUP_SCHEMA = "machine_fast_lifecycle_objective_followup_v1"
 FAST_LIFECYCLE_OBJECTIVE_FOLLOWUP_ID = "machine_lifecycle_turnover_policy_research_v1"
 OBJECTIVE_CANDIDATE_BINDING_SCHEMA = (
@@ -115,6 +118,8 @@ TIMEOUT_RESEARCH_MAX_QUOTE_AGE_SEC = 5
 CANARY_COMPLETE_AFTER_KST = time(20, 0)
 GROSS_PROFIT_TOUCH_BPS = (1, 3, 5, 10, 20, 30, 50)
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
+REGISTRATION_RECEIPT_REQUIRED_FROM_DATE = date(2026, 9, 4)
+SOURCE_ENTRY_EVENT_ID_REQUIRED_FROM_DATE = date(2026, 9, 7)
 POSTCLOSE_COMPLETE_TIME = time(20, 0)
 ENTRY_CONFIRMATION_HORIZONS_SEC = (1, 3, 5)
 ENTRY_CONFIRMATION_MAX_QUOTE_AGE_SEC = 1
@@ -3279,6 +3284,9 @@ def _episode_inventory(
                         "lifecycle_stage": "entry",
                         "anchor_role": "episode_signal_bar",
                         "entry_timing_decision_anchor_valid": False,
+                        "source_entry_event_id": str(
+                            signal_features.get("source_entry_event_id") or ""
+                        ),
                         "owner_round_trip_cost_pct": episode_round_trip_cost_pct,
                         "owner_round_trip_cost_provenance": (
                             episode_round_trip_cost_provenance
@@ -3448,6 +3456,10 @@ def _episode_inventory(
                                     "lifecycle_stage": "entry",
                                     "anchor_role": "episode_signal_decision_leg",
                                     "entry_timing_decision_anchor_valid": True,
+                                    "source_entry_event_id": str(
+                                        signal_features.get("source_entry_event_id")
+                                        or ""
+                                    ),
                                     "owner_round_trip_cost_pct": (
                                         episode_round_trip_cost_pct
                                     ),
@@ -3781,6 +3793,9 @@ def _episode_inventory(
                         "lifecycle_stage": "entry",
                         "anchor_role": "episode_signal_decision_leg",
                         "entry_timing_decision_anchor_valid": True,
+                        "source_entry_event_id": str(
+                            features.get("source_entry_event_id") or ""
+                        ),
                         "owner_round_trip_cost_pct": _finite_float(
                             (samsung or {}).get("cost_pct")
                         ),
@@ -5026,6 +5041,9 @@ _ENTRY_CONFIRMATION_ANCHOR_ROLES = frozenset(
         "episode_signal_bar",
         "prospective_episode_research_signal",
     }
+)
+_TUNING_ENTRY_DECISION_ANCHOR_ROLES = frozenset(
+    {"actual_widget_entry_signal", "episode_signal_decision_leg"}
 )
 
 
@@ -6496,6 +6514,15 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
     source_gaps: list[str] = []
     if result.get("entry_timing_decision_anchor_valid") is False:
         source_gaps.append("actual_signal_decision_timestamp_missing")
+    anchor_at = _parse_ts(result.get("anchor_at"))
+    if (
+        result.get("anchor_role") in _TUNING_ENTRY_DECISION_ANCHOR_ROLES
+        and anchor_at is not None
+        and anchor_at.astimezone(KST).date()
+        >= SOURCE_ENTRY_EVENT_ID_REQUIRED_FROM_DATE
+        and not str(result.get("source_entry_event_id") or "").strip()
+    ):
+        source_gaps.append("source_entry_event_id_missing")
     if result.get("micro_context_status") != "matched":
         source_gaps.append(str(result.get("micro_context_status") or "unknown"))
     source_gaps.extend(f"bbo_{horizon}s_missing" for horizon in missing_bbo)
@@ -6567,6 +6594,11 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "entry_state": str(result.get("entry_state") or "UNSPECIFIED"),
         "source_entry_event_id": result.get("source_entry_event_id"),
         "anchor_role": result.get("anchor_role"),
+        "tuning_population_role": (
+            "actual_decision_anchor"
+            if result.get("anchor_role") in _TUNING_ENTRY_DECISION_ANCHOR_ROLES
+            else "diagnostic_or_prospective_anchor"
+        ),
         "classification": label,
         "source_gap_reasons": sorted(set(source_gaps)),
         "actual_order_submitted": result.get("actual_order_submitted") is True,
@@ -6849,6 +6881,15 @@ def _micro_entry_confirmation_summary(
         },
         "summary": {
             "entry_anchor_count": len(rows),
+            "actual_decision_anchor_count": sum(
+                row.get("tuning_population_role") == "actual_decision_anchor"
+                for row in rows
+            ),
+            "diagnostic_or_prospective_anchor_count": sum(
+                row.get("tuning_population_role")
+                == "diagnostic_or_prospective_anchor"
+                for row in rows
+            ),
             "source_quality_eligible_count": sum(
                 row["classification"] != "source_quality_blocked" for row in rows
             ),
@@ -7492,7 +7533,10 @@ def _rolling_source_contract_recovery(gap: str | None) -> dict[str, Any]:
             "excluded_from_rolling_policy_evidence": False,
             "next_action": "continue_rolling_readiness_review",
         }
-    if gap == "micro_canary_target_date_evidence_incomplete":
+    if gap in {
+        "micro_canary_target_date_evidence_incomplete",
+        "micro_runtime_registration_receipt_missing_or_incomplete",
+    }:
         return {
             "disposition": "immutable_source_date_quarantine",
             "rerun_same_source_date_allowed": False,
@@ -7500,7 +7544,10 @@ def _rolling_source_contract_recovery(gap: str | None) -> dict[str, Any]:
             "next_action": (
                 "quarantine_current_source_date_and_continue_next_exact_date_collection"
             ),
-            "reason": "irreversible_intraday_observation_loss_cannot_be_reconstructed",
+            "reason": (
+                "irreversible_intraday_observation_or_exact_route_receipt_loss_"
+                "cannot_be_reconstructed"
+            ),
         }
     return {
         "disposition": "repairable_source_contract_gap",
@@ -7508,6 +7555,164 @@ def _rolling_source_contract_recovery(gap: str | None) -> dict[str, Any]:
         "excluded_from_rolling_policy_evidence": True,
         "next_action": "repair_current_attribution_source_contract_and_rerun",
         "reason": gap,
+    }
+
+
+def _runtime_registration_receipt_status(
+    target_date: str,
+    *,
+    collection_target_root: Path,
+    receipt_root: Path,
+) -> dict[str, Any]:
+    target_day = date.fromisoformat(target_date)
+    if target_day < REGISTRATION_RECEIPT_REQUIRED_FROM_DATE:
+        return {
+            "status": "not_required_before_activation",
+            "ready": True,
+            "activation_date": REGISTRATION_RECEIPT_REQUIRED_FROM_DATE.isoformat(),
+            "runtime_effect": False,
+        }
+    target_manifest = load_exact_date_collection_targets(
+        target_date, root=collection_target_root
+    )
+    if target_manifest.get("status") != "loaded":
+        return {
+            "status": "target_manifest_missing_or_invalid",
+            "ready": False,
+            "target_manifest_status": target_manifest.get("status"),
+            "target_manifest_path": target_manifest.get("path"),
+            "runtime_effect": False,
+        }
+    expected_items = sorted(
+        set(str(value) for value in target_manifest.get("registration_items") or [])
+    )
+    manifest_payload = (
+        target_manifest.get("payload")
+        if isinstance(target_manifest.get("payload"), dict)
+        else {}
+    )
+    selected_targets = manifest_payload.get("selected_targets")
+    if isinstance(selected_targets, list):
+        required_active_items = sorted(
+            {
+                str(item)
+                for row in selected_targets
+                if isinstance(row, dict) and row.get("active_owner") is True
+                for item in row.get("registration_items") or []
+            }
+        )
+    else:
+        # Compatibility for direct/test loaders without the payload envelope.
+        required_active_items = list(expected_items)
+    receipt_path = receipt_root / (
+        f"scalp_micro_reversion_registration_receipt_{target_date}.json"
+    )
+    try:
+        receipt = read_json_object_strict(receipt_path)
+    except (FileNotFoundError, OSError, TypeError, ValueError):
+        receipt = None
+    if not isinstance(receipt, dict):
+        return {
+            "status": "receipt_missing_or_invalid",
+            "ready": False,
+            "receipt_path": str(receipt_path),
+            "expected_registration_items": expected_items,
+            "runtime_effect": False,
+        }
+    requested_items_raw = [
+        str(value) for value in receipt.get("requested_registration_items") or []
+    ]
+    requested_items = sorted(set(requested_items_raw))
+    item_rows = receipt.get("items") if isinstance(receipt.get("items"), dict) else {}
+
+    def item_receipt_complete(item: str) -> bool:
+        row = item_rows.get(item)
+        if not isinstance(row, dict):
+            return False
+        received_types = set(row.get("received_realtime_types") or ())
+        first_by_type = row.get("first_received_at_epoch_by_type")
+        counts = row.get("receipt_count_by_type")
+        transport_epochs = row.get("transport_epochs")
+        max_gap_sec = _finite_float(row.get("max_interarrival_gap_sec"))
+
+        def positive_int(value: Any) -> bool:
+            return bool(
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and value > 0
+            )
+
+        def nonnegative_int(value: Any) -> bool:
+            return bool(
+                isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+            )
+
+        return bool(
+            row.get("required_realtime_types") == ["0B", "0D"]
+            and received_types >= {"0B", "0D"}
+            and isinstance(first_by_type, dict)
+            and all(
+                (_finite_float(first_by_type.get(value)) or 0.0) > 0.0
+                for value in ("0B", "0D")
+            )
+            and isinstance(counts, dict)
+            and all(positive_int(counts.get(value)) for value in ("0B", "0D"))
+            and (_finite_float(row.get("last_received_at_epoch")) or 0.0) > 0.0
+            and isinstance(transport_epochs, list)
+            and bool(transport_epochs)
+            and all(nonnegative_int(value) for value in transport_epochs)
+            and max_gap_sec is not None
+            and max_gap_sec >= 0.0
+        )
+
+    incomplete_items = [
+        item for item in expected_items if not item_receipt_complete(item)
+    ]
+    incomplete_active_items = [
+        item for item in incomplete_items if item in set(required_active_items)
+    ]
+    authority_valid = bool(
+        receipt.get("schema") == "scalp_micro_reversion_registration_receipt_v1"
+        and receipt.get("effective_date") == target_date
+        and receipt.get("decision_authority")
+        == "market_data_source_quality_only"
+        and receipt.get("runtime_effect") is False
+        and receipt.get("trading_runtime_effect") is False
+        and receipt.get("trading_decision_effect") is False
+        and receipt.get("actual_order_submitted") is False
+        and receipt.get("broker_order_forbidden") is True
+    )
+    exact_manifest_match = requested_items_raw == expected_items
+    item_census_match = sorted(item_rows) == expected_items
+    ready = bool(
+        authority_valid
+        and exact_manifest_match
+        and item_census_match
+        and not incomplete_active_items
+    )
+    return {
+        "status": "complete" if ready else "incomplete_or_contract_invalid",
+        "ready": ready,
+        "receipt_path": str(receipt_path),
+        "target_manifest_path": target_manifest.get("path"),
+        "authority_valid": authority_valid,
+        "exact_manifest_match": exact_manifest_match,
+        "item_census_match": item_census_match,
+        "expected_registration_item_count": len(expected_items),
+        "required_active_registration_item_count": len(required_active_items),
+        "requested_registration_item_count": len(requested_items),
+        "complete_registration_item_count": len(expected_items)
+        - len(incomplete_items),
+        "incomplete_registration_items": incomplete_items,
+        "incomplete_active_registration_items": incomplete_active_items,
+        "max_interarrival_gap_sec": (receipt.get("summary") or {}).get(
+            "max_interarrival_gap_sec"
+        ),
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
     }
 
 
@@ -7527,6 +7732,21 @@ def build_report(
     if generated.tzinfo is None:
         generated = generated.replace(tzinfo=KST)
     generated = generated.astimezone(KST)
+    runtime_root = (
+        DATA_DIR / "runtime"
+        if report_root == DATA_DIR / "report"
+        else report_root.parent / "runtime"
+    )
+    collection_target_root = (
+        COLLECTION_TARGET_ROOT
+        if report_root == DATA_DIR / "report"
+        else runtime_root / "scalp_micro_reversion_collection_targets"
+    )
+    registration_receipt = _runtime_registration_receipt_status(
+        target_date,
+        collection_target_root=collection_target_root,
+        receipt_root=runtime_root / "scalp_micro_reversion_registration_receipt",
+    )
     canary_snapshot_path = resolve_target_canary_snapshot(
         target_date=target_day,
         latest_path=canary_snapshot_path,
@@ -7584,9 +7804,15 @@ def build_report(
                         )
                         == "target_date_evidence_stale"
                         else (
-                            "micro_stream_source_contract_invalid"
-                            if micro_source.get("source_contract_ready") is not True
-                            else None
+                            (
+                                "micro_stream_source_contract_invalid"
+                                if micro_source.get("source_contract_ready") is not True
+                                else (
+                                    "micro_runtime_registration_receipt_missing_or_incomplete"
+                                    if registration_receipt.get("ready") is not True
+                                    else None
+                                )
+                            )
                         )
                     )
                 )
@@ -7837,8 +8063,9 @@ def build_report(
         "gap": source_contract_gap,
         "recovery": _rolling_source_contract_recovery(source_contract_gap),
         "required": (
-            "clean_baseline_and_exact_date_partition_manifest_canary_stream_contract"
+            "clean_baseline_exact_date_partition_manifest_canary_stream_and_runtime_registration_receipt_contract"
         ),
+        "runtime_registration_receipt": registration_receipt,
     }
     research_input_report = {
         "schema": REPORT_SCHEMA,
@@ -7939,6 +8166,31 @@ def build_report(
         "decision": decision,
         "metric_contract": METRIC_CONTRACT,
         "rolling_policy_source_contract": rolling_policy_source_contract,
+        "decision_ownership": {
+            "schema": DECISION_OWNERSHIP_SCHEMA,
+            "entry_confirmation_source": {
+                "owner": "machine_microstructure_attribution.micro_entry_confirmation",
+                "consumer": "machine_entry_timing_tuning",
+                "policy_selection_authority": False,
+                "runtime_effect": False,
+            },
+            "entry_timing_policy": {
+                "owner": "machine_entry_timing_tuning",
+                "source_section": "micro_entry_confirmation",
+                "single_public_policy_owner": True,
+            },
+            "lifecycle_turnover_research": {
+                "owner": "machine_lifecycle_turnover_policy_research",
+                "source_section": "rolling_paired_policy_research",
+                "separate_from_entry_timing": True,
+                "runtime_effect": False,
+            },
+            "market_weakness_policy": {
+                "owner": "market_weakness_hysteresis_tuning",
+                "source_section": "market_weakness_entry_response",
+                "separate_from_entry_timing": True,
+            },
+        },
         "fast_lifecycle_objective_alignment": objective_alignment,
         "rolling_paired_policy_research": rolling_paired_policy_research,
         "micro_entry_confirmation": micro_entry_confirmation,
@@ -7959,6 +8211,7 @@ def build_report(
             "widget": widget_sources,
             "episode": episode_sources,
             "micro_reversion": micro_source,
+            "runtime_registration_receipt": registration_receipt,
             "market_weakness_response": market_weakness_response["sources"],
             "market_weakness_blocked_entries": weakness_blocked_source,
         },
@@ -8033,6 +8286,7 @@ def build_report(
             "runtime_registration_receipt_required": collection_targets["budget"][
                 "runtime_registration_receipt_required"
             ],
+            "current_runtime_registration_receipt": registration_receipt,
             "active_owner_full_coverage": collection_targets["budget"][
                 "active_owner_exact_route_full_coverage"
             ],
@@ -8073,6 +8327,7 @@ def build_report(
             ),
             "coverage_stage": "exact_date_target_manifest_selection",
             "runtime_registration_receipt_required": True,
+            "current_runtime_registration_receipt": registration_receipt,
             "active_owner_full_coverage": False,
             "active_owner_candidate_count": 0,
             "selected_active_owner_count": 0,

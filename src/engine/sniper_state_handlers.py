@@ -71500,6 +71500,7 @@ ENTRY_SPLIT_POSITION_PROVENANCE_KEYS = (
     "entry_split_order_bucket",
     "entry_split_order_policy_version",
     "entry_split_order_policy_mode",
+    "entry_split_order_policy_variant_id",
     "entry_split_order_variant_id",
     "entry_split_order_leg_count",
     "entry_split_order_price_offsets_ticks",
@@ -71519,6 +71520,7 @@ def _entry_split_position_provenance(entry_orders) -> dict:
             continue
         if not (
             bool(order.get("entry_split_order_policy_applied"))
+            or str(order.get("entry_split_order_policy_variant_id") or "").strip()
             or str(order.get("entry_split_order_variant_id") or "").strip()
             or str(order.get("entry_split_order_policy_mode") or "").strip()
         ):

@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import tempfile
 import threading
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -18,12 +19,20 @@ from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     is_date_allowed,
 )
+from src.trading.order.split_execution_math import (
+    pct_price_offset as _pct_price_offset,
+    split_qty as _split_qty,
+    tick_size as _tick_size,
+)
 from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl, open_text_auto
 
 SCHEMA_VERSION = "entry_split_order_plan_v1"
 POLICY_SCHEMA_VERSION = "entry_split_order_policy_v1"
+CUMULATIVE_STATE_SCHEMA_VERSION = "entry_split_cumulative_state_v2"
+GENERATION_BINDING_SCHEMA_VERSION = "entry_split_report_policy_generation_v1"
+GENERATION_BINDING_REQUIRED_FROM_DATE = date(2026, 9, 4)
 REPORT_TYPE = "entry_split_order_plan"
 RUNTIME_FAMILY = "entry_split_order_plan"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -117,7 +126,12 @@ CALIBRATION_EVENT_KEYS = frozenset(
         "entry_split_order_bucket",
         "entry_split_order_policy_version",
         "entry_split_order_policy_mode",
+        "entry_split_order_policy_variant_id",
         "entry_split_order_variant_id",
+        "entry_split_order_original_qty",
+        "entry_split_order_skip_reason",
+        "requested_qty",
+        "submitted_qty",
         "entry_split_order_leg_count",
         "entry_split_order_price_offsets_ticks",
         "entry_split_order_qty_weight_min",
@@ -1168,10 +1182,120 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _canonical_sha256(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _without_generation_binding(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in payload.items()
+        if key != "artifact_generation_binding"
+    }
+
+
+def bind_report_policy_generation(
+    report: dict[str, Any], policy: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind one report/policy pair without introducing a circular digest."""
+
+    report_payload = _without_generation_binding(report)
+    policy_payload = _without_generation_binding(policy)
+    report_sha256 = _canonical_sha256(report_payload)
+    policy_sha256 = _canonical_sha256(policy_payload)
+    identity = {
+        "schema_version": GENERATION_BINDING_SCHEMA_VERSION,
+        "target_date": str(report_payload.get("date") or ""),
+        "policy_version": str(policy_payload.get("policy_version") or ""),
+        "report_content_sha256": report_sha256,
+        "policy_content_sha256": policy_sha256,
+    }
+    generation_id = _canonical_sha256(identity)
+    binding = {**identity, "generation_id": generation_id}
+    return (
+        {**report_payload, "artifact_generation_binding": binding},
+        {**policy_payload, "artifact_generation_binding": binding},
     )
+
+
+def validate_report_policy_generation(
+    report: dict[str, Any], policy: dict[str, Any]
+) -> tuple[bool, str]:
+    """Validate exact report/policy lineage before a policy can be consumed."""
+
+    report_binding = report.get("artifact_generation_binding")
+    policy_binding = policy.get("artifact_generation_binding")
+    if not isinstance(report_binding, dict) or not isinstance(policy_binding, dict):
+        return False, "generation_binding_missing"
+    if report_binding != policy_binding:
+        return False, "generation_binding_pair_mismatch"
+    expected_report, expected_policy = bind_report_policy_generation(report, policy)
+    expected_binding = expected_report["artifact_generation_binding"]
+    if expected_binding != report_binding:
+        return False, "generation_binding_digest_mismatch"
+    if expected_policy["artifact_generation_binding"] != policy_binding:
+        return False, "generation_binding_policy_digest_mismatch"
+    if report.get("schema_version") != SCHEMA_VERSION:
+        return False, "generation_source_report_schema_invalid"
+    if policy.get("schema_version") != POLICY_SCHEMA_VERSION:
+        return False, "generation_policy_schema_invalid"
+    if report.get("date") != policy.get("source_date"):
+        return False, "generation_target_date_mismatch"
+    recommended = report.get("recommended_policy")
+    if not isinstance(recommended, dict):
+        return False, "generation_recommended_policy_missing"
+    if recommended.get("policy_version") != policy.get("policy_version"):
+        return False, "generation_recommended_policy_version_mismatch"
+    return True, "generation_binding_valid"
+
+
+def policy_report_generation_contract_status(
+    policy: dict[str, Any],
+) -> tuple[bool, str]:
+    """Load and validate the source report named by a generated policy."""
+
+    source_date = str(policy.get("source_date") or "").strip()
+    try:
+        binding_required = (
+            date.fromisoformat(source_date) >= GENERATION_BINDING_REQUIRED_FROM_DATE
+        )
+    except ValueError:
+        return False, "generation_source_date_invalid"
+    binding_present = isinstance(policy.get("artifact_generation_binding"), dict)
+    if not binding_present:
+        return (
+            (False, "generation_binding_required")
+            if binding_required
+            else (True, "legacy_policy_before_generation_binding_activation")
+        )
+    source_report = str(policy.get("source_report") or "").strip()
+    if not source_report:
+        return False, "generation_source_report_path_missing"
+    report = _load_json(Path(source_report))
+    if not report:
+        return False, "generation_source_report_missing_or_invalid"
+    return validate_report_policy_generation(report, policy)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -1481,50 +1605,6 @@ def _available_calibration_dates(target_date: str) -> list[str]:
     )
 
 
-def _iter_cumulative_input_events(
-    target_date: str,
-) -> tuple[
-    list[dict[str, Any]],
-    dict[str, Any],
-    dict[str, dict[str, Any]],
-]:
-    events: list[dict[str, Any]] = []
-    source_quality_by_date: dict[str, dict[str, Any]] = {}
-    source_paths_by_date: dict[str, Any] = {}
-    excluded_pre_baseline = 0
-    for source_date in _available_calibration_dates(target_date):
-        source_quality_by_date[source_date] = _source_quality_summary(source_date)
-        if source_date == target_date:
-            daily_events, daily_summary = _iter_input_events(source_date)
-            events.extend(daily_events)
-            source_paths_by_date[source_date] = daily_summary.get("source_paths") or {}
-            excluded_pre_baseline += _safe_int(
-                daily_summary.get("excluded_pre_baseline_count"), 0
-            )
-        else:
-            source_paths_by_date[source_date] = {
-                "pipeline_events": _existing_jsonl_source(
-                    _pipeline_events_path(source_date)
-                ),
-                "threshold_events": _existing_jsonl_source(
-                    _threshold_events_path(source_date)
-                ),
-                "read_mode": "post_sell_outcome_only_for_cumulative_rebuild",
-            }
-    return (
-        events,
-        {
-            "source_paths": source_paths_by_date.get(target_date, {}),
-            "source_paths_by_date": source_paths_by_date,
-            "source_dates": sorted(source_quality_by_date),
-            "source_date_count": len(source_quality_by_date),
-            "excluded_pre_baseline_count": excluded_pre_baseline,
-            "clean_tuning_baseline": clean_baseline_policy(),
-        },
-        source_quality_by_date,
-    )
-
-
 def _existing_jsonl_source(path: Path) -> str | None:
     if path.exists():
         return str(path)
@@ -1537,6 +1617,7 @@ ENTRY_SPLIT_PROVENANCE_KEYS = (
     "entry_split_order_bucket",
     "entry_split_order_policy_version",
     "entry_split_order_policy_mode",
+    "entry_split_order_policy_variant_id",
     "entry_split_order_variant_id",
     "entry_split_order_leg_count",
     "entry_split_order_price_offsets_ticks",
@@ -1545,6 +1626,55 @@ ENTRY_SPLIT_PROVENANCE_KEYS = (
     "entry_split_order_runtime_default_policy_applied",
     "entry_split_order_operator_fallback_authorized",
 )
+
+
+def _source_quality_contract(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return only source-quality semantics consumed by this report.
+
+    File mtimes are deliberately excluded: the final postclose audit may rewrite
+    an equivalent artifact after this report without invalidating its cumulative
+    state. A semantic contract change still invalidates the state.
+    """
+
+    return {
+        "status": str(summary.get("status") or "missing"),
+        "tuning_input_allowed": summary.get("tuning_input_allowed") is True,
+        "hard_blocking_contract_gap_count": _safe_int(
+            summary.get("hard_blocking_contract_gap_count"), 0
+        ),
+        "hard_blocking_excluded_row_count": _safe_int(
+            summary.get("hard_blocking_excluded_row_count"), 0
+        ),
+        "raw_row_exclusion_applied": summary.get("raw_row_exclusion_applied") is True,
+        "hard_blocking_stages": sorted(
+            str(value)
+            for value in (summary.get("hard_blocking_stages") or [])
+            if str(value)
+        ),
+    }
+
+
+def _source_quality_contract_sha256(summary: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        _source_quality_contract(summary),
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _source_quality_contract_bindings(
+    source_dates: list[str],
+) -> dict[str, dict[str, Any]]:
+    bindings: dict[str, dict[str, Any]] = {}
+    for source_date in sorted(set(source_dates)):
+        summary = _source_quality_summary(source_date)
+        bindings[source_date] = {
+            "contract": _source_quality_contract(summary),
+            "contract_sha256": _source_quality_contract_sha256(summary),
+        }
+    return bindings
 
 
 def _identifier(value: Any) -> str:
@@ -1630,6 +1760,22 @@ def _latest_prior_cumulative_state(target_date: str) -> tuple[dict[str, Any], st
         if not source_date or source_date >= target_date:
             continue
         payload = _load_json(path)
+        try:
+            generation_binding_required = (
+                date.fromisoformat(source_date) >= GENERATION_BINDING_REQUIRED_FROM_DATE
+            )
+        except ValueError:
+            continue
+        if generation_binding_required:
+            prior_policy_path = (
+                POLICY_DIR / f"entry_split_order_policy_{source_date}.json"
+            )
+            prior_policy = _load_json(prior_policy_path)
+            generation_valid, _generation_reason = validate_report_policy_generation(
+                payload, prior_policy
+            )
+            if not generation_valid:
+                continue
         state = (
             payload.get("cumulative_state")
             if isinstance(payload.get("cumulative_state"), dict)
@@ -1637,6 +1783,7 @@ def _latest_prior_cumulative_state(target_date: str) -> tuple[dict[str, Any], st
         )
         if (
             payload.get("schema_version") == SCHEMA_VERSION
+            and state.get("schema_version") == CUMULATIVE_STATE_SCHEMA_VERSION
             and state.get("window_policy")
             == "clean_baseline_cumulative_through_target_date"
             and str(state.get("through_date") or "") == source_date
@@ -1647,22 +1794,39 @@ def _latest_prior_cumulative_state(target_date: str) -> tuple[dict[str, Any], st
             ]
             if not source_dates or max(source_dates) != source_date:
                 continue
-            try:
-                report_mtime = path.stat().st_mtime
-            except OSError:
+            expected_source_dates = [
+                value
+                for value in _available_calibration_dates(source_date)
+                if _source_quality_summary(value).get("tuning_input_allowed") is True
+            ]
+            if sorted(set(source_dates)) != sorted(set(expected_source_dates)):
+                # Do not perpetuate a cumulative state that skipped dates. An
+                # older complete state can then replay the entire missing gap.
                 continue
-            state_is_current = True
+            bindings = (
+                state.get("source_quality_contract_bindings")
+                if isinstance(state.get("source_quality_contract_bindings"), dict)
+                else {}
+            )
+            state_is_current = set(bindings) == set(source_dates)
             for state_source_date in source_dates:
+                if not state_is_current:
+                    break
                 quality = _source_quality_summary(state_source_date)
-                quality_path = _source_quality_path(state_source_date)
                 if quality.get("tuning_input_allowed") is not True:
                     state_is_current = False
                     break
-                try:
-                    if quality_path.stat().st_mtime > report_mtime:
-                        state_is_current = False
-                        break
-                except OSError:
+                binding = bindings.get(state_source_date)
+                if not isinstance(binding, dict):
+                    state_is_current = False
+                    break
+                stored_contract = binding.get("contract")
+                stored_hash = str(binding.get("contract_sha256") or "")
+                if (
+                    not isinstance(stored_contract, dict)
+                    or stored_hash != _source_quality_contract_sha256(stored_contract)
+                    or stored_hash != _source_quality_contract_sha256(quality)
+                ):
                     state_is_current = False
                     break
             if not state_is_current:
@@ -1744,6 +1908,7 @@ def _enrich_real_post_sell_provenance(
             continue
         if not (
             _safe_bool(fields.get("entry_split_order_policy_applied"))
+            or str(fields.get("entry_split_order_policy_variant_id") or "").strip()
             or str(fields.get("entry_split_order_variant_id") or "").strip()
             or str(fields.get("entry_split_order_policy_mode") or "").strip()
         ):
@@ -1767,15 +1932,19 @@ def _enrich_real_post_sell_provenance(
     reconstructed_count = 0
     for row in rows:
         next_row = dict(row)
-        if not _split_variant_id_from_fields(next_row):
-            recommendation_id = _identifier(
-                next_row.get("recommendation_id") or next_row.get("record_id")
-            )
-            provenance = provenance_by_recommendation.get(
-                (_provenance_date(next_row), recommendation_id)
-            )
-            if provenance:
-                next_row.update(provenance)
+        recommendation_id = _identifier(
+            next_row.get("recommendation_id") or next_row.get("record_id")
+        )
+        provenance = provenance_by_recommendation.get(
+            (_provenance_date(next_row), recommendation_id)
+        )
+        if provenance:
+            filled_any = False
+            for key, value in provenance.items():
+                if next_row.get(key) in (None, "", "-", "None", "none", "null"):
+                    next_row[key] = value
+                    filled_any = True
+            if filled_any:
                 reconstructed_count += 1
         enriched.append(next_row)
     return enriched, reconstructed_count
@@ -1853,9 +2022,28 @@ def _load_real_ev_values(
 
 
 def _split_variant_id_from_fields(fields: dict[str, Any]) -> str:
-    explicit = str(fields.get("entry_split_order_variant_id") or "").strip()
-    if explicit:
-        return explicit
+    explicit_parent = str(
+        fields.get("entry_split_order_policy_variant_id") or ""
+    ).strip()
+    if explicit_parent:
+        return explicit_parent
+    historical_child = str(fields.get("entry_split_order_variant_id") or "").strip()
+    if historical_child:
+        runtime_suffix_markers = (
+            "__qty_clipped_legs",
+            "__runtime_first_weight_",
+            f"__{PROBE_VARIANT_SUFFIX}",
+        )
+        suffix_offsets = [
+            historical_child.find(marker)
+            for marker in runtime_suffix_markers
+            if marker in historical_child
+        ]
+        return (
+            historical_child[: min(suffix_offsets)]
+            if suffix_offsets
+            else historical_child
+        )
     if not (
         _safe_bool(fields.get("entry_split_order_policy_applied"))
         or str(fields.get("entry_split_order_policy_mode") or "").strip()
@@ -1876,8 +2064,15 @@ def _split_variant_id_from_fields(fields: dict[str, Any]) -> str:
     return f"{mode}:legs{leg_count}:offsets{offsets}:w{weight}"
 
 
+def _split_child_variant_id_from_fields(fields: dict[str, Any]) -> str:
+    return str(fields.get("entry_split_order_variant_id") or "").strip()
+
+
 def _load_real_split_variant_ev_values(
-    target_date: str, rows: list[dict[str, Any]] | None = None
+    target_date: str,
+    rows: list[dict[str, Any]] | None = None,
+    *,
+    child_variant: bool = False,
 ) -> dict[tuple[str, str], list[float]]:
     if not is_date_allowed(target_date, clean_baseline_policy()):
         return {}
@@ -1894,7 +2089,11 @@ def _load_real_split_variant_ev_values(
             continue
         if not _safe_bool(fields.get("actual_order_submitted")):
             continue
-        variant_id = _split_variant_id_from_fields(fields)
+        variant_id = (
+            _split_child_variant_id_from_fields(fields)
+            if child_variant
+            else _split_variant_id_from_fields(fields)
+        )
         if not variant_id:
             continue
         profit = _safe_float(
@@ -2048,15 +2247,6 @@ def _post_submit_tick_band_template(
     return template
 
 
-def _pct_price_offset(base_price: int, offset_pct: float) -> int:
-    if base_price <= 0:
-        return 0
-    raw_price = int(
-        round(float(base_price) * max(0.0, 1.0 - (float(offset_pct or 0.0) / 100.0)))
-    )
-    return clamp_price_to_tick(max(1, raw_price))
-
-
 def _percentile(values: list[int], pct: float) -> float:
     if not values:
         return 0.0
@@ -2127,6 +2317,8 @@ def _build_post_submit_low_tick_bands(
             if stage != "order_bundle_submitted":
                 continue
             if not _safe_bool(submit.get("actual_order_submitted")):
+                continue
+            if not _has_split_eligible_quantity_or_provenance(submit):
                 continue
             if submit_dt is None:
                 continue
@@ -2221,6 +2413,29 @@ def _is_real_submit_event(fields: dict[str, Any]) -> bool:
     )
 
 
+def _has_split_eligible_quantity_or_provenance(fields: dict[str, Any]) -> bool:
+    if (
+        _safe_bool(fields.get("entry_split_order_policy_applied"))
+        or str(fields.get("entry_split_order_policy_variant_id") or "").strip()
+        or str(fields.get("entry_split_order_variant_id") or "").strip()
+    ):
+        return True
+    return any(
+        _safe_int(fields.get(key), 0) > 1
+        for key in (
+            "entry_split_order_original_qty",
+            "requested_qty",
+            "submitted_qty",
+        )
+    )
+
+
+def _is_split_eligible_real_event(fields: dict[str, Any]) -> bool:
+    return _is_real_submit_event(fields) and _has_split_eligible_quantity_or_provenance(
+        fields
+    )
+
+
 def _is_sim_event(fields: dict[str, Any]) -> bool:
     stage = str(fields.get("stage") or fields.get("event") or "").strip()
     if str(stage).startswith("scalp_sim_"):
@@ -2275,24 +2490,31 @@ def _quality_counts(
         )
         row = sample_keys[bucket]
         if _is_real_submit_event(fields):
-            row["real_sample_count"].add(execution_key)
-            if stage == "order_leg_sent" or _safe_bool(
-                fields.get("broker_order_submitted")
-            ):
-                row["real_submitted_count"].add(execution_key)
-            if (
-                str(fields.get("fill_status") or "").upper() == "PARTIAL"
-                or _safe_int(fields.get("filled_qty"), 0) > 0
-            ):
-                row["partial_fill_count"].add(execution_key)
-            if _safe_bool(fields.get("late_fill")) or _safe_bool(
-                fields.get("late_fill_detected")
-            ):
-                row["late_fill_count"].add(execution_key)
-        if _safe_bool(fields.get("actual_order_submitted")) and stage in {
-            "order_leg_fail",
-            "order_bundle_failed",
-        }:
+            row["real_observed_entry_count"].add(execution_key)
+            if _is_split_eligible_real_event(fields):
+                row["real_sample_count"].add(execution_key)
+                if stage == "order_leg_sent" or _safe_bool(
+                    fields.get("broker_order_submitted")
+                ):
+                    row["real_submitted_count"].add(execution_key)
+                if (
+                    str(fields.get("fill_status") or "").upper() == "PARTIAL"
+                    or _safe_int(fields.get("filled_qty"), 0) > 0
+                ):
+                    row["partial_fill_count"].add(execution_key)
+                if _safe_bool(fields.get("late_fill")) or _safe_bool(
+                    fields.get("late_fill_detected")
+                ):
+                    row["late_fill_count"].add(execution_key)
+        if (
+            _safe_bool(fields.get("actual_order_submitted"))
+            and stage
+            in {
+                "order_leg_fail",
+                "order_bundle_failed",
+            }
+            and _has_split_eligible_quantity_or_provenance(fields)
+        ):
             row["cancel_or_fail_count"].add(execution_key)
         if _is_sim_event(fields):
             row["sim_sample_count"].add(execution_key)
@@ -2321,10 +2543,13 @@ def _build_candidate_grid(
     sim_ev_values: dict[str, list[float]],
     real_ev_values: dict[str, list[float]],
     real_split_variant_ev_values: dict[tuple[str, str], list[float]] | None = None,
+    real_split_child_variant_ev_values: dict[tuple[str, str], list[float]]
+    | None = None,
     post_submit_low_tick_bands: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     grid: list[dict[str, Any]] = []
     real_split_variant_ev_values = real_split_variant_ev_values or {}
+    real_split_child_variant_ev_values = real_split_child_variant_ev_values or {}
     post_submit_low_tick_bands = post_submit_low_tick_bands or {}
     split_variant_buckets = {
         bucket for bucket, _variant_id in real_split_variant_ev_values
@@ -2344,8 +2569,6 @@ def _build_candidate_grid(
         real_ev_list = real_ev_values.get(bucket) or []
         sim_ev_list = sim_ev_values.get(bucket) or []
         real_bucket_outcome_count = len(real_ev_list)
-        real_count = max(event_real_count, real_bucket_outcome_count)
-        total = max(1, real_count + sim_count)
         real_bucket_ev = round(mean(real_ev_list), 4) if real_ev_list else None
         sim_ev = round(mean(sim_ev_list), 4) if sim_ev_list else None
         split_variant_id = ""
@@ -2417,6 +2640,8 @@ def _build_candidate_grid(
         observed_split_outcome_count = sum(
             _safe_int(item.get("sample_count"), 0) for item in observed_split_variants
         )
+        real_count = max(event_real_count, observed_split_outcome_count)
+        total = max(1, real_count + sim_count)
         split_variant_outcome_count = len(split_variant_ev_list or [])
         split_variant_ev = (
             round(mean(split_variant_ev_list), 4) if split_variant_ev_list else None
@@ -2519,6 +2744,9 @@ def _build_candidate_grid(
                     if item in ALLOWED_PRICE_CANDIDATES
                 ],
                 "real_sample_count": real_count,
+                "real_observed_entry_count": _safe_int(
+                    counts.get("real_observed_entry_count"), 0
+                ),
                 "sim_sample_count": sim_count,
                 "real_outcome_joined_sample": real_bucket_outcome_count,
                 "real_bucket_outcome_ev_pct": real_bucket_ev,
@@ -2526,6 +2754,20 @@ def _build_candidate_grid(
                 "real_split_variant_ev_pct": split_variant_ev,
                 "observed_real_split_outcome_count": observed_split_outcome_count,
                 "observed_real_split_variants": observed_split_variants,
+                "observed_real_split_child_variants": [
+                    {
+                        "split_child_variant_id": observed_variant_id,
+                        "sample_count": len(observed_values),
+                        "equal_weight_avg_profit_pct": round(mean(observed_values), 4),
+                    }
+                    for (
+                        observed_bucket,
+                        observed_variant_id,
+                    ), observed_values in sorted(
+                        real_split_child_variant_ev_values.items()
+                    )
+                    if observed_bucket == bucket and observed_values
+                ],
                 "cumulative_judgment_quality": {
                     "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
                     "learning_sample_count": cumulative_learning_sample_count,
@@ -2751,14 +2993,17 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     )
     prior_state, prior_state_path = _latest_prior_cumulative_state(target_date)
     if prior_state:
-        events = daily_events
-        calibration_events = daily_allowed_events
-        excluded_source_quality = daily_excluded_source_quality
-        counts = _merge_count_maps(prior_state.get("counts") or {}, daily_counts)
+        loaded_event_count = 0
+        included_calibration_event_count = 0
+        excluded_source_quality = 0
+        counts = _merge_count_maps(prior_state.get("counts") or {}, {})
         sim_ev_values = _deserialize_value_map(prior_state.get("sim_ev_values"))
         real_ev_values = _deserialize_value_map(prior_state.get("real_ev_values"))
         real_split_variant_ev_values = _deserialize_variant_value_map(
             prior_state.get("real_split_variant_ev_values")
+        )
+        real_split_child_variant_ev_values = _deserialize_variant_value_map(
+            prior_state.get("real_split_child_variant_ev_values")
         )
         real_post_sell_summary = {
             key: _safe_int(value, 0)
@@ -2768,13 +3013,37 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         reconstructed_provenance_count = _safe_int(
             prior_state.get("reconstructed_split_provenance_count"), 0
         )
-        if source_quality.get("tuning_input_allowed") is True:
-            _extend_value_map(sim_ev_values, _load_sim_ev_values(target_date))
-            real_post_sell_rows, source_summary = _load_real_post_sell_rows(target_date)
-            real_post_sell_rows, reconstructed_today = (
-                _enrich_real_post_sell_provenance(
-                    real_post_sell_rows, calibration_events
+        replay_dates = [
+            value
+            for value in _available_calibration_dates(target_date)
+            if value not in set(source_dates)
+            and _source_quality_summary(value).get("tuning_input_allowed") is True
+        ]
+        source_paths_by_date: dict[str, Any] = {}
+        for replay_date in replay_dates:
+            if replay_date == target_date:
+                replay_events = daily_events
+                replay_summary = daily_load_summary
+                allowed_events = daily_allowed_events
+                excluded_count = daily_excluded_source_quality
+            else:
+                replay_events, replay_summary = _iter_input_events(replay_date)
+                replay_quality = _source_quality_summary(replay_date)
+                allowed_events, excluded_count = _source_quality_filtered_events(
+                    replay_events, {replay_date: replay_quality}
                 )
+            replay_counts, _ = _quality_counts(
+                allowed_events, {"tuning_input_allowed": True}
+            )
+            counts = _merge_count_maps(counts, replay_counts)
+            loaded_event_count += len(replay_events)
+            included_calibration_event_count += len(allowed_events)
+            excluded_source_quality += excluded_count
+            source_paths_by_date[replay_date] = replay_summary.get("source_paths") or {}
+            _extend_value_map(sim_ev_values, _load_sim_ev_values(replay_date))
+            real_post_sell_rows, source_summary = _load_real_post_sell_rows(replay_date)
+            real_post_sell_rows, reconstructed_today = (
+                _enrich_real_post_sell_provenance(real_post_sell_rows, allowed_events)
             )
             reconstructed_provenance_count += reconstructed_today
             for key, value in source_summary.items():
@@ -2783,21 +3052,25 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 ) + _safe_int(value, 0)
             _extend_value_map(
                 real_ev_values,
-                _load_real_ev_values(target_date, real_post_sell_rows),
+                _load_real_ev_values(replay_date, real_post_sell_rows),
             )
             _extend_value_map(
                 real_split_variant_ev_values,
-                _load_real_split_variant_ev_values(target_date, real_post_sell_rows),
+                _load_real_split_variant_ev_values(replay_date, real_post_sell_rows),
             )
-            if target_date not in source_dates:
-                source_dates.append(target_date)
+            _extend_value_map(
+                real_split_child_variant_ev_values,
+                _load_real_split_variant_ev_values(
+                    replay_date, real_post_sell_rows, child_variant=True
+                ),
+            )
+            source_dates.append(replay_date)
         load_summary = {
-            "aggregation_mode": "incremental_from_prior_cumulative_state",
+            "aggregation_mode": "incremental_gap_replay_from_prior_cumulative_state",
             "prior_cumulative_state_path": prior_state_path,
-            "source_paths": daily_load_summary.get("source_paths") or {},
-            "source_paths_by_date": {
-                target_date: daily_load_summary.get("source_paths") or {}
-            },
+            "replayed_source_dates": replay_dates,
+            "source_paths": source_paths_by_date.get(target_date) or {},
+            "source_paths_by_date": source_paths_by_date,
             "source_dates": sorted(source_dates),
             "source_date_count": len(set(source_dates)),
             "excluded_pre_baseline_count": _safe_int(
@@ -2806,15 +3079,19 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "clean_tuning_baseline": clean_baseline_policy(),
         }
     else:
-        events, load_summary, source_quality_by_date = _iter_cumulative_input_events(
-            target_date
-        )
-        calibration_events, excluded_source_quality = _source_quality_filtered_events(
-            events, source_quality_by_date
-        )
-        counts, _ = _quality_counts(calibration_events, {"tuning_input_allowed": True})
+        loaded_event_count = 0
+        included_calibration_event_count = 0
+        excluded_source_quality = 0
+        counts: dict[str, dict[str, int]] = {}
         sim_ev_values: dict[str, list[float]] = defaultdict(list)
-        real_post_sell_rows: list[dict[str, Any]] = []
+        real_ev_values: dict[str, list[float]] = defaultdict(list)
+        real_split_variant_ev_values: dict[tuple[str, str], list[float]] = defaultdict(
+            list
+        )
+        real_split_child_variant_ev_values: dict[tuple[str, str], list[float]] = (
+            defaultdict(list)
+        )
+        reconstructed_provenance_count = 0
         real_post_sell_summary = {
             "candidate_count": 0,
             "evaluation_count": 0,
@@ -2823,27 +3100,42 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "merged_count": 0,
         }
         included_source_dates: list[str] = []
-        for source_date in load_summary.get("source_dates") or []:
-            source_date_quality = source_quality_by_date.get(source_date) or {}
+        source_paths_by_date: dict[str, Any] = {}
+        excluded_pre_baseline_count = 0
+        for source_date in _available_calibration_dates(target_date):
+            source_date_quality = _source_quality_summary(source_date)
+            if source_date == target_date:
+                source_events = daily_events
+                source_summary = daily_load_summary
+                allowed_events = daily_allowed_events
+                excluded_count = daily_excluded_source_quality
+            else:
+                source_events, source_summary = _iter_input_events(source_date)
+                allowed_events, excluded_count = _source_quality_filtered_events(
+                    source_events, {source_date: source_date_quality}
+                )
+            loaded_event_count += len(source_events)
+            excluded_source_quality += excluded_count
+            excluded_pre_baseline_count += _safe_int(
+                source_summary.get("excluded_pre_baseline_count"), 0
+            )
+            source_paths_by_date[source_date] = source_summary.get("source_paths") or {}
             if source_date_quality.get("tuning_input_allowed") is not True:
                 continue
             included_source_dates.append(source_date)
+            included_calibration_event_count += len(allowed_events)
+            source_counts, _ = _quality_counts(
+                allowed_events, {"tuning_input_allowed": True}
+            )
+            counts = _merge_count_maps(counts, source_counts)
             _extend_value_map(sim_ev_values, _load_sim_ev_values(source_date))
-            source_rows, source_summary = _load_real_post_sell_rows(source_date)
-            real_post_sell_rows.extend(source_rows)
+            source_rows, post_sell_summary = _load_real_post_sell_rows(source_date)
+            source_rows, reconstructed_today = _enrich_real_post_sell_provenance(
+                source_rows, allowed_events
+            )
+            reconstructed_provenance_count += reconstructed_today
             for key in real_post_sell_summary:
-                real_post_sell_summary[key] += _safe_int(source_summary.get(key), 0)
-        real_post_sell_rows, reconstructed_provenance_count = (
-            _enrich_real_post_sell_provenance(real_post_sell_rows, calibration_events)
-        )
-        real_ev_values = defaultdict(list)
-        real_split_variant_ev_values = defaultdict(list)
-        for source_date in included_source_dates:
-            source_rows = [
-                row
-                for row in real_post_sell_rows
-                if _provenance_date(row) == source_date
-            ]
+                real_post_sell_summary[key] += _safe_int(post_sell_summary.get(key), 0)
             _extend_value_map(
                 real_ev_values, _load_real_ev_values(source_date, source_rows)
             )
@@ -2851,9 +3143,24 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 real_split_variant_ev_values,
                 _load_real_split_variant_ev_values(source_date, source_rows),
             )
-        load_summary["aggregation_mode"] = "full_clean_baseline_rebuild"
-        load_summary["source_dates"] = included_source_dates
-        load_summary["source_date_count"] = len(included_source_dates)
+            _extend_value_map(
+                real_split_child_variant_ev_values,
+                _load_real_split_variant_ev_values(
+                    source_date, source_rows, child_variant=True
+                ),
+            )
+        load_summary = {
+            "aggregation_mode": "full_clean_baseline_rebuild",
+            "rebuild_memory_mode": "date_streaming",
+            "prior_cumulative_state_path": "",
+            "streamed_source_dates": included_source_dates,
+            "source_paths": source_paths_by_date.get(target_date) or {},
+            "source_paths_by_date": source_paths_by_date,
+            "source_dates": included_source_dates,
+            "source_date_count": len(included_source_dates),
+            "excluded_pre_baseline_count": excluded_pre_baseline_count,
+            "clean_tuning_baseline": clean_baseline_policy(),
+        }
     post_submit_low_tick_bands = _build_post_submit_low_tick_bands(
         daily_allowed_events,
         source_quality={"hard_blocking_stages": []},
@@ -2863,6 +3170,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         sim_ev_values,
         real_ev_values,
         real_split_variant_ev_values,
+        real_split_child_variant_ev_values,
         post_submit_low_tick_bands,
     )
     for item in candidate_grid:
@@ -2871,6 +3179,9 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         item["target_date_contribution"] = {
             "date": target_date,
             "real_sample_count": _safe_int(target_counts.get("real_sample_count"), 0),
+            "real_observed_entry_count": _safe_int(
+                target_counts.get("real_observed_entry_count"), 0
+            ),
             "sim_sample_count": _safe_int(target_counts.get("sim_sample_count"), 0),
         }
     json_path, md_path = report_paths(target_date)
@@ -2897,6 +3208,15 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "wrapper_default_enabled": True,
             "calibration_window": "clean_baseline_cumulative_through_target_date",
         },
+        "split_domain_ownership": {
+            "stage": "initial_entry",
+            "evidence_owner": "entry_split_order_plan",
+            "policy_owner": "entry_split_order_plan",
+            "shared_execution_math": "src.trading.order.split_execution_math",
+            "shared_execution_math_authority": "pure_qty_and_tick_math_only",
+            "scale_in_evidence_or_policy_accepted": False,
+            "independent_machine_evidence_or_policy_accepted": False,
+        },
         "metric_contract": {
             "metric_role": "authority_split_primary_ev_and_execution_shape_seed",
             "decision_authority": "next_preopen_bounded_entry_split_policy",
@@ -2914,7 +3234,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             ),
             "probe_attribution_contract": (
                 "A one-share entry intent is attributed to this owner only when entry_split_probe_bundle_id "
-                "or entry_split_order_variant_id is observed; record-level opportunity EV alone cannot claim "
+                "or an entry split parent/child variant ID is observed; record-level opportunity EV alone cannot claim "
                 "split-policy execution quality."
             ),
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
@@ -2953,7 +3273,8 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             },
             "optimization_contract": (
                 "Post-sell profit_rate is only split-policy primary EV when it is joined to an applied "
-                "entry_split_order_variant_id. Bucket-only sell outcome is diagnostic."
+                "entry_split_order_policy_variant_id (with the runtime child variant retained separately). "
+                "Bucket-only sell outcome is diagnostic."
             ),
             "baseline_apply_contract": (
                 "A qty-preserving execution-shape seed may open at next PREOPEN after real-submit sample and "
@@ -2969,6 +3290,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         },
         "source_quality": source_quality,
         "cumulative_state": {
+            "schema_version": CUMULATIVE_STATE_SCHEMA_VERSION,
             "window_policy": "clean_baseline_cumulative_through_target_date",
             "through_date": target_date,
             "clean_tuning_baseline_date": clean_baseline_policy().get(
@@ -2985,13 +3307,19 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "real_split_variant_ev_values": _serialize_variant_value_map(
                 real_split_variant_ev_values
             ),
+            "real_split_child_variant_ev_values": _serialize_variant_value_map(
+                real_split_child_variant_ev_values
+            ),
+            "source_quality_contract_bindings": _source_quality_contract_bindings(
+                list(load_summary.get("source_dates") or [])
+            ),
             "real_post_sell_summary": real_post_sell_summary,
             "reconstructed_split_provenance_count": (reconstructed_provenance_count),
         },
         "input_summary": {
             **load_summary,
-            "loaded_event_count": len(events),
-            "included_calibration_event_count": len(calibration_events),
+            "loaded_event_count": loaded_event_count,
+            "included_calibration_event_count": included_calibration_event_count,
             "excluded_source_quality_event_count": excluded_source_quality,
             "daily_diagnostic": {
                 **daily_load_summary,
@@ -3061,6 +3389,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "candidates": recommended_candidates,
         },
     }
+    report, policy = bind_report_policy_generation(report, policy)
     if write:
         _write_json(json_path, report)
         _write_json(policy_json, policy)
@@ -3086,6 +3415,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- exploration_seed_allowed: `{rec.get('exploration_seed_allowed')}` / count: `{rec.get('exploration_seed_count')}`",
         f"- ev_validated_runtime_apply_allowed: `{rec.get('ev_validated_runtime_apply_allowed')}` / count: `{rec.get('ev_validated_bucket_count')}`",
         f"- runtime_apply_authority_classes: `{rec.get('runtime_apply_authority_classes') or []}`",
+        f"- policy_version: `{rec.get('policy_version') or '-'}`",
+        f"- artifact_generation_id: `{(report.get('artifact_generation_binding') or {}).get('generation_id') or '-'}`",
         f"- baseline_runtime_defaults_enabled: `{rec.get('baseline_runtime_defaults_enabled')}`",
         f"- explicit_bucket_count: `{rec.get('explicit_bucket_count')}`",
         f"- policy_file: `{rec.get('policy_file') or '-'}`",
@@ -3169,7 +3500,13 @@ def _load_policy_from_env(
     authority_valid, authority_reason = runtime_apply_authority_contract_status(payload)
     if not authority_valid:
         return {}, f"invalid_policy_authority_contract:{authority_reason}"
+    generation_valid, generation_reason = policy_report_generation_contract_status(
+        payload
+    )
+    if not generation_valid:
+        return {}, f"invalid_policy_generation_contract:{generation_reason}"
     payload = {**payload, "runtime_apply_authority_contract": authority_reason}
+    payload["artifact_generation_contract"] = generation_reason
     if "runtime_apply_allowed" in payload and not _safe_bool(
         payload.get("runtime_apply_allowed")
     ):
@@ -3224,34 +3561,6 @@ def _max_legs_for_qty(qty: int) -> int:
     if 3 <= qty <= 5:
         return 2
     return 3
-
-
-def _split_qty(total_qty: int, leg_count: int, first_weight: float) -> list[int]:
-    leg_count = min(max(1, leg_count), total_qty)
-    if leg_count <= 1:
-        return [total_qty]
-    first_qty = max(
-        1, min(total_qty - (leg_count - 1), int(round(total_qty * first_weight)))
-    )
-    remaining = total_qty - first_qty
-    quantities = [first_qty]
-    for idx in range(leg_count - 1):
-        legs_left = leg_count - 1 - idx
-        qty = max(1, remaining // legs_left)
-        quantities.append(qty)
-        remaining -= qty
-    if sum(quantities) != total_qty:
-        quantities[-1] += total_qty - sum(quantities)
-    return quantities
-
-
-def _tick_size(price: int) -> int:
-    try:
-        from src.utils import kiwoom_utils
-
-        return max(1, int(kiwoom_utils.get_tick_size(price) or 1))
-    except Exception:
-        return 1
 
 
 def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:

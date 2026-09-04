@@ -238,6 +238,7 @@ ENTRY_SPLIT_POST_SELL_KEYS = (
     "entry_split_order_bucket",
     "entry_split_order_policy_version",
     "entry_split_order_policy_mode",
+    "entry_split_order_policy_variant_id",
     "entry_split_order_variant_id",
     "entry_split_order_leg_count",
     "entry_split_order_price_offsets_ticks",
@@ -254,7 +255,9 @@ def _entry_split_post_sell_fields(stock: dict) -> dict:
         value = stock.get(key)
         if value not in (None, "", "-", "None", "none", "null"):
             fields[key] = value
-    if fields.get("entry_split_order_variant_id"):
+    if fields.get("entry_split_order_policy_variant_id") or fields.get(
+        "entry_split_order_variant_id"
+    ):
         fields["entry_split_order_policy_applied"] = _safe_bool(
             fields.get("entry_split_order_policy_applied"), True
         )
@@ -269,6 +272,7 @@ def _entry_split_post_sell_fields(stock: dict) -> dict:
             continue
         if not (
             _safe_bool(order.get("entry_split_order_policy_applied"))
+            or order.get("entry_split_order_policy_variant_id")
             or order.get("entry_split_order_variant_id")
             or order.get("entry_split_order_policy_mode")
         ):
@@ -277,7 +281,9 @@ def _entry_split_post_sell_fields(stock: dict) -> dict:
             value = order.get(key)
             if value not in (None, "", "-", "None", "none", "null"):
                 fields.setdefault(key, value)
-        if fields.get("entry_split_order_variant_id"):
+        if fields.get("entry_split_order_policy_variant_id") or fields.get(
+            "entry_split_order_variant_id"
+        ):
             fields["entry_split_order_policy_applied"] = _safe_bool(
                 fields.get("entry_split_order_policy_applied"), True
             )

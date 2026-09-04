@@ -10512,25 +10512,32 @@ def build_bridge_report(
                 str(trace.get("decision_trace_id") or "").strip()
             ),
         )
+        state = str(evidence.get("state") or "source_unavailable")
         ask_depletion_sidecar: dict[str, Any] | None = None
         ask_depletion_sidecar_status = "not_eligible"
-        try:
-            candidate_sidecar = build_ask_depletion_feature_sidecar(
-                evidence=evidence,
-                market_rows=evidence_market_rows,
-                depth_rows=evidence_depth_rows,
-                max_depth_age_ms=selected_config.max_depth_age_ms,
-            )
-            _validated_ask_depletion_feature_view(
-                candidate_sidecar,
-                evidence=evidence,
-            )
-        except (TypeError, ValueError) as exc:
-            ask_depletion_sidecar_status = str(exc).split(":", 1)[0]
+        if state == "not_applicable":
+            ask_depletion_sidecar_status = "not_applicable_no_shock_event"
+        elif state == "source_unavailable":
+            ask_depletion_sidecar_status = "source_unavailable_no_sidecar"
         else:
-            ask_depletion_sidecar = candidate_sidecar
-            ask_depletion_sidecar_status = "eligible_source_only_feature_ablation"
-        state = str(evidence.get("state") or "source_unavailable")
+            try:
+                candidate_sidecar = build_ask_depletion_feature_sidecar(
+                    evidence=evidence,
+                    market_rows=evidence_market_rows,
+                    depth_rows=evidence_depth_rows,
+                    max_depth_age_ms=selected_config.max_depth_age_ms,
+                )
+                _validated_ask_depletion_feature_view(
+                    candidate_sidecar,
+                    evidence=evidence,
+                )
+            except (TypeError, ValueError) as exc:
+                ask_depletion_sidecar_status = str(exc).split(":", 1)[0]
+            else:
+                ask_depletion_sidecar = candidate_sidecar
+                ask_depletion_sidecar_status = (
+                    "eligible_source_only_feature_ablation"
+                )
         wave_id = str((evidence.get("event") or {}).get("parent_wave_id") or "")
         wave_key = (
             normalize_symbol(evidence.get("stock_code")),
@@ -10650,7 +10657,10 @@ def build_bridge_report(
             ),
         }
         rows.append(row)
-        if ask_depletion_sidecar is None:
+        if ask_depletion_sidecar is None and state not in {
+            "not_applicable",
+            "source_unavailable",
+        }:
             exclusions[f"ask_depletion_source_gap:{ask_depletion_sidecar_status}"] += 1
         if state == "source_unavailable":
             for reason in (evidence.get("source_quality") or {}).get("blockers") or []:
@@ -10756,6 +10766,9 @@ def build_bridge_report(
     state_counts = Counter(
         str((row[TACTICAL_EVIDENCE_SCHEMA] or {}).get("state") or "unknown")
         for row in rows
+    )
+    ask_depletion_sidecar_status_counts = Counter(
+        str(row.get("ask_depletion_sidecar_status") or "unknown") for row in rows
     )
     stage_counts = Counter(str(row.get("decision_stage") or "unknown") for row in rows)
     observation_context_eligible = sum(
@@ -11088,6 +11101,16 @@ def build_bridge_report(
                 row.get("same_parent_wave_repeat") is True for row in rows
             ),
             "state_counts": dict(state_counts),
+            "ask_depletion_sidecar_status_counts": dict(
+                ask_depletion_sidecar_status_counts
+            ),
+            "ask_depletion_sidecar_build_avoided_count": sum(
+                ask_depletion_sidecar_status_counts.get(status, 0)
+                for status in (
+                    "not_applicable_no_shock_event",
+                    "source_unavailable_no_sidecar",
+                )
+            ),
             "stage_counts": dict(stage_counts),
             "exclusion_counts": dict(exclusions),
             "depth_route_rejection_counts": dict(route_rejection_counts),

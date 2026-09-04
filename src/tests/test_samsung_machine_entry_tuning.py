@@ -166,6 +166,7 @@ def test_extracts_actual_two_leg_outcome_without_broker_identifiers(tmp_path: Pa
     payload["signal_features"].update(
         {
             "signal_decision_at": "2026-08-11T14:00:01+09:00",
+            "source_entry_event_id": "samsung_midday_two_leg:005930:signal-1",
             "entry_confirmation_delay_sec": 3,
             "entry_timing_policy_provenance": {
                 "status": "applied",
@@ -197,6 +198,9 @@ def test_extracts_actual_two_leg_outcome_without_broker_identifiers(tmp_path: Pa
     assert row["legs"][0]["buy_filled_at"] == "2026-08-11T14:00:04+09:00"
     assert row["legs"][0]["target_filled_at"] == "2026-08-11T14:01:00+09:00"
     assert row["signal_features"]["signal_decision_at"] == ("2026-08-11T14:00:01+09:00")
+    assert row["signal_features"]["source_entry_event_id"] == (
+        "samsung_midday_two_leg:005930:signal-1"
+    )
     assert row["signal_features"]["entry_confirmation_delay_sec"] == 3
 
 

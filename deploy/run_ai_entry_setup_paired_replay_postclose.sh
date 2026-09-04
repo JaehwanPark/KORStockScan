@@ -25,8 +25,28 @@ if ! [[ "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
+refresh_main_ai_consumer() {
+  nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer \
+    --target-date "$TARGET_DATE" \
+    --write \
+    --print-summary && \
+  nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.main_ai_holding_base_replay_batch \
+    --date "$TARGET_DATE" \
+    --write \
+    --print-summary && \
+  nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.main_ai_prompt_consumer \
+    --target-date "$TARGET_DATE" \
+    --write \
+    --require-entry-terminal \
+    --print-summary
+}
+
 for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
   batch_rc=0
+  failure_stage="entry_batch"
   if nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
     --date "$TARGET_DATE" \
@@ -34,11 +54,17 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
     --candidate-workers "$CANDIDATE_WORKERS" \
     --predecessor-wait-sec "$PREDECESSOR_WAIT_SEC" \
     --write; then
-    exit 0
+    if refresh_main_ai_consumer; then
+      exit 0
+    else
+      batch_rc=$?
+      failure_stage="consumer_refresh"
+      echo "[WARN] main AI source-only consumer refresh failed attempt=$attempt"
+    fi
   else
     batch_rc=$?
   fi
-  if [ "$batch_rc" -eq 3 ]; then
+  if [ "$failure_stage" = "entry_batch" ] && [ "$batch_rc" -eq 3 ]; then
     echo "[ERROR] offline candidate batch predecessor bounded wait exhausted target_date=$TARGET_DATE"
     exit 1
   fi

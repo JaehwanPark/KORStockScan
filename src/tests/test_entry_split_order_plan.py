@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 
 from src.engine.scalping import entry_split_order_plan as split_plan
 from src.engine import sniper_post_sell_feedback as post_sell_feedback
@@ -59,6 +59,128 @@ def test_runtime_apply_authority_contract_rejects_malformed_authority_classes():
     assert reason == "runtime_apply_authority_classes_not_string_list"
 
 
+def test_report_policy_generation_binding_detects_independent_overwrite(tmp_path):
+    report_path = tmp_path / "entry_split_order_plan_2026-09-04.json"
+    policy = {
+        "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+        "source_date": "2026-09-04",
+        "source_report": str(report_path),
+        "policy_version": "entry_split_order_plan:2026-09-04:abc",
+        "buckets": {},
+    }
+    report = {
+        "schema_version": split_plan.SCHEMA_VERSION,
+        "date": "2026-09-04",
+        "recommended_policy": {"policy_version": policy["policy_version"]},
+    }
+    report, policy = split_plan.bind_report_policy_generation(report, policy)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    assert split_plan.validate_report_policy_generation(report, policy) == (
+        True,
+        "generation_binding_valid",
+    )
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        True,
+        "generation_binding_valid",
+    )
+
+    independently_overwritten = {
+        **report,
+        "recommended_policy": {"policy_version": "different-generation"},
+    }
+    report_path.write_text(json.dumps(independently_overwritten), encoding="utf-8")
+    assert split_plan.policy_report_generation_contract_status(policy) == (
+        False,
+        "generation_binding_digest_mismatch",
+    )
+
+
+def test_generation_binding_required_from_activation_date():
+    valid, reason = split_plan.policy_report_generation_contract_status(
+        {
+            "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+            "source_date": "2026-09-04",
+            "source_report": "/not/used/without/binding.json",
+            "policy_version": "entry_split_order_plan:2026-09-04:legacy",
+            "buckets": {},
+        }
+    )
+
+    assert valid is False
+    assert reason == "generation_binding_required"
+
+
+def test_prior_cumulative_state_requires_valid_generation_pair_after_activation(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        split_plan, "GENERATION_BINDING_REQUIRED_FROM_DATE", date(2026, 9, 4)
+    )
+    source_date = "2026-09-04"
+    target_date = "2026-09-05"
+    source_quality = {
+        "status": "pass",
+        "tuning_input_allowed": True,
+        "hard_blocking_contract_gap_count": 0,
+        "hard_blocking_excluded_row_count": 0,
+        "raw_row_exclusion_applied": False,
+        "hard_blocking_stages": [],
+    }
+    monkeypatch.setattr(
+        split_plan, "_available_calibration_dates", lambda _date: [source_date]
+    )
+    monkeypatch.setattr(
+        split_plan, "_source_quality_summary", lambda _date: source_quality
+    )
+    state = {
+        "schema_version": split_plan.CUMULATIVE_STATE_SCHEMA_VERSION,
+        "window_policy": "clean_baseline_cumulative_through_target_date",
+        "through_date": source_date,
+        "clean_tuning_baseline_date": "2026-06-05",
+        "source_dates": [source_date],
+        "source_quality_contract_bindings": {
+            source_date: {
+                "contract": split_plan._source_quality_contract(source_quality),
+                "contract_sha256": split_plan._source_quality_contract_sha256(
+                    source_quality
+                ),
+            }
+        },
+    }
+    report_path = split_plan.REPORT_DIR / f"entry_split_order_plan_{source_date}.json"
+    policy_path = split_plan.POLICY_DIR / f"entry_split_order_policy_{source_date}.json"
+    report = {
+        "schema_version": split_plan.SCHEMA_VERSION,
+        "date": source_date,
+        "cumulative_state": state,
+        "recommended_policy": {"policy_version": "entry:test"},
+    }
+    policy = {
+        "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+        "source_date": source_date,
+        "source_report": str(report_path),
+        "policy_version": "entry:test",
+        "buckets": {},
+    }
+    report, policy = split_plan.bind_report_policy_generation(report, policy)
+    report_path.parent.mkdir(parents=True)
+    policy_path.parent.mkdir(parents=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+    loaded, loaded_path = split_plan._latest_prior_cumulative_state(target_date)
+    assert loaded == state
+    assert loaded_path == str(report_path)
+
+    report["cumulative_state"]["counts"] = {"tampered": {"count": 1}}
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    loaded, loaded_path = split_plan._latest_prior_cumulative_state(target_date)
+    assert loaded == {}
+    assert loaded_path == ""
+
+
 def _write_jsonl(path, rows):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -78,6 +200,11 @@ def _patch_dirs(monkeypatch, tmp_path):
         "POLICY_DIR",
         data_dir / "threshold_cycle" / "entry_split_order_policy",
     )
+    # Existing allocator tests intentionally exercise a minimal legacy policy.
+    # Generation-binding behavior has dedicated exact-pair tests above.
+    monkeypatch.setattr(
+        split_plan, "GENERATION_BINDING_REQUIRED_FROM_DATE", date(2099, 1, 1)
+    )
     return data_dir
 
 
@@ -93,6 +220,7 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
                 "date": target_date,
                 "stage": "order_leg_sent",
                 "actual_order_submitted": True,
+                "requested_qty": 2,
                 "spread_bps": 5,
                 "buy_pressure_10t": 72,
                 "stock_code": f"R{idx:03d}",
@@ -451,6 +579,7 @@ def test_build_report_reads_threshold_cycle_events_from_contract_path(
                 "date": target_date,
                 "stage": "order_leg_sent",
                 "actual_order_submitted": True,
+                "requested_qty": 2,
                 "spread_bps": 5,
                 "buy_pressure_10t": 72,
             }
@@ -545,7 +674,7 @@ def test_build_report_updates_cumulative_judgment_from_one_mature_outcome(
         "calibration_window": "clean_baseline_cumulative_through_target_date",
     }
     assert report["input_summary"]["source_dates"] == [source_date, target_date]
-    assert balanced["real_sample_count"] == 1
+    assert balanced["real_sample_count"] == 2
     assert balanced["target_date_contribution"]["real_sample_count"] == 1
     assert balanced["cumulative_judgment_quality"] == {
         "learning_sample_floor": 1,
@@ -588,6 +717,7 @@ def test_quality_counts_deduplicates_submit_lifecycle_and_ignores_propagated_fla
             "stock_code": "005930",
             "actual_order_submitted": True,
             "broker_order_submitted": True,
+            "requested_qty": 2,
             "spread_bps": 18,
             "buy_pressure_10t": 55,
         },
@@ -598,6 +728,7 @@ def test_quality_counts_deduplicates_submit_lifecycle_and_ignores_propagated_fla
             "stock_code": "005930",
             "actual_order_submitted": True,
             "broker_order_submitted": True,
+            "requested_qty": 2,
             "spread_bps": 18,
             "buy_pressure_10t": 55,
         },
@@ -619,6 +750,56 @@ def test_quality_counts_deduplicates_submit_lifecycle_and_ignores_propagated_fla
     assert excluded == 0
     assert counts["balanced_normal"]["real_sample_count"] == 1
     assert counts["balanced_normal"]["real_submitted_count"] == 1
+
+
+def test_quality_counts_keeps_one_share_submit_out_of_split_eligible_denominator():
+    counts, excluded = split_plan._quality_counts(
+        [
+            {
+                "source_date": "2026-07-07",
+                "stage": "order_bundle_submitted",
+                "record_id": 123,
+                "stock_code": "005930",
+                "actual_order_submitted": True,
+                "broker_order_submitted": True,
+                "requested_qty": 1,
+                "spread_bps": 18,
+                "buy_pressure_10t": 55,
+            }
+        ],
+        {"tuning_input_allowed": True},
+    )
+
+    assert excluded == 0
+    assert counts["balanced_normal"]["real_observed_entry_count"] == 1
+    assert counts["balanced_normal"].get("real_sample_count", 0) == 0
+
+
+def test_split_variant_uses_parent_policy_identity_and_keeps_child_diagnostic():
+    fields = {
+        "entry_split_order_policy_variant_id": "parent-policy",
+        "entry_split_order_variant_id": "parent-policy__runtime_first_weight_40",
+    }
+
+    assert split_plan._split_variant_id_from_fields(fields) == "parent-policy"
+    assert (
+        split_plan._split_child_variant_id_from_fields(fields)
+        == "parent-policy__runtime_first_weight_40"
+    )
+
+
+def test_split_variant_recovers_parent_from_known_historical_runtime_suffixes():
+    historical_child = (
+        "equal_50_50_offset_0pct_0_3pct"
+        "__qty_clipped_legs1__runtime_first_weight_40"
+        f"__{split_plan.PROBE_VARIANT_SUFFIX}"
+    )
+    fields = {"entry_split_order_variant_id": historical_child}
+
+    assert split_plan._split_variant_id_from_fields(fields) == (
+        "equal_50_50_offset_0pct_0_3pct"
+    )
+    assert split_plan._split_child_variant_id_from_fields(fields) == historical_child
 
 
 def test_build_report_uses_prior_cumulative_state_for_daily_increment(
@@ -690,7 +871,7 @@ def test_build_report_uses_prior_cumulative_state_for_daily_increment(
     )
     assert (
         report["input_summary"]["aggregation_mode"]
-        == "incremental_from_prior_cumulative_state"
+        == "incremental_gap_replay_from_prior_cumulative_state"
     )
     assert report["input_summary"]["source_dates"] == [source_date, target_date]
     assert report["cumulative_state"]["through_date"] == target_date
@@ -700,28 +881,11 @@ def test_build_report_uses_prior_cumulative_state_for_daily_increment(
     assert balanced["cumulative_judgment_quality"]["equal_weight_avg_profit_pct"] == 1.5
 
 
-def test_prior_cumulative_state_is_rejected_after_source_quality_refresh(
+def test_prior_cumulative_state_survives_equivalent_source_quality_refresh(
     monkeypatch, tmp_path
 ):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     source_date = "2026-07-06"
-    report_path = split_plan.REPORT_DIR / f"entry_split_order_plan_{source_date}.json"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
-        json.dumps(
-            {
-                "schema_version": split_plan.SCHEMA_VERSION,
-                "cumulative_state": {
-                    "window_policy": ("clean_baseline_cumulative_through_target_date"),
-                    "through_date": source_date,
-                    "clean_tuning_baseline_date": "2026-06-05",
-                    "source_dates": [source_date],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    os.utime(report_path, (1, 1))
     source_quality_path = (
         data_dir
         / "report"
@@ -734,6 +898,190 @@ def test_prior_cumulative_state_is_rejected_after_source_quality_refresh(
             {
                 "status": "pass",
                 "summary": {"tuning_input_allowed": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    report_path = split_plan.REPORT_DIR / f"entry_split_order_plan_{source_date}.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.SCHEMA_VERSION,
+                "cumulative_state": {
+                    "schema_version": split_plan.CUMULATIVE_STATE_SCHEMA_VERSION,
+                    "window_policy": ("clean_baseline_cumulative_through_target_date"),
+                    "through_date": source_date,
+                    "clean_tuning_baseline_date": "2026-06-05",
+                    "source_dates": [source_date],
+                    "source_quality_contract_bindings": (
+                        split_plan._source_quality_contract_bindings([source_date])
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(report_path, (1, 1))
+
+    state, state_path = split_plan._latest_prior_cumulative_state("2026-07-07")
+
+    assert state["through_date"] == source_date
+    assert state_path == str(report_path)
+
+
+def test_build_report_replays_all_dates_after_latest_complete_cumulative_state(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    source_dates = ["2026-07-06", "2026-07-07", "2026-07-08"]
+    for index, source_date in enumerate(source_dates, start=1):
+        _write_jsonl(
+            data_dir / "pipeline_events" / f"pipeline_events_{source_date}.jsonl",
+            [
+                {
+                    "date": source_date,
+                    "stage": "order_bundle_submitted",
+                    "record_id": index,
+                    "stock_code": f"{index:06d}",
+                    "actual_order_submitted": True,
+                    "broker_order_submitted": True,
+                    "requested_qty": 2,
+                    "spread_bps": 18,
+                    "buy_pressure_10t": 55,
+                    "entry_split_order_policy_variant_id": "parent-policy",
+                    "entry_split_order_variant_id": "parent-policy__runtime",
+                }
+            ],
+        )
+        quality_path = (
+            data_dir
+            / "report"
+            / "observation_source_quality_audit"
+            / f"observation_source_quality_audit_{source_date}.json"
+        )
+        quality_path.parent.mkdir(parents=True, exist_ok=True)
+        quality_path.write_text(
+            json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+            encoding="utf-8",
+        )
+
+    split_plan.build_report(source_dates[0], write=True)
+    incomplete_path = (
+        split_plan.REPORT_DIR / f"entry_split_order_plan_{source_dates[1]}.json"
+    )
+    incomplete_path.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.SCHEMA_VERSION,
+                "cumulative_state": {
+                    "schema_version": split_plan.CUMULATIVE_STATE_SCHEMA_VERSION,
+                    "window_policy": "clean_baseline_cumulative_through_target_date",
+                    "through_date": source_dates[1],
+                    "clean_tuning_baseline_date": "2026-06-05",
+                    "source_dates": [source_dates[1]],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = split_plan.build_report(source_dates[2], write=False)
+    balanced = next(
+        row
+        for row in report["candidate_grid"]
+        if row["context_bucket"] == "balanced_normal"
+    )
+
+    assert report["input_summary"]["replayed_source_dates"] == source_dates[1:]
+    assert report["input_summary"]["source_dates"] == source_dates
+    assert balanced["real_sample_count"] == 3
+
+
+def test_prior_cumulative_state_is_rejected_after_source_quality_contract_change(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    source_date = "2026-07-06"
+    source_quality_path = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{source_date}.json"
+    )
+    source_quality_path.parent.mkdir(parents=True, exist_ok=True)
+    source_quality_path.write_text(
+        json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+        encoding="utf-8",
+    )
+    binding = split_plan._source_quality_contract_bindings([source_date])
+    report_path = split_plan.REPORT_DIR / f"entry_split_order_plan_{source_date}.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.SCHEMA_VERSION,
+                "cumulative_state": {
+                    "schema_version": split_plan.CUMULATIVE_STATE_SCHEMA_VERSION,
+                    "window_policy": "clean_baseline_cumulative_through_target_date",
+                    "through_date": source_date,
+                    "clean_tuning_baseline_date": "2026-06-05",
+                    "source_dates": [source_date],
+                    "source_quality_contract_bindings": binding,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    source_quality_path.write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "summary": {
+                    "tuning_input_allowed": True,
+                    "hard_blocking_stages": ["changed_stage"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state, state_path = split_plan._latest_prior_cumulative_state("2026-07-07")
+
+    assert state == {}
+    assert state_path == ""
+
+
+def test_prior_cumulative_state_requires_complete_source_quality_bindings(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    source_date = "2026-07-06"
+    source_quality_path = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{source_date}.json"
+    )
+    source_quality_path.parent.mkdir(parents=True, exist_ok=True)
+    source_quality_path.write_text(
+        json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+        encoding="utf-8",
+    )
+    report_path = split_plan.REPORT_DIR / f"entry_split_order_plan_{source_date}.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.SCHEMA_VERSION,
+                "cumulative_state": {
+                    "schema_version": split_plan.CUMULATIVE_STATE_SCHEMA_VERSION,
+                    "window_policy": "clean_baseline_cumulative_through_target_date",
+                    "through_date": source_date,
+                    "clean_tuning_baseline_date": "2026-06-05",
+                    "source_dates": [source_date],
+                    "source_quality_contract_bindings": {},
+                },
             }
         ),
         encoding="utf-8",
@@ -758,6 +1106,7 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(
                 "stage": "order_leg_sent",
                 "actual_order_submitted": True,
                 "broker_order_submitted": True,
+                "requested_qty": 2,
                 "spread_bps": 18,
                 "buy_pressure_10t": 55,
             }
@@ -911,6 +1260,7 @@ def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(
                 "stock_code": f"T{idx:05d}"[:6],
                 "actual_order_submitted": True,
                 "broker_order_submitted": True,
+                "requested_qty": 2,
                 "order_price": 10000,
                 "spread_bps": 18,
                 "buy_pressure_10t": 55,
@@ -983,6 +1333,7 @@ def test_post_submit_tick_band_excludes_source_quality_hard_blocked_rows(
                 "stock_code": f"B{idx:05d}"[:6],
                 "actual_order_submitted": True,
                 "broker_order_submitted": True,
+                "requested_qty": 2,
                 "order_price": 10000,
                 "spread_bps": 18,
                 "buy_pressure_10t": 55,

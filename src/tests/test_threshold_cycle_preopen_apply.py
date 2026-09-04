@@ -9060,6 +9060,43 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     assert audits[0]["operator_fallback_authorized"] is True
 
 
+def test_split_runtime_policy_audit_rejects_post_activation_entry_generation_gap(
+    tmp_path,
+):
+    entry_policy = tmp_path / "entry.json"
+    entry_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "entry-unbound",
+                "source_date": "2026-09-04",
+                "runtime_apply_allowed": False,
+                "buckets": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE": "2026-09-04",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": str(entry_policy),
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry-unbound",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "false",
+    }
+
+    audits = mod._split_runtime_policy_audits("2026-09-04", env)
+
+    entry_audit = next(
+        item for item in audits if item["family"] == "entry_split_order_plan"
+    )
+    assert entry_audit["status"] == "fail"
+    assert entry_audit["reason"] == "policy_generation_contract_invalid"
+    assert entry_audit["artifact_generation_contract"] == {
+        "valid": False,
+        "reason": "generation_binding_required",
+    }
+
+
 def test_split_runtime_policy_audit_accepts_scale_in_policy_across_krx_holiday_weekend(
     tmp_path,
 ):

@@ -496,6 +496,7 @@ def _sanitize_signal_features(machine: str, raw: Any) -> dict[str, Any]:
         "signal_bar": str(raw.get("signal_bar") or ""),
         "signal_close": _as_int(raw.get("signal_close")),
         "signal_decision_at": str(raw.get("signal_decision_at") or ""),
+        "source_entry_event_id": str(raw.get("source_entry_event_id") or ""),
         "entry_confirmation_delay_sec": _as_int(
             raw.get("entry_confirmation_delay_sec")
         ),

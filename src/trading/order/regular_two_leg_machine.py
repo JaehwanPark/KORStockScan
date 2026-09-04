@@ -2153,6 +2153,14 @@ class SamsungRegularTwoLegMachine:
         if confirmed_pending:
             delay_sec = int(pending_confirmation["delay_sec"])
             signal_decision_at = str(pending_confirmation["armed_at"])
+            source_entry_event_id = str(
+                pending_confirmation.get("source_entry_event_id")
+                or (
+                    f"{self.strategy_name}:{self.policy.symbol}:"
+                    f"{str(pending_confirmation.get('signal_bar') or latest_iso)}:"
+                    f"{signal_decision_at}"
+                )
+            )
             timing_policy_provenance = dict(
                 pending_confirmation.get("policy_provenance") or {}
             )
@@ -2231,6 +2239,10 @@ class SamsungRegularTwoLegMachine:
             delay_sec = int(timing_policy["delay_sec"])
             timing_policy_provenance = dict(timing_policy["provenance"])
             signal_decision_at = now.isoformat()
+            source_entry_event_id = (
+                f"{self.strategy_name}:{self.policy.symbol}:"
+                f"{latest_iso}:{signal_decision_at}"
+            )
             if timing_policy["mode"] == DYNAMIC_MODE:
                 runtime_cost = (
                     timing_policy_provenance.get("executable_confirmation") or {}
@@ -2262,6 +2274,7 @@ class SamsungRegularTwoLegMachine:
                         "signal_bar": latest_iso,
                         "signal_close": int(latest.close_price),
                         "armed_at": signal_decision_at,
+                        "source_entry_event_id": source_entry_event_id,
                         "due_at": due_at.isoformat(),
                         "delay_sec": 0,
                         "checkpoint_sec": next_checkpoint,
@@ -2303,6 +2316,7 @@ class SamsungRegularTwoLegMachine:
                     "signal_bar": latest_iso,
                     "signal_close": int(latest.close_price),
                     "armed_at": signal_decision_at,
+                    "source_entry_event_id": source_entry_event_id,
                     "due_at": due_at.isoformat(),
                     "delay_sec": delay_sec,
                     "policy_provenance": timing_policy_provenance,
@@ -2335,6 +2349,7 @@ class SamsungRegularTwoLegMachine:
                     "source": (f"kiwoom_ka10080_{self.policy.symbol}_AL_completed_1m"),
                     "signal_bar": latest_iso,
                     "signal_decision_at": signal_decision_at,
+                    "source_entry_event_id": source_entry_event_id,
                     "signal_close": int(latest.close_price),
                     "entry_confirmation_delay_sec": delay_sec,
                     "entry_timing_policy_provenance": timing_policy_provenance,

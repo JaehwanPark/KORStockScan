@@ -1890,10 +1890,14 @@ def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkey
     submitted = machine.run_once(first_at + timedelta(seconds=3))
 
     assert armed["pending_entry_confirmation"]["delay_sec"] == 3
+    assert armed["pending_entry_confirmation"]["source_entry_event_id"]
     assert waiting["status"] == "READY"
     assert gateway.buy_calls == [22_650, 22_600]
     assert gateway.liquidity_calls == ["SOR", "SOR"]
     assert submitted["signal_features"]["signal_decision_at"] == first_at.isoformat()
+    assert submitted["signal_features"]["source_entry_event_id"] == (
+        armed["pending_entry_confirmation"]["source_entry_event_id"]
+    )
     assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
     assert (
         submitted["signal_features"]["entry_executable_micro_confirmation"][

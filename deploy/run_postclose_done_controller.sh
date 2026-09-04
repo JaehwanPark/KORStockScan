@@ -97,9 +97,110 @@ if batch.get("status") != "completed_offline_only":
     print(f"retry_required:batch_status_{batch.get('status') or 'missing'}")
     raise SystemExit(0)
 
+consumer_path = (
+    project_dir
+    / "data"
+    / "report"
+    / "main_ai_prompt_consumer"
+    / f"main_ai_prompt_consumer_{target_date}.json"
+)
+try:
+    consumer = json.loads(consumer_path.read_text(encoding="utf-8"))
+except Exception:
+    print("retry_required:main_ai_consumer_missing_or_invalid")
+    raise SystemExit(0)
+consumer_hash = consumer.get("artifact_content_sha256")
+consumer_content = {
+    key: value for key, value in consumer.items() if key != "artifact_content_sha256"
+}
+computed_consumer_hash = hashlib.sha256(
+    json.dumps(
+        consumer_content,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+).hexdigest()
+if consumer_hash != computed_consumer_hash:
+    print("retry_required:main_ai_consumer_self_hash_mismatch")
+    raise SystemExit(0)
+if (
+    consumer.get("schema") != "main_ai_prompt_consumer_v1"
+    or consumer.get("target_date") != target_date
+    or consumer.get("status") != "ready_source_only_consumer_closure"
+    or consumer.get("unclassified_request_path_count") != 0
+    or consumer.get("terminal_request_path_contract_invalid_count") != 0
+    or consumer.get("entry_followup_terminal_ready") is not True
+    or consumer.get("runtime_effect") is not False
+    or consumer.get("runtime_authority") is not False
+    or consumer.get("allowed_runtime_apply") is not False
+    or consumer.get("actual_order_submitted") is not False
+    or consumer.get("broker_order_forbidden") is not True
+    or (consumer.get("performance_evidence") or {}).get(
+        "runtime_prompt_update_allowed"
+    )
+    is not False
+):
+    print("retry_required:main_ai_consumer_contract_invalid")
+    raise SystemExit(0)
+valid_path_statuses = {
+    "connected_and_hash_bound",
+    "intentionally_blocked_with_owner_and_acceptance_test",
+    "retired_as_duplicate_of_existing_r0_r3",
+}
+request_paths = consumer.get("request_paths")
+if not isinstance(request_paths, dict) or set(request_paths) != {
+    "entry_base",
+    "holding_base",
+    "optional_micro_enriched_2x2",
+}:
+    print("retry_required:main_ai_consumer_path_census_invalid")
+    raise SystemExit(0)
+for path_name, path_row in request_paths.items():
+    if not isinstance(path_row, dict) or path_row.get("path_status") not in valid_path_statuses:
+        print(f"retry_required:main_ai_consumer_path_status_invalid:{path_name}")
+        raise SystemExit(0)
+    children = (
+        path_row.get("cells")
+        if path_name == "optional_micro_enriched_2x2"
+        else path_row.get("cohorts")
+    )
+    if not isinstance(children, list):
+        print(f"retry_required:main_ai_consumer_path_children_invalid:{path_name}")
+        raise SystemExit(0)
+    if any(
+        not isinstance(child, dict)
+        or child.get("path_status") not in valid_path_statuses
+        or (
+            child.get("path_status")
+            == "intentionally_blocked_with_owner_and_acceptance_test"
+            and (
+                not child.get("owner")
+                or not child.get("acceptance_test")
+                or not child.get("blocking_reason")
+            )
+        )
+        for child in children
+    ):
+        print(f"retry_required:main_ai_consumer_child_status_invalid:{path_name}")
+        raise SystemExit(0)
+entry_cohorts = request_paths["entry_base"].get("cohorts") or []
+if any(
+    child.get("path_status") != "connected_and_hash_bound"
+    and not (
+        child.get("path_status")
+        == "intentionally_blocked_with_owner_and_acceptance_test"
+        and child.get("terminality") == "terminal_source_observation"
+    )
+    for child in entry_cohorts
+):
+    print("retry_required:main_ai_consumer_entry_followup_nonterminal")
+    raise SystemExit(0)
+
 candidate_ref = batch.get("krx_bounded_live_candidate")
 if candidate_ref is None:
-    print("terminal_ready:no_krx_candidate")
+    print("terminal_ready:validated_batch_and_main_ai_consumer_no_krx_candidate")
     raise SystemExit(0)
 if not isinstance(candidate_ref, dict):
     print("retry_required:candidate_reference_invalid")
@@ -167,7 +268,7 @@ if not isinstance(candidate_contract_sha256, str) or len(candidate_contract_sha2
 if candidate.get("artifact_sha256") != candidate_ref.get("artifact_sha256"):
     print("retry_required:candidate_hash_mismatch")
     raise SystemExit(0)
-print("terminal_ready:validated_batch_and_candidate")
+print("terminal_ready:validated_batch_candidate_and_main_ai_consumer")
 PY
 }
 

@@ -815,6 +815,9 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         confirmation_delay_sec = 0
         timing_policy_provenance: dict = {}
         signal_decision_at = now.isoformat()
+        source_entry_event_id = (
+            f"samsung_morning_two_leg:{route}:{signal_bar}:{signal_decision_at}"
+        )
         if isinstance(pending_confirmation, dict):
             same_signal = bool(
                 pending_confirmation.get("signal_bar") == str(signal_bar)
@@ -881,6 +884,13 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 )
                 return self.snapshot()
             signal_decision_at = str(pending_confirmation["armed_at"])
+            source_entry_event_id = str(
+                pending_confirmation.get("source_entry_event_id")
+                or (
+                    f"samsung_morning_two_leg:{route}:"
+                    f"{signal_bar}:{signal_decision_at}"
+                )
+            )
             if pending_mode == DYNAMIC_MODE:
                 armed_at = datetime.fromisoformat(signal_decision_at)
                 checkpoint_sec = int(pending_confirmation["checkpoint_sec"])
@@ -981,6 +991,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                         "route": route,
                         "session": timing_session,
                         "armed_at": signal_decision_at,
+                        "source_entry_event_id": source_entry_event_id,
                         "due_at": due_at.isoformat(),
                         "delay_sec": 0,
                         "checkpoint_sec": next_checkpoint,
@@ -1028,6 +1039,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     "route": route,
                     "session": timing_session,
                     "armed_at": signal_decision_at,
+                    "source_entry_event_id": source_entry_event_id,
                     "due_at": due_at.isoformat(),
                     "delay_sec": confirmation_delay_sec,
                     "policy_provenance": timing_policy_provenance,
@@ -1053,6 +1065,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         signal_features.update(
             {
                 "signal_decision_at": signal_decision_at,
+                "source_entry_event_id": source_entry_event_id,
                 "entry_confirmation_delay_sec": confirmation_delay_sec,
                 "entry_timing_policy_provenance": timing_policy_provenance,
                 "entry_confirmation_anchor_snapshot": (

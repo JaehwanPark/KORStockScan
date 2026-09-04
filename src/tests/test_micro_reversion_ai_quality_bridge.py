@@ -3699,6 +3699,41 @@ def test_report_deduplicates_same_parent_wave_per_stage() -> None:
     assert report["future_outcomes_separate_from_prompt_context"] is True
 
 
+def test_report_does_not_build_ask_depletion_sidecar_without_shock_context(
+    monkeypatch,
+) -> None:
+    def unexpected_sidecar_build(**_kwargs):
+        raise AssertionError("sidecar builder must not run without shock context")
+
+    monkeypatch.setattr(
+        bridge_module,
+        "build_ask_depletion_feature_sidecar",
+        unexpected_sidecar_build,
+    )
+
+    report = build_bridge_report(
+        target_date="2026-08-14",
+        traces=[_trace()],
+        payloads=[_payload()],
+        market_rows=[],
+        depth_rows=[],
+        event_references=[],
+        config=_verified_config(),
+    )
+
+    row = report["rows"][0]
+    assert row["ask_depletion_sidecar"] is None
+    assert row["ask_depletion_sidecar_status"] in {
+        "not_applicable_no_shock_event",
+        "source_unavailable_no_sidecar",
+    }
+    assert report["summary"]["ask_depletion_sidecar_build_avoided_count"] == 1
+    assert not any(
+        key.startswith("ask_depletion_source_gap:")
+        for key in report["summary"]["exclusion_counts"]
+    )
+
+
 def test_report_uses_purpose_specific_primary_when_first_control_is_invalid() -> None:
     first_trace = _trace()
     first_trace["timeout"] = True

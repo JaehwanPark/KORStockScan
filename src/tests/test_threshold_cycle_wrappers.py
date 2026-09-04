@@ -596,11 +596,11 @@ def test_postclose_wrapper_runs_daily_low_price_candidate_recommendation_and_adm
     )
 
 
-def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_reports():
+def test_postclose_wrapper_defers_machine_microstructure_to_final_refresh_owner():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert (
-        'RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION:-true}"'
+        'RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION:-false}"'
         in script
     )
     tuning_idx = script.index("-m src.engine.monitoring.low_price_two_leg_tuning")
@@ -626,7 +626,7 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     assert 'wait_for_postclose_resources "machine_microstructure_attribution"' in script
     assert "machine_microstructure_attribution_${TARGET_DATE}.json" in script
     assert (
-        'RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL:-true}"'
+        'RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL:-false}"'
         in script
     )
     approval_idx = script.index(
@@ -657,6 +657,50 @@ def test_postclose_wrapper_runs_machine_microstructure_after_dynamic_machine_rep
     )
     assert "TimeoutStartSec=3600" in widget_expansion_service
     assert "RestartPreventExitStatus=42" in widget_expansion_service
+
+    widget_expansion_timer = Path(
+        "deploy/systemd/korstockscan-widget-expansion-recommendation.timer"
+    ).read_text(encoding="utf-8")
+    assert "OnCalendar=Mon..Fri *-*-* 21:15:00 Asia/Seoul" in widget_expansion_timer
+
+
+def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        'RUN_MAIN_AI_PROMPT_OPTIMIZER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_OPTIMIZER:-$RUN_MAIN_AI_QUALITY_R0_R3}"'
+        in script
+    )
+    r0_index = script.index("-m src.engine.scalping.micro_reversion.ai_quality_cycle")
+    optimizer_index = script.index(
+        "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
+    )
+    holding_consumer_index = script.index(
+        "-m src.engine.scalping.main_ai_holding_base_replay_batch"
+    )
+    prompt_consumer_index = script.index(
+        "-m src.engine.scalping.main_ai_prompt_consumer"
+    )
+    runtime_family_index = script.index(
+        "-m src.engine.automation.main_ai_quality_runtime_family"
+    )
+    assert (
+        r0_index
+        < optimizer_index
+        < holding_consumer_index
+        < prompt_consumer_index
+        < runtime_family_index
+    )
+    assert "main_ai_prompt_optimizer_${TARGET_DATE}.json" in script
+    assert "main_ai_prompt_optimizer=$RUN_MAIN_AI_PROMPT_OPTIMIZER" in script
+    assert (
+        'RUN_MAIN_AI_PROMPT_CONSUMER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_CONSUMER:-$RUN_MAIN_AI_PROMPT_OPTIMIZER}"'
+        in script
+    )
+    assert "main_ai_prompt_consumer_${TARGET_DATE}.json" in script
+    assert "main_ai_prompt_consumer=$RUN_MAIN_AI_PROMPT_CONSUMER" in script
 
     final_refresh = Path(
         "deploy/run_machine_microstructure_final_refresh.sh"
@@ -1018,7 +1062,10 @@ def test_postclose_done_controller_retriggers_late_entry_setup_follower_idempote
         'candidate.get("artifact_sha256") != candidate_ref.get("artifact_sha256")'
         in script
     )
-    assert "terminal_ready:validated_batch_and_candidate" in script
+    assert "terminal_ready:validated_batch_candidate_and_main_ai_consumer" in script
+    assert "main_ai_prompt_consumer_v1" in script
+    assert "main_ai_consumer_self_hash_mismatch" in script
+    assert "main_ai_consumer_child_status_invalid" in script
     assert 'while ! flock -n "$lock_path" -c true' in script
     assert "active_runner_timeout" in script
     assert (
@@ -1084,6 +1131,69 @@ def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path
         },
     }
     batch_path.write_text(json.dumps(batch), encoding="utf-8")
+    consumer_path = (
+        tmp_path
+        / "data"
+        / "report"
+        / "main_ai_prompt_consumer"
+        / f"main_ai_prompt_consumer_{target_date}.json"
+    )
+    consumer_path.parent.mkdir(parents=True)
+    consumer = {
+        "schema": "main_ai_prompt_consumer_v1",
+        "target_date": target_date,
+        "status": "ready_source_only_consumer_closure",
+        "unclassified_request_path_count": 0,
+        "terminal_request_path_contract_invalid_count": 0,
+        "entry_followup_terminal_ready": True,
+        "request_paths": {
+            "entry_base": {
+                "path_status": "connected_and_hash_bound",
+                "cohorts": [
+                    {
+                        "path_status": "connected_and_hash_bound",
+                        "effective_venue": "KRX",
+                        "session_bucket": "KRX_REGULAR",
+                    }
+                ],
+            },
+            "holding_base": {
+                "path_status": (
+                    "intentionally_blocked_with_owner_and_acceptance_test"
+                ),
+                "cohorts": [
+                    {
+                        "path_status": (
+                            "intentionally_blocked_with_owner_and_acceptance_test"
+                        ),
+                        "blocking_reason": "no_exact_holding_request",
+                        "owner": "MainAIHoldingBaseReplayConsumer",
+                        "acceptance_test": "collect one exact request",
+                    }
+                ],
+            },
+            "optional_micro_enriched_2x2": {
+                "path_status": "connected_and_hash_bound",
+                "cells": [],
+            },
+        },
+        "performance_evidence": {"runtime_prompt_update_allowed": False},
+        "runtime_effect": False,
+        "runtime_authority": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    consumer["artifact_content_sha256"] = hashlib.sha256(
+        json.dumps(
+            consumer,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    consumer_path.write_text(json.dumps(consumer), encoding="utf-8")
 
     def validate() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -1096,7 +1206,17 @@ def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path
 
     result = validate()
     assert result.returncode == 0
-    assert result.stdout.strip() == "terminal_ready:validated_batch_and_candidate"
+    assert result.stdout.strip() == (
+        "terminal_ready:validated_batch_candidate_and_main_ai_consumer"
+    )
+
+    consumer["runtime_effect"] = True
+    consumer_path.write_text(json.dumps(consumer), encoding="utf-8")
+    result = validate()
+    assert result.returncode == 0
+    assert result.stdout.strip() == "retry_required:main_ai_consumer_self_hash_mismatch"
+    consumer["runtime_effect"] = False
+    consumer_path.write_text(json.dumps(consumer), encoding="utf-8")
 
     candidate["blocking_reasons"] = ["tampered_without_hash_refresh"]
     candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
@@ -1731,6 +1851,7 @@ def test_postclose_wrapper_isolates_main_ai_quality_failures(
             """
 set -Eeuo pipefail
 RUN_MAIN_AI_QUALITY_R0_R3=true
+RUN_MAIN_AI_PROMPT_OPTIMIZER=false
 MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY=true
 MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP=12
 MAIN_AI_QUALITY_DAILY_USD_CAP=1
@@ -1814,17 +1935,75 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE" in installer
     assert "run_ai_entry_setup_paired_replay_postclose.sh" in installer
     assert "src.engine.scalping.entry_setup_paired_replay_batch" in runner
+    assert "src.engine.scalping.micro_reversion.main_ai_prompt_optimizer" in runner
+    assert "src.engine.scalping.main_ai_holding_base_replay_batch" in runner
+    assert "src.engine.scalping.main_ai_prompt_consumer" in runner
+    assert "refresh_main_ai_consumer" in runner
     assert "--max-new-requests-per-cohort" in runner
     assert "--candidate-workers" in runner
     assert "--write" in runner
     assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
     assert 'MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"' in runner
-    assert 'if [ "$batch_rc" -eq 3 ]' in runner
+    assert (
+        'if [ "$failure_stage" = "entry_batch" ] && [ "$batch_rc" -eq 3 ]'
+        in runner
+    )
+    assert 'failure_stage="consumer_refresh"' in runner
     assert "AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200" in runner
     assert "predecessor bounded wait exhausted" in runner
     assert "sleep 15" in runner
     assert "run_bot.sh" not in runner
     assert "tmux" not in runner
+
+
+def test_entry_setup_runner_retries_consumer_nonterminal_without_mislabeling_predecessor(
+    tmp_path: Path,
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    count_path = tmp_path / "consumer-count"
+    fake_python = fake_bin / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -eu\n"
+        "case \" $* \" in\n"
+        "  *\" src.engine.scalping.main_ai_prompt_consumer \"*)\n"
+        f"    count_file={count_path!s}\n"
+        "    count=0\n"
+        "    if [ -f \"$count_file\" ]; then count=$(tr -d '\\n' < \"$count_file\"); fi\n"
+        "    count=$((count + 1))\n"
+        "    echo \"$count\" > \"$count_file\"\n"
+        "    if [ \"$count\" -eq 1 ]; then exit 3; fi\n"
+        "    ;;\n"
+        "esac\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fake_sleep.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PROJECT_DIR": str(tmp_path),
+        "VENV_PY": str(fake_python),
+        "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS": "2",
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+    result = subprocess.run(
+        ["bash", "deploy/run_ai_entry_setup_paired_replay_postclose.sh", "2026-09-03"],
+        cwd=Path.cwd(),
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert count_path.read_text(encoding="utf-8").strip() == "2"
+    assert "consumer refresh failed attempt=1" in result.stdout
+    assert "predecessor bounded wait exhausted" not in result.stdout
 
 
 def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():

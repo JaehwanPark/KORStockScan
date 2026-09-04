@@ -191,6 +191,17 @@ def _postactivation_lineage_fixture(bound_source_fixture, monkeypatch) -> dict:
             expected_target_date=target_date,
         )
     )
+    exact_trace_ids = sorted(
+        str(row.get("decision_trace_id") or "")
+        for row in source_bundle.get("rows") or []
+    )
+    source_bundle["bridge_current_ablation_source_eligible_trace_ids"] = exact_trace_ids
+    source_bundle["bridge_current_ablation_source_eligible_count"] = len(
+        exact_trace_ids
+    )
+    source_bundle["bridge_current_ablation_source_eligible_trace_ids_sha256"] = (
+        quality._sha256(exact_trace_ids)
+    )
     source_bundle.update(quality.ABLATION_SOURCE_ONLY_AUTHORITY)
     source_bundle["selection_authority"] = False
     source_bundle["source_bundle_content_sha256"] = quality._sha256(
@@ -1293,6 +1304,11 @@ def test_current_lineage_rejects_eligible_row_replaced_by_fabricated_exclusion(
     monkeypatch,
 ):
     lineage = _postactivation_lineage_fixture(bound_source_fixture, monkeypatch)
+    monkeypatch.setattr(
+        quality,
+        "CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE",
+        lineage["target_date"],
+    )
     source_bundle = deepcopy(lineage["source_bundle"])
     removed = source_bundle["rows"].pop()
     source_bundle["exclusions"] = [
@@ -1316,6 +1332,11 @@ def test_current_lineage_rejects_eligible_row_replaced_by_fabricated_exclusion(
     source_bundle["row_count"] = 0
     source_bundle["eligible_row_count"] = 0
     source_bundle["excluded_row_count"] = 1
+    source_bundle["bridge_current_ablation_source_eligible_trace_ids"] = []
+    source_bundle["bridge_current_ablation_source_eligible_count"] = 0
+    source_bundle["bridge_current_ablation_source_eligible_trace_ids_sha256"] = (
+        quality._sha256([])
+    )
     for pool_name in source_bundle["source_row_pool"]:
         source_bundle["source_row_pool"][pool_name] = {}
         source_bundle["source_row_pool_counts"][pool_name] = 0
@@ -1328,7 +1349,10 @@ def test_current_lineage_rejects_eligible_row_replaced_by_fabricated_exclusion(
     )
 
     with pytest.raises(
-        ValueError, match="micro_reversion_current_source_eligibility_census_invalid"
+        ValueError,
+        match=(
+            "micro_reversion_current_source_(eligibility_census|exclusion_reason)_invalid"
+        ),
     ):
         quality.materialize_micro_reversion_offline_requests(
             prepared_requests=lineage["prepared"]["prepared_requests"],
@@ -1622,7 +1646,7 @@ def test_current_execute_cli_rejects_floor_before_provider_import_or_call(
         else lineage["target_date"]
     )
     floor_path = tmp_path / (
-        "micro_reversion_provider_ablation_sample_floor_" f"{floor_target_date}.json"
+        f"micro_reversion_provider_ablation_sample_floor_{floor_target_date}.json"
     )
     if floor_mode == "tampered":
         floor_path.write_text(
@@ -1762,8 +1786,7 @@ def test_current_execute_cli_blocks_cross_day_or_terminal_custody_before_new_cal
         path.write_text(json.dumps(lineage[name]), encoding="utf-8")
         artifact_paths[name] = path
     floor_path = tmp_path / (
-        "micro_reversion_provider_ablation_sample_floor_"
-        f"{lineage['target_date']}.json"
+        f"micro_reversion_provider_ablation_sample_floor_{lineage['target_date']}.json"
     )
     floor_path.write_text(
         json.dumps({"floor_content_sha256": "f" * 64}),
@@ -3033,6 +3056,8 @@ def test_invalid_preactivation_execution_does_not_globally_poison_current_r3():
         {
             "reason": "execution_report_content_hash_mismatch",
             "target_date": "2026-08-24",
+            "repair_required": False,
+            "terminal_exclusion_reason": ("pre_current_design_immutable_companion_gap"),
         }
     ]
 
@@ -3363,8 +3388,9 @@ def test_current_r3_blocks_one_contract_invalid_lifecycle_day_in_21_day_census(
     assert blocked_manifest["status"] == "source_only_candidate_blocked_current_run"
     assert blocked_manifest["candidate_count"] == 0
     assert blocked_manifest["candidates"] == []
-    assert blocked_manifest["source_current_run_global_blockers_sha256"] == (
-        blocked_rolling["current_run_global_blockers_sha256"]
+    assert (
+        blocked_manifest["source_current_run_global_blockers_sha256"]
+        == (blocked_rolling["current_run_global_blockers_sha256"])
     )
 
 
@@ -3409,9 +3435,7 @@ def test_current_r3_natural_lifecycle_absence_is_parent_exclusion_not_global_blo
     assert rolling["global_candidate_blockers"] == []
     exclusion = rolling["exclusions"][0]
     assert exclusion["reason"] == "lifecycle_not_applicable_non_order_entry"
-    assert exclusion["lifecycle_join_requirement"] == (
-        "not_applicable_non_order_entry"
-    )
+    assert exclusion["lifecycle_join_requirement"] == ("not_applicable_non_order_entry")
     assert exclusion["repair_required"] is False
     assert rolling["status"] == "no_joined_lifecycle_rows"
     assert manifest["status"] == "no_source_only_candidate_passed_all_gates"
@@ -3874,8 +3898,7 @@ def test_preactivation_lifecycle_finding_overflow_does_not_block_current_diagnos
     assert diagnostic["global_blockers"] == []
     assert diagnostic["eligible_parent_count"] == 1
     assert rolling["lifecycle_report_findings"][-1] == (
-        "lifecycle_findings_truncated:"
-        "pre_current_design=2,current_design=0,undated=0"
+        "lifecycle_findings_truncated:pre_current_design=2,current_design=0,undated=0"
     )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 
@@ -364,9 +364,10 @@ def test_exit_only_policy_cannot_fall_back_to_legacy_entry_authority(
 def test_exit_only_main_state_guard_blocks_entry_but_allows_existing_custody(
     tmp_path, monkeypatch
 ):
+    runtime_date = datetime.now(kiwoom_orders.KST).date()
     policy_path = tmp_path / "policy.json"
     exclusion_path = tmp_path / "excluded.txt"
-    _write_policy(policy_path, mode=COEXIST_EXIT_ONLY)
+    _write_policy(policy_path, mode=COEXIST_EXIT_ONLY, active_date=runtime_date)
     exclusion_path.write_text(f"{SYMBOL} # manual_operator widget_episode\n")
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv(
@@ -1097,9 +1098,10 @@ def test_registry_owner_check_includes_owner_type(tmp_path):
 def test_kiwoom_order_surface_requires_context_only_for_selected_coexistence_symbol(
     tmp_path, monkeypatch
 ):
+    runtime_date = datetime.now(kiwoom_orders.KST).date()
     policy_path = tmp_path / "policy.json"
     registry_path = tmp_path / "registry.jsonl"
-    _write_policy(policy_path)
+    _write_policy(policy_path, active_date=runtime_date)
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
@@ -1194,9 +1196,10 @@ def test_registry_finalize_failure_preserves_broker_attempt_and_order_number():
 
 
 def test_receipt_before_sor_retry_blocks_second_broker_order(tmp_path, monkeypatch):
+    runtime_date = datetime.now(kiwoom_orders.KST).date()
     policy_path = tmp_path / "policy.json"
     registry_path = tmp_path / "registry.jsonl"
-    _write_policy(policy_path)
+    _write_policy(policy_path, active_date=runtime_date)
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
@@ -1213,7 +1216,7 @@ def test_receipt_before_sor_retry_blocks_second_broker_order(tmp_path, monkeypat
         owner = registry.bind_unique_pending_receipt(
             symbol=SYMBOL,
             side="BUY",
-            order_date=TARGET_DATE,
+            order_date=runtime_date,
             broker_order_no="6244567",
             broker_order_qty=1,
         )
@@ -1229,7 +1232,7 @@ def test_receipt_before_sor_retry_blocks_second_broker_order(tmp_path, monkeypat
             symbol=SYMBOL,
             side="BUY",
             order_quantity=1,
-            order_date=TARGET_DATE,
+            order_date=runtime_date,
             broker_order_no="6244567",
             cumulative_filled_qty=1,
             cumulative_fill_amount=70_000,
@@ -1408,6 +1411,7 @@ def test_aggregate_balance_never_overwrites_registered_symbol_without_daily_poli
 def test_main_cancel_reconciliation_uses_owner_qty_not_aggregate_balance(
     tmp_path, monkeypatch
 ):
+    runtime_date = datetime.now(kiwoom_orders.KST).date()
     registry_path = tmp_path / "registry.jsonl"
     registry = OrderOwnerRegistry(registry_path)
     main_position = OwnerOrderContext(
@@ -1423,7 +1427,7 @@ def test_main_cancel_reconciliation_uses_owner_qty_not_aggregate_balance(
         quantity=5,
         average_price=70_000,
         route="KRX",
-        order_date=TARGET_DATE,
+        order_date=runtime_date,
         broker_order_no="8244567",
         evidence_sha256="1" * 64,
     )
@@ -1433,7 +1437,7 @@ def test_main_cancel_reconciliation_uses_owner_qty_not_aggregate_balance(
         quantity=10,
         average_price=70_000,
         route="KRX",
-        order_date=TARGET_DATE,
+        order_date=runtime_date,
         broker_order_no="8244568",
         evidence_sha256="2" * 64,
     )
@@ -1449,7 +1453,7 @@ def test_main_cancel_reconciliation_uses_owner_qty_not_aggregate_balance(
         side="BUY",
         quantity=2,
         route="SOR",
-        order_date=TARGET_DATE,
+        order_date=runtime_date,
     )
     registry.transition(intent, state="ORDER_BOUND", broker_order_no="8244569")
     monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
@@ -1479,7 +1483,7 @@ def test_main_cancel_reconciliation_uses_owner_qty_not_aggregate_balance(
     assert reconciled is True
     assert reason == "terminal_absence_and_owner_inventory_exact"
     assert observed_qty == 5
-    owner = registry.order_owner(order_date=TARGET_DATE, broker_order_no="8244569")
+    owner = registry.order_owner(order_date=runtime_date, broker_order_no="8244569")
     assert owner is not None
     assert owner["state"] == "ORDER_TERMINAL"
 

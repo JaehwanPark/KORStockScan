@@ -27,6 +27,7 @@ from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
     scalp_sim_policy_catalog_path,
 )
 from src.engine.scalping.entry_split_order_plan import (
+    policy_report_generation_contract_status,
     runtime_apply_authority_contract_status,
 )
 from src.engine.scalping.scale_in_split_order_plan import (
@@ -5037,6 +5038,21 @@ def _split_runtime_policy_audits(
                 audit.update(
                     status="fail",
                     reason="runtime_apply_authority_contract_invalid",
+                )
+                audits.append(audit)
+                continue
+        if spec["family"] == "entry_split_order_plan":
+            generation_valid, generation_reason = (
+                policy_report_generation_contract_status(policy)
+            )
+            audit["artifact_generation_contract"] = {
+                "valid": generation_valid,
+                "reason": generation_reason,
+            }
+            if not generation_valid:
+                audit.update(
+                    status="fail",
+                    reason="policy_generation_contract_invalid",
                 )
                 audits.append(audit)
                 continue

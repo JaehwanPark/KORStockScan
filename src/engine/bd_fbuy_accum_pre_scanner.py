@@ -25,6 +25,15 @@ from src.utils.constants import DATA_DIR, POSTGRES_URL
 SCHEMA_VERSION = "BD_FBUY_ACCUM_PRE_V1"
 ARTIFACT_DIR = DATA_DIR / "runtime" / "bd_fbuy_accum_pre"
 WS_SNAPSHOT_PATH = DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
+MICRO_REVERSION_REGISTRATION_RECEIPT_DIR = (
+    DATA_DIR / "runtime" / "scalp_micro_reversion_registration_receipt"
+)
+
+
+def micro_reversion_registration_receipt_path(effective_date: str) -> Path:
+    return MICRO_REVERSION_REGISTRATION_RECEIPT_DIR / (
+        f"scalp_micro_reversion_registration_receipt_{effective_date}.json"
+    )
 
 
 @dataclass(frozen=True)
@@ -974,6 +983,7 @@ def write_ws_snapshot(
     realtime_data: dict[str, Any],
     *,
     observation_route_data: dict[str, Any] | None = None,
+    micro_reversion_registration_receipt: dict[str, Any] | None = None,
     now_ts: float | None = None,
 ) -> Path | None:
     """Persist a read-only WS snapshot for dashboard and source-quality consumers."""
@@ -1093,6 +1103,11 @@ def write_ws_snapshot(
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
         },
+        "micro_reversion_registration_receipt": (
+            micro_reversion_registration_receipt
+            if isinstance(micro_reversion_registration_receipt, dict)
+            else None
+        ),
         "stocks": stocks,
     }
     try:
@@ -1103,6 +1118,26 @@ def write_ws_snapshot(
             encoding="utf-8",
         )
         tmp.replace(WS_SNAPSHOT_PATH)
+        receipt = micro_reversion_registration_receipt
+        if isinstance(receipt, dict):
+            effective_date = str(receipt.get("effective_date") or "").strip()
+            try:
+                date.fromisoformat(effective_date)
+            except ValueError:
+                effective_date = ""
+            if effective_date:
+                receipt_path = micro_reversion_registration_receipt_path(
+                    effective_date
+                )
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                receipt_tmp = receipt_path.with_suffix(".json.tmp")
+                receipt_tmp.write_text(
+                    json.dumps(
+                        receipt, ensure_ascii=False, separators=(",", ":")
+                    ),
+                    encoding="utf-8",
+                )
+                receipt_tmp.replace(receipt_path)
         return WS_SNAPSHOT_PATH
     except OSError:
         return None

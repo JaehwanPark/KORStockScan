@@ -3283,7 +3283,9 @@ def test_rotation_tag_activation_is_strictly_after_broker_acceptance():
     activate_index = submit_source.index(
         "_activate_opening_rotation_after_broker_submit", reject_guard_index
     )
-    stage_index = submit_source.index("_stage_buy_order_submission(", activate_index)
+    stage_index = submit_source.index(
+        "_stage_broker_accepted_entry_order(", activate_index
+    )
     assert send_index < reject_guard_index < activate_index < stage_index
 
 
@@ -3469,7 +3471,7 @@ def test_opening_rotation_duplicate_guard_bypass_is_wired_before_common_blocks()
         "_is_standard_stale_submit_block",
         "_evaluate_caution_stale_negative_micro_submit_block",
         "_limit_down_live_pre_submit_guard",
-        "_stage_buy_order_submission",
+        "_stage_broker_accepted_entry_order",
     ):
         assert hard_guard_call in submit_source
 
@@ -4077,8 +4079,9 @@ def test_fill_receipt_places_exactly_one_cost_aware_target_order(monkeypatch):
     )
     monkeypatch.setattr(
         "src.engine.kiwoom_orders.send_sell_order_market",
-        lambda **kwargs: submitted.append(kwargs)
-        or {"return_code": "0", "ord_no": "0000001"},
+        lambda **kwargs: (
+            submitted.append(kwargs) or {"return_code": "0", "ord_no": "0000001"}
+        ),
     )
     monkeypatch.setattr(
         sniper_execution_receipts,

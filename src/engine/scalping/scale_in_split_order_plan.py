@@ -15,7 +15,13 @@ from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     is_date_allowed,
 )
-from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
+from src.trading.order.split_execution_math import (
+    pct_price_offset as _pct_price_offset,
+    split_qty as _split_qty,
+    split_qty_by_weights as _split_qty_by_weights,
+    tick_size as _tick_size,
+)
+from src.trading.order.tick_utils import clamp_price_to_tick
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.market_day import count_krx_trading_days
@@ -1157,6 +1163,17 @@ def build_report(target_date: str) -> dict[str, Any]:
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
+        "split_domain_ownership": {
+            "stage": "scale_in",
+            "add_type": "AVG_DOWN",
+            "evidence_owner": "scale_in_split_order_plan",
+            "policy_owner": "scale_in_split_order_plan",
+            "shared_execution_math": "src.trading.order.split_execution_math",
+            "shared_execution_math_authority": "pure_qty_and_tick_math_only",
+            "initial_entry_evidence_or_policy_accepted": False,
+            "pyramid_evidence_or_policy_accepted": False,
+            "independent_machine_evidence_or_policy_accepted": False,
+        },
         "metric_contract": {
             "metric_role": "execution_shape_seed",
             "decision_authority": "next_preopen_bounded_scale_in_split_policy",
@@ -1340,72 +1357,6 @@ def _runtime_default_bucket_policy(bucket: str) -> dict[str, Any]:
         "policy_mode": RUNTIME_FALLBACK_POLICY_MODE,
         "split_variant_id": RUNTIME_FALLBACK_VARIANT_ID,
     }
-
-
-def _split_qty(total_qty: int, leg_count: int, first_weight: float) -> list[int]:
-    if leg_count <= 1 or total_qty <= 1:
-        return [total_qty]
-    first_qty = max(
-        1, min(total_qty - (leg_count - 1), int(round(total_qty * first_weight)))
-    )
-    quantities = [first_qty]
-    remaining = total_qty - first_qty
-    for remaining_legs in range(leg_count - 1, 0, -1):
-        qty = max(1, remaining // remaining_legs)
-        quantities.append(qty)
-        remaining -= qty
-    if remaining:
-        quantities[-1] += remaining
-    return quantities
-
-
-def _split_qty_by_weights(
-    total_qty: int, leg_count: int, weights: list[float]
-) -> list[int]:
-    if leg_count <= 1 or total_qty <= 1:
-        return [total_qty]
-    if total_qty < leg_count:
-        return _split_qty(total_qty, leg_count, weights[0] if weights else 0.5)
-    normalized = [max(0.0, float(weight or 0.0)) for weight in weights[:leg_count]]
-    while len(normalized) < leg_count:
-        normalized.append(0.0)
-    weight_sum = sum(normalized)
-    if weight_sum <= 0:
-        return _split_qty(total_qty, leg_count, 0.5)
-    normalized = [weight / weight_sum for weight in normalized]
-    if leg_count == 2:
-        first_qty = max(1, min(total_qty - 1, int(round(total_qty * normalized[0]))))
-        return [first_qty, total_qty - first_qty]
-    quantities = [1] * leg_count
-    remaining = total_qty - leg_count
-    raw_allocations = [remaining * weight for weight in normalized]
-    floors = [int(value) for value in raw_allocations]
-    for idx, value in enumerate(floors):
-        quantities[idx] += value
-    leftover = remaining - sum(floors)
-    remainders = sorted(
-        ((raw_allocations[idx] - floors[idx], idx) for idx in range(leg_count)),
-        key=lambda item: (-item[0], item[1]),
-    )
-    for _remainder, idx in remainders[:leftover]:
-        quantities[idx] += 1
-    return quantities
-
-
-def _tick_size(price: int) -> int:
-    try:
-        return max(1, int(get_tick_size(price) or 1))
-    except Exception:
-        return 1
-
-
-def _pct_price_offset(base_price: int, offset_pct: float) -> int:
-    if base_price <= 0:
-        return 0
-    raw_price = int(
-        round(float(base_price) * max(0.0, 1.0 - (float(offset_pct or 0.0) / 100.0)))
-    )
-    return clamp_price_to_tick(max(1, raw_price))
 
 
 def apply_scale_in_split_order_policy(

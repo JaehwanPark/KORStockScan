@@ -223,3 +223,40 @@ def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(
     assert stock["last_trade_cum_volume"] == 1234
     assert "nested" not in stock["last_trade_tick"]
     assert stock["last_trade_tick_age_ms"] == 1500.0
+
+
+def test_write_ws_snapshot_persists_exact_date_registration_receipt(
+    monkeypatch, tmp_path
+):
+    snapshot_path = tmp_path / "latest.json"
+    receipt_dir = tmp_path / "registration-receipts"
+    monkeypatch.setattr(mod, "WS_SNAPSHOT_PATH", snapshot_path)
+    monkeypatch.setattr(
+        mod, "MICRO_REVERSION_REGISTRATION_RECEIPT_DIR", receipt_dir
+    )
+    receipt = {
+        "schema": "scalp_micro_reversion_registration_receipt_v1",
+        "effective_date": "2026-09-04",
+        "decision_authority": "market_data_source_quality_only",
+        "runtime_effect": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "requested_registration_items": ["005930_NX"],
+        "items": {},
+    }
+
+    written = mod.write_ws_snapshot(
+        {}, micro_reversion_registration_receipt=receipt, now_ts=1001.0
+    )
+
+    assert written == snapshot_path
+    assert json.loads(snapshot_path.read_text(encoding="utf-8"))[
+        "micro_reversion_registration_receipt"
+    ] == receipt
+    assert json.loads(
+        mod.micro_reversion_registration_receipt_path("2026-09-04").read_text(
+            encoding="utf-8"
+        )
+    ) == receipt

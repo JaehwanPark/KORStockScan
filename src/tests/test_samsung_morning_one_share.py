@@ -367,9 +367,13 @@ def test_nxt_entry_confirmation_delay_changes_only_submission_time(
     assert armed["status"] == "READY"
     assert armed["attempt_consumed"] is False
     assert armed["pending_entry_confirmation"]["delay_sec"] == 3
+    assert armed["pending_entry_confirmation"]["source_entry_event_id"]
     assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
     assert gateway.liquidity_calls == ["NXT", "NXT"]
     assert submitted["signal_features"]["signal_decision_at"] == armed_at.isoformat()
+    assert submitted["signal_features"]["source_entry_event_id"] == (
+        armed["pending_entry_confirmation"]["source_entry_event_id"]
+    )
     assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
     assert all(call["session"] == "NXT_PREMARKET" for call in calls)
 

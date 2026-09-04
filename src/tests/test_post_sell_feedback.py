@@ -17,6 +17,19 @@ def _make_candle(ts: str, high: int, low: int, close: int) -> dict:
     }
 
 
+def test_entry_split_post_sell_fields_preserve_parent_and_child_variant_ids():
+    fields = feedback_mod._entry_split_post_sell_fields(
+        {
+            "entry_split_order_policy_variant_id": "parent-policy",
+            "entry_split_order_variant_id": "parent-policy__runtime-child",
+        }
+    )
+
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_policy_variant_id"] == "parent-policy"
+    assert fields["entry_split_order_variant_id"] == "parent-policy__runtime-child"
+
+
 def test_post_sell_minute_forward_source_quality_marks_truncated_ka10080_window_partial():
     quality = feedback_mod._minute_forward_source_quality(
         {10: {"bars": 10}},

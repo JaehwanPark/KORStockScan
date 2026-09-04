@@ -3445,7 +3445,14 @@ def test_preactivation_replaced_execution_companion_is_excluded_without_global_p
     assert rolling["joined_parent_count"] == 0
     assert rolling["source_execution_dates"] == []
     assert rolling["exclusions"] == [
-        {"reason": expected_reason, "target_date": source_date}
+        {
+            "reason": expected_reason,
+            "target_date": source_date,
+            "repair_required": False,
+            "terminal_exclusion_reason": (
+                "pre_current_design_immutable_companion_gap"
+            ),
+        }
     ]
     assert rolling["global_candidate_blockers"] == []
     assert manifest["candidate_count"] == 0
@@ -6010,6 +6017,10 @@ def test_source_gap_diagnostics_does_not_bind_historical_gap_to_healthy_current_
         {
             "target_date": "2026-08-24",
             "reason": "execution_report_materialized_companion_binding_mismatch",
+            "repair_required": False,
+            "terminal_exclusion_reason": (
+                "pre_current_design_immutable_companion_gap"
+            ),
         }
     ]
     exclusions.extend(
@@ -6033,14 +6044,15 @@ def test_source_gap_diagnostics_does_not_bind_historical_gap_to_healthy_current_
     assert diagnostics["natural_entry_non_order_lifecycle_not_applicable_count"] == 7
     assert diagnostics[
         "execution_report_materialized_companion_binding_mismatch_dates"
-    ] == ["2026-08-24"]
-    assert [row["owner"] for row in diagnostics["workorders"]] == [
-        "MainAIQualityMaterializedCompanionBindingRepair"
-    ]
-    assert diagnostics["workorders"][0]["reason_codes"] == [
-        "execution_report_materialized_companion_binding_mismatch_count=1",
-        "execution_report_materialized_companion_binding_mismatch_dates=2026-08-24",
-    ]
+    ] == []
+    assert (
+        diagnostics[
+            "execution_report_materialized_companion_binding_mismatch_count"
+        ]
+        == 0
+    )
+    assert diagnostics["terminal_historical_exclusion_count"] == 1
+    assert diagnostics["workorders"] == []
 
 
 def test_source_gap_diagnostics_reject_self_inconsistent_artifact_census():

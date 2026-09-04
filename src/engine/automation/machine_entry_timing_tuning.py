@@ -16,7 +16,7 @@ import os
 import statistics
 import tempfile
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -71,6 +71,8 @@ from src.utils.market_day import is_krx_trading_day
 KST = ZoneInfo("Asia/Seoul")
 REPORT_SCHEMA = "machine_entry_timing_tuning_report_v3"
 SOURCE_REPORT_SCHEMA = "machine_microstructure_attribution_v1"
+SOURCE_DECISION_OWNERSHIP_SCHEMA = "machine_microstructure_decision_ownership_v1"
+SOURCE_DECISION_OWNERSHIP_REQUIRED_FROM_DATE = date(2026, 9, 4)
 SOURCE_DIR = DATA_DIR / "report" / "machine_microstructure_attribution"
 OUTPUT_DIR = DATA_DIR / "report" / "machine_entry_timing_tuning"
 SOURCE_PREFIX = "machine_microstructure_attribution"
@@ -82,9 +84,10 @@ SAMSUNG_CANDIDATE_DIR = (
 )
 WIDGET_POLICY_DIR = DATA_DIR / "runtime" / "widget_auto_trade_policy"
 ENTRY_ROLES = frozenset({"actual_widget_entry_signal", "episode_signal_decision_leg"})
-ACTUAL_ENTRY_SOURCE_ROLES = frozenset({*ENTRY_ROLES, "episode_signal_bar"})
+ACTUAL_ENTRY_SOURCE_ROLES = ENTRY_ROLES
 DELAYS_SEC = tuple(sorted(ALLOWED_DELAYS_SEC - {0}))
 ROLLING_WINDOWS_DAYS = REQUIRED_ROLLING_WINDOWS_DAYS
+PREOPEN_POLICY_WRITE_CUTOFF_KST = dt_time(hour=8)
 
 METRIC_CONTRACT = {
     "metric_role": "bounded_widget_episode_entry_timing_policy_selection",
@@ -227,6 +230,23 @@ def _source_reports(
             continue
         payload = _read_json(path)
         authority = (payload or {}).get("authority") or {}
+        decision_ownership = (payload or {}).get("decision_ownership") or {}
+        entry_source_owner = decision_ownership.get("entry_confirmation_source") or {}
+        entry_policy_owner = decision_ownership.get("entry_timing_policy") or {}
+        ownership_valid = bool(
+            isinstance(decision_ownership, dict)
+            and decision_ownership.get("schema")
+            == SOURCE_DECISION_OWNERSHIP_SCHEMA
+            and isinstance(entry_source_owner, dict)
+            and entry_source_owner.get("consumer") == "machine_entry_timing_tuning"
+            and entry_source_owner.get("policy_selection_authority") is False
+            and entry_source_owner.get("runtime_effect") is False
+            and isinstance(entry_policy_owner, dict)
+            and entry_policy_owner.get("owner") == "machine_entry_timing_tuning"
+            and entry_policy_owner.get("source_section")
+            == "micro_entry_confirmation"
+            and entry_policy_owner.get("single_public_policy_owner") is True
+        )
         valid = bool(
             payload is not None
             and payload.get("schema") == SOURCE_REPORT_SCHEMA
@@ -239,9 +259,22 @@ def _source_reports(
             and authority.get("actual_order_submitted") is False
             and authority.get("allowed_runtime_apply") is False
             and authority.get("broker_order_forbidden") is True
+            and (
+                source_date < SOURCE_DECISION_OWNERSHIP_REQUIRED_FROM_DATE
+                or ownership_valid
+            )
         )
         if not valid:
-            rejected.append({"source_date": source_date.isoformat(), "path": str(path)})
+            rejection = {
+                "source_date": source_date.isoformat(),
+                "path": str(path),
+            }
+            if (
+                source_date >= SOURCE_DECISION_OWNERSHIP_REQUIRED_FROM_DATE
+                and not ownership_valid
+            ):
+                rejection["reason"] = "decision_ownership_contract_invalid"
+            rejected.append(rejection)
             continue
         reports.append((source_date, path, payload))
     return reports, rejected
@@ -2200,6 +2233,15 @@ def build_report(
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "source_artifacts": source_artifacts,
+        "decision_ownership": {
+            "schema": SOURCE_DECISION_OWNERSHIP_SCHEMA,
+            "public_policy_owner": "machine_entry_timing_tuning",
+            "upstream_source_owner": (
+                "machine_microstructure_attribution.micro_entry_confirmation"
+            ),
+            "lifecycle_turnover_research_is_separate": True,
+            "market_weakness_policy_is_separate": True,
+        },
         "rejected_source_artifacts": rejected,
         "target_source_ready": target_source_ready,
         "cohorts": cohorts,
@@ -2345,6 +2387,54 @@ def build_applied_policy(
     return payload
 
 
+def policy_publication_gate(
+    report: dict[str, Any], *, now: datetime | None = None
+) -> dict[str, Any]:
+    """Allow an exact-date runtime policy only before its market-open cutoff."""
+
+    generated = now or datetime.now(tz=KST)
+    if generated.tzinfo is None:
+        generated = generated.replace(tzinfo=KST)
+    generated = generated.astimezone(KST)
+    try:
+        source_date = date.fromisoformat(str(report.get("target_date") or ""))
+        effective_date = date.fromisoformat(str(report.get("effective_date") or ""))
+    except ValueError:
+        return {
+            "status": "blocked_invalid_source_or_effective_date",
+            "allowed": False,
+            "generated_at_kst": generated.isoformat(timespec="seconds"),
+            "cutoff_kst": PREOPEN_POLICY_WRITE_CUTOFF_KST.isoformat(),
+            "runtime_effect": False,
+        }
+    if generated.date() < source_date:
+        status = "blocked_future_source_date"
+        allowed = False
+    elif generated.date() < effective_date:
+        status = "allowed_next_session_staging"
+        allowed = True
+    elif (
+        generated.date() == effective_date
+        and generated.time().replace(tzinfo=None) < PREOPEN_POLICY_WRITE_CUTOFF_KST
+    ):
+        status = "allowed_effective_date_preopen"
+        allowed = True
+    else:
+        status = "blocked_effective_date_preopen_cutoff_elapsed"
+        allowed = False
+    return {
+        "status": status,
+        "allowed": allowed,
+        "source_date": source_date.isoformat(),
+        "effective_date": effective_date.isoformat(),
+        "generated_at_kst": generated.isoformat(timespec="seconds"),
+        "cutoff_kst": PREOPEN_POLICY_WRITE_CUTOFF_KST.isoformat(),
+        "late_report_regeneration_allowed": True,
+        "late_runtime_policy_overwrite_allowed": False,
+        "runtime_effect": False,
+    }
+
+
 def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
     winner = report.get("runtime_winner")
     lines = [
@@ -2389,7 +2479,9 @@ def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
             f"`{(report.get('per_signal_dynamic_confirmation_source_only') or {}).get('decision')}` "
             f"(selected for exact-date policy: "
             f"`{(report.get('per_signal_dynamic_confirmation_source_only') or {}).get('selected_for_next_preopen_policy')}`).",
-            f"- Applied scope count: `{len(applied['scopes'])}`.",
+            "- Policy publication: "
+            f"`{(report.get('policy_publication') or {}).get('status', 'not_evaluated')}`.",
+            f"- Candidate scope count: `{len(applied['scopes'])}`.",
             "",
         ]
     )
@@ -2402,7 +2494,8 @@ def write_outputs(
     *,
     output_dir: Path = OUTPUT_DIR,
     policy_dir: Path = DEFAULT_POLICY_DIR,
-) -> tuple[Path, Path, Path]:
+    publish_policy: bool = True,
+) -> tuple[Path, Path, Path | None]:
     report_path = (
         output_dir / f"machine_entry_timing_tuning_{report['target_date']}.json"
     )
@@ -2412,8 +2505,10 @@ def write_outputs(
     )
     _atomic_write_json(report_path, report)
     _atomic_write_text(markdown_path, render_markdown(report, applied))
-    _atomic_write_json(applied_path, applied)
-    return report_path, markdown_path, applied_path
+    if publish_policy:
+        _atomic_write_json(applied_path, applied)
+        return report_path, markdown_path, applied_path
+    return report_path, markdown_path, None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2424,10 +2519,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     target_date = date.fromisoformat(args.target_date)
     report = build_report(target_date=target_date)
+    publication = policy_publication_gate(report)
+    report["policy_publication"] = publication
+    if publication["allowed"] is not True:
+        dynamic = report.get("per_signal_dynamic_confirmation_source_only")
+        if isinstance(dynamic, dict):
+            dynamic["runtime_policy_emitted"] = False
     applied = build_applied_policy(report)
-    paths: tuple[Path, Path, Path] | None = None
+    paths: tuple[Path, Path, Path | None] | None = None
     if args.write:
-        paths = write_outputs(report, applied)
+        paths = write_outputs(
+            report,
+            applied,
+            publish_policy=publication["allowed"] is True,
+        )
     if args.print_summary:
         print(
             json.dumps(
@@ -2436,7 +2541,10 @@ def main(argv: list[str] | None = None) -> int:
                     "decision": report["decision"],
                     "winner": report.get("runtime_winner"),
                     "fixed_delay_diagnostic_winner": report.get("winner"),
-                    "paths": [str(path) for path in paths] if paths else [],
+                    "policy_publication": publication,
+                    "paths": [str(path) for path in paths if path is not None]
+                    if paths
+                    else [],
                 },
                 ensure_ascii=False,
             )
