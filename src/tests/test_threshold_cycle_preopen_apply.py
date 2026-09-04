@@ -5,7 +5,9 @@ from src.engine import lifecycle_bucket_discovery as discovery_mod
 from src.engine import runtime_apply_bridge as bridge_mod
 from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_mod
 from src.engine import threshold_cycle_preopen_apply as mod
+from src.engine.monitoring import limit_down_watch_research
 from src.engine.scalping import (
+    limit_down_watch,
     scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod,
 )
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
@@ -53,6 +55,41 @@ def _entry_ai_candidate_runtime_fields():
     }
 
 
+def _limit_down_binding(tmp_path, target_date):
+    audit_path = tmp_path / f"source-quality-{target_date}.json"
+    audit_path.write_text("{}", encoding="utf-8")
+    return {
+        "binding_version": 1,
+        "target_date": target_date,
+        "status": "pass",
+        "tuning_input_allowed": True,
+        "source_quality_gate": "pass",
+        "blocked_reason": None,
+        "audit_artifact": str(audit_path),
+        "audit_artifact_sha256": limit_down_watch._file_sha256(audit_path),
+        "event_source_storage_equivalent": True,
+        "raw_row_exclusion_manifest": None,
+        "raw_row_exclusion_manifest_sha256": "",
+    }
+
+
+def _limit_down_real_attribution(target_date, binding):
+    return {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_real_post_apply_attribution",
+        "target_date": target_date,
+        "status": "no_applied_execution",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": binding,
+        "completed_sample_count": 0,
+        "source_quality_adjusted_ev_pct": None,
+        "downside_p10_pct": None,
+        "rows": [],
+        **limit_down_watch_research.REAL_ATTRIBUTION_CONTRACT,
+        **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+    }
+
+
 @pytest.fixture(autouse=True)
 def _source_quality_preflight_pass(monkeypatch):
     monkeypatch.setattr(
@@ -84,6 +121,176 @@ def test_entry_cancel_wait_standalone_defaults_on(tmp_path, monkeypatch):
     assert env["KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC"] == "120"
     assert env["KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC"] == "600"
     assert env["KORSTOCKSCAN_SCALPING_RESERVE_ENTRY_TIMEOUT_SEC"] == "1200"
+
+
+def test_limit_down_watch_preopen_selects_exact_date_hashed_sim_and_live(
+    tmp_path, monkeypatch
+):
+    source_date = "2026-09-03"
+    target_date = "2026-09-04"
+    sim_dir = tmp_path / "sim"
+    live_dir = tmp_path / "live"
+    source_dir = tmp_path / "counterfactual"
+    real_dir = tmp_path / "real_attribution"
+    sim_dir.mkdir()
+    live_dir.mkdir()
+    source_dir.mkdir()
+    real_dir.mkdir()
+    monkeypatch.setattr(mod, "LIMIT_DOWN_SIM_POLICY_DIR", sim_dir)
+    monkeypatch.setattr(mod, "LIMIT_DOWN_LIVE_POLICY_DIR", live_dir)
+    monkeypatch.setattr(limit_down_watch_research, "COUNTERFACTUAL_DIR", source_dir)
+    monkeypatch.setattr(limit_down_watch_research, "REAL_ATTRIBUTION_DIR", real_dir)
+    monkeypatch.setattr(limit_down_watch, "COUNTERFACTUAL_SOURCE_DIR", source_dir)
+    monkeypatch.setattr(limit_down_watch, "REAL_ATTRIBUTION_DIR", real_dir)
+    monkeypatch.setattr(
+        limit_down_watch, "_source_quality_binding_valid", lambda *_args: True
+    )
+    binding = _limit_down_binding(tmp_path, source_date)
+    cell = {
+        "policy_key": "single_limit_down|1000_4999",
+        "cohort": "single_limit_down",
+        "price_band": "1000_4999",
+        "sample_count": 5,
+        "observation_date_count": 3,
+        "eligible_for_sim": True,
+        "source_quality_adjusted_ev_pct": 1.0,
+        "downside_p10_pct": 0.5,
+        "mae_p10_pct": -0.5,
+        "relock_rate_pct": 0.0,
+        "entry_bbo_coverage_pct": 100.0,
+    }
+    counterfactual = {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_counterfactual",
+        "target_date": source_date,
+        "status": "pass",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": binding,
+        "policy_cells": [cell],
+        **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+    }
+    (source_dir / f"limit_down_watch_counterfactual_{source_date}.json").write_text(
+        json.dumps(counterfactual), encoding="utf-8"
+    )
+    sim = limit_down_watch_research.build_sim_policy_catalog(
+        source_date, counterfactual
+    )
+    real_attribution = _limit_down_real_attribution(source_date, binding)
+    (
+        real_dir / f"limit_down_watch_real_post_apply_attribution_{source_date}.json"
+    ).write_text(json.dumps(real_attribution), encoding="utf-8")
+    live = limit_down_watch_research.build_bounded_live_candidate(
+        source_date, counterfactual, real_attribution
+    )
+    sim_path = sim_dir / f"limit_down_watch_sim_policy_catalog_{source_date}.json"
+    live_path = live_dir / f"limit_down_watch_bounded_live_candidate_{source_date}.json"
+    sim_path.write_text(json.dumps(sim), encoding="utf-8")
+    live_path.write_text(json.dumps(live), encoding="utf-8")
+
+    decision, env = mod._limit_down_watch_standalone_decision(
+        source_date,
+        target_date,
+        selected_live_candidates=[],
+    )
+
+    assert decision["sim_selected"] is True
+    assert decision["live_selected"] is True
+    assert env["KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ACTIVE_DATE"] == target_date
+    assert env["KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ACTIVE_DATE"] == target_date
+    assert env["KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_SHA256"] == mod._file_sha256(
+        sim_path
+    )
+    assert env["KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_SHA256"] == mod._file_sha256(
+        live_path
+    )
+    audit = mod._limit_down_watch_runtime_policy_audit(target_date, env)
+    assert audit["status"] == "pass"
+    assert {item["status"] for item in audit["mode_audits"]} == {"pass"}
+
+
+def test_limit_down_watch_preopen_keeps_sim_but_blocks_same_entry_stage_live(
+    tmp_path, monkeypatch
+):
+    source_date = "2026-09-03"
+    target_date = "2026-09-04"
+    sim_dir = tmp_path / "sim"
+    live_dir = tmp_path / "live"
+    source_dir = tmp_path / "counterfactual"
+    real_dir = tmp_path / "real_attribution"
+    sim_dir.mkdir()
+    live_dir.mkdir()
+    source_dir.mkdir()
+    real_dir.mkdir()
+    monkeypatch.setattr(mod, "LIMIT_DOWN_SIM_POLICY_DIR", sim_dir)
+    monkeypatch.setattr(mod, "LIMIT_DOWN_LIVE_POLICY_DIR", live_dir)
+    monkeypatch.setattr(limit_down_watch_research, "COUNTERFACTUAL_DIR", source_dir)
+    monkeypatch.setattr(limit_down_watch_research, "REAL_ATTRIBUTION_DIR", real_dir)
+    monkeypatch.setattr(limit_down_watch, "COUNTERFACTUAL_SOURCE_DIR", source_dir)
+    monkeypatch.setattr(limit_down_watch, "REAL_ATTRIBUTION_DIR", real_dir)
+    monkeypatch.setattr(
+        limit_down_watch, "_source_quality_binding_valid", lambda *_args: True
+    )
+    binding = _limit_down_binding(tmp_path, source_date)
+    cell = {
+        "policy_key": "single_limit_down|1000_4999",
+        "cohort": "single_limit_down",
+        "price_band": "1000_4999",
+        "sample_count": 5,
+        "observation_date_count": 3,
+        "eligible_for_sim": True,
+        "source_quality_adjusted_ev_pct": 1.0,
+        "downside_p10_pct": 0.5,
+        "mae_p10_pct": -0.5,
+        "relock_rate_pct": 0.0,
+        "entry_bbo_coverage_pct": 100.0,
+    }
+    counterfactual = {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_counterfactual",
+        "target_date": source_date,
+        "status": "pass",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": binding,
+        "policy_cells": [cell],
+        **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+    }
+    (source_dir / f"limit_down_watch_counterfactual_{source_date}.json").write_text(
+        json.dumps(counterfactual), encoding="utf-8"
+    )
+    sim_path = sim_dir / f"limit_down_watch_sim_policy_catalog_{source_date}.json"
+    live_path = live_dir / f"limit_down_watch_bounded_live_candidate_{source_date}.json"
+    real_attribution = _limit_down_real_attribution(source_date, binding)
+    (
+        real_dir / f"limit_down_watch_real_post_apply_attribution_{source_date}.json"
+    ).write_text(json.dumps(real_attribution), encoding="utf-8")
+    sim_path.write_text(
+        json.dumps(
+            limit_down_watch_research.build_sim_policy_catalog(
+                source_date, counterfactual
+            )
+        ),
+        encoding="utf-8",
+    )
+    live_path.write_text(
+        json.dumps(
+            limit_down_watch_research.build_bounded_live_candidate(
+                source_date, counterfactual, real_attribution
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    decision, env = mod._limit_down_watch_standalone_decision(
+        source_date,
+        target_date,
+        selected_live_candidates=[{"family": "another_entry", "stage": "entry"}],
+    )
+
+    assert decision["sim_selected"] is True
+    assert decision["live_selected"] is False
+    assert env["KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ENABLED"] == "true"
+    assert env["KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED"] == "false"
+    assert "same_stage_owner_conflict:another_entry" in decision["blockers"]
 
 
 def test_entry_cancel_wait_only_explicit_operator_lock_turns_off(tmp_path, monkeypatch):

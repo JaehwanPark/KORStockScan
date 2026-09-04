@@ -1772,15 +1772,37 @@ def _limit_down_watch_report_status(
         )
         if readiness.get("decision") != expected_readiness_decision:
             issues.append("limit_down_watch_readiness_decision_invalid")
-        if readiness.get("sim_candidate_ready") is not False:
-            issues.append("limit_down_watch_sim_authority_leak")
+        exact_runtime_contract_required = False
+        try:
+            exact_runtime_contract_required = date.fromisoformat(target_date) >= date(
+                2026, 9, 4
+            )
+        except ValueError:
+            pass
         if conversion_contract_required:
+            if readiness.get("sim_candidate_ready") is not conversion.get(
+                "sim_policy_catalog_ready"
+            ):
+                issues.append("limit_down_watch_sim_readiness_mismatch")
+            if (
+                exact_runtime_contract_required
+                or "sim_policy_applied_to_runtime" in readiness
+                or "sim_policy_applied_to_runtime" in conversion
+            ) and readiness.get("sim_policy_applied_to_runtime") is not conversion.get(
+                "sim_policy_applied_to_runtime"
+            ):
+                issues.append("limit_down_watch_sim_runtime_apply_mismatch")
             if readiness.get("real_trading_ready") is not conversion.get(
                 "real_trading_ready"
             ):
                 issues.append("limit_down_watch_real_readiness_mismatch")
-        elif readiness.get("real_trading_ready") is not False:
-            issues.append("limit_down_watch_real_authority_leak")
+        else:
+            if readiness.get("sim_candidate_ready") is not False:
+                issues.append("limit_down_watch_sim_authority_leak")
+            if readiness.get("sim_policy_applied_to_runtime") not in {None, False}:
+                issues.append("limit_down_watch_sim_runtime_authority_leak")
+            if readiness.get("real_trading_ready") is not False:
+                issues.append("limit_down_watch_real_authority_leak")
         blockers = (
             set(readiness.get("blockers"))
             if isinstance(readiness.get("blockers"), list)
@@ -1790,7 +1812,6 @@ def _limit_down_watch_report_status(
             expected_conversion = {
                 "schema_version": 1,
                 "observer_activation_expected": True,
-                "automatic_live_conversion_performed": False,
                 "runtime_effect": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
@@ -1805,6 +1826,7 @@ def _limit_down_watch_report_status(
             if conversion.get("decision") not in {
                 "keep_observing_and_build_evidence",
                 "auto_live_policy_ready",
+                "auto_live_policy_ready_for_next_preopen",
             }:
                 issues.append("limit_down_watch_conversion_decision_invalid")
             conversion_blockers = (
@@ -1819,6 +1841,10 @@ def _limit_down_watch_report_status(
                     "bounded_live_candidate_contract_missing"
                 },
             }
+            if exact_runtime_contract_required:
+                blocker_requirements["real_runtime_policy_applied"] = {
+                    "current_real_runtime_policy_not_applied"
+                }
             for field, required in blocker_requirements.items():
                 if conversion.get(field) is not True and not required.issubset(
                     conversion_blockers
@@ -1828,12 +1854,20 @@ def _limit_down_watch_report_status(
                     )
             live_auto_ready = conversion.get("live_conversion_review_ready") is True
             separate_ready = conversion.get("separate_preopen_apply_ready") is True
-            expected_decision = (
-                "auto_live_policy_ready"
-                if live_auto_ready
-                else "keep_observing_and_build_evidence"
+            ready_decisions = (
+                {"auto_live_policy_ready_for_next_preopen"}
+                if exact_runtime_contract_required
+                else {
+                    "auto_live_policy_ready",
+                    "auto_live_policy_ready_for_next_preopen",
+                }
             )
-            if conversion.get("decision") != expected_decision:
+            expected_decisions = (
+                ready_decisions
+                if live_auto_ready
+                else {"keep_observing_and_build_evidence"}
+            )
+            if conversion.get("decision") not in expected_decisions:
                 issues.append("limit_down_watch_conversion_decision_state_invalid")
             if conversion.get("operator_approval_required") is not False:
                 issues.append("limit_down_watch_operator_approval_required_invalid")
@@ -1841,7 +1875,10 @@ def _limit_down_watch_report_status(
                 issues.append("limit_down_watch_operator_approval_present_invalid")
             if separate_ready != live_auto_ready:
                 issues.append("limit_down_watch_separate_preopen_apply_state_invalid")
-            if conversion.get("real_trading_ready") is not live_auto_ready:
+            real_runtime_applied = conversion.get("real_runtime_policy_applied") is True
+            if exact_runtime_contract_required and (
+                conversion.get("real_trading_ready") is not real_runtime_applied
+            ):
                 issues.append("limit_down_watch_real_trading_ready_invalid")
             if conversion.get("allowed_runtime_apply") is not live_auto_ready:
                 issues.append("limit_down_watch_runtime_apply_readiness_invalid")
@@ -1850,7 +1887,56 @@ def _limit_down_watch_report_status(
                 is not live_auto_ready
             ):
                 issues.append("limit_down_watch_auto_schedule_state_invalid")
-            if conversion.get("decision") == "auto_live_policy_ready":
+            if exact_runtime_contract_required:
+                if conversion.get("automatic_live_conversion_performed") is not (
+                    real_runtime_applied
+                ):
+                    issues.append("limit_down_watch_auto_apply_observation_invalid")
+            elif conversion.get("automatic_live_conversion_performed") is not False:
+                issues.append(
+                    "limit_down_watch_conversion_contract_mismatch:"
+                    "automatic_live_conversion_performed"
+                )
+            blocker_details = (
+                conversion.get("runtime_blocker_details")
+                if isinstance(conversion.get("runtime_blocker_details"), list)
+                else []
+            )
+            blocker_detail_codes = {
+                str(item.get("code") or "")
+                for item in blocker_details
+                if isinstance(item, dict)
+                and item.get("class")
+                and item.get("observed_evidence")
+                and item.get("next_repair_action")
+                and item.get("acceptance_test")
+            }
+            if exact_runtime_contract_required and not conversion_blockers.issubset(
+                blocker_detail_codes
+            ):
+                issues.append("limit_down_watch_runtime_blocker_taxonomy_incomplete")
+            readiness_blocker_details = (
+                readiness.get("runtime_blocker_details")
+                if isinstance(readiness.get("runtime_blocker_details"), list)
+                else []
+            )
+            readiness_detail_codes = {
+                str(item.get("code") or "")
+                for item in readiness_blocker_details
+                if isinstance(item, dict)
+                and item.get("class")
+                and item.get("observed_evidence")
+                and item.get("next_repair_action")
+                and item.get("acceptance_test")
+            }
+            if exact_runtime_contract_required and not blockers.issubset(
+                readiness_detail_codes
+            ):
+                issues.append("limit_down_watch_evidence_blocker_taxonomy_incomplete")
+            if conversion.get("decision") in {
+                "auto_live_policy_ready",
+                "auto_live_policy_ready_for_next_preopen",
+            }:
                 if not separate_ready:
                     issues.append("limit_down_watch_preopen_apply_readiness_invalid")
                 else:

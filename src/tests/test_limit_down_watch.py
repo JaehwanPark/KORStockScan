@@ -99,6 +99,101 @@ def _candidate_source_payload(*candidates):
     }
 
 
+def _source_quality_binding(target_date: str) -> dict:
+    return {
+        "binding_version": 1,
+        "target_date": target_date,
+        "status": "pass",
+        "tuning_input_allowed": True,
+        "source_quality_gate": "pass",
+        "blocked_reason": None,
+        "audit_artifact": "/tmp/source-quality-audit.json",
+        "audit_artifact_sha256": "a" * 64,
+        "event_source_storage_equivalent": True,
+        "raw_row_exclusion_manifest": None,
+        "raw_row_exclusion_manifest_sha256": "",
+    }
+
+
+def _real_attribution_payload(target_date: str) -> dict:
+    return {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_real_post_apply_attribution",
+        "target_date": target_date,
+        "status": "no_applied_execution",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": _source_quality_binding(target_date),
+        "completed_sample_count": 0,
+        "source_quality_adjusted_ev_pct": None,
+        "downside_p10_pct": None,
+        "rows": [],
+        **limit_down_watch_research.REAL_ATTRIBUTION_CONTRACT,
+        **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+    }
+
+
+def test_source_quality_binding_rejects_mutated_audit(monkeypatch, tmp_path):
+    target_date = "2026-08-03"
+    event_dir = tmp_path / "pipeline_events"
+    audit_dir = tmp_path / "audit"
+    event_dir.mkdir()
+    audit_dir.mkdir()
+    event_path = event_dir / f"pipeline_events_{target_date}.jsonl"
+    event_path.write_text("", encoding="utf-8")
+    audit_path = audit_dir / f"observation_source_quality_audit_{target_date}.json"
+    audit = {
+        "report_type": "observation_source_quality_audit",
+        "target_date": target_date,
+        "generated_at": "2026-08-03T18:00:00+09:00",
+        "status": "pass",
+        "source": {"pipeline_events": str(event_path)},
+        "summary": {
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+            "hard_blocking_excluded_row_count": 0,
+            "raw_row_exclusion_applied": False,
+            "raw_row_exclusion_manifest": None,
+            "blocked_reason": None,
+        },
+    }
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+    monkeypatch.setattr(limit_down_watch, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(limit_down_watch, "SOURCE_QUALITY_AUDIT_DIR", audit_dir)
+    binding = {
+        "binding_version": 1,
+        "target_date": target_date,
+        "status": "pass",
+        "tuning_input_allowed": True,
+        "source_quality_gate": "pass",
+        "audit_artifact": str(audit_path),
+        "audit_artifact_sha256": limit_down_watch._file_sha256(audit_path),
+        "audit_generated_at": audit["generated_at"],
+        "audit_event_source": str(event_path),
+        "event_source": str(event_path),
+        "event_source_storage_equivalent": True,
+        "hard_blocking_contract_gap_count": 0,
+        "hard_blocking_excluded_row_count": 0,
+        "raw_row_exclusion_applied": False,
+        "raw_row_exclusion_manifest": None,
+        "raw_row_exclusion_manifest_sha256": "",
+    }
+    payload = {
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": binding,
+    }
+
+    assert limit_down_watch.validate_limit_down_source_quality_binding(
+        payload, target_date
+    )
+
+    audit["summary"]["tuning_input_allowed"] = False
+    audit_path.write_text(json.dumps(audit), encoding="utf-8")
+
+    assert not limit_down_watch.validate_limit_down_source_quality_binding(
+        payload, target_date
+    )
+
+
 def test_signal_radar_fallback_resolves_registered_token_before_request(
     monkeypatch, tmp_path
 ):
@@ -908,17 +1003,36 @@ def test_rotation_pays_unseen_candidate_coverage_debt_before_reexploitation():
     assert picked is single
 
 
-def test_runtime_loads_latest_prior_source_only_sim_policy(monkeypatch, tmp_path):
+def test_runtime_loads_exact_date_preopen_source_only_sim_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(limit_down_watch, "SIM_POLICY_DIR", tmp_path)
+    monkeypatch.setattr(limit_down_watch, "COUNTERFACTUAL_SOURCE_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch, "_source_quality_binding_valid", lambda *_args: True
+    )
+    source_path = tmp_path / "limit_down_watch_counterfactual_2026-08-02.json"
+    source_payload = {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_counterfactual",
+        "target_date": "2026-08-02",
+        "status": "pass",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": _source_quality_binding("2026-08-02"),
+        "rows": [],
+        **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+    }
+    source_path.write_text(json.dumps(source_payload), encoding="utf-8")
     path = tmp_path / "limit_down_watch_sim_policy_catalog_2026-08-02.json"
     path.write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "report_type": "limit_down_watch_sim_policy_catalog",
+                "policy_version": limit_down_watch.LIMIT_DOWN_SIM_POLICY_VERSION,
                 "target_date": "2026-08-02",
                 "status": "pass",
                 "allowed_sim_apply": True,
+                "decision_authority": limit_down_watch.LIMIT_DOWN_SIM_DECISION_AUTHORITY,
+                "forbidden_uses": limit_down_watch.LIMIT_DOWN_SIM_FORBIDDEN_USES,
                 "active_policy_count": 1,
                 "active_policies": [
                     {
@@ -927,6 +1041,12 @@ def test_runtime_loads_latest_prior_source_only_sim_policy(monkeypatch, tmp_path
                         "price_band": "1000_4999",
                     }
                 ],
+                "source_quality_status": "pass",
+                "source_quality_preflight_gate": _source_quality_binding("2026-08-02"),
+                "source_artifact": str(source_path),
+                "source_artifact_payload_sha256": limit_down_watch._payload_sha256(
+                    source_payload
+                ),
                 "runtime_effect": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
@@ -934,6 +1054,18 @@ def test_runtime_loads_latest_prior_source_only_sim_policy(monkeypatch, tmp_path
             }
         ),
         encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ACTIVE_DATE", "2026-08-03")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_SOURCE_DATE", "2026-08-02")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_FILE", str(path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_VERSION",
+        limit_down_watch.LIMIT_DOWN_SIM_POLICY_VERSION,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_SHA256",
+        limit_down_watch._file_sha256(path),
     )
     manager = LimitDownWatchManager("token", _DB(), _Bus())
 
@@ -943,21 +1075,43 @@ def test_runtime_loads_latest_prior_source_only_sim_policy(monkeypatch, tmp_path
     assert manager.sim_policy_source_date == "2026-08-02"
 
 
-def test_runtime_loads_latest_prior_live_auto_policy(monkeypatch, tmp_path):
+def test_runtime_loads_exact_date_preopen_live_auto_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(limit_down_watch, "LIVE_AUTO_POLICY_DIR", tmp_path)
+    monkeypatch.setattr(limit_down_watch, "COUNTERFACTUAL_SOURCE_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch, "_source_quality_binding_valid", lambda *_args: True
+    )
+    source_path = tmp_path / "limit_down_watch_counterfactual_2026-08-02.json"
+    monkeypatch.setattr(
+        limit_down_watch, "_post_apply_guard_valid", lambda *_args: True
+    )
+    source_payload = {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_counterfactual",
+        "target_date": "2026-08-02",
+        "status": "pass",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": _source_quality_binding("2026-08-02"),
+        "rows": [],
+        **limit_down_watch_research.SOURCE_ONLY_FIELDS,
+    }
+    source_path.write_text(json.dumps(source_payload), encoding="utf-8")
     path = tmp_path / "limit_down_watch_bounded_live_candidate_2026-08-02.json"
     path.write_text(
         json.dumps(
             {
                 "schema_version": 1,
                 "report_type": "limit_down_watch_bounded_live_candidate",
+                "policy_version": limit_down_watch.LIMIT_DOWN_LIVE_POLICY_VERSION,
                 "target_date": "2026-08-02",
                 "status": "live_auto_apply_ready",
                 "decision_authority": "limit_down_live_auto_eligibility_candidate",
                 "operator_approval_required": False,
                 "preopen_consumer_implemented": True,
-                "activation_mode": "latest_valid_prior_date_policy_auto_loaded",
+                "activation_mode": "exact_date_preopen_runtime_env_policy",
                 "sample_floor": "1_verified_ordered_path_per_cohort_price_band",
+                "forbidden_uses": limit_down_watch.LIMIT_DOWN_LIVE_FORBIDDEN_USES,
+                "real_post_apply_attribution_valid": True,
                 "ready_candidate_count": 1,
                 "candidates": [
                     {
@@ -973,6 +1127,18 @@ def test_runtime_loads_latest_prior_live_auto_policy(monkeypatch, tmp_path):
                         "evidence_mode": "single_verified_ordered_path_allowed",
                     }
                 ],
+                "source_quality_status": "pass",
+                "source_quality_preflight_gate": _source_quality_binding("2026-08-02"),
+                "source_artifact": str(source_path),
+                "source_artifact_payload_sha256": limit_down_watch._payload_sha256(
+                    source_payload
+                ),
+                "runtime_handoff_contract": {
+                    "apply_timing": "next_preopen_only",
+                    "exact_target_date_env_required": True,
+                    "policy_file_sha256_required": True,
+                    "pid_env_verification_required": True,
+                },
                 "risk_contract": {
                     "max_concurrent_positions": 1,
                     "max_daily_entries": 1,
@@ -982,6 +1148,7 @@ def test_runtime_loads_latest_prior_live_auto_policy(monkeypatch, tmp_path):
                     "same_day_reentry_allowed": False,
                     "overnight_allowed": False,
                     "entry_requires_two_ordered_unlocked_ticks": True,
+                    "entry_requires_two_ordered_trigger_ticks": True,
                     "entry_requires_fresh_quote_and_bbo": True,
                     "max_entry_spread_pct": 1.5,
                     "relock_or_stale_cancels_unfilled_entry": True,
@@ -996,6 +1163,18 @@ def test_runtime_loads_latest_prior_live_auto_policy(monkeypatch, tmp_path):
         ),
         encoding="utf-8",
     )
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ACTIVE_DATE", "2026-08-03")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_SOURCE_DATE", "2026-08-02")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_FILE", str(path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_VERSION",
+        limit_down_watch.LIMIT_DOWN_LIVE_POLICY_VERSION,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_SHA256",
+        limit_down_watch._file_sha256(path),
+    )
     manager = LimitDownWatchManager("token", _DB(), _Bus())
 
     manager._load_live_policy(date(2026, 8, 3))
@@ -1008,6 +1187,13 @@ def test_latest_cumulative_blocked_artifact_withdraws_prior_live_policy(
     monkeypatch, tmp_path
 ):
     monkeypatch.setattr(limit_down_watch, "LIVE_AUTO_POLICY_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch, "_source_quality_binding_valid", lambda *_args: True
+    )
+    monkeypatch.setattr(limit_down_watch, "_source_artifact_valid", lambda *_args: True)
+    monkeypatch.setattr(
+        limit_down_watch, "_post_apply_guard_valid", lambda *_args: True
+    )
     positive_cell = {
         "policy_key": "near_limit_rebound|1000_4999",
         "cohort": "near_limit_rebound",
@@ -1022,12 +1208,18 @@ def test_latest_cumulative_blocked_artifact_withdraws_prior_live_policy(
     }
     ready = limit_down_watch_research.build_bounded_live_candidate(
         "2026-08-02",
-        {"source_quality_status": "pass", "policy_cells": [positive_cell]},
+        {
+            "source_quality_status": "pass",
+            "source_quality_preflight_gate": _source_quality_binding("2026-08-02"),
+            "policy_cells": [positive_cell],
+        },
+        _real_attribution_payload("2026-08-02"),
     )
     blocked = limit_down_watch_research.build_bounded_live_candidate(
         "2026-08-03",
         {
             "source_quality_status": "pass",
+            "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
             "policy_cells": [
                 {
                     **positive_cell,
@@ -1038,12 +1230,24 @@ def test_latest_cumulative_blocked_artifact_withdraws_prior_live_policy(
                 }
             ],
         },
+        _real_attribution_payload("2026-08-03"),
     )
-    (tmp_path / "limit_down_watch_bounded_live_candidate_2026-08-02.json").write_text(
-        json.dumps(ready), encoding="utf-8"
-    )
+    ready_path = tmp_path / "limit_down_watch_bounded_live_candidate_2026-08-02.json"
+    ready_path.write_text(json.dumps(ready), encoding="utf-8")
     (tmp_path / "limit_down_watch_bounded_live_candidate_2026-08-03.json").write_text(
         json.dumps(blocked), encoding="utf-8"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ACTIVE_DATE", "2026-08-03")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_SOURCE_DATE", "2026-08-02")
+    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_FILE", str(ready_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_VERSION",
+        limit_down_watch.LIMIT_DOWN_LIVE_POLICY_VERSION,
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_SHA256",
+        limit_down_watch._file_sha256(ready_path),
     )
     prior_manager = LimitDownWatchManager("token", _DB(), _Bus())
     prior_manager._load_live_policy(date(2026, 8, 3))
@@ -1517,6 +1721,105 @@ def test_research_collector_preserves_raw_near_rebound_confirmation(
     ]
 
 
+def test_research_collector_joins_live_submit_and_completed_profit(
+    monkeypatch, tmp_path
+):
+    event_dir = tmp_path / "events"
+    candidate_dir = tmp_path / "candidates"
+    event_dir.mkdir()
+    candidate_dir.mkdir()
+    monkeypatch.setattr(limit_down_watch_research, "EVENT_DIR", event_dir)
+    monkeypatch.setattr(limit_down_watch_research, "CANDIDATE_DIR", candidate_dir)
+    candidate = {
+        "code": "000001",
+        "name": "테스트",
+        "cohort": "single_limit_down",
+        "price_band": "1000_4999",
+    }
+    source = {**_candidate_source_payload(candidate), "target_date": "2026-08-05"}
+    (candidate_dir / "limit_down_watch_candidate_source_2026-08-05.json").write_text(
+        json.dumps(source), encoding="utf-8"
+    )
+    events = [
+        {
+            "pipeline": "LIMIT_DOWN_WATCH",
+            "stage": "limit_down_watch_registered",
+            "stock_code": "000001",
+            "emitted_at": "2026-08-05T09:00:00+09:00",
+            "fields": _observation_event_fields(
+                cohort="single_limit_down", price_band="1000_4999"
+            ),
+        },
+        {
+            "pipeline": "SCALPING",
+            "stage": "order_bundle_submitted",
+            "record_id": "101",
+            "stock_code": "000001",
+            "stock_name": "테스트",
+            "emitted_at": "2026-08-05T09:01:00+09:00",
+            "fields": {
+                "source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
+                "actual_order_submitted": True,
+                "broker_order_no": "000101",
+                "buy_price": 1000,
+                "buy_qty": 10,
+                "limit_down_live_policy_key": "single_limit_down|1000_4999",
+                "limit_down_live_policy_source_date": "2026-08-04",
+                "limit_down_live_policy_version": (
+                    limit_down_watch.LIMIT_DOWN_LIVE_POLICY_VERSION
+                ),
+                "limit_down_cohort": "single_limit_down",
+                "limit_down_price_band": "1000_4999",
+            },
+        },
+        {
+            "pipeline": "SCALPING",
+            "stage": "sell_completed",
+            "record_id": "101",
+            "stock_code": "000001",
+            "stock_name": "테스트",
+            "emitted_at": "2026-08-05T10:00:00+09:00",
+            "fields": {"profit_rate": 1.25, "sell_price": 1015},
+        },
+    ]
+    (event_dir / "pipeline_events_2026-08-05.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in events), encoding="utf-8"
+    )
+
+    _visits, status = limit_down_watch_research.collect_observation_visits("2026-08-05")
+
+    assert status["valid"] is True
+    assert status["_live_attribution_rows"] == [
+        {
+            "row_id": "2026-08-05:record:101",
+            "target_date": "2026-08-05",
+            "record_id": "101",
+            "code": "000001",
+            "name": "테스트",
+            "source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
+            "actual_order_submitted": True,
+            "submit_receipt_verified": True,
+            "broker_order_no": "000101",
+            "completed": True,
+            "submit_stage": "order_bundle_submitted",
+            "submit_at": "2026-08-05T09:01:00+09:00",
+            "buy_price": 1000.0,
+            "buy_qty": 10,
+            "limit_down_live_policy_key": "single_limit_down|1000_4999",
+            "limit_down_live_policy_source_date": "2026-08-04",
+            "limit_down_live_policy_version": (
+                limit_down_watch.LIMIT_DOWN_LIVE_POLICY_VERSION
+            ),
+            "limit_down_cohort": "single_limit_down",
+            "limit_down_price_band": "1000_4999",
+            "completed_at": "2026-08-05T10:00:00+09:00",
+            "profit_rate": 1.25,
+            "sell_price": 1015.0,
+            "status": "COMPLETED",
+        }
+    ]
+
+
 def test_near_limit_rebound_label_rejects_single_trigger_tick():
     row = limit_down_watch_research.label_observation_visit(
         {
@@ -1581,6 +1884,8 @@ def test_sim_policy_is_independent_by_cohort_and_price_band():
     counterfactual = {
         "policy_cells": cells,
         "target_date": "2026-08-03",
+        "source_quality_status": "pass",
+        "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
     }
 
     catalog = limit_down_watch_research.build_sim_policy_catalog(
@@ -1599,6 +1904,7 @@ def test_sim_policy_is_independent_by_cohort_and_price_band():
 def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
     counterfactual = {
         "source_quality_status": "pass",
+        "source_quality_preflight_gate": _source_quality_binding("2026-08-03"),
         "policy_cells": [
             {
                 "policy_key": "near_limit_rebound|5000_9999",
@@ -1617,7 +1923,9 @@ def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
     }
 
     artifact = limit_down_watch_research.build_bounded_live_candidate(
-        "2026-08-03", counterfactual
+        "2026-08-03",
+        counterfactual,
+        _real_attribution_payload("2026-08-03"),
     )
 
     assert artifact["status"] == "live_auto_apply_ready"
@@ -1637,7 +1945,110 @@ def test_bounded_live_candidate_auto_applies_one_verified_positive_path():
     assert artifact["allowed_runtime_apply"] is True
 
 
+def test_bounded_live_candidate_fails_closed_without_source_quality_binding():
+    artifact = limit_down_watch_research.build_bounded_live_candidate(
+        "2026-08-03",
+        {
+            "source_quality_status": "pass",
+            "policy_cells": [
+                {
+                    "policy_key": "single_limit_down|1000_4999",
+                    "cohort": "single_limit_down",
+                    "price_band": "1000_4999",
+                    "sample_count": 1,
+                    "observation_date_count": 1,
+                    "source_quality_adjusted_ev_pct": 1.0,
+                    "downside_p10_pct": 1.0,
+                    "mae_p10_pct": -0.5,
+                    "relock_rate_pct": 0.0,
+                    "entry_bbo_coverage_pct": 100.0,
+                }
+            ],
+        },
+    )
+
+    assert artifact["status"] == "blocked"
+    assert artifact["source_quality_status"] == "blocked"
+    assert artifact["allowed_runtime_apply"] is False
+
+
+def test_real_post_apply_attribution_uses_only_submitted_completed_valid_profit(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "_latest_prior_artifact",
+        lambda *_args: {},
+    )
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "_source_quality_binding",
+        lambda target_date: _source_quality_binding(target_date),
+    )
+    binding = _source_quality_binding("2026-08-03")
+    artifact = limit_down_watch_research.build_real_post_apply_attribution(
+        "2026-08-03",
+        [
+            {
+                "row_id": "2026-08-03:record:1",
+                "target_date": "2026-08-03",
+                "record_id": "1",
+                "actual_order_submitted": True,
+                "submit_receipt_verified": True,
+                "broker_order_no": "000001",
+                "completed": True,
+                "status": "COMPLETED",
+                "profit_rate": 1.2,
+                "buy_price": 1000,
+                "buy_qty": 10,
+                "limit_down_cohort": "single_limit_down",
+                "limit_down_price_band": "1000_4999",
+                "limit_down_live_policy_key": "single_limit_down|1000_4999",
+            },
+            {
+                "row_id": "2026-08-03:record:2",
+                "target_date": "2026-08-03",
+                "record_id": "2",
+                "actual_order_submitted": False,
+                "completed": True,
+                "status": "COMPLETED",
+                "profit_rate": 99.0,
+            },
+        ],
+        binding,
+    )
+
+    assert artifact["status"] == "pass"
+    assert artifact["observed_live_record_count"] == 2
+    assert artifact["observed_actual_order_submitted_count"] == 1
+    assert artifact["completed_sample_count"] == 1
+    assert artifact["source_quality_adjusted_ev_pct"] == 1.2
+    assert artifact["notional_weighted_ev_pct"] == 1.2
+
+
+def test_candidate_source_summary_preserves_blocked_and_excluded_rows():
+    payload = {
+        **_candidate_source_payload(),
+        "blocked_count": 1,
+        "excluded_count": 1,
+        "blocked_rows": [{"code": "000001", "reason": "source_gap"}],
+        "excluded_rows": [{"code": "000002", "reason": "audit_info_excluded"}],
+    }
+
+    summary = limit_down_watch_report._candidate_source_summary("2026-07-27", payload)
+
+    assert summary["blocked_count"] == 1
+    assert summary["excluded_count"] == 1
+    assert summary["blocked_rows"][0]["reason"] == "source_gap"
+    assert summary["excluded_rows"][0]["reason"] == "audit_info_excluded"
+
+
 def test_counterfactual_cumulative_rows_auto_merge_and_deduplicate(monkeypatch):
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "_source_quality_binding",
+        lambda target_date: _source_quality_binding(target_date),
+    )
     prior_row = {
         "row_id": "2026-08-04:000001:1",
         "target_date": "2026-08-04",
@@ -1701,6 +2112,7 @@ def test_counterfactual_cumulative_rows_auto_merge_and_deduplicate(monkeypatch):
         "prior_input_row_count": 1,
         "current_input_row_count": 2,
         "deduplicated_rolling_row_count": 2,
+        "source_quality_excluded_row_count": 0,
         "duplicate_or_out_of_window_row_count": 1,
     }
 
@@ -1708,6 +2120,11 @@ def test_counterfactual_cumulative_rows_auto_merge_and_deduplicate(monkeypatch):
 def test_counterfactual_blocks_live_candidate_when_prior_cumulative_is_invalid(
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        limit_down_watch_research,
+        "_source_quality_binding",
+        lambda target_date: _source_quality_binding(target_date),
+    )
     current_row = {
         "row_id": "2026-08-05:000002:1",
         "target_date": "2026-08-05",
@@ -2229,6 +2646,7 @@ def test_conversion_readiness_auto_applies_without_operator_approval():
         "counterfactual": {"status": "pass"},
         "sim_policy_catalog": {"status": "pass"},
         "post_sim_attribution": {"status": "pass"},
+        "real_post_apply_attribution": {"status": "pass"},
         "bounded_live_candidate": {"status": "pass"},
         "live_conversion_approval": {"status": "missing"},
     }
@@ -2242,22 +2660,32 @@ def test_conversion_readiness_auto_applies_without_operator_approval():
         runtime_state={"target_date": "2026-08-03", "enabled": True},
     )
 
-    assert readiness["decision"] == "auto_live_policy_ready"
+    assert readiness["decision"] == "auto_live_policy_ready_for_next_preopen"
     assert readiness["live_conversion_review_ready"] is True
     assert readiness["operator_approval_required"] is False
     assert readiness["separate_preopen_apply_ready"] is True
     assert readiness["automatic_live_conversion_scheduled"] is True
     assert readiness["automatic_live_conversion_performed"] is False
-    assert readiness["real_trading_ready"] is True
+    assert readiness["real_trading_ready"] is False
     assert readiness["allowed_runtime_apply"] is True
+    assert "next_preopen_exact_date_live_handoff_pending" in readiness["blockers"]
 
 
-def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_path):
+def test_conversion_artifact_checks_require_metric_and_authority_contracts(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(limit_down_watch, "COUNTERFACTUAL_SOURCE_DIR", tmp_path)
+    monkeypatch.setattr(limit_down_watch, "REAL_ATTRIBUTION_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch, "_source_quality_binding_valid", lambda *_args: True
+    )
     paths = {
         "runtime_state": tmp_path / "runtime.json",
-        "counterfactual": tmp_path / "counterfactual.json",
+        "counterfactual": tmp_path / "limit_down_watch_counterfactual_2026-08-03.json",
         "sim_policy_catalog": tmp_path / "sim-policy.json",
         "post_sim_attribution": tmp_path / "post-sim.json",
+        "real_post_apply_attribution": tmp_path
+        / "limit_down_watch_real_post_apply_attribution_2026-08-03.json",
         "bounded_live_candidate": tmp_path / "bounded.json",
         "live_conversion_approval": tmp_path / "approval.json",
     }
@@ -2269,6 +2697,13 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
         "broker_order_forbidden": True,
         "allowed_runtime_apply": False,
     }
+    audit_path = tmp_path / "source-quality-audit.json"
+    audit_path.write_text("{}", encoding="utf-8")
+    binding = {
+        **_source_quality_binding("2026-08-03"),
+        "audit_artifact": str(audit_path),
+        "audit_artifact_sha256": limit_down_watch._file_sha256(audit_path),
+    }
     paths["counterfactual"].write_text(
         json.dumps(
             {
@@ -2277,6 +2712,7 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
                 "report_type": "limit_down_watch_counterfactual",
                 "status": "pass",
                 "source_quality_status": "pass",
+                "source_quality_preflight_gate": binding,
                 "sample_count": 20,
                 "observation_date_count": 5,
                 "consecutive_limit_down_2plus_sample_count": 5,
@@ -2293,14 +2729,29 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
         ),
         encoding="utf-8",
     )
+    counterfactual_hash = limit_down_watch._payload_sha256(
+        json.loads(paths["counterfactual"].read_text(encoding="utf-8"))
+    )
     paths["sim_policy_catalog"].write_text(
         json.dumps(
             {
                 **source_only,
                 "report_type": "limit_down_watch_sim_policy_catalog",
+                "policy_version": limit_down_watch.LIMIT_DOWN_SIM_POLICY_VERSION,
                 "status": "pass",
                 "allowed_sim_apply": True,
                 "active_policy_count": 1,
+                "active_policies": [
+                    {
+                        "policy_key": "single_limit_down|5000_9999",
+                        "cohort": "single_limit_down",
+                        "price_band": "5000_9999",
+                    }
+                ],
+                "source_quality_status": "pass",
+                "source_quality_preflight_gate": binding,
+                "source_artifact": str(paths["counterfactual"]),
+                "source_artifact_payload_sha256": counterfactual_hash,
                 "decision_authority": "limit_down_sim_policy_only",
                 "forbidden_uses": limit_down_watch_report.CONVERSION_FORBIDDEN_USES,
             }
@@ -2315,6 +2766,9 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
                 "report_type": "limit_down_watch_post_sim_attribution",
                 "status": "pass",
                 "source_quality_status": "pass",
+                "source_quality_preflight_gate": binding,
+                "source_artifact": str(paths["counterfactual"]),
+                "source_artifact_payload_sha256": counterfactual_hash,
                 "sample_count": 20,
                 "source_quality_adjusted_ev_pct": 0.2,
                 "qualified_policy_count": 1,
@@ -2323,11 +2777,31 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
         ),
         encoding="utf-8",
     )
+    paths["real_post_apply_attribution"].write_text(
+        json.dumps(
+            {
+                **source_only,
+                **limit_down_watch_report.REAL_ATTRIBUTION_CONTRACT,
+                "report_type": "limit_down_watch_real_post_apply_attribution",
+                "status": "no_applied_execution",
+                "source_quality_status": "pass",
+                "source_quality_preflight_gate": binding,
+                "completed_sample_count": 0,
+                "source_quality_adjusted_ev_pct": None,
+                "downside_p10_pct": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_attribution_hash = limit_down_watch._payload_sha256(
+        json.loads(paths["real_post_apply_attribution"].read_text(encoding="utf-8"))
+    )
     paths["bounded_live_candidate"].write_text(
         json.dumps(
             {
                 **source_only,
                 "report_type": "limit_down_watch_bounded_live_candidate",
+                "policy_version": limit_down_watch.LIMIT_DOWN_LIVE_POLICY_VERSION,
                 "status": "live_auto_apply_ready",
                 "ready_candidate_count": 1,
                 "candidates": [
@@ -2341,11 +2815,34 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
                         "mae_p10_pct": -0.2,
                         "relock_rate_pct": 0.0,
                         "entry_bbo_coverage_pct": 100.0,
+                        "evidence_mode": "single_verified_ordered_path_allowed",
                     }
                 ],
                 "decision_authority": "limit_down_live_auto_eligibility_candidate",
                 "operator_approval_required": False,
                 "preopen_consumer_implemented": True,
+                "activation_mode": "exact_date_preopen_runtime_env_policy",
+                "sample_floor": limit_down_watch.LIMIT_DOWN_LIVE_SAMPLE_FLOOR,
+                "source_quality_status": "pass",
+                "source_quality_preflight_gate": binding,
+                "source_artifact": str(paths["counterfactual"]),
+                "source_artifact_payload_sha256": counterfactual_hash,
+                "real_post_apply_attribution_valid": True,
+                "post_apply_attribution_guard": {
+                    "artifact": str(paths["real_post_apply_attribution"]),
+                    "artifact_payload_sha256": real_attribution_hash,
+                    "completed_sample_count": 0,
+                    "source_quality_adjusted_ev_pct": None,
+                    "downside_p10_pct": None,
+                    "rollback_required": False,
+                    "rollback_reason": None,
+                },
+                "runtime_handoff_contract": {
+                    "apply_timing": "next_preopen_only",
+                    "exact_target_date_env_required": True,
+                    "policy_file_sha256_required": True,
+                    "pid_env_verification_required": True,
+                },
                 "forbidden_uses": limit_down_watch_report.LIVE_AUTO_FORBIDDEN_USES,
                 "allowed_runtime_apply": True,
                 "risk_contract": {
@@ -2390,6 +2887,7 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
         "counterfactual": "pass",
         "sim_policy_catalog": "pass",
         "post_sim_attribution": "pass",
+        "real_post_apply_attribution": "pass",
         "bounded_live_candidate": "pass",
         "live_conversion_approval": "not_required_live_auto",
     }
@@ -2400,6 +2898,53 @@ def test_conversion_artifact_checks_require_metric_and_authority_contracts(tmp_p
     invalid = limit_down_watch_report._conversion_artifact_checks("2026-08-03", paths)
     assert invalid["counterfactual"]["status"] == "invalid"
     assert "contract_mismatch:metric_role" in invalid["counterfactual"]["issues"]
+
+
+def test_runtime_policy_observation_requires_matching_file_hash_and_key_set(
+    tmp_path, monkeypatch
+):
+    source_date = "2026-08-03"
+    target_date = "2026-08-04"
+    policy_path = tmp_path / f"limit_down_watch_sim_policy_catalog_{source_date}.json"
+    policy = {
+        "active_policies": [
+            {
+                "policy_key": "single_limit_down|1000_4999",
+                "cohort": "single_limit_down",
+                "price_band": "1000_4999",
+            }
+        ]
+    }
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    monkeypatch.setattr(limit_down_watch_report, "SIM_POLICY_DIR", tmp_path)
+    monkeypatch.setattr(
+        limit_down_watch_report,
+        "validate_limit_down_sim_policy_payload",
+        lambda *_args: (True, []),
+    )
+    state = {
+        "target_date": target_date,
+        "enabled": True,
+        "sim_policy_active_date": target_date,
+        "sim_policy_source_date": source_date,
+        "sim_policy_sha256": limit_down_watch_report._file_sha256(policy_path),
+        "sim_policy_version": limit_down_watch.LIMIT_DOWN_SIM_POLICY_VERSION,
+        "active_sim_policy_keys": ["single_limit_down|1000_4999"],
+    }
+
+    observed = limit_down_watch_report._runtime_policy_observation(
+        state, target_date, "sim"
+    )
+
+    assert observed["status"] == "pass"
+
+    policy_path.write_text(json.dumps({**policy, "tampered": True}), encoding="utf-8")
+    rejected = limit_down_watch_report._runtime_policy_observation(
+        state, target_date, "sim"
+    )
+
+    assert rejected["status"] == "not_applied"
+    assert rejected["reason"] == "policy_file_sha256_mismatch"
 
 
 def test_postclose_report_marks_missing_daily_observer_activation(tmp_path):
@@ -2413,6 +2958,7 @@ def test_postclose_report_marks_missing_daily_observer_activation(tmp_path):
             "counterfactual": tmp_path / "missing-counterfactual.json",
             "sim_policy_catalog": tmp_path / "missing-sim-policy.json",
             "post_sim_attribution": tmp_path / "missing-post-sim.json",
+            "real_post_apply_attribution": tmp_path / "missing-real-attribution.json",
             "bounded_live_candidate": tmp_path / "missing-bounded.json",
             "live_conversion_approval": tmp_path / "missing-approval.json",
         },

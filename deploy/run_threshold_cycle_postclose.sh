@@ -1421,16 +1421,6 @@ if [ "$RUN_SIM_POST_SELL_FEEDBACK" = "true" ] || [ "$RUN_SIM_POST_SELL_FEEDBACK"
     --evaluate-sim \
     --materialize-monitor-snapshot
 fi
-if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "1" ]; then
-  wait_for_postclose_resources "limit_down_watch_report"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.limit_down_watch_report \
-    --target-date "$TARGET_DATE" \
-    --write
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.md" \
-    "limit_down_watch_report"
-fi
 if [ "$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" = "true" ] || [ "$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE" = "1" ]; then
   wait_for_postclose_resources "rising_missed_intraday_feedback_postclose"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.rising_missed_intraday_feedback \
@@ -2162,6 +2152,16 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
       "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
       "observation_source_quality_audit"
   fi
+fi
+if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "1" ]; then
+  wait_for_postclose_resources "limit_down_watch_report"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.limit_down_watch_report \
+    --target-date "$TARGET_DATE" \
+    --write
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.md" \
+    "limit_down_watch_report"
 fi
 if [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "1" ]; then
   wait_for_postclose_resources "entry_split_order_plan"

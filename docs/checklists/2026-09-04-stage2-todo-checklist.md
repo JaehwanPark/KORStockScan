@@ -72,6 +72,14 @@
   - 금지: approval request만 보고 env 파일을 직접 수정하지 않고, 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: approval request가 있으면 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 확인 항목을 남긴다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
+- [x] `[LimitDownExactPreopenHandoff0904] Limit-down watch source-quality·PREOPEN·실체결 귀속 체인 보완` (`Due: 2026-09-04`, `Slot: POSTCLOSE`, `TimeWindow: 19:00~20:30`, `Track: ScalpingLogic`)
+  - Source: [limit_down_watch.py](/home/ubuntu/KORStockScan/src/engine/scalping/limit_down_watch.py), [limit_down_watch_research.py](/home/ubuntu/KORStockScan/src/engine/monitoring/limit_down_watch_research.py), [limit_down_watch_report.py](/home/ubuntu/KORStockScan/src/engine/monitoring/limit_down_watch_report.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 완료: canonical source-quality audit 이후에만 report/research를 실행하고 audit/event-source/exclusion-manifest와 counterfactual/real-attribution payload를 SHA256으로 결속한다. 누적 row는 날짜별 preflight를 다시 확인하며 결손 row는 제외·표시한다.
+  - 완료: runtime의 latest-prior glob 로드를 제거하고 `2026-09-04`부터 직전 KRX 거래일의 exact-date PREOPEN env, policy version/file hash, same-entry-stage 비충돌, runtime env/PID 검증을 모두 통과한 sim/live policy만 소비하도록 연결했다. 만료 일자에는 `run_bot.sh`가 두 policy를 자동 비활성화한다.
+  - 완료: 실제 귀속은 `LIMIT_DOWN_LIVE_UNLOCK` source signature, 동일 record ID, broker order number가 있는 `order_bundle_submitted`, `sell_completed + valid profit_rate`를 모두 충족한 행만 net EV에 포함한다. 실체결 EV/하방 guard 위반 시 다음 bounded-live 후보를 fail-closed한다.
+  - 완료 조건: source-quality 및 payload 변조, 구/미래 일자, policy key 불일치, same-stage conflict, stale/relock/BBO/spread, scale-in/reentry/overnight 우회가 모두 차단되고 관련 producer/report/PREOPEN/verifier 테스트와 shell/parser 검증이 통과한다.
+  - 권한 경계: 구현·검증만 완료했으며 현재 실행 중인 봇 재기동, 당일 runtime env 변경, 실주문·취소, provider, 수량/cap, hard/protect/emergency guard 변경은 수행하지 않는다. 다음 자연 장전 apply에서 새 exact-date 산출물을 검증한다.
+
 - [x] `[MainAIQualitySourceGapMainAIQualityMaterializedCompanionBindingRepair0904] main AI materialized companion exact-hash 결속 복구 확인` (`Due: 2026-09-04`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:20`, `Track: ScalpingLogic`)
   - Source: [main_ai_quality_r0_r3_cycle_2026-09-03.json](/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-09-03.json)
   - 판정 기준: workorder `main-ai-gap-44e194dd8dd1a770337dcc17`의 owner=`MainAIQualityMaterializedCompanionBindingRepair`, reason_codes=`execution_report_materialized_companion_binding_mismatch_count=1, execution_report_materialized_companion_binding_mismatch_dates=2026-08-24`를 source-only producer 보완으로 닫는다. reason_codes에 명시된 source date별 execution report와 materialized request/response companion의 exact hash를 재검증하고, 불변 원천에 결속할 수 없는 historical row는 합성 없이 제외한다.

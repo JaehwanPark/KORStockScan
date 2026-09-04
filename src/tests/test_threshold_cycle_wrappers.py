@@ -1629,6 +1629,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert '|| -s "$LIMIT_DOWN_WATCH_CANDIDATE_SOURCE"' not in script
     assert "RUN_LIMIT_DOWN_WATCH_REPORT=false" not in script
     assert "src.engine.monitoring.limit_down_watch_report" in script
+    assert script.rindex(
+        "src.engine.monitoring.limit_down_watch_report"
+    ) > script.rindex("src.engine.observation_source_quality_audit")
     assert (
         '"$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.json"'
         in script
@@ -2802,6 +2805,23 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert script.index("reset_runtime_policy_env_before_handoff") < script.index(
         '. "$THRESHOLD_RUNTIME_ENV"'
     )
+    reset_block = script[
+        script.index("reset_runtime_policy_env_before_handoff()") : script.index(
+            "# 무한 루프 시작"
+        )
+    ]
+    for mode in ("SIM", "LIVE"):
+        for suffix in (
+            "ENABLED",
+            "ACTIVE_DATE",
+            "FILE",
+            "VERSION",
+            "SOURCE_DATE",
+            "SHA256",
+        ):
+            assert (
+                f"unset KORSTOCKSCAN_LIMIT_DOWN_{mode}_POLICY_{suffix}" in reset_block
+            )
     assert 'disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"' in script
     assert "verify_threshold_runtime_env_handoff" in script
     assert "KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=0.25" in script
@@ -2912,6 +2932,14 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert (
         "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED:"
         "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE:" in script
+    )
+    assert (
+        "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ENABLED:"
+        "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ACTIVE_DATE:" in script
+    )
+    assert (
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED:"
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ACTIVE_DATE:" in script
     )
     assert script.index(
         'BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$DEFAULT_BOT_CPU_AFFINITY}"'

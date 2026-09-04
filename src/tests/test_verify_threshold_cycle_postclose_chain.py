@@ -1782,6 +1782,85 @@ def test_limit_down_watch_report_validates_daily_conversion_check_contract():
     assert status["separate_preopen_apply_ready"] is False
 
 
+def test_limit_down_watch_exact_runtime_contract_requires_blocker_taxonomy():
+    blockers = [
+        "bounded_live_candidate_contract_missing",
+        "current_real_runtime_policy_not_applied",
+    ]
+    details = [
+        {
+            "code": code,
+            "class": "runtime_observation",
+            "observed_evidence": "not observed",
+            "next_repair_action": "retain source-only mode",
+            "acceptance_test": "exact PREOPEN and PID verification pass",
+        }
+        for code in blockers
+    ]
+    conversion = _limit_down_conversion(
+        sim_policy_applied_to_runtime=False,
+        real_runtime_policy_applied=False,
+        blockers=blockers,
+        runtime_blocker_details=details,
+    )
+    status = mod._limit_down_watch_report_status(
+        {
+            "schema_version": 1,
+            "report_type": "limit_down_watch",
+            "target_date": "2026-09-04",
+            "generated_at": "2026-09-04T20:10:00+09:00",
+            **_limit_down_metric_contract(),
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": _limit_down_live_readiness(
+                sim_policy_applied_to_runtime=False,
+                blockers=blockers,
+                runtime_blocker_details=details,
+            ),
+            "conversion_readiness": conversion,
+            "observer_activation": _limit_down_observer_activation(),
+        },
+        enabled=True,
+        target_date="2026-09-04",
+    )
+
+    assert status["status"] == "pass"
+
+    conversion["runtime_blocker_details"] = []
+    rejected = mod._limit_down_watch_report_status(
+        {
+            "schema_version": 1,
+            "report_type": "limit_down_watch",
+            "target_date": "2026-09-04",
+            "generated_at": "2026-09-04T20:10:00+09:00",
+            **_limit_down_metric_contract(),
+            "status": "pass",
+            "decision_authority": "limit_down_source_observation_only",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_sim_apply": False,
+            "allowed_runtime_apply": False,
+            "evidence_readiness": _limit_down_live_readiness(
+                sim_policy_applied_to_runtime=False,
+                blockers=blockers,
+                runtime_blocker_details=details,
+            ),
+            "conversion_readiness": conversion,
+            "observer_activation": _limit_down_observer_activation(),
+        },
+        enabled=True,
+        target_date="2026-09-04",
+    )
+
+    assert "limit_down_watch_runtime_blocker_taxonomy_incomplete" in rejected["issues"]
+
+
 def test_limit_down_watch_report_surfaces_auto_live_policy_ready():
     conversion = _limit_down_conversion(
         decision="auto_live_policy_ready",
@@ -1812,6 +1891,7 @@ def test_limit_down_watch_report_surfaces_auto_live_policy_ready():
             "allowed_sim_apply": False,
             "allowed_runtime_apply": False,
             "evidence_readiness": _limit_down_live_readiness(
+                sim_candidate_ready=True,
                 real_trading_ready=True,
                 blockers=[],
             ),

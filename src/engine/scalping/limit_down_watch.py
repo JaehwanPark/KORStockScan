@@ -17,6 +17,7 @@ import pandas as pd
 from sqlalchemy import text
 
 from src.utils import kiwoom_utils
+from src.utils.market_day import count_krx_trading_days
 from src.utils.pipeline_event_logger import emit_pipeline_event
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -25,8 +26,42 @@ RUNTIME_DIR = DATA_DIR / "runtime"
 CANDIDATE_DIR = DATA_DIR / "report" / "limit_down_watch_candidate_source"
 SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 LIVE_AUTO_POLICY_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
+COUNTERFACTUAL_SOURCE_DIR = DATA_DIR / "report" / "limit_down_watch_counterfactual"
+SOURCE_QUALITY_AUDIT_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
+REAL_ATTRIBUTION_DIR = (
+    DATA_DIR / "report" / "limit_down_watch_real_post_apply_attribution"
+)
 LIMIT_DOWN_LIVE_UNLOCK_SOURCE = "LIMIT_DOWN_LIVE_UNLOCK"
-LIMIT_DOWN_LIVE_POLICY_VERSION = "limit_down_single_verified_path_live_auto_v2"
+LIMIT_DOWN_SIM_POLICY_VERSION = "limit_down_sim_policy_v2"
+LIMIT_DOWN_LIVE_POLICY_VERSION = "limit_down_single_verified_path_live_auto_v3"
+LIMIT_DOWN_SIM_ENV_PREFIX = "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_"
+LIMIT_DOWN_LIVE_ENV_PREFIX = "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_"
+LIMIT_DOWN_SIM_DECISION_AUTHORITY = "limit_down_sim_policy_only"
+LIMIT_DOWN_SIM_FORBIDDEN_USES = (
+    "direct_real_order,automatic_runtime_apply,provider_route_change,"
+    "bot_restart,hard_safety_bypass"
+)
+LIMIT_DOWN_LIVE_DECISION_AUTHORITY = "limit_down_live_auto_eligibility_candidate"
+LIMIT_DOWN_LIVE_FORBIDDEN_USES = (
+    "direct_broker_order_submission,hard_safety_bypass,stale_quote_bypass,"
+    "account_order_quantity_cooldown_bypass,provider_route_change,bot_restart,"
+    "scale_in,reentry,overnight,position_sizing_owner_override"
+)
+LIMIT_DOWN_LIVE_SAMPLE_FLOOR = "1_verified_ordered_path_per_cohort_price_band"
+LIMIT_DOWN_REAL_ATTRIBUTION_CONTRACT = {
+    "metric_role": "primary_ev",
+    "decision_authority": "limit_down_real_post_apply_attribution_only",
+    "window_policy": "rolling_clean_baseline_completed_real_limit_down_positions",
+    "sample_floor": "one_preopen_applied_completed_real_position",
+    "primary_decision_metric": "source_quality_adjusted_ev_pct",
+    "source_quality_gate": (
+        "exact_limit_down_source_signature_record_id_submit_and_completed_profit"
+    ),
+    "forbidden_uses": (
+        "standalone_live_promotion,provider_route_change,bot_restart,"
+        "hard_safety_bypass,quantity_or_cap_override"
+    ),
+}
 
 DECISION_AUTHORITY = "limit_down_source_observation_only"
 METRIC_ROLE = "diagnostic"
@@ -115,6 +150,366 @@ def _canonical_hash(value: Any) -> str:
         value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    try:
+        with path.open("rb") as handle:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return ""
+
+
+def _payload_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _dates_form_exact_preopen_handoff(source_date: str, target_date: str) -> bool:
+    try:
+        source_day = date.fromisoformat(source_date)
+        target_day = date.fromisoformat(target_date)
+    except ValueError:
+        return False
+    return (
+        source_day < target_day and count_krx_trading_days(source_day, target_day) == 1
+    )
+
+
+def _storage_equivalent(left: Path, right: Path) -> bool:
+    left_resolved = left.resolve()
+    right_resolved = right.resolve()
+    return bool(
+        left_resolved == right_resolved
+        or left_resolved == Path(f"{right_resolved}.gz")
+        or Path(f"{left_resolved}.gz") == right_resolved
+    )
+
+
+def _existing_event_source(source_date: str) -> Path | None:
+    raw = DATA_DIR / "pipeline_events" / f"pipeline_events_{source_date}.jsonl"
+    compressed = raw.with_suffix(f"{raw.suffix}.gz")
+    if raw.is_file():
+        return raw
+    return compressed if compressed.is_file() else None
+
+
+def _source_artifact_valid(payload: dict[str, Any], source_date: str) -> bool:
+    expected_path = (
+        COUNTERFACTUAL_SOURCE_DIR
+        / f"limit_down_watch_counterfactual_{source_date}.json"
+    )
+    source_path = Path(str(payload.get("source_artifact") or ""))
+    expected_hash = str(payload.get("source_artifact_payload_sha256") or "")
+    if (
+        source_path.resolve() != expected_path.resolve()
+        or not source_path.is_file()
+        or len(expected_hash) != 64
+    ):
+        return False
+    try:
+        source_payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(
+        isinstance(source_payload, dict)
+        and _payload_sha256(source_payload) == expected_hash
+        and source_payload.get("schema_version") == 1
+        and source_payload.get("report_type") == "limit_down_watch_counterfactual"
+        and source_payload.get("target_date") == source_date
+        and source_payload.get("status") == "pass"
+        and source_payload.get("source_quality_status") == "pass"
+        and _source_quality_binding_valid(source_payload, source_date)
+        and source_payload.get("runtime_effect") is False
+        and source_payload.get("actual_order_submitted") is False
+        and source_payload.get("broker_order_forbidden") is True
+        and source_payload.get("allowed_runtime_apply") is False
+    )
+
+
+def _source_quality_binding_valid(payload: dict[str, Any], source_date: str) -> bool:
+    binding = payload.get("source_quality_preflight_gate")
+    structurally_valid = bool(
+        payload.get("source_quality_status") == "pass"
+        and isinstance(binding, dict)
+        and binding.get("binding_version") == 1
+        and binding.get("target_date") == source_date
+        and binding.get("tuning_input_allowed") is True
+        and binding.get("source_quality_gate") == "pass"
+        and binding.get("event_source_storage_equivalent") is True
+        and isinstance(binding.get("audit_artifact_sha256"), str)
+        and len(binding.get("audit_artifact_sha256")) == 64
+    )
+    if not structurally_valid:
+        return False
+    audit_path = Path(str(binding.get("audit_artifact") or ""))
+    expected_audit_path = (
+        SOURCE_QUALITY_AUDIT_DIR
+        / f"observation_source_quality_audit_{source_date}.json"
+    )
+    if (
+        audit_path.resolve() != expected_audit_path.resolve()
+        or not audit_path.is_file()
+        or _file_sha256(audit_path) != binding.get("audit_artifact_sha256")
+    ):
+        return False
+    try:
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(audit, dict):
+        return False
+    summary = audit.get("summary") if isinstance(audit.get("summary"), dict) else {}
+    audit_source = audit.get("source") if isinstance(audit.get("source"), dict) else {}
+    existing_event_source = _existing_event_source(source_date)
+    bound_event_source = Path(str(binding.get("event_source") or ""))
+    audited_event_source = Path(str(audit_source.get("pipeline_events") or ""))
+    if (
+        audit.get("report_type") != "observation_source_quality_audit"
+        or audit.get("target_date") != source_date
+        or audit.get("status") not in {"pass", "warning"}
+        or audit.get("generated_at") != binding.get("audit_generated_at")
+        or summary.get("tuning_input_allowed") is not True
+        or _safe_int(summary.get("hard_blocking_contract_gap_count")) != 0
+        or bool(summary.get("blocked_reason"))
+        or existing_event_source is None
+        or not _storage_equivalent(existing_event_source, bound_event_source)
+        or not _storage_equivalent(existing_event_source, audited_event_source)
+        or str(audit_source.get("pipeline_events") or "")
+        != str(binding.get("audit_event_source") or "")
+        or _safe_int(binding.get("hard_blocking_contract_gap_count")) != 0
+        or _safe_int(binding.get("hard_blocking_excluded_row_count"))
+        != _safe_int(summary.get("hard_blocking_excluded_row_count"))
+        or bool(binding.get("raw_row_exclusion_applied"))
+        != bool(summary.get("raw_row_exclusion_applied"))
+    ):
+        return False
+    manifest_value = str(binding.get("raw_row_exclusion_manifest") or "").strip()
+    manifest_hash = str(binding.get("raw_row_exclusion_manifest_sha256") or "").strip()
+    audited_manifest = str(summary.get("raw_row_exclusion_manifest") or "").strip()
+    if manifest_value != audited_manifest:
+        return False
+    if manifest_value:
+        manifest_path = Path(manifest_value)
+        if (
+            not manifest_path.is_file()
+            or len(manifest_hash) != 64
+            or _file_sha256(manifest_path) != manifest_hash
+        ):
+            return False
+    return True
+
+
+def validate_limit_down_source_quality_binding(
+    payload: dict[str, Any], source_date: str
+) -> bool:
+    """Validate the exact audit, event source, and exclusion-manifest binding."""
+
+    return _source_quality_binding_valid(payload, source_date)
+
+
+def validate_limit_down_sim_policy_payload(
+    payload: dict[str, Any], source_date: str
+) -> tuple[bool, list[str]]:
+    policies = payload.get("active_policies")
+    policies = policies if isinstance(policies, list) else []
+    checks = {
+        "schema_version_invalid": payload.get("schema_version") == 1,
+        "report_type_invalid": payload.get("report_type")
+        == "limit_down_watch_sim_policy_catalog",
+        "policy_version_invalid": payload.get("policy_version")
+        == LIMIT_DOWN_SIM_POLICY_VERSION,
+        "source_date_invalid": payload.get("target_date") == source_date,
+        "status_not_pass": payload.get("status") == "pass",
+        "sim_apply_not_allowed": payload.get("allowed_sim_apply") is True,
+        "decision_authority_invalid": payload.get("decision_authority")
+        == LIMIT_DOWN_SIM_DECISION_AUTHORITY,
+        "forbidden_uses_invalid": payload.get("forbidden_uses")
+        == LIMIT_DOWN_SIM_FORBIDDEN_USES,
+        "source_quality_invalid": _source_quality_binding_valid(payload, source_date),
+        "source_artifact_invalid": _source_artifact_valid(payload, source_date),
+        "runtime_effect_invalid": payload.get("runtime_effect") is False,
+        "actual_order_state_invalid": payload.get("actual_order_submitted") is False,
+        "broker_state_invalid": payload.get("broker_order_forbidden") is True,
+        "runtime_apply_leak": payload.get("allowed_runtime_apply") is False,
+        "active_policy_count_invalid": payload.get("active_policy_count")
+        == len(policies)
+        > 0,
+        "policy_rows_invalid": all(
+            isinstance(row, dict)
+            and str(row.get("cohort") or "") in LIVE_AUTO_COHORTS
+            and str(row.get("policy_key") or "")
+            == f"{row.get('cohort')}|{row.get('price_band')}"
+            for row in policies
+        ),
+    }
+    issues = [name for name, passed in checks.items() if not passed]
+    return not issues, issues
+
+
+def _post_apply_guard_valid(payload: dict[str, Any], source_date: str) -> bool:
+    guard = payload.get("post_apply_attribution_guard")
+    if not isinstance(guard, dict) or guard.get("rollback_required") is not False:
+        return False
+    expected_path = (
+        REAL_ATTRIBUTION_DIR
+        / f"limit_down_watch_real_post_apply_attribution_{source_date}.json"
+    )
+    artifact_path = Path(str(guard.get("artifact") or ""))
+    expected_hash = str(guard.get("artifact_payload_sha256") or "")
+    if (
+        artifact_path.resolve() != expected_path.resolve()
+        or not artifact_path.is_file()
+        or len(expected_hash) != 64
+    ):
+        return False
+    try:
+        attribution = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(attribution, dict):
+        return False
+    completed_count = _safe_int(attribution.get("completed_sample_count"))
+    status_valid = bool(
+        attribution.get("status") == "pass"
+        if completed_count > 0
+        else attribution.get("status") == "no_applied_execution"
+    )
+    return bool(
+        _payload_sha256(attribution) == expected_hash
+        and attribution.get("schema_version") == 1
+        and attribution.get("report_type")
+        == "limit_down_watch_real_post_apply_attribution"
+        and attribution.get("target_date") == source_date
+        and attribution.get("source_quality_status") == "pass"
+        and _source_quality_binding_valid(attribution, source_date)
+        and status_valid
+        and all(
+            attribution.get(field) == expected
+            for field, expected in LIMIT_DOWN_REAL_ATTRIBUTION_CONTRACT.items()
+        )
+        and attribution.get("runtime_effect") is False
+        and attribution.get("actual_order_submitted") is False
+        and attribution.get("broker_order_forbidden") is True
+        and attribution.get("allowed_runtime_apply") is False
+        and guard.get("completed_sample_count") == completed_count
+        and guard.get("source_quality_adjusted_ev_pct")
+        == attribution.get("source_quality_adjusted_ev_pct")
+        and guard.get("downside_p10_pct") == attribution.get("downside_p10_pct")
+    )
+
+
+def validate_limit_down_live_policy_payload(
+    payload: dict[str, Any], source_date: str
+) -> tuple[bool, list[str]]:
+    policies = payload.get("candidates")
+    policies = policies if isinstance(policies, list) else []
+    risk = payload.get("risk_contract")
+    risk = risk if isinstance(risk, dict) else {}
+    handoff = payload.get("runtime_handoff_contract")
+    handoff = handoff if isinstance(handoff, dict) else {}
+    has_near_policy = any(
+        isinstance(row, dict) and row.get("cohort") == "near_limit_rebound"
+        for row in policies
+    )
+    checks = {
+        "schema_version_invalid": payload.get("schema_version") == 1,
+        "report_type_invalid": payload.get("report_type")
+        == "limit_down_watch_bounded_live_candidate",
+        "policy_version_invalid": payload.get("policy_version")
+        == LIMIT_DOWN_LIVE_POLICY_VERSION,
+        "source_date_invalid": payload.get("target_date") == source_date,
+        "status_not_ready": payload.get("status") == "live_auto_apply_ready",
+        "source_quality_invalid": _source_quality_binding_valid(payload, source_date),
+        "source_artifact_invalid": _source_artifact_valid(payload, source_date),
+        "decision_authority_invalid": payload.get("decision_authority")
+        == LIMIT_DOWN_LIVE_DECISION_AUTHORITY,
+        "sample_floor_invalid": payload.get("sample_floor")
+        == LIMIT_DOWN_LIVE_SAMPLE_FLOOR,
+        "forbidden_uses_invalid": payload.get("forbidden_uses")
+        == LIMIT_DOWN_LIVE_FORBIDDEN_USES,
+        "operator_approval_invalid": payload.get("operator_approval_required") is False,
+        "preopen_consumer_missing": payload.get("preopen_consumer_implemented") is True,
+        "activation_mode_invalid": payload.get("activation_mode")
+        == "exact_date_preopen_runtime_env_policy",
+        "runtime_effect_invalid": payload.get("runtime_effect") is False,
+        "actual_order_state_invalid": payload.get("actual_order_submitted") is False,
+        "broker_state_invalid": payload.get("broker_order_forbidden") is True,
+        "runtime_apply_not_allowed": payload.get("allowed_runtime_apply") is True,
+        "candidate_count_invalid": payload.get("ready_candidate_count")
+        == len(policies)
+        > 0,
+        "real_attribution_state_invalid": payload.get(
+            "real_post_apply_attribution_valid"
+        )
+        is True,
+        "post_apply_guard_invalid": _post_apply_guard_valid(payload, source_date),
+        "risk_max_concurrent_invalid": risk.get("max_concurrent_positions") == 1,
+        "risk_max_daily_entries_invalid": risk.get("max_daily_entries") == 1,
+        "risk_quantity_owner_invalid": risk.get("quantity_owner")
+        == "position_sizing_dynamic_formula",
+        "risk_quantity_override_present": risk.get("requested_quantity_override")
+        is None,
+        "risk_scale_in_not_blocked": risk.get("scale_in_allowed") is False,
+        "risk_reentry_not_blocked": risk.get("same_day_reentry_allowed") is False,
+        "risk_overnight_not_blocked": risk.get("overnight_allowed") is False,
+        "risk_trigger_confirmation_missing": risk.get(
+            "entry_requires_two_ordered_trigger_ticks"
+        )
+        is True,
+        "risk_fresh_bbo_missing": risk.get("entry_requires_fresh_quote_and_bbo")
+        is True,
+        "risk_relock_cancel_missing": risk.get("relock_or_stale_cancels_unfilled_entry")
+        is True,
+        "risk_normal_guards_missing": risk.get(
+            "normal_scalping_ai_and_submit_guards_required"
+        )
+        is True,
+        "risk_hard_safety_invalid": risk.get("hard_safety_priority")
+        == "unchanged_and_unbypassable",
+        "risk_spread_cap_invalid": 0.0
+        < _safe_float(risk.get("max_entry_spread_pct"))
+        <= 1.5,
+        "near_rebound_contract_invalid": not has_near_policy
+        or (
+            risk.get("near_rebound_requires_session_open_recovery") is True
+            and _safe_float(risk.get("near_rebound_min_from_low_pct"))
+            == NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT
+        ),
+        "handoff_apply_timing_invalid": handoff.get("apply_timing")
+        == "next_preopen_only",
+        "handoff_exact_date_missing": handoff.get("exact_target_date_env_required")
+        is True,
+        "handoff_sha_missing": handoff.get("policy_file_sha256_required") is True,
+        "handoff_pid_verify_missing": handoff.get("pid_env_verification_required")
+        is True,
+        "candidate_rows_invalid": all(
+            isinstance(row, dict)
+            and str(row.get("cohort") or "") in LIVE_AUTO_COHORTS
+            and str(row.get("policy_key") or "")
+            == f"{row.get('cohort')}|{row.get('price_band')}"
+            and _safe_int(row.get("sample_count")) >= 1
+            and _safe_float(row.get("source_quality_adjusted_ev_pct")) > 0.0
+            and _safe_float(row.get("downside_p10_pct")) > 0.0
+            and _safe_float(row.get("mae_p10_pct"), -999.0) >= -5.0
+            and _safe_float(row.get("relock_rate_pct"), 999.0) <= 0.0
+            and _safe_float(row.get("entry_bbo_coverage_pct")) >= 100.0
+            and row.get("evidence_mode") == "single_verified_ordered_path_allowed"
+            for row in policies
+        ),
+    }
+    issues = [name for name, passed in checks.items() if not passed]
+    return not issues, issues
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -758,9 +1153,13 @@ class LimitDownWatchManager:
         self.cell_visit_counts: dict[str, int] = {}
         self.active_sim_policy_keys: set[str] = set()
         self.sim_policy_source_date = ""
+        self.sim_policy_active_date = ""
+        self.sim_policy_sha256 = ""
         self.active_live_policy_keys: set[str] = set()
         self.live_policy_by_key: dict[str, dict[str, Any]] = {}
         self.live_policy_source_date = ""
+        self.live_policy_active_date = ""
+        self.live_policy_sha256 = ""
         self.live_policy_max_entry_spread_pct = 0.0
         self.last_release: dict[str, Any] | None = None
         self._lock = threading.RLock()
@@ -798,8 +1197,13 @@ class LimitDownWatchManager:
             "cell_visit_counts": self.cell_visit_counts,
             "active_sim_policy_keys": sorted(self.active_sim_policy_keys),
             "sim_policy_source_date": self.sim_policy_source_date,
+            "sim_policy_active_date": self.sim_policy_active_date,
+            "sim_policy_sha256": self.sim_policy_sha256,
+            "sim_policy_version": LIMIT_DOWN_SIM_POLICY_VERSION,
             "active_live_policy_keys": sorted(self.active_live_policy_keys),
             "live_policy_source_date": self.live_policy_source_date,
+            "live_policy_active_date": self.live_policy_active_date,
+            "live_policy_sha256": self.live_policy_sha256,
             "live_policy_version": LIMIT_DOWN_LIVE_POLICY_VERSION,
             "live_policy_max_entry_spread_pct": self.live_policy_max_entry_spread_pct,
             "last_release": self.last_release,
@@ -844,25 +1248,35 @@ class LimitDownWatchManager:
             source_hash=artifact.get("request_response_hash"),
             active_sim_policy_count=len(self.active_sim_policy_keys),
             sim_policy_source_date=self.sim_policy_source_date,
+            sim_policy_active_date=self.sim_policy_active_date,
+            sim_policy_sha256=self.sim_policy_sha256,
             active_live_policy_count=len(self.active_live_policy_keys),
             live_policy_source_date=self.live_policy_source_date,
+            live_policy_active_date=self.live_policy_active_date,
+            live_policy_sha256=self.live_policy_sha256,
         )
 
     def _load_sim_policy(self, target_date: date) -> None:
-        candidates: list[tuple[date, Path]] = []
-        for path in SIM_POLICY_DIR.glob("limit_down_watch_sim_policy_catalog_*.json"):
-            suffix = path.stem.removeprefix("limit_down_watch_sim_policy_catalog_")
-            try:
-                policy_date = date.fromisoformat(suffix)
-            except ValueError:
-                continue
-            if policy_date < target_date:
-                candidates.append((policy_date, path))
         self.active_sim_policy_keys = set()
         self.sim_policy_source_date = ""
-        if not candidates:
+        self.sim_policy_active_date = ""
+        self.sim_policy_sha256 = ""
+        if not _truthy(os.getenv(f"{LIMIT_DOWN_SIM_ENV_PREFIX}ENABLED")):
             return
-        policy_date, path = max(candidates)
+        target_value = os.getenv(f"{LIMIT_DOWN_SIM_ENV_PREFIX}ACTIVE_DATE", "")
+        source_value = os.getenv(f"{LIMIT_DOWN_SIM_ENV_PREFIX}SOURCE_DATE", "")
+        path = Path(os.getenv(f"{LIMIT_DOWN_SIM_ENV_PREFIX}FILE", ""))
+        expected_hash = os.getenv(f"{LIMIT_DOWN_SIM_ENV_PREFIX}SHA256", "")
+        expected_version = os.getenv(f"{LIMIT_DOWN_SIM_ENV_PREFIX}VERSION", "")
+        if (
+            target_value != target_date.isoformat()
+            or not _dates_form_exact_preopen_handoff(source_value, target_value)
+            or path.parent.resolve() != SIM_POLICY_DIR.resolve()
+            or len(expected_hash) != 64
+            or _file_sha256(path) != expected_hash
+            or expected_version != LIMIT_DOWN_SIM_POLICY_VERSION
+        ):
+            return
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -873,18 +1287,7 @@ class LimitDownWatchManager:
             and isinstance(payload.get("active_policies"), list)
             else []
         )
-        valid = bool(
-            payload.get("schema_version") == 1
-            and payload.get("report_type") == "limit_down_watch_sim_policy_catalog"
-            and payload.get("target_date") == policy_date.isoformat()
-            and payload.get("status") == "pass"
-            and payload.get("allowed_sim_apply") is True
-            and payload.get("runtime_effect") is False
-            and payload.get("actual_order_submitted") is False
-            and payload.get("broker_order_forbidden") is True
-            and payload.get("allowed_runtime_apply") is False
-            and payload.get("active_policy_count") == len(policies)
-        )
+        valid, _issues = validate_limit_down_sim_policy_payload(payload, source_value)
         if not valid:
             return
         self.active_sim_policy_keys = {
@@ -895,27 +1298,33 @@ class LimitDownWatchManager:
             and str(row.get("policy_key") or "")
             == f"{row.get('cohort')}|{row.get('price_band')}"
         }
-        self.sim_policy_source_date = policy_date.isoformat()
+        self.sim_policy_source_date = source_value
+        self.sim_policy_active_date = target_value
+        self.sim_policy_sha256 = expected_hash
 
     def _load_live_policy(self, target_date: date) -> None:
-        candidates: list[tuple[date, Path]] = []
-        for path in LIVE_AUTO_POLICY_DIR.glob(
-            "limit_down_watch_bounded_live_candidate_*.json"
-        ):
-            suffix = path.stem.removeprefix("limit_down_watch_bounded_live_candidate_")
-            try:
-                policy_date = date.fromisoformat(suffix)
-            except ValueError:
-                continue
-            if policy_date < target_date:
-                candidates.append((policy_date, path))
         self.active_live_policy_keys = set()
         self.live_policy_by_key = {}
         self.live_policy_source_date = ""
+        self.live_policy_active_date = ""
+        self.live_policy_sha256 = ""
         self.live_policy_max_entry_spread_pct = 0.0
-        if not candidates:
+        if not _truthy(os.getenv(f"{LIMIT_DOWN_LIVE_ENV_PREFIX}ENABLED")):
             return
-        policy_date, path = max(candidates)
+        target_value = os.getenv(f"{LIMIT_DOWN_LIVE_ENV_PREFIX}ACTIVE_DATE", "")
+        source_value = os.getenv(f"{LIMIT_DOWN_LIVE_ENV_PREFIX}SOURCE_DATE", "")
+        path = Path(os.getenv(f"{LIMIT_DOWN_LIVE_ENV_PREFIX}FILE", ""))
+        expected_hash = os.getenv(f"{LIMIT_DOWN_LIVE_ENV_PREFIX}SHA256", "")
+        expected_version = os.getenv(f"{LIMIT_DOWN_LIVE_ENV_PREFIX}VERSION", "")
+        if (
+            target_value != target_date.isoformat()
+            or not _dates_form_exact_preopen_handoff(source_value, target_value)
+            or path.parent.resolve() != LIVE_AUTO_POLICY_DIR.resolve()
+            or len(expected_hash) != 64
+            or _file_sha256(path) != expected_hash
+            or expected_version != LIMIT_DOWN_LIVE_POLICY_VERSION
+        ):
+            return
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -927,57 +1336,7 @@ class LimitDownWatchManager:
         )
         risk = payload.get("risk_contract") if isinstance(payload, dict) else {}
         risk = risk if isinstance(risk, dict) else {}
-        has_near_policy = any(
-            isinstance(row, dict) and row.get("cohort") == "near_limit_rebound"
-            for row in policies
-        )
-        valid = bool(
-            payload.get("schema_version") == 1
-            and payload.get("report_type") == "limit_down_watch_bounded_live_candidate"
-            and payload.get("target_date") == policy_date.isoformat()
-            and payload.get("status") == "live_auto_apply_ready"
-            and payload.get("decision_authority")
-            == "limit_down_live_auto_eligibility_candidate"
-            and payload.get("operator_approval_required") is False
-            and payload.get("preopen_consumer_implemented") is True
-            and payload.get("activation_mode")
-            == "latest_valid_prior_date_policy_auto_loaded"
-            and payload.get("sample_floor")
-            == "1_verified_ordered_path_per_cohort_price_band"
-            and payload.get("runtime_effect") is False
-            and payload.get("actual_order_submitted") is False
-            and payload.get("broker_order_forbidden") is True
-            and payload.get("allowed_runtime_apply") is True
-            and payload.get("ready_candidate_count") == len(policies)
-            and risk.get("max_concurrent_positions") == 1
-            and risk.get("max_daily_entries") == 1
-            and risk.get("quantity_owner") == "position_sizing_dynamic_formula"
-            and risk.get("requested_quantity_override") is None
-            and risk.get("scale_in_allowed") is False
-            and risk.get("same_day_reentry_allowed") is False
-            and risk.get("overnight_allowed") is False
-            and risk.get("entry_requires_two_ordered_unlocked_ticks") is True
-            and (
-                risk.get("entry_requires_two_ordered_trigger_ticks") is True
-                or (
-                    not has_near_policy
-                    and risk.get("entry_requires_two_ordered_trigger_ticks") is None
-                )
-            )
-            and (
-                not has_near_policy
-                or (
-                    risk.get("near_rebound_requires_session_open_recovery") is True
-                    and _safe_float(risk.get("near_rebound_min_from_low_pct"))
-                    == NEAR_LIMIT_LIVE_MIN_REBOUND_FROM_LOW_PCT
-                )
-            )
-            and risk.get("entry_requires_fresh_quote_and_bbo") is True
-            and risk.get("relock_or_stale_cancels_unfilled_entry") is True
-            and 0.0 < _safe_float(risk.get("max_entry_spread_pct")) <= 1.5
-            and risk.get("normal_scalping_ai_and_submit_guards_required") is True
-            and risk.get("hard_safety_priority") == "unchanged_and_unbypassable"
-        )
+        valid, _issues = validate_limit_down_live_policy_payload(payload, source_value)
         if not valid:
             return
         policy_by_key = {
@@ -999,7 +1358,9 @@ class LimitDownWatchManager:
             return
         self.live_policy_by_key = policy_by_key
         self.active_live_policy_keys = set(policy_by_key)
-        self.live_policy_source_date = policy_date.isoformat()
+        self.live_policy_source_date = source_value
+        self.live_policy_active_date = target_value
+        self.live_policy_sha256 = expected_hash
         self.live_policy_max_entry_spread_pct = _safe_float(
             risk.get("max_entry_spread_pct")
         )

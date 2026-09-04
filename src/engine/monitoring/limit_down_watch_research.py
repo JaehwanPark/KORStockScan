@@ -12,12 +12,29 @@ import argparse
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 import gzip
+import hashlib
 import json
 import math
 import os
 from pathlib import Path
 import tempfile
 from typing import Any, Iterable
+
+from src.engine.automation.source_quality_hard_gate import (
+    load_source_quality_preflight,
+    source_quality_preflight_blocked,
+)
+from src.engine.scalping.limit_down_watch import (
+    LIMIT_DOWN_LIVE_DECISION_AUTHORITY,
+    LIMIT_DOWN_LIVE_FORBIDDEN_USES,
+    LIMIT_DOWN_LIVE_POLICY_VERSION,
+    LIMIT_DOWN_LIVE_SAMPLE_FLOOR,
+    LIMIT_DOWN_REAL_ATTRIBUTION_CONTRACT,
+    LIMIT_DOWN_SIM_DECISION_AUTHORITY,
+    LIMIT_DOWN_SIM_FORBIDDEN_USES,
+    LIMIT_DOWN_SIM_POLICY_VERSION,
+    validate_limit_down_sim_policy_payload,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -26,6 +43,9 @@ CANDIDATE_DIR = DATA_DIR / "report" / "limit_down_watch_candidate_source"
 COUNTERFACTUAL_DIR = DATA_DIR / "report" / "limit_down_watch_counterfactual"
 SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 POST_SIM_DIR = DATA_DIR / "report" / "limit_down_watch_post_sim_attribution"
+REAL_ATTRIBUTION_DIR = (
+    DATA_DIR / "report" / "limit_down_watch_real_post_apply_attribution"
+)
 BOUNDED_CANDIDATE_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
 
 ROLLOUT_DATE = date(2026, 7, 28)
@@ -62,16 +82,15 @@ FORBIDDEN_USES = (
     "direct_real_order,automatic_runtime_apply,provider_route_change,"
     "bot_restart,hard_safety_bypass"
 )
-LIVE_AUTO_FORBIDDEN_USES = (
-    "direct_broker_order_submission,hard_safety_bypass,stale_quote_bypass,"
-    "account_order_quantity_cooldown_bypass,provider_route_change,bot_restart,"
-    "scale_in,reentry,overnight,position_sizing_owner_override"
+COUNTERFACTUAL_SAMPLE_FLOOR_NAME = (
+    "5_dates_20_paths_capture80pct_independent_cell_floors"
 )
+POST_SIM_SAMPLE_FLOOR_NAME = "20_prior_policy_matches_with_independent_cell_floors"
 COUNTERFACTUAL_CONTRACT = {
     "metric_role": "primary_ev",
     "decision_authority": "limit_down_counterfactual_sim_only",
     "window_policy": "rolling_clean_baseline_ordered_unlock_entry",
-    "sample_floor": "5_dates_20_paths_with_independent_cell_floors",
+    "sample_floor": COUNTERFACTUAL_SAMPLE_FLOOR_NAME,
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": "valid_ordered_path_and_raw_row_exclusion",
     "forbidden_uses": FORBIDDEN_USES,
@@ -80,10 +99,16 @@ POST_SIM_CONTRACT = {
     "metric_role": "primary_ev",
     "decision_authority": "limit_down_post_sim_attribution_only",
     "window_policy": "rolling_clean_baseline_post_sim_attribution",
-    "sample_floor": "20_prior_policy_matches_with_independent_cell_floors",
+    "sample_floor": POST_SIM_SAMPLE_FLOOR_NAME,
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
     "source_quality_gate": "valid_sim_attribution_and_raw_row_exclusion",
     "forbidden_uses": FORBIDDEN_USES,
+}
+REAL_ATTRIBUTION_CONTRACT = LIMIT_DOWN_REAL_ATTRIBUTION_CONTRACT
+SOURCE_QUALITY_BINDING_VERSION = 1
+LEGACY_COUNTERFACTUAL_SAMPLE_FLOOR_NAMES = {
+    COUNTERFACTUAL_SAMPLE_FLOOR_NAME,
+    "5_dates_20_paths_with_independent_cell_floors",
 }
 
 
@@ -128,6 +153,135 @@ def _load_json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _file_sha256(path: Path) -> str:
+    try:
+        with path.open("rb") as handle:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return ""
+
+
+def _payload_sha256(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _source_quality_binding(target_date: str) -> dict[str, Any]:
+    """Return compact, tamper-evident preflight provenance for tuning rows."""
+
+    preflight = load_source_quality_preflight(target_date)
+    audit_path = Path(str(preflight.get("artifact") or ""))
+    audit_payload = _load_json(audit_path) if audit_path.is_file() else {}
+    audit_source = (
+        audit_payload.get("source")
+        if isinstance(audit_payload.get("source"), dict)
+        else {}
+    )
+    event_path = _event_path(target_date)
+    recorded_event_path = str(audit_source.get("pipeline_events") or "").strip()
+    recorded_path = Path(recorded_event_path) if recorded_event_path else None
+    storage_equivalent = bool(
+        event_path
+        and recorded_path
+        and (
+            event_path.resolve() == recorded_path.resolve()
+            or event_path.resolve() == Path(f"{recorded_path.resolve()}.gz")
+            or Path(f"{event_path.resolve()}.gz") == recorded_path.resolve()
+        )
+    )
+    manifest_path = Path(str(preflight.get("raw_row_exclusion_manifest") or ""))
+    blocked = bool(
+        source_quality_preflight_blocked(preflight)
+        or not audit_path.is_file()
+        or event_path is None
+        or not storage_equivalent
+    )
+    blocked_reason = preflight.get("blocked_reason")
+    if blocked and not blocked_reason:
+        if event_path is None:
+            blocked_reason = "target_date_event_source_missing"
+        elif not storage_equivalent:
+            blocked_reason = "preflight_event_source_mismatch"
+        else:
+            blocked_reason = "source_quality_preflight_unusable"
+    return {
+        "binding_version": SOURCE_QUALITY_BINDING_VERSION,
+        "target_date": target_date,
+        "status": preflight.get("status"),
+        "tuning_input_allowed": not blocked,
+        "source_quality_gate": ("pass" if not blocked else "blocked_contract_gap"),
+        "blocked_reason": blocked_reason,
+        "audit_artifact": str(audit_path) if audit_path.is_file() else None,
+        "audit_artifact_sha256": _file_sha256(audit_path),
+        "audit_generated_at": audit_payload.get("generated_at"),
+        "audit_event_source": recorded_event_path or None,
+        "event_source": str(event_path) if event_path else None,
+        "event_source_storage_equivalent": storage_equivalent,
+        "hard_blocking_contract_gap_count": _safe_int(
+            preflight.get("hard_blocking_contract_gap_count")
+        ),
+        "hard_blocking_excluded_row_count": _safe_int(
+            preflight.get("hard_blocking_excluded_row_count")
+        ),
+        "raw_row_exclusion_applied": bool(preflight.get("raw_row_exclusion_applied")),
+        "raw_row_exclusion_manifest": (
+            str(manifest_path) if manifest_path.is_file() else None
+        ),
+        "raw_row_exclusion_manifest_sha256": _file_sha256(manifest_path),
+        "review_warning_count": _safe_int(preflight.get("review_warning_count")),
+    }
+
+
+def _binding_allowed(binding: Any, target_date: str) -> bool:
+    return bool(
+        isinstance(binding, dict)
+        and binding.get("binding_version") == SOURCE_QUALITY_BINDING_VERSION
+        and binding.get("target_date") == target_date
+        and binding.get("tuning_input_allowed") is True
+        and binding.get("source_quality_gate") == "pass"
+        and isinstance(binding.get("audit_artifact_sha256"), str)
+        and len(binding.get("audit_artifact_sha256")) == 64
+        and binding.get("event_source_storage_equivalent") is True
+    )
+
+
+def _bind_tuning_rows(
+    rows: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    bindings: dict[str, dict[str, Any]] = {}
+    allowed: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        source_date = str(row.get("target_date") or "").strip()
+        binding = bindings.get(source_date)
+        if binding is None:
+            binding = _source_quality_binding(source_date)
+            bindings[source_date] = binding
+        if _binding_allowed(binding, source_date):
+            allowed.append({**row, "source_quality_binding": binding})
+        else:
+            excluded.append(
+                {
+                    "row_id": row.get("row_id"),
+                    "target_date": source_date or None,
+                    "blocked_reason": binding.get("blocked_reason"),
+                    "audit_artifact": binding.get("audit_artifact"),
+                }
+            )
+    return allowed, excluded
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -152,6 +306,15 @@ def _event_contract_valid(row: dict[str, Any]) -> bool:
         and _contract_bool(fields.get("actual_order_submitted")) is False
         and _contract_bool(fields.get("broker_order_forbidden")) is True
     )
+
+
+def _is_limit_down_live_signature(value: Any) -> bool:
+    if isinstance(value, (list, tuple, set)):
+        tokens = {str(item).strip().upper() for item in value}
+    else:
+        normalized = str(value or "").replace("|", ",")
+        tokens = {item.strip().upper() for item in normalized.split(",")}
+    return "LIMIT_DOWN_LIVE_UNLOCK" in tokens
 
 
 def _event_path(target_date: str) -> Path | None:
@@ -239,6 +402,7 @@ def collect_observation_visits(
     active: dict[str, dict[str, Any]] = {}
     visits: list[dict[str, Any]] = []
     visit_sequence: defaultdict[str, int] = defaultdict(int)
+    live_records: dict[str, dict[str, Any]] = {}
 
     def close_visit(code: str, reason: str) -> None:
         visit = active.pop(code, None)
@@ -252,6 +416,80 @@ def collect_observation_visits(
             if event.get("_invalid_json") or event.get("_invalid_schema"):
                 status["invalid_row_count"] += 1
                 continue
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            )
+            record_id = str(event.get("record_id") or "").strip()
+            signature = (
+                fields.get("source_signature")
+                or fields.get("scanner_source_signature")
+                or fields.get("SourceSignature")
+            )
+            if record_id and (
+                _is_limit_down_live_signature(signature) or record_id in live_records
+            ):
+                live = live_records.setdefault(
+                    record_id,
+                    {
+                        "row_id": f"{target_date}:record:{record_id}",
+                        "target_date": target_date,
+                        "record_id": record_id,
+                        "code": str(event.get("stock_code") or "").strip(),
+                        "name": str(event.get("stock_name") or "").strip(),
+                        "source_signature": "LIMIT_DOWN_LIVE_UNLOCK",
+                        "actual_order_submitted": False,
+                        "completed": False,
+                    },
+                )
+                broker_order_no = str(
+                    fields.get("broker_order_no")
+                    or fields.get("order_no")
+                    or fields.get("ord_no")
+                    or fields.get("order_response_ord_no")
+                    or ""
+                ).strip()
+                if (
+                    event.get("stage") == "order_bundle_submitted"
+                    and _contract_bool(fields.get("actual_order_submitted")) is True
+                    and broker_order_no not in {"", "-"}
+                ):
+                    live["actual_order_submitted"] = True
+                    live["submit_receipt_verified"] = True
+                    live["broker_order_no"] = broker_order_no
+                    live["submit_stage"] = event.get("stage")
+                    live["submit_at"] = event.get("emitted_at")
+                    live["buy_price"] = (
+                        _safe_float(fields.get("buy_price"))
+                        or _safe_float(fields.get("order_price"))
+                        or _safe_float(fields.get("current_price"))
+                    )
+                    live["buy_qty"] = (
+                        _safe_int(fields.get("qty"))
+                        or _safe_int(fields.get("buy_qty"))
+                        or _safe_int(fields.get("effective_qty"))
+                    )
+                for key in (
+                    "limit_down_live_policy_key",
+                    "limit_down_live_policy_source_date",
+                    "limit_down_live_policy_version",
+                    "limit_down_cohort",
+                    "limit_down_price_band",
+                ):
+                    value = fields.get(key)
+                    if value not in (None, "", "-"):
+                        live[key] = value
+                profit_rate = _safe_float(fields.get("profit_rate"))
+                if event.get("stage") == "sell_completed" and profit_rate is not None:
+                    live.update(
+                        {
+                            "completed": True,
+                            "completed_at": event.get("emitted_at"),
+                            "profit_rate": profit_rate,
+                            "sell_price": _safe_float(fields.get("sell_price")),
+                            "status": "COMPLETED",
+                        }
+                    )
+
             if event.get("pipeline") != "LIMIT_DOWN_WATCH":
                 continue
             status["matching_event_count"] += 1
@@ -260,9 +498,6 @@ def collect_observation_visits(
                 continue
             code = str(event.get("stock_code") or "").strip()
             stage = str(event.get("stage") or "").strip()
-            fields = (
-                event.get("fields") if isinstance(event.get("fields"), dict) else {}
-            )
             emitted_at = _parse_dt(event.get("emitted_at"))
             if not code or emitted_at is None:
                 status["invalid_row_count"] += 1
@@ -374,6 +609,7 @@ def collect_observation_visits(
         and status["contract_violation_count"] == 0
         and status["invalid_row_count"] == 0
     )
+    status["_live_attribution_rows"] = list(live_records.values())
     return visits, status
 
 
@@ -635,6 +871,7 @@ def _prior_counterfactual_valid(payload: dict[str, Any], target_date: str) -> bo
             isinstance(cumulative, dict)
             and cumulative.get("mode")
             == "latest_prior_rolling_rows_plus_current_dedup_by_row_id"
+            and isinstance(rows, list)
             and _safe_int(cumulative.get("deduplicated_rolling_row_count")) == len(rows)
         )
     )
@@ -653,7 +890,9 @@ def _prior_counterfactual_valid(payload: dict[str, Any], target_date: str) -> bo
         and all(
             payload.get(field) == expected
             for field, expected in COUNTERFACTUAL_CONTRACT.items()
+            if field != "sample_floor"
         )
+        and payload.get("sample_floor") in LEGACY_COUNTERFACTUAL_SAMPLE_FLOOR_NAMES
         and cumulative_valid
     )
 
@@ -775,7 +1014,8 @@ def build_counterfactual(
     target_date: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     visits, source_status = collect_observation_visits(target_date)
-    current_rows = [label_observation_visit(visit) for visit in visits]
+    raw_current_rows = [label_observation_visit(visit) for visit in visits]
+    current_binding = _source_quality_binding(target_date)
     prior = _latest_prior_artifact(
         COUNTERFACTUAL_DIR, "limit_down_watch_counterfactual", target_date
     )
@@ -784,12 +1024,20 @@ def build_counterfactual(
         prior.get("rows") if prior_valid and isinstance(prior.get("rows"), list) else []
     )
     source_status = dict(source_status)
+    live_attribution_rows = source_status.pop("_live_attribution_rows", [])
     source_status["prior_counterfactual_present"] = bool(prior)
     source_status["prior_counterfactual_valid"] = prior_valid
-    source_status["valid"] = bool(source_status.get("valid") and prior_valid)
+    source_status["source_quality_preflight_gate"] = current_binding
+    source_status["valid"] = bool(
+        source_status.get("valid")
+        and prior_valid
+        and _binding_allowed(current_binding, target_date)
+    )
+    bound_rows, excluded_rows = _bind_tuning_rows([*prior_rows, *raw_current_rows])
+    current_rows = [row for row in bound_rows if row.get("target_date") == target_date]
     deduped = {
         str(row.get("row_id")): row
-        for row in [*prior_rows, *current_rows]
+        for row in bound_rows
         if isinstance(row, dict) and row.get("row_id")
     }
     rows = sorted(
@@ -800,11 +1048,10 @@ def build_counterfactual(
         "mode": "latest_prior_rolling_rows_plus_current_dedup_by_row_id",
         "prior_artifact_target_date": prior.get("target_date"),
         "prior_input_row_count": len(prior_rows),
-        "current_input_row_count": len(current_rows),
+        "current_input_row_count": len(raw_current_rows),
         "deduplicated_rolling_row_count": len(rows),
-        "duplicate_or_out_of_window_row_count": max(
-            0, len(prior_rows) + len(current_rows) - len(rows)
-        ),
+        "source_quality_excluded_row_count": len(excluded_rows),
+        "duplicate_or_out_of_window_row_count": max(0, len(bound_rows) - len(rows)),
     }
     metrics = _aggregate_rows(rows)
     cells = _cell_rows(rows)
@@ -833,7 +1080,10 @@ def build_counterfactual(
             else ("insufficient_sample" if source_status["valid"] else "source_blocked")
         ),
         "source_quality_status": "pass" if source_status["valid"] else "blocked",
-        "source_status": source_status,
+        "source_status": dict(source_status),
+        "source_quality_binding_version": SOURCE_QUALITY_BINDING_VERSION,
+        "source_quality_preflight_gate": current_binding,
+        "source_quality_excluded_rows": excluded_rows,
         "rolling_window_calendar_days": ROLLING_WINDOW_CALENDAR_DAYS,
         "cumulative_update": cumulative_update,
         **metrics,
@@ -864,6 +1114,7 @@ def build_counterfactual(
         **COUNTERFACTUAL_CONTRACT,
         **SOURCE_ONLY_FIELDS,
     }
+    source_status["_live_attribution_rows"] = live_attribution_rows
     return payload, current_rows, source_status
 
 
@@ -902,30 +1153,56 @@ def build_sim_policy_catalog(
                 "broker_order_forbidden": True,
             }
         )
+    source_quality = counterfactual.get("source_quality_preflight_gate")
+    source_quality_allowed = bool(
+        _binding_allowed(source_quality, target_date)
+        and counterfactual.get("source_quality_status") == "pass"
+    )
+    if not source_quality_allowed:
+        policies = []
     return {
         "schema_version": 1,
         "report_type": "limit_down_watch_sim_policy_catalog",
+        "policy_version": LIMIT_DOWN_SIM_POLICY_VERSION,
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(),
         "status": "pass" if policies else "insufficient_sample",
         "allowed_sim_apply": bool(policies),
         "active_policy_count": len(policies),
         "active_policies": policies,
-        "decision_authority": "limit_down_sim_policy_only",
-        "forbidden_uses": FORBIDDEN_USES,
+        "source_artifact": str(
+            COUNTERFACTUAL_DIR / f"limit_down_watch_counterfactual_{target_date}.json"
+        ),
+        "source_artifact_payload_sha256": _payload_sha256(counterfactual),
+        "source_quality_status": "pass" if source_quality_allowed else "blocked",
+        "source_quality_preflight_gate": source_quality,
+        "decision_authority": LIMIT_DOWN_SIM_DECISION_AUTHORITY,
+        "forbidden_uses": LIMIT_DOWN_SIM_FORBIDDEN_USES,
         **SOURCE_ONLY_FIELDS,
     }
 
 
 def build_post_sim_attribution(
-    target_date: str, current_rows: list[dict[str, Any]]
+    target_date: str,
+    current_rows: list[dict[str, Any]],
+    current_binding: dict[str, Any],
 ) -> dict[str, Any]:
     prior_policy = _latest_prior_artifact(
         SIM_POLICY_DIR, "limit_down_watch_sim_policy_catalog", target_date
     )
+    prior_policy_date = str(prior_policy.get("target_date") or "")
+    if prior_policy:
+        prior_policy_valid, prior_policy_issues = (
+            validate_limit_down_sim_policy_payload(
+                prior_policy,
+                prior_policy_date,
+            )
+        )
+    else:
+        prior_policy_valid, prior_policy_issues = (False, ["artifact_missing"])
     policies = (
         prior_policy.get("active_policies")
-        if isinstance(prior_policy.get("active_policies"), list)
+        if prior_policy_valid and isinstance(prior_policy.get("active_policies"), list)
         else []
     )
     policy_keys = {
@@ -942,10 +1219,14 @@ def build_post_sim_attribution(
     prior = _latest_prior_artifact(
         POST_SIM_DIR, "limit_down_watch_post_sim_attribution", target_date
     )
-    prior_rows = prior.get("rows") if isinstance(prior.get("rows"), list) else []
+    prior_valid = _prior_post_sim_valid(prior, target_date)
+    prior_rows = (
+        prior.get("rows") if prior_valid and isinstance(prior.get("rows"), list) else []
+    )
+    bound_rows, excluded_rows = _bind_tuning_rows([*prior_rows, *matched_current])
     rows = {
         str(row.get("row_id")): row
-        for row in [*prior_rows, *matched_current]
+        for row in bound_rows
         if isinstance(row, dict) and row.get("row_id")
     }
     rows_list = sorted(
@@ -968,14 +1249,37 @@ def build_post_sim_attribution(
         ),
         default=None,
     )
-    sufficient = bool(metrics["sample_count"] >= MIN_POST_SIM_SAMPLE and qualified)
+    source_quality_allowed = bool(
+        _binding_allowed(current_binding, target_date)
+        and prior_valid
+        and (not prior_policy or prior_policy_valid)
+    )
+    sufficient = bool(
+        source_quality_allowed
+        and metrics["sample_count"] >= MIN_POST_SIM_SAMPLE
+        and qualified
+    )
     return {
         "schema_version": 1,
         "report_type": "limit_down_watch_post_sim_attribution",
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(),
-        "status": "pass" if sufficient else "insufficient_sample",
-        "source_quality_status": "pass" if prior_policy else "policy_missing",
+        "status": (
+            "pass"
+            if sufficient
+            else (
+                "source_blocked"
+                if not source_quality_allowed
+                else "insufficient_sample"
+            )
+        ),
+        "source_quality_status": ("pass" if source_quality_allowed else "blocked"),
+        "source_quality_preflight_gate": current_binding,
+        "prior_policy_contract_valid": prior_policy_valid,
+        "prior_policy_contract_issues": prior_policy_issues,
+        "prior_attribution_present": bool(prior),
+        "prior_attribution_valid": prior_valid,
+        "source_quality_excluded_rows": excluded_rows,
         "prior_policy_target_date": prior_policy.get("target_date"),
         "rolling_window_calendar_days": ROLLING_WINDOW_CALENDAR_DAYS,
         **metrics,
@@ -990,8 +1294,183 @@ def build_post_sim_attribution(
     }
 
 
+def _prior_post_sim_valid(payload: dict[str, Any], target_date: str) -> bool:
+    if not payload:
+        return True
+    rows = payload.get("rows")
+    try:
+        artifact_date = date.fromisoformat(str(payload.get("target_date") or ""))
+        current_date = date.fromisoformat(target_date)
+    except ValueError:
+        return False
+    return bool(
+        payload.get("schema_version") == 1
+        and payload.get("report_type") == "limit_down_watch_post_sim_attribution"
+        and artifact_date < current_date
+        and isinstance(rows, list)
+        and payload.get("runtime_effect") is False
+        and payload.get("actual_order_submitted") is False
+        and payload.get("broker_order_forbidden") is True
+        and payload.get("allowed_runtime_apply") is False
+        and all(
+            payload.get(field) == expected
+            for field, expected in POST_SIM_CONTRACT.items()
+        )
+    )
+
+
+def _prior_real_attribution_valid(payload: dict[str, Any], target_date: str) -> bool:
+    if not payload:
+        return True
+    rows = payload.get("rows")
+    try:
+        artifact_date = date.fromisoformat(str(payload.get("target_date") or ""))
+        current_date = date.fromisoformat(target_date)
+    except ValueError:
+        return False
+    return bool(
+        payload.get("schema_version") == 1
+        and payload.get("report_type") == "limit_down_watch_real_post_apply_attribution"
+        and artifact_date < current_date
+        and isinstance(rows, list)
+        and payload.get("runtime_effect") is False
+        and payload.get("allowed_runtime_apply") is False
+        and all(
+            payload.get(field) == expected
+            for field, expected in REAL_ATTRIBUTION_CONTRACT.items()
+        )
+    )
+
+
+def _aggregate_real_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    completed = [
+        row
+        for row in rows
+        if row.get("status") == "COMPLETED"
+        and row.get("actual_order_submitted") is True
+        and row.get("submit_receipt_verified") is True
+        and _safe_float(row.get("profit_rate")) is not None
+    ]
+    profits = [float(row["profit_rate"]) for row in completed]
+    notionals = [
+        max(0.0, _safe_float(row.get("buy_price")) or 0.0)
+        * max(0, _safe_int(row.get("buy_qty")))
+        for row in completed
+    ]
+    total_notional = sum(notionals)
+    return {
+        "completed_sample_count": len(completed),
+        "observation_date_count": len(
+            {str(row.get("target_date")) for row in completed}
+        ),
+        "source_quality_adjusted_ev_pct": (
+            round(sum(profits) / len(profits), 6) if profits else None
+        ),
+        "notional_weighted_ev_pct": (
+            round(
+                sum(profit * notional for profit, notional in zip(profits, notionals))
+                / total_notional,
+                6,
+            )
+            if total_notional > 0
+            else None
+        ),
+        "downside_p10_pct": _percentile(profits, 0.10),
+        "winner_count": sum(value > 0.0 for value in profits),
+        "loss_count": sum(value < 0.0 for value in profits),
+        "diagnostic_win_rate_pct": (
+            round(sum(value > 0.0 for value in profits) / len(profits) * 100.0, 4)
+            if profits
+            else None
+        ),
+    }
+
+
+def build_real_post_apply_attribution(
+    target_date: str,
+    current_live_rows: list[dict[str, Any]],
+    current_binding: dict[str, Any],
+) -> dict[str, Any]:
+    prior = _latest_prior_artifact(
+        REAL_ATTRIBUTION_DIR,
+        "limit_down_watch_real_post_apply_attribution",
+        target_date,
+    )
+    prior_valid = _prior_real_attribution_valid(prior, target_date)
+    prior_rows = (
+        prior.get("rows") if prior_valid and isinstance(prior.get("rows"), list) else []
+    )
+    normalized_current = []
+    for row in current_live_rows:
+        if not isinstance(row, dict):
+            continue
+        normalized_current.append(
+            {
+                **row,
+                "cohort": row.get("limit_down_cohort"),
+                "price_band": row.get("limit_down_price_band"),
+                "policy_key": row.get("limit_down_live_policy_key"),
+                "policy_source_date": row.get("limit_down_live_policy_source_date"),
+                "policy_version": row.get("limit_down_live_policy_version"),
+            }
+        )
+    bound_rows, excluded_rows = _bind_tuning_rows([*prior_rows, *normalized_current])
+    deduped = {
+        str(row.get("row_id")): row
+        for row in bound_rows
+        if isinstance(row, dict) and row.get("row_id")
+    }
+    rows = sorted(
+        _rows_in_rolling_window(deduped.values(), target_date),
+        key=lambda row: str(row.get("row_id")),
+    )
+    metrics = _aggregate_real_rows(rows)
+    source_allowed = _binding_allowed(current_binding, target_date)
+    return {
+        "schema_version": 1,
+        "report_type": "limit_down_watch_real_post_apply_attribution",
+        "target_date": target_date,
+        "generated_at": datetime.now().isoformat(),
+        "status": (
+            "source_quality_blocked"
+            if not source_allowed or not prior_valid
+            else (
+                "pass"
+                if metrics["completed_sample_count"] > 0
+                else "no_applied_execution"
+            )
+        ),
+        "source_quality_status": (
+            "pass" if source_allowed and prior_valid else "blocked"
+        ),
+        "source_quality_preflight_gate": current_binding,
+        "source_quality_excluded_rows": excluded_rows,
+        "prior_attribution_present": bool(prior),
+        "prior_attribution_valid": prior_valid,
+        "observed_live_record_count": len(normalized_current),
+        "observed_actual_order_submitted_count": sum(
+            row.get("actual_order_submitted") is True for row in normalized_current
+        ),
+        "profit_rate_basis": "sell_completed_execution_receipt_net_profit_rate",
+        "pending_or_incomplete_count": sum(
+            row.get("actual_order_submitted") is True
+            and row.get("completed") is not True
+            for row in rows
+        ),
+        **metrics,
+        "rows": rows,
+        **REAL_ATTRIBUTION_CONTRACT,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "allowed_runtime_apply": False,
+    }
+
+
 def build_bounded_live_candidate(
-    target_date: str, counterfactual: dict[str, Any]
+    target_date: str,
+    counterfactual: dict[str, Any],
+    real_attribution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     cells = (
         counterfactual.get("policy_cells")
@@ -1043,23 +1522,93 @@ def build_bounded_live_candidate(
                 "entry_bbo_coverage_pct": bbo_rate,
             }
         )
+    source_quality = counterfactual.get("source_quality_preflight_gate")
+    source_quality_allowed = bool(
+        _binding_allowed(source_quality, target_date)
+        and counterfactual.get("source_quality_status") == "pass"
+    )
+    real_attribution = real_attribution or {}
+    real_attribution_valid = bool(
+        real_attribution.get("schema_version") == 1
+        and real_attribution.get("report_type")
+        == "limit_down_watch_real_post_apply_attribution"
+        and real_attribution.get("target_date") == target_date
+        and real_attribution.get("status") in {"pass", "no_applied_execution"}
+        and real_attribution.get("source_quality_status") == "pass"
+        and _binding_allowed(
+            real_attribution.get("source_quality_preflight_gate"), target_date
+        )
+        and real_attribution.get("runtime_effect") is False
+        and real_attribution.get("actual_order_submitted") is False
+        and real_attribution.get("broker_order_forbidden") is True
+        and real_attribution.get("allowed_runtime_apply") is False
+        and all(
+            real_attribution.get(field) == expected
+            for field, expected in REAL_ATTRIBUTION_CONTRACT.items()
+        )
+    )
+    real_completed_count = _safe_int(real_attribution.get("completed_sample_count"))
+    real_ev = _safe_float(real_attribution.get("source_quality_adjusted_ev_pct"))
+    real_downside = _safe_float(real_attribution.get("downside_p10_pct"))
+    real_rollback_required = bool(
+        real_completed_count > 0
+        and (
+            real_ev is None
+            or real_ev <= 0.0
+            or real_downside is None
+            or real_downside < LIVE_AUTO_MAX_MAE_P10_PCT
+        )
+    )
+    if (
+        not source_quality_allowed
+        or not real_attribution_valid
+        or real_rollback_required
+    ):
+        candidates = []
     ready = bool(candidates)
     return {
         "schema_version": 1,
         "report_type": "limit_down_watch_bounded_live_candidate",
+        "policy_version": LIMIT_DOWN_LIVE_POLICY_VERSION,
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(),
         "status": "live_auto_apply_ready" if ready else "blocked",
         "ready_candidate_count": len(candidates),
         "candidates": candidates,
-        "decision_authority": "limit_down_live_auto_eligibility_candidate",
+        "decision_authority": LIMIT_DOWN_LIVE_DECISION_AUTHORITY,
         "operator_approval_required": False,
         "preopen_consumer_implemented": True,
-        "activation_mode": "latest_valid_prior_date_policy_auto_loaded",
+        "activation_mode": "exact_date_preopen_runtime_env_policy",
         "source_artifact": str(
             COUNTERFACTUAL_DIR / f"limit_down_watch_counterfactual_{target_date}.json"
         ),
-        "sample_floor": "1_verified_ordered_path_per_cohort_price_band",
+        "source_artifact_payload_sha256": _payload_sha256(counterfactual),
+        "source_quality_status": "pass" if source_quality_allowed else "blocked",
+        "source_quality_preflight_gate": source_quality,
+        "real_post_apply_attribution_valid": real_attribution_valid,
+        "post_apply_attribution_guard": {
+            "artifact": str(
+                REAL_ATTRIBUTION_DIR
+                / f"limit_down_watch_real_post_apply_attribution_{target_date}.json"
+            ),
+            "artifact_payload_sha256": _payload_sha256(real_attribution),
+            "completed_sample_count": real_completed_count,
+            "source_quality_adjusted_ev_pct": real_ev,
+            "downside_p10_pct": real_downside,
+            "rollback_required": real_rollback_required,
+            "rollback_reason": (
+                "non_positive_real_ev_or_downside_below_guard"
+                if real_rollback_required
+                else None
+            ),
+        },
+        "runtime_handoff_contract": {
+            "apply_timing": "next_preopen_only",
+            "exact_target_date_env_required": True,
+            "policy_file_sha256_required": True,
+            "pid_env_verification_required": True,
+        },
+        "sample_floor": LIMIT_DOWN_LIVE_SAMPLE_FLOOR,
         "risk_contract": {
             "max_concurrent_positions": 1,
             "max_daily_entries": 1,
@@ -1079,7 +1628,7 @@ def build_bounded_live_candidate(
             "normal_scalping_ai_and_submit_guards_required": True,
             "hard_safety_priority": "unchanged_and_unbypassable",
         },
-        "forbidden_uses": LIVE_AUTO_FORBIDDEN_USES,
+        "forbidden_uses": LIMIT_DOWN_LIVE_FORBIDDEN_USES,
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
@@ -1088,10 +1637,25 @@ def build_bounded_live_candidate(
 
 
 def produce_research_artifacts(target_date: str) -> dict[str, Path]:
-    counterfactual, current_rows, _source = build_counterfactual(target_date)
+    counterfactual, current_rows, source = build_counterfactual(target_date)
     sim_policy = build_sim_policy_catalog(target_date, counterfactual)
-    post_sim = build_post_sim_attribution(target_date, current_rows)
-    bounded = build_bounded_live_candidate(target_date, counterfactual)
+    current_binding = counterfactual.get("source_quality_preflight_gate")
+    current_binding = current_binding if isinstance(current_binding, dict) else {}
+    post_sim = build_post_sim_attribution(
+        target_date,
+        current_rows,
+        current_binding,
+    )
+    real_attribution = build_real_post_apply_attribution(
+        target_date,
+        source.pop("_live_attribution_rows", []),
+        current_binding,
+    )
+    bounded = build_bounded_live_candidate(
+        target_date,
+        counterfactual,
+        real_attribution,
+    )
     paths = {
         "counterfactual": COUNTERFACTUAL_DIR
         / f"limit_down_watch_counterfactual_{target_date}.json",
@@ -1099,6 +1663,8 @@ def produce_research_artifacts(target_date: str) -> dict[str, Path]:
         / f"limit_down_watch_sim_policy_catalog_{target_date}.json",
         "post_sim_attribution": POST_SIM_DIR
         / f"limit_down_watch_post_sim_attribution_{target_date}.json",
+        "real_post_apply_attribution": REAL_ATTRIBUTION_DIR
+        / f"limit_down_watch_real_post_apply_attribution_{target_date}.json",
         "bounded_live_candidate": BOUNDED_CANDIDATE_DIR
         / f"limit_down_watch_bounded_live_candidate_{target_date}.json",
     }
@@ -1106,6 +1672,7 @@ def produce_research_artifacts(target_date: str) -> dict[str, Path]:
         ("counterfactual", counterfactual),
         ("sim_policy_catalog", sim_policy),
         ("post_sim_attribution", post_sim),
+        ("real_post_apply_attribution", real_attribution),
         ("bounded_live_candidate", bounded),
     ):
         _atomic_write_json(paths[key], payload)
