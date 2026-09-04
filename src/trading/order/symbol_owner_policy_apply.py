@@ -32,6 +32,11 @@ from src.trading.config.symbol_owner_policy import (
     normalize_symbol,
     symbol_owner_entry_authority_hash,
 )
+from src.trading.config.symbol_owner_standing_authority import (
+    load_standing_authority,
+    standing_apply_window,
+    validate_apply_binding,
+)
 from src.trading.order.owner_custody_registry import (
     DEFAULT_REGISTRY_PATH,
     REGISTRY_PATH_ENV,
@@ -443,9 +448,14 @@ def collect_broker_snapshot(
     return {**canonical, "snapshot_sha256": _sha256_payload(canonical)}
 
 
-def _validate_broker_snapshot(
-    snapshot: dict[str, Any], entries: dict[str, dict[str, Any]]
+def validate_broker_snapshot_contract(
+    snapshot: dict[str, Any],
+    *,
+    symbols: set[str],
+    migration_receipts_allowed: bool = True,
 ) -> None:
+    """Validate canonical snapshot integrity before reconciliation uses it."""
+
     if not isinstance(snapshot, dict):
         raise SymbolOwnerPolicyApplyError("symbol_owner_apply_snapshot_invalid")
     canonical = {
@@ -464,6 +474,67 @@ def _validate_broker_snapshot(
         raise SymbolOwnerPolicyApplyError(
             "symbol_owner_apply_snapshot_contract_or_hash_invalid"
         )
+    if set(canonical["inventory"]) != symbols:
+        raise SymbolOwnerPolicyApplyError(
+            "symbol_owner_apply_snapshot_inventory_scope_invalid"
+        )
+    try:
+        inventory_invalid = any(
+            not (str(symbol).isdigit() and len(str(symbol)) == 6)
+            or int(quantity) < 0
+            for symbol, quantity in canonical["inventory"].items()
+        )
+    except (TypeError, ValueError) as exc:
+        raise SymbolOwnerPolicyApplyError(
+            "symbol_owner_apply_snapshot_inventory_invalid"
+        ) from exc
+    if inventory_invalid:
+        raise SymbolOwnerPolicyApplyError(
+            "symbol_owner_apply_snapshot_inventory_invalid"
+        )
+    order_keys: set[tuple[str, str]] = set()
+    for row in canonical["open_orders"]:
+        if not isinstance(row, dict):
+            raise SymbolOwnerPolicyApplyError(
+                "symbol_owner_apply_snapshot_open_order_invalid"
+            )
+        symbol = str(row.get("symbol") or "")
+        order_no = str(row.get("order_no") or "")
+        try:
+            quantity = int(row.get("quantity"))
+            filled_quantity = int(row.get("filled_quantity"))
+            remaining_quantity = int(row.get("remaining_quantity"))
+        except (TypeError, ValueError) as exc:
+            raise SymbolOwnerPolicyApplyError(
+                "symbol_owner_apply_snapshot_open_order_invalid"
+            ) from exc
+        key = (symbol, order_no)
+        if (
+            symbol not in symbols
+            or not (order_no.isdigit() and len(order_no) == 7)
+            or key in order_keys
+            or not str(row.get("side") or "").strip()
+            or str(row.get("route") or "").strip().upper()
+            not in {"KRX", "NXT", "SOR"}
+            or quantity <= 0
+            or min(filled_quantity, remaining_quantity) < 0
+            or filled_quantity > quantity
+            or remaining_quantity <= 0
+        ):
+            raise SymbolOwnerPolicyApplyError(
+                "symbol_owner_apply_snapshot_open_order_invalid"
+            )
+        order_keys.add(key)
+    if not migration_receipts_allowed and canonical["migration_receipts"]:
+        raise SymbolOwnerPolicyApplyError(
+            "symbol_owner_apply_discovery_migration_receipt_forbidden"
+        )
+
+
+def _validate_broker_snapshot(
+    snapshot: dict[str, Any], entries: dict[str, dict[str, Any]]
+) -> None:
+    validate_broker_snapshot_contract(snapshot, symbols=set(entries))
     for symbol, entry in entries.items():
         actual_quantity = int(snapshot["inventory"].get(symbol, 0))
         if actual_quantity != entry["expected_broker_quantity"]:
@@ -473,7 +544,7 @@ def _validate_broker_snapshot(
         for migration in entry["migrated_positions"]:
             matches = [
                 receipt
-                for receipt in canonical["migration_receipts"]
+                for receipt in snapshot["migration_receipts"]
                 if receipt.get("symbol") == symbol
                 and receipt.get("order_date") == migration.get("order_date")
                 and receipt.get("order_no") == migration.get("broker_order_no")
@@ -665,6 +736,7 @@ def apply_symbol_owner_policy(
     owner_env_file: Path = OWNER_ENV_FILE,
     apply_lock_path: Path = DEFAULT_APPLY_LOCK,
     output_policy_path: Path | None = None,
+    standing_authority_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate or atomically publish one exact-date coexistence policy."""
 
@@ -679,13 +751,40 @@ def apply_symbol_owner_policy(
         generated_at_kst,
         entries,
     ) = _validate_request(request, now=observed_at)
+    standing_authority: dict[str, Any] | None = None
+    apply_window = (PREOPEN_APPLY_START, PREOPEN_APPLY_END)
+    if standing_authority_path is not None:
+        standing_authority = load_standing_authority(
+            Path(standing_authority_path), observed_at=observed_at
+        )
+        validate_apply_binding(
+            standing_authority,
+            request,
+            active_date=active_date,
+        )
+        if standing_authority.get("broker_account_key") != account_key:
+            raise SymbolOwnerPolicyApplyError(
+                "symbol_owner_apply_standing_account_key_mismatch"
+            )
+        authority_symbols = standing_authority.get("symbols") or {}
+        for symbol, entry in entries.items():
+            expected = authority_symbols.get(symbol)
+            if not isinstance(expected, dict) or (
+                expected.get("mode") != entry["mode"]
+                or sorted(expected.get("allowed_owners") or [])
+                != entry["allowed_owners"]
+            ):
+                raise SymbolOwnerPolicyApplyError(
+                    f"symbol_owner_apply_standing_scope_mismatch:{symbol}"
+                )
+        apply_window = standing_apply_window(standing_authority)
     expected_confirmation = f"APPLY SAME SYMBOL OWNER POLICY {active_date.isoformat()}"
     if apply and confirmation != expected_confirmation:
         raise SymbolOwnerPolicyApplyError(
             "symbol_owner_apply_confirmation_mismatch"
         )
     local_time = observed_at.astimezone(KST).time().replace(tzinfo=None)
-    if apply and not (PREOPEN_APPLY_START <= local_time <= PREOPEN_APPLY_END):
+    if apply and not (apply_window[0] <= local_time <= apply_window[1]):
         raise SymbolOwnerPolicyApplyError(
             "symbol_owner_apply_outside_preopen_window"
         )
@@ -730,9 +829,9 @@ def apply_symbol_owner_policy(
     first_snapshot = snapshot_fetcher(token, symbols, migration_rows)
     second_snapshot = snapshot_fetcher(token, symbols, migration_rows)
     _validate_broker_snapshot(first_snapshot, entries)
-    _validate_broker_snapshot(second_snapshot, entries)
     if first_snapshot != second_snapshot:
         raise SymbolOwnerPolicyApplyError("symbol_owner_apply_broker_snapshot_drift")
+    _validate_broker_snapshot(second_snapshot, entries)
 
     current_reconciliation: dict[str, dict[str, Any]] = {}
     for symbol, entry in entries.items():
@@ -792,9 +891,25 @@ def apply_symbol_owner_policy(
         "broker_snapshot_sha256": first_snapshot["snapshot_sha256"],
         "policy_path": str(output_path),
         "registry_path": str(target_registry.path),
+        "owner_env_file": str(Path(owner_env_file).resolve()),
         "symbols": sorted(entries),
         "current_reconciliation": current_reconciliation,
         "required_confirmation": expected_confirmation,
+        "apply_authority": (
+            "standing_exact_scope"
+            if standing_authority is not None
+            else "same_date_operator_confirmation"
+        ),
+        "standing_authorization_id": (
+            str(standing_authority.get("authorization_id") or "")
+            if standing_authority is not None
+            else ""
+        ),
+        "standing_authorization_sha256": (
+            str(standing_authority.get("artifact_content_sha256") or "")
+            if standing_authority is not None
+            else ""
+        ),
     }
     if not apply:
         return dry_result
@@ -885,12 +1000,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--request", required=True, type=Path)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm", default="")
+    parser.add_argument("--standing-authority", type=Path, default=None)
     args = parser.parse_args(argv)
     try:
         result = apply_symbol_owner_policy(
             args.request,
             apply=args.apply,
             confirmation=args.confirm,
+            standing_authority_path=args.standing_authority,
         )
     except Exception as exc:
         print(

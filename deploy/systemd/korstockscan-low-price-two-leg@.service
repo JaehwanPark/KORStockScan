@@ -1,6 +1,6 @@
 [Unit]
 Description=KORStockScan Lower-Price Two-Leg Live Machine (%i)
-After=network-online.target korstockscan-low-price-two-leg-preflight@%i.service
+After=network-online.target korstockscan-symbol-owner-policy-auto-apply.service korstockscan-low-price-two-leg-preflight@%i.service
 Wants=network-online.target
 Requires=korstockscan-low-price-two-leg-preflight@%i.service
 StartLimitIntervalSec=300

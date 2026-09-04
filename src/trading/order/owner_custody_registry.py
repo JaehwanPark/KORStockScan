@@ -1193,6 +1193,39 @@ class OrderOwnerRegistry:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
 
+    def unresolved_intent_summary(
+        self,
+        *,
+        symbol: object,
+        active_date: date | str,
+    ) -> dict[str, Any]:
+        """Describe same-date unbound intents without changing their state."""
+
+        clean_symbol = _registry_symbol(symbol)
+        clean_date = _registry_order_date(active_date)
+        lock = self._locked()
+        try:
+            state = self._state(self._read_locked())
+            account_key = broker_account_key(require_explicit=True)
+            rows = [
+                row
+                for row in state.values()
+                if row.get("account_key") == account_key
+                and row.get("order_date") == clean_date
+                and row.get("symbol") == clean_symbol
+                and row.get("state") in _ACTIVE_UNBOUND_STATES
+            ]
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+        return {
+            "symbol": clean_symbol,
+            "active_date": clean_date,
+            "unresolved_intent_count": len(rows),
+            "states": sorted({str(row.get("state") or "") for row in rows}),
+            "sides": sorted({str(row.get("side") or "") for row in rows}),
+        }
+
     def migration_receipt(
         self,
         *,

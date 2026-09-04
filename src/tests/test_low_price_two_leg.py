@@ -623,10 +623,10 @@ def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guar
     ).read_text(encoding="utf-8")
 
     assert "Requires=korstockscan-low-price-two-leg-preflight@%i.service" in unit
-    assert (
-        "After=network-online.target "
-        "korstockscan-low-price-two-leg-preflight@%i.service" in unit
-    )
+    after_line = next(line for line in unit.splitlines() if line.startswith("After="))
+    assert "network-online.target" in after_line
+    assert "korstockscan-symbol-owner-policy-auto-apply.service" in after_line
+    assert "korstockscan-low-price-two-leg-preflight@%i.service" in after_line
     assert "RestartPreventExitStatus=4 5" in unit
 
 

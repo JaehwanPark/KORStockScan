@@ -1,0 +1,104 @@
+{
+  "artifact_content_sha256": "9e239f52eb45c030a599be5b44e66b5ff01c3248eb0a01a6ad95d0f774ef34d6",
+  "authorization_id": "operator-same-symbol-owner-unattended-preopen-20260904",
+  "auto_issue_shared_token": true,
+  "broker_account_key": "kiwoom-live-primary",
+  "effective_from": "2026-09-07",
+  "expires_after": "2026-12-31",
+  "forbidden_uses": [
+    "migrate_or_infer_legacy_owner_custody",
+    "classify_unregistered_broker_quantity_as_manual_custody",
+    "accept_unregistered_or_ambiguous_open_orders",
+    "change_order_quantity_price_target_threshold_provider_bot_or_cap",
+    "relax_market_broker_account_order_cooldown_or_hard_safety",
+    "stop_or_cancel_broker_orders",
+    "cross_owner_cancel_sell_or_quantity_transfer"
+  ],
+  "minimum_safe_symbol_count": 1,
+  "operator_instruction": "Automatically apply exact-date same-symbol owner coexistence before each KRX session without a new operator instruction, while retaining owner isolation and all safety gates.",
+  "preopen_window": {
+    "end_kst": "07:54:00",
+    "start_kst": "07:32:00"
+  },
+  "recurring_exact_date_apply": true,
+  "reviewed_at_kst": "2026-09-04T15:20:00+09:00",
+  "schema": "symbol_owner_policy_standing_authority_v1",
+  "scope_contract": "exact_current_widget_episode_symbol_universe",
+  "status": "active",
+  "symbols": {
+    "002900": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "005930": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator", "widget_auto_trade"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "006800": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "010140": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "015760": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "017670": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "028050": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "028670": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "034020": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator", "widget_auto_trade"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "035720": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "042660": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator", "widget_auto_trade"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "079160": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "080220": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "105630": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "111770": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "137310": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "181710": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    },
+    "475150": {
+      "allowed_owners": ["episode", "main_scalping", "manual_operator"],
+      "mode": "COEXIST_ENTRY_ENABLED"
+    }
+  },
+  "unregistered_open_order_behavior": "skip_symbol_keep_legacy_exclusion",
+  "unresolved_custody_behavior": "skip_symbol_keep_legacy_exclusion"
+}

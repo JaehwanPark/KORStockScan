@@ -782,6 +782,43 @@ def test_registered_symbol_fails_closed_when_shared_account_identity_is_missing(
         registry.symbol_registered(SYMBOL)
 
 
+def test_registry_reports_same_date_unbound_intent_without_mutation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "kiwoom-live-primary")
+    registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
+    context = OwnerOrderContext(
+        owner_type="episode",
+        owner_id="episode:samsung_morning",
+        position_id="episode:samsung_morning:leg1",
+        client_intent_id="episode:samsung_morning:pending",
+    )
+    registry.reserve(
+        context=context,
+        symbol=SYMBOL,
+        side="BUY",
+        quantity=10,
+        route="KRX",
+        order_date="2026-09-03",
+    )
+    before = registry.path.read_bytes()
+
+    current = registry.unresolved_intent_summary(
+        symbol=SYMBOL,
+        active_date="2026-09-03",
+    )
+    next_date = registry.unresolved_intent_summary(
+        symbol=SYMBOL,
+        active_date="2026-09-04",
+    )
+
+    assert current["unresolved_intent_count"] == 1
+    assert current["states"] == ["INTENT_RESERVED"]
+    assert current["sides"] == ["BUY"]
+    assert next_date["unresolved_intent_count"] == 0
+    assert registry.path.read_bytes() == before
+
+
 def test_all_order_process_launchers_load_shared_owner_account_identity():
     environment_file = (
         "EnvironmentFile=-/home/ubuntu/KORStockScan/data/runtime/"

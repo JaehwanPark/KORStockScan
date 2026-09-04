@@ -1,6 +1,6 @@
 [Unit]
 Description=KORStockScan Lower-Price Two-Leg Same-Day Preflight (%i)
-After=network-online.target
+After=network-online.target korstockscan-symbol-owner-policy-auto-apply.service
 Wants=network-online.target
 
 [Service]
