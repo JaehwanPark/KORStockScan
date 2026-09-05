@@ -116,6 +116,26 @@ class DynamicConfirmationPolicy:
 
 
 DEFAULT_DYNAMIC_CONFIRMATION_POLICY = DynamicConfirmationPolicy()
+SAMSUNG_RISE_REBOUND_POLICY = DynamicConfirmationPolicy(
+    minimum_bid_return_bps=2.0,
+    policy_id="samsung_rise_rebound_confirmation_policy_v1",
+)
+SAMSUNG_CONFIRMATION_SCOPES = frozenset(
+    {"morning", "morning_sor_reentry", "midday", "afternoon"}
+)
+
+
+def dynamic_policy_for_scope(
+    *, owner: str, scope_id: str, symbol: str
+) -> DynamicConfirmationPolicy:
+    """One recipe shared by source replay, selection, validation and runtime."""
+    if (
+        owner == "episode"
+        and symbol == "005930"
+        and scope_id in SAMSUNG_CONFIRMATION_SCOPES
+    ):
+        return SAMSUNG_RISE_REBOUND_POLICY
+    return DEFAULT_DYNAMIC_CONFIRMATION_POLICY
 
 
 def _finite(value: Any) -> float | None:
@@ -1100,8 +1120,16 @@ def evaluate_live_dynamic_confirmation_progress(
             break
         if checkpoint_sec == policy.checkpoints_sec[-1]:
             if any(row["state"] == "SOURCE_GAP" for row in rows):
-                action = "BASELINE_REVALIDATE"
-                reason = "source_gap_fallback_to_existing_owner_guards"
+                action = (
+                    "REJECT"
+                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    else "BASELINE_REVALIDATE"
+                )
+                reason = (
+                    "rise_rebound_confirmation_source_unavailable"
+                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    else "source_gap_fallback_to_existing_owner_guards"
+                )
             else:
                 action = "REJECT"
                 reason = "confirmation_window_expired_without_support"
@@ -1111,8 +1139,14 @@ def evaluate_live_dynamic_confirmation_progress(
         reason = "await_next_checkpoint"
         next_checkpoint = policy.checkpoints_sec[len(rows)]
     else:
-        action = "BASELINE_REVALIDATE"
-        reason = "no_checkpoint_source_fallback_to_existing_owner_guards"
+        action = (
+            "REJECT" if policy == SAMSUNG_RISE_REBOUND_POLICY else "BASELINE_REVALIDATE"
+        )
+        reason = (
+            "rise_rebound_confirmation_source_unavailable"
+            if policy == SAMSUNG_RISE_REBOUND_POLICY
+            else "no_checkpoint_source_fallback_to_existing_owner_guards"
+        )
         next_checkpoint = None
     return {
         "schema": LIVE_DYNAMIC_CONFIRMATION_SCHEMA,
@@ -1125,7 +1159,8 @@ def evaluate_live_dynamic_confirmation_progress(
         ),
         "next_checkpoint_sec": next_checkpoint,
         "checkpoint_decisions": rows,
-        "source_gap_fallback_requires_full_owner_guard_revalidation": True,
+        "source_gap_fallback_requires_full_owner_guard_revalidation": policy
+        != SAMSUNG_RISE_REBOUND_POLICY,
         "runtime_effect": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
@@ -1147,10 +1182,14 @@ def advance_live_dynamic_confirmation(
     owner_target_price: Any,
     round_trip_cost_pct: Any,
     widget_take_profit: bool,
+    scope_id: str = "",
     snapshot_path: Path | str | None = None,
     policy: DynamicConfirmationPolicy = DEFAULT_DYNAMIC_CONFIRMATION_POLICY,
 ) -> dict[str, Any]:
     """Advance one applied dynamic confirmation without touching the broker."""
+
+    if scope_id:
+        policy = dynamic_policy_for_scope(owner=owner, scope_id=scope_id, symbol=symbol)
 
     checkpoints = {
         int(key): dict(value)
@@ -1198,8 +1237,16 @@ def advance_live_dynamic_confirmation(
         # a temporarily missing route still follows the bounded 0/1/3/5 retry.
         decision.update(
             {
-                "action": "BASELINE_REVALIDATE",
-                "reason": "global_snapshot_gap_fallback_to_existing_owner_guards",
+                "action": (
+                    "REJECT"
+                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    else "BASELINE_REVALIDATE"
+                ),
+                "reason": (
+                    "rise_rebound_confirmation_source_unavailable"
+                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    else "global_snapshot_gap_fallback_to_existing_owner_guards"
+                ),
                 "selected_delay_sec": None,
                 "next_checkpoint_sec": None,
             }

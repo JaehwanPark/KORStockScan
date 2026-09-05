@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import Counter, defaultdict
@@ -12,6 +13,8 @@ from src.engine.automation.source_quality_hard_gate import (
     filter_source_dates_by_preflight,
     load_source_quality_preflight,
 )
+from src.engine.sniper_scale_in import _pyramid_quality_decision
+from src.engine.trade_profit import calculate_net_profit_rate, get_trade_cost_rate
 from src.utils.constants import DATA_DIR, TRADING_RULES
 
 KST = timezone(timedelta(hours=9))
@@ -20,7 +23,13 @@ STAGE = "scale_in"
 REPORT_TYPE = "scalping_pyramid_quality_calibration"
 INPUT_REPORT_DIR = DATA_DIR / "report" / "scalping_pyramid_intraday_feedback"
 OUTPUT_REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
+RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 CLEAN_BASELINE_DATE = "2026-06-05"
+EVIDENCE_CONTRACT_VERSION = "pyramid_fixed_exit_replay_v1"
+REPLAY_SOURCE_CONTRACT_VERSION = "pyramid_gate_replay_source_v1"
+REPLAY_SOURCE_SCHEMA_VERSION = 5
+REPLAY_EVENT_SCHEMA = "pyramid_gate_observation_v2"
+REPLAY_PRICE_EVIDENCE = "fresh_quote_existing_resolver_limit_price"
 CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
 POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR = 20
 WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR = 10
@@ -67,20 +76,28 @@ FORBIDDEN_USES = [
 ]
 TARGET_ENV_KEYS = [
     "SCALPING_PYRAMID_MIN_PROFIT_PCT",
-    "SCALPING_PYRAMID_MIN_AI_SCORE",
-    "SCALPING_PYRAMID_MIN_BUY_PRESSURE",
-    "SCALPING_PYRAMID_MIN_TICK_ACCEL",
-    "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS",
-    "SCALPING_PYRAMID_MAX_SPREAD_BPS",
-    "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED",
-    "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT",
-    "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT",
 ]
-PROFIT_GRID_MIN = 0.8
+TARGET_VALUE_FIELDS = {
+    "SCALPING_PYRAMID_MIN_PROFIT_PCT": "min_profit_pct",
+    "SCALPING_PYRAMID_MIN_AI_SCORE": "min_ai_score",
+    "SCALPING_PYRAMID_MIN_BUY_PRESSURE": "min_buy_pressure",
+    "SCALPING_PYRAMID_MIN_TICK_ACCEL": "min_tick_accel",
+    "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS": "max_micro_vwap_bps",
+    "SCALPING_PYRAMID_MAX_SPREAD_BPS": "max_spread_bps",
+    "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED": ("strong_continuation_enabled"),
+    "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT": (
+        "strong_continuation_min_profit_pct"
+    ),
+    "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT": (
+        "strong_continuation_max_drawdown_pct"
+    ),
+}
+BOOLEAN_VALUE_FIELDS = {"strong_continuation_enabled"}
+PROFIT_GRID_MIN = 0.2
 PROFIT_GRID_MAX = 2.5
 PROFIT_GRID_STEP = 0.1
 PROFIT_GRID_MIN_ELIGIBLE = 20
-PROFIT_GRID_MIN_EV_DELTA = 0.2
+PROFIT_GRID_RUNTIME_STEP = 0.1
 RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 ROW_ISOLATABLE_SOURCE_QUALITY_STATUSES = {
     "pass",
@@ -191,6 +208,180 @@ def _current_values() -> dict[str, Any]:
             )
             or 0.2
         ),
+    }
+
+
+def _runtime_env_manifest_path(target_date: str) -> Path:
+    return RUNTIME_ENV_DIR / f"threshold_runtime_env_{target_date}.json"
+
+
+def _runtime_env_verify_path(target_date: str) -> Path:
+    return RUNTIME_ENV_DIR / f"threshold_runtime_env_verify_{target_date}.json"
+
+
+def _parse_runtime_value(field_name: str, value: Any) -> Any | None:
+    if field_name in BOOLEAN_VALUE_FIELDS:
+        if isinstance(value, bool):
+            return value
+        token = str(value or "").strip().lower()
+        if token not in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
+            return None
+        return token in {"1", "true", "yes", "on"}
+    if value in (None, "", "-"):
+        return None
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or (field_name == "min_profit_pct" and parsed <= 0):
+        return None
+    return parsed
+
+
+def _verified_runtime_env_values(target_date: str) -> dict[str, Any]:
+    manifest_path = _runtime_env_manifest_path(target_date)
+    verify_path = _runtime_env_verify_path(target_date)
+    manifest = _load_json(manifest_path)
+    verify = _load_json(verify_path)
+    reasons: list[str] = []
+    if not manifest:
+        reasons.append("runtime_env_manifest_missing_or_invalid")
+    if not verify:
+        reasons.append("runtime_env_verify_missing_or_invalid")
+    if manifest and str(manifest.get("target_date") or "") != target_date:
+        reasons.append("runtime_env_manifest_target_date_mismatch")
+    if verify and str(verify.get("target_date") or "") != target_date:
+        reasons.append("runtime_env_verify_target_date_mismatch")
+    if verify and not (
+        verify.get("passed") is True
+        and verify.get("pid_passed") is True
+        and str(verify.get("status") or "").lower() == "pass"
+    ):
+        reasons.append("runtime_env_pid_verification_not_pass")
+    overrides = manifest.get("env_overrides") if isinstance(manifest, dict) else None
+    if manifest and not isinstance(overrides, dict):
+        reasons.append("runtime_env_overrides_missing_or_invalid")
+    manifest_reference = str(verify.get("manifest_path") or "").strip()
+    if manifest_reference:
+        try:
+            if Path(manifest_reference).resolve() != manifest_path.resolve():
+                reasons.append("runtime_env_verify_manifest_path_mismatch")
+        except OSError:
+            reasons.append("runtime_env_verify_manifest_path_invalid")
+    values: dict[str, Any] = {}
+    invalid_keys: list[str] = []
+    if not reasons and isinstance(overrides, dict):
+        for env_key, field_name in TARGET_VALUE_FIELDS.items():
+            runtime_key = f"KORSTOCKSCAN_{env_key}"
+            if runtime_key not in overrides:
+                continue
+            parsed = _parse_runtime_value(field_name, overrides.get(runtime_key))
+            if parsed is None:
+                invalid_keys.append(runtime_key)
+            else:
+                values[field_name] = parsed
+    if invalid_keys:
+        reasons.append("runtime_env_target_value_invalid")
+        values = {}
+    return {
+        "valid": not reasons,
+        "values": values,
+        "reasons": reasons,
+        "invalid_keys": sorted(invalid_keys),
+        "manifest_path": str(manifest_path),
+        "verify_path": str(verify_path),
+    }
+
+
+def _observed_min_profit_values(
+    target_date: str, reports: list[dict[str, Any]]
+) -> dict[str, Any]:
+    values: set[float] = set()
+    reasons: list[str] = []
+    report_count = 0
+    selection_sources: set[str] = set()
+    for report in reports:
+        if str(report.get("target_date") or "") != target_date:
+            continue
+        report_count += 1
+        provenance = report.get("pyramid_threshold_provenance")
+        if not isinstance(provenance, dict):
+            continue
+        if provenance.get("ambiguous") is True:
+            reasons.append("same_day_feedback_threshold_ambiguous")
+        configured_contract_valid = (
+            provenance.get("configured_threshold_contract_valid") is True
+        )
+        source = str(provenance.get("selection_source") or "").strip()
+        if source:
+            selection_sources.add(source)
+        observed_values = provenance.get("configured_v2_min_profit_pct_values")
+        if isinstance(observed_values, list):
+            for value in observed_values:
+                parsed = _parse_runtime_value("min_profit_pct", value)
+                if parsed is not None:
+                    values.add(round(float(parsed), 6))
+                else:
+                    reasons.append("same_day_feedback_observed_threshold_invalid")
+        selected = _parse_runtime_value(
+            "min_profit_pct", provenance.get("selected_min_profit_pct")
+        )
+        if (
+            configured_contract_valid
+            and selected is not None
+            and source == "same_day_unique_runtime_pyramid_evaluation"
+        ):
+            values.add(round(float(selected), 6))
+    if len(values) > 1:
+        reasons.append("same_day_feedback_threshold_conflict")
+    return {
+        "valid": len(values) == 1 and not reasons,
+        "value": next(iter(values)) if len(values) == 1 else None,
+        "values": sorted(values),
+        "reasons": sorted(set(reasons)),
+        "report_count": report_count,
+        "selection_sources": sorted(selection_sources),
+    }
+
+
+def _resolve_current_values(
+    target_date: str, reports: list[dict[str, Any]]
+) -> dict[str, Any]:
+    current = _current_values()
+    field_sources = {key: "code_default" for key in current}
+    runtime_env = _verified_runtime_env_values(target_date)
+    if runtime_env["valid"]:
+        for field_name, value in runtime_env["values"].items():
+            current[field_name] = value
+            field_sources[field_name] = "verified_runtime_env_pid"
+
+    observed = _observed_min_profit_values(target_date, reports)
+    blockers = list(observed["reasons"])
+    observed_value = observed.get("value")
+    runtime_value = runtime_env["values"].get("min_profit_pct")
+    if (
+        observed["valid"]
+        and runtime_value is not None
+        and not math.isclose(float(observed_value), float(runtime_value), abs_tol=1e-9)
+    ):
+        blockers.append("feedback_runtime_env_min_profit_conflict")
+    if observed["valid"] and not blockers:
+        current["min_profit_pct"] = float(observed_value)
+        field_sources["min_profit_pct"] = "same_day_runtime_feedback_observation"
+    elif runtime_value is not None and not blockers:
+        current["min_profit_pct"] = float(runtime_value)
+        field_sources["min_profit_pct"] = "verified_runtime_env_pid"
+    if observed_value is None and runtime_value is None:
+        blockers.append("current_min_profit_runtime_provenance_missing")
+
+    return {
+        "status": "pass" if not blockers else "blocked",
+        "blockers": sorted(set(blockers)),
+        "values": current,
+        "field_sources": field_sources,
+        "observed_feedback": observed,
+        "verified_runtime_env": runtime_env,
+        "selected_min_profit_pct": current["min_profit_pct"],
     }
 
 
@@ -484,9 +675,7 @@ def _normal_winner_expansion_observation(
         else (
             "venue_conflict_requires_independent_decision"
             if positive_ready and non_positive_ready
-            else "non_positive_ev_hold"
-            if non_positive_ready
-            else "hold_sample"
+            else "non_positive_ev_hold" if non_positive_ready else "hold_sample"
         )
     )
     bounded_canary = {
@@ -570,7 +759,9 @@ def _winner_recovery_real_execution_observation(
     source_quality_rejected_count = 0
     rows: list[dict[str, Any]] = []
     for report in reports:
-        if not isinstance(report.get("real_scale_in_performance_metric_contract"), dict):
+        if not isinstance(
+            report.get("real_scale_in_performance_metric_contract"), dict
+        ):
             continue
         source_rows = report.get("real_scale_in_performance_rows")
         if not isinstance(source_rows, list):
@@ -609,16 +800,12 @@ def _winner_recovery_real_execution_observation(
                 continue
             rows.append(row)
 
-    valid_notional = sum(
-        _safe_float(row.get("fill_notional_krw"), 0.0) for row in rows
-    )
+    valid_notional = sum(_safe_float(row.get("fill_notional_krw"), 0.0) for row in rows)
     valid_net_pnl = sum(
         _safe_float(row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0) for row in rows
     )
     source_quality_adjusted_ev_pct = (
-        round(valid_net_pnl / valid_notional * 100.0, 4)
-        if valid_notional > 0
-        else None
+        round(valid_net_pnl / valid_notional * 100.0, 4) if valid_notional > 0 else None
     )
     sample_floor_met = len(rows) >= WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
     positive_ev = bool(
@@ -629,11 +816,15 @@ def _winner_recovery_real_execution_observation(
     state = (
         "not_available"
         if not section_present
-        else "observe_one_share_canary"
-        if not sample_floor_met
-        else "first_planned_residual_leg_candidate_ready"
-        if positive_ev
-        else "non_positive_ev_hold"
+        else (
+            "observe_one_share_canary"
+            if not sample_floor_met
+            else (
+                "first_planned_residual_leg_candidate_ready"
+                if positive_ev
+                else "non_positive_ev_hold"
+            )
+        )
     )
 
     def _dimension_rollup(dimension: str) -> list[dict[str, Any]]:
@@ -643,8 +834,7 @@ def _winner_recovery_real_execution_observation(
         result = []
         for value, bucket_rows in sorted(grouped.items()):
             bucket_notional = sum(
-                _safe_float(row.get("fill_notional_krw"), 0.0)
-                for row in bucket_rows
+                _safe_float(row.get("fill_notional_krw"), 0.0) for row in bucket_rows
             )
             bucket_net_pnl = sum(
                 _safe_float(row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0)
@@ -685,10 +875,7 @@ def _winner_recovery_real_execution_observation(
                 sum(
                     1
                     for row in rows
-                    if _safe_float(
-                        row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0
-                    )
-                    > 0
+                    if _safe_float(row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0) > 0
                 )
                 / len(rows),
                 4,
@@ -732,6 +919,156 @@ def _winner_recovery_real_execution_observation(
         ),
         "forbidden_uses": FORBIDDEN_USES
         + ["automatic_quantity_increase", "full_residual_submit"],
+    }
+
+
+def _winner_recovery_runtime_funnel_observation(
+    reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    totals: Counter[str] = Counter()
+    runtime_block_reasons: Counter[str] = Counter()
+    downstream_block_reasons: Counter[str] = Counter()
+    section_present = False
+    accepted_report_count = 0
+    provenance_rejected_report_count = 0
+    for report in reports:
+        contract = report.get("winner_recovery_runtime_funnel_metric_contract")
+        summary = report.get("summary")
+        if not isinstance(contract, dict) or not isinstance(summary, dict):
+            continue
+        funnel = summary.get("winner_recovery_runtime_funnel")
+        if not isinstance(funnel, dict):
+            continue
+        section_present = True
+        if not (
+            contract.get("metric_role") == "winner_recovery_runtime_funnel_attribution"
+            and funnel.get("runtime_effect") is False
+            and funnel.get("allowed_runtime_apply") is False
+            and funnel.get("decision_authority")
+            == "source_only_winner_recovery_runtime_funnel_attribution"
+            and funnel.get("source_quality_status") == "pass"
+        ):
+            provenance_rejected_report_count += 1
+            continue
+        accepted_report_count += 1
+        for key in (
+            "runtime_gate_evaluation_count",
+            "runtime_gate_selected_count",
+            "runtime_gate_blocked_count",
+            "selected_downstream_guard_blocked_count",
+            "selected_order_submitted_count",
+            "selected_executed_count",
+            "selected_open_or_unresolved_count",
+            "selected_closed_without_submit_count",
+            "invalid_timestamp_event_count",
+        ):
+            totals[key] += int(_safe_float(funnel.get(key), 0.0) or 0)
+        for item in funnel.get("runtime_gate_block_reason_counts") or []:
+            if isinstance(item, dict):
+                runtime_block_reasons[str(item.get("reason") or "unknown")] += int(
+                    _safe_float(item.get("count"), 0.0) or 0
+                )
+        for item in funnel.get("downstream_guard_block_reason_counts") or []:
+            if isinstance(item, dict):
+                downstream_block_reasons[str(item.get("reason") or "unknown")] += int(
+                    _safe_float(item.get("count"), 0.0) or 0
+                )
+
+    selected_count = totals["runtime_gate_selected_count"]
+    if not accepted_report_count and provenance_rejected_report_count:
+        state = "source_quality_blocked"
+    elif totals["selected_executed_count"]:
+        state = "real_execution_observed"
+    elif totals["selected_order_submitted_count"]:
+        state = "selected_order_submitted_no_execution"
+    elif totals["selected_downstream_guard_blocked_count"]:
+        state = "selected_downstream_guard_blocked"
+    elif totals["selected_closed_without_submit_count"]:
+        state = "selected_closed_without_submit"
+    elif selected_count:
+        state = "selected_open_or_unresolved"
+    elif totals["runtime_gate_blocked_count"]:
+        state = "runtime_gate_only_no_selection"
+    else:
+        state = (
+            "not_available" if not section_present else "no_runtime_gate_observation"
+        )
+    non_execution_layers = {
+        "winner_recovery_runtime_gate": totals["runtime_gate_blocked_count"],
+        "downstream_scale_in_guard": totals["selected_downstream_guard_blocked_count"],
+        "execution_receipt_or_fill": max(
+            0,
+            totals["selected_order_submitted_count"]
+            - totals["selected_executed_count"],
+        ),
+        "downstream_event_provenance": totals["selected_open_or_unresolved_count"],
+        "position_closed_without_submit": totals[
+            "selected_closed_without_submit_count"
+        ],
+        "rejected_report_provenance": provenance_rejected_report_count,
+    }
+    dominant_non_execution_layer = max(
+        non_execution_layers,
+        key=lambda key: (non_execution_layers[key], key),
+    )
+    if non_execution_layers[dominant_non_execution_layer] == 0:
+        dominant_non_execution_layer = "none"
+    count_fields = {
+        key: totals[key]
+        for key in (
+            "runtime_gate_evaluation_count",
+            "runtime_gate_selected_count",
+            "runtime_gate_blocked_count",
+            "selected_downstream_guard_blocked_count",
+            "selected_order_submitted_count",
+            "selected_executed_count",
+            "selected_open_or_unresolved_count",
+            "selected_closed_without_submit_count",
+            "invalid_timestamp_event_count",
+        )
+    }
+    return {
+        "state": state,
+        "section_present": section_present,
+        "accepted_report_count": accepted_report_count,
+        "provenance_rejected_report_count": provenance_rejected_report_count,
+        **count_fields,
+        "runtime_gate_block_reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in runtime_block_reasons.most_common()
+        ],
+        "downstream_guard_block_reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in downstream_block_reasons.most_common()
+        ],
+        "selection_to_submit_rate": (
+            round(totals["selected_order_submitted_count"] / selected_count, 4)
+            if selected_count
+            else 0.0
+        ),
+        "selection_to_execution_rate": (
+            round(totals["selected_executed_count"] / selected_count, 4)
+            if selected_count
+            else 0.0
+        ),
+        "dominant_non_execution_layer": dominant_non_execution_layer,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "metric_role": "winner_recovery_runtime_funnel_attribution",
+        "decision_authority": (
+            "rolling_source_only_winner_recovery_runtime_funnel_attribution"
+        ),
+        "window_policy": "rolling_clean_baseline_runtime_gate_to_execution_funnel",
+        "sample_floor": "1_winner_recovery_runtime_gate_evaluation",
+        "primary_decision_metric": (
+            "runtime_gate_selected_count_selected_downstream_guard_blocked_count_"
+            "selected_closed_without_submit_count_selected_order_submitted_count_"
+            "selected_executed_count"
+        ),
+        "source_quality_gate": (
+            "feedback_metric_contract_and_source_only_summary_provenance"
+        ),
+        "forbidden_uses": FORBIDDEN_USES,
     }
 
 
@@ -1090,14 +1427,526 @@ def _profit_reached(row: dict[str, Any]) -> float | None:
         "profit_rate",
     ):
         if row.get(key) is not None:
-            return _safe_float(row.get(key), 0.0)
+            value = _safe_float(row.get(key), math.nan)
+            return value if math.isfinite(value) and value >= -100.0 else None
     return None
 
 
 def _final_profit(row: dict[str, Any]) -> float | None:
     if row.get("final_profit_rate") is not None:
-        return _safe_float(row.get("final_profit_rate"), 0.0)
+        value = _safe_float(row.get("final_profit_rate"), math.nan)
+        return value if math.isfinite(value) and value >= -100.0 else None
     return None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if value in (None, "", "-"):
+        return None
+    if isinstance(value, bool):
+        return value
+    token = str(value).strip().lower()
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _pyramid_gate_replay(row: dict[str, Any], threshold: float) -> dict[str, Any]:
+    """Replay only the existing PYRAMID gate from one timestamped observation."""
+    missing: list[str] = []
+
+    def number(name: str) -> float | None:
+        value = _safe_float(row.get(name), math.nan)
+        if not math.isfinite(value):
+            missing.append(name)
+            return None
+        return float(value)
+
+    def boolean(name: str) -> bool | None:
+        value = _optional_bool(row.get(name))
+        if value is None:
+            missing.append(name)
+        return value
+
+    profit = number("profit_rate")
+    drawdown = number("drawdown_from_peak")
+    is_new_high = boolean("is_new_high")
+    strong_allowed = boolean("strong_continuation_allowed")
+    strong_min = number("strong_continuation_min_profit_pct")
+    ai_available = boolean("ai_score_available")
+    ai_score = number("current_ai_score")
+    min_ai = number("min_ai_score")
+    pressure_usable = boolean("tick_aggressor_pressure_usable")
+    trusted_pressure_count = number("tick_aggressor_trusted_count")
+    buy_pressure = number("buy_pressure_10t")
+    min_buy_pressure = number("min_buy_pressure")
+    tick_accel = number("tick_acceleration_ratio")
+    min_tick = number("min_tick_accel")
+    stale = boolean("reversal_feature_stale")
+    large_sell = boolean("large_sell_print_detected")
+    micro_available = boolean("micro_vwap_available")
+    micro_vwap = (
+        number("curr_vs_micro_vwap_bp") if micro_available is not False else None
+    )
+    max_micro = number("max_micro_vwap_bps")
+    if missing:
+        return {
+            "status": "source_quality_blocked",
+            "selected": False,
+            "reason": "missing_gate_context",
+            "source_quality_reasons": sorted(set(missing)),
+        }
+
+    assert profit is not None
+    assert drawdown is not None
+    assert is_new_high is not None
+    assert strong_allowed is not None
+    assert strong_min is not None
+    assert ai_available is not None
+    assert ai_score is not None
+    assert min_ai is not None
+    assert pressure_usable is not None
+    assert trusted_pressure_count is not None
+    assert buy_pressure is not None
+    assert min_buy_pressure is not None
+    assert tick_accel is not None
+    assert min_tick is not None
+    assert stale is not None
+    assert large_sell is not None
+    assert micro_available is not None
+    assert max_micro is not None
+
+    effective_strong_min = min(float(threshold), strong_min)
+    threshold_pass = bool(
+        profit >= threshold
+        or (profit < threshold and strong_allowed and profit >= effective_strong_min)
+    )
+    if not threshold_pass:
+        return {
+            "status": "evaluated",
+            "selected": False,
+            "reason": "profit_not_enough",
+            "source_quality_reasons": [],
+        }
+    if not (is_new_high or drawdown <= 0.3):
+        return {
+            "status": "evaluated",
+            "selected": False,
+            "reason": "trend_not_strong",
+            "source_quality_reasons": [],
+        }
+
+    quality_decision = _pyramid_quality_decision(
+        {
+            "current_ai_score": ai_score,
+            "ai_score_available": ai_available,
+            "min_ai_score": min_ai,
+            "buy_pressure_10t": buy_pressure,
+            "min_buy_pressure": min_buy_pressure,
+            "tick_acceleration_ratio": tick_accel,
+            "min_tick_accel": min_tick,
+            "curr_vs_micro_vwap_bp": (
+                micro_vwap if micro_available and micro_vwap is not None else "-"
+            ),
+            "max_micro_vwap_bps": max_micro,
+            "reversal_feature_stale": stale,
+            "tick_aggressor_pressure_usable": pressure_usable,
+            "tick_aggressor_trusted_count": trusted_pressure_count,
+            "large_sell_print_detected": large_sell,
+        }
+    )
+    selected = bool(quality_decision.get("allowed"))
+    return {
+        "status": "evaluated",
+        "selected": selected,
+        "reason": "scalping_pyramid_ok" if selected else "quality_or_safety_blocked",
+        "support_score": quality_decision.get("support_score"),
+        "hard_blockers": sorted(set(quality_decision.get("hard_blockers") or [])),
+        "source_quality_reasons": [],
+    }
+
+
+def _threshold_replay_rows(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for report in reports:
+        contract = report.get("pyramid_threshold_replay_metric_contract")
+        if not isinstance(contract, dict) or contract.get("metric_role") != (
+            "bounded_tunable_threshold_gate_counterfactual"
+        ):
+            continue
+        contract_reasons: list[str] = []
+        if int(_safe_float(report.get("schema_version"), -1.0)) != (
+            REPLAY_SOURCE_SCHEMA_VERSION
+        ):
+            contract_reasons.append("threshold_replay_report_schema_invalid")
+        if str(contract.get("contract_version") or "") != (
+            REPLAY_SOURCE_CONTRACT_VERSION
+        ):
+            contract_reasons.append("threshold_replay_contract_version_invalid")
+        if str(contract.get("decision_authority") or "") != (
+            "source_only_fixed_observed_exit_pyramid_gate_replay"
+        ):
+            contract_reasons.append("threshold_replay_contract_authority_invalid")
+        if str(contract.get("primary_decision_metric") or "") != (
+            "source_quality_adjusted_ev_pct"
+        ):
+            contract_reasons.append("threshold_replay_primary_metric_invalid")
+        source_date = str(report.get("target_date") or "")
+        for raw in report.get("pyramid_threshold_replay_rows") or []:
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            source_reasons = list(row.get("source_quality_reasons") or []) + list(
+                contract_reasons
+            )
+            if row.get("runtime_effect") is not False:
+                source_reasons.append("threshold_replay_runtime_effect_not_false")
+            if row.get("allowed_runtime_apply") is not False:
+                source_reasons.append(
+                    "threshold_replay_allowed_runtime_apply_not_false"
+                )
+            if str(row.get("decision_authority") or "") != (
+                "source_only_fixed_observed_exit_pyramid_gate_replay"
+            ):
+                source_reasons.append("threshold_replay_decision_authority_invalid")
+            if row.get("same_stage_competing_owner") is True:
+                source_reasons.append("same_stage_competing_bridge_owner")
+            if row.get("runtime_prior_action_applied") is True:
+                source_reasons.append("runtime_prior_action_applied")
+            if str(row.get("effective_venue") or "") not in {
+                "KRX",
+                "NXT",
+                "PREMARKET_KRX_LIKE",
+            } or str(row.get("effective_venue_source") or "") == (
+                "terminal_cycle_fallback"
+            ):
+                source_reasons.append("threshold_replay_evaluation_venue_invalid")
+            if not str(row.get("market_session_bucket") or "").strip():
+                source_reasons.append("threshold_replay_evaluation_session_missing")
+            if str(row.get("pyramid_evaluation_schema") or "") != REPLAY_EVENT_SCHEMA:
+                source_reasons.append("threshold_replay_event_schema_invalid")
+            if row.get("fixed_exit_economic_replay_ready") is not True:
+                source_reasons.append("fixed_exit_economic_replay_not_ready")
+            if str(row.get("price_evidence_level") or "") != REPLAY_PRICE_EVIDENCE:
+                source_reasons.append("threshold_replay_price_evidence_invalid")
+            if row.get("quote_stale") is not False:
+                source_reasons.append("threshold_replay_quote_not_fresh")
+            if row.get("pyramid_price_resolver_observed") is not True:
+                source_reasons.append("threshold_replay_resolver_not_observed")
+            if row.get("pyramid_price_resolver_allowed") is not True:
+                source_reasons.append("threshold_replay_resolver_not_allowed")
+            if str(row.get("pyramid_price_resolver_reason") or "") != (
+                "scale_in_price_resolved"
+            ) or str(row.get("pyramid_price_resolver_price_source") or "") not in {
+                "best_bid",
+                "defensive_ticks",
+                "best_bid_defensive_clamp",
+            }:
+                source_reasons.append(
+                    "threshold_replay_resolver_limit_contract_invalid"
+                )
+            best_ask = _safe_float(row.get("executable_best_ask"), math.nan)
+            best_bid = _safe_float(row.get("executable_best_bid"), math.nan)
+            resolver_best_ask = _safe_float(
+                row.get("pyramid_price_resolver_best_ask"), math.nan
+            )
+            resolver_best_bid = _safe_float(
+                row.get("pyramid_price_resolver_best_bid"), math.nan
+            )
+            if (
+                not math.isfinite(best_ask)
+                or not math.isfinite(best_bid)
+                or best_ask <= 0
+                or best_bid <= 0
+                or best_ask < best_bid
+            ):
+                source_reasons.append("threshold_replay_executable_bbo_invalid")
+            if (
+                not math.isfinite(resolver_best_ask)
+                or not math.isfinite(resolver_best_bid)
+                or not math.isclose(best_ask, resolver_best_ask, abs_tol=1e-9)
+                or not math.isclose(best_bid, resolver_best_bid, abs_tol=1e-9)
+            ):
+                source_reasons.append("threshold_replay_resolver_bbo_mismatch")
+            replay_entry = _safe_float(row.get("replay_entry_price"), math.nan)
+            resolver_price = _safe_float(
+                row.get("pyramid_price_resolver_order_price"), math.nan
+            )
+            if (
+                not math.isfinite(replay_entry)
+                or not math.isfinite(resolver_price)
+                or replay_entry <= 0
+                or resolver_price <= 0
+                or not math.isclose(replay_entry, resolver_price, abs_tol=1e-9)
+            ):
+                source_reasons.append("threshold_replay_resolver_price_mismatch")
+            if source_reasons:
+                row["gate_replay_source_quality_valid"] = False
+                row["source_quality_reasons"] = sorted(set(source_reasons))
+            row["source_target_date"] = source_date
+            rows.append(row)
+    return rows
+
+
+def _threshold_replay_episode_result(
+    events: list[dict[str, Any]], threshold: float
+) -> dict[str, Any]:
+    ordered = sorted(
+        events,
+        key=lambda row: (
+            str(row.get("source_event_ts") or ""),
+            str(row.get("pyramid_evaluation_id") or ""),
+        ),
+    )
+    exclusion_reasons: list[str] = []
+    for row in ordered:
+        if not row.get("gate_replay_source_quality_valid"):
+            exclusion_reasons.extend(row.get("source_quality_reasons") or [])
+            continue
+        configured_threshold = _safe_float(
+            row.get("configured_min_profit_pct"), math.nan
+        )
+        if not math.isfinite(configured_threshold):
+            exclusion_reasons.append("configured_min_profit_missing")
+            continue
+        observed_replay = _pyramid_gate_replay(row, configured_threshold)
+        if observed_replay.get("status") != "evaluated":
+            exclusion_reasons.extend(
+                observed_replay.get("source_quality_reasons") or []
+            )
+            continue
+        observed_selected = _optional_bool(row.get("observed_gate_selected"))
+        if observed_selected is None:
+            exclusion_reasons.append("observed_gate_selected_missing")
+        elif bool(observed_replay.get("selected")) != observed_selected:
+            exclusion_reasons.append("observed_gate_replay_mismatch")
+    if exclusion_reasons:
+        return {
+            "status": "source_quality_blocked",
+            "selected": False,
+            "net_profit_pct": None,
+            "selected_event_id": None,
+            "source_quality_reasons": sorted(set(exclusion_reasons)),
+        }
+
+    for row in ordered:
+        replay = _pyramid_gate_replay(row, threshold)
+        if replay.get("status") != "evaluated":
+            return {
+                "status": "source_quality_blocked",
+                "selected": False,
+                "net_profit_pct": None,
+                "selected_event_id": None,
+                "source_quality_reasons": sorted(
+                    set(replay.get("source_quality_reasons") or [])
+                )
+                or ["no_replayable_gate_event"],
+            }
+        if not replay.get("selected"):
+            continue
+        entry_price = _safe_float(row.get("replay_entry_price"), 0.0)
+        sell_price = _safe_float(row.get("sell_price"), 0.0)
+        if (
+            not row.get("fixed_exit_economic_replay_ready")
+            or entry_price <= 0
+            or sell_price <= 0
+        ):
+            return {
+                "status": "selected_price_or_outcome_unusable",
+                "selected": True,
+                "net_profit_pct": None,
+                "selected_event_id": row.get("pyramid_evaluation_id"),
+                "source_quality_reasons": sorted(
+                    set(
+                        (row.get("source_quality_reasons") or [])
+                        + ["selected_event_fixed_exit_economics_unusable"]
+                    )
+                ),
+            }
+        return {
+            "status": "evaluated",
+            "selected": True,
+            "net_profit_pct": calculate_net_profit_rate(
+                entry_price,
+                sell_price,
+                precision=8,
+            ),
+            "selected_event_id": row.get("pyramid_evaluation_id"),
+            "entry_price": entry_price,
+            "sell_price": sell_price,
+            "price_evidence_level": row.get("price_evidence_level"),
+            "effective_venue": row.get("effective_venue"),
+            "source_quality_reasons": [],
+        }
+    if ordered:
+        episode_venues = {str(row.get("effective_venue") or "") for row in ordered}
+        return {
+            "status": "evaluated",
+            "selected": False,
+            "net_profit_pct": 0.0,
+            "selected_event_id": None,
+            "effective_venue": (
+                next(iter(episode_venues)) if len(episode_venues) == 1 else "UNKNOWN"
+            ),
+            "source_quality_reasons": [],
+        }
+    return {
+        "status": "source_quality_blocked",
+        "selected": False,
+        "net_profit_pct": None,
+        "selected_event_id": None,
+        "source_quality_reasons": sorted(set(exclusion_reasons))
+        or ["no_replayable_gate_event"],
+    }
+
+
+def _pyramid_threshold_replay_grid(
+    rows: list[dict[str, Any]], current_threshold: float
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    by_episode: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        position_key = str(row.get("position_key") or "").strip()
+        source_date = str(row.get("source_target_date") or "").strip()
+        if position_key and source_date:
+            by_episode[f"{source_date}:{position_key}"].append(row)
+    if not by_episode:
+        return []
+    thresholds = {
+        round(PROFIT_GRID_MIN + (index * PROFIT_GRID_STEP), 1)
+        for index in range(
+            int(round((PROFIT_GRID_MAX - PROFIT_GRID_MIN) / PROFIT_GRID_STEP)) + 1
+        )
+    }
+    thresholds.add(float(current_threshold))
+    ordered_thresholds = sorted(thresholds)
+    episode_results = {
+        episode_key: {
+            threshold: _threshold_replay_episode_result(events, threshold)
+            for threshold in ordered_thresholds
+        }
+        for episode_key, events in by_episode.items()
+    }
+    aligned_episode_keys = {
+        episode_key
+        for episode_key, results_by_threshold in episode_results.items()
+        if all(
+            item.get("status") == "evaluated" for item in results_by_threshold.values()
+        )
+    }
+    grid: list[dict[str, Any]] = []
+    for threshold in ordered_thresholds:
+        results = [
+            results_by_threshold[threshold]
+            for results_by_threshold in episode_results.values()
+        ]
+        aligned_results = [
+            episode_results[episode_key][threshold]
+            for episode_key in sorted(aligned_episode_keys)
+        ]
+        comparable = aligned_results
+        selected = [item for item in comparable if item.get("selected")]
+        net_values = [float(item.get("net_profit_pct") or 0.0) for item in comparable]
+        selected_net_values = [
+            float(item.get("net_profit_pct") or 0.0) for item in selected
+        ]
+        exclusion_counts = Counter(
+            reason
+            for item in results
+            if item.get("status") != "evaluated"
+            for reason in item.get("source_quality_reasons") or [item.get("status")]
+        )
+        positive_exit_count = sum(1 for value in selected_net_values if value > 0)
+        venue_counts = Counter(
+            str(item.get("effective_venue") or "UNKNOWN") for item in comparable
+        )
+        venue_rows = []
+        for venue in sorted(venue_counts):
+            venue_results = [
+                item
+                for item in comparable
+                if str(item.get("effective_venue") or "UNKNOWN") == venue
+            ]
+            venue_values = [
+                float(item.get("net_profit_pct") or 0.0) for item in venue_results
+            ]
+            venue_rows.append(
+                {
+                    "effective_venue": venue,
+                    "comparable_episode_count": len(venue_results),
+                    "eligible_count": sum(
+                        1 for item in venue_results if item.get("selected")
+                    ),
+                    "source_quality_adjusted_ev_pct": (
+                        sum(venue_values) / len(venue_values) if venue_values else 0.0
+                    ),
+                    "runtime_effect": False,
+                }
+            )
+        grid.append(
+            {
+                "min_profit_pct": threshold,
+                "source_episode_count": len(by_episode),
+                "comparable_episode_count": len(comparable),
+                "source_quality_excluded_episode_count": len(results) - len(comparable),
+                "aligned_comparison_episode_count": len(comparable),
+                "comparison_effective_venue_counts": dict(venue_counts),
+                "source_quality_adjusted_ev_by_effective_venue": venue_rows,
+                "eligible_count": len(selected),
+                "eligible_rate": len(selected) / len(comparable) if comparable else 0.0,
+                "positive_exit_count": positive_exit_count,
+                "positive_exit_rate": (
+                    positive_exit_count / len(selected) if selected else 0.0
+                ),
+                "loss_or_flat_count": len(selected) - positive_exit_count,
+                "loss_or_flat_rate": (
+                    (len(selected) - positive_exit_count) / len(selected)
+                    if selected
+                    else 0.0
+                ),
+                "trade_cost_rate": get_trade_cost_rate(),
+                "trade_cost_pct": round(get_trade_cost_rate() * 100.0, 8),
+                "cost_application": "calculate_net_profit_rate_once_on_sell_notional",
+                "trade_cost_rate_source": "shared_trade_profit_runtime_config",
+                "trade_cost_schedule_scope": (
+                    "runtime_config_not_date_or_product_specific"
+                ),
+                "slippage_policy": "excluded_resolver_limit_price_counterfactual",
+                "avg_incremental_exit_profit_pct": (
+                    sum(selected_net_values) / len(selected_net_values)
+                    if selected_net_values
+                    else 0.0
+                ),
+                "equal_weight_avg_profit_pct": (
+                    sum(selected_net_values) / len(selected_net_values)
+                    if selected_net_values
+                    else 0.0
+                ),
+                "notional_weighted_ev_pct": None,
+                "notional_weighted_ev_status": (
+                    "unavailable_without_compatible_quantity_provenance"
+                ),
+                "source_quality_adjusted_ev_pct": (
+                    sum(net_values) / len(comparable) if comparable else 0.0
+                ),
+                "equal_weight_expected_net_profit_contribution_pct": (
+                    sum(net_values) / len(comparable) if comparable else 0.0
+                ),
+                "source_quality_exclusion_reasons": [
+                    {"reason": key, "count": value}
+                    for key, value in exclusion_counts.most_common()
+                ],
+                "replay_method": (
+                    "fixed_observed_exit_first_eligible_event_existing_resolver_price"
+                ),
+                "causal_runtime_effect_claimed": False,
+                "comparison_alignment": "same_complete_episode_set_all_thresholds",
+                "runtime_effect": False,
+            }
+        )
+    return grid
 
 
 def _profit_threshold_grid(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1107,6 +1956,9 @@ def _profit_threshold_grid(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if (reached := _profit_reached(row)) is not None
         and (final := _final_profit(row)) is not None
     ]
+    if not usable_rows:
+        return []
+    assumed_trade_cost_pct = round(get_trade_cost_rate() * 100.0, 4)
     grid: list[dict[str, Any]] = []
     steps = int(round((PROFIT_GRID_MAX - PROFIT_GRID_MIN) / PROFIT_GRID_STEP)) + 1
     for index in range(steps):
@@ -1117,9 +1969,15 @@ def _profit_threshold_grid(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if reached >= threshold
         ]
         eligible_count = len(eligible)
-        positive_exit_count = sum(1 for _, final, _ in eligible if final > threshold)
+        gross_incremental = [
+            ((((1.0 + (final / 100.0)) / (1.0 + (threshold / 100.0))) - 1.0) * 100.0)
+            for _, final, _ in eligible
+        ]
+        net_incremental = [
+            value - assumed_trade_cost_pct for value in gross_incremental
+        ]
+        positive_exit_count = sum(1 for value in net_incremental if value > 0.0)
         loss_or_flat_count = eligible_count - positive_exit_count
-        incremental = [final - threshold for _, final, _ in eligible]
         missed_upside = [max(0.0, reached - threshold) for reached, _, _ in eligible]
         label_counts = Counter(
             str(row.get("pyramid_feedback_label") or "unknown")
@@ -1141,8 +1999,19 @@ def _profit_threshold_grid(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "loss_or_flat_rate": (
                     loss_or_flat_count / eligible_count if eligible_count else 0.0
                 ),
+                "assumed_trade_cost_pct": assumed_trade_cost_pct,
+                "avg_gross_incremental_exit_profit_pct": (
+                    sum(gross_incremental) / len(gross_incremental)
+                    if gross_incremental
+                    else 0.0
+                ),
                 "avg_incremental_exit_profit_pct": (
-                    sum(incremental) / len(incremental) if incremental else 0.0
+                    sum(net_incremental) / len(net_incremental)
+                    if net_incremental
+                    else 0.0
+                ),
+                "equal_weight_expected_net_profit_contribution_pct": (
+                    sum(net_incremental) / len(usable_rows) if usable_rows else 0.0
                 ),
                 "avg_missed_upside_after_threshold_pct": (
                     sum(missed_upside) / len(missed_upside) if missed_upside else 0.0
@@ -1171,6 +2040,14 @@ def _profit_grid_decision(
 ) -> dict[str, Any]:
     current_threshold = float(current["min_profit_pct"])
     current_row = _nearest_grid_row(grid, current_threshold)
+    current_row_exact = bool(
+        current_row
+        and math.isclose(
+            float(current_row.get("min_profit_pct") or 0.0),
+            current_threshold,
+            abs_tol=1e-9,
+        )
+    )
     eligible_rows = [
         row
         for row in grid
@@ -1180,98 +2057,202 @@ def _profit_grid_decision(
         return {
             "status": "unavailable",
             "reason": "no_rows_with_max_and_final_profit",
+            "objective": "maximize_fee_aware_expected_net_profit_contribution",
             "selected_min_profit_pct": current_threshold,
+            "recommended_next_min_profit_pct": current_threshold,
+            "exploratory_selected_min_profit_pct": None,
+            "current_min_profit_pct": current_threshold,
             "current_row": current_row,
             "selected_row": None,
+        }
+    if not current_row_exact:
+        return {
+            "status": "hold",
+            "reason": "current_threshold_outside_profit_grid",
+            "objective": "maximize_fee_aware_expected_net_profit_contribution",
+            "selected_min_profit_pct": current_threshold,
+            "recommended_next_min_profit_pct": current_threshold,
+            "candidate_next_min_profit_pct": None,
+            "exploratory_selected_min_profit_pct": None,
+            "current_min_profit_pct": current_threshold,
+            "current_row": None,
+            "selected_row": None,
+            "candidate_next_row": None,
         }
     if not eligible_rows:
         return {
             "status": "hold",
             "reason": "grid_eligible_rows_lt_20",
+            "objective": "maximize_fee_aware_expected_net_profit_contribution",
             "selected_min_profit_pct": current_threshold,
+            "recommended_next_min_profit_pct": current_threshold,
+            "exploratory_selected_min_profit_pct": None,
+            "current_min_profit_pct": current_threshold,
             "current_row": current_row,
             "selected_row": None,
         }
-    selected = max(
+    exploratory_selected = max(
         eligible_rows,
         key=lambda row: (
-            float(row.get("avg_incremental_exit_profit_pct") or 0.0),
+            float(row.get("equal_weight_expected_net_profit_contribution_pct") or 0.0),
             -float(row.get("loss_or_flat_rate") or 0.0),
             float(row.get("min_profit_pct") or 0.0),
         ),
     )
-    current_ev = (
-        float(current_row.get("avg_incremental_exit_profit_pct") or 0.0)
+    current_contribution = (
+        float(
+            current_row.get("equal_weight_expected_net_profit_contribution_pct") or 0.0
+        )
         if current_row
         else 0.0
     )
-    selected_ev = float(selected.get("avg_incremental_exit_profit_pct") or 0.0)
-    selected_threshold = float(selected["min_profit_pct"])
-    ev_delta = selected_ev - current_ev
-    if abs(selected_threshold - current_threshold) < 0.05:
+    exploratory_threshold = float(exploratory_selected["min_profit_pct"])
+    if abs(exploratory_threshold - current_threshold) < 0.05:
+        recommended_threshold = current_threshold
+    else:
+        direction = -1.0 if exploratory_threshold < current_threshold else 1.0
+        recommended_threshold = round(
+            current_threshold + (direction * PROFIT_GRID_RUNTIME_STEP), 1
+        )
+    candidate_next = _nearest_grid_row(grid, recommended_threshold)
+    candidate_next_contribution = (
+        float(
+            candidate_next.get("equal_weight_expected_net_profit_contribution_pct")
+            or 0.0
+        )
+        if candidate_next
+        else current_contribution
+    )
+    contribution_delta = candidate_next_contribution - current_contribution
+    if abs(exploratory_threshold - current_threshold) < 0.05:
         status = "hold"
         reason = "grid_selected_current_threshold"
-    elif ev_delta < PROFIT_GRID_MIN_EV_DELTA:
+    elif not candidate_next or int(candidate_next.get("eligible_count") or 0) < (
+        PROFIT_GRID_MIN_ELIGIBLE
+    ):
         status = "hold"
-        reason = "grid_ev_delta_lt_0_20"
-    elif selected_threshold < current_threshold:
+        reason = "grid_next_step_eligible_rows_lt_20"
+    elif contribution_delta <= 0.0:
+        status = "hold"
+        reason = "grid_next_step_net_contribution_not_improved"
+    elif candidate_next_contribution <= 0.0:
+        status = "hold"
+        reason = "grid_next_step_net_contribution_non_positive"
+    elif recommended_threshold < current_threshold:
         status = "adjust_down"
-        reason = "grid_loosen_profit_threshold_direct"
+        reason = "grid_loosen_profit_threshold_one_step"
     else:
         status = "adjust_up"
-        reason = "grid_tighten_profit_threshold_direct"
+        reason = "grid_tighten_profit_threshold_one_step"
     return {
         "status": status,
         "reason": reason,
-        "selected_min_profit_pct": selected_threshold,
+        "objective": "maximize_fee_aware_expected_net_profit_contribution",
+        "selected_min_profit_pct": (
+            recommended_threshold if status != "hold" else current_threshold
+        ),
+        "recommended_next_min_profit_pct": (
+            recommended_threshold if status != "hold" else current_threshold
+        ),
+        "candidate_next_min_profit_pct": recommended_threshold,
+        "exploratory_selected_min_profit_pct": exploratory_threshold,
         "current_min_profit_pct": current_threshold,
-        "current_avg_incremental_exit_profit_pct": current_ev,
-        "selected_avg_incremental_exit_profit_pct": selected_ev,
-        "avg_incremental_exit_profit_delta_pct": ev_delta,
+        "current_equal_weight_expected_net_profit_contribution_pct": (
+            current_contribution
+        ),
+        "current_source_quality_adjusted_ev_pct": current_contribution,
+        "selected_equal_weight_expected_net_profit_contribution_pct": (
+            candidate_next_contribution if status != "hold" else current_contribution
+        ),
+        "candidate_next_equal_weight_expected_net_profit_contribution_pct": (
+            candidate_next_contribution
+        ),
+        "candidate_next_source_quality_adjusted_ev_pct": candidate_next_contribution,
+        "source_quality_adjusted_ev_delta_pct": contribution_delta,
+        "equal_weight_expected_net_profit_contribution_delta_pct": (contribution_delta),
+        "exploratory_selected_equal_weight_expected_net_profit_contribution_pct": (
+            float(
+                exploratory_selected.get(
+                    "equal_weight_expected_net_profit_contribution_pct"
+                )
+                or 0.0
+            )
+        ),
+        "current_avg_incremental_exit_profit_pct": (
+            float(current_row.get("avg_incremental_exit_profit_pct") or 0.0)
+            if current_row
+            else 0.0
+        ),
+        "selected_avg_incremental_exit_profit_pct": (
+            float(
+                (candidate_next if status != "hold" else current_row).get(
+                    "avg_incremental_exit_profit_pct"
+                )
+                or 0.0
+            )
+        ),
         "current_row": current_row,
-        "selected_row": selected,
+        "selected_row": candidate_next if status != "hold" else current_row,
+        "candidate_next_row": candidate_next,
+        "exploratory_selected_row": exploratory_selected,
+        "max_runtime_step_pct": PROFIT_GRID_RUNTIME_STEP,
     }
 
 
-def _one_step_candidate_values(
-    current: dict[str, Any], rates: dict[str, Any]
-) -> tuple[str, dict[str, Any], str]:
-    recommended = dict(current)
-    recovery_rate = _safe_float(rates.get("recovered_or_extended_rate"))
-    reversal_rate = _safe_float(rates.get("reversal_or_flat_rate"))
-    if reversal_rate >= 0.60:
-        recommended["min_profit_pct"] = min(float(current["min_profit_pct"]) + 0.2, 3.0)
-        recommended["min_ai_score"] = min(float(current["min_ai_score"]) + 5.0, 85.0)
-        recommended["min_buy_pressure"] = min(
-            float(current["min_buy_pressure"]) + 5.0, 80.0
-        )
-        recommended["min_tick_accel"] = min(float(current["min_tick_accel"]) + 0.1, 1.5)
-        recommended["max_micro_vwap_bps"] = max(
-            float(current["max_micro_vwap_bps"]) - 10.0, 30.0
-        )
-        recommended["max_spread_bps"] = max(
-            float(current["max_spread_bps"]) - 10.0, 40.0
-        )
-        if _boolish(current.get("strong_continuation_enabled")):
-            recommended["strong_continuation_enabled"] = False
-        return "adjust_up", recommended, "reversal_cluster_tighten_one_step"
-    if recovery_rate >= 0.60:
-        recommended["min_profit_pct"] = max(float(current["min_profit_pct"]) - 0.2, 0.8)
-        recommended["min_ai_score"] = max(float(current["min_ai_score"]) - 5.0, 60.0)
-        recommended["min_buy_pressure"] = max(
-            float(current["min_buy_pressure"]) - 5.0, 45.0
-        )
-        recommended["min_tick_accel"] = max(float(current["min_tick_accel"]) - 0.1, 0.2)
-        recommended["max_micro_vwap_bps"] = min(
-            float(current["max_micro_vwap_bps"]) + 10.0, 100.0
-        )
-        recommended["max_spread_bps"] = min(
-            float(current["max_spread_bps"]) + 10.0, 120.0
-        )
-        if not _boolish(current.get("strong_continuation_enabled")):
-            recommended["strong_continuation_enabled"] = True
-        return "adjust_down", recommended, "recovery_cluster_loosen_one_step"
-    return "hold", recommended, "mixed_cluster_hold"
+def _condition_feasibility(
+    grid_decision: dict[str, Any],
+    *,
+    source_blockers: list[str],
+    runtime_baseline_blockers: list[str],
+    runtime_scope_blockers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Distinguish missing evidence, economic rejection and a blocked step path."""
+    runtime_scope_blockers = runtime_scope_blockers or []
+    best = grid_decision.get("exploratory_selected_row") or {}
+    best_net = best.get("equal_weight_expected_net_profit_contribution_pct")
+    if source_blockers or runtime_baseline_blockers:
+        state = "evidence_not_ready"
+        action = "resolve_named_source_or_baseline_blockers"
+    elif runtime_scope_blockers:
+        state = "runtime_scope_not_supported"
+        action = "collect_common_axis_krx_parent_evidence"
+    elif not best:
+        state = "grid_evidence_not_ready"
+        action = "repair_profit_observations_or_collect_eligible_samples"
+    elif best_net is None or best_net <= 0.0:
+        state = "no_economic_candidate"
+        action = "reject_current_threshold_only_hypothesis"
+    elif grid_decision.get("status") in {"adjust_up", "adjust_down"}:
+        state = "bounded_candidate_ready"
+        action = "next_preopen_ai_and_owner_review"
+    elif grid_decision.get("reason") == "grid_selected_current_threshold":
+        state = "current_threshold_best"
+        action = "retain_current_threshold"
+    else:
+        state = "positive_candidate_unreachable_in_one_step"
+        action = "review_bounded_path_with_source_only_replay"
+    return {
+        "state": state,
+        "next_action": action,
+        "condition_currently_achievable": state == "bounded_candidate_ready",
+        "profit_improvement_demonstrated": state == "bounded_candidate_ready",
+        "positive_exploratory_candidate_present": bool(
+            best_net is not None and best_net > 0
+        ),
+        "best_exploratory_min_profit_pct": best.get("min_profit_pct"),
+        "best_exploratory_net_contribution_pct": best_net,
+        "indefinite_wait_appropriate": state
+        not in {"no_economic_candidate", "positive_candidate_unreachable_in_one_step"},
+        "source_blockers": source_blockers,
+        "runtime_baseline_blockers": runtime_baseline_blockers,
+        "runtime_scope_blockers": runtime_scope_blockers,
+        "reconsideration_trigger": "new_valid_closed_outcomes_or_revised_source_only_hypothesis",
+        "future_success_probability": None,
+        "probability_status": "not_estimated_from_observational_grid",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "source_only_threshold_feasibility_review",
+    }
 
 
 def _calibration_candidate(
@@ -1291,21 +2272,29 @@ def _calibration_candidate(
     winner_recovery_bounded_canary = normal_winner_expansion[
         "winner_recovery_bounded_canary_observation"
     ]
-    winner_recovery_real_execution = (
-        _winner_recovery_real_execution_observation(reports)
+    winner_recovery_real_execution = _winner_recovery_real_execution_observation(
+        reports
+    )
+    winner_recovery_runtime_funnel = _winner_recovery_runtime_funnel_observation(
+        reports
     )
     post_probe_real_outcome = _post_probe_real_outcome_observation(reports)
     post_probe_reprice = _post_probe_reprice_observation(reports)
+    threshold_replay_contract_present = any(
+        isinstance(report.get("pyramid_threshold_replay_metric_contract"), dict)
+        and (report.get("pyramid_threshold_replay_metric_contract") or {}).get(
+            "metric_role"
+        )
+        == "bounded_tunable_threshold_gate_counterfactual"
+        for report in reports
+    )
+    threshold_replay_rows = _threshold_replay_rows(reports)
     rows = (
         one_share_rows
         if one_share_source_present
         else _closed_pyramid_rows(reports, row_exclusion_counts)
     )
-    calibration_source_scope = (
-        "one_share_event_opportunity"
-        if one_share_source_present
-        else "legacy_pyramid_feedback_rows"
-    )
+    calibration_source_scope = "timestamped_pyramid_gate_fixed_exit_replay"
     rates = _row_rates(rows)
     source_quality_status_counts = Counter(
         str((report.get("source_quality") or {}).get("status") or "missing")
@@ -1337,24 +2326,77 @@ def _calibration_candidate(
                 observation["source_quality_blocked_reason"] = (
                     "input_report_source_quality_not_row_isolatable"
                 )
-    provenance_present = _provenance_present(rows)
-    source_contract_pass = bool(source_quality_pass and provenance_present)
-    sample_floor_met = int(rates["sample_count"]) >= 20
-    sample_floor_reason = (
-        "rolling_closed_one_share_pyramid_rows_lt_20"
-        if one_share_source_present
-        else "rolling_closed_pyramid_rows_lt_20"
+    legacy_provenance_present = _provenance_present(rows)
+    provenance_present = _provenance_present(threshold_replay_rows)
+    source_contract_pass = bool(
+        source_quality_pass and (provenance_present or legacy_provenance_present)
     )
-    current = _current_values()
-    profit_grid = _profit_threshold_grid(rows)
-    grid_decision = _profit_grid_decision(current, profit_grid)
-    blockers: list[str] = []
-    if not sample_floor_met:
-        blockers.append(sample_floor_reason)
+    current_resolution = _resolve_current_values(target_date, reports)
+    current = dict(current_resolution["values"])
+    legacy_proxy_profit_grid = _profit_threshold_grid(rows)
+    threshold_replay_grid = _pyramid_threshold_replay_grid(
+        threshold_replay_rows, float(current["min_profit_pct"])
+    )
+    grid_decision = _profit_grid_decision(current, threshold_replay_grid)
+    replay_episode_count = max(
+        (int(row.get("source_episode_count") or 0) for row in threshold_replay_grid),
+        default=0,
+    )
+    replay_ready_episode_count = max(
+        (
+            int(row.get("comparable_episode_count") or 0)
+            for row in threshold_replay_grid
+        ),
+        default=0,
+    )
+    replay_eligible_count = max(
+        (int(row.get("eligible_count") or 0) for row in threshold_replay_grid),
+        default=0,
+    )
+    decision_grid_row = (
+        grid_decision.get("candidate_next_row")
+        or grid_decision.get("current_row")
+        or {}
+    )
+    decision_eligible_count = int(decision_grid_row.get("eligible_count") or 0)
+    comparison_venue_counts = next(
+        (
+            dict(row.get("comparison_effective_venue_counts") or {})
+            for row in threshold_replay_grid
+            if int(row.get("comparable_episode_count") or 0) > 0
+        ),
+        {},
+    )
+    source_blockers: list[str] = []
+    if not threshold_replay_contract_present:
+        source_blockers.append("pyramid_threshold_replay_contract_missing")
+    elif not threshold_replay_rows:
+        source_blockers.append("pyramid_threshold_replay_rows_missing")
+    elif replay_ready_episode_count <= 0:
+        source_blockers.append("threshold_replay_no_comparable_episodes")
+    elif replay_eligible_count < PROFIT_GRID_MIN_ELIGIBLE:
+        source_blockers.append("rolling_replay_eligible_episodes_lt_20")
     if not source_quality_pass:
-        blockers.append("source_quality_not_pass")
+        source_blockers.append("source_quality_not_pass")
     if not provenance_present:
-        blockers.append("order_provenance_missing")
+        source_blockers.append("threshold_replay_provenance_missing")
+    decision_evidence_blockers = [
+        blocker
+        for blocker in source_blockers
+        if blocker != "rolling_replay_eligible_episodes_lt_20"
+    ]
+    sample_blockers = [
+        blocker
+        for blocker in source_blockers
+        if blocker == "rolling_replay_eligible_episodes_lt_20"
+    ]
+    runtime_scope_blockers: list[str] = []
+    if (
+        replay_ready_episode_count > 0
+        and int(comparison_venue_counts.get("KRX") or 0) <= 0
+    ):
+        runtime_scope_blockers.append("common_runtime_axis_krx_evidence_missing")
+    runtime_baseline_blockers = list(current_resolution.get("blockers") or [])
 
     opportunity_costs = [
         _safe_float(row.get("pyramid_opportunity_cost_pct"), 0.0)
@@ -1378,54 +2420,68 @@ def _calibration_candidate(
         "source_quality_excluded_date_count": len(source_quality_excluded_dates),
         "source_quality_excluded_dates": source_quality_excluded_dates,
     }
-    if blockers:
+    normal_winner_loosen_veto_applied = False
+    if runtime_baseline_blockers:
+        state = "hold_runtime_baseline"
+        recommended = dict(current)
+        reason = ",".join(runtime_baseline_blockers)
+        allowed = False
+    elif decision_evidence_blockers:
+        state = "source_quality_blocked"
+        recommended = dict(current)
+        reason = ",".join(decision_evidence_blockers)
+        allowed = False
+    elif sample_blockers:
         state = "hold_sample"
         recommended = dict(current)
-        reason = ",".join(blockers)
+        reason = ",".join(sample_blockers)
+        allowed = False
+    elif runtime_scope_blockers:
+        state = "hold_runtime_scope"
+        recommended = dict(current)
+        reason = ",".join(runtime_scope_blockers)
         allowed = False
     else:
-        state, recommended, reason = _one_step_candidate_values(current, rates)
+        recommended = dict(current)
         grid_status = str(grid_decision.get("status") or "")
+        reason = str(grid_decision.get("reason") or "grid_evidence_missing")
         if grid_status in {"adjust_up", "adjust_down"}:
-            if state in {"adjust_up", "adjust_down"} and state != grid_status:
-                state = "hold"
-                recommended = dict(current)
-                reason = (
-                    f"cluster_grid_conflict_hold:{reason},{grid_decision.get('reason')}"
-                )
-            else:
-                state = grid_status
-                recommended = dict(
-                    recommended if reason != "mixed_cluster_hold" else current
-                )
-                recommended["min_profit_pct"] = float(
-                    grid_decision["selected_min_profit_pct"]
-                )
-                reason = str(grid_decision.get("reason") or reason)
-        normal_winner_loosen_veto_applied = bool(
-            state == "adjust_down"
-            and normal_winner_expansion.get("sample_floor_met")
-            and _safe_float(
-                normal_winner_expansion.get("notional_weighted_ev_pct"), 0.0
+            state = grid_status
+            recommended["min_profit_pct"] = float(
+                grid_decision["selected_min_profit_pct"]
             )
-            <= 0.0
-        )
-        if normal_winner_loosen_veto_applied:
-            prior_reason = reason
+        else:
             state = "hold"
-            recommended = dict(current)
-            reason = (
-                "normal_winner_expansion_non_positive_ev_hold:"
-                f"{prior_reason}"
-            )
         allowed = state in {"adjust_up", "adjust_down"}
 
-    if blockers:
-        normal_winner_loosen_veto_applied = False
+    feasibility = _condition_feasibility(
+        grid_decision,
+        source_blockers=source_blockers,
+        runtime_baseline_blockers=runtime_baseline_blockers,
+        runtime_scope_blockers=runtime_scope_blockers,
+    )
 
+    evidence_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "evidence_contract_version": EVIDENCE_CONTRACT_VERSION,
+                "target_date": target_date,
+                "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+                "source_dates": source_dates,
+                "current_min_profit_pct": current["min_profit_pct"],
+                "recommended_min_profit_pct": recommended["min_profit_pct"],
+                "threshold_replay_grid": threshold_replay_grid,
+                "source_quality_excluded_dates": source_quality_excluded_dates,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     quality_update_id = (
         f"{FAMILY}:cumulative:{CLEAN_BASELINE_DATE}:{target_date}:"
-        f"{recommended.get('min_profit_pct', current['min_profit_pct'])}"
+        f"{recommended.get('min_profit_pct', current['min_profit_pct'])}:"
+        f"{evidence_digest[:16]}"
     )
 
     return {
@@ -1435,37 +2491,78 @@ def _calibration_candidate(
         "family_type": "bounded_tunable_scalping_pyramid_quality_gate",
         "calibration_state": state,
         "calibration_reason": reason,
-        "threshold_version": f"{FAMILY}:{target_date}:v1",
+        "threshold_version": f"{FAMILY}:{target_date}:v2",
         "quality_update_id": quality_update_id,
+        "evidence_contract_version": EVIDENCE_CONTRACT_VERSION,
+        "evidence_digest": evidence_digest,
         "runtime_update_mode": RUNTIME_UPDATE_MODE,
         "max_runtime_apply_count": 1,
         "cumulative_quality_window": cumulative_quality_window,
         "post_apply_attribution_required": True,
         "sample_count": rates["sample_count"],
+        "source_sample_count": replay_eligible_count,
+        "decision_sample_count": decision_eligible_count,
+        "decision_universe_count": replay_ready_episode_count,
         "sample_floor": 20,
         "allowed_runtime_apply": allowed,
         "safety_revert_required": False,
         "source_quality_gate": (
             ("pass_with_row_exclusions" if row_exclusion_counts else "pass")
-            if source_contract_pass
+            if source_contract_pass and not decision_evidence_blockers
             else "source_quality_blocked"
         ),
         "source_quality_status": (
             ("pass_with_row_exclusions" if row_exclusion_counts else "pass")
-            if source_contract_pass
+            if source_contract_pass and not decision_evidence_blockers
             else "blocked"
         ),
         "source_quality_blocked": (
             None
-            if source_contract_pass
-            else ",".join(blockers) or "source_quality_or_provenance_not_pass"
+            if source_contract_pass and not decision_evidence_blockers
+            else ",".join(decision_evidence_blockers)
+            or "source_quality_or_provenance_not_pass"
         ),
+        "input_source_quality_status": (
+            (
+                "pass_with_row_exclusions"
+                if row_exclusion_counts and rates["sample_count"] > 0
+                else "blocked" if row_exclusion_counts else "pass"
+            )
+            if source_quality_pass
+            else "blocked"
+        ),
+        "decision_evidence_gate": ("blocked" if decision_evidence_blockers else "pass"),
+        "decision_evidence_blockers": decision_evidence_blockers,
+        "runtime_baseline_gate": current_resolution.get("status"),
+        "runtime_baseline_blockers": runtime_baseline_blockers,
+        "runtime_scope_gate": "blocked" if runtime_scope_blockers else "pass",
+        "runtime_scope_blockers": runtime_scope_blockers,
+        "current_value_provenance": current_resolution,
+        "condition_feasibility": feasibility,
         "current_values": current,
         "recommended_values": recommended,
+        "current_value": current["min_profit_pct"],
+        "recommended_value": recommended["min_profit_pct"],
+        "bounds": {"min": PROFIT_GRID_MIN, "max": PROFIT_GRID_MAX},
+        "max_step_per_day": PROFIT_GRID_RUNTIME_STEP,
         "target_env_keys": TARGET_ENV_KEYS if allowed else [],
         "source_metrics": {
+            "condition_feasibility": feasibility,
             **rates,
             "calibration_source_scope": calibration_source_scope,
+            "threshold_replay_contract_present": threshold_replay_contract_present,
+            "threshold_replay_row_count": len(threshold_replay_rows),
+            "threshold_replay_episode_count": replay_episode_count,
+            "threshold_replay_ready_episode_count": replay_ready_episode_count,
+            "threshold_replay_eligible_episode_count": replay_eligible_count,
+            "threshold_replay_decision_eligible_episode_count": (
+                decision_eligible_count
+            ),
+            "threshold_replay_comparison_effective_venue_counts": (
+                comparison_venue_counts
+            ),
+            "evidence_contract_version": EVIDENCE_CONTRACT_VERSION,
+            "evidence_digest": evidence_digest,
             "one_share_event_source_present": one_share_source_present,
             "one_share_closed_pyramid_row_count": len(one_share_rows),
             "one_share_pyramid_avg_opportunity_cost_pct": (
@@ -1473,8 +2570,12 @@ def _calibration_candidate(
                 if opportunity_costs
                 else 0.0
             ),
-            "profit_threshold_grid": profit_grid,
+            "profit_threshold_grid": threshold_replay_grid,
             "profit_threshold_grid_decision": grid_decision,
+            "legacy_peak_threshold_proxy_grid": legacy_proxy_profit_grid,
+            "legacy_peak_threshold_proxy_role": (
+                "diagnostic_only_no_runtime_candidate_authority"
+            ),
             "source_quality_pass": source_quality_pass,
             "source_quality_status_counts": dict(source_quality_status_counts),
             "unisolatable_source_quality_statuses": (
@@ -1483,17 +2584,23 @@ def _calibration_candidate(
             "source_quality_excluded_row_count": sum(row_exclusion_counts.values()),
             "source_quality_exclusion_reasons": dict(row_exclusion_counts),
             "provenance_present": provenance_present,
+            "legacy_feedback_provenance_present": legacy_provenance_present,
             "recommended_action": state,
             "recommended_action_reason": reason,
             "normal_winner_expansion_observation": normal_winner_expansion,
             "normal_winner_expansion_loosen_veto_applied": (
                 normal_winner_loosen_veto_applied
             ),
+            "normal_winner_expansion_role": "diagnostic_different_entry_anchor_not_threshold_candidate_veto",
+            "label_cluster_role": "diagnostic_only_no_quality_env_authority",
             "winner_recovery_bounded_canary_observation": (
                 winner_recovery_bounded_canary
             ),
             "winner_recovery_real_execution_observation": (
                 winner_recovery_real_execution
+            ),
+            "winner_recovery_runtime_funnel_observation": (
+                winner_recovery_runtime_funnel
             ),
             "post_probe_real_outcome_observation": post_probe_real_outcome,
             "post_probe_reprice_observation": post_probe_reprice,
@@ -1555,29 +2662,45 @@ def build_report(
         "metric_contract": {
             "metric_role": "bounded_tunable_calibration_candidate",
             "decision_authority": "postclose_calibration_candidate_preopen_only",
-            "window_policy": "rolling_clean_baseline_one_share_pyramid_opportunity_rows_when_present",
-            "sample_floor": "rolling_closed_one_share_pyramid_rows_ge_20",
-            "primary_decision_metric": (
-                "one_share_pyramid_recovered_or_extended_rate_reversal_or_flat_rate_and_opportunity_cost"
+            "window_policy": (
+                "rolling_clean_baseline_timestamped_pyramid_gate_parent_episodes"
             ),
+            "sample_floor": "rolling_replay_eligible_parent_episodes_ge_20",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": (
-                "row_isolatable_provenance_gaps_excluded_then_remaining_rows_"
-                "must_have_complete_order_provenance"
+                "row_isolatable_provenance_gaps_excluded_then_timestamped_gate_"
+                "context_conflict_free_owner_fresh_same_route_bbo_existing_price_"
+                "resolver_observation_later_terminal_sell_and_same_day_current_"
+                "min_profit_or_pid_verified_"
+                "exact_date_runtime_provenance"
             ),
+            "forbidden_uses": FORBIDDEN_USES,
+        },
+        "condition_feasibility": candidate["condition_feasibility"],
+        "condition_feasibility_metric_contract": {
+            "metric_role": "threshold_candidate_feasibility_diagnostic",
+            "decision_authority": "source_only_threshold_feasibility_review",
+            "window_policy": (
+                "rolling_clean_baseline_timestamped_fixed_exit_gate_replay"
+            ),
+            "sample_floor": PROFIT_GRID_MIN_ELIGIBLE,
+            "primary_decision_metric": (
+                "positive_source_quality_adjusted_ev_and_bounded_step_reachability"
+            ),
+            "source_quality_gate": "same_as_calibration_candidate",
             "forbidden_uses": FORBIDDEN_USES,
         },
         "normal_winner_expansion_observation": (
             candidate["source_metrics"]["normal_winner_expansion_observation"]
         ),
         "winner_recovery_bounded_canary_observation": (
-            candidate["source_metrics"][
-                "winner_recovery_bounded_canary_observation"
-            ]
+            candidate["source_metrics"]["winner_recovery_bounded_canary_observation"]
         ),
         "winner_recovery_real_execution_observation": (
-            candidate["source_metrics"][
-                "winner_recovery_real_execution_observation"
-            ]
+            candidate["source_metrics"]["winner_recovery_real_execution_observation"]
+        ),
+        "winner_recovery_runtime_funnel_observation": (
+            candidate["source_metrics"]["winner_recovery_runtime_funnel_observation"]
         ),
         "post_probe_real_outcome_observation": (
             candidate["source_metrics"]["post_probe_real_outcome_observation"]
@@ -1586,7 +2709,10 @@ def build_report(
             candidate["source_metrics"]["post_probe_reprice_observation"]
         ),
         "source_quality": {
-            "status": candidate.get("source_quality_status"),
+            "status": candidate.get("input_source_quality_status"),
+            "decision_evidence_status": candidate.get("source_quality_status"),
+            "decision_evidence_gate": candidate.get("decision_evidence_gate"),
+            "decision_evidence_blockers": candidate.get("decision_evidence_blockers"),
             "input_report_count": len(reports),
             "intended_input_report_count": len(intended_paths),
             "input_paths": [str(path) for path in paths],
@@ -1609,6 +2735,8 @@ def build_report(
                 bool(candidate.get("allowed_runtime_apply"))
             ),
             "quality_update_id": candidate.get("quality_update_id"),
+            "evidence_contract_version": candidate.get("evidence_contract_version"),
+            "evidence_digest": candidate.get("evidence_digest"),
             "cumulative_quality_window": candidate.get("cumulative_quality_window"),
             "post_apply_attribution_required": True,
             "runtime_effect": False,
@@ -1630,6 +2758,11 @@ def write_outputs(
     metrics = (
         candidate.get("source_metrics")
         if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
+    winner_recovery_runtime_funnel = (
+        report.get("winner_recovery_runtime_funnel_observation")
+        if isinstance(report.get("winner_recovery_runtime_funnel_observation"), dict)
         else {}
     )
     grid_decision = (
@@ -1675,7 +2808,18 @@ def write_outputs(
         f"- stage: {STAGE}",
         f"- calibration_state: {candidate.get('calibration_state')}",
         f"- calibration_reason: {candidate.get('calibration_reason')}",
+        "- condition_feasibility: "
+        + json.dumps(
+            candidate.get("condition_feasibility") or {},
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
         f"- allowed_runtime_apply: {str(candidate.get('allowed_runtime_apply')).lower()}",
+        f"- runtime_baseline_gate: {candidate.get('runtime_baseline_gate')}",
+        "- current_min_profit_pct: "
+        f"{(candidate.get('current_values') or {}).get('min_profit_pct')}",
+        "- current_min_profit_source: "
+        f"{((candidate.get('current_value_provenance') or {}).get('field_sources') or {}).get('min_profit_pct')}",
         "- source_quality_excluded_dates: "
         + json.dumps(
             source_quality.get("source_quality_excluded_dates") or [],
@@ -1699,9 +2843,14 @@ def write_outputs(
         f"{_safe_float(metrics.get('one_share_pyramid_avg_opportunity_cost_pct')):.2f}",
         f"- profit_threshold_grid_status: {grid_decision.get('status')}",
         f"- profit_threshold_grid_reason: {grid_decision.get('reason')}",
+        f"- profit_threshold_grid_objective: {grid_decision.get('objective')}",
+        "- profit_threshold_grid_exploratory_selected_min_profit_pct: "
+        f"{grid_decision.get('exploratory_selected_min_profit_pct')}",
         f"- profit_threshold_grid_selected_min_profit_pct: {grid_decision.get('selected_min_profit_pct')}",
         "- profit_threshold_grid_selected_avg_incremental_exit_profit_pct: "
         f"{_safe_float(selected_grid_row.get('avg_incremental_exit_profit_pct')):.2f}",
+        "- profit_threshold_grid_selected_expected_net_profit_contribution_pct: "
+        f"{_safe_float(selected_grid_row.get('equal_weight_expected_net_profit_contribution_pct')):.4f}",
         f"- source_quality_pass: {metrics.get('source_quality_pass')}",
         "- source_quality_excluded_row_count: "
         f"{metrics.get('source_quality_excluded_row_count')}",
@@ -1738,6 +2887,18 @@ def write_outputs(
         f"{_safe_float(winner_recovery_real_execution.get('source_quality_adjusted_ev_pct')):.4f}",
         "- winner_recovery_recommended_next_qty_stage: "
         f"{winner_recovery_real_execution.get('recommended_next_qty_stage')}",
+        "- winner_recovery_runtime_funnel_state: "
+        f"{winner_recovery_runtime_funnel.get('state')}",
+        "- winner_recovery_runtime_selected_count: "
+        f"{winner_recovery_runtime_funnel.get('runtime_gate_selected_count')}",
+        "- winner_recovery_downstream_guard_blocked_count: "
+        f"{winner_recovery_runtime_funnel.get('selected_downstream_guard_blocked_count')}",
+        "- winner_recovery_order_submitted_count: "
+        f"{winner_recovery_runtime_funnel.get('selected_order_submitted_count')}",
+        "- winner_recovery_executed_count: "
+        f"{winner_recovery_runtime_funnel.get('selected_executed_count')}",
+        "- winner_recovery_dominant_non_execution_layer: "
+        f"{winner_recovery_runtime_funnel.get('dominant_non_execution_layer')}",
     ]
     output_md.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 

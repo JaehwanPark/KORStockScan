@@ -629,7 +629,6 @@ def _scalping_pyramid_strong_continuation_context(
         ),
     }
     strong_checks = {**checks, "ai_score_ok": ai_score_real_support}
-    failed = [name for name, ok in checks.items() if not ok]
     strong_failed = [name for name, ok in strong_checks.items() if not ok]
     return {
         "base_min_profit_pct": round(base_min_profit, 4),
@@ -1158,6 +1157,9 @@ def evaluate_scalping_pyramid(
                     "reason": "profit_not_enough",
                     "profit_gate_mode": "base",
                     "min_profit_pct": round(base_min_profit, 4),
+                    "configured_min_profit_pct": round(base_min_profit, 4),
+                    "effective_min_profit_pct": round(base_min_profit, 4),
+                    "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
                     "drawdown_from_peak": round(drawdown_from_peak, 4),
                     "is_new_high": bool(is_new_high),
                 }
@@ -1193,6 +1195,9 @@ def evaluate_scalping_pyramid(
         result["reason"] = "profit_not_enough"
         result["profit_gate_mode"] = profit_gate_mode
         result["min_profit_pct"] = round(effective_min_profit, 4)
+        result["configured_min_profit_pct"] = round(base_min_profit, 4)
+        result["effective_min_profit_pct"] = round(effective_min_profit, 4)
+        result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
         result["is_new_high"] = bool(is_new_high)
         result["pyramid_quality_support_score"] = quality_decision["support_score"]
@@ -1225,6 +1230,9 @@ def evaluate_scalping_pyramid(
         result["reason"] = "trend_not_strong"
         result["profit_gate_mode"] = profit_gate_mode
         result["min_profit_pct"] = round(effective_min_profit, 4)
+        result["configured_min_profit_pct"] = round(base_min_profit, 4)
+        result["effective_min_profit_pct"] = round(effective_min_profit, 4)
+        result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
         result["is_new_high"] = bool(is_new_high)
         return _apply_pyramid_runtime_prior_context(
@@ -1239,6 +1247,9 @@ def evaluate_scalping_pyramid(
         )
         result["profit_gate_mode"] = profit_gate_mode
         result["min_profit_pct"] = round(effective_min_profit, 4)
+        result["configured_min_profit_pct"] = round(base_min_profit, 4)
+        result["effective_min_profit_pct"] = round(effective_min_profit, 4)
+        result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
         result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
         result["is_new_high"] = bool(is_new_high)
         result["pyramid_quality_support_score"] = quality_decision["support_score"]
@@ -1265,6 +1276,9 @@ def evaluate_scalping_pyramid(
     result["reason"] = "scalping_pyramid_ok"
     result["profit_gate_mode"] = profit_gate_mode
     result["min_profit_pct"] = round(effective_min_profit, 4)
+    result["configured_min_profit_pct"] = round(base_min_profit, 4)
+    result["effective_min_profit_pct"] = round(effective_min_profit, 4)
+    result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
     result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
     result["is_new_high"] = bool(is_new_high)
     result["pyramid_quality_support_score"] = quality_decision["support_score"]
@@ -1379,8 +1393,6 @@ def _check_reversal_add_ai_recovery(stock, current_ai_score):
     )
     if not ai_score_available:
         return "ai_recovery_source_unusable"
-    min_ai = int(getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_SCORE", 60))
-
     ai_bottom = int(stock.get("reversal_add_ai_bottom", 100))
     recovery_delta = int(
         getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_RECOVERY_DELTA", 15)
@@ -1586,7 +1598,14 @@ def _check_aggressive_reversal_add(stock, profit_rate, current_ai_score, held_se
     return None
 
 
-def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
+def _build_shallow_volatility_avg_down_probe(
+    stock,
+    profit_rate,
+    held_sec,
+    *,
+    min_buy_pressure_override=None,
+    now_ts=None,
+):
     feat = stock.get("last_reversal_features", {}) or {}
     pnl_min = float(
         getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_PNL_MIN", -1.20)
@@ -1607,8 +1626,13 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
             max_hold,
         )
     )
-    min_buy_pressure = float(
+    configured_min_buy_pressure = float(
         getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", 85.0)
+    )
+    min_buy_pressure = (
+        configured_min_buy_pressure
+        if min_buy_pressure_override is None
+        else float(min_buy_pressure_override)
     )
     min_tick_accel = float(
         getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL", 1.05)
@@ -1648,7 +1672,7 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
     large_sell_print = bool(feat.get("large_sell_print_detected", True))
     used_count = max(0, _safe_int(stock.get("shallow_volatility_avg_down_count"), 0))
     last_at = _safe_float(stock.get("shallow_volatility_avg_down_last_at"), 0.0)
-    now_ts = time.time()
+    now_ts = time.time() if now_ts is None else float(now_ts)
     cooldown_elapsed_sec = None if last_at <= 0 else max(0.0, now_ts - last_at)
     cooldown_ok = (
         cooldown_sec <= 0
@@ -1671,7 +1695,9 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
         "observation_extension_hold_ok": max_hold < held_sec <= observation_max_hold,
         "post_add_take_profit_pct": round(post_add_take_profit_pct, 4),
         "buy_pressure_10t": round(float(buy_pressure), 4),
+        "configured_min_buy_pressure": round(configured_min_buy_pressure, 4),
         "min_buy_pressure": round(min_buy_pressure, 4),
+        "min_buy_pressure_override_applied": min_buy_pressure_override is not None,
         "buy_pressure_ok": buy_pressure >= min_buy_pressure,
         "tick_acceleration_ratio": round(float(tick_accel), 4),
         "min_tick_accel": round(min_tick_accel, 4),
@@ -1700,13 +1726,32 @@ def _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec):
     }
 
 
-def _check_shallow_volatility_avg_down(stock, profit_rate, held_sec):
+def _check_shallow_volatility_avg_down(
+    stock,
+    profit_rate,
+    held_sec,
+    *,
+    min_buy_pressure_override=None,
+    now_ts=None,
+):
     if not bool(getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_ENABLED", False)):
         return (
             "shallow_volatility_avg_down_disabled",
-            _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec),
+            _build_shallow_volatility_avg_down_probe(
+                stock,
+                profit_rate,
+                held_sec,
+                min_buy_pressure_override=min_buy_pressure_override,
+                now_ts=now_ts,
+            ),
         )
-    probe = _build_shallow_volatility_avg_down_probe(stock, profit_rate, held_sec)
+    probe = _build_shallow_volatility_avg_down_probe(
+        stock,
+        profit_rate,
+        held_sec,
+        min_buy_pressure_override=min_buy_pressure_override,
+        now_ts=now_ts,
+    )
     if probe["max_per_position"] <= 0:
         return "shallow_volatility_max_per_position_zero", probe
     if not probe["count_ok"]:
@@ -1861,7 +1906,15 @@ def _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec):
     return probe
 
 
-def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec):
+def evaluate_scalping_reversal_add(
+    stock,
+    profit_rate,
+    current_ai_score,
+    held_sec,
+    *,
+    shallow_min_buy_pressure_override=None,
+    now_ts=None,
+):
     """
     역전 확인 추가매수(reversal_add) 평가.
     저점 미갱신 + AI 회복 + 수급 재개가 동시 확인될 때 1회 실행.
@@ -1884,7 +1937,11 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
     for reason in reasons:
         if reason:
             shallow_reason, shallow_probe = _check_shallow_volatility_avg_down(
-                stock, profit_rate, held_sec
+                stock,
+                profit_rate,
+                held_sec,
+                min_buy_pressure_override=shallow_min_buy_pressure_override,
+                now_ts=now_ts,
             )
             result["shallow_volatility_probe"] = shallow_probe
             if shallow_reason is None:

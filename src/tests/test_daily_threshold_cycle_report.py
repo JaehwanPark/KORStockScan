@@ -4,6 +4,8 @@ from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from src.engine import daily_threshold_cycle_report as report_mod
 
 
@@ -2599,15 +2601,32 @@ def test_ai_correction_input_context_is_compact_and_hash_referenced():
     assert report_mod._json_sha256(context) == report_mod._json_sha256(rerun_context)
 
 
-def test_avg_down_direct_calibration_is_merged_into_ai_review_inventory(tmp_path):
-    source_path = tmp_path / "scalping_avg_down_recovery_calibration_2026-07-29.json"
+@pytest.mark.parametrize(
+    "report_type,family,merge_function",
+    [
+        (
+            "scalping_avg_down_recovery_calibration",
+            "scalping_avg_down_recovery_quality_gate",
+            "merge_scalping_avg_down_recovery_calibration_candidate",
+        ),
+        (
+            "scalping_pyramid_quality_calibration",
+            "scalping_pyramid_quality_gate",
+            "merge_scalping_pyramid_quality_calibration_candidate",
+        ),
+    ],
+)
+def test_direct_scale_in_calibration_is_merged_into_ai_review_inventory(
+    tmp_path, report_type, family, merge_function
+):
+    source_path = tmp_path / f"{report_type}_2026-07-29.json"
     source_path.write_text(
         json.dumps(
             {
                 "target_date": "2026-07-29",
                 "calibration_candidates": [
                     {
-                        "family": "scalping_avg_down_recovery_quality_gate",
+                        "family": family,
                         "stage": "scale_in",
                         "priority": 37,
                         "calibration_state": "hold_no_edge",
@@ -2617,6 +2636,10 @@ def test_avg_down_direct_calibration_is_merged_into_ai_review_inventory(tmp_path
                         "recommended_values": {"shallow_max_per_position": 2},
                         "source_metrics": {
                             "decision_guards": {"final_ev_edge_ok": False}
+                        },
+                        "condition_feasibility": {
+                            "state": "no_economic_candidate",
+                            "next_action": "reject_current_threshold_only_hypothesis",
                         },
                     }
                 ],
@@ -2630,9 +2653,7 @@ def test_avg_down_direct_calibration_is_merged_into_ai_review_inventory(tmp_path
         "calibration_source_bundle": {},
     }
 
-    report_mod.merge_scalping_avg_down_recovery_calibration_candidate(
-        report, "2026-07-29", source_path=source_path
-    )
+    getattr(report_mod, merge_function)(report, "2026-07-29", source_path=source_path)
     context = report_mod._build_ai_correction_input_context(report)
     ai_report = report_mod.build_threshold_cycle_ai_correction_report(
         report,
@@ -2641,7 +2662,7 @@ def test_avg_down_direct_calibration_is_merged_into_ai_review_inventory(tmp_path
                 "schema_version": 1,
                 "corrections": [
                     {
-                        "family": "scalping_avg_down_recovery_quality_gate",
+                        "family": family,
                         "anomaly_type": "normal_drift",
                         "ai_review_state": "agree",
                         "correction_proposal": {
@@ -2662,20 +2683,353 @@ def test_avg_down_direct_calibration_is_merged_into_ai_review_inventory(tmp_path
     )
 
     assert (
-        report["supplemental_calibration_sources"][
-            "scalping_avg_down_recovery_calibration"
-        ]["merged_candidate_count"]
+        report["supplemental_calibration_sources"][report_type][
+            "merged_candidate_count"
+        ]
         == 1
     )
     candidate = context["calibration_candidates"][0]
-    assert candidate["family"] == "scalping_avg_down_recovery_quality_gate"
+    assert candidate["family"] == family
     assert candidate["current_values"]["shallow_max_per_position"] == 2
     assert candidate["recommended_values"]["shallow_max_per_position"] == 2
     assert ai_report["candidate_count"] == 1
-    assert ai_report["items"][0]["family"] == (
-        "scalping_avg_down_recovery_quality_gate"
-    )
+    assert ai_report["items"][0]["family"] == family
     assert ai_report["items"][0]["ai_review_state"] == "agree"
+    assert candidate["condition_feasibility"]["state"] == "no_economic_candidate"
+
+
+def test_pyramid_positive_candidate_reaches_preopen_after_parsed_review(
+    tmp_path, monkeypatch
+):
+    from src.engine import threshold_cycle_preopen_apply as preopen
+    from src.engine.monitoring import scalping_pyramid_quality_calibration as pyramid
+
+    monkeypatch.setattr(pyramid, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    source = {
+        "schema_version": 5,
+        "target_date": "2026-09-04",
+        "source_quality": {"status": "pass"},
+        "pyramid_threshold_provenance": {
+            "ambiguous": False,
+            "selected_min_profit_pct": 1.1,
+            "observed_min_profit_pct_values": [1.1],
+            "configured_v2_min_profit_pct_values": [1.1],
+            "configured_threshold_contract_valid": True,
+            "selection_source": "same_day_unique_runtime_pyramid_evaluation",
+        },
+        "pyramid_feedback_rows": [
+            {
+                "record_id": str(i),
+                "pyramid_feedback_label": "pyramid_would_have_helped",
+                "max_profit_seen": 2.0,
+                "final_profit_rate": 2.0,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": "source_only_pyramid_intraday_feedback_no_runtime_mutation",
+                "forbidden_uses": ["intraday_threshold_mutation"],
+            }
+            for i in range(20)
+        ],
+        "pyramid_threshold_replay_metric_contract": {
+            "contract_version": "pyramid_gate_replay_source_v1",
+            "metric_role": "bounded_tunable_threshold_gate_counterfactual",
+            "decision_authority": (
+                "source_only_fixed_observed_exit_pyramid_gate_replay"
+            ),
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        },
+        "pyramid_threshold_replay_rows": [
+            {
+                "pyramid_evaluation_id": f"record:{i}:event",
+                "position_key": f"record:{i}",
+                "source_event_ts": f"2026-09-04T10:{i:02d}:00+09:00",
+                "profit_rate": 1.0,
+                "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
+                "configured_min_profit_pct": 1.1,
+                "effective_min_profit_pct": 1.1,
+                "observed_gate_selected": False,
+                "strong_continuation_min_profit_pct": 0.9,
+                "strong_continuation_allowed": False,
+                "drawdown_from_peak": 0.0,
+                "is_new_high": True,
+                "current_ai_score": 75,
+                "ai_score_available": True,
+                "min_ai_score": 70,
+                "buy_pressure_10t": 70,
+                "min_buy_pressure": 60,
+                "tick_acceleration_ratio": 1.2,
+                "min_tick_accel": 0.5,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 20,
+                "max_micro_vwap_bps": 60,
+                "micro_vwap_available": True,
+                "reversal_feature_stale": False,
+                "tick_aggressor_trusted_count": 5,
+                "tick_aggressor_pressure_usable": True,
+                "quote_stale": False,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+                "executable_best_ask": 10010,
+                "executable_best_bid": 10000,
+                "pyramid_price_resolver_observed": True,
+                "pyramid_price_resolver_allowed": True,
+                "pyramid_price_resolver_reason": "scale_in_price_resolved",
+                "pyramid_price_resolver_price_source": "best_bid",
+                "pyramid_price_resolver_order_price": 10000,
+                "pyramid_price_resolver_best_ask": 10010,
+                "pyramid_price_resolver_best_bid": 10000,
+                "replay_entry_price": 10000,
+                "sell_price": 10400,
+                "price_evidence_level": ("fresh_quote_existing_resolver_limit_price"),
+                "gate_replay_source_quality_valid": True,
+                "fixed_exit_economic_replay_ready": True,
+                "source_quality_reasons": [],
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": (
+                    "source_only_fixed_observed_exit_pyramid_gate_replay"
+                ),
+                "forbidden_uses": ["intraday_threshold_mutation"],
+            }
+            for i in range(20)
+        ],
+    }
+    candidate = pyramid._calibration_candidate(
+        target_date="2026-09-04", reports=[source], source_paths=[]
+    )
+    assert candidate["allowed_runtime_apply"] is True
+    source_path = tmp_path / "scalping_pyramid_quality_calibration_2026-09-04.json"
+    source_path.write_text(
+        json.dumps({"target_date": "2026-09-04", "calibration_candidates": [candidate]})
+    )
+    report = {
+        "date": "2026-09-04",
+        "calibration_candidates": [],
+        "calibration_source_bundle": {},
+    }
+    report_mod.merge_scalping_pyramid_quality_calibration_candidate(
+        report, "2026-09-04", source_path=source_path
+    )
+    report_mod.apply_window_policy_registry_to_report(report, {})
+    context = report_mod._build_ai_correction_input_context(report)
+    ai_report = report_mod.build_threshold_cycle_ai_correction_report(
+        report,
+        ai_raw_response=json.dumps(
+            {
+                "schema_version": 1,
+                "corrections": [
+                    {
+                        "family": pyramid.FAMILY,
+                        "anomaly_type": "normal_drift",
+                        "ai_review_state": "agree",
+                        "correction_proposal": {
+                            "proposed_state": "adjust_down",
+                            "proposed_value": 1.0,
+                            "anomaly_route": "normal_drift",
+                            "sample_window": "cumulative",
+                        },
+                        "correction_reason": "Positive cumulative net contribution and bounded one-axis change.",
+                        "required_evidence": ["cumulative net contribution"],
+                        "risk_flags": [],
+                    }
+                ],
+            }
+        ),
+        ai_provider_status={"provider": "file", "status": "loaded"},
+        ai_input_context=context,
+    )
+    selected, decisions, env = preopen._select_auto_apply_candidates(
+        [candidate],
+        ai_review={
+            "items_by_family": {item["family"]: item for item in ai_report["items"]}
+        },
+        require_ai=True,
+        target_date="2026-09-07",
+    )
+    assert [item["family"] for item in selected] == [pyramid.FAMILY], decisions
+    assert env == {"KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1"}
+    assert ai_report["items"][0]["guard_accepted"] is True
+    assert ai_report["items"][0]["quality_update_id"] == candidate["quality_update_id"]
+    assert ai_report["items"][0]["evidence_digest"] == candidate["evidence_digest"]
+    assert (
+        context["calibration_candidates"][0]["condition_feasibility"]["state"]
+        == "bounded_candidate_ready"
+    )
+
+
+def test_avg_down_candidate_identity_survives_ai_and_preopen_handoff(
+    tmp_path, monkeypatch
+):
+    from src.engine import threshold_cycle_preopen_apply as preopen
+
+    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    window = {
+        "window_policy": "clean_baseline_cumulative",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "start_date": "2026-06-05",
+        "end_date": "2026-09-04",
+        "source_dates": ["2026-09-04"],
+        "source_date_count": 1,
+    }
+    candidate = {
+        "family": preopen.AVG_DOWN_RECOVERY_FAMILY,
+        "stage": "scale_in",
+        "priority": 37,
+        "calibration_state": "adjust_down",
+        "calibration_reason": "paired_incremental_net_edge_ready",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "source_quality_gate": "pass",
+        "target_env_key": preopen.AVG_DOWN_TARGET_ENV_KEY,
+        "target_env_keys": [preopen.AVG_DOWN_TARGET_ENV_KEY],
+        "changed_target_env_keys": [preopen.AVG_DOWN_TARGET_ENV_KEY],
+        "current_value": 85.0,
+        "recommended_value": 80.0,
+        "current_value_source": "same_day_runtime_route_event",
+        "current_runtime_value_sources": ["runtime_rules_loaded_value"],
+        "current_values": {preopen.AVG_DOWN_TARGET_VALUE_KEY: 85.0},
+        "recommended_values": {preopen.AVG_DOWN_TARGET_VALUE_KEY: 80.0},
+        "quality_update_id": "avg-down-quality-1",
+        "evidence_contract_version": preopen.AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
+        "evidence_digest": "a" * 64,
+        "evaluation_method": preopen.AVG_DOWN_EVALUATION_METHOD,
+        "evidence_authority": preopen.AVG_DOWN_EVIDENCE_AUTHORITY,
+        "runtime_update_mode": "single_cumulative_quality_update",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": window,
+        "post_apply_attribution_required": True,
+        "sample_count": 10,
+        "sample_floor": 10,
+        "sample_floor_passed": True,
+        "bounds": preopen.AVG_DOWN_BOUNDS,
+        "max_step_per_day": preopen.AVG_DOWN_MAX_STEP_PER_DAY,
+        "rollback_value": 85.0,
+        "comparison_universe_hash": "b" * 64,
+        "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00100000",
+        "exit_policy_version": "existing-exit-policy-v1",
+        "sizing_policy_version": "recorded_existing_position_sizing_owner",
+        "recommended_values_changed": True,
+        "condition_feasibility": {
+            "state": "bounded_candidate_ready",
+            "paired_exit_replay_ready": True,
+            "unique_complete_parent_episode_floor_passed": True,
+            "common_runtime_venue_scope_ready": True,
+            "runtime_current_value_provenance_ready": True,
+            "selected_exit_policy_version": "existing-exit-policy-v1",
+        },
+        "impact_scope": "common_runtime",
+        "venue_scope_authority": "common_or_all_active_venues",
+        "source_date": "2026-09-04",
+        "target_date": "2026-09-04",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    source_path = tmp_path / "scalping_avg_down_recovery_calibration_2026-09-04.json"
+    source_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "target_date": "2026-09-04",
+                "calibration_candidates": [candidate],
+            }
+        )
+    )
+    report = {
+        "date": "2026-09-04",
+        "calibration_candidates": [],
+        "calibration_source_bundle": {},
+    }
+    report_mod.merge_scalping_avg_down_recovery_calibration_candidate(
+        report, "2026-09-04", source_path=source_path
+    )
+    context = report_mod._build_ai_correction_input_context(report)
+    context_candidate = context["calibration_candidates"][0]
+    assert context_candidate["target_env_key"] == preopen.AVG_DOWN_TARGET_ENV_KEY
+    assert context_candidate["current_value"] == 85.0
+    assert context_candidate["recommended_value"] == 80.0
+
+    ai_report = report_mod.build_threshold_cycle_ai_correction_report(
+        report,
+        ai_raw_response=json.dumps(
+            {
+                "schema_version": 1,
+                "corrections": [
+                    {
+                        "family": preopen.AVG_DOWN_RECOVERY_FAMILY,
+                        "anomaly_type": "normal_drift",
+                        "ai_review_state": "agree",
+                        "correction_proposal": {
+                            "proposed_state": "adjust_down",
+                            "proposed_value": 80.0,
+                            "anomaly_route": "normal_drift",
+                            "sample_window": "cumulative",
+                        },
+                        "correction_reason": "Positive paired incremental net contribution.",
+                        "required_evidence": ["paired incremental economics"],
+                        "risk_flags": [],
+                    }
+                ],
+            }
+        ),
+        ai_provider_status={"provider": "file", "status": "loaded"},
+        ai_input_context=context,
+    )
+    item = ai_report["items"][0]
+    assert item["quality_update_id"] == candidate["quality_update_id"]
+    assert item["target_env_key"] == candidate["target_env_key"]
+    assert item["current_value"] == candidate["current_value"]
+    assert item["recommended_value"] == candidate["recommended_value"]
+    selected, decisions, env = preopen._select_auto_apply_candidates(
+        [candidate],
+        ai_review={"items_by_family": {candidate["family"]: item}},
+        require_ai=True,
+        target_date="2026-09-07",
+    )
+    assert [entry["family"] for entry in selected] == [candidate["family"]], decisions
+    assert env == {
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80",
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID": "avg-down-quality-1",
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_CONTRACT_VERSION": (
+            preopen.AVG_DOWN_EVIDENCE_CONTRACT_VERSION
+        ),
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST": "a" * 64,
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_PREVIOUS_MIN_BUY_PRESSURE": "85.0",
+    }
+
+
+@pytest.mark.parametrize("source_date", ["2026-09-03", "2026-09-07"])
+def test_pyramid_review_handoff_rejects_wrong_source_date(tmp_path, source_date):
+    path = tmp_path / "scalping_pyramid_quality_calibration_2026-09-04.json"
+    path.write_text(
+        json.dumps(
+            {
+                "target_date": source_date,
+                "calibration_candidates": [
+                    {
+                        "family": "scalping_pyramid_quality_gate",
+                        "allowed_runtime_apply": True,
+                    }
+                ],
+            }
+        )
+    )
+    report = {"date": "2026-09-04", "calibration_candidates": []}
+    report_mod.merge_scalping_pyramid_quality_calibration_candidate(
+        report, "2026-09-04", source_path=path
+    )
+    assert report["calibration_candidates"] == []
+    assert (
+        report["supplemental_calibration_sources"][
+            "scalping_pyramid_quality_calibration"
+        ]["status"]
+        == "target_date_mismatch"
+    )
 
 
 def test_reuse_ai_review_requires_matching_input_hash(tmp_path):

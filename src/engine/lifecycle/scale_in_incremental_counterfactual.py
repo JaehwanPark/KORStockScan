@@ -396,12 +396,16 @@ def _compute_incremental_pnl(
     eval_price: float,
 ) -> dict[str, Any]:
     """Compute incremental PnL for added shares."""
-    no_add_pnl = calculate_net_realized_pnl(pre_add_price, int(eval_price), pre_add_qty)
-    added_tranche_pnl = calculate_net_realized_pnl(
-        proposed_price, int(eval_price), proposed_qty
+    economics = compute_fixed_exit_incremental_economics(
+        pre_add_qty=pre_add_qty,
+        pre_add_price=pre_add_price,
+        proposed_qty=proposed_qty,
+        proposed_price=proposed_price,
+        exit_price=eval_price,
     )
-    add_pnl_total = no_add_pnl + added_tranche_pnl
-    incremental_pnl_krw = added_tranche_pnl
+    no_add_pnl = economics["no_add_pnl_krw"]
+    add_pnl_total = economics["add_pnl_krw"]
+    incremental_pnl_krw = economics["incremental_pnl_krw"]
     incremental_notional_ev_pct = (
         round(incremental_pnl_krw / (proposed_price * proposed_qty) * 100.0, 4)
         if proposed_price > 0 and proposed_qty > 0
@@ -413,6 +417,44 @@ def _compute_incremental_pnl(
         "incremental_pnl_krw": incremental_pnl_krw,
         "incremental_notional_ev_pct": incremental_notional_ev_pct,
         "evaluation_price": eval_price,
+    }
+
+
+def compute_fixed_exit_incremental_economics(
+    *,
+    pre_add_qty: int,
+    pre_add_price: int | float,
+    proposed_qty: int,
+    proposed_price: int | float,
+    exit_price: int | float,
+    cost_rate: float | None = None,
+) -> dict[str, Any]:
+    """Compare ADD with NO_ADD at one already-observed exit price.
+
+    This helper is deliberately policy-neutral and source-only. It does not
+    claim that AVG_DOWN would preserve the observed exit decision; callers
+    must separately prove paired lifecycle replay before runtime promotion.
+    """
+    no_add_pnl = calculate_net_realized_pnl(
+        pre_add_price, int(exit_price), pre_add_qty, cost_rate=cost_rate
+    )
+    added_tranche_pnl = calculate_net_realized_pnl(
+        proposed_price, int(exit_price), proposed_qty, cost_rate=cost_rate
+    )
+    reference_notional = float(pre_add_price) * int(pre_add_qty)
+    return {
+        "no_add_pnl_krw": no_add_pnl,
+        "add_pnl_krw": no_add_pnl + added_tranche_pnl,
+        "incremental_pnl_krw": added_tranche_pnl,
+        "normal_no_add_incremental_pnl_krw": 0,
+        "reference_notional_krw": reference_notional,
+        "source_quality_adjusted_ev_pct": (
+            round(100.0 * added_tranche_pnl / reference_notional, 6)
+            if reference_notional > 0
+            else None
+        ),
+        "evaluation_method": "fixed_observed_exit_counterfactual",
+        "runtime_authority_ready": False,
     }
 
 

@@ -47,6 +47,212 @@ def _prune_observer_contract_fields() -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "avg_down_runtime_config_observed",
+        "avg_down_route_sizing_observed",
+        "avg_down_exit_replay_frame_observed",
+    ],
+)
+def test_avg_down_new_source_contracts_never_allow_runtime_authority(stage):
+    from src.tests.test_scalping_avg_down_recovery_calibration import _config_fields
+
+    contract = audit.STAGE_CONTRACTS[stage]
+    fields = {name: "present" for name in contract.required_fields}
+    fields.update(
+        _config_fields(),
+        decision_authority=contract.decision_authority,
+        primary_decision_metric="source_quality_adjusted_ev_pct",
+        sizing_replay=json.dumps(
+            {"85": {"proposed_add_price": 100, "proposed_add_qty": 1}}
+        ),
+        replay_frame_schema="avg_down_exit_replay_frame_v1",
+        sequence=1,
+        market=json.dumps(
+            {"source_quality": "fresh_conflict_free", "best_bid": 100, "best_ask": 101}
+        ),
+        full_policy_decisions="{}",
+    )
+    valid = audit._row_contract_violations(stage, {"fields": fields}, contract)
+    assert valid == {"missing_fields": [], "zero_fields": [], "invalid_fields": []}
+    fields["runtime_effect"] = True
+    assert audit._row_contract_violations(stage, {"fields": fields}, contract)[
+        "invalid_fields"
+    ]
+
+
+def _avg_down_route_contract_fields() -> dict:
+    route_replay = {
+        str(value): {
+            "should_add": False,
+            "selected_route": "NO_ADD",
+            "behavior_signature": f"route-{value}",
+            "route_evaluation_complete": True,
+        }
+        for value in (80, 85, 90)
+    }
+    return {
+        "avg_down_route_schema": "avg_down_route_arbitration_v2",
+        "source_event_id": "avgdn-event-1",
+        "scale_in_decision_id": "avgdn-decision-1",
+        "position_episode_id": "mlc-" + "a" * 32,
+        "route_behavior_signature": "b" * 64,
+        "configured_min_buy_pressure": 85.0,
+        "effective_min_buy_pressure": 85.0,
+        "runtime_value_source": "runtime_rules_loaded_value",
+        "runtime_value_raw": "not_set",
+        "runtime_candidate_quality_update_id": "baseline_no_selected_candidate",
+        "runtime_candidate_evidence_contract_version": (
+            "baseline_no_selected_candidate"
+        ),
+        "runtime_candidate_evidence_digest": "baseline_no_selected_candidate",
+        "runtime_candidate_selected": False,
+        "runtime_env_written": False,
+        "runtime_pid_value_verified": True,
+        "runtime_natural_match": False,
+        "runtime_attribution_state": "no_selected_candidate_observation",
+        "candidate_grid": json.dumps([80.0, 85.0, 90.0]),
+        "route_replay": json.dumps(route_replay),
+        "pre_add_buy_price": 1000.5,
+        "pre_add_buy_qty": 10,
+        "shallow_scope_pnl_ok": True,
+        "shallow_scope_hold_ok": True,
+        "avg_down_policy_version": "existing_avg_down_route_arbitration_v2",
+        "sizing_policy_version": "position_sizing_dynamic_formula_v1",
+        "cost_policy_version": "trade_profit_net_realized_pnl",
+        "evidence_layer": "gate_observed",
+        "evidence_authority": "fixed_observed_exit_source_only",
+        "exit_replay_feasibility": "requires_paired_exit_replay",
+        "metric_role": "bounded_tunable_route_observation",
+        "decision_authority": "source_only_route_arbitration_observation",
+        "window_policy": "clean_baseline_cumulative_same_policy_version",
+        "sample_floor": "unique_complete_eligible_parent_episode>=10",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "exact_position_identity_present",
+        "forbidden_uses": (
+            "real_scale_in_submit|intraday_threshold_mutation|quantity_cap_release|"
+            "provider_route_change|bot_restart|fixed_exit_source_only_runtime_promotion"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def test_avg_down_route_observation_contract_is_strict_and_source_only() -> None:
+    stage = "avg_down_route_arbitration_observed"
+    fields = _avg_down_route_contract_fields()
+
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+    selected_fields = _avg_down_route_contract_fields()
+    selected_fields.update(
+        {
+            "runtime_value_source": "exact_process_env",
+            "runtime_value_raw": "85",
+            "runtime_candidate_quality_update_id": "avg-down-quality-1",
+            "runtime_candidate_evidence_contract_version": (
+                "avg_down_paired_economics_v2"
+            ),
+            "runtime_candidate_evidence_digest": "c" * 64,
+            "runtime_candidate_selected": True,
+            "runtime_env_written": True,
+            "runtime_pid_value_verified": True,
+            "runtime_natural_match": False,
+            "runtime_attribution_state": "selected_no_natural_match",
+        }
+    )
+    selected_violations = audit._row_contract_violations(
+        stage,
+        {"fields": selected_fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert selected_violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+    fields["runtime_value_source"] = "unknown"
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations["invalid_fields"] == [
+        "avg_down_route_arbitration_source_contract"
+    ]
+
+
+def _avg_down_paired_terminal_contract_fields() -> dict:
+    outcomes = {
+        key: {
+            "status": "COMPLETED",
+            "exit_price": 110,
+            "terminal_source_event_id": f"paired-terminal-{key.lower()}",
+            "exit_policy_version": "existing-exit-policy-v1",
+            "evaluation_method": "paired_add_no_add_lifecycle_replay",
+            "evidence_authority": "paired_add_no_add_lifecycle_replay",
+        }
+        for key in ("80", "85", "90", "NO_ADD")
+    }
+    return {
+        "terminal_replay_schema": "avg_down_paired_exit_terminal_v1",
+        "position_episode_id": "mlc-" + "a" * 32,
+        "scale_in_decision_id": "avgdn-decision-1",
+        "terminal_status": "COMPLETED",
+        "configured_min_buy_pressure": 85.0,
+        "candidate_grid": json.dumps([80.0, 85.0, 90.0]),
+        "evidence_authority": "paired_add_no_add_lifecycle_replay",
+        "paired_exit_replay": json.dumps(outcomes),
+        "metric_role": "paired_add_no_add_exit_replay",
+        "decision_authority": "source_only_paired_exit_replay",
+        "source_quality_gate": "exact_paired_terminal_contract",
+        "forbidden_uses": "fixed_exit_source_only_runtime_promotion|broker_order_submit",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
+def test_avg_down_paired_terminal_requires_independent_complete_outcomes() -> None:
+    stage = "avg_down_route_arbitration_terminal"
+    fields = _avg_down_paired_terminal_contract_fields()
+
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations == {
+        "missing_fields": [],
+        "zero_fields": [],
+        "invalid_fields": [],
+    }
+
+    outcomes = json.loads(fields["paired_exit_replay"])
+    outcomes["80"]["exit_price"] = None
+    fields["paired_exit_replay"] = json.dumps(outcomes)
+    violations = audit._row_contract_violations(
+        stage,
+        {"fields": fields},
+        audit.STAGE_CONTRACTS[stage],
+    )
+    assert violations["invalid_fields"] == ["avg_down_paired_terminal_source_contract"]
+
+
 def test_prune_bbo_source_loaded_contract_requires_exact_bounded_receipt() -> None:
     stage = "scalping_scanner_prune_bbo_source_loaded"
     fields = {

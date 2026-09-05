@@ -108,7 +108,9 @@ def test_low_price_postclose_contract_uses_target_date_profile_inventory(
     parsed_target_date = date.fromisoformat(target_date)
     target_profiles = profiles_for_target_date(parsed_target_date)
     assert len(target_profiles) < len(PROFILES)
-    monkeypatch.setattr(policy_runtime, "validate_candidate", lambda _: (True, "ok"))
+    monkeypatch.setattr(
+        policy_runtime, "validate_candidate", lambda *_args, **_kwargs: (True, "ok")
+    )
     tuning = {
         "schema": REPORT_SCHEMA,
         "target_date": target_date,
@@ -145,7 +147,9 @@ def test_low_price_postclose_contract_rejects_malformed_daily_profiles(
     from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
     from src.trading.low_price_two_leg import policy_runtime
 
-    monkeypatch.setattr(policy_runtime, "validate_candidate", lambda _: (True, "ok"))
+    monkeypatch.setattr(
+        policy_runtime, "validate_candidate", lambda *_args, **_kwargs: (True, "ok")
+    )
     monkeypatch.setattr(
         CandidateRecommendationNotifier,
         "_valid_report",
@@ -187,7 +191,9 @@ def test_low_price_recommendations_without_approved_mapping_are_source_only(
 
     target_date = "2026-08-25"
     target_profiles = profiles_for_target_date(date.fromisoformat(target_date))
-    monkeypatch.setattr(policy_runtime, "validate_candidate", lambda _: (True, "ok"))
+    monkeypatch.setattr(
+        policy_runtime, "validate_candidate", lambda *_args, **_kwargs: (True, "ok")
+    )
     monkeypatch.setattr(
         CandidateRecommendationNotifier,
         "_valid_report",
@@ -253,7 +259,9 @@ def test_low_price_20260824_recommendations_verify_20260825_mapping(monkeypatch)
 
     target_date = "2026-08-24"
     target_profiles = profiles_for_target_date(date.fromisoformat(target_date))
-    monkeypatch.setattr(policy_runtime, "validate_candidate", lambda _: (True, "ok"))
+    monkeypatch.setattr(
+        policy_runtime, "validate_candidate", lambda *_args, **_kwargs: (True, "ok")
+    )
     monkeypatch.setattr(
         CandidateRecommendationNotifier,
         "_valid_report",
@@ -312,7 +320,96 @@ def test_low_price_20260824_recommendations_verify_20260825_mapping(monkeypatch)
     assert status["recommendation_profile_contract_failures"] == {}
 
 
-def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidate():
+def test_low_price_20260904_mapping_records_expected_cost_quarantine(monkeypatch):
+    from datetime import date
+    from types import SimpleNamespace
+
+    from src.engine.monitoring import low_price_two_leg_expanded_candidate_research
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+        CandidateRecommendationNotifier,
+    )
+    from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
+    from src.trading.low_price_two_leg import policy_runtime, preflight
+    from src.trading.low_price_two_leg.profiles import profiles_for_target_date
+
+    target_date = "2026-09-04"
+    target_profiles = profiles_for_target_date(date.fromisoformat(target_date))
+    excluded = {"cj_cgv_morning", "youngone_midday", "sk_telecom_midday"}
+    monkeypatch.setattr(
+        policy_runtime, "validate_candidate", lambda *_args, **_kwargs: (True, "ok")
+    )
+    monkeypatch.setattr(
+        CandidateRecommendationNotifier,
+        "_valid_report",
+        staticmethod(lambda _: True),
+    )
+    monkeypatch.setattr(
+        preflight,
+        "validate_research_evidence",
+        lambda profile, **_kwargs: (
+            (
+                False,
+                "research_economics_nonpositive_under_current_cost",
+            )
+            if profile.profile_id in excluded
+            else (True, "ready")
+        ),
+    )
+    monkeypatch.setattr(
+        low_price_two_leg_expanded_candidate_research,
+        "_target_date_research_inventory",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            research_profiles={},
+            time_extension_profiles={},
+            logic_improvement_profiles={},
+        ),
+    )
+    tuning = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "daily": {"profiles": {profile_id: {} for profile_id in target_profiles}},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+    }
+    expanded = {
+        "target_date": target_date,
+        "status": "recommendations_ready",
+        "candidate_symbols": {},
+        "candidate_universe_size": 0,
+        "new_symbol_profile_count": 0,
+        "existing_symbol_time_extension_profile_count": 0,
+        "existing_symbol_logic_improvement_profile_count": 0,
+        "research_profile_inventory": {},
+        "profiles": {},
+        "recommendations": [
+            {"profile_id": report_profile_id}
+            for report_profile_id in preflight.RECOMMENDATION_20260904_PROFILE_MAP.values()
+        ],
+    }
+
+    status = mod._low_price_two_leg_postclose_contract_status(
+        tuning,
+        {"source_date": target_date},
+        expanded,
+        target_date=target_date,
+    )
+
+    assert status["status"] == "pass"
+    assert status["recommendation_implementation_status"] == (
+        "pass_with_runtime_quarantine"
+    )
+    assert status["recommendation_effective_date"] == "2026-09-07"
+    assert status["recommendation_profile_mapping_count"] == 13
+    assert status["recommendation_profile_contract_pass_count"] == 10
+    assert status["recommendation_profile_runtime_exclusion_count"] == 3
+    assert set(status["recommendation_profile_runtime_exclusions"]) == excluded
+    assert status["recommendation_profile_contract_failures"] == {}
+
+
+def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidate(
+    tmp_path: Path,
+):
     from src.engine.monitoring.samsung_machine_entry_tuning import (
         MACHINE_FILES,
         REPORT_SCHEMA,
@@ -320,7 +417,11 @@ def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidat
     from src.trading.order.samsung_entry_policy import (
         BASELINE_POLICIES,
         CANDIDATE_SCHEMA,
+        candidate_artifact_hash,
+        canonical_hash,
+        file_sha256,
         policy_hash,
+        report_artifact_hash,
     )
 
     target_date = "2026-08-14"
@@ -330,16 +431,72 @@ def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidat
             "selected_axis": None,
             "policy": dict(policy),
             "evidence": {},
+            "evidence_digest": canonical_hash({}),
             "allowed_runtime_apply": True,
         }
         for machine, policy in BASELINE_POLICIES.items()
     }
+    source_runtime_policy_binding = {
+        "source_date": target_date,
+        "status": "missing_baseline_only",
+        "policies": {
+            machine: dict(policy) for machine, policy in BASELINE_POLICIES.items()
+        },
+    }
+    source_quality_path = tmp_path / "observation_source_quality_audit_2026-08-14.json"
+    source_quality_path.write_text(
+        json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+        encoding="utf-8",
+    )
+    preflight = {
+        "status": "pass",
+        "tuning_input_allowed": True,
+        "reason": "ready",
+        "source_path": str(source_quality_path),
+        "source_sha256": file_sha256(source_quality_path),
+        "source_artifact_present": True,
+        "audit_status": "pass",
+    }
+    report = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "source_quality_preflight": preflight,
+        "outcome_amendment_ledger": {
+            "status": "pass",
+            "issues": [],
+            "record_count": 0,
+            "records_sha256": canonical_hash([]),
+            "records": [],
+        },
+        "source_runtime_policy_binding": source_runtime_policy_binding,
+        "daily": {"machines": {machine: {} for machine in MACHINE_FILES}},
+        "windows": {
+            name: {machine: {} for machine in MACHINE_FILES}
+            for name in (
+                "clean_baseline_cumulative",
+                "rolling_10d",
+                "rolling_20d",
+                "post_apply_version",
+            )
+        },
+    }
+    report["artifact_hash"] = report_artifact_hash(report)
     candidate = {
         "schema": CANDIDATE_SCHEMA,
         "source_date": target_date,
         "source_report": "samsung_machine_entry_tuning",
         "source_report_schema": REPORT_SCHEMA,
         "clean_tuning_baseline_date": "2026-06-05",
+        "source_quality_preflight": preflight,
+        "source_report_binding": {
+            "schema": REPORT_SCHEMA,
+            "target_date": target_date,
+            "sha256": report["artifact_hash"],
+        },
+        "source_runtime_policy_binding": source_runtime_policy_binding,
         "policy_hash": policy_hash(
             {machine: item["policy"] for machine, item in machines.items()}
         ),
@@ -350,18 +507,7 @@ def test_samsung_machine_entry_postclose_contract_validates_windows_and_candidat
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
     }
-    report = {
-        "schema": REPORT_SCHEMA,
-        "target_date": target_date,
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "daily": {"machines": {machine: {} for machine in MACHINE_FILES}},
-        "windows": {
-            name: {machine: {} for machine in MACHINE_FILES}
-            for name in ("clean_baseline_cumulative", "rolling_10d", "rolling_20d")
-        },
-    }
+    candidate["candidate_hash"] = candidate_artifact_hash(candidate)
 
     status = mod._samsung_machine_entry_postclose_contract_status(
         report, candidate, target_date=target_date
@@ -7998,3 +8144,123 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         "ldm_scale_in_bucket_attribution_missing"
         in report["predecessor_integrity"]["log_issues"]
     )
+
+
+def test_avg_down_verifier_accepts_source_only_candidate_without_runtime_leak(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    path = (
+        tmp_path
+        / "scalping_avg_down_recovery_calibration"
+        / "scalping_avg_down_recovery_calibration_2026-09-04.json"
+    )
+    path.parent.mkdir(parents=True)
+    candidate = {
+        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
+        "calibration_state": "hold_runtime_scope",
+        "calibration_reason": "requires_paired_exit_replay",
+        "allowed_runtime_apply": False,
+        "quality_update_id": "avg-1",
+        "evidence_contract_version": mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
+        "evidence_digest": "a" * 64,
+        "evidence_authority": "fixed_observed_exit_source_only",
+        "evaluation_method": "fixed_observed_exit_counterfactual",
+        "source_date": "2026-09-04",
+        "target_date": "2026-09-04",
+        "target_env_key": "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE",
+        "target_env_keys": [],
+        "changed_target_env_keys": [],
+        "current_value": 85.0,
+        "recommended_value": 85.0,
+        "current_values": {"shallow_min_buy_pressure": 85.0},
+        "recommended_values": {"shallow_min_buy_pressure": 85.0},
+        "recommended_values_changed": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "target_date": "2026-09-04",
+                "calibration_candidates": [candidate],
+                "runtime_update_contract": {
+                    "owner_family": mod.AVG_DOWN_RECOVERY_FAMILY,
+                    "owner_stage": "scale_in",
+                    "update_mode": "single_cumulative_quality_update",
+                    "runtime_apply_candidate_count": 1,
+                    "max_runtime_apply_count": 1,
+                    "quality_update_id": "avg-1",
+                    "evidence_contract_version": (
+                        mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION
+                    ),
+                    "evidence_digest": "a" * 64,
+                    "allowed_runtime_apply_count": 0,
+                    "runtime_effect": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = mod._avg_down_calibration_contract_status("2026-09-04")
+
+    assert status["status"] == "pass"
+    assert status["runtime_candidate_present"] is False
+    assert status["evidence_authority"] == "fixed_observed_exit_source_only"
+
+
+def test_avg_down_verifier_rejects_source_only_runtime_authority_leak(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    path = (
+        tmp_path
+        / "scalping_avg_down_recovery_calibration"
+        / "scalping_avg_down_recovery_calibration_2026-09-04.json"
+    )
+    path.parent.mkdir(parents=True)
+    candidate = {
+        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
+        "allowed_runtime_apply": True,
+        "quality_update_id": "avg-1",
+        "evidence_contract_version": mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
+        "evidence_digest": "a" * 64,
+        "evidence_authority": "fixed_observed_exit_source_only",
+        "source_date": "2026-09-04",
+        "target_date": "2026-09-04",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "target_date": "2026-09-04",
+                "calibration_candidates": [candidate],
+                "runtime_update_contract": {
+                    "owner_family": mod.AVG_DOWN_RECOVERY_FAMILY,
+                    "owner_stage": "scale_in",
+                    "update_mode": "single_cumulative_quality_update",
+                    "runtime_apply_candidate_count": 1,
+                    "max_runtime_apply_count": 1,
+                    "quality_update_id": "avg-1",
+                    "evidence_contract_version": (
+                        mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION
+                    ),
+                    "evidence_digest": "a" * 64,
+                    "allowed_runtime_apply_count": 1,
+                    "runtime_effect": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = mod._avg_down_calibration_contract_status("2026-09-04")
+
+    assert status["status"] == "fail"
+    assert "avg_down_runtime_candidate_source_only_authority_leak" in status["issues"]

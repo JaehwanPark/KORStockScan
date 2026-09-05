@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 
 from src.trading.market.micro_confirmation import (
     DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
+    DEFAULT_DYNAMIC_CONFIRMATION_POLICY,
+    SAMSUNG_RISE_REBOUND_POLICY,
+    dynamic_policy_for_scope,
     advance_live_dynamic_confirmation,
     build_dynamic_micro_confirmation_checkpoints,
     build_live_dynamic_confirmation_checkpoint,
@@ -144,6 +147,83 @@ def test_dynamic_confirmation_enters_at_first_supportive_checkpoint() -> None:
     assert replay["broker_order_forbidden"] is True
     assert replay["metric_contract"] == DYNAMIC_CONFIRMATION_METRIC_CONTRACT
     assert validate_dynamic_micro_confirmation_replay(replay) == (True, None)
+
+
+def test_samsung_confirmation_requires_rise_or_rebound_not_flat_or_falling() -> None:
+    for bid_return in (0.0, -1.0):
+        flat_or_falling = {
+            sec: _checkpoint(sec, bid_return_bps=bid_return * (sec + 1))
+            for sec in (0, 1, 3, 5)
+        }
+        replay = evaluate_dynamic_micro_confirmation(
+            flat_or_falling, policy=SAMSUNG_RISE_REBOUND_POLICY
+        )
+        assert replay["terminal_action"] == "REJECT"
+    rising = {
+        0: _checkpoint(0, trade_backed_ratio=0.2),
+        1: _checkpoint(1, bid_return_bps=3.0),
+    }
+    assert (
+        evaluate_dynamic_micro_confirmation(rising, policy=SAMSUNG_RISE_REBOUND_POLICY)[
+            "terminal_action"
+        ]
+        == "ENTER"
+    )
+    rebound = {
+        0: _checkpoint(0, bid_return_bps=-8),
+        1: _checkpoint(1, bid_return_bps=-5),
+    }
+    rebound[1]["bid_recovery_from_low_bps"] = 3.0
+    assert (
+        evaluate_dynamic_micro_confirmation(
+            rebound, policy=SAMSUNG_RISE_REBOUND_POLICY
+        )["terminal_action"]
+        == "ENTER"
+    )
+    rebound[1]["net_edge_after_cost_bps"] = -1.0
+    assert (
+        evaluate_dynamic_micro_confirmation(
+            rebound, policy=SAMSUNG_RISE_REBOUND_POLICY
+        )["terminal_action"]
+        != "ENTER"
+    )
+
+
+def test_samsung_selected_confirmation_cannot_fallback_to_unconfirmed_entry(
+    tmp_path,
+) -> None:
+    now = datetime.fromisoformat("2026-09-04T10:00:00+09:00")
+    decision = advance_live_dynamic_confirmation(
+        now=now,
+        signal_decision_at=now,
+        checkpoint_sec=0,
+        prior_checkpoints={},
+        prior_anchor={},
+        symbol="005930",
+        route="NXT",
+        owner="episode",
+        scope_id="morning",
+        baseline_fill_price=10_010,
+        owner_entry_limit_price=10_010,
+        owner_target_price=10_050,
+        round_trip_cost_pct=0.23,
+        widget_take_profit=False,
+        snapshot_path=tmp_path / "missing.json",
+    )
+    assert decision["action"] == "REJECT"
+    assert decision["reason"] == "rise_rebound_confirmation_source_unavailable"
+    assert (
+        dynamic_policy_for_scope(owner="episode", scope_id="midday", symbol="005930")
+        == SAMSUNG_RISE_REBOUND_POLICY
+    )
+    assert (
+        dynamic_policy_for_scope(owner="episode", scope_id="low_price", symbol="005930")
+        == DEFAULT_DYNAMIC_CONFIRMATION_POLICY
+    )
+    assert (
+        dynamic_policy_for_scope(owner="widget", scope_id="midday", symbol="005930")
+        == DEFAULT_DYNAMIC_CONFIRMATION_POLICY
+    )
 
 
 def test_live_checkpoint_uses_exact_route_causal_0b_0d_and_enters() -> None:

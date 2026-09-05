@@ -12,6 +12,8 @@
 
 튜닝 원칙과 현재 owner는 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8, 당일 실행 항목은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 `docs/time-based-operations-runbook.md`, producer/consumer 순서는 `docs/report-based-automation-traceability.md`를 따른다.
 
+2026-09-05부터의 실행 단위별 순차 상세검토 진행상태는 `docs/audit-reports/2026-09-05-postclose-work-inventory.md`에서 추적한다. 이 진행표는 상태 요약이며 Plan Rebase나 당일 체크리스트의 owner·권한을 대체하지 않는다.
+
 ## 1. 완료 목표
 
 다음을 모두 충족하면 장후작업과 허용된 추천 구현이 완료된 것으로 판정한다.

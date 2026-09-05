@@ -2,13 +2,14 @@
 
 This producer reads durable profile states, its own prior reports, and exact
 realized-cost account rows for uniquely attributable completed episodes. It
-never queries market-price history and can only propose one bounded tightening
-axis for the next PREOPEN across the shared regular-entry stage.
+never queries market-price history. Observed-signal subsets remain diagnostics;
+the next-PREOPEN candidate preserves actual applied policy custody only.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -19,20 +20,26 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
 from src.engine.monitoring.machine_microstructure_attribution import (
     OUTPUT_DIR as MACHINE_MICROSTRUCTURE_REPORT_DIR,
     load_prior_owner_diagnostic,
 )
+from src.trading.low_price_two_leg.economics import (
+    ROUND_TRIP_COST_PCT,
+    cost_contract as canonical_cost_contract,
+)
+from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
 from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
     atomic_write_json,
-    candidate_policies_with_current_baselines,
     baseline_policies_for_target_date,
     load_applied_profile_policy,
     policy_hash,
+    report_artifact_hash,
+    runtime_policy_binding,
+    SUBSET_AUTHORITY_CONTRACT,
     policy_bounds_for_target_date,
     policy_mutations_between,
     validate_candidate,
@@ -52,7 +59,7 @@ from src.utils import kiwoom_utils
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v6"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v7"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
@@ -60,10 +67,11 @@ SUPPORTED_REPORT_SCHEMAS = frozenset(
         "low_price_two_leg_tuning_report_v3",
         "low_price_two_leg_tuning_report_v4",
         "low_price_two_leg_tuning_report_v5",
+        "low_price_two_leg_tuning_report_v6",
         REPORT_SCHEMA,
     }
 )
-DEFAULT_ROUND_TRIP_COST_PCT = 0.23
+DEFAULT_ROUND_TRIP_COST_PCT = ROUND_TRIP_COST_PCT
 MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
 MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
@@ -155,7 +163,14 @@ METRIC_CONTRACT = {
         "broker_priced_completed_legs": SAMPLE_FLOOR_COMPLETED_LEGS,
         "minimum_notional_ev_uplift_pct": MIN_NOTIONAL_EV_UPLIFT_PCT,
     },
-    "primary_decision_metric": "notional_weighted_ev_pct",
+    "primary_decision_metric": (
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+    ),
+    "secondary_decision_metrics": [
+        "notional_weighted_ev_pct",
+        "attempted_episodes_per_source_valid_observation_day",
+        "broker_completed_net_return_per_capital_hour",
+    ],
     "profit_cost_model": (
         "ka10073_exact_cost_when_uniquely_attributable_else_"
         "broker_exit_fill_price_minus_fixed_round_trip_cost_pct_including_"
@@ -214,6 +229,7 @@ METRIC_CONTRACT = {
         "ka10073_symbol_day_quantity_and_average_price_unique_match",
         "verified_manual_operator_exit_is_realized_pnl_not_machine_target_success",
         "candidate_improves_same_profile_current_policy_cost_adjusted_ev",
+        "candidate_improves_same_profile_cost_adjusted_net_profit_per_day",
     ],
     "forbidden_uses": [
         "historical_market_data_requery",
@@ -308,11 +324,16 @@ def _source_quality_preflight(target_date: str, source_quality_dir: Path) -> dic
     status = str(payload.get("status") or "").lower()
     allowed = (payload.get("summary") or {}).get("tuning_input_allowed") is True
     passed = allowed and status in {"pass", "warning"}
+    try:
+        source_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        source_sha256 = ""
     return {
         "status": "pass" if passed else "blocked",
         "tuning_input_allowed": passed,
         "reason": "ready" if passed else "observation_source_quality_audit_blocked",
         "source_path": str(path),
+        "source_sha256": source_sha256,
         "audit_status": status,
     }
 
@@ -1013,6 +1034,10 @@ def extract_profile_row(
 
 
 def _aggregate(rows: list[dict]) -> dict:
+    eligible_days = sum(bool(row.get("eligible_for_tuning")) for row in rows)
+    source_valid_observation_days = sum(
+        row.get("source_quality") == "pass" for row in rows
+    )
     all_attempted_rows = [row for row in rows if row.get("attempted")]
     attempted_rows = [
         row for row in rows if row.get("eligible_for_tuning") and row.get("attempted")
@@ -1154,7 +1179,8 @@ def _aggregate(rows: list[dict]) -> dict:
         else None
     )
     return {
-        "eligible_days": sum(row.get("eligible_for_tuning") for row in rows),
+        "eligible_days": eligible_days,
+        "source_valid_observation_days": source_valid_observation_days,
         "source_gap_days": sum(
             row.get("source_quality") not in {"pass", "not_applicable"} for row in rows
         ),
@@ -1162,6 +1188,14 @@ def _aggregate(rows: list[dict]) -> dict:
             row.get("cohort") == "pre_operational_not_applicable" for row in rows
         ),
         "attempted_episodes": len(attempted_rows),
+        "attempted_episodes_per_eligible_day": (
+            round(len(attempted_rows) / eligible_days, 6) if eligible_days else None
+        ),
+        "attempted_episodes_per_source_valid_observation_day": (
+            round(len(attempted_rows) / source_valid_observation_days, 6)
+            if source_valid_observation_days
+            else None
+        ),
         "completed_legs": len(completed),
         "broker_priced_completed_legs": len(broker_priced_completed),
         "machine_target_completed_legs": len(machine_target_completed),
@@ -1224,6 +1258,14 @@ def _aggregate(rows: list[dict]) -> dict:
         ),
         "broker_realized_net_profit_krw": round(broker_realized_profit, 3),
         "cost_adjusted_net_profit_krw": round(broker_realized_profit, 3),
+        "cost_adjusted_net_profit_krw_per_eligible_day": (
+            round(broker_realized_profit / eligible_days, 6) if eligible_days else None
+        ),
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": (
+            round(broker_realized_profit / source_valid_observation_days, 6)
+            if source_valid_observation_days
+            else None
+        ),
         "exact_broker_realized_net_profit_krw": round(exact_broker_profit, 3),
         "fixed_cost_estimate_net_profit_krw": round(fixed_cost_broker_profit, 3),
         "manual_exit_fixed_cost_estimate_net_profit_krw": round(
@@ -1268,7 +1310,25 @@ def _axis_outcome(
             and near_low - 1e-12 <= max_near_low
         ):
             selected.append(row)
-    return _aggregate(selected)
+    outcome = _aggregate(selected)
+    source_valid_observation_days = sum(
+        row.get("source_quality") == "pass" for row in rows
+    )
+    outcome["source_valid_observation_days"] = source_valid_observation_days
+    outcome["attempted_episodes_per_source_valid_observation_day"] = (
+        round(outcome["attempted_episodes"] / source_valid_observation_days, 6)
+        if source_valid_observation_days
+        else None
+    )
+    outcome["cost_adjusted_net_profit_krw_per_source_valid_observation_day"] = (
+        round(
+            outcome["cost_adjusted_net_profit_krw"] / source_valid_observation_days,
+            6,
+        )
+        if source_valid_observation_days
+        else None
+    )
+    return outcome
 
 
 def _load_history(
@@ -1311,29 +1371,6 @@ def _load_history(
             for profile_id in target_profiles
         }
     return history
-
-
-def _latest_prior_policies(candidate_dir: Path, target_date: str) -> dict[str, dict]:
-    parsed_target_date = date.fromisoformat(target_date)
-    paths = sorted(
-        candidate_dir.glob("low_price_two_leg_policy_candidate_*.json"), reverse=True
-    )
-    for path in paths:
-        payload = _read_json(path)
-        if not payload or str(payload.get("source_date") or "") >= target_date:
-            continue
-        valid, reason = validate_candidate(payload)
-        if not valid:
-            raise ValueError(f"latest_prior_candidate_{reason}")
-        return candidate_policies_with_current_baselines(
-            payload, target_date=parsed_target_date
-        )
-    return {
-        profile_id: dict(policy)
-        for profile_id, policy in baseline_policies_for_target_date(
-            parsed_target_date
-        ).items()
-    }
 
 
 def _samsung_same_stage_owner(
@@ -1572,14 +1609,30 @@ def build_report(
             "summary": _aggregate(rows),
             "rows": rows,
         }
-    return {
+    report = {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
+        "artifact_path": str(output_dir / f"{REPORT_TYPE}_{target_date}.json"),
+        "source_runtime_policy_binding": runtime_policy_binding(
+            target_date=parsed_date, applied_dir=applied_dir
+        ),
+        "evaluation_authority_contract": SUBSET_AUTHORITY_CONTRACT,
+        "economic_replay_handoff": {
+            "owner": "low_price_two_leg_expanded_candidate_research",
+            "profile_field": "existing_axis_economic_replay",
+            "decision_authority": "source_only_no_runtime_or_order_authority",
+            "runtime_effect": False,
+            "reason": "observed_signal_subset_cannot_reconstruct_next_entry_or_custody",
+        },
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "target_date_is_krx_trading_day": target_date_is_trading,
         "cost_pct": cost_pct,
+        "cost_contract": {
+            **canonical_cost_contract(),
+            "round_trip_cost_pct": cost_pct,
+        },
         "cost_model": {
             "primary_source": "ka10073_exact_when_uniquely_attributable",
             "fallback_source": "fixed_round_trip_cost_pct",
@@ -1622,6 +1675,8 @@ def build_report(
         "actual_order_submitted": False,
         "decision": "profile_separated_actual_outcome_observation_only",
     }
+    report["artifact_hash"] = report_artifact_hash(report)
+    return report
 
 
 def build_candidate(
@@ -1633,12 +1688,16 @@ def build_candidate(
     source_date = date.fromisoformat(str(report["target_date"]))
     target_profiles = profiles_for_target_date(source_date)
     target_bounds = policy_bounds_for_target_date(source_date)
-    prior = _latest_prior_policies(candidate_dir, report["target_date"])
+    binding = report.get("source_runtime_policy_binding") or {
+        "status": "missing_baseline_only",
+        "source_date": report["target_date"],
+        "policies": baseline_policies_for_target_date(source_date),
+    }
+    prior = binding["policies"]
     selected_policies = {
         profile_id: dict(policy) for profile_id, policy in prior.items()
     }
     evaluations: dict[str, dict[str, Any]] = {}
-    eligible: list[tuple[float, str, str, float]] = []
     for profile_id in target_profiles:
         current = prior[profile_id]
         clean_window = report["windows"][CLEAN_WINDOW_NAME][profile_id]
@@ -1682,6 +1741,30 @@ def build_candidate(
                 if candidate_ev is not None and current_ev is not None
                 else None
             )
+            current_net_per_day = current_outcome.get(
+                "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+            )
+            candidate_net_per_day = clean_outcome.get(
+                "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+            )
+            net_profit_uplift_per_day = (
+                float(candidate_net_per_day) - float(current_net_per_day)
+                if candidate_net_per_day is not None and current_net_per_day is not None
+                else None
+            )
+            current_frequency = current_outcome.get(
+                "attempted_episodes_per_source_valid_observation_day"
+            )
+            candidate_frequency = clean_outcome.get(
+                "attempted_episodes_per_source_valid_observation_day"
+            )
+            frequency_retention_ratio = (
+                float(candidate_frequency) / float(current_frequency)
+                if candidate_frequency is not None
+                and current_frequency is not None
+                and float(current_frequency) > 0.0
+                else None
+            )
             ready = bool(
                 report.get("target_date_is_krx_trading_day") is True
                 and report["source_quality_preflight"]["tuning_input_allowed"]
@@ -1698,6 +1781,8 @@ def build_candidate(
                 and float(candidate_ev) > 0
                 and ev_uplift is not None
                 and ev_uplift >= MIN_NOTIONAL_EV_UPLIFT_PCT
+                and net_profit_uplift_per_day is not None
+                and net_profit_uplift_per_day > 1e-9
             )
             evaluated_alternatives.append(
                 {
@@ -1707,12 +1792,42 @@ def build_candidate(
                     "clean_baseline_cumulative_outcome": clean_outcome,
                     "current_policy_outcome": current_outcome,
                     "notional_ev_uplift_pct": ev_uplift,
-                    "ready": ready,
+                    "cost_adjusted_net_profit_uplift_krw_per_source_valid_observation_day": (
+                        net_profit_uplift_per_day
+                    ),
+                    "attempted_episode_frequency_retention_ratio": (
+                        frequency_retention_ratio
+                    ),
+                    "ready": False,
+                    "diagnostic_economic_conditions_passed": ready,
+                    "decision_authority": "observed_signal_subset_diagnostic_only",
+                    "allowed_runtime_apply": False,
+                    "condition_feasibility": (
+                        "hold_source_quality"
+                        if not report["source_quality_preflight"][
+                            "tuning_input_allowed"
+                        ]
+                        or report["daily"]["profiles"][profile_id].get("source_quality")
+                        != "pass"
+                        else (
+                            "hold_inventory_custody"
+                            if not profile_inventory_clear
+                            else (
+                                "hold_source_gap_causal_path_required"
+                                if ready
+                                else (
+                                    "hold_sample"
+                                    if clean_outcome["broker_priced_completed_legs"]
+                                    < SAMPLE_FLOOR_COMPLETED_LEGS
+                                    or clean_outcome["eligible_days"]
+                                    < BOUNDED_MIN_OBSERVED_DAYS
+                                    else "hold_no_edge_in_observed_subset"
+                                )
+                            )
+                        )
+                    ),
                 }
             )
-            if ready:
-                after = drawdown if axis == "rolling_high_drawdown_pct" else near_low
-                eligible.append((float(ev_uplift), profile_id, axis, after))
         evaluations[profile_id] = {
             "current_policy": current,
             "current_clean_baseline_cumulative_outcome": current_outcome,
@@ -1722,30 +1837,19 @@ def build_candidate(
     same_stage_owner = _samsung_same_stage_owner(
         report["target_date"], samsung_candidate_dir
     )
-    winner = (
-        None if same_stage_owner["mutation_present"] else max(eligible, default=None)
-    )
-    selected_profile = selected_axis = None
-    if winner is not None:
-        _, selected_profile, selected_axis, after = winner
-        selected_policies[selected_profile][selected_axis] = after
     mutations = policy_mutations_between(prior, selected_policies)
     if len(mutations) > 1:
         raise ValueError("same_stage_multiple_axis_candidate_forbidden")
     profiles = {}
     for profile_id in target_profiles:
         profiles[profile_id] = {
-            "selection_status": (
-                "selected_next_preopen_bounded_tightening"
-                if profile_id == selected_profile
-                else "carry_forward_profile_policy"
-            ),
-            "selected_axis": selected_axis if profile_id == selected_profile else None,
+            "selection_status": "carry_forward_profile_policy",
+            "selected_axis": None,
             "policy": selected_policies[profile_id],
             "evaluation": evaluations[profile_id],
             "allowed_runtime_apply": True,
         }
-    return {
+    candidate = {
         "schema": CANDIDATE_SCHEMA,
         "source_date": report["target_date"],
         "generated_at_kst": report["generated_at_kst"],
@@ -1755,6 +1859,9 @@ def build_candidate(
         "source_quality_preflight": report["source_quality_preflight"],
         "policy_hash": policy_hash(selected_policies),
         "policy_mutations": mutations,
+        "source_runtime_policy_binding": binding,
+        "evaluation_authority_contract": SUBSET_AUTHORITY_CONTRACT,
+        "decision": "carry_actual_policy_subset_promotion_retired",
         "same_stage_owner_guard": same_stage_owner,
         "profiles": profiles,
         "decision_authority": "postclose_bounded_candidate_only",
@@ -1764,6 +1871,17 @@ def build_candidate(
         "rollback": "next_preopen_exact_date_artifact_or_verified_baseline",
         "forbidden_uses": METRIC_CONTRACT["forbidden_uses"],
     }
+    if report.get("artifact_hash"):
+        candidate.update(
+            {
+                "source_report_path": report.get("artifact_path"),
+                "source_report_artifact_hash": report.get("artifact_hash"),
+                "source_quality_source_sha256": (
+                    report.get("source_quality_preflight") or {}
+                ).get("source_sha256"),
+            }
+        )
+    return candidate
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -1786,7 +1904,8 @@ def render_markdown(report: dict, candidate: dict) -> str:
     lines = [
         f"# Low-price two-leg tuning — {report['target_date']}",
         "",
-        "- Decision: profile-separated actual broker outcomes; next-PREOPEN bounded tightening only.",
+        "- Decision: carry the actually applied policy; observed-signal subsets are diagnostic only and cannot promote new tightening.",
+        "- Economic replay owner: low_price_two_leg_expanded_candidate_research / existing_axis_economic_replay (same two filters, source-only, no new live authority).",
         "- No market-history query, cross-profile pooling, stop loss, forced exit, quantity, target, or validity change.",
         (
             "- Cost model: exact ka10073 only on unique identity match "
@@ -1885,7 +2004,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     candidate = build_candidate(report, candidate_dir=args.candidate_dir)
-    valid, reason = validate_candidate(candidate)
+    valid, reason = validate_candidate(candidate, source_report=report)
     if not valid:
         raise ValueError(reason)
     paths = write_outputs(

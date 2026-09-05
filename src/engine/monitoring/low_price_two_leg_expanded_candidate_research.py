@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import time as time_module
@@ -32,11 +33,16 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     Bar,
     DayContext,
     ResearchError,
+    ResearchDeferred,
     SpotCandidate,
     _atomic_write,
     baseline_candidate,
     build_day_contexts,
     evaluate_candidate,
+    existing_axis_economic_replay,
+    valid_existing_axis_economic_replay,
+    paired_economics,
+    ECONOMIC_REPLAY_CONTRACT,
     fetch_sor_history,
     select_profile_spot,
 )
@@ -44,19 +50,25 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILES as LIVE_PROFILES,
     profiles_for_target_date,
 )
+from src.trading.low_price_two_leg.economics import (
+    cost_contract as canonical_cost_contract,
+)
 from src.trading.low_price_two_leg.policy_runtime import load_applied_profile_policy
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
-REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v5"
+REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v6"
+LEGACY_REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v5"
 REPORT_TYPE = "low_price_two_leg_expanded_candidate_research"
 AUTHORITY = "lower_price_machine_candidate_recommendation_only"
 OUTPUT_DIR = DATA_DIR / "report" / "low_price_two_leg_expanded_candidate_research"
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "low_price_two_leg_candidate_telegram_state.json"
 )
+DEFAULT_SOURCE_CACHE_DIR = DATA_DIR / "cache" / "low_price_two_leg_ka10080"
+SOURCE_CACHE_SCHEMA = "low_price_two_leg_ka10080_source_cache_v1"
 DEFAULT_DYNAMIC_UNIVERSE_PATH = DATA_DIR / "daily_recommendations_v2.csv"
 DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH = (
     DATA_DIR / "daily_recommendations_v2_diagnostics.json"
@@ -673,6 +685,9 @@ def _recommendation_rows(
             continue
         holdout = (item.get("selected") or {}).get("holdout") or {}
         baseline_holdout = (item.get("baseline") or {}).get("holdout") or {}
+        comparison = paired_economics(baseline_holdout, holdout)
+        if not comparison["net_profit_improved"]:
+            continue
         candidate_ev = float(holdout.get("notional_weighted_ev_pct") or 0.0)
         held_rate = float(holdout.get("held_leg_rate_per_filled_leg", 0.0) or 0.0)
         held_mark = holdout.get("active_unrealized_notional_weighted_pct")
@@ -712,6 +727,9 @@ def _recommendation_rows(
                     "realized_net_profit_krw_per_episode"
                 ),
                 "notional_weighted_ev_pct": candidate_ev,
+                "paired_economics": comparison,
+                "current_economic_outcome": baseline_holdout,
+                "candidate_economic_outcome": holdout,
                 "baseline_notional_weighted_ev_pct": baseline_ev,
                 "baseline_policy_source": item.get("baseline_policy_source"),
                 "baseline_policy_hash": item.get("baseline_policy_hash"),
@@ -726,6 +744,7 @@ def _recommendation_rows(
         )
     rows.sort(
         key=lambda row: (
+            float(row["paired_economics"]["net_profit_uplift_krw_per_observation_day"]),
             float(row["notional_weighted_ev_pct"]),
             float(row.get("holdout_realized_net_profit_krw_per_episode") or 0.0),
             -float(row["holdout_held_leg_rate_per_filled_leg"]),
@@ -831,7 +850,7 @@ def _target_date_logic_attribution(
         except (KeyError, TypeError, ValueError) as exc:
             raise ResearchError("target_date_applied_policy_invalid") from exc
         candidate = _spot_candidate_from_public(parameters)
-        contexts = {target_date: context}
+        contexts = contexts_by_symbol[research_profile.symbol]
         baseline_result = evaluate_candidate(
             baseline, contexts, [target_date], include_episodes=True
         )
@@ -986,6 +1005,18 @@ def build_report(
             )
             selected["baseline_policy_hash"] = policy_snapshot.get("policy_hash")
             selected["baseline_policy_reason"] = policy_snapshot.get("reason")
+            selected["existing_axis_economic_replay"] = (
+                existing_axis_economic_replay(
+                    profile, contexts_by_symbol[profile.symbol]
+                )
+                if policy_snapshot.get("status") == "ready"
+                else {
+                    "status": "source_runtime_policy_unavailable",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "decision_authority": "source_only_no_runtime_or_order_authority",
+                }
+            )
         profiles[profile_id] = selected
     recommendations = _recommendation_rows(
         profiles,
@@ -1036,6 +1067,7 @@ def build_report(
         "calibration_trading_day_count": calibration_days,
         "holdout_trading_day_count": HOLDOUT_DAYS,
         "cost_pct": COST_PCT,
+        "cost_contract": canonical_cost_contract(),
         "official_reference": OFFICIAL_REFERENCE,
         "metric_contract": METRIC_CONTRACT,
         "candidate_universe_source": (
@@ -1132,6 +1164,7 @@ def build_source_quality_blocked_report(
         "calibration_trading_day_count": len(expected_dates) - HOLDOUT_DAYS,
         "holdout_trading_day_count": HOLDOUT_DAYS,
         "cost_pct": COST_PCT,
+        "cost_contract": canonical_cost_contract(),
         "official_reference": OFFICIAL_REFERENCE,
         "metric_contract": METRIC_CONTRACT,
         "candidate_universe_source": (
@@ -1209,8 +1242,26 @@ def render_markdown(report: dict[str, Any]) -> str:
         ),
         "",
         f"Recommendation status: `{report['status']}`; profiles: `{report['recommendation_count']}`.",
+        "Economic decision: same-window cost-adjusted net profit with positive EV; calibration-half signs are robustness diagnostics. HELD custody continues across date/window boundaries without invented resolution.",
         "",
     ]
+    axis_replays = {
+        profile_id: item.get("existing_axis_economic_replay") or {}
+        for profile_id, item in (report.get("profiles") or {}).items()
+        if item.get("discovery_lane") == "existing_symbol_logic_improvement"
+    }
+    if axis_replays:
+        lines.extend(["## Existing two-filter economic replay (source-only)", ""])
+        for profile_id, replay in axis_replays.items():
+            alternatives = replay.get("alternatives") or []
+            decisions = ", ".join(
+                f"{item['axis']}: {item['decision']} ({item['comparison']['net_profit_uplift_krw_per_observation_day']} KRW/day)"
+                for item in alternatives
+            )
+            lines.append(
+                f"- `{profile_id}`: {decisions or replay.get('status', 'no_remaining_bounded_axis')}."
+            )
+        lines.append("")
     if report["status"] == "source_quality_blocked":
         lines.extend(
             [
@@ -1533,8 +1584,37 @@ class CandidateRecommendationNotifier:
         expected_profile_inventory = _research_profile_inventory_public(
             target_inventory.research_profiles
         )
+        legacy_cost_contract = (
+            target_date <= date(2026, 9, 4)
+            and report.get("schema") == LEGACY_REPORT_SCHEMA
+        )
+        try:
+            reported_cost_pct = float(report.get("cost_pct"))
+        except (TypeError, ValueError):
+            return False
+        cost_contract = report.get("cost_contract")
+        cost_contract_valid = bool(
+            (
+                legacy_cost_contract
+                and reported_cost_pct in {0.20, COST_PCT}
+                and (
+                    cost_contract is None or cost_contract == canonical_cost_contract()
+                )
+            )
+            or (
+                not legacy_cost_contract
+                and reported_cost_pct == COST_PCT
+                and cost_contract == canonical_cost_contract()
+            )
+        )
         basic_valid = bool(
-            report.get("schema") == REPORT_SCHEMA
+            (
+                report.get("schema") == REPORT_SCHEMA
+                or (
+                    legacy_cost_contract
+                    and report.get("schema") == LEGACY_REPORT_SCHEMA
+                )
+            )
             and report.get("report_type") == REPORT_TYPE
             and report.get("status")
             in {
@@ -1552,6 +1632,7 @@ class CandidateRecommendationNotifier:
             and report.get("allowed_runtime_apply") is False
             and report.get("actual_order_submitted") is False
             and report.get("broker_order_forbidden") is True
+            and cost_contract_valid
             and isinstance(recommendations, list)
             and all(
                 isinstance(symbol, str)
@@ -1607,6 +1688,14 @@ class CandidateRecommendationNotifier:
             and isinstance(report.get("source_meta"), dict)
             and int(report.get("eligible_source_symbol_count", -1))
             == len(report.get("source_meta") or {})
+            and (
+                legacy_cost_contract
+                or all(
+                    isinstance(item, dict)
+                    and len(str(item.get("source_content_sha256") or "")) == 64
+                    for item in (report.get("source_meta") or {}).values()
+                )
+            )
             and int(report.get("quarantined_source_symbol_count", -1))
             == len(report.get("source_quarantine") or {})
             and set(report.get("source_meta") or {}).isdisjoint(
@@ -1638,6 +1727,25 @@ class CandidateRecommendationNotifier:
         )
         if not basic_valid:
             return False
+        if (
+            report.get("schema") == REPORT_SCHEMA
+            and report.get("status") != "source_quality_blocked"
+        ):
+            for profile_id in target_inventory.logic_improvement_profiles:
+                item = (report.get("profiles") or {}).get(profile_id) or {}
+                if item.get("decision") == "source_quality_quarantined_no_evaluation":
+                    continue
+                replay = item.get("existing_axis_economic_replay")
+                if not valid_existing_axis_economic_replay(replay):
+                    return False
+                if item.get(
+                    "baseline_policy_source"
+                ) == "target_date_applied_policy" and (
+                    replay.get("status") == "source_runtime_policy_unavailable"
+                    or replay.get("current_parameters")
+                    != (item.get("baseline") or {}).get("parameters")
+                ):
+                    return False
         expected_observation_inventory = _operator_observation_inventory(
             _new_symbol_profiles(candidate_symbols)
         )
@@ -1814,6 +1922,20 @@ class CandidateRecommendationNotifier:
             == "source_only_requires_review_and_user_approval"
             and row.get("runtime_effect") is False
             and (
+                report.get("schema") == LEGACY_REPORT_SCHEMA
+                or (
+                    (row.get("paired_economics") or {}).get("economic_replay_contract")
+                    == ECONOMIC_REPLAY_CONTRACT
+                    and (row.get("paired_economics") or {}).get("net_profit_improved")
+                    is True
+                    and row.get("paired_economics")
+                    == paired_economics(
+                        row.get("current_economic_outcome") or {},
+                        row.get("candidate_economic_outcome") or {},
+                    )
+                )
+            )
+            and (
                 row.get("discovery_lane") != "existing_symbol_logic_improvement"
                 or (
                     row.get("baseline_policy_source") == "target_date_applied_policy"
@@ -1907,6 +2029,169 @@ def _valid_postclose_logic_recommendation(row: Any) -> bool:
         return False
 
 
+def _source_cache_contract(
+    *, symbol: str, start_date: date, end_date: date, expected_trading_day_count: int
+) -> dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "request_code": f"{symbol}_AL",
+        "api_id": "ka10080",
+        "path": "/api/dostk/chart",
+        "tic_scope": "1",
+        "upd_stkpc_tp": "1",
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "expected_trading_day_count": int(expected_trading_day_count),
+        "official_reference_commit": OFFICIAL_REFERENCE["commit_sha"],
+    }
+
+
+def _canonical_digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _source_cache_path(cache_dir: Path, *, end_date: date, symbol: str) -> Path:
+    return cache_dir / end_date.isoformat() / f"{symbol}.json"
+
+
+def _bar_rows(bars: list[Bar]) -> list[dict[str, Any]]:
+    return [
+        {
+            "timestamp": bar.timestamp.isoformat(),
+            "open_price": bar.open_price,
+            "high_price": bar.high_price,
+            "low_price": bar.low_price,
+            "close_price": bar.close_price,
+        }
+        for bar in bars
+    ]
+
+
+def _write_source_cache(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    start_date: date,
+    end_date: date,
+    expected_trading_day_count: int,
+    bars: list[Bar],
+    meta: dict[str, Any],
+) -> Path:
+    contract = _source_cache_contract(
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        expected_trading_day_count=expected_trading_day_count,
+    )
+    bar_rows = _bar_rows(bars)
+    bars_sha256 = _canonical_digest(bar_rows)
+    stored_meta = dict(meta)
+    stored_meta["source_content_sha256"] = bars_sha256
+    payload = {
+        "schema": SOURCE_CACHE_SCHEMA,
+        "request_contract": contract,
+        "request_contract_sha256": _canonical_digest(contract),
+        "bars": bar_rows,
+        "bars_sha256": bars_sha256,
+        "source_meta": stored_meta,
+        "source_quality_status": "PASS",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    path = _source_cache_path(cache_dir, end_date=end_date, symbol=symbol)
+    _atomic_write(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    )
+    return path
+
+
+def _load_source_cache(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    start_date: date,
+    end_date: date,
+    expected_trading_day_count: int,
+) -> tuple[list[Bar], dict[str, Any]] | None:
+    path = _source_cache_path(cache_dir, end_date=end_date, symbol=symbol)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    contract = _source_cache_contract(
+        symbol=symbol,
+        start_date=start_date,
+        end_date=end_date,
+        expected_trading_day_count=expected_trading_day_count,
+    )
+    rows = payload.get("bars")
+    meta = payload.get("source_meta")
+    if (
+        payload.get("schema") != SOURCE_CACHE_SCHEMA
+        or payload.get("request_contract") != contract
+        or payload.get("request_contract_sha256") != _canonical_digest(contract)
+        or not isinstance(rows, list)
+        or payload.get("bars_sha256") != _canonical_digest(rows)
+        or not isinstance(meta, dict)
+        or payload.get("source_quality_status") != "PASS"
+        or meta.get("source_quality_status") != "PASS"
+        or meta.get("source_content_sha256") != payload.get("bars_sha256")
+        or payload.get("runtime_effect") is not False
+        or payload.get("allowed_runtime_apply") is not False
+        or payload.get("actual_order_submitted") is not False
+        or payload.get("broker_order_forbidden") is not True
+    ):
+        return None
+    bars: list[Bar] = []
+    try:
+        for row in rows:
+            timestamp = datetime.fromisoformat(str(row["timestamp"]))
+            if timestamp.tzinfo is None:
+                return None
+            bar = Bar(
+                timestamp.astimezone(KST),
+                int(row["open_price"]),
+                int(row["high_price"]),
+                int(row["low_price"]),
+                int(row["close_price"]),
+            )
+            if (
+                min(
+                    bar.open_price,
+                    bar.high_price,
+                    bar.low_price,
+                    bar.close_price,
+                )
+                <= 0
+                or bar.high_price < max(bar.open_price, bar.low_price, bar.close_price)
+                or bar.low_price > min(bar.open_price, bar.high_price, bar.close_price)
+            ):
+                return None
+            bars.append(bar)
+    except (KeyError, TypeError, ValueError):
+        return None
+    trading_dates = sorted({bar.timestamp.date() for bar in bars})
+    if (
+        len(trading_dates) != expected_trading_day_count
+        or not trading_dates
+        or trading_dates[0] != start_date
+        or trading_dates[-1] != end_date
+        or int(meta.get("bar_count", -1)) != len(bars)
+        or int(meta.get("trading_date_count", -1)) != len(trading_dates)
+    ):
+        return None
+    return bars, dict(meta)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date")
@@ -1915,6 +2200,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-pages", type=int, default=400)
     parser.add_argument("--page-delay-sec", type=float, default=0.2)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    parser.add_argument(
+        "--source-cache-dir", type=Path, default=DEFAULT_SOURCE_CACHE_DIR
+    )
+    parser.add_argument("--shared-defer-max-attempts", type=int, default=12)
+    parser.add_argument("--shared-defer-delay-sec", type=float, default=2.0)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--notify", action="store_true")
     parser.add_argument("--print-summary", action="store_true")
@@ -1972,7 +2262,18 @@ def main(argv: list[str] | None = None) -> int:
         allowlist = target_inventory.research_symbols
         sources: dict[str, tuple[list[Bar], dict[str, Any]]] = {}
         fetch_failures: dict[str, str] = {}
+        deferred_failures: dict[str, str] = {}
         for symbol in sorted(allowlist):
+            cached = _load_source_cache(
+                cache_dir=args.source_cache_dir,
+                symbol=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                expected_trading_day_count=expected_trading_day_count,
+            )
+            if cached is not None:
+                sources[symbol] = cached
+                continue
             try:
                 sources[symbol] = fetch_sor_history(
                     symbol=symbol,
@@ -1983,9 +2284,43 @@ def main(argv: list[str] | None = None) -> int:
                     page_delay_sec=args.page_delay_sec,
                     allowed_symbols=allowlist,
                     expected_trading_day_count=expected_trading_day_count,
+                    shared_defer_max_attempts=args.shared_defer_max_attempts,
+                    shared_defer_delay_sec=args.shared_defer_delay_sec,
                 )
+                fetched_bars, fetched_meta = sources[symbol]
+                fetched_meta = dict(fetched_meta)
+                fetched_meta["source_content_sha256"] = _canonical_digest(
+                    _bar_rows(fetched_bars)
+                )
+                sources[symbol] = (fetched_bars, fetched_meta)
+                _write_source_cache(
+                    cache_dir=args.source_cache_dir,
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    expected_trading_day_count=expected_trading_day_count,
+                    bars=fetched_bars,
+                    meta=fetched_meta,
+                )
+            except ResearchDeferred as exc:
+                deferred_failures[symbol] = str(exc)
             except (ResearchError, requests.RequestException) as exc:
                 fetch_failures[symbol] = str(exc)
+        if deferred_failures:
+            print(
+                json.dumps(
+                    {
+                        "status": "deferred_resume_required",
+                        "target_date": target_date.isoformat(),
+                        "deferred_symbols": deferred_failures,
+                        "completed_source_cache_count": len(sources),
+                        "runtime_effect": False,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 75
         if not sources:
             distinct_reasons = sorted(set(fetch_failures.values()))
             raise ResearchError(

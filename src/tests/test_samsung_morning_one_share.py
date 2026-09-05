@@ -424,6 +424,68 @@ def test_late_start_arms_sor_fallback_without_attempting_nxt(tmp_path):
     ] == [298_000, 297_500]
 
 
+@pytest.mark.parametrize("terminal_action", ["ENTER", "REJECT"])
+def test_prearmed_sor_plan_cannot_bypass_selected_dynamic_confirmation(
+    tmp_path, monkeypatch, terminal_action
+):
+    from src.trading.market.micro_confirmation import SAMSUNG_RISE_REBOUND_POLICY
+
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+    machine.run_once(_at(11, 8, 30))
+    assert not gateway.buy_calls
+    mode = "per_signal_dynamic_0_1_3_5"
+
+    def resolve(**kwargs):
+        policy = _fixed_entry_timing_policy(0)(**kwargs)
+        policy["mode"] = policy["provenance"]["entry_confirmation_mode"] = mode
+        return policy
+
+    calls = []
+
+    def advance(**kwargs):
+        calls.append(kwargs)
+        return {
+            "policy_id": SAMSUNG_RISE_REBOUND_POLICY.policy_id,
+            "action": "WAIT" if len(calls) == 1 else terminal_action,
+            "next_checkpoint_sec": 1,
+            "checkpoints": {},
+            "anchor": {},
+            "selected_delay_sec": 1,
+            "evaluated_at": kwargs["now"].isoformat(),
+        }
+
+    monkeypatch.setattr(
+        "src.trading.samsung_morning_one_share.machine.resolve_entry_confirmation_policy",
+        resolve,
+    )
+    monkeypatch.setattr(
+        "src.trading.samsung_morning_one_share.machine.advance_live_dynamic_confirmation",
+        advance,
+    )
+    started_at = _at(11, 9)
+    machine.run_once(started_at)
+    assert not gateway.buy_calls
+    result = machine.run_once(started_at + timedelta(seconds=1))
+    assert len(calls) == 2
+    assert all(
+        call["scope_id"] == "morning" and call["route"] == "SOR" for call in calls
+    )
+    assert all(call["baseline_fill_price"] == 298_000 for call in calls)
+    if terminal_action == "ENTER":
+        assert gateway.buy_calls == [("SOR", 298_000), ("SOR", 297_500)]
+        assert (
+            result["signal_features"]["entry_timing_policy_provenance"][
+                "dynamic_runtime_decision"
+            ]["action"]
+            == "ENTER"
+        )
+    else:
+        assert not gateway.buy_calls
+        machine.run_once(started_at + timedelta(seconds=2))
+        assert len(calls) == 2
+
+
 def test_start_during_sor_window_uses_sor_open_directly(tmp_path):
     gateway = FakeGateway()
     state = _machine(tmp_path, gateway).run_once(_at(11, 9, 1))

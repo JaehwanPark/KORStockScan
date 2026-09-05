@@ -32,6 +32,12 @@ for attempt in $(/usr/bin/seq 1 18); do
       --main-bot-active \
       --write; then
       exit 0
+    else
+      preflight_rc=$?
+    fi
+    if [ "$preflight_rc" -eq 4 ]; then
+      echo "low-price two-leg preflight terminal quarantine profile=$PROFILE" >&2
+      exit 4
     fi
   else
     echo "preflight profile=$PROFILE attempt=$attempt main_bot_inactive"

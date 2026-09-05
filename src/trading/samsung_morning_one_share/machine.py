@@ -20,7 +20,10 @@ from src.trading.config.machine_entry_timing_policy import (
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
     resolve_entry_confirmation_policy,
 )
-from src.trading.market.micro_confirmation import advance_live_dynamic_confirmation
+from src.trading.market.micro_confirmation import (
+    SAMSUNG_RISE_REBOUND_POLICY,
+    advance_live_dynamic_confirmation,
+)
 from src.trading.samsung_morning_one_share.policy import (
     DEFAULT_POLICY,
     EntryWindow,
@@ -564,6 +567,113 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             )
         return True
 
+    def _confirm_planned_route(self, now: datetime, route: str) -> bool:
+        """Apply the selected confirmation also to pre-armed SOR fallback legs."""
+        timing = resolve_entry_confirmation_policy(
+            target_date=now.date(),
+            owner=self.entry_timing_owner,
+            scope_id=self.entry_timing_scope_id,
+            symbol=str(self.policy.symbol),
+            session="NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR",
+            entry_state="UNSPECIFIED",
+        )
+        if timing["mode"] != DYNAMIC_MODE:
+            return True
+        features = self._state.get("signal_features") or {}
+        provenance = features.get("entry_timing_policy_provenance") or {}
+        proof = provenance.get("dynamic_runtime_decision") or {}
+        if (
+            features.get("route") == route
+            and provenance.get("policy_hash") == timing["provenance"].get("policy_hash")
+            and proof.get("policy_id") == SAMSUNG_RISE_REBOUND_POLICY.policy_id
+            and proof.get("action") == "ENTER"
+            and proof.get("evaluated_at") == now.isoformat()
+        ):
+            return True
+        pending = self._state.get("planned_route_confirmation") or {}
+        identity = (route, timing["provenance"].get("policy_hash"))
+        if (pending.get("route"), pending.get("policy_hash")) != identity:
+            pending = {
+                "route": route,
+                "policy_hash": identity[1],
+                "armed_at": now.isoformat(),
+                "checkpoint_sec": 0,
+            }
+        armed_at = datetime.fromisoformat(pending["armed_at"])
+        checkpoint = int(pending["checkpoint_sec"])
+        if now < armed_at + timedelta(seconds=checkpoint):
+            return False
+        plans = [
+            leg
+            for leg in self._state.get("legs", [])
+            if leg.get("status") == "PLANNED" and leg.get("route") == route
+        ]
+        baseline = max(int(leg["entry_price"]) for leg in plans)
+        step = advance_live_dynamic_confirmation(
+            now=now,
+            signal_decision_at=armed_at,
+            checkpoint_sec=checkpoint,
+            prior_checkpoints=pending.get("checkpoints"),
+            prior_anchor=pending.get("anchor"),
+            symbol=str(self.policy.symbol),
+            route=route,
+            owner=self.entry_timing_owner,
+            scope_id=self.entry_timing_scope_id,
+            baseline_fill_price=baseline,
+            owner_entry_limit_price=max(int(leg["entry_price"]) for leg in plans),
+            owner_target_price=self.policy.target_price(baseline),
+            round_trip_cost_pct=(
+                timing["provenance"].get("executable_confirmation") or {}
+            ).get("round_trip_cost_pct"),
+            widget_take_profit=False,
+        )
+        if step["action"] == "WAIT":
+            self._state["planned_route_confirmation"] = {
+                **pending,
+                "checkpoint_sec": step["next_checkpoint_sec"],
+                "checkpoints": step["checkpoints"],
+                "anchor": step["anchor"],
+            }
+            self._record(
+                now,
+                "planned_route_confirmation_wait",
+                route=route,
+                dynamic_confirmation=step,
+            )
+            return False
+        self._state["planned_route_confirmation"] = None
+        if step["action"] != "ENTER":
+            for leg in plans:
+                leg["status"] = "NO_FILL"
+            self._record(
+                now,
+                "planned_route_confirmation_rejected",
+                route=route,
+                dynamic_confirmation=step,
+            )
+            return False
+        features.update(
+            {
+                "signal_decision_at": armed_at.isoformat(),
+                "source_entry_event_id": f"samsung_morning_two_leg:{route}:{armed_at.isoformat()}",
+                "entry_confirmation_delay_sec": int(
+                    step.get("selected_delay_sec") or 0
+                ),
+                "entry_timing_policy_provenance": {
+                    **timing["provenance"],
+                    "dynamic_runtime_decision": step,
+                },
+            }
+        )
+        self._state["signal_features"] = features
+        self._record(
+            now,
+            "planned_route_confirmation_enter",
+            route=route,
+            dynamic_confirmation=step,
+        )
+        return True
+
     def _submit_planned_buys(self, now: datetime) -> None:
         if any(
             leg.get("status") == "PLANNED" for leg in self._state.get("legs", [])
@@ -596,6 +706,8 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             ):
                 continue
             if route not in approved_routes:
+                if not self._confirm_planned_route(now, route):
+                    return
                 planned_quantity = sum(
                     int(planned_leg.get("quantity", 0) or 0)
                     for planned_leg in self._state.get("legs", [])
@@ -742,6 +854,8 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             return self.snapshot()
         source_owner = str(self.ownership_source(self.policy.symbol) or "")
         route = "NXT" if now.time() < self.policy.nxt.deadline else "SOR"
+        if route in (self._state.get("rejected_confirmation_routes") or []):
+            return self.snapshot()
         opening = None
         if route == "NXT" or now.time() >= self.policy.sor.open_time:
             opening = self.gateway.opening_price(route=route, trade_date=now.date())
@@ -906,6 +1020,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     symbol=str(self.policy.symbol),
                     route=route,
                     owner="episode",
+                    scope_id=self.entry_timing_scope_id,
                     baseline_fill_price=open_price,
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans
@@ -938,6 +1053,10 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     return self.snapshot()
                 self._state["pending_entry_confirmation"] = None
                 if dynamic_step["action"] == "REJECT":
+                    self._state["rejected_confirmation_routes"] = [
+                        *(self._state.get("rejected_confirmation_routes") or []),
+                        route,
+                    ]
                     self._record(
                         now,
                         "entry_dynamic_confirmation_rejected",
@@ -962,6 +1081,13 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             confirmation_delay_sec = int(timing_policy["delay_sec"])
             timing_policy_provenance = dict(timing_policy["provenance"])
             if timing_policy["mode"] == DYNAMIC_MODE:
+                if open_price <= 0:
+                    # A scheduled SOR plan has no executable opening signal
+                    # before 09:00; start confirmation only after it exists.
+                    self._record(
+                        now, "entry_confirmation_await_opening_source", route=route
+                    )
+                    return self.snapshot()
                 runtime_cost = (
                     timing_policy_provenance.get("executable_confirmation") or {}
                 ).get("round_trip_cost_pct")
@@ -974,6 +1100,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     symbol=str(self.policy.symbol),
                     route=route,
                     owner="episode",
+                    scope_id=self.entry_timing_scope_id,
                     baseline_fill_price=open_price,
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans
@@ -1012,6 +1139,10 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     )
                     return self.snapshot()
                 if dynamic_step["action"] == "REJECT":
+                    self._state["rejected_confirmation_routes"] = [
+                        *(self._state.get("rejected_confirmation_routes") or []),
+                        route,
+                    ]
                     self._record(
                         now,
                         "entry_dynamic_confirmation_rejected",

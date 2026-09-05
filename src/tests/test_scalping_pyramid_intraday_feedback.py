@@ -439,7 +439,7 @@ def test_normal_winner_expansion_tracks_post_candidate_incremental_ev_and_probe_
     summary = report["summary"]["normal_winner_expansion"]
     item = report["normal_winner_expansion_rows"][0]
 
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
     assert summary["candidate_count"] == 1
     assert summary["source_quality_valid_candidate_count"] == 1
     assert summary["realized_incremental_winner_count"] == 1
@@ -707,7 +707,7 @@ def test_one_share_peak_crossing_is_not_labeled_as_correctly_blocked(tmp_path):
     assert item["pyramid_opportunity_seen"] is True
     assert item["pyramid_opportunity_min_profit_pct"] == 1.1
     assert item["pyramid_opportunity_threshold_source"] == (
-        "same_day_unique_runtime_pyramid_evaluation"
+        "legacy_unique_threshold_observation_diagnostic_only"
     )
     assert item["pyramid_opportunity_source"] == (
         "holding_peak_runtime_threshold_crossed_postscan"
@@ -973,7 +973,7 @@ def test_post_probe_real_outcome_separates_profitable_and_loss_zero_fill_rows(
     }
     winner = by_code["073240"]
 
-    assert report["schema_version"] == 4
+    assert report["schema_version"] == 5
     assert (
         winner["post_probe_real_outcome_label"]
         == "profitable_zero_fill_confirmation_ready"
@@ -2071,9 +2071,7 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
     assert item["runtime_effect"] is False
     assert item["actual_order_submitted"] is False
     assert report["summary"]["post_hard_abort_recovery_confirmation_ready_count"] == 1
-    assert (
-        item["post_probe_hard_abort_recovery_confirmation_preserved_gap_count"] == 1
-    )
+    assert item["post_probe_hard_abort_recovery_confirmation_preserved_gap_count"] == 1
     assert item["post_probe_hard_abort_recovery_ai_thesis_state_counts"] == {
         "neutral_or_unproven": 1,
         "supportive": 2,
@@ -2086,20 +2084,16 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
         == 1
     )
     assert (
-        report["summary"][
-            "post_terminal_abort_recovery_ai_supportive_evaluation_count"
-        ]
+        report["summary"]["post_terminal_abort_recovery_ai_supportive_evaluation_count"]
         == 2
     )
     assert (
-        report["summary"][
-            "post_terminal_abort_recovery_ai_tape_substitution_count"
-        ]
+        report["summary"]["post_terminal_abort_recovery_ai_tape_substitution_count"]
         == 2
     )
-    ai_axis = report["summary"]["normal_winner_expansion"][
-        "feature_axis_metrics"
-    ]["recovery_ai_thesis_state"]
+    ai_axis = report["summary"]["normal_winner_expansion"]["feature_axis_metrics"][
+        "recovery_ai_thesis_state"
+    ]
     assert len(ai_axis) == 1
     assert ai_axis[0]["bucket"] == "supportive"
     assert ai_axis[0]["sample_count"] == 1
@@ -2109,9 +2103,7 @@ def test_hard_abort_recovery_confirmation_becomes_source_only_normal_winner_cand
         "supportive"
     )
     assert (
-        persisted[
-            "normal_winner_expansion_recovery_ai_tape_substitution_applied"
-        ]
+        persisted["normal_winner_expansion_recovery_ai_tape_substitution_applied"]
         is True
     )
     assert persisted["normal_winner_expansion_recovery_ai_parent_prompt_version"] == (
@@ -2666,9 +2658,7 @@ def test_real_scale_in_performance_separates_winner_recovery_and_avg_down(
     assert items["winner_recovery"]["winner_recovery_qty_cap_valid"] is False
     assert items["winner_recovery"]["recovery_ai_thesis_state"] == "supportive"
     assert items["winner_recovery"]["recovery_ai_parent_prompt_version"] == "entry-v9"
-    assert items["winner_recovery"]["recovery_ai_parent_trace_id"] == (
-        "entry-trace-v9"
-    )
+    assert items["winner_recovery"]["recovery_ai_parent_trace_id"] == ("entry-trace-v9")
     assert items["winner_recovery"]["recovery_ai_parent_snapshot_id"] == (
         "entry-snapshot-v9"
     )
@@ -2696,6 +2686,233 @@ def test_real_scale_in_performance_separates_winner_recovery_and_avg_down(
         report["real_scale_in_performance_metric_contract"]["metric_role"]
         == "real_scale_in_execution_outcome_attribution"
     )
+
+
+def test_winner_recovery_runtime_funnel_exposes_gate_guard_submit_and_execution(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-27.jsonl"
+    selected_fields = {
+        "post_probe_winner_recovery_confirmation_ready": True,
+        "post_probe_winner_recovery_confirmation_count": 2,
+        "post_probe_winner_recovery_action": ("post_probe_winner_recovery_first_leg"),
+        "post_probe_winner_recovery_qty_cap": 1,
+        "effective_venue": "KRX",
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+    }
+    rows = [
+        _event(
+            801,
+            "111111",
+            "gate-blocked",
+            "post_probe_winner_recovery_blocked",
+            {
+                "post_probe_winner_recovery_confirmation_ready": False,
+                "post_probe_winner_recovery_confirmation_count": 1,
+                "post_probe_winner_recovery_block_reason": (
+                    "recovery_confirmation_not_ready"
+                ),
+                "effective_venue": "KRX",
+                "runtime_effect": False,
+            },
+            emitted_at="2026-08-27T10:00:00+09:00",
+        ),
+        _event(
+            802,
+            "222222",
+            "guard-blocked",
+            "scale_in_qty_block",
+            {
+                "add_type": "PYRAMID",
+                "post_probe_winner_recovery_qty_cap": 1,
+                "scale_in_blocker_reason": (
+                    "real_pyramid_ai_score_no_submit_authority:ai_score_sentinel_50"
+                ),
+            },
+            emitted_at="2026-08-27T10:01:00.400000+09:00",
+        ),
+        _event(
+            802,
+            "222222",
+            "guard-blocked",
+            "post_probe_winner_recovery_selected",
+            selected_fields,
+            emitted_at="2026-08-27T10:01:00+09:00",
+        ),
+        _event(
+            803,
+            "333333",
+            "executed",
+            "post_probe_winner_recovery_selected",
+            selected_fields,
+            emitted_at="2026-08-27T10:02:00+09:00",
+        ),
+        _event(
+            803,
+            "333333",
+            "executed",
+            "scale_in_order_submitted",
+            {
+                "add_type": "PYRAMID",
+                "add_reason": "post_probe_winner_recovery_first_leg",
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+            },
+            emitted_at="2026-08-27T10:02:00.200000+09:00",
+        ),
+        _event(
+            803,
+            "333333",
+            "executed",
+            "scale_in_qty_block",
+            {
+                "add_type": "PYRAMID",
+                "scale_in_blocker_reason": "later_unrelated_scale_in_attempt",
+            },
+            emitted_at="2026-08-27T10:02:00.500000+09:00",
+        ),
+        _event(
+            803,
+            "333333",
+            "executed",
+            "scale_in_executed",
+            {
+                "add_type": "PYRAMID",
+                "add_reason": "post_probe_winner_recovery_first_leg",
+                "actual_order_submitted": True,
+                "broker_order_forbidden": False,
+                "order_no": "P3",
+                "fill_price": 10000,
+                "fill_qty": 1,
+            },
+            emitted_at="2026-08-27T10:02:01+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-27", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["winner_recovery_runtime_funnel"]
+    selected = {
+        item["stock_code"]: item
+        for item in report["winner_recovery_runtime_funnel_rows"]
+        if item["gate_outcome"] == "selected"
+    }
+
+    assert summary["state"] == "real_execution_observed"
+    assert summary["runtime_gate_evaluation_count"] == 3
+    assert summary["runtime_gate_selected_count"] == 2
+    assert summary["runtime_gate_blocked_count"] == 1
+    assert summary["selected_downstream_guard_blocked_count"] == 1
+    assert summary["selected_order_submitted_count"] == 1
+    assert summary["selected_executed_count"] == 1
+    assert summary["selection_to_submit_rate"] == 0.5
+    assert summary["selection_to_execution_rate"] == 0.5
+    assert summary["runtime_gate_block_reason_counts"] == [
+        {"reason": "recovery_confirmation_not_ready", "count": 1}
+    ]
+    assert summary["downstream_guard_block_reason_counts"] == [
+        {
+            "reason": (
+                "real_pyramid_ai_score_no_submit_authority:ai_score_sentinel_50"
+            ),
+            "count": 1,
+        }
+    ]
+    assert selected["222222"]["terminal_stage"] == "scale_in_qty_block"
+    assert selected["222222"]["actual_order_submitted"] is False
+    assert selected["333333"]["terminal_stage"] == "scale_in_executed"
+    assert selected["333333"]["actual_order_submitted"] is True
+    assert selected["333333"]["real_execution_observed"] is True
+    assert (
+        report["winner_recovery_runtime_funnel_metric_contract"]["metric_role"]
+        == "winner_recovery_runtime_funnel_attribution"
+    )
+
+
+def test_winner_recovery_runtime_funnel_fails_closed_on_invalid_timestamp(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-27.jsonl"
+    row = _event(
+        804,
+        "444444",
+        "invalid-time",
+        "post_probe_winner_recovery_selected",
+        {
+            "post_probe_winner_recovery_confirmation_ready": True,
+            "post_probe_winner_recovery_confirmation_count": 2,
+            "runtime_effect": True,
+        },
+        emitted_at="not-a-timestamp",
+    )
+    pipeline_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-08-27", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["winner_recovery_runtime_funnel"]
+
+    assert summary["runtime_gate_evaluation_count"] == 0
+    assert summary["invalid_timestamp_event_count"] == 1
+    assert summary["source_quality_status"] == "timestamp_invalid"
+    assert summary["dominant_non_execution_layer"] == "invalid_event_timestamp"
+    assert report["winner_recovery_runtime_funnel_rows"] == []
+
+
+def test_winner_recovery_runtime_funnel_counts_position_closed_without_submit(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-08-27.jsonl"
+    rows = [
+        _event(
+            805,
+            "555555",
+            "closed-without-submit",
+            "post_probe_winner_recovery_selected",
+            {
+                "post_probe_winner_recovery_confirmation_ready": True,
+                "post_probe_winner_recovery_confirmation_count": 2,
+                "post_probe_winner_recovery_action": (
+                    "post_probe_winner_recovery_first_leg"
+                ),
+                "post_probe_winner_recovery_qty_cap": 1,
+                "effective_venue": "KRX",
+                "runtime_effect": True,
+            },
+            emitted_at="2026-08-27T10:03:00+09:00",
+        ),
+        _event(
+            805,
+            "555555",
+            "closed-without-submit",
+            "sell_completed",
+            {"profit_rate": 0.4},
+            emitted_at="2026-08-27T10:04:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-08-27", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    summary = report["summary"]["winner_recovery_runtime_funnel"]
+    funnel_row = report["winner_recovery_runtime_funnel_rows"][0]
+
+    assert summary["state"] == "selected_closed_without_submit"
+    assert summary["runtime_gate_selected_count"] == 1
+    assert summary["selected_closed_without_submit_count"] == 1
+    assert summary["selected_open_or_unresolved_count"] == 0
+    assert summary["selected_order_submitted_count"] == 0
+    assert summary["dominant_non_execution_layer"] == "position_closed_without_submit"
+    assert funnel_row["terminal_stage"] == "sell_completed"
+    assert funnel_row["closed_without_scale_in_submit"] is True
 
 
 def test_real_scale_in_performance_calculates_fee_aware_ev_from_complete_receipts(
@@ -2834,4 +3051,205 @@ def test_incomplete_real_scale_in_receipt_isolated_without_poisoning_report(
     assert report["source_quality"]["source_quality_excluded_row_count"] == 1
     assert report["source_quality"]["source_quality_exclusion_reasons"] == {
         "real_scale_in_receipt_source_quality_incomplete": 1
+    }
+
+
+def test_threshold_replay_row_keeps_same_event_bbo_gate_context_and_terminal_sell(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-04.jsonl"
+    rows = [
+        _event(
+            801,
+            "801801",
+            "replay-ready",
+            "pyramid_blocked_reason",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_blocker_reason": "profit_not_enough",
+                "gate_reason": "ok",
+                "profit_rate": 0.9,
+                "peak_profit": 0.9,
+                "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
+                "profit_gate_mode": "base",
+                "configured_min_profit_pct": 1.1,
+                "effective_min_profit_pct": 1.1,
+                "base_min_profit_pct": 1.1,
+                "strong_continuation_min_profit_pct": 0.9,
+                "strong_continuation_allowed": False,
+                "drawdown_from_peak": 0.0,
+                "is_new_high": True,
+                "current_ai_score": 75,
+                "ai_score_available": True,
+                "min_ai_score": 70,
+                "buy_pressure_10t": 70,
+                "min_buy_pressure": 60,
+                "tick_acceleration_ratio": 1.2,
+                "min_tick_accel": 0.5,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 20,
+                "max_micro_vwap_bps": 60,
+                "micro_vwap_available": True,
+                "reversal_feature_stale": False,
+                "tick_context_stale": False,
+                "tick_aggressor_trusted_count": 5,
+                "tick_aggressor_pressure_usable": True,
+                "quote_stale": False,
+                "quote_age_ms": 100,
+                "current_price_observed": 10090,
+                "position_buy_price": 10000,
+                "executable_best_ask": 10100,
+                "executable_best_bid": 10090,
+                "pyramid_price_observation_source": "same_evaluation_ws_bbo",
+                "pyramid_price_resolver_observation_status": "evaluated",
+                "pyramid_price_resolver_observed": True,
+                "pyramid_price_resolver_allowed": True,
+                "pyramid_price_resolver_reason": "scale_in_price_resolved",
+                "pyramid_price_resolver_order_price": 10090,
+                "pyramid_price_resolver_price_source": "best_bid",
+                "pyramid_price_resolver_best_bid": 10090,
+                "pyramid_price_resolver_best_ask": 10100,
+                "pyramid_price_resolver_spread_bps": 9.91,
+                "pyramid_price_resolver_max_spread_bps": 80,
+                "holding_context_venue": "KRX",
+                "holding_context_session": "krx_regular",
+                "pyramid_runtime_prior_status": "missing",
+                "pyramid_runtime_prior_signal": "neutral",
+            },
+            emitted_at="2026-09-04T10:00:00+09:00",
+        ),
+        _event(
+            801,
+            "801801",
+            "replay-ready",
+            "sell_completed",
+            {
+                "profit_rate": 1.5,
+                "sell_price": 10200,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-09-04T10:05:00+09:00",
+        ),
+        # A physically later worker append with an earlier event timestamp must
+        # not overwrite the actual terminal receipt selected above.
+        _event(
+            801,
+            "801801",
+            "replay-ready",
+            "sell_completed",
+            {
+                "profit_rate": 1.3,
+                "sell_price": 10150,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-09-04T10:03:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-09-04", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    replay = report["pyramid_threshold_replay_rows"][0]
+
+    assert report["schema_version"] == 5
+    assert report["pyramid_threshold_replay_metric_contract"][
+        "primary_decision_metric"
+    ] == ("source_quality_adjusted_ev_pct")
+    assert replay["configured_min_profit_pct"] == 1.1
+    assert replay["replay_entry_price"] == 10090
+    assert replay["sell_price"] == 10200
+    assert replay["price_evidence_level"] == (
+        "fresh_quote_existing_resolver_limit_price"
+    )
+    assert replay["gate_replay_source_quality_valid"] is True
+    assert replay["fixed_exit_economic_replay_ready"] is True
+    assert replay["submit_evaluable"] is False
+    assert replay["runtime_effect"] is False
+    assert report["pyramid_threshold_replay_coverage"] == {
+        "evaluation_event_count": 1,
+        "fixed_exit_economic_replay_ready_count": 1,
+        "explicitly_unusable_or_pending_count": 0,
+        "gate_replay_source_quality_valid_count": 1,
+        "pending_outcome_count": 0,
+        "price_or_resolver_gap_count": 0,
+        "owner_or_prior_conflict_count": 0,
+        "source_quality_reason_counts": {},
+        "coverage_scope": "observed_pyramid_gate_events_only_not_full_tick_universe",
+        "accounting_complete": True,
+        "runtime_effect": False,
+    }
+
+    rows[0]["fields"]["pyramid_price_resolver_allowed"] = False
+    rows[0]["fields"]["pyramid_price_resolver_reason"] = "spread_too_wide"
+    rows[0]["fields"]["pyramid_price_resolver_order_price"] = 0
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    blocked_report = mod.build_report(
+        "2026-09-04", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    blocked_replay = blocked_report["pyramid_threshold_replay_rows"][0]
+
+    assert blocked_replay["gate_replay_source_quality_valid"] is True
+    assert blocked_replay["fixed_exit_economic_replay_ready"] is False
+    assert blocked_replay["replay_entry_price"] is None
+    assert "pyramid_price_resolver_blocked" in blocked_replay["source_quality_reasons"]
+    assert (
+        "pyramid_price_resolver_order_price_missing"
+        in blocked_replay["source_quality_reasons"]
+    )
+    assert (
+        blocked_report["pyramid_threshold_replay_coverage"][
+            "price_or_resolver_gap_count"
+        ]
+        == 1
+    )
+
+
+def test_selected_pyramid_snapshot_owns_same_day_configured_threshold_provenance(
+    tmp_path,
+):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-04.jsonl"
+    rows = [
+        _event(
+            802,
+            "802802",
+            "selected-only",
+            "stat_action_decision_snapshot",
+            {
+                "scale_in_arm": "PYRAMID",
+                "scale_in_action_type": "PYRAMID",
+                "scale_in_action_reason": "scalping_pyramid_ok",
+                "chosen_action": "pyramid_wait",
+                "gate_reason": "ok",
+                "scale_in_gate_allowed": True,
+                "profit_rate": 1.2,
+                "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
+                "configured_min_profit_pct": 1.1,
+                "effective_min_profit_pct": 1.1,
+            },
+            emitted_at="2026-09-04T10:00:00+09:00",
+        )
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-09-04", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    assert report["pyramid_threshold_provenance"] == {
+        "observed_min_profit_pct_values": [1.1],
+        "configured_v2_min_profit_pct_values": [1.1],
+        "configured_threshold_contract_valid": True,
+        "selected_min_profit_pct": 1.1,
+        "selection_source": "same_day_unique_runtime_pyramid_evaluation",
+        "ambiguous": False,
     }

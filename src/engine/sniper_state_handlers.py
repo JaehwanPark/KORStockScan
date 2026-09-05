@@ -12,6 +12,7 @@ import re
 import time
 import math
 import threading
+import sys
 from contextvars import ContextVar
 from dataclasses import replace as dataclass_replace
 from datetime import (
@@ -32,6 +33,10 @@ from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders, sniper_trade_utils
 from src.engine.automation.source_quality_clean_baseline import (
     embedded_source_date_gate,
+)
+from src.engine.lifecycle.avg_down_replay import (
+    CONFIG_SCHEMA as AVG_DOWN_CONFIG_SCHEMA,
+    policy_fingerprint as avg_down_policy_fingerprint,
 )
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
@@ -87,6 +92,7 @@ from src.engine.scalping.main_lifecycle_journal import (
     PIPELINE_IDENTITY_SCHEMA,
     pipeline_lifecycle_fields_safe,
     pipeline_lifecycle_stage_mapped,
+    mint_main_lifecycle_id,
     validate_main_lifecycle_id,
 )
 from src.engine.scalping.entry_setup_live_policy import (
@@ -236,7 +242,7 @@ from src.engine.sniper_dynamic_thresholds import (
 from src.engine.swing.entry_lifecycle_policy import (
     evaluate_swing_entry_lifecycle_policy,
 )
-from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.trade_profit import calculate_net_profit_rate, get_trade_cost_rate
 from src.engine.sniper_position_tags import (
     is_default_position_tag,
     normalize_position_tag,
@@ -19992,6 +19998,18 @@ def _holding_stage_needs_probe_residual_causality(stage: str) -> bool:
 
 
 _HOLDING_PIPELINE_STABLE_BLOCK_SIGNATURE_KEYS = {
+    "avg_down_route_arbitration_observed": (
+        "position_episode_id",
+        "route_behavior_signature",
+        "effective_min_buy_pressure",
+        "pre_add_buy_price",
+        "pre_add_buy_qty",
+        "avg_down_policy_version",
+        "sizing_policy_version",
+        "cost_policy_version",
+        "runtime_candidate_quality_update_id",
+        "runtime_previous_min_buy_pressure",
+    ),
     "scalp_fast_exit_venue_blocked": (
         "fast_exit_broker_route",
         "fast_exit_execution_cohort",
@@ -20120,7 +20138,7 @@ def _log_holding_pipeline(stock, code, stage, **fields):
         fields,
     )
     if not should_emit:
-        return
+        return False
     fields.update(throttle_fields)
     for key, value in _holding_pipeline_observation_scope_fields(stock).items():
         fields.setdefault(key, value)
@@ -21179,6 +21197,7 @@ def _emit_stat_action_decision_snapshot(
     drawdown_from_peak = _safe_float(peak_profit, 0.0) - _safe_float(profit_rate, 0.0)
     curr_price_int = _safe_int(curr_price, 0)
     buy_price_float = _safe_float(buy_price, 0.0)
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
     distance_to_buy_bps = (
         ((curr_price_int - buy_price_float) / buy_price_float) * 10000.0
         if curr_price_int > 0 and buy_price_float > 0
@@ -21196,6 +21215,9 @@ def _emit_stat_action_decision_snapshot(
         "current_ai_score": f"{_safe_float(current_ai_score, 0.0):.0f}",
         "curr_price": curr_price_int,
         "buy_price": f"{buy_price_float:.2f}",
+        "executable_best_ask": _safe_int(best_ask, 0),
+        "executable_best_bid": _safe_int(best_bid, 0),
+        "pyramid_price_observation_source": "same_evaluation_ws_bbo",
         "buy_qty": _safe_int(stock.get("buy_qty"), 0),
         "avg_down_count": _safe_int(stock.get("avg_down_count"), 0),
         "pyramid_count": _safe_int(stock.get("pyramid_count"), 0),
@@ -21271,6 +21293,16 @@ def _emit_stat_action_decision_snapshot(
     ):
         if key in action:
             fields[key] = action.get(key)
+    if scale_in_arm == "PYRAMID":
+        fields = _append_pyramid_probe_fields(fields, action)
+        fields.update(
+            _pyramid_price_replay_observation_fields(
+                stock=stock,
+                ws_data=ws_data,
+                probe=action,
+                curr_price=curr_price_int,
+            )
+        )
     fields.update(
         _prefixed_micro_estimator_fields(
             stock,
@@ -21335,11 +21367,15 @@ def _log_scale_in_arm_blocked(
     peak_profit,
     current_ai_score,
     held_sec,
+    curr_price=None,
+    buy_price=None,
+    ws_data=None,
     gate=None,
     probe=None,
 ):
     gate = gate if isinstance(gate, dict) else {}
     namespace = _scale_in_namespace_for_arm(arm, blocked_reason)
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
     fields = {
         "scale_in_arm": str(arm or "NONE").upper(),
         "scale_in_blocker_namespace": namespace,
@@ -21361,6 +21397,11 @@ def _log_scale_in_arm_blocked(
         "ai_score": f"{_safe_float(current_ai_score, 0.0):.0f}",
         "ai_score_source": _ai_score_source_for_snapshot(stock),
         "held_sec": _safe_int(held_sec, 0),
+        "current_price_observed": _safe_int(curr_price, 0),
+        "position_buy_price": _safe_float(buy_price, 0.0),
+        "executable_best_ask": _safe_int(best_ask, 0),
+        "executable_best_bid": _safe_int(best_bid, 0),
+        "pyramid_price_observation_source": "same_evaluation_ws_bbo",
         "metric_role": "funnel_count",
         "decision_authority": "scale_in_attribution_source_only",
         "runtime_effect": False,
@@ -21374,6 +21415,14 @@ def _log_scale_in_arm_blocked(
         fields = _append_reversal_add_probe_fields(fields, probe)
     elif str(arm or "").upper() == "PYRAMID":
         fields = _append_pyramid_probe_fields(fields, probe)
+        fields.update(
+            _pyramid_price_replay_observation_fields(
+                stock=stock,
+                ws_data=ws_data,
+                probe=probe,
+                curr_price=_safe_int(curr_price, 0),
+            )
+        )
     fields.update(_prefixed_micro_estimator_fields(stock, "scale_in_micro_estimator_"))
     _log_holding_pipeline(
         stock,
@@ -21394,9 +21443,12 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
     else:
         probe = _scale_in_feature_contract_defaults(probe)
     for key in (
+        "pyramid_evaluation_schema",
         "profit_gate_mode",
         "min_profit_pct",
         "base_min_profit_pct",
+        "configured_min_profit_pct",
+        "effective_min_profit_pct",
         "strong_continuation_min_profit_pct",
         "strong_continuation_max_drawdown_pct",
         "strong_continuation_allowed",
@@ -21423,6 +21475,15 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
         "minute_candle_window_fresh",
         "minute_candle_latest_age_ms",
         "micro_vwap_not_overheated",
+        "pyramid_quality_support_score",
+        "pyramid_quality_required_support_score",
+        "pyramid_quality_support_signals",
+        "pyramid_quality_risk_signals",
+        "pyramid_quality_hard_blockers",
+        "score_gate_converted_to_prior",
+        "hard_gate_veto",
+        "score_prior_band",
+        "ai_score_prior_weight",
         "reversal_feature_source_quality",
         "reversal_feature_stale",
         "reversal_feature_stale_reason",
@@ -21483,6 +21544,50 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
             merged[key] = value
     merged.update(_prefixed_micro_estimator_fields(probe, "scale_in_micro_estimator_"))
     return merged
+
+
+def _pyramid_price_replay_observation_fields(
+    *, stock: dict, ws_data: dict | None, probe: dict | None, curr_price: int
+) -> dict:
+    """Observe the existing resolver without changing order or runtime state."""
+    if not isinstance(probe, dict) or (
+        str(probe.get("pyramid_evaluation_schema") or "")
+        != "pyramid_gate_observation_v2"
+    ):
+        return {
+            "pyramid_price_resolver_observation_status": "not_evaluated_no_gate_context",
+            "pyramid_price_resolver_observed": False,
+        }
+    try:
+        resolution = resolve_scale_in_order_price(
+            stock=stock,
+            ws_data=ws_data or {},
+            action={**probe, "add_type": "PYRAMID"},
+            strategy="SCALPING",
+            curr_price=_safe_int(curr_price, 0),
+        )
+    except Exception as exc:
+        return {
+            "pyramid_price_resolver_observation_status": "evaluation_error",
+            "pyramid_price_resolver_observed": False,
+            "pyramid_price_resolver_error_type": type(exc).__name__,
+        }
+    return {
+        "pyramid_price_resolver_observation_status": "evaluated",
+        "pyramid_price_resolver_observed": True,
+        "pyramid_price_resolver_allowed": bool(resolution.get("allowed")),
+        "pyramid_price_resolver_reason": resolution.get("reason"),
+        "pyramid_price_resolver_order_price": _safe_int(
+            resolution.get("order_price"), 0
+        ),
+        "pyramid_price_resolver_price_source": resolution.get("price_source"),
+        "pyramid_price_resolver_best_bid": _safe_int(resolution.get("best_bid"), 0),
+        "pyramid_price_resolver_best_ask": _safe_int(resolution.get("best_ask"), 0),
+        "pyramid_price_resolver_spread_bps": resolution.get("spread_bps"),
+        "pyramid_price_resolver_max_spread_bps": resolution.get("max_spread_bps"),
+        "pyramid_price_resolver_runtime_effect": False,
+        "pyramid_price_resolver_actual_order_submitted": False,
+    }
 
 
 def _reversal_add_state_provenance_fields(stock: dict | None) -> dict[str, str]:
@@ -21580,6 +21685,674 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
             merged[key] = probe.get(key)
     merged.update(_prefixed_micro_estimator_fields(probe, "scale_in_micro_estimator_"))
     return merged
+
+
+_AVG_DOWN_ROUTE_SCHEMA = "avg_down_route_arbitration_v2"
+_AVG_DOWN_ROUTE_GRID = (80.0, 85.0, 90.0)
+_AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE = None
+_AVG_DOWN_ROUTE_CONTEXT = ContextVar("avg_down_source_route_context", default=None)
+
+
+def _observe_avg_down_route_sizing(
+    stock, code, price, budget, action, qty_details
+) -> None:
+    """Join already-fetched exact-price sizing to the same evaluation only."""
+    try:
+        context = _AVG_DOWN_ROUTE_CONTEXT.get()
+        if (
+            not context
+            or context["code"] != code
+            or context["record_id"] != stock.get("id")
+        ):
+            return
+        if not 0 <= time.monotonic() - context["observed_monotonic"] <= 2.0:
+            return
+        if (stock.get("buy_price"), stock.get("buy_qty")) != context["position_basis"]:
+            return
+        if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
+            return
+        arms = {}
+        for key, arm in context["route_replay"].items():
+            if (
+                not arm.get("should_add")
+                or arm.get("proposed_add_price") != price
+                or not arm.get("price_allowed")
+            ):
+                continue
+            observed_action = context["actions"][key]
+            # Only identical existing actions may share the actual sizing
+            # result. A different candidate action needs its own full budget,
+            # price and cap evaluation; do not infer its quantity from A.
+            if not observed_action or any(
+                action.get(name) != value for name, value in observed_action.items()
+            ):
+                continue
+            arms[key] = {
+                "proposed_add_price": price,
+                "proposed_add_qty": _safe_int(qty_details.get("qty"), 0),
+            }
+        if not arms:
+            return
+        _log_holding_pipeline(
+            stock,
+            code,
+            "avg_down_route_sizing_observed",
+            source_observation_id=context["source_event_id"],
+            scale_in_decision_id=context["decision_id"],
+            position_episode_id=context["position_episode_id"],
+            pre_add_buy_price=context["position_basis"][0],
+            pre_add_buy_qty=context["position_basis"][1],
+            sizing_replay=json.dumps(arms, sort_keys=True),
+            metric_role="exact_route_sizing_enrichment",
+            decision_authority="source_only_route_sizing_observation",
+            window_policy="same_decision_exact_price_existing_budget",
+            sample_floor="same_decision_identity_required",
+            primary_decision_metric="source_quality_adjusted_ev_pct",
+            source_quality_gate="existing_sizing_owner_exact_budget",
+            forbidden_uses="assumed_real_fill|quantity_override|broker_guard_bypass",
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
+    except Exception:
+        # Telemetry failure cannot change the already evaluated live sizing.
+        pass
+
+
+def _avg_down_runtime_config_fields() -> dict[str, Any]:
+    configured = _rule_float("SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", 85.0)
+    loaded_value = _safe_float(
+        getattr(TRADING_RULES, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", None),
+        None,
+    )
+    raw = os.getenv("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE")
+    return {
+        "runtime_config_schema": AVG_DOWN_CONFIG_SCHEMA,
+        "configured_min_buy_pressure": configured,
+        "effective_min_buy_pressure": configured,
+        "runtime_value_source": (
+            "exact_process_env" if raw is not None else "runtime_rules_loaded_value"
+        ),
+        "runtime_value_raw": raw if raw is not None else "not_set",
+        "runtime_pid_value_verified": loaded_value == configured
+        and (raw is None or _safe_float(raw, None) == configured),
+        "avg_down_policy_version": avg_down_policy_fingerprint(TRADING_RULES),
+        "sizing_policy_version": SCALPING_SIZING_FORMULA_VERSION,
+        "cost_policy_version": f"trade_profit_net_realized_pnl:rate={get_trade_cost_rate():.8f}",
+    }
+
+
+def _observe_avg_down_runtime_config(stock, code, now_ts) -> None:
+    """Record loaded configuration even when no shallow opportunity occurs."""
+    global _AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE
+    try:
+        if normalize_strategy(stock.get("strategy")) != "SCALPING":
+            return
+        fields = _avg_down_runtime_config_fields()
+        signature = (
+            datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat(),
+            json.dumps(fields, sort_keys=True),
+        )
+        if signature == _AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE:
+            return
+        emitted = _log_holding_pipeline(
+            stock,
+            code,
+            "avg_down_runtime_config_observed",
+            **fields,
+            metric_role="runtime_configuration_provenance",
+            decision_authority="source_only_runtime_config_observation",
+            window_policy="exact_source_date_loaded_process_config",
+            sample_floor="one_consistent_loaded_process_config",
+            primary_decision_metric="source_quality_adjusted_ev_pct",
+            source_quality_gate="exact_loaded_config_identity",
+            forbidden_uses="standalone_ev_sample|real_order_authority|bot_restart",
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+        )
+        if emitted is False or (
+            isinstance(emitted, dict)
+            and emitted.get("structured_append_succeeded") is not True
+        ):
+            return
+        _AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE = signature
+    except Exception as exc:
+        try:
+            log_error(f"[AVG_DOWN_CONFIG_OBSERVER] source-only snapshot failed: {exc}")
+        except Exception:
+            pass
+
+
+def _avg_down_route_arm_observation(
+    *,
+    stock: dict,
+    ws_data: dict,
+    curr_price: int,
+    action: dict | None,
+    downstream_action: dict | None,
+    downstream_evaluated: bool,
+) -> dict[str, Any]:
+    selected = action if isinstance(action, dict) and action.get("should_add") else None
+    selected_route = "NO_ADD"
+    if selected is not None:
+        selected_route = str(selected.get("reason") or "REVERSAL_UNKNOWN")
+    elif downstream_evaluated and isinstance(downstream_action, dict):
+        if downstream_action.get("should_add"):
+            selected = downstream_action
+            selected_route = str(
+                downstream_action.get("decision_source")
+                or downstream_action.get("reason")
+                or "ADM_AVG_DOWN"
+            )
+    elif not downstream_evaluated:
+        selected_route = "NOT_EVALUATED_DOWNSTREAM"
+
+    should_add = bool(selected and selected.get("should_add"))
+    route_evaluation_complete = selected_route != "NOT_EVALUATED_DOWNSTREAM"
+    resolution: dict[str, Any] = {}
+    proposed_price = 0
+    proposed_qty = 0
+    sizing_status = "not_applicable_no_add"
+    if should_add:
+        resolution = resolve_scale_in_order_price(
+            stock=stock,
+            ws_data=ws_data or {},
+            action=selected,
+            strategy="SCALPING",
+            curr_price=curr_price,
+        )
+        proposed_price = _safe_int(resolution.get("order_price"), 0)
+        sizing_status = "price_guard_blocked"
+        if resolution.get("allowed") and proposed_price > 0:
+            if _is_any_simulated_position(stock, "SCALPING"):
+                budget = _sim_virtual_budget_krw()
+                sizing = describe_dynamic_scale_in_qty(
+                    stock=stock,
+                    resolved_price=proposed_price,
+                    deposit=budget,
+                    add_type="AVG_DOWN",
+                    strategy="SCALPING",
+                    add_reason=selected.get("reason"),
+                    price_resolution=resolution,
+                    action=selected,
+                    budget_source="sim_virtual_budget",
+                    account_deposit=budget,
+                    cash_orderable_amount=budget,
+                    effective_venue=infer_scalping_venue(
+                        datetime.now(tz=_KST),
+                        stock.get("rising_missed_effective_venue")
+                        or stock.get("effective_venue"),
+                    ),
+                )
+                proposed_qty = _safe_int(sizing.get("qty"), 0)
+                sizing_status = (
+                    "existing_sizing_owner_observed"
+                    if proposed_qty > 0
+                    else "existing_sizing_owner_zero_qty"
+                )
+            else:
+                # Never add an account/deposit API call to this source-only
+                # observation. Real sizing remains unknown unless an exact
+                # downstream submit/receipt source later closes it.
+                sizing_status = "real_budget_not_available_without_extra_api_call"
+    action_reason = str((selected or action or {}).get("reason") or selected_route)
+    signature_material = {
+        "should_add": should_add,
+        "selected_route": selected_route,
+        "action_reason": action_reason,
+        "add_type": str((selected or {}).get("add_type") or ""),
+        "price_allowed": bool(resolution.get("allowed")) if should_add else False,
+        "proposed_add_price": proposed_price,
+        "proposed_add_qty": proposed_qty,
+        "sizing_status": sizing_status,
+        "route_evaluation_complete": route_evaluation_complete,
+    }
+    behavior_material = (
+        signature_material
+        if should_add
+        else {
+            "should_add": False,
+            "route_evaluation_complete": route_evaluation_complete,
+        }
+    )
+    return {
+        **signature_material,
+        "_sizing_action": copy.deepcopy(selected or {}),
+        "behavior_signature": hashlib.sha256(
+            json.dumps(
+                behavior_material,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "exit_replay_method": "fixed_observed_exit_counterfactual",
+    }
+
+
+def _observe_avg_down_route_arbitration_impl(
+    *,
+    stock: dict,
+    code: str,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    curr_price: int,
+    ws_data: dict,
+    current_reversal: dict,
+    current_downstream_action: dict | None,
+    current_downstream_evaluated: bool,
+    now_ts: float,
+) -> None:
+    shallow_scope = current_reversal.get("shallow_volatility_probe")
+    if not isinstance(shallow_scope, dict) or not (
+        shallow_scope.get("pnl_ok") and shallow_scope.get("hold_ok")
+    ):
+        return
+    configured = _rule_float("SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", 85.0)
+    previous_value = _safe_float(
+        os.getenv("KORSTOCKSCAN_AVG_DOWN_RUNTIME_PREVIOUS_MIN_BUY_PRESSURE"), None
+    )
+    grid = sorted(
+        {
+            configured,
+            *_AVG_DOWN_ROUTE_GRID,
+            *(
+                [previous_value]
+                if previous_value is not None and 80 <= previous_value <= 90
+                else []
+            ),
+        }
+    )
+    route_replay: dict[str, Any] = {}
+    sizing_actions = {}
+    for candidate_value in grid:
+        if candidate_value == configured:
+            reversal = current_reversal
+            downstream_action = current_downstream_action
+            downstream_evaluated = current_downstream_evaluated
+        else:
+            reversal = evaluate_scalping_reversal_add(
+                stock,
+                profit_rate,
+                current_ai_score,
+                held_sec,
+                shallow_min_buy_pressure_override=candidate_value,
+                now_ts=now_ts,
+            )
+            downstream_action = current_downstream_action
+            downstream_evaluated = bool(
+                not reversal.get("should_add") and current_downstream_evaluated
+            )
+            if not reversal.get("should_add") and not current_downstream_evaluated:
+                # This adapter is a deterministic policy lookup. Evaluate a
+                # copied context; do not call AI or mutate the live decision.
+                downstream_action = resolve_holding_exit_matrix_scale_in_bias(
+                    strategy="SCALPING",
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    current_ai_score=current_ai_score,
+                    held_sec=held_sec,
+                    safety_context=copy.deepcopy(stock),
+                )
+                downstream_evaluated = True
+        route_replay[f"{candidate_value:g}"] = _avg_down_route_arm_observation(
+            stock=stock,
+            ws_data=ws_data,
+            curr_price=curr_price,
+            action=reversal,
+            downstream_action=downstream_action,
+            downstream_evaluated=downstream_evaluated,
+        )
+        sizing_actions[f"{candidate_value:g}"] = route_replay[
+            f"{candidate_value:g}"
+        ].pop("_sizing_action")
+
+    attempt_id = str(
+        stock.get("scanner_promotion_id") or stock.get("scanner_generation_id") or ""
+    ).strip()
+    episode_seed = {
+        "record_id": stock.get("id"),
+        "code": str(code or "")[:6],
+        "attempt_id": attempt_id,
+    }
+    try:
+        position_episode_id = mint_main_lifecycle_id(
+            record_id=stock.get("id"),
+            stock_code=str(code or "")[:6],
+            attempt_id=attempt_id,
+        )
+    except (TypeError, ValueError):
+        position_episode_id = ""
+    if not position_episode_id:
+        # Ambiguous legacy/sim positions must not mint a fake lifecycle row;
+        # their existing funnel telemetry remains diagnostic only.
+        return
+    decision_material = {
+        **episode_seed,
+        "feature_extracted_at": (
+            (stock.get("last_reversal_features") or {}).get("feature_extracted_at")
+        ),
+        "held_sec": int(held_sec),
+        "curr_price": int(curr_price),
+        "configured": configured,
+        "route_replay": route_replay,
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            decision_material,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    route_behavior_signature = hashlib.sha256(
+        json.dumps(
+            {
+                key: {
+                    "should_add": value.get("should_add"),
+                    "selected_route": value.get("selected_route"),
+                    "action_reason": value.get("action_reason"),
+                    "route_evaluation_complete": value.get("route_evaluation_complete"),
+                }
+                for key, value in route_replay.items()
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    threshold_env_key = "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
+    raw_runtime_value = os.getenv(threshold_env_key)
+    runtime_quality_update_id = str(
+        os.getenv("KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID") or ""
+    ).strip()
+    runtime_evidence_contract_version = str(
+        os.getenv("KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_CONTRACT_VERSION") or ""
+    ).strip()
+    runtime_evidence_digest = str(
+        os.getenv("KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST") or ""
+    ).strip()
+    runtime_candidate_selected = bool(
+        runtime_quality_update_id
+        and runtime_evidence_contract_version
+        and runtime_evidence_digest
+    )
+    runtime_env_value_present = raw_runtime_value is not None
+    parsed_runtime_value = _safe_float(raw_runtime_value, None)
+    runtime_pid_value_verified = bool(
+        (not runtime_env_value_present and not runtime_candidate_selected)
+        or (
+            parsed_runtime_value is not None
+            and float(parsed_runtime_value) == float(configured)
+        )
+    )
+    current_arm = route_replay.get(f"{configured:g}") or {}
+    previous_arm = (
+        route_replay.get(f"{previous_value:g}", {})
+        if previous_value is not None
+        else {}
+    )
+    runtime_natural_match = bool(
+        runtime_candidate_selected
+        and runtime_pid_value_verified
+        and (
+            current_arm.get("selected_route") == "shallow_volatility_avg_down"
+            or previous_arm.get("selected_route") == "shallow_volatility_avg_down"
+        )
+    )
+    runtime_behavior_changed = bool(
+        runtime_natural_match
+        and previous_value != configured
+        and current_arm.get("route_evaluation_complete")
+        and previous_arm.get("route_evaluation_complete")
+        and current_arm.get("behavior_signature")
+        != previous_arm.get("behavior_signature")
+    )
+    from src.engine.scalping import avg_down_replay_capture
+
+    try:
+        replay_fields = avg_down_replay_capture.prepare(
+            sys.modules[__name__], stock, code, position_episode_id, now_ts=time.time()
+        )
+    except Exception as exc:
+        replay_fields = {
+            "replay_capture_state": "full_policy_snapshot_gap:" + type(exc).__name__
+        }
+    for replay_arm in route_replay.values():
+        if replay_arm.get("should_add"):
+            replay_arm["add_order_expires_at"] = datetime.fromtimestamp(
+                time.time() + 20.0, tz=_KST
+            ).isoformat()
+    if not runtime_candidate_selected:
+        runtime_attribution_state = "no_selected_candidate_observation"
+    elif not runtime_pid_value_verified:
+        runtime_attribution_state = "selected_pid_value_mismatch"
+    elif runtime_natural_match:
+        runtime_attribution_state = "natural_match_decision_terminal_pending"
+    else:
+        runtime_attribution_state = "selected_no_natural_match"
+    emitted = _log_holding_pipeline(
+        stock,
+        code,
+        "avg_down_route_arbitration_observed",
+        avg_down_route_schema=_AVG_DOWN_ROUTE_SCHEMA,
+        source_event_id=f"avgdn-event-{digest}",
+        scale_in_decision_id=f"avgdn-decision-{digest[:32]}",
+        position_episode_id=position_episode_id,
+        route_behavior_signature=route_behavior_signature,
+        configured_min_buy_pressure=configured,
+        effective_min_buy_pressure=configured,
+        runtime_value_source=(
+            "exact_process_env"
+            if runtime_env_value_present
+            else "runtime_rules_loaded_value"
+        ),
+        runtime_value_raw=(
+            str(raw_runtime_value) if raw_runtime_value is not None else "not_set"
+        ),
+        runtime_candidate_quality_update_id=(
+            runtime_quality_update_id or "baseline_no_selected_candidate"
+        ),
+        runtime_candidate_evidence_contract_version=(
+            runtime_evidence_contract_version or "baseline_no_selected_candidate"
+        ),
+        runtime_candidate_evidence_digest=(
+            runtime_evidence_digest or "baseline_no_selected_candidate"
+        ),
+        runtime_candidate_selected=runtime_candidate_selected,
+        runtime_env_written=bool(
+            runtime_candidate_selected and runtime_env_value_present
+        ),
+        runtime_pid_value_verified=runtime_pid_value_verified,
+        runtime_natural_match=runtime_natural_match,
+        runtime_behavior_changed=runtime_behavior_changed,
+        runtime_previous_min_buy_pressure=(
+            previous_value if previous_value is not None else "unknown"
+        ),
+        runtime_attribution_state=runtime_attribution_state,
+        candidate_grid=json.dumps(grid, ensure_ascii=True, separators=(",", ":")),
+        route_replay=json.dumps(
+            route_replay,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        pre_add_buy_price=_safe_float(stock.get("buy_price"), 0.0),
+        pre_add_buy_qty=_safe_int(stock.get("buy_qty"), 0),
+        current_price_observed=_safe_int(curr_price, 0),
+        profit_rate=_safe_float(profit_rate, 0.0),
+        peak_profit=_safe_float(peak_profit, 0.0),
+        current_ai_score=_safe_float(current_ai_score, 0.0),
+        held_sec=_safe_int(held_sec, 0),
+        shallow_scope_pnl_ok=True,
+        shallow_scope_hold_ok=True,
+        avg_down_policy_version=avg_down_policy_fingerprint(TRADING_RULES),
+        sizing_policy_version=SCALPING_SIZING_FORMULA_VERSION,
+        cost_policy_version=f"trade_profit_net_realized_pnl:rate={get_trade_cost_rate():.8f}",
+        evidence_layer="gate_observed",
+        evidence_authority="fixed_observed_exit_source_only",
+        exit_replay_feasibility="requires_paired_exit_replay",
+        metric_role="bounded_tunable_route_observation",
+        decision_authority="source_only_route_arbitration_observation",
+        window_policy="clean_baseline_cumulative_same_policy_version",
+        sample_floor="unique_complete_eligible_parent_episode>=10",
+        primary_decision_metric="source_quality_adjusted_ev_pct",
+        source_quality_gate=(
+            "exact_position_identity_present"
+            if position_episode_id
+            else "position_identity_missing"
+        ),
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+        cost_rate=get_trade_cost_rate(),
+        **{
+            key: (
+                json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+                if isinstance(value, dict)
+                else value
+            )
+            for key, value in replay_fields.items()
+        },
+        forbidden_uses=(
+            "real_scale_in_submit|intraday_threshold_mutation|quantity_cap_release|"
+            "provider_route_change|bot_restart|fixed_exit_source_only_runtime_promotion"
+        ),
+    )
+    if emitted is False or (
+        isinstance(emitted, dict)
+        and emitted.get("structured_append_succeeded") is not True
+    ):
+        return
+    avg_down_replay_capture.register(
+        episode=position_episode_id,
+        source_id=f"avgdn-event-{digest}",
+        decision_id=f"avgdn-decision-{digest[:32]}",
+        code=code,
+        venue=infer_scalping_venue(
+            datetime.fromtimestamp(now_ts, tz=_KST), stock.get("effective_venue")
+        ),
+        now_ts=time.time(),
+        fields=replay_fields,
+    )
+    _AVG_DOWN_ROUTE_CONTEXT.set(
+        {
+            "code": code,
+            "record_id": stock.get("id"),
+            "position_basis": (stock.get("buy_price"), stock.get("buy_qty")),
+            "observed_monotonic": time.monotonic(),
+            "source_event_id": f"avgdn-event-{digest}",
+            "decision_id": f"avgdn-decision-{digest[:32]}",
+            "position_episode_id": position_episode_id,
+            "route_replay": copy.deepcopy(route_replay),
+            "actions": sizing_actions,
+            "venue": infer_scalping_venue(
+                datetime.fromtimestamp(now_ts, tz=_KST), stock.get("effective_venue")
+            ),
+        }
+    )
+
+
+def _observe_avg_down_route_arbitration(**kwargs) -> None:
+    """Keep source-only route replay strictly fail-open for live decisions."""
+
+    _AVG_DOWN_ROUTE_CONTEXT.set(None)
+    try:
+        _observe_avg_down_route_arbitration_impl(**kwargs)
+    except Exception as exc:
+        try:
+            log_error(f"[AVG_DOWN_ROUTE_OBSERVER] source-only replay failed: {exc}")
+        except Exception:
+            pass
+
+
+def observe_avg_down_exit_replay_cycle(*, now_ts: float) -> int:
+    """Use the existing source-only cadence and already subscribed WS cache."""
+    from src.engine.scalping.avg_down_replay_capture import (
+        observe_cycle,
+        warm_policy_cache,
+        micro_state,
+    )
+
+    if WS_MANAGER is None or not hasattr(WS_MANAGER, "get_latest_data"):
+        return 0
+
+    def market_builder(code, ws, observed_at):
+        fields, _, ask, bid = _build_quote_consistency_fields(
+            ws, side="sell", now_ts=observed_at
+        )
+        book = ws.get("orderbook") or {}
+        bids, asks = book.get("bids") or [], book.get("asks") or []
+
+        def level_quantity(side, price, levels):
+            quantity = ws.get(f"best_{side}_qty")
+            if (
+                quantity not in (None, "")
+                and _safe_int(ws.get(f"best_{side}"), 0) == price
+            ):
+                return quantity
+            if levels and _safe_int(levels[0].get("price"), 0) == price:
+                return levels[0].get("volume")
+            return None
+
+        quote_ts = _safe_float((ws.get("last_realtime_type_ts") or {}).get("0D"), None)
+        if quote_ts is None:
+            quote_ts = _safe_float(ws.get("last_ws_update_ts"), None)
+        fresh = (
+            fields.get("quote_consistency_state") in {"ok", "single_source"}
+            and fields.get("quote_consistency_reason")
+            in {"ws_only_fresh", "ws_rest_gap_ok"}
+            and quote_ts is not None
+            and 0 <= observed_at - quote_ts <= _holding_exit_ws_max_age_sec()
+            and not _boolish_true(ws.get("quote_stale"))
+        )
+        return {
+            "best_bid": bid,
+            "best_ask": ask,
+            "best_bid_qty": level_quantity("bid", bid, bids),
+            "best_ask_qty": level_quantity("ask", ask, asks),
+            "source_quality": "fresh_conflict_free" if fresh else "unavailable",
+            "ws_data": ws,
+            "micro_estimator_state": micro_state(sys.modules[__name__], code),
+            "market_regime": ws.get("market_regime", "UNKNOWN"),
+        }
+
+    def emit(frame):
+        return emit_pipeline_event(
+            "HOLDING_PIPELINE",
+            frame["stock_code"],
+            frame["stock_code"],
+            "avg_down_exit_replay_frame_observed",
+            fields={
+                key: (
+                    json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+                    if isinstance(value, (dict, list))
+                    else value
+                )
+                for key, value in frame.items()
+            },
+        )
+
+    try:
+        warm_policy_cache(sys.modules[__name__], now_ts=now_ts)
+        return observe_cycle(
+            now_ts=now_ts,
+            snapshot_provider=WS_MANAGER.get_latest_data,
+            market_builder=market_builder,
+            emit=emit,
+        )
+    except Exception as exc:
+        log_error(
+            f"[AVG_DOWN_REPLAY_CAPTURE] source-only cadence failed: {type(exc).__name__}"
+        )
+        return 0
 
 
 def _scale_in_feature_contract_defaults(probe: dict | None) -> dict:
@@ -83006,6 +83779,15 @@ def handle_holding_state(
         now_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
     now_t = now_dt.time()
 
+    _observe_avg_down_runtime_config(stock, code, now_ts)
+    from src.engine.scalping.avg_down_replay_capture import (
+        record_market_inputs,
+        record_ai_state,
+    )
+
+    record_market_inputs(code, now_ts=time.time(), market_regime=market_regime)
+    record_ai_state(code, ai_engine)
+
     _maybe_release_auto_manual_control_at_average_price(
         stock,
         code,
@@ -84025,6 +84807,23 @@ def handle_holding_state(
                             )
                         )
                     holding_ai_orderbook_refresh_fields = {}
+                    if not sim_ai_budget_skip:
+                        record_market_inputs(
+                            code,
+                            now_ts=time.time(),
+                            holding_score_market_source={
+                                "request_code": _resolve_holding_context_request_code(
+                                    code,
+                                    ws_data=ws_data,
+                                    position_ctx=stock,
+                                    decision_kind="holding_score",
+                                    now_ts=now_ts,
+                                ),
+                                "recent_ticks": recent_ticks,
+                                "recent_candles": recent_candles,
+                                "recent_candle_meta": recent_candle_meta,
+                            },
+                        )
                     if (
                         not sim_ai_budget_skip
                         and not _pre_submit_input_snapshot_has_usable_quote(ws_data)
@@ -87839,6 +88638,17 @@ def handle_holding_state(
                     QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
                 )
             )
+            # Passive copy of already acquired input, not another API request
+            # or a change to the REST parser/freshness decision.
+            record_market_inputs(
+                code,
+                now_ts=time.time(),
+                bounded_rest_orderbook={
+                    "request_code": sell_quote_request_code,
+                    "timeout_ms": QuoteConsistencyConfig.from_env().emergency_rest_timeout_ms,
+                    "result": [rest_snapshot, rest_check_state, rest_check_elapsed_ms],
+                },
+            )
         sell_quote_checked_at = (
             float(now_ts) + max(0.0, float(rest_check_elapsed_ms)) / 1000.0
         )
@@ -89073,6 +89883,9 @@ def handle_holding_state(
                             peak_profit=peak_profit,
                             current_ai_score=current_ai_score,
                             held_sec=held_sec,
+                            curr_price=curr_p,
+                            buy_price=buy_p,
+                            ws_data=ws_data,
                             gate=gate,
                             probe=_pyramid_probe,
                         )
@@ -89200,6 +90013,9 @@ def handle_holding_state(
                         peak_profit=peak_profit,
                         current_ai_score=current_ai_score,
                         held_sec=held_sec,
+                        curr_price=curr_p,
+                        buy_price=buy_p,
+                        ws_data=ws_data,
                         gate=gate,
                     )
                     rejected_action = f"pyramid_wait:{gate.get('reason') or '-'}"
@@ -90226,6 +91042,7 @@ def _evaluate_scale_in_signal(
     shallow_recheck_only=False,
 ):
     """전략별 추가매수 시그널 평가."""
+    _AVG_DOWN_ROUTE_CONTEXT.set(None)
     now_ts = time.time() if now_ts is None else float(now_ts)
 
     if _scale_in_exit_authority_block_reason(stock):
@@ -90625,9 +91442,27 @@ def _evaluate_scale_in_signal(
             )
             return pyramid
         reversal = evaluate_scalping_reversal_add(
-            stock, profit_rate, current_ai_score, held_sec
+            stock,
+            profit_rate,
+            current_ai_score,
+            held_sec,
+            now_ts=now_ts,
         )
         if reversal.get("should_add"):
+            _observe_avg_down_route_arbitration(
+                stock=stock,
+                code=code,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                curr_price=_safe_int(curr_price, 0),
+                ws_data=ws_data,
+                current_reversal=reversal,
+                current_downstream_action=None,
+                current_downstream_evaluated=False,
+                now_ts=now_ts,
+            )
             if stock.get("shallow_source_gap_recheck_armed"):
                 _clear_shallow_source_gap_recheck(stock, now_ts=now_ts)
             reversal.update(
@@ -90657,6 +91492,20 @@ def _evaluate_scale_in_signal(
             current_ai_score=current_ai_score,
             held_sec=held_sec,
             safety_context=stock if isinstance(stock, dict) else {},
+        )
+        _observe_avg_down_route_arbitration(
+            stock=stock,
+            code=code,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            curr_price=_safe_int(curr_price, 0),
+            ws_data=ws_data,
+            current_reversal=reversal,
+            current_downstream_action=adm_scale_in,
+            current_downstream_evaluated=True,
+            now_ts=now_ts,
         )
         if adm_scale_in.get("should_add"):
             adm_scale_in.update(
@@ -91617,6 +92466,10 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "initial_qty_cap_applied": qty < planned_qty_before_initial_cap,
         }
     )
+    if add_type == "AVG_DOWN" and not simulated_position:
+        _observe_avg_down_route_sizing(
+            stock, code, qty_price, budget_context, action, qty_details
+        )
     scale_in_qty_budget_fields = {
         key: qty_details.get(key)
         for key in (

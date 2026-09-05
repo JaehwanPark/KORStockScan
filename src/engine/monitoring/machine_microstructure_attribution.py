@@ -66,6 +66,7 @@ from src.trading.low_price_two_leg.profiles import PROFILES
 from src.trading.market.micro_confirmation import (
     CHECKPOINTS_SEC as DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC,
     build_dynamic_micro_confirmation_checkpoints,
+    dynamic_policy_for_scope,
     evaluate_dynamic_micro_confirmation,
     modeled_dynamic_target_price,
 )
@@ -3185,10 +3186,14 @@ def _episode_inventory(
         "low_price_two_leg_tuning_report_v4",
         "low_price_two_leg_tuning_report_v5",
         "low_price_two_leg_tuning_report_v6",
+        "low_price_two_leg_tuning_report_v7",
     )
-    expansion_schemas = ("low_price_two_leg_expanded_candidate_research_v5",)
+    expansion_schemas = (
+        "low_price_two_leg_expanded_candidate_research_v5",
+        "low_price_two_leg_expanded_candidate_research_v6",
+    )
     samsung_schemas = tuple(
-        f"samsung_machine_entry_tuning_report_v{version}" for version in range(2, 8)
+        f"samsung_machine_entry_tuning_report_v{version}" for version in range(2, 10)
     )
     tuning = _read_target_json(
         tuning_path, target_date, expected_schemas=tuning_schemas
@@ -4657,7 +4662,10 @@ def _timestamp_regression_row_quarantine_validation(
             return None
         return value
 
-    if guard.get("status") != "stopped_clean" or guard.get("stop_required") is not False:
+    if (
+        guard.get("status") != "stopped_clean"
+        or guard.get("stop_required") is not False
+    ):
         return {
             **base,
             "status": "row_quarantine_requires_stopped_clean_canary",
@@ -4672,7 +4680,10 @@ def _timestamp_regression_row_quarantine_validation(
             "status": "row_quarantine_requires_closed_reconciled_collector",
             "quarantined_row_count": quarantined_count,
         }
-    if exact_nonnegative_int("path_exchange_timestamp_regression_exceeded_count") != quarantined_count:
+    if (
+        exact_nonnegative_int("path_exchange_timestamp_regression_exceeded_count")
+        != quarantined_count
+    ):
         return {
             **base,
             "status": "timestamp_quarantine_count_mismatch",
@@ -4693,9 +4704,7 @@ def _timestamp_regression_row_quarantine_validation(
             "quarantined_row_count": quarantined_count,
         }
     invalid_loss_fields = [
-        field
-        for field in CANARY_LOSS_COUNTERS
-        if exact_nonnegative_int(field) != 0
+        field for field in CANARY_LOSS_COUNTERS if exact_nonnegative_int(field) != 0
     ]
     if invalid_loss_fields:
         return {
@@ -4725,9 +4734,10 @@ def _timestamp_regression_row_quarantine_validation(
             "path_point_submitted_count",
         )
     ]
-    if any(value is None for value in observation_counts) or len(
-        set(observation_counts)
-    ) != 1:
+    if (
+        any(value is None for value in observation_counts)
+        or len(set(observation_counts)) != 1
+    ):
         return {
             **base,
             "status": "observation_persistence_accounting_mismatch",
@@ -5619,10 +5629,9 @@ def _anchor_result(
         status = source_contract_gap
     elif anchor.get("owner_lifecycle_contract_valid") is False:
         status = "owner_anchor_contract_invalid"
-    elif (
-        isinstance(registration_receipt_binding, Mapping)
-        and registration_receipt_binding.get("source_gap_reason")
-    ):
+    elif isinstance(
+        registration_receipt_binding, Mapping
+    ) and registration_receipt_binding.get("source_gap_reason"):
         status = str(registration_receipt_binding["source_gap_reason"])
     elif _invalid_contract_count_for_scope(
         symbol_inventory,
@@ -6693,6 +6702,11 @@ def _anchor_result(
 
 
 def _dynamic_confirmation_replay(result: dict[str, Any]) -> dict[str, Any]:
+    confirmation_policy = dynamic_policy_for_scope(
+        owner=str(result.get("owner") or ""),
+        scope_id=str(result.get("scope_id") or ""),
+        symbol=str(result.get("symbol") or ""),
+    )
     metrics = result.get("metrics") or {}
     future_bbo = metrics.get("entry_confirmation_bbo_horizons") or {}
     anchor_bbo = metrics.get("entry_confirmation_bbo_anchor") or {}
@@ -6725,7 +6739,9 @@ def _dynamic_confirmation_replay(result: dict[str, Any]) -> dict[str, Any]:
             and outcome.get("exit_reason") == "take_profit_fill"
         ),
     )
-    replay = evaluate_dynamic_micro_confirmation(checkpoints)
+    replay = evaluate_dynamic_micro_confirmation(
+        checkpoints, policy=confirmation_policy
+    )
     replay["signal_binding"] = {
         "anchor_id": result.get("anchor_id"),
         "lifecycle_id": result.get("lifecycle_id"),
@@ -6775,8 +6791,7 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
     if (
         result.get("anchor_role") in _TUNING_ENTRY_DECISION_ANCHOR_ROLES
         and anchor_at is not None
-        and anchor_at.astimezone(KST).date()
-        >= SOURCE_ENTRY_EVENT_ID_REQUIRED_FROM_DATE
+        and anchor_at.astimezone(KST).date() >= SOURCE_ENTRY_EVENT_ID_REQUIRED_FROM_DATE
         and not str(result.get("source_entry_event_id") or "").strip()
     ):
         source_gaps.append("source_entry_event_id_missing")
@@ -6870,9 +6885,7 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "owner_requested_quantity": result.get("owner_requested_quantity"),
         "owner_target_price": result.get("owner_target_price"),
         "owner_round_trip_cost_pct": result.get("owner_round_trip_cost_pct"),
-        "owner_lifecycle_contract_valid": result.get(
-            "owner_lifecycle_contract_valid"
-        ),
+        "owner_lifecycle_contract_valid": result.get("owner_lifecycle_contract_valid"),
         "owner_policy_tuning_eligible": (
             result.get("owner_policy_tuning_eligible") is True
         ),
@@ -7149,8 +7162,7 @@ def _micro_entry_confirmation_summary(
                 for row in rows
             ),
             "diagnostic_or_prospective_anchor_count": sum(
-                row.get("tuning_population_role")
-                == "diagnostic_or_prospective_anchor"
+                row.get("tuning_population_role") == "diagnostic_or_prospective_anchor"
                 for row in rows
             ),
             "source_quality_eligible_count": sum(
@@ -7943,25 +7955,23 @@ def _runtime_registration_receipt_status(
         transport_epochs = row.get("transport_epochs")
         max_gap_sec = _finite_float(row.get("max_interarrival_gap_sec"))
         first_epochs = [
-            _finite_float(first_by_type.get(value))
-            if isinstance(first_by_type, dict)
-            else None
+            (
+                _finite_float(first_by_type.get(value))
+                if isinstance(first_by_type, dict)
+                else None
+            )
             for value in ("0B", "0D")
         ]
         last_epoch = _finite_float(row.get("last_received_at_epoch"))
 
         def positive_int(value: Any) -> bool:
             return bool(
-                isinstance(value, int)
-                and not isinstance(value, bool)
-                and value > 0
+                isinstance(value, int) and not isinstance(value, bool) and value > 0
             )
 
         def nonnegative_int(value: Any) -> bool:
             return bool(
-                isinstance(value, int)
-                and not isinstance(value, bool)
-                and value >= 0
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
             )
 
         return bool(
@@ -7997,8 +8007,7 @@ def _runtime_registration_receipt_status(
     authority_valid = bool(
         receipt.get("schema") == "scalp_micro_reversion_registration_receipt_v1"
         and receipt.get("effective_date") == target_date
-        and receipt.get("decision_authority")
-        == "market_data_source_quality_only"
+        and receipt.get("decision_authority") == "market_data_source_quality_only"
         and receipt.get("runtime_effect") is False
         and receipt.get("trading_runtime_effect") is False
         and receipt.get("trading_decision_effect") is False
@@ -8049,8 +8058,7 @@ def _runtime_registration_receipt_status(
         "expected_registration_item_count": len(expected_items),
         "required_active_registration_item_count": len(required_active_items),
         "requested_registration_item_count": len(requested_items),
-        "complete_registration_item_count": len(expected_items)
-        - len(incomplete_items),
+        "complete_registration_item_count": len(expected_items) - len(incomplete_items),
         "expected_registration_items": expected_items,
         "complete_registration_items": complete_items,
         "incomplete_registration_items": incomplete_items,
@@ -8238,9 +8246,7 @@ def build_report(
                                 if micro_source.get("source_contract_ready") is not True
                                 else (
                                     "micro_runtime_registration_receipt_missing_or_incomplete"
-                                    if registration_receipt.get(
-                                        "global_contract_ready"
-                                    )
+                                    if registration_receipt.get("global_contract_ready")
                                     is not True
                                     else None
                                 )

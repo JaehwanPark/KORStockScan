@@ -55,6 +55,86 @@ def _entry_ai_candidate_runtime_fields():
     }
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("sample_count", "invalid"),
+        ("sample_count", True),
+        ("sample_count", 10.5),
+        ("sample_count", float("nan")),
+        ("cost_policy_version", "trade_profit_net_realized_pnl:rate=nan"),
+        ("cost_policy_version", "trade_profit_net_realized_pnl:rate=-0.1"),
+    ],
+)
+def test_avg_down_malformed_sample_or_cost_is_rejected_without_exception(field, value):
+    candidate = _valid_avg_down_candidate()
+    candidate[field] = value
+    assert mod._avg_down_candidate_contract_error(candidate)
+
+
+def _valid_avg_down_candidate():
+    window = {
+        "window_policy": "clean_baseline_cumulative",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "start_date": "2026-06-05",
+        "end_date": "2026-07-03",
+        "source_dates": ["2026-07-03"],
+        "source_date_count": 1,
+    }
+    return {
+        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
+        "stage": "scale_in",
+        "priority": 37,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "source_quality_gate": "pass",
+        "target_env_key": mod.AVG_DOWN_TARGET_ENV_KEY,
+        "target_env_keys": [mod.AVG_DOWN_TARGET_ENV_KEY],
+        "changed_target_env_keys": [mod.AVG_DOWN_TARGET_ENV_KEY],
+        "current_value": 85.0,
+        "recommended_value": 80.0,
+        "current_value_source": "same_day_runtime_route_event",
+        "current_runtime_value_sources": ["runtime_rules_loaded_value"],
+        "current_values": {mod.AVG_DOWN_TARGET_VALUE_KEY: 85.0},
+        "recommended_values": {mod.AVG_DOWN_TARGET_VALUE_KEY: 80.0},
+        "quality_update_id": "avg-down-quality-1",
+        "evidence_contract_version": mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
+        "evidence_digest": "a" * 64,
+        "evaluation_method": mod.AVG_DOWN_EVALUATION_METHOD,
+        "evidence_authority": mod.AVG_DOWN_EVIDENCE_AUTHORITY,
+        "runtime_update_mode": "single_cumulative_quality_update",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": window,
+        "post_apply_attribution_required": True,
+        "sample_count": 10,
+        "bounds": mod.AVG_DOWN_BOUNDS,
+        "max_step_per_day": mod.AVG_DOWN_MAX_STEP_PER_DAY,
+        "rollback_value": 85.0,
+        "comparison_universe_hash": "b" * 64,
+        "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00100000",
+        "exit_policy_version": "existing-exit-policy-v1",
+        "sizing_policy_version": "recorded_existing_position_sizing_owner",
+        "recommended_values_changed": True,
+        "sample_floor_passed": True,
+        "condition_feasibility": {
+            "state": "bounded_candidate_ready",
+            "paired_exit_replay_ready": True,
+            "unique_complete_parent_episode_floor_passed": True,
+            "common_runtime_venue_scope_ready": True,
+            "runtime_current_value_provenance_ready": True,
+            "selected_exit_policy_version": "existing-exit-policy-v1",
+        },
+        "impact_scope": "common_runtime",
+        "venue_scope_authority": "common_or_all_active_venues",
+        "source_date": "2026-07-03",
+        "target_date": "2026-07-03",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+
 def _limit_down_binding(tmp_path, target_date):
     audit_path = tmp_path / f"source-quality-{target_date}.json"
     audit_path.write_text("{}", encoding="utf-8")
@@ -1059,6 +1139,60 @@ def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(
     assert decisions[0]["decision_reason"] == "ai_guard_rejected_test"
 
 
+def test_scalping_pyramid_ai_guard_rejects_different_replay_evidence_digest():
+    candidate = {
+        "family": "scalping_pyramid_quality_gate",
+        "quality_update_id": "pyramid-quality-1",
+        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_digest": "candidate-digest",
+    }
+    ai_review = {
+        "items_by_family": {
+            "scalping_pyramid_quality_gate": {
+                "guard_accepted": True,
+                "ai_anomaly_route": "normal_drift",
+                "quality_update_id": "pyramid-quality-1",
+                "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+                "evidence_digest": "different-digest",
+            }
+        }
+    }
+
+    allowed, reason = mod._ai_guard_allows_candidate(
+        candidate, ai_review, require_ai=True
+    )
+
+    assert allowed is False
+    assert reason == "pyramid_ai_evidence_digest_mismatch"
+
+
+def test_scalping_pyramid_ai_guard_rejects_different_replay_evidence_version():
+    candidate = {
+        "family": "scalping_pyramid_quality_gate",
+        "quality_update_id": "pyramid-quality-1",
+        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_digest": "candidate-digest",
+    }
+    ai_review = {
+        "items_by_family": {
+            "scalping_pyramid_quality_gate": {
+                "guard_accepted": True,
+                "ai_anomaly_route": "normal_drift",
+                "quality_update_id": "pyramid-quality-1",
+                "evidence_contract_version": "legacy_replay_v0",
+                "evidence_digest": "candidate-digest",
+            }
+        }
+    }
+
+    allowed, reason = mod._ai_guard_allows_candidate(
+        candidate, ai_review, require_ai=True
+    )
+
+    assert allowed is False
+    assert reason == "pyramid_ai_evidence_contract_version_mismatch"
+
+
 def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
     monkeypatch, tmp_path
 ):
@@ -1106,18 +1240,50 @@ def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
         "family": "scalping_avg_down_recovery_quality_gate",
         "stage": "scale_in",
         "priority": 37,
-        "calibration_state": "adjust_up",
+        "calibration_state": "adjust_down",
         "allowed_runtime_apply": True,
         "safety_revert_required": False,
         "source_quality_gate": "pass",
-        "target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"],
-        "current_values": {"shallow_max_per_position": 1},
-        "recommended_values": {"shallow_max_per_position": 2},
+        "target_env_key": "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE",
+        "target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"],
+        "changed_target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"],
+        "current_value": 85.0,
+        "recommended_value": 80.0,
+        "current_value_source": "same_day_runtime_route_event",
+        "current_runtime_value_sources": ["runtime_rules_loaded_value"],
+        "current_values": {"shallow_min_buy_pressure": 85.0},
+        "recommended_values": {"shallow_min_buy_pressure": 80.0},
         "quality_update_id": "avg-down-quality-1",
+        "evidence_contract_version": "avg_down_paired_economics_v2",
+        "evidence_digest": "a" * 64,
+        "evaluation_method": "paired_add_no_add_lifecycle_replay",
+        "evidence_authority": "paired_add_no_add_lifecycle_replay",
         "runtime_update_mode": "single_cumulative_quality_update",
         "max_runtime_apply_count": 1,
         "cumulative_quality_window": cumulative_window,
         "post_apply_attribution_required": True,
+        "sample_count": 10,
+        "bounds": {"min": 80.0, "max": 90.0, "unit": "buy_pressure_pct"},
+        "max_step_per_day": 5.0,
+        "rollback_value": 85.0,
+        "comparison_universe_hash": "b" * 64,
+        "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00100000",
+        "exit_policy_version": "existing-exit-policy-v1",
+        "sizing_policy_version": "recorded_existing_position_sizing_owner",
+        "recommended_values_changed": True,
+        "sample_floor_passed": True,
+        "condition_feasibility": {
+            "state": "bounded_candidate_ready",
+            "paired_exit_replay_ready": True,
+            "unique_complete_parent_episode_floor_passed": True,
+            "common_runtime_venue_scope_ready": True,
+            "runtime_current_value_provenance_ready": True,
+            "selected_exit_policy_version": "existing-exit-policy-v1",
+        },
+        "impact_scope": "common_runtime",
+        "venue_scope_authority": "common_or_all_active_venues",
+        "source_date": "2026-07-03",
+        "target_date": "2026-07-03",
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
@@ -1140,7 +1306,7 @@ def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
         "scalping_avg_down_recovery_quality_gate"
     )
     assert env["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"] == "2"
+    assert env["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"] == "80"
     assert "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE" not in env
 
 
@@ -1189,6 +1355,68 @@ def test_cumulative_quality_contract_rejects_quality_update_id_mismatch():
             owner_stage="scale_in",
         )
         == "candidate_quality_update_id_mismatch"
+    )
+
+
+def test_pyramid_cumulative_quality_contract_binds_fixed_exit_replay_digest():
+    quality_window = {
+        "window_policy": "clean_baseline_cumulative",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "start_date": "2026-06-05",
+        "end_date": "2026-09-04",
+        "source_dates": ["2026-09-04"],
+        "source_date_count": 1,
+    }
+    candidate = {
+        "family": "scalping_pyramid_quality_gate",
+        "stage": "scale_in",
+        "quality_update_id": "pyramid-quality-1",
+        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_digest": "fixed-exit-digest",
+        "runtime_update_mode": "single_cumulative_quality_update",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": quality_window,
+        "post_apply_attribution_required": True,
+        "allowed_runtime_apply": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    contract = {
+        "update_mode": "single_cumulative_quality_update",
+        "owner_family": "scalping_pyramid_quality_gate",
+        "owner_stage": "scale_in",
+        "max_runtime_apply_count": 1,
+        "runtime_apply_candidate_count": 1,
+        "allowed_runtime_apply_count": 1,
+        "quality_update_id": "pyramid-quality-1",
+        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_digest": "fixed-exit-digest",
+        "cumulative_quality_window": quality_window,
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
+    }
+    payload = {"target_date": "2026-09-04", "runtime_update_contract": contract}
+
+    assert (
+        mod._cumulative_quality_update_contract_error(
+            payload,
+            [candidate],
+            owner_family="scalping_pyramid_quality_gate",
+            owner_stage="scale_in",
+        )
+        == ""
+    )
+
+    payload["runtime_update_contract"] = {**contract, "evidence_digest": "stale"}
+    assert (
+        mod._cumulative_quality_update_contract_error(
+            payload,
+            [candidate],
+            owner_family="scalping_pyramid_quality_gate",
+            owner_stage="scale_in",
+        )
+        == "candidate_evidence_digest_mismatch"
     )
 
 
@@ -1546,7 +1774,7 @@ def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
     assert avg_down_candidates[0]["source_quality_gate"] == "source_quality_blocked"
 
 
-def test_scalping_avg_down_recovery_quality_gate_emits_runtime_env_overrides():
+def test_scalping_avg_down_recovery_quality_gate_does_not_force_emit_legacy_multi_env():
     candidate = {
         "family": "scalping_avg_down_recovery_quality_gate",
         "calibration_state": "adjust_up",
@@ -1569,9 +1797,203 @@ def test_scalping_avg_down_recovery_quality_gate_emits_runtime_env_overrides():
 
     overrides = mod._env_overrides_for_candidate(candidate)
 
-    assert overrides["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"] == "2"
-    assert overrides["KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_ENABLED"] == "true"
-    assert overrides["KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN"] == "-4"
+    assert overrides == {}
+
+
+def test_scalping_avg_down_recovery_quality_gate_emits_only_changed_pressure_axis():
+    candidate = {
+        "family": "scalping_avg_down_recovery_quality_gate",
+        "calibration_state": "adjust_down",
+        "current_values": {"shallow_min_buy_pressure": 85.0},
+        "recommended_values": {"shallow_min_buy_pressure": 80.0},
+        "target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"],
+    }
+
+    assert mod._env_overrides_for_candidate(candidate) == {
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"
+    }
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        (
+            lambda item: item.update(
+                {
+                    "target_env_keys": [
+                        mod.AVG_DOWN_TARGET_ENV_KEY,
+                        "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION",
+                    ]
+                }
+            ),
+            "avg_down_exactly_one_allowed_target_required",
+        ),
+        (
+            lambda item: item.update(
+                {
+                    "evidence_authority": "fixed_observed_exit_source_only",
+                    "evaluation_method": "fixed_observed_exit_counterfactual",
+                }
+            ),
+            "avg_down_evaluation_method_not_runtime_authoritative",
+        ),
+        (
+            lambda item: item["recommended_values"].update(
+                {mod.AVG_DOWN_TARGET_VALUE_KEY: 90.0}
+            ),
+            "avg_down_scalar_value_identity_mismatch",
+        ),
+        (
+            lambda item: item.update(
+                {"current_value_source": "runtime_rules_display_only"}
+            ),
+            "avg_down_current_value_source_not_runtime_observed",
+        ),
+        (
+            lambda item: item.update({"current_runtime_value_sources": ["unknown"]}),
+            "avg_down_runtime_value_provenance_invalid",
+        ),
+        (
+            lambda item: item.update({"rollback_value": 90.0}),
+            "avg_down_rollback_value_identity_mismatch",
+        ),
+        (
+            lambda item: item.update({"comparison_universe_hash": "bad"}),
+            "avg_down_comparison_universe_hash_invalid",
+        ),
+        (
+            lambda item: item.update({"cost_policy_version": "unknown"}),
+            "avg_down_cost_policy_version_invalid",
+        ),
+        (
+            lambda item: item.update(
+                {"exit_policy_version": mod.AVG_DOWN_EVALUATION_METHOD}
+            ),
+            "avg_down_exit_policy_version_invalid",
+        ),
+        (
+            lambda item: item["condition_feasibility"].update(
+                {"selected_exit_policy_version": "different-exit-policy-v2"}
+            ),
+            "avg_down_exit_policy_identity_mismatch",
+        ),
+    ],
+)
+def test_avg_down_runtime_contract_rejects_invalid_authority_value_or_provenance(
+    mutation, expected
+):
+    candidate = _valid_avg_down_candidate()
+    mutation(candidate)
+
+    assert mod._avg_down_candidate_contract_error(candidate) == expected
+    assert expected in mod._candidate_apply_contract_blockers(candidate)
+
+
+def test_avg_down_ai_guard_binds_hash_key_values_and_dates():
+    candidate = _valid_avg_down_candidate()
+    ai_item = {
+        "guard_decision": "accept",
+        "guard_accepted": True,
+        "ai_anomaly_route": "normal_drift",
+        "quality_update_id": candidate["quality_update_id"],
+        "evidence_contract_version": candidate["evidence_contract_version"],
+        "evidence_digest": candidate["evidence_digest"],
+        "target_env_key": candidate["target_env_key"],
+        "current_value": candidate["current_value"],
+        "recommended_value": candidate["recommended_value"],
+        "source_date": candidate["source_date"],
+        "target_date": candidate["target_date"],
+    }
+    accepted, reason = mod._ai_guard_allows_candidate(
+        candidate,
+        {"items_by_family": {candidate["family"]: ai_item}},
+        require_ai=True,
+    )
+    assert accepted is True
+    assert reason == "ai_guard_accepted"
+
+    ai_item["evidence_digest"] = "b" * 64
+    accepted, reason = mod._ai_guard_allows_candidate(
+        candidate,
+        {"items_by_family": {candidate["family"]: ai_item}},
+        require_ai=True,
+    )
+    assert accepted is False
+    assert reason == "avg_down_ai_evidence_digest_mismatch"
+
+
+def test_avg_down_loader_preserves_valid_source_only_hold_state(tmp_path, monkeypatch):
+    report_dir = tmp_path / "avg_down"
+    report_dir.mkdir()
+    monkeypatch.setattr(mod, "SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR", report_dir)
+    monkeypatch.setattr(
+        mod,
+        "load_source_quality_preflight",
+        lambda source_date: {
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "allowed_runtime_apply": True,
+            "source_quality_gate": "pass",
+        },
+    )
+    candidate = _valid_avg_down_candidate()
+    candidate.update(
+        {
+            "calibration_state": "hold_runtime_scope",
+            "calibration_reason": "requires_paired_exit_replay",
+            "allowed_runtime_apply": False,
+            "evaluation_method": "fixed_observed_exit_counterfactual",
+            "evidence_authority": "fixed_observed_exit_source_only",
+        }
+    )
+    (report_dir / "scalping_avg_down_recovery_calibration_2026-07-03.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "target_date": "2026-07-03",
+                "calibration_candidates": [candidate],
+                "runtime_update_contract": {
+                    "update_mode": "single_cumulative_quality_update",
+                    "owner_family": mod.AVG_DOWN_RECOVERY_FAMILY,
+                    "owner_stage": "scale_in",
+                    "max_runtime_apply_count": 1,
+                    "runtime_apply_candidate_count": 1,
+                    "allowed_runtime_apply_count": 0,
+                    "quality_update_id": candidate["quality_update_id"],
+                    "evidence_contract_version": candidate["evidence_contract_version"],
+                    "evidence_digest": candidate["evidence_digest"],
+                    "cumulative_quality_window": candidate["cumulative_quality_window"],
+                    "post_apply_attribution_required": True,
+                    "runtime_effect": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_scalping_avg_down_recovery_calibration_candidates(
+        "2026-07-03"
+    )
+
+    assert status["runtime_update_contract_error"] is None
+    assert candidates[0]["calibration_state"] == "hold_runtime_scope"
+    assert candidates[0]["allowed_runtime_apply"] is False
+
+
+def test_avg_down_source_only_contract_rejects_target_identity_mismatch():
+    candidate = _valid_avg_down_candidate()
+    candidate.update(
+        {
+            "allowed_runtime_apply": False,
+            "evaluation_method": "fixed_observed_exit_counterfactual",
+            "evidence_authority": "fixed_observed_exit_source_only",
+            "target_env_key": "DEEP_RECOVERY_AVG_DOWN_MIN_BUY_PRESSURE",
+        }
+    )
+
+    assert mod._avg_down_source_only_candidate_contract_error(candidate) == (
+        "avg_down_source_only_target_identity_mismatch"
+    )
 
 
 def test_scalping_avg_down_recovery_carry_forward_filters_to_avg_down_env():
@@ -1591,6 +2013,137 @@ def test_scalping_avg_down_recovery_carry_forward_filters_to_avg_down_env():
         "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION": "2",
         "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN": "-4",
     }
+
+
+def _write_previous_avg_down_runtime_manifest(tmp_path, monkeypatch, env_overrides):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-10.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-10",
+                "selected_families": [mod.AVG_DOWN_RECOVERY_FAMILY],
+                "env_overrides": env_overrides,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_avg_down_hold_no_edge_preserves_last_accepted_single_axis(
+    tmp_path, monkeypatch
+):
+    _write_previous_avg_down_runtime_manifest(
+        tmp_path,
+        monkeypatch,
+        {"KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"},
+    )
+    candidate = {
+        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
+        "stage": "scale_in",
+        "priority": 37,
+        "calibration_state": "hold_no_edge",
+        "calibration_reason": "economic_hypothesis_rejected",
+        "allowed_runtime_apply": False,
+        "safety_revert_required": False,
+        "source_quality_gate": "pass",
+        "current_value": 80.0,
+        "current_value_source": "same_day_runtime_route_event",
+        "runtime_update_mode": "single_cumulative_quality_update",
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-07-11",
+    )
+
+    assert [item["family"] for item in selected] == [mod.AVG_DOWN_RECOVERY_FAMILY]
+    assert env == {"KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"}
+    assert decisions[0]["selection_change_class"] == "carried_forward_unchanged"
+    assert (
+        decisions[0]["hold_carry_forward"]["migration_state"]
+        == "v2_single_axis_preserved"
+    )
+
+
+def test_avg_down_missing_candidate_preserves_legacy_env_without_new_authority(
+    tmp_path, monkeypatch
+):
+    previous_env = {
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION": "2",
+        "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN": "-4",
+    }
+    _write_previous_avg_down_runtime_manifest(tmp_path, monkeypatch, previous_env)
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-07-11",
+    )
+
+    assert [item["family"] for item in selected] == [mod.AVG_DOWN_RECOVERY_FAMILY]
+    assert env == previous_env
+    carry = decisions[0]["hold_carry_forward"]
+    assert carry["trigger"] == "current_postclose_candidate_missing"
+    assert (
+        carry["migration_state"]
+        == "legacy_avg_down_env_preserved_without_new_authority"
+    )
+
+
+@pytest.mark.parametrize(
+    ("candidate_update", "expected_reason"),
+    [
+        (
+            {"source_quality_blocked": "required_field_missing"},
+            "source_quality_hard_block",
+        ),
+        (
+            {
+                "current_value": 85.0,
+                "current_value_source": "same_day_runtime_route_event",
+            },
+            "avg_down_previous_runtime_value_conflict",
+        ),
+    ],
+)
+def test_avg_down_hold_does_not_carry_on_quality_or_runtime_value_conflict(
+    tmp_path, monkeypatch, candidate_update, expected_reason
+):
+    _write_previous_avg_down_runtime_manifest(
+        tmp_path,
+        monkeypatch,
+        {"KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"},
+    )
+    candidate = {
+        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
+        "stage": "scale_in",
+        "priority": 37,
+        "calibration_state": "hold_runtime_scope",
+        "calibration_reason": "requires_paired_exit_replay",
+        "allowed_runtime_apply": False,
+        "safety_revert_required": False,
+        "source_quality_gate": "pass",
+        "current_value": 80.0,
+        "current_value_source": "same_day_runtime_route_event",
+        "runtime_update_mode": "single_cumulative_quality_update",
+        **candidate_update,
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-07-11",
+    )
+
+    assert selected == []
+    assert env == {}
+    assert expected_reason in decisions[0]["decision_reason"]
 
 
 def test_entry_ai_gate_loader_blocks_source_quality_preflight(tmp_path, monkeypatch):
@@ -6869,6 +7422,52 @@ def test_build_preopen_apply_manifest_reports_missing_source(tmp_path, monkeypat
     assert manifest["status"] == "missing_source_report"
     assert manifest["runtime_change"] is False
     assert manifest["candidates"] == []
+
+
+def test_missing_source_report_preserves_previous_avg_down_runtime_env(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "report"
+    runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    runtime_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", report_dir / "calibration")
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", tmp_path / "apply_plans")
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    (runtime_dir / "threshold_runtime_env_2026-07-10.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-07-10",
+                "selected_families": [mod.AVG_DOWN_RECOVERY_FAMILY],
+                "env_overrides": {
+                    "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-07-11",
+        source_date="2026-07-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=True,
+    )
+
+    assert manifest["status"] == "carry_forward_ready_missing_source_report"
+    assert manifest["runtime_change"] is True
+    assert manifest["runtime_env_overrides"] == {
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"
+    }
+    assert (
+        manifest["auto_apply_decisions"][0]["hold_carry_forward"]["trigger"]
+        == "current_postclose_candidate_missing"
+    )
+    assert manifest["runtime_env_handoff_verification"]["status"] == "pass"
 
 
 def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeypatch):

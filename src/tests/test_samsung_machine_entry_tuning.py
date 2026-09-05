@@ -8,9 +8,12 @@ import pytest
 
 from src.engine.monitoring.samsung_machine_entry_tuning import (
     CLEAN_WINDOW_NAME,
+    POST_APPLY_WINDOW_NAME,
     REPORT_SCHEMA,
     REPORT_TYPE,
     _aggregate_rows,
+    _attach_policy_cohort,
+    _axis_observations,
     _normalize_historical_machine_row,
     build_policy_candidate,
     build_report,
@@ -23,9 +26,11 @@ from src.trading.order.samsung_entry_policy import (
     OPERATOR_OVERRIDE_RUNTIME_SOURCE,
     atomic_write_json,
     baseline_applied_payload,
+    candidate_artifact_hash,
     load_applied_machine_policy,
     policy_hash,
     policy_mutations_between,
+    report_artifact_hash,
 )
 
 
@@ -99,6 +104,10 @@ def _features(machine: str) -> dict:
 
 
 def _state(machine: str, trade_date: str, *, held: bool = False) -> dict:
+    features = _features(machine)
+    features["signal_bar"] = str(features["signal_bar"]).replace(
+        "2026-08-11", trade_date
+    )
     schema = f"samsung_{machine}_two_leg_state_v2"
     complete_leg = {
         "leg_id": "base_plus_1tick" if machine == "morning" else "signal_close",
@@ -113,6 +122,7 @@ def _state(machine: str, trade_date: str, *, held: bool = False) -> dict:
         "target_order_no": "SECRET-SELL-1",
         "target_price": 70200,
         "target_filled_qty": 0 if held else 1,
+        "target_filled_at": None if held else f"{trade_date}T15:00:00+09:00",
     }
     no_fill_leg = {
         "leg_id": "base" if machine == "morning" else "signal_close_minus_1tick",
@@ -133,7 +143,7 @@ def _state(machine: str, trade_date: str, *, held: bool = False) -> dict:
         "trade_date": trade_date,
         "status": "HELD" if held else "COMPLETE",
         "attempt_consumed": True,
-        "signal_features": _features(machine),
+        "signal_features": features,
         "legs": [complete_leg, no_fill_leg],
         "owned_order_nos": ["SECRET-BUY-1", "SECRET-BUY-2", "SECRET-SELL-1"],
         "audit": [{"order_no": "SECRET-AUDIT"}],
@@ -155,7 +165,14 @@ def _write_source_quality(source_quality_dir: Path, trade_date: str) -> None:
     (
         source_quality_dir / f"observation_source_quality_audit_{trade_date}.json"
     ).write_text(
-        json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+        json.dumps(
+            {
+                "report_type": "observation_source_quality_audit",
+                "target_date": trade_date,
+                "status": "pass",
+                "summary": {"tuning_input_allowed": True},
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -197,6 +214,10 @@ def test_extracts_actual_two_leg_outcome_without_broker_identifiers(tmp_path: Pa
     assert row["legs"][0]["equal_weight_profit_pct"] == pytest.approx(0.085714)
     assert row["legs"][0]["buy_filled_at"] == "2026-08-11T14:00:04+09:00"
     assert row["legs"][0]["target_filled_at"] == "2026-08-11T14:01:00+09:00"
+    assert row["legs"][0]["holding_duration_sec"] == 56
+    assert _aggregate_rows([row])["avg_realized_holding_minutes"] == pytest.approx(
+        0.933
+    )
     assert row["signal_features"]["signal_decision_at"] == ("2026-08-11T14:00:01+09:00")
     assert row["signal_features"]["source_entry_event_id"] == (
         "samsung_midday_two_leg:005930:signal-1"
@@ -231,7 +252,8 @@ def test_ten_share_partial_fill_uses_filled_quantity_for_notional_ev(
     expected_ev = 70_000 * 4 * completed_profit_pct / (70_000 * 10 + 69_900 * 10)
 
     assert row["source_quality"] == "pass"
-    assert summary["notional_weighted_ev_pct"] == round(expected_ev, 6)
+    assert summary["notional_weighted_ev_pct"] == round(completed_profit_pct, 6)
+    assert summary["attempted_notional_return_pct_diagnostic"] == round(expected_ev, 6)
 
     payload["legs"][1]["quantity"] = 1
     state_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -329,6 +351,73 @@ def test_exact_date_applied_policy_provenance_and_broker_sell_price(tmp_path: Pa
         "signal_feature_policy_timestamp_invalid"
         in wrong_signal_date["source_quality_reasons"]
     )
+
+
+def test_axis_observation_does_not_mix_target_quantity_or_runtime_hash_cohorts(
+    tmp_path: Path,
+):
+    applied_dir = tmp_path / "applied"
+    applied = baseline_applied_payload(
+        target_date=date(2026, 8, 14), reason="test_baseline"
+    )
+    atomic_write_json(
+        applied_dir / "samsung_machine_entry_policy_2026-08-14.json", applied
+    )
+    _, effective_hash, _ = load_applied_machine_policy(
+        "midday", target_date=date(2026, 8, 14), applied_dir=applied_dir
+    )
+
+    old_state_path = tmp_path / "old.json"
+    old_state_path.write_text(
+        json.dumps(_state("midday", "2026-08-13")), encoding="utf-8"
+    )
+    old_row = _attach_policy_cohort(
+        extract_machine_row(
+            machine="midday",
+            state_path=old_state_path,
+            target_date="2026-08-13",
+            cost_pct=0.20,
+            applied_dir=applied_dir,
+        ),
+        "midday",
+        applied_dir,
+    )
+
+    new_state = _state("midday", "2026-08-14")
+    new_state["signal_features"].update(
+        {
+            "target_ticks": 3,
+            "runtime_policy_source": OPERATOR_OVERRIDE_RUNTIME_SOURCE,
+            "runtime_policy_hash": effective_hash,
+        }
+    )
+    for leg in new_state["legs"]:
+        leg["quantity"] = 10
+    new_state_path = tmp_path / "new.json"
+    new_state_path.write_text(json.dumps(new_state), encoding="utf-8")
+    new_row = _attach_policy_cohort(
+        extract_machine_row(
+            machine="midday",
+            state_path=new_state_path,
+            target_date="2026-08-14",
+            cost_pct=0.20,
+            applied_dir=applied_dir,
+        ),
+        "midday",
+        applied_dir,
+    )
+
+    assert old_row["policy_cohort"]["target_ticks"] == 2
+    assert old_row["policy_cohort"]["leg_quantity_each"] == 1
+    assert new_row["policy_cohort"]["target_ticks"] == 3
+    assert new_row["policy_cohort"]["leg_quantity_each"] == 10
+    assert old_row["policy_cohort_id"] != new_row["policy_cohort_id"]
+    observations = _axis_observations([old_row, new_row], "midday")
+    assert observations
+    assert {item["policy_cohort_id"] for item in observations} == {
+        new_row["policy_cohort_id"]
+    }
+    assert {item["outcome"]["signal_attempts"] for item in observations} == {1}
 
 
 def test_samsung_manual_stop_loss_is_retained_as_negative_realized_ev():
@@ -680,6 +769,63 @@ def test_historical_held_row_is_removed_from_decision_ev() -> None:
     assert normalized["outcome_exclusion_reasons"] == ["held_or_unresolved_inventory"]
 
 
+def test_sample_floor_remains_eight_but_state_reports_observation_rate() -> None:
+    no_signal_row = {
+        "eligible_for_cumulative_tuning": True,
+        "attempted": False,
+        "no_signal": True,
+        "cohort": "two_leg_runtime",
+        "source_quality": "pass",
+        "legs": [],
+        "summary": {
+            "attempted_legs": 0,
+            "submitted_legs": 0,
+            "filled_legs": 0,
+            "completed_legs": 0,
+            "held_legs": 0,
+            "unresolved_legs": 0,
+            "completed_signal_episode": False,
+        },
+    }
+    completed = _state("midday", "2026-08-11")
+    completed_path_row = {
+        **no_signal_row,
+        "attempted": True,
+        "no_signal": False,
+        "legs": [
+            {
+                "entry_price": 70_000,
+                "quantity": 1,
+                "fill_price": 70_000,
+                "buy_filled_qty": 1,
+                "equal_weight_profit_pct": 0.1,
+                "profit_price_source": "broker_target_fill_price",
+            }
+        ],
+        "summary": {
+            "attempted_legs": 2,
+            "submitted_legs": 1,
+            "filled_legs": 1,
+            "completed_legs": 1,
+            "held_legs": 0,
+            "unresolved_legs": 0,
+            "completed_signal_episode": True,
+        },
+    }
+    assert completed["attempt_consumed"] is True
+
+    zero_rate = _aggregate_rows([dict(no_signal_row) for _ in range(5)])
+    low_rate = _aggregate_rows(
+        [completed_path_row, *[dict(no_signal_row) for _ in range(9)]]
+    )
+
+    assert zero_rate["candidate_status"] == "structural_no_signal_observation"
+    assert zero_rate["signal_rate_per_observation_day"] == 0.0
+    assert low_rate["completed_signal_episodes"] == 1
+    assert low_rate["candidate_status"] == "evidence_accumulating_low_signal_rate"
+    assert low_rate["estimated_observation_days_to_sample_floor"] == 70
+
+
 def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path):
     state_dir = tmp_path / "runtime"
     output_dir = tmp_path / "reports"
@@ -717,6 +863,7 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
     assert second["schema"] == REPORT_SCHEMA
     assert set(second["windows"]) == {
         CLEAN_WINDOW_NAME,
+        POST_APPLY_WINDOW_NAME,
         "rolling_10d",
         "rolling_20d",
     }
@@ -738,16 +885,15 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
     assert midday["summary"]["target_price_proxy_completed_legs"] == 1
     assert midday["summary"]["candidate_status"] == "inventory_or_order_unresolved"
     assert midday["summary"]["allowed_runtime_apply"] is False
-    assert second["operator_review_gate"]["midday"] == {
-        "status": "inventory_or_order_unresolved",
-        "clean_baseline_completed_signal_episodes": 1,
-        "clean_baseline_equal_weight_avg_profit_pct": pytest.approx(0.085714),
-        "clean_baseline_notional_weighted_ev_pct": pytest.approx(0.0),
-        "rolling_10d_notional_weighted_ev_pct": pytest.approx(0.0),
-        "rolling_20d_notional_weighted_ev_pct": pytest.approx(0.0),
-        "broker_priced_completed_legs": 0,
-        "allowed_runtime_apply": False,
-    }
+    gate = second["operator_review_gate"]["midday"]
+    assert gate["status"] == "inventory_or_order_unresolved"
+    assert gate["clean_baseline_completed_signal_episodes"] == 1
+    assert gate["clean_baseline_equal_weight_avg_profit_pct"] == pytest.approx(0.085714)
+    assert gate["clean_baseline_notional_weighted_ev_pct"] is None
+    assert gate["rolling_10d_notional_weighted_ev_pct"] is None
+    assert gate["rolling_20d_notional_weighted_ev_pct"] is None
+    assert gate["broker_priced_completed_legs"] == 0
+    assert gate["allowed_runtime_apply"] is False
     assert any(
         item["resulting_policy"]
         == {
@@ -759,7 +905,7 @@ def test_cumulative_uses_prior_reports_and_held_blocks_readiness(tmp_path: Path)
     candidate = build_policy_candidate(second)
     assert candidate["runtime_effect"] is False
     assert candidate["machines"]["midday"]["selection_status"] == (
-        "carry_forward_current_policy_insufficient_evidence"
+        "carry_forward_inventory_or_order_unresolved"
     )
     assert candidate["machines"]["midday"]["policy"]["target_ticks"] == 2
 
@@ -802,6 +948,131 @@ def test_prior_date_target_completion_reconciles_to_original_machine_day(
     assert report["daily"]["machines"]["midday"]["attempted"] is False
 
 
+def test_broker_exit_amendment_persists_across_newer_machine_state(tmp_path: Path):
+    state_dir = tmp_path / "runtime"
+    output_dir = tmp_path / "reports"
+    source_quality_dir = tmp_path / "source-quality"
+    receipt_path = tmp_path / "episode_manual_exit_receipts.json"
+    for trade_date in ("2026-08-10", "2026-08-11", "2026-08-12"):
+        _write_source_quality(source_quality_dir, trade_date)
+
+    _write_states(state_dir, "2026-08-10", held_machine="midday")
+    first = build_report(
+        target_date="2026-08-10",
+        state_dir=state_dir,
+        output_dir=output_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+        manual_exit_receipt_registry_path=receipt_path,
+    )
+    write_report(first, output_dir)
+    receipt_path.write_text(
+        json.dumps(
+            {
+                "schema": "episode_manual_exit_receipt_registry_v1",
+                "receipts": [
+                    {
+                        "entry_trade_date": "2026-08-10",
+                        "fill_price": 68_000,
+                        "filled_qty": 1,
+                        "owner_id": "samsung_midday",
+                        "status": "applied",
+                        "symbol": "005930",
+                        "applied_at_kst": "2026-08-11T09:00:00+09:00",
+                        "order_date": "2026-08-11",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    second = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=output_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+        manual_exit_receipt_registry_path=receipt_path,
+    )
+    write_report(second, output_dir)
+    second_summary = second["windows"][CLEAN_WINDOW_NAME]["midday"]["summary"]
+    assert second_summary["held_legs"] == 0
+    assert second_summary["manual_exit_loss_legs"] == 1
+    assert second_summary["broker_realized_net_profit_krw"] < 0
+
+    _write_states(state_dir, "2026-08-12")
+    third = build_report(
+        target_date="2026-08-12",
+        state_dir=state_dir,
+        output_dir=output_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+        manual_exit_receipt_registry_path=receipt_path,
+    )
+    third_summary = third["windows"][CLEAN_WINDOW_NAME]["midday"]["summary"]
+    assert third_summary["completed_signal_episodes"] == 2
+    assert third_summary["held_legs"] == 0
+    assert third_summary["manual_exit_loss_legs"] == 1
+    assert third_summary["broker_realized_net_profit_krw"] < 0
+    assert third["outcome_amendment_ledger"]["status"] == "pass"
+    assert any(
+        item["source_kind"] == "broker_verified_manual_exit_receipt_registry"
+        for item in third["outcome_amendment_ledger"]["records"]
+    )
+
+
+def test_nontrading_report_amendment_is_loaded_on_next_trading_day(tmp_path: Path):
+    state_dir = tmp_path / "runtime"
+    output_dir = tmp_path / "reports"
+    source_quality_dir = tmp_path / "source-quality"
+    applied_dir = tmp_path / "applied"
+    for trade_date in ("2026-08-07", "2026-08-08", "2026-08-10"):
+        _write_source_quality(source_quality_dir, trade_date)
+
+    _write_states(state_dir, "2026-08-07", held_machine="midday")
+    friday = build_report(
+        target_date="2026-08-07",
+        state_dir=state_dir,
+        output_dir=output_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=applied_dir,
+    )
+    write_report(friday, output_dir)
+
+    _write_states(state_dir, "2026-08-07")
+    saturday = build_report(
+        target_date="2026-08-08",
+        state_dir=state_dir,
+        output_dir=output_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=applied_dir,
+    )
+    assert saturday["target_date_is_krx_trading_day"] is False
+    assert saturday["prior_state_reconciliations"]["midday"]["state_status"] == (
+        "COMPLETE"
+    )
+    write_report(saturday, output_dir)
+
+    _write_states(state_dir, "2026-08-10")
+    monday = build_report(
+        target_date="2026-08-10",
+        state_dir=state_dir,
+        output_dir=output_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=applied_dir,
+    )
+    summary = monday["windows"][CLEAN_WINDOW_NAME]["midday"]["summary"]
+    assert summary["completed_signal_episodes"] == 2
+    assert summary["held_legs"] == 0
+
+
 def test_prior_report_contract_mismatch_is_counted_and_excluded(tmp_path: Path):
     state_dir = tmp_path / "runtime"
     output_dir = tmp_path / "reports"
@@ -831,7 +1102,11 @@ def test_prior_report_contract_mismatch_is_counted_and_excluded(tmp_path: Path):
     )
 
     summary = second["windows"][CLEAN_WINDOW_NAME]["midday"]["summary"]
-    assert summary["source_gap_days"] == 1
+    all_cohorts = second["windows"][CLEAN_WINDOW_NAME]["midday"][
+        "all_policy_cohorts_summary_audit_only"
+    ]
+    assert summary["source_gap_days"] == 0
+    assert all_cohorts["source_gap_days"] == 1
     assert summary["eligible_report_days"] == 1
     assert summary["candidate_status"] == "collect_sample"
 
@@ -854,23 +1129,25 @@ def test_missing_source_quality_audit_blocks_tuning_candidate(tmp_path: Path):
         "source_quality_blocked"
     )
     assert candidate["machines"]["midday"]["selection_status"] == (
-        "carry_forward_current_policy_insufficient_evidence"
+        "carry_forward_source_quality_blocked"
     )
 
 
-def test_candidate_carries_prior_tightening_when_new_evidence_is_blocked(
+def test_unconsumed_prior_candidate_is_not_runtime_authority(
     tmp_path: Path,
 ):
     state_dir = tmp_path / "runtime"
     report_dir = tmp_path / "reports"
     candidate_dir = tmp_path / "candidates"
+    source_quality_dir = tmp_path / "source-quality"
     _write_states(state_dir, "2026-08-10")
+    _write_source_quality(source_quality_dir, "2026-08-10")
     first = build_report(
         target_date="2026-08-10",
         state_dir=state_dir,
         output_dir=report_dir,
         cost_pct=0.20,
-        source_quality_dir=tmp_path / "missing-source-quality",
+        source_quality_dir=source_quality_dir,
     )
     prior = build_policy_candidate(first)
     prior["machines"]["midday"]["policy"].update(
@@ -880,7 +1157,10 @@ def test_candidate_carries_prior_tightening_when_new_evidence_is_blocked(
     )
     policies = {machine: item["policy"] for machine, item in prior["machines"].items()}
     prior["policy_hash"] = policy_hash(policies)
-    prior["policy_mutations"] = policy_mutations_between(BASELINE_POLICIES, policies)
+    prior["policy_mutations"] = policy_mutations_between(
+        BASELINE_POLICIES, policies, include_kind=True
+    )
+    prior["candidate_hash"] = candidate_artifact_hash(prior)
     atomic_write_json(
         candidate_dir / "samsung_machine_entry_policy_candidate_2026-08-10.json",
         prior,
@@ -892,149 +1172,251 @@ def test_candidate_carries_prior_tightening_when_new_evidence_is_blocked(
         state_dir=state_dir,
         output_dir=report_dir,
         cost_pct=0.20,
-        source_quality_dir=tmp_path / "missing-source-quality",
+        source_quality_dir=source_quality_dir,
     )
     path = write_policy_candidate(second, candidate_dir)
     next_candidate = json.loads(path.read_text(encoding="utf-8"))
 
-    assert (
-        next_candidate["machines"]["midday"]["policy"]
-        == prior["machines"]["midday"]["policy"]
+    assert next_candidate["machines"]["midday"]["policy"] == BASELINE_POLICIES["midday"]
+
+
+def test_subset_even_with_positive_uplift_has_no_new_runtime_authority(tmp_path: Path):
+    state_dir = tmp_path / "runtime"
+    _write_states(state_dir, "2026-08-11")
+    _write_source_quality(tmp_path / "quality", "2026-08-11")
+    report = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=tmp_path / "reports",
+        cost_pct=0.20,
+        source_quality_dir=tmp_path / "quality",
+        applied_dir=tmp_path / "applied",
     )
-
-
-def test_candidate_changes_only_highest_ev_single_axis_across_regular_machines():
-    def outcome(ev: float, *, sample_count: int = 8) -> dict:
-        return {
-            "candidate_status": "operator_review_candidate",
-            "eligible_report_days": 5,
-            "completed_signal_episodes": sample_count,
-            "completed_legs": sample_count,
-            "broker_priced_completed_legs": sample_count,
-            "notional_weighted_ev_pct": ev,
-        }
-
-    def axis(machine: str, *, drawdown: float, near_low: float, ev: float) -> dict:
-        return {
-            "axis": f"{machine}_{drawdown}_{near_low}",
-            "resulting_policy": {
-                "rolling_high_drawdown_pct": drawdown,
-                "rolling_low_proximity_pct": near_low,
-            },
-            "current_policy_cohort": {
-                "rolling_high_drawdown_pct": 1.25,
-                "rolling_low_proximity_pct": 0.20,
-            },
-            "outcome": outcome(ev),
-        }
-
-    midday_current = axis("midday", drawdown=1.25, near_low=0.20, ev=0.04)
-    midday_single = axis("midday", drawdown=1.50, near_low=0.20, ev=0.10)
-    midday_combined = axis("midday", drawdown=1.50, near_low=0.10, ev=0.90)
-    afternoon_current = axis("afternoon", drawdown=1.25, near_low=0.20, ev=0.05)
-    afternoon_single = axis("afternoon", drawdown=1.25, near_low=0.10, ev=0.20)
-    report = {
-        "target_date": "2026-08-11",
-        "generated_at_kst": "2026-08-11T20:10:00+09:00",
-        "clean_tuning_baseline_date": "2026-06-05",
-        "target_date_is_krx_trading_day": True,
-        "source_quality_preflight": {"tuning_input_allowed": True},
-        "operator_review_gate": {
-            "morning": {"status": "collect_sample"},
-            "midday": {"status": "operator_review_candidate"},
-            "afternoon": {"status": "operator_review_candidate"},
-        },
-        "windows": {
-            CLEAN_WINDOW_NAME: {
-                "morning": {"entry_axis_observations": []},
-                "midday": {
-                    "entry_axis_observations": [
-                        midday_current,
-                        midday_single,
-                        midday_combined,
-                    ]
-                },
-                "afternoon": {
-                    "entry_axis_observations": [
-                        afternoon_current,
-                        afternoon_single,
-                    ]
-                },
-            },
-            "rolling_10d": {
-                "morning": {"entry_axis_observations": []},
-                "midday": {
-                    "entry_axis_observations": [
-                        midday_current,
-                        midday_single,
-                        midday_combined,
-                    ]
-                },
-                "afternoon": {
-                    "entry_axis_observations": [
-                        afternoon_current,
-                        afternoon_single,
-                    ]
-                },
-            },
-            "rolling_20d": {
-                "morning": {"entry_axis_observations": []},
-                "midday": {
-                    "entry_axis_observations": [
-                        midday_current,
-                        midday_single,
-                        midday_combined,
-                    ]
-                },
-                "afternoon": {
-                    "entry_axis_observations": [
-                        afternoon_current,
-                        afternoon_single,
-                    ]
-                },
-            },
-        },
-    }
-
+    for window in report["windows"].values():
+        for machine in ("midday", "afternoon"):
+            for axis in window[machine]["entry_axis_observations"]:
+                axis["outcome"].update(
+                    candidate_status="auto_bounded_candidate_ready",
+                    eligible_report_days=10,
+                    completed_signal_episodes=8,
+                    completed_legs=16,
+                    broker_priced_completed_legs=16,
+                    notional_weighted_ev_pct=0.20,
+                    broker_realized_net_profit_krw=2000,
+                )
+    for machine in ("midday", "afternoon"):
+        report["operator_review_gate"][machine][
+            "status"
+        ] = "auto_bounded_candidate_ready"
+    report["artifact_hash"] = report_artifact_hash(report)
     candidate = build_policy_candidate(report)
-
-    assert candidate["policy_mutations"] == [
-        {
-            "machine": "afternoon",
-            "axis": "rolling_low_proximity_pct",
-            "before": 0.20,
-            "after": 0.10,
-        }
-    ]
-    assert candidate["machines"]["midday"]["policy"] == BASELINE_POLICIES["midday"]
-    assert candidate["machines"]["midday"]["selection_status"] == (
-        "carry_forward_same_stage_single_axis_guard"
+    assert candidate["policy_mutations"] == []
+    assert candidate["runtime_optimization_owner"] == "machine_entry_timing_tuning"
+    assert (
+        candidate["machines"]["midday"]["evidence"]["subset_new_runtime_authority"]
+        is False
     )
 
-    rolling_negative = json.loads(json.dumps(report))
-    for item in rolling_negative["windows"]["rolling_10d"]["afternoon"][
-        "entry_axis_observations"
-    ]:
-        item["outcome"]["notional_weighted_ev_pct"] = -0.01
-    rolling_blocked = build_policy_candidate(rolling_negative)
-    assert rolling_blocked["policy_mutations"] == [
+
+def test_rollback_requires_actual_policy_and_contiguous_apply_epoch(tmp_path: Path):
+    from copy import deepcopy
+    from src.trading.order.samsung_entry_policy import validate_candidate
+
+    applied_dir = tmp_path / "applied"
+    applied = baseline_applied_payload(target_date=date(2026, 8, 20), reason="test")
+    applied["machines"]["midday"]["policy"]["rolling_high_drawdown_pct"] = 1.50
+    applied["policy_hash"] = policy_hash(
+        {m: x["policy"] for m, x in applied["machines"].items()}
+    )
+    atomic_write_json(
+        applied_dir / "samsung_machine_entry_policy_2026-08-20.json", applied
+    )
+    _write_states(tmp_path / "runtime", "2026-08-20")
+    _write_source_quality(tmp_path / "quality", "2026-08-20")
+    report = build_report(
+        target_date="2026-08-20",
+        state_dir=tmp_path / "runtime",
+        output_dir=tmp_path / "reports",
+        cost_pct=0.20,
+        source_quality_dir=tmp_path / "quality",
+        applied_dir=applied_dir,
+    )
+    post = report["windows"][POST_APPLY_WINDOW_NAME]["midday"]
+    post.update(
+        applied_epoch_start="2026-08-14",
+        observed_trading_dates=["2026-08-17", "2026-08-18", "2026-08-19", "2026-08-20"],
+    )
+    post["summary"].update(
+        completed_signal_episodes=4,
+        broker_priced_completed_legs=8,
+        broker_sell_fill_price_coverage=1.0,
+        notional_weighted_ev_pct=-0.10,
+        broker_realized_net_profit_krw=-1000,
+        held_legs=0,
+        unresolved_legs=0,
+    )
+    report["operator_review_gate"]["midday"]["status"] = "auto_bounded_candidate_ready"
+    report["artifact_hash"] = report_artifact_hash(report)
+    selected = build_policy_candidate(report)
+    assert selected["policy_mutations"] == [
         {
             "machine": "midday",
             "axis": "rolling_high_drawdown_pct",
-            "before": 1.25,
-            "after": 1.5,
+            "before": 1.50,
+            "after": 1.25,
+            "kind": "bounded_rollback",
         }
     ]
+    assert validate_candidate(selected, source_report=report) == (True, "valid")
+    wrong = deepcopy(report)
+    wrong["windows"][POST_APPLY_WINDOW_NAME]["midday"]["policy_cohort"][
+        "rolling_high_drawdown_pct"
+    ] = 1.25
+    assert build_policy_candidate(wrong)["policy_mutations"] == []
+    wrong = deepcopy(report)
+    wrong["windows"][POST_APPLY_WINDOW_NAME]["midday"]["observed_trading_dates"].append(
+        "2026-08-13"
+    )
+    assert build_policy_candidate(wrong)["policy_mutations"] == []
+    wrong = deepcopy(report)
+    wrong["windows"][POST_APPLY_WINDOW_NAME]["midday"][
+        "matches_source_date_applied_policy"
+    ] = False
+    assert build_policy_candidate(wrong)["policy_mutations"] == []
 
-    below_floor = json.loads(json.dumps(report))
-    for window in below_floor["windows"].values():
-        for machine in ("midday", "afternoon"):
-            for item in window[machine]["entry_axis_observations"]:
-                if item["resulting_policy"] != BASELINE_POLICIES[machine]:
-                    item["outcome"]["completed_signal_episodes"] = 7
-                    item["outcome"]["completed_legs"] = 7
-                    item["outcome"]["broker_priced_completed_legs"] = 7
-    assert build_policy_candidate(below_floor)["policy_mutations"] == []
+
+def test_future_receipt_does_not_backdate_loss(tmp_path: Path):
+    state_dir, reports, quality = (
+        tmp_path / name for name in ("runtime", "reports", "quality")
+    )
+    for day in ("2026-08-10", "2026-08-11", "2026-08-12"):
+        _write_source_quality(quality, day)
+    _write_states(state_dir, "2026-08-10", held_machine="midday")
+    receipt_path = tmp_path / "receipts.json"
+    atomic_write_json(
+        receipt_path,
+        {
+            "schema": "episode_manual_exit_receipt_registry_v1",
+            "receipts": [
+                {
+                    "entry_trade_date": "2026-08-10",
+                    "owner_id": "samsung_midday",
+                    "symbol": "005930",
+                    "status": "applied",
+                    "filled_qty": 1,
+                    "fill_price": 68000,
+                    "order_date": "2026-08-12",
+                    "applied_at_kst": "2026-08-12T09:00:00+09:00",
+                }
+            ],
+        },
+    )
+    args = dict(
+        state_dir=state_dir,
+        output_dir=reports,
+        source_quality_dir=quality,
+        applied_dir=tmp_path / "applied",
+        manual_exit_receipt_registry_path=receipt_path,
+        cost_pct=0.20,
+    )
+    first = build_report(target_date="2026-08-11", **args)
+    assert not any(
+        x["source_kind"] == "broker_verified_manual_exit_receipt_registry"
+        for x in first["outcome_amendment_ledger"]["records"]
+    )
+    write_report(first, reports)
+    later = build_report(target_date="2026-08-12", **args)
+    manual = [
+        x
+        for x in later["outcome_amendment_ledger"]["records"]
+        if x["source_kind"] == "broker_verified_manual_exit_receipt_registry"
+    ]
+    assert len(manual) == 1
+    assert manual[0]["row"]["legs"][0]["equal_weight_profit_pct"] < 0
+    write_report(later, reports)
+    atomic_write_json(
+        receipt_path,
+        {"schema": "episode_manual_exit_receipt_registry_v1", "receipts": []},
+    )
+    _write_states(state_dir, "2026-08-12")
+    repeated = build_report(target_date="2026-08-12", **args)
+    assert manual[0]["amendment_id"] in {
+        x["amendment_id"] for x in repeated["outcome_amendment_ledger"]["records"]
+    }
+
+
+def test_source_quality_wrong_date_cannot_authorize_report(tmp_path: Path):
+    from src.engine.monitoring.samsung_machine_entry_tuning import (
+        _source_quality_preflight,
+    )
+
+    path = tmp_path / "observation_source_quality_audit_2026-08-12.json"
+    atomic_write_json(
+        path,
+        {
+            "report_type": "observation_source_quality_audit",
+            "target_date": "2026-08-11",
+            "status": "pass",
+            "summary": {"tuning_input_allowed": True},
+        },
+    )
+    assert (
+        _source_quality_preflight("2026-08-12", tmp_path)["tuning_input_allowed"]
+        is False
+    )
+
+
+def test_missing_exit_time_cannot_backdate_mutable_state_completion():
+    from src.engine.monitoring.samsung_machine_entry_tuning import (
+        _row_known_by_report_date,
+    )
+
+    row = {"legs": [{"completed": True, "target_filled_at": None}]}
+    assert not _row_known_by_report_date(row, "2026-08-27", require_exit_timestamp=True)
+    row["legs"][0]["target_filled_at"] = "2026-08-28T09:00:00+09:00"
+    assert not _row_known_by_report_date(row, "2026-08-27", require_exit_timestamp=True)
+    assert _row_known_by_report_date(row, "2026-08-28", require_exit_timestamp=True)
+
+
+def test_sibling_policy_mutation_does_not_reset_machine_cohort(tmp_path: Path):
+    from src.engine.monitoring.samsung_machine_entry_tuning import (
+        _policy_cohort_contract,
+    )
+
+    for day in (date(2026, 8, 17), date(2026, 8, 18)):
+        applied = baseline_applied_payload(target_date=day, reason="test")
+        if day.day == 18:
+            applied["machines"]["midday"]["policy"]["rolling_high_drawdown_pct"] = 1.50
+            applied["policy_hash"] = policy_hash(
+                {m: x["policy"] for m, x in applied["machines"].items()}
+            )
+        atomic_write_json(
+            tmp_path / f"samsung_machine_entry_policy_{day}.json", applied
+        )
+    a, _ = _policy_cohort_contract(
+        {"target_date": "2026-08-17", "attempted": False}, "afternoon", tmp_path
+    )
+    b, _ = _policy_cohort_contract(
+        {"target_date": "2026-08-18", "attempted": False}, "afternoon", tmp_path
+    )
+    assert a == b
+
+
+def test_no_fill_has_no_broker_ev_or_completion_eta():
+    row = {
+        "attempted": True,
+        "eligible_for_cumulative_tuning": True,
+        "source_quality": "pass",
+        "legs": [{"quantity": 10, "entry_price": 70000, "position_qty": 0}],
+        "summary": {"completed_signal_episode": True},
+    }
+    summary = _aggregate_rows([row])
+    assert summary["notional_weighted_ev_pct"] is None
+    assert summary["estimated_observation_days_to_sample_floor"] is None
+    assert (
+        summary["sample_floor_estimate_contract"]["status"]
+        == "no_broker_completion_rate_available"
+    )
 
 
 def test_nontrading_target_is_excluded_and_cannot_open_candidate(tmp_path: Path):
