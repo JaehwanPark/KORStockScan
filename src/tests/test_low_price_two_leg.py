@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from src.engine.automation.low_price_two_leg_policy_apply import build_applied_policy
+from src.engine.automation.low_price_two_leg_policy_apply import (
+    build_applied_policy,
+    main as policy_apply_main,
+)
 from src.engine.risk.manual_control_exclusion import (
     manual_control_operator_exclusion_source,
 )
@@ -45,16 +48,18 @@ from src.trading.order.entry_liquidity_guard import (
 from src.trading.order.owner_custody_registry import OrderOwnerRegistry
 from src.trading.low_price_two_leg.policy_runtime import (
     BASELINE_POLICIES,
-    CANDIDATE_SCHEMA,
     KAKAO_MORNING_TARGET_TRANSITION,
     POLICY_BOUNDS,
     PRE_RECOMMENDATION_BASELINE_POLICIES,
     PROFILE_20260819_BASELINE_POLICIES,
     PROFILE_20260821_BASELINE_POLICIES,
+    PROFILE_REVISION_20260907_TRANSITION,
     apply_operator_policy_transitions,
     atomic_write_json,
     load_applied_profile_policy,
     policy_hash,
+    report_artifact_hash,
+    runtime_profile_exclusions,
     validate_applied,
     validate_candidate,
 )
@@ -1213,24 +1218,20 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
         target_date=date(2026, 9, 7), candidate_dir=tmp_path / "none"
     )
     assert set(monday_0907_generation["profiles"]) == set(PROFILES)
-    assert monday_0907_generation["profile_revision_transition"] == {
-        "effective_target_date": "2026-09-07",
-        "source_date": "2026-09-04",
-        "before_profile_count": 48,
-        "after_profile_count": 53,
-        "recommendation_count": 13,
-        "new_profile_count": 5,
-        "logic_revision_count": 8,
-        "approved_profile_ids": sorted(RECOMMENDATION_20260904_PROFILE_MAP),
-        "evidence_path": (
-            "data/config/low_price_two_leg_expanded_profile_evidence_2026-09-04.json"
-        ),
-        "evidence_canonical_sha256": (
-            "aee6d554c5aeaaf69484ac9e90d978174f66adca2a7b5cc88108c8686e3339bd"
-        ),
-        "decision_authority": "explicit_user_directed_profile_revision_2026_09_04",
-        "existing_order_effect": "none_preserve_prior_policy_custody",
-    }
+    assert (
+        monday_0907_generation["profile_revision_transition"]
+        == PROFILE_REVISION_20260907_TRANSITION
+    )
+    assert monday_0907_generation["runtime_profile_exclusions"] == (
+        runtime_profile_exclusions(date(2026, 9, 7))
+    )
+    assert (
+        sum(
+            item["selection_status"] == "runtime_quarantined_unified_cost_nonpositive"
+            for item in monday_0907_generation["profiles"].values()
+        )
+        == 3
+    )
     assert validate_applied(monday_0907_generation, target_date=date(2026, 9, 7)) == (
         True,
         "valid",
@@ -1280,7 +1281,10 @@ def test_all_thirteen_20260904_recommendations_bind_exact_next_profiles():
 
     assert len(RECOMMENDATION_20260904_PROFILE_MAP) == 13
     assert set(RECOMMENDATION_20260904_PROFILE_MAP.values()) == set(recommendations)
-    for live_profile_id, report_profile_id in RECOMMENDATION_20260904_PROFILE_MAP.items():
+    for (
+        live_profile_id,
+        report_profile_id,
+    ) in RECOMMENDATION_20260904_PROFILE_MAP.items():
         profile = PROFILES[live_profile_id]
         policy = profile.policy
         assert policy.quantity == 20
@@ -1294,10 +1298,101 @@ def test_all_thirteen_20260904_recommendations_bind_exact_next_profiles():
             "entry_valid_completed_bars": policy.entry_valid_completed_bars,
             "target_ticks": policy.target_ticks,
         }
-        assert validate_research_evidence(profile, target_date=date(2026, 9, 7)) == (
-            True,
-            "ready",
+        evidence_result = validate_research_evidence(
+            profile, target_date=date(2026, 9, 7)
         )
+        if live_profile_id in {"cj_cgv_morning", "youngone_midday"}:
+            assert evidence_result == (
+                False,
+                "research_half_robustness_review_requires_new_profile_revision",
+            )
+        elif live_profile_id == "sk_telecom_midday":
+            assert evidence_result == (
+                False,
+                "research_economics_nonpositive_under_current_cost",
+            )
+        else:
+            assert evidence_result == (True, "ready")
+
+
+def test_20260907_applied_policy_fail_closes_three_cost_quarantined_profiles(
+    tmp_path,
+):
+    target_date = date(2026, 9, 7)
+    applied, _ = build_applied_policy(
+        target_date=target_date, candidate_dir=tmp_path / "no_candidates"
+    )
+    applied_dir = tmp_path / "applied"
+    atomic_write_json(applied_dir / "low_price_two_leg_policy_2026-09-07.json", applied)
+
+    for profile_id in {
+        "cj_cgv_morning",
+        "youngone_midday",
+        "sk_telecom_midday",
+    }:
+        policy, digest, reason = load_applied_profile_policy(
+            profile_id, target_date=target_date, applied_dir=applied_dir
+        )
+        assert policy is None
+        assert digest == ""
+        assert reason == (
+            "runtime_profile_quarantined:"
+            "unified_round_trip_cost_revalidation_nonpositive"
+        )
+
+    policy, digest, reason = load_applied_profile_policy(
+        "sd_biosensor_midday", target_date=target_date, applied_dir=applied_dir
+    )
+    assert policy is not None
+    assert len(digest) == 64
+    assert reason == "ready"
+
+
+def test_20260907_exact_date_cost_quarantine_migration_is_bounded_and_idempotent(
+    tmp_path,
+):
+    candidate_dir = tmp_path / "candidates"
+    applied_dir = tmp_path / "applied"
+    candidate_dir.mkdir()
+    source_candidate = (
+        Path(__file__).resolve().parents[2]
+        / "data/threshold_cycle/low_price_two_leg/candidates"
+        / "low_price_two_leg_policy_candidate_2026-09-04.json"
+    )
+    candidate_path = candidate_dir / source_candidate.name
+    candidate_path.write_bytes(source_candidate.read_bytes())
+    payload, _ = build_applied_policy(
+        target_date=date(2026, 9, 7), candidate_dir=candidate_dir
+    )
+    legacy_transition = dict(payload["profile_revision_transition"])
+    legacy_transition.pop("runtime_active_profile_count")
+    legacy_transition.pop("runtime_profile_exclusions")
+    payload["profile_revision_transition"] = legacy_transition
+    payload.pop("runtime_profile_exclusions")
+    output_path = applied_dir / "low_price_two_leg_policy_2026-09-07.json"
+    output_path.parent.mkdir()
+    output_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    args = [
+        "--target-date",
+        "2026-09-07",
+        "--candidate-dir",
+        str(candidate_dir),
+        "--applied-dir",
+        str(applied_dir),
+        "--write",
+    ]
+    assert policy_apply_main(args) == 0
+    migrated = json.loads(output_path.read_text(encoding="utf-8"))
+    assert validate_applied(migrated, target_date=date(2026, 9, 7)) == (
+        True,
+        "valid",
+    )
+    first_applied_at = migrated["applied_at_kst"]
+
+    assert policy_apply_main(args) == 0
+    reused = json.loads(output_path.read_text(encoding="utf-8"))
+    assert reused["applied_at_kst"] == first_applied_at
 
 
 def test_20260820_postclose_tuning_keeps_twenty_profile_generation(tmp_path):
@@ -1319,7 +1414,7 @@ def test_20260820_postclose_tuning_keeps_twenty_profile_generation(tmp_path):
 
     assert set(report["daily"]["profiles"]) == set(PROFILES_20260819)
     assert set(candidate["profiles"]) == set(PROFILES_20260819)
-    assert validate_candidate(candidate) == (True, "valid")
+    assert validate_candidate(candidate, source_report=report) == (True, "valid")
 
 
 def test_20260821_profile_revision_validates_but_does_not_apply_source_generation_mutation(
@@ -1332,7 +1427,7 @@ def test_20260821_profile_revision_validates_but_does_not_apply_source_generatio
     profile_id = "samsung_heavy_midday"
     source_policies[profile_id]["rolling_high_drawdown_pct"] = 1.0
     source_candidate = {
-        "schema": CANDIDATE_SCHEMA,
+        "schema": "low_price_two_leg_policy_candidate_v2",
         "source_date": "2026-08-20",
         "source_report": "low_price_two_leg_tuning",
         "source_report_schema": REPORT_SCHEMA,
@@ -1414,7 +1509,7 @@ def test_20260821_postclose_tuning_uses_combined_twenty_seven_profile_generation
 
     assert set(report["daily"]["profiles"]) == set(PROFILES_20260824_PRIOR)
     assert set(candidate["profiles"]) == set(PROFILES_20260824_PRIOR)
-    assert validate_candidate(candidate) == (True, "valid")
+    assert validate_candidate(candidate, source_report=report) == (True, "valid")
 
 
 def test_20260824_postclose_tuning_uses_thirty_five_profile_generation(tmp_path):
@@ -1436,7 +1531,7 @@ def test_20260824_postclose_tuning_uses_thirty_five_profile_generation(tmp_path)
 
     assert set(report["daily"]["profiles"]) == set(PROFILES_20260825_PRIOR)
     assert set(candidate["profiles"]) == set(PROFILES_20260825_PRIOR)
-    assert validate_candidate(candidate) == (True, "valid")
+    assert validate_candidate(candidate, source_report=report) == (True, "valid")
 
 
 def test_profile_revision_attribution_separates_candidate_and_user_approved_rows(
@@ -1447,7 +1542,7 @@ def test_profile_revision_attribution_separates_candidate_and_user_approved_rows
         for profile_id, policy in PRE_RECOMMENDATION_BASELINE_POLICIES.items()
     }
     source_candidate = {
-        "schema": CANDIDATE_SCHEMA,
+        "schema": "low_price_two_leg_policy_candidate_v2",
         "source_date": "2026-08-18",
         "source_report": "low_price_two_leg_tuning",
         "source_report_schema": REPORT_SCHEMA,
@@ -1499,7 +1594,7 @@ def test_20260821_revision_attribution_marks_combined_approved_rows(tmp_path):
         for profile_id, policy in PROFILE_20260819_BASELINE_POLICIES.items()
     }
     source_candidate = {
-        "schema": CANDIDATE_SCHEMA,
+        "schema": "low_price_two_leg_policy_candidate_v2",
         "source_date": "2026-08-19",
         "source_report": "low_price_two_leg_tuning",
         "source_report_schema": REPORT_SCHEMA,
@@ -1556,7 +1651,7 @@ def test_20260824_revision_attribution_marks_only_latest_approved_rows(tmp_path)
         for profile_id, policy in PROFILE_20260821_BASELINE_POLICIES.items()
     }
     source_candidate = {
-        "schema": CANDIDATE_SCHEMA,
+        "schema": "low_price_two_leg_policy_candidate_v2",
         "source_date": "2026-08-21",
         "source_report": "low_price_two_leg_tuning",
         "source_report_schema": REPORT_SCHEMA,
@@ -3083,7 +3178,7 @@ def test_legacy_two_share_candidate_normalizes_to_current_twenty_share_runtime(
         for profile_id, policy in PRE_RECOMMENDATION_BASELINE_POLICIES.items()
     }
     legacy = {
-        "schema": CANDIDATE_SCHEMA,
+        "schema": "low_price_two_leg_policy_candidate_v2",
         "source_date": "2026-08-12",
         "source_report": "low_price_two_leg_tuning",
         "source_report_schema": REPORT_SCHEMA,
@@ -3646,7 +3741,7 @@ def test_tuning_accepts_exact_date_kakao_three_tick_policy_and_hash(tmp_path):
     )
 
 
-def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
+def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     from src.engine.monitoring.low_price_two_leg_tuning import _aggregate
 
     target = "samsung_heavy_midday"
@@ -3672,6 +3767,19 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
         },
         "windows": windows,
     }
+    _write_source_quality_audit(tmp_path / "sq", report["target_date"])
+    bound_report = build_report(
+        target_date=report["target_date"],
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "sq",
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    bound_report.update({"windows": windows, "daily": report["daily"]})
+    bound_report["artifact_hash"] = report_artifact_hash(bound_report)
+    report = bound_report
+    atomic_write_json(Path(report["artifact_path"]), report)
     candidate = build_candidate(
         report,
         candidate_dir=tmp_path / "low_price",
@@ -3679,16 +3787,14 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
     assert validate_candidate(candidate)[0]
     legacy_candidate = json.loads(json.dumps(candidate))
+    legacy_candidate["schema"] = "low_price_two_leg_policy_candidate_v2"
     legacy_candidate["source_report_schema"] = "low_price_two_leg_tuning_report_v1"
     assert validate_candidate(legacy_candidate) == (True, "valid")
-    assert candidate["policy_mutations"] == [
-        {
-            "profile_id": target,
-            "axis": "rolling_high_drawdown_pct",
-            "before": 0.75,
-            "after": 1.0,
-        }
-    ]
+    assert candidate["policy_mutations"] == []
+    assert any(
+        item["diagnostic_economic_conditions_passed"]
+        for item in candidate["profiles"][target]["evaluation"]["alternatives"]
+    )
     assert all(
         item["policy"] == PROFILE_20260821_BASELINE_POLICIES[profile_id]
         for profile_id, item in candidate["profiles"].items()
@@ -3714,6 +3820,14 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
 
     legacy_universe_candidate = json.loads(json.dumps(candidate))
     legacy_universe_candidate["schema"] = "low_price_two_leg_policy_candidate_v1"
+    legacy_universe_candidate["policy_mutations"] = [
+        {
+            "profile_id": target,
+            "axis": "rolling_high_drawdown_pct",
+            "before": 0.75,
+            "after": 1.0,
+        }
+    ]
     legacy_universe_candidate["source_date"] = "2026-08-11"
     legacy_universe_candidate["profiles"] = {
         profile_id: legacy_universe_candidate["profiles"][profile_id]
@@ -3750,6 +3864,8 @@ def test_tuning_keeps_profiles_separate_and_selects_only_one_axis(tmp_path):
     )
 
     pre_expanded_v2 = json.loads(json.dumps(candidate))
+    pre_expanded_v2["schema"] = "low_price_two_leg_policy_candidate_v2"
+    pre_expanded_v2["policy_mutations"] = legacy_universe_candidate["policy_mutations"]
     pre_expanded_v2["source_date"] = "2026-08-12"
     pre_expanded_v2["profiles"] = {
         profile_id: pre_expanded_v2["profiles"][profile_id]
@@ -3855,17 +3971,12 @@ def test_tuning_rare_profile_uses_five_days_and_eight_broker_legs(tmp_path):
         candidate_dir=tmp_path / "ready-low-price",
         samsung_candidate_dir=tmp_path / "ready-samsung",
     )
-    assert ready["policy_mutations"] == [
-        {
-            "profile_id": target,
-            "axis": "rolling_high_drawdown_pct",
-            "before": 0.75,
-            "after": 1.0,
-        }
-    ]
+    assert ready["policy_mutations"] == []
     evaluation = ready["profiles"][target]["evaluation"]
     selected_evidence = next(
-        item for item in evaluation["alternatives"] if item["ready"]
+        item
+        for item in evaluation["alternatives"]
+        if item["diagnostic_economic_conditions_passed"]
     )
     assert selected_evidence["clean_baseline_cumulative_outcome"]["eligible_days"] == 5
     assert selected_evidence["clean_baseline_cumulative_outcome"]["completed_legs"] == 8
@@ -3888,6 +3999,52 @@ def test_tuning_rare_profile_uses_five_days_and_eight_broker_legs(tmp_path):
         samsung_candidate_dir=tmp_path / "blocked-samsung",
     )
     assert blocked["policy_mutations"] == []
+
+
+def test_tuning_rejects_higher_per_trade_ev_when_daily_net_profit_falls(tmp_path):
+    target = "samsung_heavy_midday"
+    rows = [_tuning_row(target, index, strong=index % 2 == 0) for index in range(20)]
+    for index, row in enumerate(rows):
+        for leg in row["legs"]:
+            leg["net_profit_pct"] = 0.10 if index % 2 == 0 else 0.02
+    windows = {CLEAN_WINDOW_NAME: {}}
+    for profile_id in PROFILES_20260824_PRIOR:
+        profile_rows = rows if profile_id == target else []
+        windows[CLEAN_WINDOW_NAME][profile_id] = {
+            "summary": _aggregate(profile_rows),
+            "rows": profile_rows,
+        }
+    report = {
+        "target_date": "2026-08-21",
+        "generated_at_kst": "2026-08-21T20:10:00+09:00",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "target_date_is_krx_trading_day": True,
+        "source_quality_preflight": {"tuning_input_allowed": True},
+        "daily": {
+            "profiles": {
+                profile_id: {"source_quality": "pass"}
+                for profile_id in PROFILES_20260824_PRIOR
+            }
+        },
+        "windows": windows,
+    }
+
+    candidate = build_candidate(
+        report,
+        candidate_dir=tmp_path / "low_price",
+        samsung_candidate_dir=tmp_path / "samsung",
+    )
+
+    assert candidate["policy_mutations"] == []
+    alternative = candidate["profiles"][target]["evaluation"]["alternatives"][0]
+    assert alternative["notional_ev_uplift_pct"] > 0.0
+    assert (
+        alternative[
+            "cost_adjusted_net_profit_uplift_krw_per_source_valid_observation_day"
+        ]
+        < 0.0
+    )
+    assert alternative["ready"] is False
 
 
 def test_profile_inventory_blocks_tuning_even_when_held_row_has_no_axis_features(
@@ -3950,6 +4107,264 @@ def _write_source_quality_audit(directory: Path, target_date: str) -> None:
         json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
         encoding="utf-8",
     )
+
+
+def test_future_candidate_binds_report_and_source_quality_content_hash(tmp_path):
+    target_date = "2026-09-07"
+    source_quality_dir = tmp_path / "source_quality"
+    output_dir = tmp_path / "reports"
+    _write_source_quality_audit(source_quality_dir, target_date)
+    report = build_report(
+        target_date=target_date,
+        state_dir=tmp_path / "states",
+        output_dir=output_dir,
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    assert report["artifact_hash"] == report_artifact_hash(report)
+    report_path = Path(report["artifact_path"])
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    candidate = build_candidate(
+        report,
+        candidate_dir=tmp_path / "candidates",
+        samsung_candidate_dir=tmp_path / "samsung",
+    )
+
+    assert validate_candidate(
+        candidate, source_report=report, require_source_files=True
+    ) == (True, "valid")
+    assert validate_candidate(candidate, require_source_files=True) == (True, "valid")
+
+    tampered_report = json.loads(json.dumps(report))
+    tampered_report["generated_at_kst"] = "2026-09-07T23:59:59+09:00"
+    report_path.write_text(json.dumps(tampered_report), encoding="utf-8")
+    assert validate_candidate(candidate, require_source_files=True) == (
+        False,
+        "candidate_source_report_hash_mismatch",
+    )
+
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    audit_path = source_quality_dir / (
+        f"observation_source_quality_audit_{target_date}.json"
+    )
+    audit_path.write_text(
+        audit_path.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+    )
+    assert validate_candidate(candidate, require_source_files=True) == (
+        False,
+        "candidate_source_quality_hash_mismatch",
+    )
+
+
+def test_future_candidate_rejects_hash_consistent_noncanonical_cost_contract(tmp_path):
+    target_date = "2026-09-07"
+    source_quality_dir = tmp_path / "source_quality"
+    output_dir = tmp_path / "reports"
+    _write_source_quality_audit(source_quality_dir, target_date)
+    report = build_report(
+        target_date=target_date,
+        state_dir=tmp_path / "states",
+        output_dir=output_dir,
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    report["cost_pct"] = 0.20
+    report["cost_contract"]["round_trip_cost_pct"] = 0.20
+    report["artifact_hash"] = report_artifact_hash(report)
+    report_path = Path(report["artifact_path"])
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    candidate = build_candidate(
+        report,
+        candidate_dir=tmp_path / "candidates",
+        samsung_candidate_dir=tmp_path / "samsung",
+    )
+
+    assert validate_candidate(
+        candidate, source_report=report, require_source_files=True
+    ) == (False, "candidate_source_cost_contract_invalid")
+
+
+@pytest.mark.parametrize("declare_mutation", [True, False])
+def test_zero_sample_hash_consistent_policy_change_is_rejected_before_apply(
+    tmp_path, declare_mutation
+):
+    from src.trading.low_price_two_leg.policy_runtime import policy_mutations_between
+
+    target = "2026-09-07"
+    _write_source_quality_audit(tmp_path / "sq", target)
+    report = build_report(
+        target_date=target,
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "sq",
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    atomic_write_json(Path(report["artifact_path"]), report)
+    candidate = build_candidate(
+        report,
+        candidate_dir=tmp_path / "candidates",
+        samsung_candidate_dir=tmp_path / "samsung",
+    )
+    assert validate_candidate(candidate, require_source_files=True) == (True, "valid")
+    before = {key: dict(item["policy"]) for key, item in candidate["profiles"].items()}
+    candidate["profiles"]["samsung_heavy_midday"]["policy"][
+        "rolling_high_drawdown_pct"
+    ] += 0.25
+    after = {key: item["policy"] for key, item in candidate["profiles"].items()}
+    candidate["policy_hash"] = policy_hash(after)
+    candidate["policy_mutations"] = (
+        policy_mutations_between(before, after) if declare_mutation else []
+    )
+    assert validate_candidate(candidate, require_source_files=True)[0] is False
+    atomic_write_json(
+        tmp_path / "candidates" / f"low_price_two_leg_policy_candidate_{target}.json",
+        candidate,
+    )
+    with pytest.raises(
+        ValueError, match="candidate_(subset_promotion|actual_runtime_binding)"
+    ):
+        build_applied_policy(
+            target_date=date(2026, 9, 8), candidate_dir=tmp_path / "candidates"
+        )
+
+
+def test_candidate_carries_actual_applied_policy_not_latest_unconsumed_proposal(
+    tmp_path,
+):
+    target = date(2026, 9, 7)
+    applied, _ = build_applied_policy(
+        target_date=target, candidate_dir=tmp_path / "empty"
+    )
+    applied["profiles"]["samsung_heavy_midday"]["policy"][
+        "rolling_high_drawdown_pct"
+    ] += 0.25
+    applied["policy_hash"] = policy_hash(
+        {key: item["policy"] for key, item in applied["profiles"].items()}
+    )
+    applied_file = tmp_path / "applied" / f"low_price_two_leg_policy_{target}.json"
+    atomic_write_json(applied_file, applied)
+    _write_source_quality_audit(tmp_path / "sq", str(target))
+    report = build_report(
+        target_date=str(target),
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "sq",
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    atomic_write_json(Path(report["artifact_path"]), report)
+    candidate_dir = tmp_path / "candidates"
+    atomic_write_json(
+        candidate_dir / "low_price_two_leg_policy_candidate_2026-09-04.json",
+        {"invalid_unconsumed_proposal": True},
+    )
+    candidate = build_candidate(
+        report, candidate_dir=candidate_dir, samsung_candidate_dir=tmp_path / "samsung"
+    )
+    atomic_write_json(
+        candidate_dir / f"low_price_two_leg_policy_candidate_{target}.json", candidate
+    )
+    result, _ = build_applied_policy(
+        target_date=date(2026, 9, 8), candidate_dir=candidate_dir
+    )
+    assert result["policy_hash"] == applied["policy_hash"]
+    assert result["policy_mutations"] == []
+    altered = dict(applied, selection_status="different_source_snapshot")
+    atomic_write_json(applied_file, altered)
+    assert (
+        validate_candidate(candidate, require_source_files=True)[1]
+        == "candidate_actual_runtime_source_mismatch"
+    )
+
+
+def test_new_candidate_cannot_downgrade_schema_to_restore_subset_authority(tmp_path):
+    target = "2026-09-07"
+    _write_source_quality_audit(tmp_path / "sq", target)
+    report = build_report(
+        target_date=target,
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "sq",
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    candidate = build_candidate(report, samsung_candidate_dir=tmp_path / "samsung")
+    candidate["schema"] = "low_price_two_leg_policy_candidate_v2"
+    assert (
+        validate_candidate(candidate, source_report=report)[1]
+        == "candidate_legacy_schema_after_subset_retirement"
+    )
+
+
+def test_missing_applied_binding_cannot_ignore_a_later_materialized_policy(tmp_path):
+    _write_source_quality_audit(tmp_path / "sq", "2026-09-07")
+    report = build_report(
+        target_date="2026-09-07",
+        state_dir=tmp_path / "states",
+        output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "sq",
+        applied_dir=tmp_path / "applied",
+        machine_microstructure_report_dir=tmp_path / "micro",
+    )
+    candidate = build_candidate(report, samsung_candidate_dir=tmp_path / "samsung")
+    assert validate_candidate(candidate, source_report=report) == (True, "valid")
+    applied, _ = build_applied_policy(
+        target_date=date(2026, 9, 7), candidate_dir=tmp_path / "empty"
+    )
+    atomic_write_json(
+        Path(report["source_runtime_policy_binding"]["source_path"]), applied
+    )
+    assert (
+        validate_candidate(candidate, source_report=report)[1]
+        == "candidate_missing_runtime_source_now_present"
+    )
+
+
+def test_report_cli_to_preopen_is_automatic_custody_only_without_broker_calls(
+    tmp_path, monkeypatch
+):
+    from src.engine.monitoring import low_price_two_leg_tuning as tuning
+
+    original_build = tuning.build_report
+    monkeypatch.setattr(
+        tuning,
+        "build_report",
+        lambda **kwargs: original_build(
+            **kwargs, machine_microstructure_report_dir=tmp_path / "micro"
+        ),
+    )
+    _write_source_quality_audit(tmp_path / "sq", "2026-09-07")
+    assert (
+        tuning.main(
+            [
+                "--target-date",
+                "2026-09-07",
+                "--state-dir",
+                str(tmp_path / "states"),
+                "--output-dir",
+                str(tmp_path / "reports"),
+                "--candidate-dir",
+                str(tmp_path / "candidates"),
+                "--source-quality-dir",
+                str(tmp_path / "sq"),
+                "--applied-policy-dir",
+                str(tmp_path / "applied"),
+                "--skip-broker-realized-pnl",
+            ]
+        )
+        == 0
+    )
+    applied, status = build_applied_policy(
+        target_date=date(2026, 9, 8), candidate_dir=tmp_path / "candidates"
+    )
+    assert status == "candidate_applied"
+    assert applied["policy_mutations"] == []
+    assert len(applied["runtime_profile_exclusions"]) == 3
 
 
 def _write_carried_state(

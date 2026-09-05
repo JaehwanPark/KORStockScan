@@ -12,6 +12,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
     APPLIED_SCHEMA,
     CANDIDATE_DIR,
+    CANDIDATE_SCHEMA,
     KST,
     MAX_CANDIDATE_AGE_DAYS,
     apply_operator_policy_transitions,
@@ -24,6 +25,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
     policy_hash,
     policy_mutations_between,
     profile_revision_transition,
+    runtime_profile_exclusions,
     validate_applied,
     validate_candidate,
 )
@@ -103,7 +105,7 @@ def build_applied_policy(
         candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"candidate_unreadable:{type(exc).__name__}") from exc
-    valid, reason = validate_candidate(candidate)
+    valid, reason = validate_candidate(candidate, require_source_files=True)
     if not valid:
         raise ValueError(reason)
     if candidate.get("source_date") != candidate_date.isoformat():
@@ -112,7 +114,18 @@ def build_applied_policy(
         candidate, target_date=candidate_date
     )
     candidate_policies = _candidate_policies(candidate, target_date=target_date)
-    previous_path = _latest_prior_candidate(candidate_dir, candidate_date)
+    if candidate.get("schema") != CANDIDATE_SCHEMA and target_date >= date(2026, 9, 7):
+        if candidate.get(
+            "policy_mutations"
+        ) or candidate_source_policies != baseline_policies_for_target_date(
+            candidate_date
+        ):
+            raise ValueError("legacy_subset_candidate_cannot_create_runtime_authority")
+    previous_path = (
+        None
+        if candidate.get("schema") == CANDIDATE_SCHEMA
+        else _latest_prior_candidate(candidate_dir, candidate_date)
+    )
     previous_source_policies = {
         profile_id: dict(policy)
         for profile_id, policy in baseline_policies_for_target_date(
@@ -123,6 +136,11 @@ def build_applied_policy(
         profile_id: dict(policy)
         for profile_id, policy in baseline_policies_for_target_date(target_date).items()
     }
+    if candidate.get("schema") == CANDIDATE_SCHEMA:
+        previous_source_policies = candidate["source_runtime_policy_binding"][
+            "policies"
+        ]
+        previous_target_policies = candidate_policies
     if previous_path is not None:
         try:
             previous = json.loads(previous_path.read_text(encoding="utf-8"))
@@ -130,7 +148,7 @@ def build_applied_policy(
             raise ValueError(
                 f"previous_candidate_unreadable:{type(exc).__name__}"
             ) from exc
-        valid, reason = validate_candidate(previous)
+        valid, reason = validate_candidate(previous, require_source_files=True)
         if not valid:
             raise ValueError(f"previous_candidate_{reason}")
         previous_source_policies = _candidate_policies(
@@ -151,6 +169,8 @@ def build_applied_policy(
         candidate_policies, target_date=target_date
     )
     revision = profile_revision_transition(target_date)
+    exclusions = runtime_profile_exclusions(target_date)
+    excluded_ids = {item["profile_id"] for item in exclusions}
     profile_revision_applied = bool(
         revision
         and candidate_date < date.fromisoformat(str(revision["effective_target_date"]))
@@ -172,12 +192,16 @@ def build_applied_policy(
         "policy_mutations": applied_mutations,
         "profiles": {
             profile_id: {
-                "selection_status": _applied_profile_selection_status(
-                    profile_id=profile_id,
-                    policy=policy,
-                    candidate=candidate,
-                    profile_revision_applied=profile_revision_applied,
-                    profile_revision=revision,
+                "selection_status": (
+                    "runtime_quarantined_unified_cost_nonpositive"
+                    if profile_id in excluded_ids
+                    else _applied_profile_selection_status(
+                        profile_id=profile_id,
+                        policy=policy,
+                        candidate=candidate,
+                        profile_revision_applied=profile_revision_applied,
+                        profile_revision=revision,
+                    )
                 ),
                 "selected_axis": (candidate.get("profiles") or {})
                 .get(profile_id, {})
@@ -186,6 +210,7 @@ def build_applied_policy(
             }
             for profile_id, policy in policies.items()
         },
+        "runtime_profile_exclusions": exclusions,
         "decision_authority": "auto_bounded_live_low_price_two_leg_policy",
         "runtime_effect": True,
         "allowed_runtime_apply": True,
@@ -242,6 +267,58 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         valid, reason = validate_applied(existing, target_date=target_date)
         if not valid:
+            migration_allowed = bool(
+                args.write
+                and target_date == date(2026, 9, 7)
+                and reason
+                in {
+                    "applied_profile_revision_transition_invalid",
+                    "applied_runtime_profile_exclusions_invalid",
+                }
+                and existing.get("schema") == APPLIED_SCHEMA
+                and existing.get("target_date") == target_date.isoformat()
+                and existing.get("source_date") == "2026-09-04"
+            )
+            if migration_allowed:
+                try:
+                    migrated, migrated_status = build_applied_policy(
+                        target_date=target_date,
+                        candidate_dir=args.candidate_dir,
+                    )
+                except ValueError as exc:
+                    print(
+                        json.dumps(
+                            {
+                                "status": "blocked_invalid_policy_migration_source",
+                                "target_date": target_date.isoformat(),
+                                "reason": str(exc),
+                                "runtime_effect": False,
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        )
+                    )
+                    return 3
+                atomic_write_json(output_path, migrated)
+                print(
+                    json.dumps(
+                        {
+                            "status": "exact_date_policy_cost_quarantine_migrated",
+                            "selection_status": migrated_status,
+                            "target_date": target_date.isoformat(),
+                            "output_path": str(output_path),
+                            "policy_hash": migrated["policy_hash"],
+                            "runtime_profile_exclusions": migrated[
+                                "runtime_profile_exclusions"
+                            ],
+                            "written": True,
+                            "runtime_effect": True,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+                return 0
             print(
                 json.dumps(
                     {

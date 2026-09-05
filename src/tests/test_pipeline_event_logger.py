@@ -15,6 +15,24 @@ def _reset_logger_state(monkeypatch):
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
 
 
+@pytest.mark.parametrize(
+    "stage",
+    ["avg_down_route_arbitration_observed", "avg_down_exit_replay_frame_observed"],
+)
+def test_avg_down_large_replay_inputs_are_structured_only(stage):
+    fields = {
+        "source_event_id": "source-1",
+        "market": "large-market" * 10000,
+        "policy_snapshot": "large-policy" * 10000,
+        "actual_order_submitted": "False",
+    }
+    projected = logger_mod._project_fields_for_text(stage, fields)
+    assert projected["source_event_id"] == "source-1"
+    assert "market" not in projected and "policy_snapshot" not in projected
+    assert len(str(projected)) < 500
+    assert len(fields["market"]) > 10000
+
+
 def test_exact_lifecycle_event_uses_logical_trade_date_partition_across_midnight(
     monkeypatch, tmp_path
 ):

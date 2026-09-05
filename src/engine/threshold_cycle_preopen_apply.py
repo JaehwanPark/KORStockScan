@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shlex
 from datetime import date, datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from typing import Any
 
 from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.engine.approval_contracts import annotate_approval_request
+from src.engine.lifecycle.avg_down_replay import cost_rate_from_version
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.runtime_apply_bridge import (
     ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES,
@@ -91,6 +93,22 @@ SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
 ENTRY_AI_GATE_BACKTEST_DIR = DATA_DIR / "report" / "entry_ai_gate_backtest"
 ENTRY_AI_GATE_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
+AVG_DOWN_RECOVERY_FAMILY = "scalping_avg_down_recovery_quality_gate"
+AVG_DOWN_EVIDENCE_CONTRACT_VERSION = "avg_down_paired_economics_v2"
+AVG_DOWN_EVIDENCE_AUTHORITY = "paired_add_no_add_lifecycle_replay"
+AVG_DOWN_EVALUATION_METHOD = "paired_add_no_add_lifecycle_replay"
+AVG_DOWN_TARGET_ENV_KEY = "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
+AVG_DOWN_TARGET_VALUE_KEY = "shallow_min_buy_pressure"
+AVG_DOWN_BOUNDS = {"min": 80.0, "max": 90.0, "unit": "buy_pressure_pct"}
+AVG_DOWN_MAX_STEP_PER_DAY = 5.0
+AVG_DOWN_RUNTIME_PROVENANCE_ENV_KEYS = {
+    "quality_update_id": "KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID",
+    "evidence_contract_version": (
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_CONTRACT_VERSION"
+    ),
+    "evidence_digest": "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST",
+    "rollback_value": "KORSTOCKSCAN_AVG_DOWN_RUNTIME_PREVIOUS_MIN_BUY_PRESSURE",
+}
 POST_PROBE_WINNER_RECOVERY_FAMILY = "post_probe_winner_recovery"
 POST_PROBE_WINNER_RECOVERY_STAGE = "post_probe_recovery"
 POST_PROBE_WINNER_RECOVERY_READY_STATE = "bounded_one_share_canary_evidence_ready"
@@ -111,6 +129,9 @@ AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down"}
 AUTO_APPLY_BLOCK_STATES = {"freeze", "hold_sample", "hold_no_edge"}
 HOLD_SUB_STATES = frozenset({"hold", "hold_sample", "hold_no_edge"})
 HOLD_CARRY_FORWARD_STATES = frozenset({"hold"})
+AVG_DOWN_HOLD_CARRY_FORWARD_STATES = frozenset(
+    {"hold_sample", "hold_no_edge", "hold_no_change", "hold_runtime_scope"}
+)
 AUTO_APPLY_ROUTE_EXCLUDE_ACTIONS = {"exclude_from_threshold_candidate_review"}
 AUTO_APPLY_ALLOWED_ROUTES = {"threshold_candidate", "normal_drift", ""}
 NON_LIVE_SELECTABLE_FAMILIES = {
@@ -835,6 +856,8 @@ def _cumulative_quality_update_contract_error(
     contract_quality_update_id = str(contract.get("quality_update_id") or "")
     if candidates and not contract_quality_update_id:
         return "runtime_update_quality_update_id_missing"
+    evidence_contract_version = str(contract.get("evidence_contract_version") or "")
+    evidence_digest = str(contract.get("evidence_digest") or "")
     for item in candidates:
         if str(item.get("family") or "") != owner_family:
             return "candidate_owner_family_mismatch"
@@ -854,6 +877,21 @@ def _cumulative_quality_update_contract_error(
             return "candidate_quality_update_id_missing"
         if str(item.get("quality_update_id") or "") != contract_quality_update_id:
             return "candidate_quality_update_id_mismatch"
+        expected_evidence_version = {
+            "scalping_pyramid_quality_gate": "pyramid_fixed_exit_replay_v1",
+            AVG_DOWN_RECOVERY_FAMILY: AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
+        }.get(owner_family)
+        if expected_evidence_version:
+            if evidence_contract_version != expected_evidence_version:
+                return "runtime_update_evidence_contract_version_invalid"
+            if not evidence_digest:
+                return "runtime_update_evidence_digest_missing"
+            if str(item.get("evidence_contract_version") or "") != (
+                evidence_contract_version
+            ):
+                return "candidate_evidence_contract_version_mismatch"
+            if str(item.get("evidence_digest") or "") != evidence_digest:
+                return "candidate_evidence_digest_mismatch"
         if item.get("cumulative_quality_window") != quality_window:
             return "candidate_cumulative_window_mismatch"
         if not bool(item.get("post_apply_attribution_required")):
@@ -977,6 +1015,244 @@ def _candidate_source_quality_contract_blocked(candidate: dict[str, Any]) -> boo
     return False
 
 
+def _avg_down_candidate_contract_error(candidate: dict[str, Any]) -> str:
+    if str(candidate.get("family") or "") != AVG_DOWN_RECOVERY_FAMILY:
+        return ""
+    if candidate.get("evidence_contract_version") != (
+        AVG_DOWN_EVIDENCE_CONTRACT_VERSION
+    ):
+        return "avg_down_evidence_contract_version_invalid"
+    if candidate.get("evaluation_method") != AVG_DOWN_EVALUATION_METHOD:
+        return "avg_down_evaluation_method_not_runtime_authoritative"
+    if candidate.get("evidence_authority") != AVG_DOWN_EVIDENCE_AUTHORITY:
+        return "avg_down_evidence_authority_not_runtime_authoritative"
+    if not str(candidate.get("quality_update_id") or ""):
+        return "avg_down_quality_update_id_missing"
+    evidence_digest = str(candidate.get("evidence_digest") or "")
+    if len(evidence_digest) != 64 or any(
+        char not in "0123456789abcdef" for char in evidence_digest.lower()
+    ):
+        return "avg_down_evidence_digest_invalid"
+    target_keys = [str(value) for value in candidate.get("target_env_keys") or []]
+    changed_keys = [
+        str(value) for value in candidate.get("changed_target_env_keys") or []
+    ]
+    if target_keys != [AVG_DOWN_TARGET_ENV_KEY]:
+        return "avg_down_exactly_one_allowed_target_required"
+    if changed_keys != target_keys:
+        return "avg_down_changed_target_mismatch"
+    if str(candidate.get("target_env_key") or "") != AVG_DOWN_TARGET_ENV_KEY:
+        return "avg_down_target_identity_mismatch"
+    current_values = (
+        candidate.get("current_values")
+        if isinstance(candidate.get("current_values"), dict)
+        else {}
+    )
+    recommended_values = (
+        candidate.get("recommended_values")
+        if isinstance(candidate.get("recommended_values"), dict)
+        else {}
+    )
+    if set(current_values) != {AVG_DOWN_TARGET_VALUE_KEY} or set(
+        recommended_values
+    ) != {AVG_DOWN_TARGET_VALUE_KEY}:
+        return "avg_down_scalar_value_contract_invalid"
+    try:
+        current = float(current_values[AVG_DOWN_TARGET_VALUE_KEY])
+        recommended = float(recommended_values[AVG_DOWN_TARGET_VALUE_KEY])
+    except (TypeError, ValueError):
+        return "avg_down_value_not_numeric"
+    if not math.isfinite(current) or not math.isfinite(recommended):
+        return "avg_down_value_not_finite"
+    if (
+        candidate.get("current_value") != current
+        or candidate.get("recommended_value") != recommended
+    ):
+        return "avg_down_scalar_value_identity_mismatch"
+    if candidate.get("current_value_source") not in {
+        "same_day_runtime_route_event",
+        "same_day_runtime_config_event",
+    }:
+        return "avg_down_current_value_source_not_runtime_observed"
+    runtime_value_sources = candidate.get("current_runtime_value_sources")
+    if (
+        not isinstance(runtime_value_sources, list)
+        or not runtime_value_sources
+        or any(
+            str(value) not in {"exact_process_env", "runtime_rules_loaded_value"}
+            for value in runtime_value_sources
+        )
+    ):
+        return "avg_down_runtime_value_provenance_invalid"
+    if current == recommended:
+        return "avg_down_no_effective_value_change"
+    bounds = candidate.get("bounds")
+    if bounds != AVG_DOWN_BOUNDS:
+        return "avg_down_bounds_contract_mismatch"
+    if not (
+        AVG_DOWN_BOUNDS["min"] <= current <= AVG_DOWN_BOUNDS["max"]
+        and AVG_DOWN_BOUNDS["min"] <= recommended <= AVG_DOWN_BOUNDS["max"]
+    ):
+        return "avg_down_value_out_of_bounds"
+    try:
+        max_step = float(candidate.get("max_step_per_day"))
+    except (TypeError, ValueError):
+        return "avg_down_max_step_missing"
+    if max_step != AVG_DOWN_MAX_STEP_PER_DAY:
+        return "avg_down_max_step_contract_mismatch"
+    if abs(recommended - current) > max_step:
+        return "avg_down_step_exceeded"
+    if recommended not in {80.0, 85.0, 90.0}:
+        return "avg_down_recommended_value_not_on_grid"
+    try:
+        rollback_value = float(candidate.get("rollback_value"))
+    except (TypeError, ValueError):
+        return "avg_down_rollback_value_missing"
+    if not math.isfinite(rollback_value) or rollback_value != current:
+        return "avg_down_rollback_value_identity_mismatch"
+    comparison_hash = str(candidate.get("comparison_universe_hash") or "")
+    if len(comparison_hash) != 64 or any(
+        char not in "0123456789abcdef" for char in comparison_hash.lower()
+    ):
+        return "avg_down_comparison_universe_hash_invalid"
+    if cost_rate_from_version(candidate.get("cost_policy_version")) is None:
+        return "avg_down_cost_policy_version_invalid"
+    exit_policy_version = str(candidate.get("exit_policy_version") or "")
+    if exit_policy_version in {
+        "",
+        "unknown",
+        AVG_DOWN_EVALUATION_METHOD,
+        "fixed_observed_exit_counterfactual",
+    }:
+        return "avg_down_exit_policy_version_invalid"
+    if (
+        candidate.get("sizing_policy_version")
+        != "recorded_existing_position_sizing_owner"
+    ):
+        return "avg_down_sizing_policy_version_invalid"
+    if candidate.get("recommended_values_changed") is not True:
+        return "avg_down_recommended_change_flag_invalid"
+    if candidate.get("sample_floor_passed") is not True:
+        return "avg_down_sample_floor_flag_invalid"
+    feasibility = (
+        candidate.get("condition_feasibility")
+        if isinstance(candidate.get("condition_feasibility"), dict)
+        else {}
+    )
+    if (
+        feasibility.get("state") != "bounded_candidate_ready"
+        or feasibility.get("paired_exit_replay_ready") is not True
+        or feasibility.get("unique_complete_parent_episode_floor_passed") is not True
+        or feasibility.get("common_runtime_venue_scope_ready") is not True
+        or feasibility.get("runtime_current_value_provenance_ready") is not True
+    ):
+        return "avg_down_runtime_feasibility_not_closed"
+    if feasibility.get("selected_exit_policy_version") != exit_policy_version:
+        return "avg_down_exit_policy_identity_mismatch"
+    if (
+        candidate.get("impact_scope") != "common_runtime"
+        or candidate.get("venue_scope_authority") != "common_or_all_active_venues"
+    ):
+        return "avg_down_common_runtime_scope_not_closed"
+    sample_count = candidate.get("sample_count")
+    if (
+        isinstance(sample_count, bool)
+        or not isinstance(sample_count, (int, float))
+        or not math.isfinite(sample_count)
+        or int(sample_count) != sample_count
+        or sample_count < 10
+    ):
+        return "avg_down_unique_complete_sample_floor_not_met"
+    if candidate.get("runtime_effect") is not False:
+        return "avg_down_postclose_runtime_effect_leak"
+    if candidate.get("actual_order_submitted") is not False:
+        return "avg_down_actual_order_authority_leak"
+    if candidate.get("broker_order_forbidden") is not True:
+        return "avg_down_broker_order_forbidden_missing"
+    source_date = str(candidate.get("source_date") or "")
+    target_date = str(candidate.get("target_date") or "")
+    if not source_date or not target_date or source_date != target_date:
+        return "avg_down_source_target_date_identity_invalid"
+    return ""
+
+
+def _avg_down_source_only_candidate_contract_error(
+    candidate: dict[str, Any],
+) -> str:
+    if str(candidate.get("family") or "") != AVG_DOWN_RECOVERY_FAMILY:
+        return "avg_down_source_only_family_invalid"
+    if candidate.get("evidence_contract_version") != (
+        AVG_DOWN_EVIDENCE_CONTRACT_VERSION
+    ):
+        return "avg_down_source_only_evidence_version_invalid"
+    if candidate.get("evaluation_method") != "fixed_observed_exit_counterfactual":
+        return "avg_down_source_only_evaluation_method_invalid"
+    if candidate.get("evidence_authority") != "fixed_observed_exit_source_only":
+        return "avg_down_source_only_authority_invalid"
+    quality_update_id = str(candidate.get("quality_update_id") or "")
+    evidence_digest = str(candidate.get("evidence_digest") or "")
+    if not quality_update_id:
+        return "avg_down_source_only_quality_update_id_missing"
+    if len(evidence_digest) != 64 or any(
+        char not in "0123456789abcdef" for char in evidence_digest.lower()
+    ):
+        return "avg_down_source_only_evidence_digest_invalid"
+    source_date = str(candidate.get("source_date") or "")
+    target_date = str(candidate.get("target_date") or "")
+    if not source_date or source_date != target_date:
+        return "avg_down_source_only_date_identity_invalid"
+    if candidate.get("allowed_runtime_apply") is not False:
+        return "avg_down_source_only_runtime_authority_invalid"
+    if str(candidate.get("target_env_key") or "") != AVG_DOWN_TARGET_ENV_KEY:
+        return "avg_down_source_only_target_identity_mismatch"
+    target_keys = [str(value) for value in candidate.get("target_env_keys") or []]
+    changed_keys = [
+        str(value) for value in candidate.get("changed_target_env_keys") or []
+    ]
+    if target_keys not in ([], [AVG_DOWN_TARGET_ENV_KEY]):
+        return "avg_down_source_only_target_allowlist_invalid"
+    if changed_keys != target_keys:
+        return "avg_down_source_only_changed_target_mismatch"
+    current_values = (
+        candidate.get("current_values")
+        if isinstance(candidate.get("current_values"), dict)
+        else {}
+    )
+    recommended_values = (
+        candidate.get("recommended_values")
+        if isinstance(candidate.get("recommended_values"), dict)
+        else {}
+    )
+    if set(current_values) != {AVG_DOWN_TARGET_VALUE_KEY} or set(
+        recommended_values
+    ) != {AVG_DOWN_TARGET_VALUE_KEY}:
+        return "avg_down_source_only_scalar_value_contract_invalid"
+    try:
+        current = float(current_values[AVG_DOWN_TARGET_VALUE_KEY])
+        recommended = float(recommended_values[AVG_DOWN_TARGET_VALUE_KEY])
+    except (TypeError, ValueError):
+        return "avg_down_source_only_value_not_numeric"
+    if not math.isfinite(current) or not math.isfinite(recommended):
+        return "avg_down_source_only_value_not_finite"
+    if (
+        candidate.get("current_value") != current
+        or candidate.get("recommended_value") != recommended
+    ):
+        return "avg_down_source_only_scalar_value_identity_mismatch"
+    changed = current != recommended
+    if target_keys != ([AVG_DOWN_TARGET_ENV_KEY] if changed else []):
+        return "avg_down_source_only_changed_value_target_mismatch"
+    if candidate.get("recommended_values_changed") is not changed:
+        return "avg_down_source_only_change_flag_mismatch"
+    if candidate.get("runtime_effect") is not False:
+        return "avg_down_source_only_runtime_effect_leak"
+    if candidate.get("actual_order_submitted") is not False:
+        return "avg_down_source_only_order_authority_leak"
+    if candidate.get("broker_order_forbidden") is not True:
+        return "avg_down_source_only_broker_forbidden_missing"
+    return ""
+
+
 def _candidate_apply_contract_blockers(
     candidate: dict[str, Any],
     *,
@@ -984,6 +1260,9 @@ def _candidate_apply_contract_blockers(
     runtime_handoff_contract_source_version: int = RUNTIME_HANDOFF_CONTRACT_VERSION,
 ) -> list[str]:
     blockers: list[str] = []
+    avg_down_contract_error = _avg_down_candidate_contract_error(candidate)
+    if avg_down_contract_error:
+        blockers.append(avg_down_contract_error)
     if _candidate_source_quality_contract_blocked(candidate):
         blockers.append("source_quality_blocked")
     if (
@@ -1461,21 +1740,37 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
     normalized = [item for item in candidates if isinstance(item, dict)]
+    report_schema_error = (
+        "avg_down_report_schema_version_invalid"
+        if payload.get("schema_version") != 2
+        else ""
+    )
     cumulative_contract_error = _cumulative_quality_update_contract_error(
         payload,
         normalized,
         owner_family="scalping_avg_down_recovery_quality_gate",
         owner_stage="scale_in",
     )
-    if cumulative_contract_error:
+    candidate_contract_errors = [
+        (
+            _avg_down_candidate_contract_error(item)
+            if bool(item.get("allowed_runtime_apply"))
+            else _avg_down_source_only_candidate_contract_error(item)
+        )
+        for item in normalized
+    ]
+    contract_error = (
+        report_schema_error
+        or cumulative_contract_error
+        or next((error for error in candidate_contract_errors if error), "")
+    )
+    if contract_error:
         normalized = [
             {
                 **item,
                 "allowed_runtime_apply": False,
                 "calibration_state": "freeze",
-                "apply_block_reason": (
-                    f"single_cumulative_quality_contract:{cumulative_contract_error}"
-                ),
+                "apply_block_reason": f"avg_down_runtime_contract:{contract_error}",
             }
             for item in normalized
         ]
@@ -1493,7 +1788,7 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
         ),
         "source_quality_preflight": preflight_status,
         "source_quality_blocked": bool(preflight_status.get("blocked")),
-        "runtime_update_contract_error": cumulative_contract_error or None,
+        "runtime_update_contract_error": contract_error or None,
     }
 
 
@@ -1866,6 +2161,44 @@ def _hold_carry_forward_blockers(candidate: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def _avg_down_hold_carry_forward_blockers(
+    candidate: dict[str, Any], previous_env: dict[str, str]
+) -> list[str]:
+    """Reject preservation when observed runtime value conflicts with prior env."""
+
+    blockers: list[str] = []
+    if not previous_env:
+        return ["previous_avg_down_env_missing"]
+    previous_value = previous_env.get(f"KORSTOCKSCAN_{AVG_DOWN_TARGET_ENV_KEY}")
+    if previous_value is not None and candidate.get("current_value_source") in {
+        "same_day_runtime_route_event",
+        "same_day_runtime_config_event",
+    }:
+        try:
+            observed_value = float(candidate.get("current_value"))
+            prior_value = float(previous_value)
+        except (TypeError, ValueError):
+            blockers.append("avg_down_previous_or_observed_value_not_numeric")
+        else:
+            if not math.isfinite(observed_value) or not math.isfinite(prior_value):
+                blockers.append("avg_down_previous_or_observed_value_not_finite")
+            elif observed_value != prior_value:
+                blockers.append("avg_down_previous_runtime_value_conflict")
+    return blockers
+
+
+def _avg_down_previous_env_migration_state(previous_env: dict[str, str]) -> str:
+    if not previous_env:
+        return "previous_avg_down_env_missing"
+    exact_key = f"KORSTOCKSCAN_{AVG_DOWN_TARGET_ENV_KEY}"
+    strategy_keys = set(previous_env) - set(
+        AVG_DOWN_RUNTIME_PROVENANCE_ENV_KEYS.values()
+    )
+    if strategy_keys == {exact_key}:
+        return "v2_single_axis_preserved"
+    return "legacy_avg_down_env_preserved_without_new_authority"
+
+
 _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "entry_cancel_wait_runtime": "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_",
     "quote_consistency_normalization": "KORSTOCKSCAN_QUOTE_CONSISTENCY_",
@@ -1936,12 +2269,14 @@ def _previous_runtime_env_overrides_for_family(
             "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_",
             "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_",
         )
+        provenance_keys = set(AVG_DOWN_RUNTIME_PROVENANCE_ENV_KEYS.values())
         return _normalize_runtime_env_overrides_for_family(
             family,
             {
                 str(k): str(v)
                 for k, v in env_overrides.items()
                 if any(str(k).startswith(prefix) for prefix in prefixes)
+                or str(k) in provenance_keys
             },
         )
     prefix = _FAMILY_ENV_KEY_PREFIXES.get(family)
@@ -2075,7 +2410,6 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         "lifecycle_bucket_discovery_sim_auto_approval",
         "scalp_sim_auto_approval",
         "swing_sim_auto_approval",
-        "scalping_avg_down_recovery_quality_gate",
     }
     overrides: dict[str, str] = {}
     for target_key in candidate.get("target_env_keys") or []:
@@ -2094,6 +2428,20 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
             continue
         overrides[_runtime_env_name(target_key)] = _format_env_value(value)
     return overrides
+
+
+def _avg_down_runtime_provenance_env(
+    candidate: dict[str, Any],
+) -> dict[str, str]:
+    if str(candidate.get("family") or "") != AVG_DOWN_RECOVERY_FAMILY:
+        return {}
+    values = {
+        key: str(candidate.get(field) or "").strip()
+        for field, key in AVG_DOWN_RUNTIME_PROVENANCE_ENV_KEYS.items()
+    }
+    if any(not value for value in values.values()):
+        return {}
+    return values
 
 
 def _scrub_removed_contracts(value: Any) -> Any:
@@ -3289,6 +3637,64 @@ def _ai_guard_allows_candidate(
     route = str(item.get("ai_anomaly_route") or "")
     if route not in AUTO_APPLY_ALLOWED_ROUTES:
         return (False, f"ai_route_not_runtime_apply:{route}")
+    if family == "scalping_pyramid_quality_gate":
+        candidate_update_id = str(candidate.get("quality_update_id") or "")
+        candidate_evidence_version = str(
+            candidate.get("evidence_contract_version") or ""
+        )
+        candidate_evidence_digest = str(candidate.get("evidence_digest") or "")
+        if (
+            not candidate_update_id
+            or candidate_evidence_version != "pyramid_fixed_exit_replay_v1"
+            or not candidate_evidence_digest
+        ):
+            return (False, "pyramid_candidate_evidence_identity_missing")
+        if str(item.get("quality_update_id") or "") != candidate_update_id:
+            return (False, "pyramid_ai_quality_update_id_mismatch")
+        if str(item.get("evidence_contract_version") or "") != (
+            candidate_evidence_version
+        ):
+            return (False, "pyramid_ai_evidence_contract_version_mismatch")
+        if str(item.get("evidence_digest") or "") != candidate_evidence_digest:
+            return (False, "pyramid_ai_evidence_digest_mismatch")
+    if family == AVG_DOWN_RECOVERY_FAMILY:
+        candidate_update_id = str(candidate.get("quality_update_id") or "")
+        candidate_evidence_version = str(
+            candidate.get("evidence_contract_version") or ""
+        )
+        candidate_evidence_digest = str(candidate.get("evidence_digest") or "")
+        if (
+            not candidate_update_id
+            or candidate_evidence_version != AVG_DOWN_EVIDENCE_CONTRACT_VERSION
+            or not candidate_evidence_digest
+        ):
+            return (False, "avg_down_candidate_evidence_identity_missing")
+        if str(item.get("quality_update_id") or "") != candidate_update_id:
+            return (False, "avg_down_ai_quality_update_id_mismatch")
+        if str(item.get("evidence_contract_version") or "") != (
+            candidate_evidence_version
+        ):
+            return (False, "avg_down_ai_evidence_contract_version_mismatch")
+        if str(item.get("evidence_digest") or "") != candidate_evidence_digest:
+            return (False, "avg_down_ai_evidence_digest_mismatch")
+        if str(item.get("target_env_key") or "") != str(
+            candidate.get("target_env_key") or ""
+        ):
+            return (False, "avg_down_ai_target_env_key_mismatch")
+        if not _values_equal(item.get("current_value"), candidate.get("current_value")):
+            return (False, "avg_down_ai_current_value_mismatch")
+        if not _values_equal(
+            item.get("recommended_value"), candidate.get("recommended_value")
+        ):
+            return (False, "avg_down_ai_recommended_value_mismatch")
+        if str(item.get("source_date") or "") != str(
+            candidate.get("source_date") or ""
+        ):
+            return (False, "avg_down_ai_source_date_mismatch")
+        if str(item.get("target_date") or "") != str(
+            candidate.get("target_date") or ""
+        ):
+            return (False, "avg_down_ai_target_date_mismatch")
     return (True, "ai_guard_accepted")
 
 
@@ -3400,6 +3806,25 @@ def _select_auto_apply_candidates(
     previous_selected_families, previous_runtime_manifest = (
         _load_previous_runtime_env_selected_families(target_date)
     )
+    if (
+        AVG_DOWN_RECOVERY_FAMILY in previous_selected_families
+        and AVG_DOWN_RECOVERY_FAMILY not in present_families
+    ):
+        candidates.append(
+            {
+                "family": AVG_DOWN_RECOVERY_FAMILY,
+                "stage": "scale_in",
+                "priority": 37,
+                "calibration_state": "hold_runtime_scope",
+                "calibration_reason": "current_postclose_candidate_missing",
+                "allowed_runtime_apply": False,
+                "safety_revert_required": False,
+                "runtime_update_mode": CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE,
+                "target_env_keys": [],
+                "recommended_values": {},
+                "carry_forward_trigger": "current_postclose_candidate_missing",
+            }
+        )
     for candidate in sorted(
         candidates, key=lambda item: int(item.get("priority") or 999)
     ):
@@ -3429,6 +3854,10 @@ def _select_auto_apply_candidates(
         hold_carry_forward = False
         hold_carry_forward_blockers: list[str] = []
         hold_carry_forward_env_overrides: dict[str, str] = {}
+        avg_down_hold_carry_forward = bool(
+            family == AVG_DOWN_RECOVERY_FAMILY
+            and state in AVG_DOWN_HOLD_CARRY_FORWARD_STATES
+        )
         if family in RETIRED_RUNTIME_FAMILY_REASONS:
             reject_reason = RETIRED_RUNTIME_FAMILY_REASONS[family]
         elif include_families is not None and family not in include_families:
@@ -3438,26 +3867,34 @@ def _select_auto_apply_candidates(
             or str(candidate.get("family_type") or "") == "sim_lifecycle_source"
         ):
             reject_reason = "non_live_selectable_sim_lifecycle_source"
-        elif not bool(candidate.get("allowed_runtime_apply")):
+        elif not bool(candidate.get("allowed_runtime_apply")) and not (
+            avg_down_hold_carry_forward
+        ):
             reject_reason = "runtime_apply_not_allowed"
         elif bool(candidate.get("safety_revert_required")):
             reject_reason = "safety_revert_required"
-        elif state in HOLD_CARRY_FORWARD_STATES:
+        elif state in HOLD_CARRY_FORWARD_STATES or avg_down_hold_carry_forward:
             previously_enabled = family in previous_selected_families
             if not previously_enabled:
                 reject_reason = "hold_not_previously_enabled"
             else:
                 hold_carry_forward_blockers = _hold_carry_forward_blockers(candidate)
+                hold_carry_forward_env_overrides = (
+                    _previous_runtime_env_overrides_for_family(
+                        previous_runtime_manifest, family
+                    )
+                )
+                if avg_down_hold_carry_forward:
+                    hold_carry_forward_blockers.extend(
+                        _avg_down_hold_carry_forward_blockers(
+                            candidate, hold_carry_forward_env_overrides
+                        )
+                    )
                 if stage in selected_by_stage:
                     hold_carry_forward_blockers.append("same_stage_owner_conflict")
                 if hold_carry_forward_blockers:
                     reject_reason = f"hold_carry_forward_blocked:{','.join(hold_carry_forward_blockers)}"
                 else:
-                    hold_carry_forward_env_overrides = (
-                        _previous_runtime_env_overrides_for_family(
-                            previous_runtime_manifest, family
-                        )
-                    )
                     if not hold_carry_forward_env_overrides:
                         reject_reason = "hold_carry_forward_no_previous_env"
                     else:
@@ -3542,6 +3979,19 @@ def _select_auto_apply_candidates(
                     reject_reason = lock_stage_conflict_reason
                 reason = f"operator_runtime_env_lock_allowed_close:{lock.get('lock_id') or family}"
 
+        if lock_applied and lock:
+            selected_env_overrides = _lock_env_overrides(lock)
+        elif hold_carry_forward:
+            selected_env_overrides = hold_carry_forward_env_overrides
+        elif not reject_reason:
+            selected_env_overrides = _env_overrides_for_candidate(candidate)
+            if family == AVG_DOWN_RECOVERY_FAMILY:
+                selected_env_overrides.update(
+                    _avg_down_runtime_provenance_env(candidate)
+                )
+        else:
+            selected_env_overrides = {}
+
         decision = {
             "family": family,
             "stage": stage,
@@ -3550,19 +4000,7 @@ def _select_auto_apply_candidates(
             "threshold_version": candidate.get("threshold_version"),
             "selected": not bool(reject_reason),
             "decision_reason": reject_reason or reason,
-            "env_overrides": (
-                _lock_env_overrides(lock)
-                if lock_applied and lock
-                else (
-                    hold_carry_forward_env_overrides
-                    if hold_carry_forward
-                    else (
-                        _env_overrides_for_candidate(candidate)
-                        if not reject_reason
-                        else {}
-                    )
-                )
-            ),
+            "env_overrides": selected_env_overrides,
             "postclose_runtime_handoff_contract": candidate.get(
                 "runtime_handoff_contract"
             ),
@@ -3595,6 +4033,10 @@ def _select_auto_apply_candidates(
         decision["previous_env_overrides"] = previous_family_env
         if candidate.get("quality_update_id"):
             decision["quality_update_id"] = candidate.get("quality_update_id")
+            decision["evidence_contract_version"] = candidate.get(
+                "evidence_contract_version"
+            )
+            decision["evidence_digest"] = candidate.get("evidence_digest")
             decision["runtime_update_mode"] = candidate.get("runtime_update_mode")
             decision["max_runtime_apply_count"] = candidate.get(
                 "max_runtime_apply_count"
@@ -3611,6 +4053,17 @@ def _select_auto_apply_candidates(
                 "previous_selected": True,
                 "carry_forward_blockers": hold_carry_forward_blockers,
             }
+            if family == AVG_DOWN_RECOVERY_FAMILY:
+                decision["hold_carry_forward"].update(
+                    {
+                        "trigger": candidate.get("carry_forward_trigger")
+                        or candidate.get("calibration_reason"),
+                        "migration_state": _avg_down_previous_env_migration_state(
+                            hold_carry_forward_env_overrides
+                        ),
+                        "current_candidate_contract_blockers": contract_blockers,
+                    }
+                )
         if lock:
             decision["operator_runtime_env_lock"] = {
                 "lock_id": lock.get("lock_id"),
@@ -6698,7 +7151,7 @@ def build_preopen_apply_manifest(
             source_date, target_date
         )
         selected, decisions, env_overrides = ([], [], {})
-        if auto_apply_requested and operator_runtime_env_locks:
+        if auto_apply_requested:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 [],
                 ai_review={},
@@ -6708,19 +7161,37 @@ def build_preopen_apply_manifest(
                 operator_locks=operator_runtime_env_locks,
             )
         runtime_change = bool(auto_apply_requested and env_overrides)
+        lock_preserved = any(
+            bool((item.get("operator_runtime_env_lock") or {}).get("applied"))
+            for item in decisions
+            if isinstance(item, dict)
+        )
+        carry_forward_preserved = any(
+            bool(item.get("hold_carry_forward"))
+            for item in decisions
+            if isinstance(item, dict)
+        )
         manifest = {
             "target_date": target_date,
             "status": (
                 "operator_runtime_env_lock_ready_missing_source_report"
-                if runtime_change
-                else "missing_source_report"
+                if runtime_change and lock_preserved
+                else (
+                    "carry_forward_ready_missing_source_report"
+                    if runtime_change and carry_forward_preserved
+                    else "missing_source_report"
+                )
             ),
             "apply_mode": apply_mode,
             "runtime_change": runtime_change,
             "runtime_change_reason": (
                 "source report missing; explicit operator runtime env locks preserved"
-                if runtime_change
-                else "source report missing"
+                if runtime_change and lock_preserved
+                else (
+                    "source report missing; last accepted runtime env preserved"
+                    if runtime_change and carry_forward_preserved
+                    else "source report missing"
+                )
             ),
             "source_report": None,
             "candidates": [],

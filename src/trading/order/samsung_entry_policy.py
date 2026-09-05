@@ -16,7 +16,9 @@ from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
-CANDIDATE_SCHEMA = "samsung_machine_entry_policy_candidate_v1"
+CANDIDATE_SCHEMA = "samsung_machine_entry_policy_candidate_v2"
+LEGACY_CANDIDATE_SCHEMA = "samsung_machine_entry_policy_candidate_v1"
+SUPPORTED_CANDIDATE_SCHEMAS = frozenset({LEGACY_CANDIDATE_SCHEMA, CANDIDATE_SCHEMA})
 SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
     {
         "samsung_machine_entry_tuning_report_v2",
@@ -25,9 +27,13 @@ SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
         "samsung_machine_entry_tuning_report_v5",
         "samsung_machine_entry_tuning_report_v6",
         "samsung_machine_entry_tuning_report_v7",
+        "samsung_machine_entry_tuning_report_v8",
+        "samsung_machine_entry_tuning_report_v9",
     }
 )
-APPLIED_SCHEMA = "samsung_machine_entry_policy_applied_v1"
+APPLIED_SCHEMA = "samsung_machine_entry_policy_applied_v2"
+LEGACY_APPLIED_SCHEMA = "samsung_machine_entry_policy_applied_v1"
+SUPPORTED_APPLIED_SCHEMAS = frozenset({LEGACY_APPLIED_SCHEMA, APPLIED_SCHEMA})
 CANDIDATE_DIR = (
     DATA_DIR / "threshold_cycle" / "samsung_machine_entry_policy" / "candidates"
 )
@@ -36,6 +42,7 @@ MAX_CANDIDATE_AGE_DAYS = 7
 CLEAN_BASELINE_DATE = "2026-06-05"
 LEGACY_TWO_SHARE_CANDIDATE_LAST_SOURCE_DATE = date(2026, 8, 13)
 LEGACY_TWO_SHARE_APPLIED_LAST_TARGET_DATE = date(2026, 8, 13)
+LEGACY_MUTATING_CANDIDATE_LAST_SOURCE_DATE = date(2026, 8, 13)
 SAMSUNG_TARGET_TICKS_OPERATOR_OVERRIDE = {
     "override_id": "samsung_episode_target_ticks_3_20260814",
     "machines": ["morning", "midday", "afternoon"],
@@ -145,47 +152,94 @@ def _effective_applied_policies(
     return policies
 
 
-def _canonical_hash(payload: Any) -> str:
+def canonical_hash(payload: Any) -> str:
     encoded = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def report_artifact_hash(payload: dict[str, Any]) -> str:
+    return canonical_hash(
+        {key: value for key, value in payload.items() if key != "artifact_hash"}
+    )
+
+
+def candidate_artifact_hash(payload: dict[str, Any]) -> str:
+    return canonical_hash(
+        {key: value for key, value in payload.items() if key != "candidate_hash"}
+    )
+
+
+def _valid_sha256(value: Any) -> bool:
+    text = str(value or "")
+    return bool(
+        len(text) == 64
+        and text == text.lower()
+        and all(char in "0123456789abcdef" for char in text)
+    )
+
+
 def policy_hash(policies: dict[str, Any]) -> str:
-    return _canonical_hash(policies)
+    return canonical_hash(policies)
 
 
 def policy_mutations_between(
-    before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]
+    before: dict[str, dict[str, Any]],
+    after: dict[str, dict[str, Any]],
+    *,
+    include_kind: bool = False,
 ) -> list[dict[str, Any]]:
     mutations: list[dict[str, Any]] = []
     for machine in BASELINE_POLICIES:
         for axis in BASELINE_POLICIES[machine]:
             if before[machine][axis] != after[machine][axis]:
-                mutations.append(
-                    {
-                        "machine": machine,
-                        "axis": axis,
-                        "before": before[machine][axis],
-                        "after": after[machine][axis],
-                    }
-                )
+                mutation = {
+                    "machine": machine,
+                    "axis": axis,
+                    "before": before[machine][axis],
+                    "after": after[machine][axis],
+                }
+                if include_kind:
+                    tightening = (
+                        axis == "rolling_high_drawdown_pct"
+                        and float(after[machine][axis]) > float(before[machine][axis])
+                    ) or (
+                        axis == "rolling_low_proximity_pct"
+                        and float(after[machine][axis]) < float(before[machine][axis])
+                    )
+                    mutation["kind"] = (
+                        "tightening" if tightening else "bounded_rollback"
+                    )
+                mutations.append(mutation)
     return mutations
 
 
-def _validate_policy_mutations(value: Any) -> tuple[bool, str]:
+def _validate_policy_mutations(
+    value: Any, *, allow_bounded_rollback: bool = False, require_kind: bool = False
+) -> tuple[bool, str]:
     if not isinstance(value, list) or len(value) > 1:
         return False, "same_stage_single_axis_contract_invalid"
     if not value:
         return True, "valid"
     item = value[0]
-    if not isinstance(item, dict) or set(item) != {
+    expected_keys = {
         "machine",
         "axis",
         "before",
         "after",
-    }:
+    }
+    if require_kind:
+        expected_keys.add("kind")
+    if not isinstance(item, dict) or set(item) != expected_keys:
         return False, "policy_mutation_shape_invalid"
     machine = item["machine"]
     axis = item["axis"]
@@ -198,11 +252,28 @@ def _validate_policy_mutations(value: Any) -> tuple[bool, str]:
         return False, "policy_mutation_axis_invalid"
     if before is None or after is None or before == after:
         return False, "policy_mutation_values_invalid"
-    if axis == "rolling_high_drawdown_pct" and after <= before:
-        return False, "policy_mutation_is_not_tightening"
-    if axis == "rolling_low_proximity_pct" and after >= before:
-        return False, "policy_mutation_is_not_tightening"
-    return True, "valid"
+    tightening = (axis == "rolling_high_drawdown_pct" and after > before) or (
+        axis == "rolling_low_proximity_pct" and after < before
+    )
+    rollback = (axis == "rolling_high_drawdown_pct" and after < before) or (
+        axis == "rolling_low_proximity_pct" and after > before
+    )
+    if require_kind and item.get("kind") not in {"tightening", "bounded_rollback"}:
+        return False, "policy_mutation_kind_invalid"
+    if tightening and (not require_kind or item.get("kind") == "tightening"):
+        return True, "valid"
+    if (
+        rollback
+        and allow_bounded_rollback
+        and require_kind
+        and item.get("kind") == "bounded_rollback"
+    ):
+        return True, "valid"
+    if rollback:
+        return False, "policy_mutation_rollback_not_allowed"
+    if require_kind:
+        return False, "policy_mutation_kind_direction_mismatch"
+    return False, "policy_mutation_is_not_tightening"
 
 
 def _finite_number(value: Any) -> float | None:
@@ -260,9 +331,15 @@ def validate_machine_policy(
     return True, "valid"
 
 
-def validate_candidate(payload: Any) -> tuple[bool, str]:
-    if not isinstance(payload, dict) or payload.get("schema") != CANDIDATE_SCHEMA:
+def validate_candidate(
+    payload: Any, *, source_report: dict[str, Any] | None = None
+) -> tuple[bool, str]:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") not in SUPPORTED_CANDIDATE_SCHEMAS
+    ):
         return False, "candidate_schema_invalid"
+    schema = str(payload["schema"])
     try:
         source_date = date.fromisoformat(str(payload.get("source_date") or ""))
     except ValueError:
@@ -284,9 +361,51 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
         return False, "candidate_source_report_contract_invalid"
     if payload.get("decision_authority") != "postclose_bounded_candidate_only":
         return False, "candidate_decision_authority_invalid"
-    valid, reason = _validate_policy_mutations(payload.get("policy_mutations"))
+    valid, reason = _validate_policy_mutations(
+        payload.get("policy_mutations"),
+        allow_bounded_rollback=schema == CANDIDATE_SCHEMA,
+        require_kind=schema == CANDIDATE_SCHEMA,
+    )
     if not valid:
         return False, reason
+    if (
+        schema == LEGACY_CANDIDATE_SCHEMA
+        and source_date > LEGACY_MUTATING_CANDIDATE_LAST_SOURCE_DATE
+        and payload.get("policy_mutations")
+    ):
+        return False, "legacy_mutating_candidate_no_longer_authoritative"
+    if schema == CANDIDATE_SCHEMA:
+        preflight = payload.get("source_quality_preflight")
+        if not isinstance(preflight, dict):
+            return False, "candidate_source_quality_preflight_missing"
+        source_quality_allowed = bool(
+            preflight.get("tuning_input_allowed") is True
+            and preflight.get("status") == "pass"
+            and preflight.get("audit_status") in {"pass", "warning"}
+        )
+        source_quality_blocked = bool(
+            preflight.get("tuning_input_allowed") is False
+            and preflight.get("status") == "blocked"
+        )
+        if not source_quality_allowed and not source_quality_blocked:
+            return False, "candidate_source_quality_preflight_invalid"
+        if payload.get("policy_mutations") and not source_quality_allowed:
+            return False, "candidate_source_quality_not_allowed_for_mutation"
+        if not _valid_sha256(preflight.get("source_sha256")):
+            return False, "candidate_source_quality_hash_invalid"
+        report_binding = payload.get("source_report_binding")
+        if not isinstance(report_binding, dict) or set(report_binding) != {
+            "schema",
+            "target_date",
+            "sha256",
+        }:
+            return False, "candidate_source_report_binding_invalid"
+        if (
+            report_binding.get("schema") != payload.get("source_report_schema")
+            or report_binding.get("target_date") != source_date.isoformat()
+            or not _valid_sha256(report_binding.get("sha256"))
+        ):
+            return False, "candidate_source_report_binding_mismatch"
     machines = payload.get("machines")
     if not isinstance(machines, dict) or set(machines) != set(BASELINE_POLICIES):
         return False, "candidate_machine_set_invalid"
@@ -306,9 +425,61 @@ def validate_candidate(payload: Any) -> tuple[bool, str]:
             return False, f"candidate_{machine}_{reason}"
         if item.get("allowed_runtime_apply") is not True:
             return False, f"candidate_{machine}_apply_authority_missing"
+        if schema == CANDIDATE_SCHEMA:
+            if not _valid_sha256(item.get("evidence_digest")):
+                return False, f"candidate_{machine}_evidence_digest_invalid"
+            if item.get("evidence_digest") != canonical_hash(item.get("evidence")):
+                return False, f"candidate_{machine}_evidence_digest_mismatch"
         policies[machine] = policy
     if payload.get("policy_hash") != policy_hash(policies):
         return False, "candidate_policy_hash_mismatch"
+    if payload.get("source_report_schema") == "samsung_machine_entry_tuning_report_v9":
+        binding = payload.get("source_runtime_policy_binding")
+        if (
+            not isinstance(binding, dict)
+            or binding.get("source_date") != source_date.isoformat()
+        ):
+            return False, "candidate_actual_runtime_binding_missing"
+        if binding.get("status") not in {"ready", "missing_baseline_only", "invalid"}:
+            return False, "candidate_actual_runtime_binding_invalid"
+        starting = binding.get("policies")
+        if not isinstance(starting, dict) or set(starting) != set(BASELINE_POLICIES):
+            return False, "candidate_actual_runtime_machine_set_invalid"
+        for machine, policy in starting.items():
+            valid, reason = validate_machine_policy(machine, policy)
+            if not valid:
+                return False, f"candidate_actual_runtime_{reason}"
+        mutations = payload.get("policy_mutations")
+        if mutations != policy_mutations_between(starting, policies, include_kind=True):
+            return False, "candidate_actual_runtime_mutation_mismatch"
+        if any(item.get("kind") != "bounded_rollback" for item in mutations):
+            return False, "candidate_subset_tightening_authority_retired"
+        if mutations and binding.get("status") != "ready":
+            return False, "candidate_mutation_without_actual_runtime_policy"
+        if (
+            source_report is not None
+            and source_report.get("source_runtime_policy_binding") != binding
+        ):
+            return False, "candidate_actual_runtime_report_binding_mismatch"
+    if schema == CANDIDATE_SCHEMA:
+        if not _valid_sha256(payload.get("candidate_hash")):
+            return False, "candidate_hash_invalid"
+        if payload.get("candidate_hash") != candidate_artifact_hash(payload):
+            return False, "candidate_hash_mismatch"
+        if source_report is not None:
+            if source_report.get("artifact_hash") != report_artifact_hash(
+                source_report
+            ):
+                return False, "candidate_source_report_artifact_hash_invalid"
+            if (
+                source_report.get("schema") != payload.get("source_report_schema")
+                or source_report.get("target_date") != source_date.isoformat()
+                or source_report.get("artifact_hash")
+                != payload["source_report_binding"]["sha256"]
+            ):
+                return False, "candidate_source_report_artifact_mismatch"
+            if source_report.get("source_quality_preflight") != preflight:
+                return False, "candidate_source_quality_report_mismatch"
     return True, "valid"
 
 
@@ -330,8 +501,12 @@ def candidate_policies_with_current_baselines(
 
 
 def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
-    if not isinstance(payload, dict) or payload.get("schema") != APPLIED_SCHEMA:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") not in SUPPORTED_APPLIED_SCHEMAS
+    ):
         return False, "applied_schema_invalid"
+    schema = str(payload["schema"])
     if payload.get("target_date") != target_date.isoformat():
         return False, "applied_target_date_mismatch"
     if payload.get("runtime_effect") is not True:
@@ -345,7 +520,11 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
         "preopen_safe_baseline_fallback",
     }:
         return False, "applied_decision_authority_invalid"
-    valid, reason = _validate_policy_mutations(payload.get("policy_mutations"))
+    valid, reason = _validate_policy_mutations(
+        payload.get("policy_mutations"),
+        allow_bounded_rollback=schema == APPLIED_SCHEMA,
+        require_kind=schema == APPLIED_SCHEMA,
+    )
     if not valid:
         return False, reason
     machines = payload.get("machines")
@@ -364,6 +543,16 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
         policies[machine] = policy
     if payload.get("policy_hash") != policy_hash(policies):
         return False, "applied_policy_hash_mismatch"
+    if schema == APPLIED_SCHEMA and payload.get("decision_authority") == (
+        "auto_bounded_live_samsung_entry_policy"
+    ):
+        for key in (
+            "source_candidate_hash",
+            "source_report_hash",
+            "source_quality_artifact_hash",
+        ):
+            if not _valid_sha256(payload.get(key)):
+                return False, f"applied_{key}_invalid"
     return True, "valid"
 
 

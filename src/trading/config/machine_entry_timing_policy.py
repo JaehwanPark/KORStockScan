@@ -18,7 +18,8 @@ from src.trading.order.entry_liquidity_guard import (
     EXECUTABLE_MICRO_CONFIRMATION_MODE,
 )
 from src.trading.market.micro_confirmation import (
-    DEFAULT_DYNAMIC_CONFIRMATION_POLICY,
+    SAMSUNG_RISE_REBOUND_POLICY,
+    dynamic_policy_for_scope,
 )
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
@@ -47,6 +48,7 @@ DYNAMIC_MIN_PAIRED_COMPLETED_COVERAGE_PCT = 85.0
 DYNAMIC_MAX_RIGHT_CENSORED_RATE_PCT = 35.0
 DYNAMIC_REQUIRED_ROLLING_WINDOWS_DAYS = (5,)
 DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS = 1
+SAMSUNG_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS = 4
 DYNAMIC_MODE = "per_signal_dynamic_0_1_3_5"
 FIXED_DELAY_MODE = "fixed_delay"
 # Lower-price episode services poll every 6 seconds in the live launcher. Keep
@@ -103,6 +105,25 @@ def _next_krx_trading_day(source_date: date) -> date:
     while not is_krx_trading_day(candidate):
         candidate += timedelta(days=1)
     return candidate
+
+
+def dynamic_observation_lag(
+    latest: date | None, target: date, *, owner: str, scope_id: str, symbol: str
+) -> tuple[int | None, int]:
+    limit = (
+        SAMSUNG_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS
+        if dynamic_policy_for_scope(owner=owner, scope_id=scope_id, symbol=symbol)
+        == SAMSUNG_RISE_REBOUND_POLICY
+        else DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS
+    )
+    if latest is None or latest > target:
+        return None, limit
+    lag = 0
+    day = latest
+    while day < target and lag <= limit:
+        day = _next_krx_trading_day(day)
+        lag += 1
+    return (lag if day == target else None), limit
 
 
 def _evidence_integer(evidence: Mapping[str, Any], field: str) -> int:
@@ -208,17 +229,22 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
             return False, "entry_timing_policy_scope_contract_invalid"
         if confirmation_mode == DYNAMIC_MODE:
             dynamic_confirmation = row.get("dynamic_confirmation")
+            expected_policy = dynamic_policy_for_scope(
+                owner=owner, scope_id=scope_id, symbol=symbol
+            )
             if (
                 payload.get("schema") != SCHEMA
                 or not isinstance(dynamic_confirmation, dict)
                 or dynamic_confirmation.get("mode") != DYNAMIC_MODE
-                or dynamic_confirmation.get("policy_id")
-                != DEFAULT_DYNAMIC_CONFIRMATION_POLICY.policy_id
-                or dynamic_confirmation.get("policy")
-                != DEFAULT_DYNAMIC_CONFIRMATION_POLICY.as_dict()
+                or dynamic_confirmation.get("policy_id") != expected_policy.policy_id
+                or dynamic_confirmation.get("policy") != expected_policy.as_dict()
                 or dynamic_confirmation.get("checkpoints_sec") != [0, 1, 3, 5]
                 or dynamic_confirmation.get("source_gap_action")
-                != "baseline_owner_guard_revalidation"
+                != (
+                    "reject_unconfirmed_entry"
+                    if expected_policy == SAMSUNG_RISE_REBOUND_POLICY
+                    else "baseline_owner_guard_revalidation"
+                )
                 or dynamic_confirmation.get("source_schema")
                 != "machine_entry_confirmation_ws_snapshot_v1"
                 or dynamic_confirmation.get("exact_route_required") is not True
@@ -388,13 +414,15 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
                 if confirmation_mode == DYNAMIC_MODE
                 else MAX_RIGHT_CENSORED_RATE_PCT
             )
-            dynamic_latest_observation_fresh = bool(
-                latest_completed_observation_date == source_date
-                or (
-                    latest_completed_observation_date < source_date
-                    and _next_krx_trading_day(latest_completed_observation_date)
-                    == source_date
-                )
+            dynamic_lag, dynamic_lag_limit = dynamic_observation_lag(
+                latest_completed_observation_date,
+                source_date,
+                owner=owner,
+                scope_id=scope_id,
+                symbol=symbol,
+            )
+            dynamic_latest_observation_fresh = (
+                dynamic_lag is not None and dynamic_lag <= dynamic_lag_limit
             )
             if (
                 not isinstance(evidence, dict)

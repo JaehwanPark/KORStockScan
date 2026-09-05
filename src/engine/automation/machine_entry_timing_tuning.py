@@ -29,6 +29,8 @@ from src.trading.config.machine_entry_timing_policy import (
     DEFAULT_POLICY_DIR,
     DYNAMIC_MAX_RIGHT_CENSORED_RATE_PCT,
     DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS,
+    SAMSUNG_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS,
+    dynamic_observation_lag,
     DYNAMIC_MIN_COMPLETED_OUTCOMES,
     DYNAMIC_MIN_OBSERVED_DAYS,
     DYNAMIC_MIN_PAIRED_COMPLETED_COVERAGE_PCT,
@@ -58,7 +60,8 @@ from src.trading.config.machine_entry_timing_policy import (
 )
 from src.trading.market.micro_confirmation import (
     DYNAMIC_CONFIRMATION_METRIC_CONTRACT,
-    DEFAULT_DYNAMIC_CONFIRMATION_POLICY,
+    SAMSUNG_RISE_REBOUND_POLICY,
+    dynamic_policy_for_scope,
     build_dynamic_micro_confirmation_checkpoints,
     evaluate_dynamic_micro_confirmation,
     modeled_dynamic_target_price,
@@ -122,6 +125,7 @@ METRIC_CONTRACT = {
                 DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS
             ),
             "scope_cap": 1,
+            "samsung_rise_rebound_maximum_lag_trading_days": SAMSUNG_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS,
         },
     },
     "primary_decision_metric": "source_quality_adjusted_ev_pct",
@@ -235,16 +239,14 @@ def _source_reports(
         entry_policy_owner = decision_ownership.get("entry_timing_policy") or {}
         ownership_valid = bool(
             isinstance(decision_ownership, dict)
-            and decision_ownership.get("schema")
-            == SOURCE_DECISION_OWNERSHIP_SCHEMA
+            and decision_ownership.get("schema") == SOURCE_DECISION_OWNERSHIP_SCHEMA
             and isinstance(entry_source_owner, dict)
             and entry_source_owner.get("consumer") == "machine_entry_timing_tuning"
             and entry_source_owner.get("policy_selection_authority") is False
             and entry_source_owner.get("runtime_effect") is False
             and isinstance(entry_policy_owner, dict)
             and entry_policy_owner.get("owner") == "machine_entry_timing_tuning"
-            and entry_policy_owner.get("source_section")
-            == "micro_entry_confirmation"
+            and entry_policy_owner.get("source_section") == "micro_entry_confirmation"
             and entry_policy_owner.get("single_public_policy_owner") is True
         )
         valid = bool(
@@ -1009,7 +1011,14 @@ def _dynamic_modeled_target_price_for_row(
 def _dynamic_replay_contract_valid(
     *, row: dict[str, Any], replay: dict[str, Any]
 ) -> bool:
-    replay_valid, _ = validate_dynamic_micro_confirmation_replay(replay)
+    confirmation_policy = dynamic_policy_for_scope(
+        owner=str(row.get("owner") or ""),
+        scope_id=str(row.get("scope_id") or ""),
+        symbol=str(row.get("symbol") or ""),
+    )
+    replay_valid, _ = validate_dynamic_micro_confirmation_replay(
+        replay, policy=confirmation_policy
+    )
     signal_binding = replay.get("signal_binding")
     anchor_at = _aware(row.get("anchor_at"))
     binding_at = _aware(
@@ -1108,7 +1117,8 @@ def _dynamic_replay_contract_valid(
                 isinstance(outcome, dict)
                 and outcome.get("exit_reason") == "take_profit_fill"
             ),
-        )
+        ),
+        policy=confirmation_policy,
     )
     source_binding_fields = (
         "terminal_action",
@@ -1282,21 +1292,19 @@ def _evaluate_dynamic_cohort(
     ]
     observed_dates = sorted({item["source_date"] for item in observations})
     latest_observation_date = observed_dates[-1] if observed_dates else None
-    latest_observation_lag_trading_days = (
-        0
-        if latest_observation_date == target_date
-        else (
-            1
-            if latest_observation_date is not None
-            and latest_observation_date < target_date
-            and _next_trading_date(latest_observation_date) == target_date
-            else None
+    scope_row = cohort_rows[-1][1] if cohort_rows else {}
+    latest_observation_lag_trading_days, latest_observation_lag_limit = (
+        dynamic_observation_lag(
+            latest_observation_date,
+            target_date,
+            owner=str(scope_row.get("owner") or ""),
+            scope_id=str(scope_row.get("scope_id") or ""),
+            symbol=str(scope_row.get("symbol") or ""),
         )
     )
     latest_observation_fresh = bool(
         latest_observation_lag_trading_days is not None
-        and latest_observation_lag_trading_days
-        <= DYNAMIC_MAX_LATEST_OBSERVATION_LAG_TRADING_DAYS
+        and latest_observation_lag_trading_days <= latest_observation_lag_limit
     )
     first_scope_date = min(
         (source_date for source_date, _ in source_owner_rows), default=target_date
@@ -1439,7 +1447,7 @@ def _evaluate_dynamic_cohort(
             rolling_ready = rolling_ready and improved
     baseline_p10 = _percentile_10(baseline_values)
     candidate_p10 = _percentile_10(candidate_values)
-    ready = bool(
+    sample_and_source_ready = bool(
         len(observed_dates) >= DYNAMIC_MIN_OBSERVED_DAYS
         and duplicate_anchor_row_count == 0
         and invalid_anchor_identity_count == 0
@@ -1448,8 +1456,10 @@ def _evaluate_dynamic_cohort(
         and replay_coverage_rate >= DYNAMIC_MIN_REPLAY_COVERAGE_PCT
         and paired_coverage_rate >= DYNAMIC_MIN_PAIRED_COMPLETED_COVERAGE_PCT
         and right_censored_rate <= DYNAMIC_MAX_RIGHT_CENSORED_RATE_PCT
-        and latest_observation_fresh
-        and candidate_ev is not None
+        and runtime_cost_contract_ready
+    )
+    economics_ready = bool(
+        candidate_ev is not None
         and candidate_ev > 0
         and candidate_notional_weighted_ev is not None
         and candidate_notional_weighted_ev > 0
@@ -1467,8 +1477,8 @@ def _evaluate_dynamic_cohort(
         and candidate_p10 is not None
         and candidate_p10 >= baseline_p10 - MAX_P10_DETERIORATION_PCT
         and rolling_ready
-        and runtime_cost_contract_ready
     )
+    ready = sample_and_source_ready and economics_ready and latest_observation_fresh
     action_counts = {
         action: sum(item["terminal_action"] == action for item in observations)
         for action in ("ENTER", "REJECT")
@@ -1486,6 +1496,26 @@ def _evaluate_dynamic_cohort(
     }
     return {
         "schema": "machine_per_signal_dynamic_confirmation_ev_v2",
+        "condition_feasibility": {
+            "sample_and_source_ready": sample_and_source_ready,
+            "positive_improved_economics_ready": economics_ready,
+            "latest_observation_fresh": latest_observation_fresh,
+            "state": (
+                "candidate_ready"
+                if ready
+                else (
+                    "economic_hypothesis_not_supported"
+                    if sample_and_source_ready and not economics_ready
+                    else (
+                        "fresh_natural_observation_required"
+                        if sample_and_source_ready
+                        else "sample_or_source_contract_incomplete"
+                    )
+                )
+            ),
+            "waiting_alone_guarantees_approval": False,
+            "control_positive_ev_required": False,
+        },
         "decision": (
             "source_only_candidate_ready"
             if ready
@@ -1497,6 +1527,7 @@ def _evaluate_dynamic_cohort(
         ),
         "target_date_in_completed_observations": target_date in observed_dates,
         "latest_observation_lag_trading_days": (latest_observation_lag_trading_days),
+        "maximum_latest_observation_lag_trading_days": latest_observation_lag_limit,
         "latest_observation_fresh_for_bounded_canary": latest_observation_fresh,
         "source_available_trading_days_since_scope_start": len(rolling_calendar_dates),
         "unique_decision_lifecycles": len(lifecycles),
@@ -1795,6 +1826,7 @@ def _cohort_sample_floor_assessment(
     cohort_rows: list[tuple[date, dict[str, Any]]],
     alternatives: list[dict[str, Any]],
     source_report_dates: set[date],
+    dynamic_evaluation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Separate source/terminal defects from normal exact-scope accumulation."""
 
@@ -1824,11 +1856,16 @@ def _cohort_sample_floor_assessment(
         (int(row.get("observed_trading_days") or 0) for row in alternatives),
         default=0,
     )
-    remaining = max(MIN_COMPLETED_OUTCOMES - completed_count, 0)
+    completed_floor = MIN_COMPLETED_OUTCOMES
+    if dynamic_evaluation is not None:
+        completed_count = int(dynamic_evaluation["completed_outcome_count"])
+        observed_days = int(dynamic_evaluation["observed_trading_days"])
+        completed_floor = DYNAMIC_MIN_COMPLETED_OUTCOMES
+    remaining = max(completed_floor - completed_count, 0)
     completed_per_source_day = (
         completed_count / len(eligible_source_dates) if eligible_source_dates else 0.0
     )
-    if completed_count >= MIN_COMPLETED_OUTCOMES:
+    if completed_count >= completed_floor:
         state = "sample_floor_met"
         projected_days = 0
     elif policy_eligible_count == 0 and blocked_count > 0:
@@ -1875,7 +1912,10 @@ def _cohort_sample_floor_assessment(
         "source_quality_eligible_anchor_count": policy_eligible_count,
         "completed_outcome_count": completed_count,
         "observed_trading_days": observed_days,
-        "completed_outcome_floor": MIN_COMPLETED_OUTCOMES,
+        "completed_outcome_floor": completed_floor,
+        "confirmation_mode": (
+            DYNAMIC_MODE if dynamic_evaluation is not None else FIXED_DELAY_MODE
+        ),
         "remaining_completed_outcome_count": remaining,
         "completed_outcomes_per_source_day": round(completed_per_source_day, 8),
         "projected_additional_trading_days_at_observed_yield": projected_days,
@@ -1946,8 +1986,7 @@ def _report_sample_floor_assessment(
         for row in target_blocked_rows
     )
     policy_ineligible_anchor_count = sum(
-        row.get("owner_policy_tuning_eligible") is False
-        for row in target_blocked_rows
+        row.get("owner_policy_tuning_eligible") is False for row in target_blocked_rows
     )
     immutable_source_date_quarantine_eligible = bool(
         target_actual_rows
@@ -2121,6 +2160,12 @@ def build_report(
             for delay in DELAYS_SEC
         ]
         ready_alternatives = [item for item in alternatives if item["ready"]]
+        if (
+            dynamic_policy_for_scope(owner=owner, scope_id=scope_id, symbol=symbol)
+            == SAMSUNG_RISE_REBOUND_POLICY
+        ):
+            # Fixed waiting/non-deterioration is not affirmative rise/rebound.
+            ready_alternatives = []
         selected = max(
             ready_alternatives,
             key=lambda item: (
@@ -2149,6 +2194,14 @@ def build_report(
                 cohort_rows=rows,
                 alternatives=alternatives,
                 source_report_dates=source_report_dates,
+                dynamic_evaluation=(
+                    dynamic_confirmation
+                    if dynamic_policy_for_scope(
+                        owner=owner, scope_id=scope_id, symbol=symbol
+                    )
+                    == SAMSUNG_RISE_REBOUND_POLICY
+                    else None
+                ),
             ),
         }
         cohorts.append(cohort)
@@ -2390,14 +2443,23 @@ def build_applied_policy(
             "rollback": "next_exact_date_baseline_immediate_on_any_floor_failure",
         }
         if confirmation_mode == DYNAMIC_MODE:
+            confirmation_policy = dynamic_policy_for_scope(
+                owner=winner["owner"],
+                scope_id=winner["scope_id"],
+                symbol=winner["symbol"],
+            )
             scope_payload["dynamic_confirmation"] = {
                 "mode": DYNAMIC_MODE,
-                "policy_id": DEFAULT_DYNAMIC_CONFIRMATION_POLICY.policy_id,
-                "policy": DEFAULT_DYNAMIC_CONFIRMATION_POLICY.as_dict(),
+                "policy_id": confirmation_policy.policy_id,
+                "policy": confirmation_policy.as_dict(),
                 "checkpoints_sec": [0, 1, 3, 5],
                 "source_schema": "machine_entry_confirmation_ws_snapshot_v1",
                 "exact_route_required": True,
-                "source_gap_action": "baseline_owner_guard_revalidation",
+                "source_gap_action": (
+                    "reject_unconfirmed_entry"
+                    if confirmation_policy == SAMSUNG_RISE_REBOUND_POLICY
+                    else "baseline_owner_guard_revalidation"
+                ),
                 "source_gap_is_adverse_signal": False,
                 "quantity_effect": False,
                 "price_effect": False,
@@ -2590,9 +2652,11 @@ def main(argv: list[str] | None = None) -> int:
                     "winner": report.get("runtime_winner"),
                     "fixed_delay_diagnostic_winner": report.get("winner"),
                     "policy_publication": publication,
-                    "paths": [str(path) for path in paths if path is not None]
-                    if paths
-                    else [],
+                    "paths": (
+                        [str(path) for path in paths if path is not None]
+                        if paths
+                        else []
+                    ),
                 },
                 ensure_ascii=False,
             )

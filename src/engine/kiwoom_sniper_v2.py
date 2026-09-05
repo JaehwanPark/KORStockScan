@@ -12133,7 +12133,8 @@ def run_sniper(is_test_mode=False):
             sniper_state_handlers.observe_smoothing_source_only_paths_cycle(
                 targets,
                 now_ts=now_ts,
-            )
+            ),
+            sniper_state_handlers.observe_avg_down_exit_replay_cycle(now_ts=now_ts),
         ),
         interval_sec=min(0.25, fast_exit_interval_sec),
         error_handler=lambda message: log_error(

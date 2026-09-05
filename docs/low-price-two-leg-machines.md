@@ -412,8 +412,10 @@ broker state and its own prior reports.  It never re-queries historical prices
 and never pools different symbols or sessions.  Its sole decision window is
 `clean_baseline_cumulative`: every available actual-state daily observation
 from `2026-06-05` through the target date, including explicit reconciliation
-of a carried episode to its original trade date, with notional-weighted EV as
-the primary metric.  Trading dates before machine observation began, or dates
+of a carried episode to its original trade date. Its primary selection metric is
+cost-adjusted net profit per source-valid observation day; notional-weighted EV,
+attempt frequency, and return per occupied capital-hour remain mandatory
+secondary diagnostics. Trading dates before machine observation began, or dates
 without an observation, are disclosed as coverage gaps but are not imputed as
 outcomes and are not backfilled from historical market replay.
 
@@ -441,7 +443,7 @@ From `2026-08-14`, each attempted row must match the exact-date PREOPEN applied
 policy hash and fields. Target validation uses that applied policy, so the
 historical Kakao morning +3-tick target is not compared with a different policy
 generation. New target reconciliations persist broker `kt00007.cntr_uv`;
-only broker-priced completed legs contribute to decision EV and its 20-leg floor.
+only broker-priced completed legs contribute to decision EV and its eight-leg floor.
 Older configured-target proxy results remain separately labeled diagnostics.
 The postclose producer also reads the official account realized-PnL endpoint
 `ka10073` for realization-days that contain a completed episode. The
@@ -463,18 +465,29 @@ being discarded when an older report used a different fixed cost.
 An attempted episode with any held or unresolved leg remains visible as
 inventory risk but the entire episode, including an already completed sibling
 leg, stays outside decision EV until both legs are terminal. Samsung and
-lower-price tuners use this same complete-episode rule. After at least 20
-completed legs in that clean-baseline actual-observation window,
-positive current and candidate EV, and no held/unresolved inventory, one
-profile may propose one tightening axis for the next PREOPEN:
+lower-price tuners use this same complete-episode rule. From report v7 / candidate
+v3, the five attempted-day/eight broker-priced-leg/+0.005%p subset checks are
+diagnostics, not new live promotion authority. A profitable historical subset
+does not reconstruct a later first signal or its fill/custody path. The candidate
+now preserves the source date's actually applied policy, binding its full artifact
+hash and the source report/quality snapshot. It never treats an unconsumed prior
+candidate as the current policy. With no applied source it may carry compiled
+baselines only. New subset mutations, hidden policy changes, and schema downgrade
+after 2026-09-04 fail closed; legacy nonbaseline proposals cannot create new live
+authority from 2026-09-07.
+
+The existing expanded research producer owns the source-only
+`existing_axis_economic_replay` comparison for the same two bounded axes:
 
 - drawdown from the profile baseline to at most `baseline + 0.25%p`, or
 - near-low proximity from the profile baseline to at most `baseline - 0.10%p`.
 
-Across all fifty-three profiles and the existing Samsung regular machines, at most one
-profile/machine and one entry axis may change per day.  The Samsung candidate is
-produced first; if it owns a valid mutation, or its same-date candidate is
-invalid, the lower-price family carries all policies forward. Quantity is fixed
+It preserves scan window, lookback, quantity, offsets, target, and entry validity;
+compares the same observation dates/cost contract; and captures current/candidate
+raw episode paths. The subset producer has no new tightening authority even if
+its diagnostic floors pass. Source-only replay does not itself authorize a real
+policy change. Existing Samsung/entry-timing same-stage guards remain independent;
+no second entry tuning owner is created. Quantity is fixed
 at 10 shares per leg (20 total) by explicit operator authority; each
 profile's frozen 50:50 entry offsets, target ticks, entry validity, route, stop/hold
 behavior, provider, bot, cap, and broker guards are immutable.  Each preflight
@@ -524,12 +537,23 @@ immutable 46-profile generation; existing orders and held custody retain their
 original signal-date policy snapshot across the 48-profile transition.
 
 The 2026-09-04 user-approved recommendation set becomes the 2026-09-07
-53-profile generation. It replaces eight existing profile policies and adds
-five time-extension profiles. PREOPEN revalidates the frozen 13-row evidence
-and its source-report hash, while the five new timers are enabled separately.
-Every new signal still uses two independent ten-share legs. Existing orders
-and held inventory retain their signal-date policy and are never canceled,
-resized, or retargeted by this generation transition.
+53-profile policy generation. It replaces eight existing profile policies and
+adds five time-extension profiles. PREOPEN revalidates the frozen 13-row
+evidence, its source-report hash, and every calibration half/holdout/full result
+under the shared `0.23%` round-trip cost contract. Three profiles remain explicitly
+quarantined, leaving 50 loader-ready profiles, not proof of 50 actual executions.
+`cj_cgv_morning` and `youngone_midday` have positive full/calibration/holdout EV but
+one nonpositive half: their status is
+`research_half_robustness_review_requires_new_profile_revision`.
+`sk_telecom_midday` also has negative full/holdout economics and remains an
+economic rejection. The immutable existing approval/exclusion generation is not
+silently changed when a source-only research rule is improved. Quarantined
+loaders return a terminal non-retryable reason before
+broker-gateway construction; a future release requires a new user-approved
+positive evidence generation. Every permitted new signal still uses two
+independent ten-share legs. Existing orders and held inventory retain their
+signal-date policy and are never canceled, resized, or retargeted by this
+generation transition.
 
 ## Daily implementation-candidate recommendation
 
@@ -542,6 +566,16 @@ set with up to five source-qualified dynamic seeds from the latest completed
 daily recommendation snapshot, with all four supported regular-session lanes
 evaluated separately.
 
+Minute-history collection uses the official Kiwoom `ka10080` contract (`POST
+/api/dostk/chart`, `api-id=ka10080`, integrated-SOR `{symbol}_AL`) verified at
+upstream commit `234560d213acd8871ae344b5481aecd2f30287fa`. Each symbol/date
+range is stored as a request-contract- and content-hash-bound checkpoint.
+Shared-read deferral retries the same continuation page within a bounded wait;
+if still deferred, the postclose wrapper exits with a resumable code, preserves
+completed symbol checkpoints and any prior valid report, and retries at most
+three wrapper attempts. A changed request contract, upstream reference, date
+range, or bar-content hash invalidates the checkpoint.
+
 A separate existing-symbol time-extension lane evaluates only supported
 midday/afternoon sessions that have no active profile for that symbol. Active
 symbol/session pairs are excluded rather than retuned through this discovery
@@ -549,8 +583,21 @@ producer. Active symbol/session pairs are excluded, while unimplemented
 midday/afternoon windows for the newly added symbols remain eligible for the
 separate time-extension lane.
 
+Research v3 / expanded recommendation v6 preserve HELD inventory across dates
+and across calibration-half/holdout boundaries. A later minute-bar target touch
+cannot close a HELD position because the real machine requires external custody
+resolution, not automatic retargeting. Missing resolution blocks later synthetic
+entries and is explicit `custody_resolution_required`, never an invented exit.
+The current and selected full paths are retained separately. Both use the same
+observation-day denominator. Selection ranks calibration net profit/day with EV
+and robustness diagnostics; holdout must improve same-window net profit and keep
+positive EV. Higher per-trade EV with lower total profit is not an improvement.
+All-half-positive and per-half three-leg floors are removed from new research
+selection; whole calibration and untouched holdout floors/positive economics and
+the carry-risk guard remain. Legacy frozen live approval contracts are separate.
+
 Only profiles with matching source-qualified trading dates, positive
-notional-weighted holdout EV, the required calibration/holdout sample floors,
+notional-weighted holdout EV under the shared `0.23%` cost contract, the required calibration/holdout sample floors,
 the bounded no-stop carry budget, and a latest close at or below KRW 100,000
 enter the ranked recommendation list. The JSON and Markdown report are atomically written before
 an `ADMIN_ONLY` Telegram message is attempted. Delivery retries up to three

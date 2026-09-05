@@ -594,6 +594,20 @@ def test_postclose_wrapper_runs_daily_low_price_candidate_recommendation_and_adm
         "low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION"
         in script
     )
+    assert "low_price_resume_attempt=1" in script
+    assert '[ "$low_price_resume_rc" -ne 75 ]' in script
+    assert '[ "$low_price_resume_attempt" -ge 3 ]' in script
+    assert "shared_read_deferred_resume" in script
+
+
+def test_low_price_preflight_does_not_retry_terminal_cost_quarantine():
+    script = Path("deploy/run_low_price_two_leg_preflight.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert '[ "$preflight_rc" -eq 4 ]' in script
+    assert "preflight terminal quarantine" in script
+    assert "exit 4" in script
 
 
 def test_postclose_wrapper_defers_machine_microstructure_to_final_refresh_owner():
@@ -665,9 +679,7 @@ def test_postclose_wrapper_defers_machine_microstructure_to_final_refresh_owner(
 
 
 def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(
-        encoding="utf-8"
-    )
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert (
         'RUN_MAIN_AI_PROMPT_OPTIMIZER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_OPTIMIZER:-$RUN_MAIN_AI_QUALITY_R0_R3}"'
@@ -1158,9 +1170,7 @@ def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path
                 ],
             },
             "holding_base": {
-                "path_status": (
-                    "intentionally_blocked_with_owner_and_acceptance_test"
-                ),
+                "path_status": ("intentionally_blocked_with_owner_and_acceptance_test"),
                 "cohorts": [
                     {
                         "path_status": (
@@ -1946,9 +1956,7 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     optimizer_refresh_index = runner.index(
         "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
     )
-    rebound_batch_index = runner.index(
-        "run_entry_batch", optimizer_refresh_index
-    )
+    rebound_batch_index = runner.index("run_entry_batch", optimizer_refresh_index)
     holding_manifest_index = runner.index(
         "-m src.engine.scalping.main_ai_holding_base_replay_batch"
     )
@@ -1958,10 +1966,7 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "--write" in runner
     assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
     assert 'MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"' in runner
-    assert (
-        'if [ "$failure_stage" = "entry_batch" ] && [ "$batch_rc" -eq 3 ]'
-        in runner
-    )
+    assert 'if [ "$failure_stage" = "entry_batch" ] && [ "$batch_rc" -eq 3 ]' in runner
     assert 'failure_stage="consumer_refresh"' in runner
     assert "AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200" in runner
     assert "predecessor bounded wait exhausted" in runner
@@ -1980,14 +1985,14 @@ def test_entry_setup_runner_retries_consumer_nonterminal_without_mislabeling_pre
     fake_python.write_text(
         "#!/usr/bin/env bash\n"
         "set -eu\n"
-        "case \" $* \" in\n"
-        "  *\" src.engine.scalping.main_ai_prompt_consumer \"*)\n"
+        'case " $* " in\n'
+        '  *" src.engine.scalping.main_ai_prompt_consumer "*)\n'
         f"    count_file={count_path!s}\n"
         "    count=0\n"
-        "    if [ -f \"$count_file\" ]; then count=$(tr -d '\\n' < \"$count_file\"); fi\n"
+        '    if [ -f "$count_file" ]; then count=$(tr -d \'\\n\' < "$count_file"); fi\n'
         "    count=$((count + 1))\n"
-        "    echo \"$count\" > \"$count_file\"\n"
-        "    if [ \"$count\" -eq 1 ]; then exit 3; fi\n"
+        '    echo "$count" > "$count_file"\n'
+        '    if [ "$count" -eq 1 ]; then exit 3; fi\n'
         "    ;;\n"
         "esac\n"
         "exit 0\n",

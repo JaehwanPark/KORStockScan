@@ -9,11 +9,13 @@ clean-baseline calibration day; the final 16 days remain untouched holdout data.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
+import math
 import os
 import tempfile
 import time as time_module
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -21,18 +23,33 @@ from typing import Any, Callable
 import requests
 
 from src.trading.low_price_two_leg.profiles import PROFILES, MachineProfile
+from src.trading.low_price_two_leg.economics import ROUND_TRIP_COST_PCT
 from src.trading.order.regular_two_leg_machine import KST
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_ticks
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-REPORT_SCHEMA = "low_price_two_leg_entry_spot_research_v2"
+REPORT_SCHEMA = "low_price_two_leg_entry_spot_research_v3"
+ECONOMIC_REPLAY_CONTRACT = "low_price_two_leg_continuous_custody_economics_v1"
+ECONOMIC_METRIC_CONTRACT = {
+    "metric_role": "existing_axis_paired_economic_research",
+    "decision_authority": "source_only_no_runtime_or_order_authority",
+    "window_policy": "same_clean_prefix_custody_same_observation_dates",
+    "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+    "primary_decision_metric": "notional_weighted_ev_pct",
+    "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+    "forbidden_uses": [
+        "real_fill_evidence",
+        "standalone_live_promotion",
+        "held_as_realized_pnl",
+    ],
+}
 OUTPUT_DIR = DATA_DIR / "report" / "low_price_two_leg_entry_spot_research"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 DEFAULT_END_DATE = date(2026, 8, 10)
 CALIBRATION_DAYS = 30
 HOLDOUT_DAYS = 16
-COST_PCT = 0.20
+COST_PCT = ROUND_TRIP_COST_PCT
 LOOKBACK_GRID = (15, 20, 30, 45, 60)
 DRAWDOWN_GRID = (0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00, 2.50, 3.00)
 NEAR_LOW_GRID = (0.05, 0.10, 0.20, 0.35, 0.50, 0.75)
@@ -50,12 +67,13 @@ MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT = 3.0
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
-    "retrieved_at_kst": "2026-09-03T12:04:23+09:00",
+    "retrieved_at_kst": "2026-09-05T21:30:56+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
         "kiwoom/core/errors.py",
         "postman/kiwoom-openapi.postman_collection.json",
+        "examples/국내주식/차트/get_domestic_stock_minute_chart.py",
     ],
     "request_contract": "POST /api/dostk/chart; api-id=ka10080",
 }
@@ -66,7 +84,6 @@ METRIC_CONTRACT = {
     "sample_floor": {
         "calibration_signal_episodes": 6,
         "calibration_completed_legs": 8,
-        "each_calibration_half_completed_legs": 3,
         "holdout_signal_episodes": 3,
         "holdout_completed_legs": 4,
         "full_window_completed_legs": 10,
@@ -95,6 +112,10 @@ METRIC_CONTRACT = {
 
 class ResearchError(RuntimeError):
     """Raised when read-only source or research contracts fail closed."""
+
+
+class ResearchDeferred(ResearchError):
+    """Raised when a bounded shared-read wait must resume in a later attempt."""
 
 
 @dataclass(frozen=True)
@@ -194,6 +215,9 @@ def fetch_sor_history(
     allowed_symbols: frozenset[str] | None = None,
     expected_trading_day_count: int = CALIBRATION_DAYS + HOLDOUT_DAYS,
     shared_read_control_enabled: bool | None = None,
+    shared_defer_max_attempts: int = 12,
+    shared_defer_delay_sec: float = 2.0,
+    sleeper: Callable[[float], None] = time_module.sleep,
 ) -> tuple[list[Bar], dict[str, Any]]:
     """Fetch fully bracketed integrated-SOR regular bars without auth mutation."""
     symbol_allowlist = allowed_symbols or frozenset(
@@ -221,6 +245,8 @@ def fetch_sor_history(
     page_count = 0
     start_date_fully_bracketed = False
     continuation_exhausted = False
+    shared_read_deferred_count = 0
+    shared_read_deferred_wait_sec = 0.0
     shared_read_control = (
         post is requests.post
         if shared_read_control_enabled is None
@@ -228,17 +254,29 @@ def fetch_sor_history(
     )
     for page_index in range(max(1, int(max_pages))):
         if shared_read_control:
-            admission = kiwoom_utils.acquire_kiwoom_read_capacity(
-                token=clean_token,
-                endpoint=url,
-                request_owner="low_price_two_leg_entry_spot_research",
-                request_class="source_only",
-                api_id="ka10080",
-                request_code=request_code,
-                max_wait_sec=1.25,
-            )
+            admission = None
+            for deferred_attempt in range(max(0, int(shared_defer_max_attempts)) + 1):
+                admission = kiwoom_utils.acquire_kiwoom_read_capacity(
+                    token=clean_token,
+                    endpoint=url,
+                    request_owner="low_price_two_leg_entry_spot_research",
+                    request_class="source_only",
+                    api_id="ka10080",
+                    request_code=request_code,
+                    max_wait_sec=1.25,
+                )
+                if admission.admitted:
+                    break
+                shared_read_deferred_count += 1
+                if deferred_attempt >= max(0, int(shared_defer_max_attempts)):
+                    break
+                delay = max(0.0, float(shared_defer_delay_sec))
+                if delay:
+                    sleeper(delay)
+                    shared_read_deferred_wait_sec += delay
+            assert admission is not None
             if not admission.admitted:
-                raise ResearchError(
+                raise ResearchDeferred(
                     f"ka10080_shared_read_rate_deferred:{admission.reason}"
                 )
         response = post(
@@ -368,6 +406,8 @@ def fetch_sor_history(
         "duplicate_row_count": duplicate_row_count,
         "out_of_session_row_count": out_of_session_row_count,
         "source_quality_status": source_quality_status,
+        "shared_read_deferred_count": shared_read_deferred_count,
+        "shared_read_deferred_wait_sec": round(shared_read_deferred_wait_sec, 3),
     }
     if source_quality_status != "PASS":
         raise ResearchError(f"{symbol}_source_quality_{source_quality_status.lower()}")
@@ -544,7 +584,16 @@ def _episode(
     ) == ((0, -1), 5, 2):
         cached = context.outcome_cache.get(signal.index)
     if cached is not None:
-        return cached
+        # Execution prices may share a cache across lookbacks, but the signal
+        # features belong to this candidate's prefix, not the first cache user.
+        return {
+            **cached,
+            "date": context.trade_date.isoformat(),
+            "signal_at": signal.timestamp.isoformat(),
+            "signal_close": signal.close_price,
+            "observed_drawdown_pct": round(signal.drawdown_pct, 6),
+            "observed_near_low_pct": round(signal.near_low_pct, 6),
+        }
     close = clamp_price_to_tick(signal.close_price)
     fill_bars = context.bars[
         signal.index + 1 : signal.index + 1 + candidate.entry_valid_completed_bars
@@ -645,9 +694,44 @@ def evaluate_candidate(
     *,
     include_episodes: bool = False,
 ) -> dict[str, Any]:
+    if (
+        not dates
+        or len(dates) != len(set(dates))
+        or any(day not in contexts for day in dates)
+    ):
+        raise ResearchError("economic_replay_observation_dates_invalid")
+    if any(day < CLEAN_BASELINE_DATE for day in contexts):
+        raise ResearchError("economic_replay_prebaseline_context_forbidden")
+    requested_dates = set(dates)
+    last_date = max(dates)
     episodes: list[dict[str, Any]] = []
-    for trade_date in dates:
+    blocked_dates: list[str] = []
+    carried: dict[str, Any] | None = None
+    # Start at the clean prefix even for a half/holdout view. Otherwise slicing
+    # the window would erase the inventory that prevented the next entry.
+    for trade_date in sorted(day for day in contexts if day <= last_date):
         context = contexts[trade_date]
+        if carried is not None:
+            if trade_date in requested_dates:
+                blocked_dates.append(trade_date.isoformat())
+            # The live machine does not retarget HELD legs from a future bar
+            # touch. Only an external custody resolution can close them.
+            for leg in carried["legs"]:
+                if leg["status"] != "HELD" or not context.bars:
+                    continue
+                price = int(leg["entry_price"])
+                leg["holding_completed_bars"] = int(
+                    leg.get("holding_completed_bars", 0)
+                ) + len(context.bars)
+                leg["mark_price"] = context.bars[-1].close_price
+                leg["active_unrealized_pct"] = round(
+                    (leg["mark_price"] / price - 1) * 100 - COST_PCT, 6
+                )
+                leg["max_adverse_excursion_pct"] = min(
+                    float(leg.get("max_adverse_excursion_pct", 0)),
+                    (min(bar.low_price for bar in context.bars) / price - 1) * 100,
+                )
+            continue
         signal = next(
             (
                 item
@@ -661,10 +745,41 @@ def evaluate_candidate(
             None,
         )
         if signal is not None:
-            episodes.append(_episode(context, signal, candidate))
+            episode = _episode(context, signal, candidate)
+            if any(leg["status"] == "HELD" for leg in episode["legs"]):
+                episode = deepcopy(episode)
+                carried = episode
+            if trade_date in requested_dates:
+                episodes.append(episode)
     result = _summary(episodes)
+    result.update(
+        {
+            "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
+            "metric_contract": ECONOMIC_METRIC_CONTRACT,
+            "source_valid_observation_days": len(dates),
+            "observation_dates": [day.isoformat() for day in sorted(dates)],
+            "cost_pct": COST_PCT,
+            "cost_adjusted_net_profit_krw_per_source_valid_observation_day": round(
+                result["realized_net_profit_krw"] / len(dates), 8
+            ),
+            "attempted_episodes_per_source_valid_observation_day": round(
+                len(episodes) / len(dates), 8
+            ),
+            "custody_blocked_dates": blocked_dates,
+            "custody_resolution_required": carried is not None,
+            "carry_in_held_legs": (
+                sum(leg["status"] == "HELD" for leg in (carried or {}).get("legs", []))
+                if carried and carried["date"] < min(dates).isoformat()
+                else 0
+            ),
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "decision_authority": "source_only_no_runtime_or_order_authority",
+        }
+    )
     if include_episodes:
-        result["episodes"] = episodes
+        result["episodes"] = deepcopy(episodes)
     return result
 
 
@@ -679,10 +794,7 @@ def _calibration_ready(
     return bool(
         _calibration_sample_ready(full, first, second)
         and _manageable_carry(full)
-        and _manageable_carry(first)
-        and _manageable_carry(second)
-        and _positive_ev(first)
-        and _positive_ev(second)
+        and _positive_ev(full)
     )
 
 
@@ -701,21 +813,182 @@ def _manageable_carry(summary: dict[str, Any]) -> bool:
 def _calibration_sample_ready(
     full: dict[str, Any], first: dict[str, Any], second: dict[str, Any]
 ) -> bool:
-    return bool(
-        full["signal_episodes"] >= 6
-        and full["completed_legs"] >= 8
-        and first["completed_legs"] >= 3
-        and second["completed_legs"] >= 3
-    )
+    return bool(full["signal_episodes"] >= 6 and full["completed_legs"] >= 8)
 
 
 def _robust_score(first: dict[str, Any], second: dict[str, Any]) -> float:
     values = []
     for summary in (first, second):
         completed = int(summary["completed_legs"])
-        ev = float(summary["notional_weighted_ev_pct"])
+        ev = float(summary.get("notional_weighted_ev_pct") or 0.0)
         values.append(ev * completed / (completed + 6.0))
     return min(values)
+
+
+def paired_economics(current: dict, candidate: dict) -> dict:
+    """Compare the same observation window, not just profitable trade averages."""
+    days = current.get("source_valid_observation_days")
+    observed_dates = current.get("observation_dates")
+    valid = bool(
+        isinstance(days, int)
+        and not isinstance(days, bool)
+        and days > 0
+        and isinstance(observed_dates, list)
+        and all(isinstance(day, str) for day in observed_dates)
+        and len(observed_dates) == len(set(observed_dates)) == days
+        and days == candidate.get("source_valid_observation_days")
+        and current.get("observation_dates")
+        and current.get("observation_dates") == candidate.get("observation_dates")
+        and current.get("cost_pct") == candidate.get("cost_pct") == COST_PCT
+        and current.get("economic_replay_contract")
+        == candidate.get("economic_replay_contract")
+        == ECONOMIC_REPLAY_CONTRACT
+    )
+    current_net = current.get(
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+    )
+    candidate_net = candidate.get(
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+    )
+    try:
+        uplift = (
+            float(candidate_net) - float(current_net)
+            if valid and current_net is not None and candidate_net is not None
+            else None
+        )
+    except (TypeError, ValueError, OverflowError):
+        valid, uplift = False, None
+    if uplift is None or not math.isfinite(uplift):
+        valid, uplift = False, None
+    return {
+        "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
+        "comparable_observation_window": valid,
+        "net_profit_uplift_krw_per_observation_day": uplift,
+        "net_profit_improved": bool(uplift is not None and uplift > 1e-9),
+        "current_attempt_frequency": current.get(
+            "attempted_episodes_per_source_valid_observation_day"
+        ),
+        "candidate_attempt_frequency": candidate.get(
+            "attempted_episodes_per_source_valid_observation_day"
+        ),
+        "runtime_effect": False,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+    }
+
+
+def existing_axis_economic_replay(
+    profile: MachineProfile, contexts: dict[date, DayContext]
+) -> dict:
+    """Replay only the two existing filter axes; all execution fields stay fixed."""
+    baseline = baseline_candidate(profile)
+    dates = sorted(contexts)
+    from src.trading.low_price_two_leg.policy_runtime import (
+        policy_bounds_for_target_date,
+    )
+
+    profile_id = profile.profile_id.removeprefix("logic_")
+    bounds = policy_bounds_for_target_date(dates[-1]).get(profile_id)
+    if bounds is None:
+        raise ResearchError("existing_axis_replay_unknown_live_profile")
+    current = evaluate_candidate(baseline, contexts, dates, include_episodes=True)
+    alternatives = []
+    for axis, after in (
+        ("rolling_high_drawdown_pct", bounds["drawdown_max"]),
+        ("rolling_low_proximity_pct", bounds["near_low_min"]),
+    ):
+        if after == getattr(baseline, axis):
+            continue
+        candidate = replace(baseline, **{axis: after})
+        outcome = evaluate_candidate(candidate, contexts, dates, include_episodes=True)
+        comparison = paired_economics(current, outcome)
+        alternatives.append(
+            {
+                "axis": axis,
+                "before": getattr(baseline, axis),
+                "after": after,
+                "parameters": candidate.public(),
+                "outcome": outcome,
+                "comparison": comparison,
+                "decision": (
+                    "hold_source_gap_external_custody_resolution"
+                    if current["custody_resolution_required"]
+                    or outcome["custody_resolution_required"]
+                    else (
+                        "source_only_positive_path_requires_confirmation"
+                        if comparison["net_profit_improved"] and _positive_ev(outcome)
+                        else "hold_no_edge"
+                    )
+                ),
+            }
+        )
+    return {
+        "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
+        "metric_contract": ECONOMIC_METRIC_CONTRACT,
+        "current_parameters": baseline.public(),
+        "current_outcome": current,
+        "alternatives": alternatives,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+    }
+
+
+def valid_existing_axis_economic_replay(replay: Any) -> bool:
+    """Check the source-only handoff without granting it execution authority."""
+    if not isinstance(replay, dict):
+        return False
+    if replay.get("status") == "source_runtime_policy_unavailable":
+        return (
+            replay.get("runtime_effect") is False
+            and replay.get("allowed_runtime_apply") is False
+        )
+    if (
+        replay.get("economic_replay_contract") != ECONOMIC_REPLAY_CONTRACT
+        or replay.get("metric_contract") != ECONOMIC_METRIC_CONTRACT
+        or replay.get("runtime_effect") is not False
+        or replay.get("allowed_runtime_apply") is not False
+        or replay.get("actual_order_submitted") is not False
+        or replay.get("broker_order_forbidden") is not True
+        or replay.get("decision_authority")
+        != "source_only_no_runtime_or_order_authority"
+    ):
+        return False
+    current = replay.get("current_outcome")
+    parameters = replay.get("current_parameters")
+    alternatives = replay.get("alternatives")
+    if (
+        not isinstance(current, dict)
+        or not isinstance(current.get("episodes"), list)
+        or not isinstance(parameters, dict)
+        or not isinstance(alternatives, list)
+        or len(alternatives) > 2
+    ):
+        return False
+    seen = set()
+    for item in alternatives:
+        if not isinstance(item, dict):
+            return False
+        axis = item.get("axis")
+        if (
+            axis not in {"rolling_high_drawdown_pct", "rolling_low_proximity_pct"}
+            or axis in seen
+        ):
+            return False
+        seen.add(axis)
+        outcome = item.get("outcome")
+        expected = {**parameters, axis: item.get("after")}
+        if (
+            item.get("parameters") != expected
+            or item.get("before") != parameters.get(axis)
+            or not isinstance(outcome, dict)
+            or not isinstance(outcome.get("episodes"), list)
+            or item.get("comparison") != paired_economics(current, outcome)
+            or not item["comparison"]["comparable_observation_window"]
+        ):
+            return False
+    return True
 
 
 def select_profile_spot(
@@ -777,13 +1050,24 @@ def select_profile_spot(
                 evidence,
             )
         )
-    ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    diagnostic_ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+
+    def economic_rank(item):
+        return (
+            item[4]["full"][
+                "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+            ],
+            item[0],
+            item[1],
+            item[2],
+        )
+
+    ranked.sort(key=economic_rank, reverse=True)
+    diagnostic_ranked.sort(key=economic_rank, reverse=True)
     baseline = baseline_candidate(profile)
     baseline_results = {
         "calibration": evaluate_candidate(baseline, contexts, calibration),
         "holdout": evaluate_candidate(baseline, contexts, holdout),
-        "full": evaluate_candidate(baseline, contexts, dates),
+        "full": evaluate_candidate(baseline, contexts, dates, include_episodes=True),
     }
     if not ranked:
         return {
@@ -826,8 +1110,6 @@ def select_profile_spot(
         "full": evaluate_candidate(candidate, contexts, dates, include_episodes=True),
     }
     candidate_holdout = candidate_results["holdout"]
-    baseline_holdout_ev = baseline_results["holdout"]["notional_weighted_ev_pct"]
-    candidate_holdout_ev = candidate_holdout["notional_weighted_ev_pct"]
     holdout_ready = bool(
         candidate_holdout["signal_episodes"] >= 3
         and candidate_holdout["completed_legs"] >= 4
@@ -838,10 +1120,9 @@ def select_profile_spot(
     )
     beats_baseline = bool(
         holdout_ready
-        and (
-            baseline_holdout_ev is None
-            or float(candidate_holdout_ev) > float(baseline_holdout_ev) + 1e-12
-        )
+        and paired_economics(baseline_results["holdout"], candidate_holdout)[
+            "net_profit_improved"
+        ]
     )
     if beats_baseline:
         decision = "holdout_pass_source_only_early_candidate"
@@ -883,6 +1164,16 @@ def select_profile_spot(
             _ranked_item_public(diagnostic_ranked[0]) if diagnostic_ranked else None
         ),
         "baseline": {"parameters": baseline.public(), **baseline_results},
+        "paired_economics": paired_economics(
+            baseline_results["holdout"], candidate_holdout
+        ),
+        "calibration_half_diagnostics": {
+            "first_half_positive_ev": _positive_ev(calibration_evidence["first_half"]),
+            "second_half_positive_ev": _positive_ev(
+                calibration_evidence["second_half"]
+            ),
+            "decision_authority": "robustness_diagnostic_not_standalone_veto",
+        },
         "calibration_winner": {
             "parameters": candidate.public(),
             "robust_calibration_score": round(score, 6),

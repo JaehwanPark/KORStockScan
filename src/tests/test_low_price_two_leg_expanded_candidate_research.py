@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, datetime, timedelta
+import json
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -490,7 +491,7 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
         sources={
             symbol: (
                 [SimpleNamespace(close_price=20_000)],
-                {"source_quality_status": "PASS"},
+                {"source_quality_status": "PASS", "source_content_sha256": "a" * 64},
             )
             for symbol in source_symbols
         },
@@ -545,6 +546,12 @@ def _profile_result(
         },
         "selected": {
             "holdout": {
+                "economic_replay_contract": expanded.ECONOMIC_REPLAY_CONTRACT,
+                "observation_dates": [f"2026-08-{day:02d}" for day in range(1, 17)],
+                "cost_pct": expanded.COST_PCT,
+                "source_valid_observation_days": 16,
+                "cost_adjusted_net_profit_krw_per_source_valid_observation_day": candidate_ev
+                * 100,
                 "signal_episodes": 4,
                 "completed_legs": 7,
                 "held_legs": held_legs,
@@ -555,7 +562,17 @@ def _profile_result(
                 "notional_weighted_ev_pct": candidate_ev,
             }
         },
-        "baseline": {"holdout": {"notional_weighted_ev_pct": baseline_ev}},
+        "baseline": {
+            "holdout": {
+                "notional_weighted_ev_pct": baseline_ev,
+                "economic_replay_contract": expanded.ECONOMIC_REPLAY_CONTRACT,
+                "observation_dates": [f"2026-08-{day:02d}" for day in range(1, 17)],
+                "cost_pct": expanded.COST_PCT,
+                "source_valid_observation_days": 16,
+                "cost_adjusted_net_profit_krw_per_source_valid_observation_day": baseline_ev
+                * 100,
+            }
+        },
     }
 
 
@@ -818,6 +835,8 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         "trading_date_count": 55,
         "calibration_trading_day_count": 39,
         "holdout_trading_day_count": 16,
+        "cost_pct": expanded.COST_PCT,
+        "cost_contract": expanded.canonical_cost_contract(),
         "candidate_universe_size": len(target_inventory.candidate_symbols),
         "candidate_symbols": target_inventory.candidate_symbols,
         "existing_symbol_universe_size": len(target_inventory.implemented_symbols),
@@ -832,7 +851,10 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         "eligible_source_symbol_count": len(target_inventory.research_symbols),
         "quarantined_source_symbol_count": 0,
         "source_quarantine": {},
-        "source_meta": {symbol: {} for symbol in target_inventory.research_symbols},
+        "source_meta": {
+            symbol: {"source_content_sha256": "a" * 64}
+            for symbol in target_inventory.research_symbols
+        },
         "research_profile_inventory": {
             profile_id: {
                 "symbol": profile.symbol,
@@ -851,9 +873,15 @@ def _notification_report(recommendations: list[dict] | None = None) -> dict:
         ),
         "profiles": {
             profile_id: {
+                "baseline_policy_source": "compiled_profile_baseline_not_recommendable",
+                "existing_axis_economic_replay": {
+                    "status": "source_runtime_policy_unavailable",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
                 "observation_candidate": expanded._operator_observation_inventory(
                     target_inventory.research_profiles
-                ).get(profile_id)
+                ).get(profile_id),
             }
             for profile_id in target_inventory.research_profiles
         },
@@ -908,6 +936,43 @@ def test_admin_notifier_retries_sends_once_and_never_creates_machine(tmp_path):
     state = (tmp_path / "state.json").read_text(encoding="utf-8")
     assert '"machine_created": false' in state
     assert '"service_started": false' in state
+
+
+def test_new_report_rejects_legacy_cost_even_on_archive_date():
+    report = _notification_report()
+    assert expanded.CandidateRecommendationNotifier._valid_report(report)
+    report["cost_pct"] = 0.20
+    assert not expanded.CandidateRecommendationNotifier._valid_report(report)
+
+
+def test_notifier_recomputes_paired_comparison_before_accepting_recommendation():
+    inventory = expanded._target_date_research_inventory(date(2026, 8, 24))
+    profile = next(
+        item
+        for item in inventory.new_symbol_profiles.values()
+        if not item.fixed_observation
+    )
+    source = _profile_result(
+        symbol=profile.symbol,
+        name=profile.name,
+        session=profile.session,
+        candidate_ev=0.2,
+        baseline_ev=0.1,
+    )
+    rows = expanded._recommendation_rows(
+        {profile.profile_id: source},
+        {profile.symbol: {"latest_close_price": 20000}},
+        research_profiles=inventory.research_profiles,
+        live_profiles=inventory.live_profiles,
+        active_symbol_sessions=inventory.active_symbol_sessions,
+    )
+    assert len(rows) == 1
+    report = _notification_report(rows)
+    assert expanded.CandidateRecommendationNotifier._valid_report(report)
+    rows[0]["candidate_economic_outcome"][
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+    ] = 0
+    assert not expanded.CandidateRecommendationNotifier._valid_report(report)
 
 
 def test_telegram_message_separates_new_symbol_and_existing_time_extension_lanes():
@@ -990,6 +1055,58 @@ def test_admin_notifier_exposes_exhausted_delivery_retries(tmp_path):
     assert notifier.notify(_notification_report()) == "send_failed"
     assert len(attempts) == 3
     assert not (tmp_path / "state.json").exists()
+
+
+def test_content_bound_source_cache_reuses_exact_bars_and_rejects_tamper(tmp_path):
+    target_date = date(2026, 9, 4)
+    bars = [
+        Bar(
+            datetime(2026, 9, 4, 13, 15, tzinfo=ZoneInfo("Asia/Seoul")),
+            20_000,
+            20_100,
+            19_900,
+            20_000,
+        )
+    ]
+    meta = {
+        "source_quality_status": "PASS",
+        "bar_count": 1,
+        "trading_date_count": 1,
+    }
+    path = expanded._write_source_cache(
+        cache_dir=tmp_path,
+        symbol="010140",
+        start_date=target_date,
+        end_date=target_date,
+        expected_trading_day_count=1,
+        bars=bars,
+        meta=meta,
+    )
+
+    loaded = expanded._load_source_cache(
+        cache_dir=tmp_path,
+        symbol="010140",
+        start_date=target_date,
+        end_date=target_date,
+        expected_trading_day_count=1,
+    )
+    assert loaded is not None
+    assert loaded[0] == bars
+    assert len(loaded[1]["source_content_sha256"]) == 64
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["bars"][0]["close_price"] = 19_900
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert (
+        expanded._load_source_cache(
+            cache_dir=tmp_path,
+            symbol="010140",
+            start_date=target_date,
+            end_date=target_date,
+            expected_trading_day_count=1,
+        )
+        is None
+    )
 
 
 def test_default_target_date_never_uses_an_incomplete_regular_session():

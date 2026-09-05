@@ -426,6 +426,34 @@ def _project_fields_for_compact_stream(
 
 
 def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, str]:
+    if stage in {
+        "avg_down_route_arbitration_observed",
+        "avg_down_exit_replay_frame_observed",
+    }:
+        # Full frozen policy/market inputs belong in structured fields once,
+        # not duplicated inside each JSONL text_payload and text log.
+        selected = {
+            key: fields[key]
+            for key in (
+                "id",
+                "source_event_id",
+                "position_episode_id",
+                "scale_in_decision_id",
+                "source_observation_id",
+                "sequence",
+                "replay_capture_state",
+                "capture_gap",
+                "capture_end",
+                "actual_order_submitted",
+                "broker_order_forbidden",
+                "runtime_effect",
+                "decision_authority",
+            )
+            if key in fields
+        }
+        selected["text_field_projection"] = "avg_down_replay_identity_only_v1"
+        selected["omitted_field_count"] = str(len(fields) - len(selected) + 1)
+        return selected
     if stage not in _TEXT_COMPACT_STAGES or len(fields) <= 18:
         return fields
     selected: dict[str, str] = {}

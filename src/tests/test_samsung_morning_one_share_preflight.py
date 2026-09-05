@@ -368,6 +368,11 @@ def test_main_derives_runtime_verification_from_exact_bot_pid(monkeypatch, tmp_p
     verify_calls = []
     monkeypatch.setattr(
         preflight_module,
+        "get_krx_trading_day_status",
+        lambda value: (True, "test_trading_day"),
+    )
+    monkeypatch.setattr(
+        preflight_module,
         "verify_runtime_env_handoff",
         lambda target_date, pid=None: verify_calls.append((target_date, pid))
         or {"status": "pass", "pid": pid, "findings": []},
@@ -414,6 +419,11 @@ def test_main_does_not_trust_active_pid_when_runtime_verification_fails(
 ):
     authority_path = tmp_path / "authority.json"
     target_date = datetime.now(tz=KST).date().isoformat()
+    monkeypatch.setattr(
+        preflight_module,
+        "get_krx_trading_day_status",
+        lambda value: (True, "test_trading_day"),
+    )
     monkeypatch.setattr(
         preflight_module,
         "verify_runtime_env_handoff",

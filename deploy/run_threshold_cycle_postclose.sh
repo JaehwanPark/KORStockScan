@@ -1476,12 +1476,26 @@ if [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION" = "true" ] || [ "$RUN_SCALPIN
     "scalping_avg_down_recovery_calibration" \
     "$PROJECT_DIR/data/pipeline_events" \
     "$PROJECT_DIR/src/engine/automation/source_quality_hard_gate.py" \
+    "$PROJECT_DIR/src/engine/lifecycle/scale_in_incremental_counterfactual.py" \
+    "$PROJECT_DIR/src/engine/lifecycle/avg_down_replay.py" \
+    "$PROJECT_DIR/src/engine/lifecycle/avg_down_policy_replay.py" \
+    "$PROJECT_DIR/src/engine/scalping/avg_down_replay_capture.py" \
+    "$PROJECT_DIR/src/engine/sniper_state_handlers.py" \
+    "$PROJECT_DIR/src/engine/sniper_execution_receipts.py" \
+    "$PROJECT_DIR/src/engine/sniper_scale_in.py" \
+    "$PROJECT_DIR/src/engine/ai_engine_openai.py" \
+    "$PROJECT_DIR/src/engine/holding_exit_matrix_runtime.py" \
+    "$PROJECT_DIR/src/engine/lifecycle_decision_matrix_runtime.py" \
+    "$PROJECT_DIR/src/engine/kiwoom_orders.py" \
+    "$PROJECT_DIR/src/engine/scalping/micro_estimator_state.py" \
+    "$PROJECT_DIR/src/engine/trade_profit.py" \
     "$PROJECT_DIR/src/engine/monitoring/scalping_avg_down_recovery_calibration.py"; then
     emit_postclose_marker "[REUSE] scalping_avg_down_recovery_calibration target_date=$TARGET_DATE reason=completed_artifact_checkpoint"
   else
     wait_for_postclose_resources "scalping_avg_down_recovery_calibration"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_avg_down_recovery_calibration \
       --target-date "$TARGET_DATE" \
+      --policy-replay-ai current \
       --print-summary
   fi
   wait_for_report_artifact \
@@ -1527,13 +1541,27 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW
   then
     echo "[threshold-cycle] reuse completed low-price machine candidate recommendation date=$TARGET_DATE"
   else
-    wait_for_postclose_resources "low_price_two_leg_candidate_recommendation"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
-      -m src.engine.monitoring.low_price_two_leg_expanded_candidate_research \
-      --target-date "$TARGET_DATE" \
-      --write \
-      --notify \
-      --print-summary
+    low_price_resume_attempt=1
+    while true; do
+      wait_for_postclose_resources "low_price_two_leg_candidate_recommendation"
+      if run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
+        -m src.engine.monitoring.low_price_two_leg_expanded_candidate_research \
+        --target-date "$TARGET_DATE" \
+        --write \
+        --notify \
+        --print-summary
+      then
+        break
+      else
+        low_price_resume_rc=$?
+      fi
+      if [ "$low_price_resume_rc" -ne 75 ] || [ "$low_price_resume_attempt" -ge 3 ]; then
+        exit "$low_price_resume_rc"
+      fi
+      emit_postclose_marker "[RETRY] low_price_two_leg_candidate_recommendation target_date=$TARGET_DATE reason=shared_read_deferred_resume attempt=$low_price_resume_attempt"
+      low_price_resume_attempt=$((low_price_resume_attempt + 1))
+      sleep 5
+    done
   fi
   wait_for_report_artifact \
     "$candidate_recommendation_json" \

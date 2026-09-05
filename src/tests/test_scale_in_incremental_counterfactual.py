@@ -573,3 +573,21 @@ def test_evaluable_rows_do_not_hide_unresolved_eligible_lineage(monkeypatch):
     assert report["error"] == "counterfactual_event_contract_gap"
     assert report["source_quality_gate"] == ("instrumentation_gap_with_evaluable_rows")
     assert report["summary"]["unresolved_eligible_candidate_count"] == 1
+
+
+def test_fixed_exit_incremental_economics_uses_same_reference_and_cost_once():
+    result = mod.compute_fixed_exit_incremental_economics(
+        pre_add_qty=10,
+        pre_add_price=100,
+        proposed_qty=1,
+        proposed_price=100,
+        exit_price=110,
+    )
+
+    assert result["no_add_pnl_krw"] == 97
+    assert result["add_pnl_krw"] == 107
+    assert result["incremental_pnl_krw"] == 10
+    assert result["normal_no_add_incremental_pnl_krw"] == 0
+    assert result["reference_notional_krw"] == 1000.0
+    assert result["source_quality_adjusted_ev_pct"] == 1.0
+    assert result["runtime_authority_ready"] is False

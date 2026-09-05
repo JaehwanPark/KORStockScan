@@ -2182,6 +2182,7 @@ class SamsungRegularTwoLegMachine:
                     symbol=str(self.policy.symbol),
                     route=str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
                     owner="episode",
+                    scope_id=self.entry_timing_scope_id,
                     baseline_fill_price=int(signal.signal_bar.close_price),
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans
@@ -2256,6 +2257,7 @@ class SamsungRegularTwoLegMachine:
                     symbol=str(self.policy.symbol),
                     route=str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
                     owner="episode",
+                    scope_id=self.entry_timing_scope_id,
                     baseline_fill_price=int(signal.signal_bar.close_price),
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans

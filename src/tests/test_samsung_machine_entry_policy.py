@@ -10,19 +10,29 @@ from src.engine.automation.samsung_machine_entry_policy_apply import (
     build_applied_policy,
     main,
 )
+from src.engine.monitoring.samsung_machine_entry_tuning import (
+    build_report,
+    write_policy_candidate,
+    write_report,
+)
 from src.trading.order.samsung_entry_policy import (
     APPLIED_SCHEMA,
     BASELINE_POLICIES,
     CANDIDATE_SCHEMA,
     KST,
+    LEGACY_CANDIDATE_SCHEMA,
     OPERATOR_OVERRIDE_RUNTIME_SOURCE,
     atomic_write_json,
     baseline_applied_payload,
+    candidate_artifact_hash,
     candidate_policies_with_current_baselines,
+    canonical_hash,
+    file_sha256,
     load_applied_machine_policy,
     operator_target_override,
     policy_hash,
     policy_mutations_between,
+    report_artifact_hash,
     validate_applied,
     validate_candidate,
     validate_machine_policy,
@@ -37,7 +47,7 @@ def _candidate(source_date: str) -> dict:
         }
     )
     return {
-        "schema": CANDIDATE_SCHEMA,
+        "schema": LEGACY_CANDIDATE_SCHEMA,
         "source_date": source_date,
         "source_report": "samsung_machine_entry_tuning",
         "source_report_schema": "samsung_machine_entry_tuning_report_v2",
@@ -73,6 +83,43 @@ def _legacy_two_share_candidate(source_date: str) -> dict:
     }
     payload["policy_hash"] = policy_hash(policies)
     return payload
+
+
+def _bound_v2_candidate(source_date: str) -> tuple[dict, dict]:
+    payload = _candidate(source_date)
+    payload["schema"] = CANDIDATE_SCHEMA
+    payload["source_report_schema"] = "samsung_machine_entry_tuning_report_v8"
+    payload["policy_mutations"] = policy_mutations_between(
+        BASELINE_POLICIES,
+        {machine: item["policy"] for machine, item in payload["machines"].items()},
+        include_kind=True,
+    )
+    preflight = {
+        "status": "pass",
+        "tuning_input_allowed": True,
+        "reason": "ready",
+        "source_path": "/tmp/source-quality.json",
+        "source_sha256": "a" * 64,
+        "source_artifact_present": True,
+        "audit_status": "pass",
+    }
+    report = {
+        "schema": "samsung_machine_entry_tuning_report_v8",
+        "target_date": source_date,
+        "source_quality_preflight": preflight,
+    }
+    report["artifact_hash"] = report_artifact_hash(report)
+    payload["source_quality_preflight"] = preflight
+    payload["source_report_binding"] = {
+        "schema": report["schema"],
+        "target_date": source_date,
+        "sha256": report["artifact_hash"],
+    }
+    for item in payload["machines"].values():
+        item["evidence"] = {}
+        item["evidence_digest"] = canonical_hash({})
+    payload["candidate_hash"] = candidate_artifact_hash(payload)
+    return payload, report
 
 
 def test_bounded_policy_rejects_relaxation_and_immutable_changes():
@@ -127,6 +174,40 @@ def test_candidate_accepts_current_and_legacy_tuning_report_schemas():
         assert validate_candidate(current) == (True, "valid")
 
 
+def test_v2_candidate_rejects_report_tamper_and_blocked_mutation() -> None:
+    candidate, report = _bound_v2_candidate("2026-08-11")
+    assert validate_candidate(candidate, source_report=report) == (True, "valid")
+
+    tampered_report = json.loads(json.dumps(report))
+    tampered_report["unexpected"] = "changed_after_candidate"
+    assert validate_candidate(candidate, source_report=tampered_report) == (
+        False,
+        "candidate_source_report_artifact_hash_invalid",
+    )
+
+    fake_binding = json.loads(json.dumps(candidate))
+    fake_binding["source_report_binding"]["sha256"] = "0" * 64
+    fake_binding["candidate_hash"] = candidate_artifact_hash(fake_binding)
+    assert validate_candidate(fake_binding, source_report=report) == (
+        False,
+        "candidate_source_report_artifact_mismatch",
+    )
+
+    blocked = json.loads(json.dumps(candidate))
+    blocked["source_quality_preflight"].update(
+        {
+            "status": "blocked",
+            "tuning_input_allowed": False,
+            "audit_status": "fail",
+        }
+    )
+    blocked["candidate_hash"] = candidate_artifact_hash(blocked)
+    assert validate_candidate(blocked) == (
+        False,
+        "candidate_source_quality_not_allowed_for_mutation",
+    )
+
+
 def test_legacy_two_share_candidate_is_hash_validated_then_normalized():
     legacy = _legacy_two_share_candidate("2026-08-13")
 
@@ -137,7 +218,7 @@ def test_legacy_two_share_candidate_is_hash_validated_then_normalized():
     future = _legacy_two_share_candidate("2026-08-14")
     assert validate_candidate(future) == (
         False,
-        "candidate_morning_immutable_quantity_mismatch",
+        "legacy_mutating_candidate_no_longer_authoritative",
     )
 
 
@@ -155,7 +236,9 @@ def test_preopen_migrates_legacy_candidate_to_current_quantity(tmp_path: Path):
     )
 
     assert status == "candidate_applied"
-    assert applied["source_candidate_hash"] == legacy["policy_hash"]
+    assert applied["source_candidate_hash"] == file_sha256(
+        candidate_dir / "samsung_machine_entry_policy_candidate_2026-08-13.json"
+    )
     assert {item["policy"]["quantity"] for item in applied["machines"].values()} == {20}
     assert validate_applied(applied, target_date=date(2026, 8, 14)) == (
         True,
@@ -261,6 +344,127 @@ def test_latest_valid_prior_candidate_is_applied_without_relaxing_guards(
         True,
         "valid",
     )
+
+
+def test_current_candidate_is_revalidated_against_bound_report_and_source_quality(
+    tmp_path: Path,
+):
+    state_dir = tmp_path / "runtime"
+    report_dir = tmp_path / "reports"
+    candidate_dir = tmp_path / "candidates"
+    source_quality_dir = tmp_path / "source-quality"
+    source_quality_dir.mkdir()
+    source_quality_path = (
+        source_quality_dir / "observation_source_quality_audit_2026-08-11.json"
+    )
+    source_quality_path.write_text(
+        json.dumps(
+            {
+                "report_type": "observation_source_quality_audit",
+                "target_date": "2026-08-11",
+                "status": "pass",
+                "summary": {"tuning_input_allowed": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = build_report(
+        target_date="2026-08-11",
+        state_dir=state_dir,
+        output_dir=report_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+    )
+    report_path, _ = write_report(report, report_dir)
+    write_policy_candidate(report, candidate_dir)
+
+    applied, status = build_applied_policy(
+        target_date=date(2026, 8, 12),
+        candidate_dir=candidate_dir,
+        report_dir=report_dir,
+        source_quality_dir=source_quality_dir,
+    )
+    assert status == "candidate_applied"
+    assert validate_applied(applied, target_date=date(2026, 8, 12)) == (
+        True,
+        "valid",
+    )
+
+    original_report = report_path.read_text(encoding="utf-8")
+    changed_applied_dir = tmp_path / "changed-applied"
+    atomic_write_json(
+        changed_applied_dir / "samsung_machine_entry_policy_2026-08-11.json",
+        baseline_applied_payload(
+            target_date=date(2026, 8, 11), reason="changed-after-report"
+        ),
+    )
+    with pytest.raises(
+        ValueError, match="candidate_actual_applied_policy_binding_mismatch"
+    ):
+        build_applied_policy(
+            target_date=date(2026, 8, 12),
+            candidate_dir=candidate_dir,
+            report_dir=report_dir,
+            source_quality_dir=source_quality_dir,
+            source_applied_dir=changed_applied_dir,
+        )
+    tampered = json.loads(original_report)
+    tampered["decision"] = "tampered"
+    report_path.write_text(json.dumps(tampered), encoding="utf-8")
+    with pytest.raises(
+        ValueError, match="candidate_source_report_artifact_hash_invalid"
+    ):
+        build_applied_policy(
+            target_date=date(2026, 8, 12),
+            candidate_dir=candidate_dir,
+            report_dir=report_dir,
+            source_quality_dir=source_quality_dir,
+        )
+    report_path.write_text(original_report, encoding="utf-8")
+    source_quality_path.write_text(
+        json.dumps({"status": "fail", "summary": {"tuning_input_allowed": False}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="candidate_source_quality_artifact_mismatch"):
+        build_applied_policy(
+            target_date=date(2026, 8, 12),
+            candidate_dir=candidate_dir,
+            report_dir=report_dir,
+            source_quality_dir=source_quality_dir,
+        )
+
+
+def test_blocked_source_quality_allows_only_zero_mutation_safe_carry(tmp_path: Path):
+    report_dir = tmp_path / "reports"
+    candidate_dir = tmp_path / "candidates"
+    source_quality_dir = tmp_path / "missing-source-quality"
+    report = build_report(
+        target_date="2026-08-11",
+        state_dir=tmp_path / "runtime",
+        output_dir=report_dir,
+        cost_pct=0.20,
+        source_quality_dir=source_quality_dir,
+        applied_dir=tmp_path / "applied",
+    )
+    write_report(report, report_dir)
+    candidate_path = write_policy_candidate(report, candidate_dir)
+    candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+    assert candidate["policy_mutations"] == []
+    assert candidate["source_quality_preflight"]["tuning_input_allowed"] is False
+    assert validate_candidate(candidate, source_report=report) == (True, "valid")
+
+    applied, status = build_applied_policy(
+        target_date=date(2026, 8, 12),
+        candidate_dir=candidate_dir,
+        report_dir=report_dir,
+        source_quality_dir=source_quality_dir,
+    )
+    assert status == "candidate_applied"
+    assert applied["policy_mutations"] == []
+    assert {
+        machine: item["policy"] for machine, item in applied["machines"].items()
+    } == BASELINE_POLICIES
 
 
 def test_invalid_latest_candidate_fails_closed_instead_of_skipping_to_older(

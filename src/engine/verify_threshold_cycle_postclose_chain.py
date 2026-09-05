@@ -36,6 +36,11 @@ from src.engine.monitoring.limit_down_watch_report import (
     CONTRACT as LIMIT_DOWN_WATCH_CONTRACT,
 )
 from src.engine.threshold_cycle_preopen_apply import (
+    AVG_DOWN_EVIDENCE_AUTHORITY,
+    AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
+    AVG_DOWN_RECOVERY_FAMILY,
+    _avg_down_candidate_contract_error,
+    _avg_down_source_only_candidate_contract_error,
     runtime_gap_provenance_artifact_path,
 )
 from src.utils.market_day import is_krx_trading_day
@@ -235,10 +240,16 @@ def _low_price_two_leg_postclose_contract_status(
         _target_date_research_inventory,
     )
     from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
-    from src.trading.low_price_two_leg.policy_runtime import validate_candidate
+    from src.trading.low_price_two_leg.policy_runtime import (
+        SOURCE_PROVENANCE_REQUIRED_DATE,
+        report_artifact_hash,
+        runtime_profile_exclusions,
+        validate_candidate,
+    )
     from src.trading.low_price_two_leg.preflight import (
         RECOMMENDATION_20260821_PROFILE_MAP,
         RECOMMENDATION_20260824_PROFILE_MAP,
+        RECOMMENDATION_20260904_PROFILE_MAP,
         validate_research_evidence,
     )
     from src.trading.low_price_two_leg.profiles import (
@@ -247,7 +258,10 @@ def _low_price_two_leg_postclose_contract_status(
     )
 
     issues: list[str] = []
-    if tuning.get("schema") != REPORT_SCHEMA:
+    if tuning.get("schema") != REPORT_SCHEMA and not (
+        target_date <= "2026-09-04"
+        and tuning.get("schema") == "low_price_two_leg_tuning_report_v6"
+    ):
         issues.append("tuning_schema_invalid")
     if tuning.get("target_date") != target_date:
         issues.append("tuning_target_date_mismatch")
@@ -286,7 +300,20 @@ def _low_price_two_leg_postclose_contract_status(
     ):
         issues.append("tuning_authority_contract_invalid")
 
-    candidate_valid, candidate_reason = validate_candidate(policy_candidate)
+    if (
+        target_date_profiles
+        and parsed_target_date >= SOURCE_PROVENANCE_REQUIRED_DATE
+        and tuning.get("artifact_hash") != report_artifact_hash(tuning)
+    ):
+        issues.append("tuning_artifact_hash_invalid")
+    candidate_valid, candidate_reason = validate_candidate(
+        policy_candidate,
+        source_report=tuning,
+        require_source_files=(
+            bool(target_date_profiles)
+            and parsed_target_date >= SOURCE_PROVENANCE_REQUIRED_DATE
+        ),
+    )
     if not candidate_valid:
         issues.append(f"policy_candidate_{candidate_reason}")
     elif policy_candidate.get("source_date") != target_date:
@@ -321,6 +348,7 @@ def _low_price_two_leg_postclose_contract_status(
     recommendation_implementation_status = "not_applicable_no_recommendations"
     recommendation_profile_failures: dict[str, str] = {}
     recommendation_profile_pass_count = 0
+    recommendation_profile_runtime_exclusions: dict[str, str] = {}
     recommendation_ids = {
         str(row.get("profile_id") or "")
         for row in expanded.get("recommendations") or []
@@ -338,6 +366,10 @@ def _low_price_two_leg_postclose_contract_status(
         date(2026, 8, 24): (
             date(2026, 8, 25),
             RECOMMENDATION_20260824_PROFILE_MAP,
+        ),
+        date(2026, 9, 4): (
+            date(2026, 9, 7),
+            RECOMMENDATION_20260904_PROFILE_MAP,
         ),
     }
     recommendation_contract = approved_recommendation_contracts.get(
@@ -366,6 +398,10 @@ def _low_price_two_leg_postclose_contract_status(
             if recommendation_ids != expected_report_ids:
                 issues.append("recommendation_profile_map_mismatch")
             effective_profiles = profiles_for_target_date(recommendation_effective_date)
+            expected_runtime_exclusions = {
+                item["profile_id"]: item["reason"]
+                for item in runtime_profile_exclusions(recommendation_effective_date)
+            }
             for runtime_profile_id, report_profile_id in sorted(
                 recommendation_profile_map.items()
             ):
@@ -378,6 +414,20 @@ def _low_price_two_leg_postclose_contract_status(
                 ready, reason = validate_research_evidence(
                     profile, target_date=recommendation_effective_date
                 )
+                if runtime_profile_id in expected_runtime_exclusions:
+                    if ready or reason not in {
+                        "research_economics_nonpositive_under_current_cost",
+                        "research_economics_lower_bound_nonpositive_under_current_cost",
+                        "research_half_robustness_review_requires_new_profile_revision",
+                    }:
+                        recommendation_profile_failures[runtime_profile_id] = (
+                            "runtime_exclusion_evidence_contract_mismatch"
+                        )
+                    else:
+                        recommendation_profile_runtime_exclusions[
+                            runtime_profile_id
+                        ] = expected_runtime_exclusions[runtime_profile_id]
+                    continue
                 if not ready:
                     recommendation_profile_failures[runtime_profile_id] = reason
                     continue
@@ -390,7 +440,11 @@ def _low_price_two_leg_postclose_contract_status(
             if recommendation_profile_failures:
                 issues.append("recommendation_runtime_implementation_contract_failed")
             recommendation_implementation_status = (
-                "pass"
+                (
+                    "pass_with_runtime_quarantine"
+                    if recommendation_profile_runtime_exclusions
+                    else "pass"
+                )
                 if not recommendation_profile_failures
                 and recommendation_ids == expected_report_ids
                 and recommendation_contract_valid
@@ -425,6 +479,12 @@ def _low_price_two_leg_postclose_contract_status(
             recommendation_profile_pass_count
         ),
         "recommendation_profile_contract_failures": (recommendation_profile_failures),
+        "recommendation_profile_runtime_exclusion_count": len(
+            recommendation_profile_runtime_exclusions
+        ),
+        "recommendation_profile_runtime_exclusions": (
+            recommendation_profile_runtime_exclusions
+        ),
         "quarantined_source_symbol_count": int(
             expanded.get("quarantined_source_symbol_count", 0) or 0
         ),
@@ -444,10 +504,17 @@ def _samsung_machine_entry_postclose_contract_status(
     from src.engine.monitoring.samsung_machine_entry_tuning import (
         CLEAN_WINDOW_NAME,
         MACHINE_FILES,
+        POST_APPLY_WINDOW_NAME,
         REPORT_SCHEMA,
         ROLLING_WINDOWS,
+        _validate_outcome_amendment,
     )
-    from src.trading.order.samsung_entry_policy import validate_candidate
+    from src.trading.order.samsung_entry_policy import (
+        canonical_hash,
+        file_sha256,
+        report_artifact_hash,
+        validate_candidate,
+    )
 
     issues: list[str] = []
     if tuning.get("schema") != REPORT_SCHEMA:
@@ -458,7 +525,7 @@ def _samsung_machine_entry_postclose_contract_status(
     if set(daily_machines) != set(MACHINE_FILES):
         issues.append("tuning_machine_inventory_mismatch")
     windows = tuning.get("windows") or {}
-    required_windows = {CLEAN_WINDOW_NAME, *ROLLING_WINDOWS}
+    required_windows = {CLEAN_WINDOW_NAME, POST_APPLY_WINDOW_NAME, *ROLLING_WINDOWS}
     if set(windows) != required_windows or any(
         set(windows.get(name) or {}) != set(MACHINE_FILES) for name in required_windows
     ):
@@ -472,7 +539,45 @@ def _samsung_machine_entry_postclose_contract_status(
         )
     ):
         issues.append("tuning_authority_contract_invalid")
-    candidate_valid, candidate_reason = validate_candidate(policy_candidate)
+    if tuning.get("artifact_hash") != report_artifact_hash(tuning):
+        issues.append("tuning_artifact_hash_invalid")
+    amendment_ledger = tuning.get("outcome_amendment_ledger")
+    if (
+        not isinstance(amendment_ledger, dict)
+        or amendment_ledger.get("status") != "pass"
+        or amendment_ledger.get("issues") != []
+        or not isinstance(amendment_ledger.get("records"), list)
+        or amendment_ledger.get("record_count")
+        != len(amendment_ledger.get("records") or [])
+        or amendment_ledger.get("records_sha256")
+        != canonical_hash(amendment_ledger.get("records") or [])
+    ):
+        issues.append("tuning_outcome_amendment_ledger_invalid")
+    else:
+        for record in amendment_ledger["records"]:
+            amendment_valid, amendment_reason = _validate_outcome_amendment(record)
+            if not amendment_valid:
+                issues.append(f"tuning_outcome_{amendment_reason}")
+                break
+    preflight = tuning.get("source_quality_preflight")
+    if (
+        not isinstance(preflight, dict)
+        or preflight.get("tuning_input_allowed") is not True
+    ):
+        issues.append("tuning_source_quality_not_allowed")
+    else:
+        source_path = Path(str(preflight.get("source_path") or ""))
+        try:
+            observed_source_hash = file_sha256(source_path)
+        except OSError:
+            observed_source_hash = ""
+        if not observed_source_hash or observed_source_hash != preflight.get(
+            "source_sha256"
+        ):
+            issues.append("tuning_source_quality_hash_mismatch")
+    candidate_valid, candidate_reason = validate_candidate(
+        policy_candidate, source_report=tuning
+    )
     if not candidate_valid:
         issues.append(f"policy_candidate_{candidate_reason}")
     elif policy_candidate.get("source_date") != target_date:
@@ -523,9 +628,7 @@ def _machine_entry_timing_postclose_contract_status(
     )
     immutable_source_date_quarantine = bool(
         structural_shortage
-        and sample_floor_assessment.get(
-            "immutable_source_date_quarantine_eligible"
-        )
+        and sample_floor_assessment.get("immutable_source_date_quarantine_eligible")
         is True
         and shortage_next_action
         == "quarantine_exact_source_date_and_verify_next_runtime_receipt"
@@ -2340,6 +2443,157 @@ def _calibration_path(target_date: str) -> Path:
         / "threshold_cycle_calibration"
         / f"threshold_cycle_calibration_{target_date}_postclose.json"
     )
+
+
+def _avg_down_calibration_contract_status(target_date: str) -> dict[str, Any]:
+    path = (
+        REPORT_DIR
+        / "scalping_avg_down_recovery_calibration"
+        / f"scalping_avg_down_recovery_calibration_{target_date}.json"
+    )
+    if not path.exists():
+        return {
+            "status": "missing",
+            "path": str(path),
+            "issues": ["avg_down_calibration_report_missing"],
+            "runtime_candidate_present": False,
+        }
+    payload = _load_json(path)
+    candidates = payload.get("calibration_candidates")
+    candidates = candidates if isinstance(candidates, list) else []
+    family_candidates = [
+        item
+        for item in candidates
+        if isinstance(item, dict)
+        and str(item.get("family") or "") == AVG_DOWN_RECOVERY_FAMILY
+    ]
+    issues: list[str] = []
+    if payload.get("schema_version") != 2:
+        issues.append("avg_down_calibration_schema_version_invalid")
+    if str(payload.get("target_date") or "") != target_date:
+        issues.append("avg_down_calibration_target_date_mismatch")
+    if len(family_candidates) != 1:
+        issues.append("avg_down_calibration_candidate_count_invalid")
+    candidate = family_candidates[0] if len(family_candidates) == 1 else {}
+    contract = (
+        payload.get("runtime_update_contract")
+        if isinstance(payload.get("runtime_update_contract"), dict)
+        else {}
+    )
+    if str(contract.get("owner_family") or "") != AVG_DOWN_RECOVERY_FAMILY:
+        issues.append("avg_down_runtime_contract_owner_invalid")
+    if str(contract.get("owner_stage") or "") != "scale_in":
+        issues.append("avg_down_runtime_contract_stage_invalid")
+    if str(contract.get("update_mode") or "") != ("single_cumulative_quality_update"):
+        issues.append("avg_down_runtime_contract_update_mode_invalid")
+    if int(contract.get("runtime_apply_candidate_count") or 0) != 1:
+        issues.append("avg_down_runtime_contract_candidate_count_invalid")
+    if int(contract.get("max_runtime_apply_count") or 0) != 1:
+        issues.append("avg_down_runtime_contract_max_apply_count_invalid")
+    if contract.get("runtime_effect") is not False:
+        issues.append("avg_down_runtime_contract_effect_leak")
+    if candidate:
+        if str(candidate.get("evidence_contract_version") or "") != (
+            AVG_DOWN_EVIDENCE_CONTRACT_VERSION
+        ):
+            issues.append("avg_down_calibration_evidence_version_invalid")
+        if str(contract.get("quality_update_id") or "") != str(
+            candidate.get("quality_update_id") or ""
+        ):
+            issues.append("avg_down_calibration_quality_update_id_mismatch")
+        if str(contract.get("evidence_contract_version") or "") != str(
+            candidate.get("evidence_contract_version") or ""
+        ):
+            issues.append("avg_down_calibration_evidence_version_mismatch")
+        if str(contract.get("evidence_digest") or "") != str(
+            candidate.get("evidence_digest") or ""
+        ):
+            issues.append("avg_down_calibration_evidence_digest_mismatch")
+        evidence_digest = str(candidate.get("evidence_digest") or "")
+        if len(evidence_digest) != 64 or any(
+            char not in "0123456789abcdef" for char in evidence_digest.lower()
+        ):
+            issues.append("avg_down_calibration_evidence_digest_invalid")
+        if (
+            str(candidate.get("source_date") or "") != target_date
+            or str(candidate.get("target_date") or "") != target_date
+        ):
+            issues.append("avg_down_calibration_candidate_date_mismatch")
+        if candidate.get("runtime_effect") is not False:
+            issues.append("avg_down_calibration_runtime_effect_leak")
+        if candidate.get("actual_order_submitted") is not False:
+            issues.append("avg_down_calibration_order_authority_leak")
+        if candidate.get("broker_order_forbidden") is not True:
+            issues.append("avg_down_calibration_broker_forbidden_missing")
+        if int(contract.get("allowed_runtime_apply_count") or 0) != int(
+            bool(candidate.get("allowed_runtime_apply"))
+        ):
+            issues.append("avg_down_runtime_contract_allowed_count_mismatch")
+        if bool(candidate.get("allowed_runtime_apply")):
+            runtime_contract_error = _avg_down_candidate_contract_error(candidate)
+            if runtime_contract_error:
+                issues.append(
+                    f"avg_down_runtime_candidate_invalid:{runtime_contract_error}"
+                )
+            if candidate.get("evidence_authority") != AVG_DOWN_EVIDENCE_AUTHORITY:
+                issues.append("avg_down_runtime_candidate_source_only_authority_leak")
+        else:
+            source_only_contract_error = _avg_down_source_only_candidate_contract_error(
+                candidate
+            )
+            if source_only_contract_error:
+                issues.append(
+                    f"avg_down_source_only_candidate_invalid:{source_only_contract_error}"
+                )
+            if candidate.get("evidence_authority") != (
+                "fixed_observed_exit_source_only"
+            ):
+                issues.append("avg_down_source_only_authority_invalid")
+            if candidate.get("evaluation_method") != (
+                "fixed_observed_exit_counterfactual"
+            ):
+                issues.append("avg_down_source_only_evaluation_method_invalid")
+            if bool(contract.get("allowed_runtime_apply_count")):
+                issues.append("avg_down_source_only_contract_allowed_count_leak")
+    replay = payload.get("independent_exit_replay")
+    if replay is not None and (
+        not isinstance(replay, dict)
+        or replay.get("schema") != "avg_down_independent_exit_replay_v1"
+        or replay.get("decision_authority") != "source_only_paired_exit_replay"
+        or replay.get("runtime_effect") is not False
+        or replay.get("allowed_runtime_apply") is not False
+        or replay.get("actual_order_submitted") is not False
+        or replay.get("broker_order_forbidden") is not True
+    ):
+        issues.append("avg_down_independent_replay_authority_or_schema_invalid")
+    replay = replay if isinstance(replay, dict) else {}
+    if replay:
+        from src.engine.lifecycle.avg_down_replay import replay_evidence_contract_errors
+
+        try:
+            issues.extend(replay_evidence_contract_errors(replay))
+        except (TypeError, ValueError, OverflowError):
+            issues.append("avg_down_independent_replay_nested_contract_invalid")
+    return {
+        "status": "fail" if issues else "pass",
+        "path": str(path),
+        "issues": sorted(set(issues)),
+        "calibration_state": candidate.get("calibration_state"),
+        "calibration_reason": candidate.get("calibration_reason"),
+        "independent_replay_state": replay.get(
+            "state", "legacy_report_replay_section_missing"
+        ),
+        "independent_replay_blockers": replay.get("blocker_counts", {}),
+        "evidence_contract_version": candidate.get("evidence_contract_version"),
+        "evidence_authority": candidate.get("evidence_authority"),
+        "quality_update_id": candidate.get("quality_update_id"),
+        "evidence_digest": candidate.get("evidence_digest"),
+        "runtime_application_attribution": candidate.get(
+            "runtime_application_attribution"
+        ),
+        "runtime_candidate_present": bool(candidate.get("allowed_runtime_apply")),
+        "runtime_effect": False,
+    }
 
 
 def _runtime_candidates_requiring_ai(calibration_report: dict[str, Any]) -> list[str]:
@@ -6689,6 +6943,9 @@ def build_threshold_cycle_postclose_verification(
             and ai_correction.get("incomplete_runtime_candidate_families")
             else "ai_correction_unavailable_blocks_runtime_candidates"
         )
+    avg_down_calibration_contract = _avg_down_calibration_contract_status(target_date)
+    if avg_down_calibration_contract.get("status") == "fail":
+        log_issues.extend(avg_down_calibration_contract.get("issues") or [])
     clean_policy = clean_baseline_policy()
     clean_baseline_report_residue = (
         _clean_baseline_report_residue_status(REPORT_DIR)
@@ -8349,6 +8606,7 @@ def build_threshold_cycle_postclose_verification(
             ai_decision_action_outcome_calibration_status
         ),
         "ai_correction": ai_correction,
+        "avg_down_calibration_contract": avg_down_calibration_contract,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,
         "submit_bucket_handoff": submit_bucket_handoff,

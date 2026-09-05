@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from src.engine.risk.manual_control_exclusion import (
@@ -27,6 +27,11 @@ from src.trading.low_price_two_leg.profiles import (
     MachineProfile,
     get_profile,
 )
+from src.trading.low_price_two_leg.economics import (
+    COST_CONTRACT_VERSION,
+    ROUND_TRIP_COST_PCT,
+    recost_minute_bar_episodes,
+)
 from src.trading.low_price_two_leg.policy_runtime import (
     load_applied_profile_policy,
     operator_policy_transitions,
@@ -37,7 +42,8 @@ from src.trading.order.episode_quantity import (
 )
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
-from src.utils.constants import DATA_DIR
+from src.utils.constants import DATA_DIR, PROJECT_ROOT
+from src.utils.market_day import is_krx_trading_day
 
 AUTHORITY_SCHEMA = "low_price_two_leg_authority_v2"
 
@@ -522,6 +528,152 @@ class PreflightDecision:
     blockers: tuple[str, ...]
 
 
+def _canonical_payload_sha256(payload: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _approved_source_report(payload: dict, contract: dict) -> tuple[dict | None, str]:
+    source_reference = payload.get("source_report")
+    if not isinstance(source_reference, dict):
+        return payload, "direct_approved_report"
+    raw_path = str(source_reference.get("path") or "").strip()
+    if not raw_path:
+        return None, "research_source_report_path_missing"
+    source_path = Path(raw_path)
+    if not source_path.is_absolute():
+        source_path = PROJECT_ROOT / source_path
+    try:
+        source_path = source_path.resolve(strict=True)
+        source_path.relative_to(PROJECT_ROOT.resolve())
+        source_payload = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None, "research_source_report_unreadable"
+    if (
+        not isinstance(source_payload, dict)
+        or _canonical_payload_sha256(source_payload)
+        != str(contract.get("source_report_sha256") or "")
+        or source_reference.get("canonical_sha256")
+        != contract.get("source_report_sha256")
+    ):
+        return None, "research_source_report_hash_mismatch"
+    return source_payload, "ready"
+
+
+def _research_cost_revalidation(
+    *, payload: dict, contract: dict, report_profile_id: str
+) -> tuple[bool, str, dict]:
+    source_payload, source_reason = _approved_source_report(payload, contract)
+    if source_payload is None:
+        return False, source_reason, {}
+    try:
+        source_cost_pct = float(source_payload.get("cost_pct"))
+    except (TypeError, ValueError):
+        return False, "research_source_cost_contract_missing", {}
+    source_profile = (source_payload.get("profiles") or {}).get(report_profile_id)
+    if not isinstance(source_profile, dict):
+        return False, "research_source_profile_missing", {}
+    selected = source_profile.get("selected") or {}
+    full = selected.get("full") or source_profile.get("full") or {}
+    episodes = full.get("episodes")
+    date_split = source_profile.get("date_split") or {}
+    if isinstance(episodes, list) and isinstance(date_split, dict):
+        try:
+            calibration_start = date.fromisoformat(date_split["calibration_start"])
+            calibration_end = date.fromisoformat(date_split["calibration_end"])
+            holdout_start = date.fromisoformat(date_split["holdout_start"])
+            holdout_end = date.fromisoformat(date_split["holdout_end"])
+            calibration_days: list[date] = []
+            cursor = calibration_start
+            while cursor <= calibration_end:
+                if is_krx_trading_day(cursor):
+                    calibration_days.append(cursor)
+                cursor += timedelta(days=1)
+            declared_calibration_days = date_split.get("calibration_trading_day_count")
+            if declared_calibration_days is not None and len(calibration_days) != int(
+                declared_calibration_days
+            ):
+                return False, "research_calibration_date_split_invalid", {}
+            half_index = len(calibration_days) // 2
+            if half_index <= 0 or half_index >= len(calibration_days):
+                return False, "research_calibration_half_split_invalid", {}
+            windows = {
+                "calibration_first_half": (
+                    calibration_start,
+                    calibration_days[half_index - 1],
+                ),
+                "calibration_second_half": (
+                    calibration_days[half_index],
+                    calibration_end,
+                ),
+                "calibration": (calibration_start, calibration_end),
+                "holdout": (holdout_start, holdout_end),
+                "full": (calibration_start, holdout_end),
+            }
+            repriced = {
+                name: recost_minute_bar_episodes(
+                    episodes,
+                    source_cost_pct=source_cost_pct,
+                    start_date=start,
+                    end_date=end,
+                )
+                for name, (start, end) in windows.items()
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            return False, f"research_cost_revalidation_invalid:{exc}", {}
+        if any(
+            item.get("notional_weighted_ev_pct") is None
+            or float(item["notional_weighted_ev_pct"]) <= 0.0
+            for name, item in repriced.items()
+            if name in {"calibration", "holdout", "full"}
+        ):
+            return False, "research_economics_nonpositive_under_current_cost", repriced
+        if any(
+            repriced[name].get("notional_weighted_ev_pct") is None
+            or float(repriced[name]["notional_weighted_ev_pct"]) <= 0.0
+            for name in ("calibration_first_half", "calibration_second_half")
+        ):
+            # This is an immutable operator-approved evidence contract, not
+            # the current source-only selection rule. Do not silently release
+            # live quarantine when only the research robustness rule changed.
+            return (
+                False,
+                "research_half_robustness_review_requires_new_profile_revision",
+                repriced,
+            )
+        return True, "ready", repriced
+
+    cost_delta = max(0.0, ROUND_TRIP_COST_PCT - source_cost_pct)
+    visible_evs: list[float] = []
+    for summary in (selected.get("calibration"), selected.get("holdout"), full):
+        if (
+            isinstance(summary, dict)
+            and summary.get("notional_weighted_ev_pct") is not None
+        ):
+            visible_evs.append(float(summary["notional_weighted_ev_pct"]))
+    for key in ("calibration_half_ev_pct", "calibration_third_ev_pct"):
+        values = source_profile.get(key)
+        if isinstance(values, list):
+            visible_evs.extend(float(value) for value in values)
+    if not visible_evs or min(visible_evs) - cost_delta <= 0.0:
+        return (
+            False,
+            "research_economics_lower_bound_nonpositive_under_current_cost",
+            {},
+        )
+    return (
+        True,
+        "ready_conservative_cost_lower_bound",
+        {
+            "source_cost_pct": source_cost_pct,
+            "effective_cost_pct": ROUND_TRIP_COST_PCT,
+            "minimum_reported_ev_pct": min(visible_evs),
+            "conservative_minimum_ev_pct": min(visible_evs) - cost_delta,
+        },
+    )
+
+
 def validate_research_evidence(
     profile: MachineProfile,
     path: Path | None = None,
@@ -750,6 +902,17 @@ def validate_research_evidence(
                 == held_rate
             )
     if (
+        target_date is not None
+        and target_date >= PROFILE_REVISION_20260907_EFFECTIVE_DATE
+    ):
+        cost_ready, cost_reason, _ = _research_cost_revalidation(
+            payload=payload,
+            contract=contract,
+            report_profile_id=report_profile_id,
+        )
+        if not cost_ready:
+            return False, cost_reason
+    if (
         source.get("source_quality_status") != "PASS"
         or int(source.get("trading_date_count", 0) or 0)
         != int(contract["trading_date_count"])
@@ -895,7 +1058,8 @@ def build_authority_artifact(
             "report_sha256": str(research["sha256"]),
             "schema": str(research["schema"]),
             "window": str(research["window"]),
-            "cost_pct": 0.20,
+            "cost_contract_version": COST_CONTRACT_VERSION,
+            "cost_pct": ROUND_TRIP_COST_PCT,
         },
         "metric_role": "operator_runtime_authority_gate",
         "decision_authority": "explicit_user_directed_low_price_two_leg_live_implementation",
@@ -999,6 +1163,8 @@ def validate_authority(
         or evidence.get("report_sha256") != research["sha256"]
         or evidence.get("schema") != research["schema"]
         or evidence.get("window") != research["window"]
+        or evidence.get("cost_contract_version") != COST_CONTRACT_VERSION
+        or evidence.get("cost_pct") != ROUND_TRIP_COST_PCT
     ):
         return False, "authority_evidence_mismatch"
     if any(
@@ -1082,7 +1248,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         _atomic_write(authority_path, output["artifact"])
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if decision.ready else 2
+    if decision.ready:
+        return 0
+    if str(applied_reason).startswith("runtime_profile_quarantined:"):
+        return 4
+    return 2
 
 
 if __name__ == "__main__":

@@ -15193,6 +15193,13 @@ def _cap_ai_candidate_context(candidates: list[dict]) -> list[dict]:
                 "family": item.get("family"),
                 "stage": item.get("stage"),
                 "threshold_version": item.get("threshold_version"),
+                "quality_update_id": item.get("quality_update_id"),
+                "evidence_contract_version": item.get("evidence_contract_version"),
+                "evidence_digest": item.get("evidence_digest"),
+                "source_date": item.get("source_date"),
+                "target_date": item.get("target_date"),
+                "target_env_key": item.get("target_env_key"),
+                "target_env_keys": item.get("target_env_keys"),
                 "current_value": item.get("current_value"),
                 "recommended_value": item.get("recommended_value"),
                 "current_values": _compact_json_value(
@@ -15416,6 +15423,13 @@ def _build_ai_correction_input_context(
             "family": candidate.get("family"),
             "stage": candidate.get("stage"),
             "threshold_version": candidate.get("threshold_version"),
+            "quality_update_id": candidate.get("quality_update_id"),
+            "evidence_contract_version": candidate.get("evidence_contract_version"),
+            "evidence_digest": candidate.get("evidence_digest"),
+            "source_date": candidate.get("source_date"),
+            "target_date": candidate.get("target_date"),
+            "target_env_key": candidate.get("target_env_key"),
+            "target_env_keys": candidate.get("target_env_keys"),
             "current_value": candidate.get("current_value"),
             "recommended_value": candidate.get("recommended_value"),
             "calibration_state": candidate.get("calibration_state"),
@@ -15439,6 +15453,13 @@ def _build_ai_correction_input_context(
                 candidate.get("source_metrics") or {}
             ),
         }
+        if isinstance(candidate.get("condition_feasibility"), dict):
+            candidate_item["condition_feasibility"] = _compact_json_value(
+                candidate["condition_feasibility"],
+                max_chars=4_000,
+                max_dict_keys=30,
+                max_list_items=10,
+            )
         if (
             candidate.get("current_value") is None
             and candidate.get("recommended_value") is None
@@ -16295,6 +16316,15 @@ def build_threshold_cycle_ai_correction_report(
         item = {
             "family": family,
             "threshold_version": candidate.get("threshold_version"),
+            "quality_update_id": candidate.get("quality_update_id"),
+            "evidence_contract_version": candidate.get("evidence_contract_version"),
+            "evidence_digest": candidate.get("evidence_digest"),
+            "source_date": candidate.get("source_date"),
+            "target_date": candidate.get("target_date"),
+            "target_env_key": candidate.get("target_env_key"),
+            "target_env_keys": candidate.get("target_env_keys"),
+            "current_value": candidate.get("current_value"),
+            "recommended_value": candidate.get("recommended_value"),
             "anomaly_type": anomaly_type,
             "ai_review_state": ai_review_state,
             "correction_proposal": {
@@ -18164,20 +18194,19 @@ def build_daily_threshold_cycle_report(
     return report
 
 
-def merge_scalping_avg_down_recovery_calibration_candidate(
+def _merge_direct_scale_in_calibration_candidate(
     report: dict[str, Any],
     target_date: str,
     *,
-    source_path: Path | None = None,
+    source_path: Path,
+    report_type: str,
+    owner_family: str,
 ) -> dict[str, Any]:
-    """Merge the direct AVG_DOWN candidate before threshold AI review."""
+    """Send the same dated direct candidate to AI review and PREOPEN."""
 
-    path = source_path or (
-        SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR
-        / f"scalping_avg_down_recovery_calibration_{target_date}.json"
-    )
+    path = source_path
     source_status: dict[str, Any] = {
-        "report_type": "scalping_avg_down_recovery_calibration",
+        "report_type": report_type,
         "path": str(path),
         "status": "missing_report",
         "candidate_count": 0,
@@ -18185,19 +18214,19 @@ def merge_scalping_avg_down_recovery_calibration_candidate(
     }
     supplemental_sources = report.setdefault("supplemental_calibration_sources", {})
     if not path.exists():
-        supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+        supplemental_sources[report_type] = source_status
         return report
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         source_status.update({"status": "invalid_report", "error": str(exc)})
-        supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+        supplemental_sources[report_type] = source_status
         return report
     if not isinstance(payload, dict) or str(payload.get("target_date") or "") != str(
         target_date
     ):
         source_status["status"] = "target_date_mismatch"
-        supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+        supplemental_sources[report_type] = source_status
         return report
     raw_candidates = payload.get("calibration_candidates")
     candidates = (
@@ -18208,8 +18237,7 @@ def merge_scalping_avg_down_recovery_calibration_candidate(
     eligible_candidates = [
         candidate
         for candidate in candidates
-        if str(candidate.get("family") or "")
-        == "scalping_avg_down_recovery_quality_gate"
+        if str(candidate.get("family") or "") == owner_family
     ]
     source_status["candidate_count"] = len(eligible_candidates)
     report_candidates = report.setdefault("calibration_candidates", [])
@@ -18224,7 +18252,7 @@ def merge_scalping_avg_down_recovery_calibration_candidate(
     merged_count = 0
     for candidate in eligible_candidates:
         family = str(candidate.get("family") or "")
-        if family != "scalping_avg_down_recovery_quality_gate":
+        if family != owner_family:
             continue
         if family in existing_families:
             continue
@@ -18234,7 +18262,9 @@ def merge_scalping_avg_down_recovery_calibration_candidate(
             if isinstance(normalized.get("source_reports"), dict)
             else {}
         )
-        source_reports["scalping_avg_down_recovery_calibration"] = str(path)
+        if isinstance(normalized.get("source_reports"), list):
+            normalized["source_report_paths"] = list(normalized["source_reports"])
+        source_reports[report_type] = str(path)
         normalized["source_reports"] = source_reports
         report_candidates.append(normalized)
         existing_families.add(family)
@@ -18246,13 +18276,46 @@ def merge_scalping_avg_down_recovery_calibration_candidate(
             "already_present_count": max(0, len(eligible_candidates) - merged_count),
         }
     )
-    supplemental_sources["scalping_avg_down_recovery_calibration"] = source_status
+    supplemental_sources[report_type] = source_status
     report["post_apply_attribution"] = _build_post_apply_attribution(report_candidates)
     report["safety_guard_pack"] = _build_safety_guard_pack(report_candidates)
     report["calibration_trigger_pack"] = _build_calibration_trigger_pack(
         report_candidates
     )
     return report
+
+
+def merge_scalping_avg_down_recovery_calibration_candidate(
+    report: dict[str, Any], target_date: str, *, source_path: Path | None = None
+) -> dict[str, Any]:
+    return _merge_direct_scale_in_calibration_candidate(
+        report,
+        target_date,
+        source_path=source_path
+        or (
+            SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR
+            / f"scalping_avg_down_recovery_calibration_{target_date}.json"
+        ),
+        report_type="scalping_avg_down_recovery_calibration",
+        owner_family="scalping_avg_down_recovery_quality_gate",
+    )
+
+
+def merge_scalping_pyramid_quality_calibration_candidate(
+    report: dict[str, Any], target_date: str, *, source_path: Path | None = None
+) -> dict[str, Any]:
+    return _merge_direct_scale_in_calibration_candidate(
+        report,
+        target_date,
+        source_path=source_path
+        or (
+            REPORT_DIR
+            / "scalping_pyramid_quality_calibration"
+            / f"scalping_pyramid_quality_calibration_{target_date}.json"
+        ),
+        report_type="scalping_pyramid_quality_calibration",
+        owner_family="scalping_pyramid_quality_gate",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -18306,6 +18369,7 @@ def main(argv: list[str] | None = None) -> int:
         calibration_run_phase=args.calibration_run_phase,
     )
     merge_scalping_avg_down_recovery_calibration_candidate(report, args.target_date)
+    merge_scalping_pyramid_quality_calibration_candidate(report, args.target_date)
     cumulative_report = build_cumulative_threshold_cycle_report(
         args.target_date,
         report_source_loader=_summarize_holding_exit_report_sources,

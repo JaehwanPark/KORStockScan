@@ -12189,7 +12189,6 @@ def test_holding_flow_override_passes_micro_estimator_fields_to_ai(monkeypatch):
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
-
     proceed = state_handlers._evaluate_holding_flow_override(
         stock={
             "id": 32,
@@ -17406,6 +17405,9 @@ def test_scalping_pyramid_strong_continuation_can_use_lower_profit_gate():
     assert result["reason"] == "scalping_pyramid_ok"
     assert result["profit_gate_mode"] == "strong_continuation"
     assert result["min_profit_pct"] == 0.9
+    assert result["configured_min_profit_pct"] == 1.5
+    assert result["effective_min_profit_pct"] == 0.9
+    assert result["pyramid_evaluation_schema"] == "pyramid_gate_observation_v2"
 
 
 def test_scalping_pyramid_strong_continuation_default_off_preserves_base_gate():
@@ -17447,6 +17449,8 @@ def test_scalping_pyramid_strong_continuation_default_off_preserves_base_gate():
     assert result["should_add"] is False
     assert result["reason"] == "profit_not_enough"
     assert result["profit_gate_mode"] == "base"
+    assert result["configured_min_profit_pct"] == 1.5
+    assert result["effective_min_profit_pct"] == 1.5
     assert "enabled" in result["strong_continuation_failed_checks"]
 
 
@@ -18037,12 +18041,26 @@ def test_stat_action_decision_snapshot_separates_pyramid_namespace(monkeypatch):
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "reason": "scale_in_price_resolved",
+            "order_price": 10050,
+            "price_source": "best_bid",
+            "best_bid": 10050,
+            "best_ask": 10060,
+            "spread_bps": 9.95,
+            "max_spread_bps": 80.0,
+        },
+    )
 
     emitted = state_handlers._emit_stat_action_decision_snapshot(
         stock={"id": 2, "name": "PYR", "buy_qty": 1, "holding_ai_score": 72},
         code="654321",
         strategy="SCALPING",
-        ws_data={},
+        ws_data={"best_ask": 10060, "best_bid": 10050},
         chosen_action="hold_wait",
         eligible_actions=["hold_wait"],
         rejected_actions=["pyramid_wait:profit_not_enough"],
@@ -18053,7 +18071,11 @@ def test_stat_action_decision_snapshot_separates_pyramid_namespace(monkeypatch):
         curr_price=10050,
         buy_price=10000,
         scale_in_gate={"allowed": True, "reason": "ok"},
-        scale_in_action={"add_type": "PYRAMID", "reason": "profit_not_enough"},
+        scale_in_action={
+            "add_type": "PYRAMID",
+            "reason": "profit_not_enough",
+            "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
+        },
         reason="unit_test",
     )
 
@@ -18062,6 +18084,10 @@ def test_stat_action_decision_snapshot_separates_pyramid_namespace(monkeypatch):
     assert logs[0][1]["scale_in_arm"] == "PYRAMID"
     assert logs[0][1]["scale_in_blocker_namespace"] == "PYRAMID"
     assert logs[0][1]["scale_in_blocker_reason"] == "profit_not_enough"
+    assert logs[0][1]["executable_best_ask"] == 10060
+    assert logs[0][1]["executable_best_bid"] == 10050
+    assert logs[0][1]["pyramid_price_resolver_observed"] is True
+    assert logs[0][1]["pyramid_price_resolver_order_price"] == 10050
     assert "reversal_add" not in logs[0][1]["rejected_actions"]
 
 
@@ -18118,6 +18144,20 @@ def test_pyramid_block_log_includes_profit_gate_probe(monkeypatch):
         "_log_holding_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
     )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "reason": "scale_in_price_resolved",
+            "order_price": 10100,
+            "price_source": "best_bid",
+            "best_bid": 10100,
+            "best_ask": 10110,
+            "spread_bps": 9.9,
+            "max_spread_bps": 80.0,
+        },
+    )
 
     state_handlers._log_scale_in_arm_blocked(
         {"name": "PYR"},
@@ -18128,11 +18168,17 @@ def test_pyramid_block_log_includes_profit_gate_probe(monkeypatch):
         peak_profit=1.06,
         current_ai_score=65,
         held_sec=45,
+        curr_price=10100,
+        buy_price=10000,
+        ws_data={"best_ask": 10110, "best_bid": 10100},
         gate={"reason": "ok"},
         probe={
+            "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
             "profit_gate_mode": "base",
             "min_profit_pct": 1.5,
             "base_min_profit_pct": 1.5,
+            "configured_min_profit_pct": 1.5,
+            "effective_min_profit_pct": 1.5,
             "strong_continuation_min_profit_pct": 0.9,
             "strong_continuation_allowed": False,
             "strong_continuation_failed_checks": "ai_score_ok,tick_accel_ok",
@@ -18148,6 +18194,14 @@ def test_pyramid_block_log_includes_profit_gate_probe(monkeypatch):
     assert logs[0][1]["scale_in_blocker_reason"] == "profit_not_enough"
     assert logs[0][1]["profit_gate_mode"] == "base"
     assert logs[0][1]["min_profit_pct"] == 1.5
+    assert logs[0][1]["configured_min_profit_pct"] == 1.5
+    assert logs[0][1]["effective_min_profit_pct"] == 1.5
+    assert logs[0][1]["current_price_observed"] == 10100
+    assert logs[0][1]["position_buy_price"] == 10000
+    assert logs[0][1]["executable_best_ask"] == 10110
+    assert logs[0][1]["executable_best_bid"] == 10100
+    assert logs[0][1]["pyramid_price_resolver_observed"] is True
+    assert logs[0][1]["pyramid_price_resolver_order_price"] == 10100
     assert logs[0][1]["strong_continuation_allowed"] is False
     assert (
         logs[0][1]["strong_continuation_failed_checks"] == "ai_score_ok,tick_accel_ok"
@@ -34063,9 +34117,7 @@ def test_stage_buy_order_submission_persists_split_provenance_after_pending_clea
 
     assert "pending_entry_orders" not in stock
     assert stock["entry_split_order_policy_applied"] is True
-    assert stock["entry_split_order_policy_variant_id"] == (
-        "equal_50_50_policy_parent"
-    )
+    assert stock["entry_split_order_policy_variant_id"] == ("equal_50_50_policy_parent")
     assert stock["entry_split_order_variant_id"] == "equal_50_50_offset_0pct_0_3pct"
     assert stock["entry_split_order_price_offsets_ticks"] == "0,1"
 
@@ -45414,6 +45466,404 @@ def test_shallow_volatility_avg_down_accepts_fresh_shallow_rebound():
         assert result["probe"]["shallow_above_stop_line_ok"] is True
     finally:
         scale_in.TRADING_RULES = CONFIG
+
+
+def test_shallow_buy_pressure_override_is_pure_and_changes_only_existing_axis():
+    stock = _reversal_add_stock(
+        {
+            "reversal_add_ai_bottom": 70,
+            "reversal_add_ai_history": [70, 68, 67, 66],
+            "reversal_add_profit_floor": -0.80,
+            "last_reversal_features": {
+                "buy_pressure_10t": 83.0,
+                "tick_acceleration_ratio": 1.12,
+                "large_sell_print_detected": False,
+                "curr_vs_micro_vwap_bp": 3.5,
+                "micro_vwap_available": True,
+                "minute_candle_window_fresh": True,
+                "minute_candle_context_quality": "fresh_bar_window",
+                "tick_context_quality": "live_tick",
+                "tick_context_stale": False,
+                "tick_latest_age_ms": 250,
+                "tick_aggressor_trusted_count": 5,
+                "tick_aggressor_pressure_usable": True,
+                "quote_stale": False,
+                "quote_age_ms": 450,
+            },
+        }
+    )
+    before = json.loads(json.dumps(stock))
+    from src.utils.constants import TRADING_RULES as ORIGINAL_CONFIG
+
+    scale_in.TRADING_RULES = _reversal_add_rules(
+        SCALP_STOP=-2.0,
+        SHALLOW_VOLATILITY_AVG_DOWN_ENABLED=True,
+        SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85.0,
+        AGGRESSIVE_REVERSAL_ADD_ENABLED=False,
+    )
+    try:
+        current = scale_in.evaluate_scalping_reversal_add(
+            stock,
+            profit_rate=-0.58,
+            current_ai_score=72,
+            held_sec=75,
+            now_ts=1_000.0,
+        )
+        candidate = scale_in.evaluate_scalping_reversal_add(
+            stock,
+            profit_rate=-0.58,
+            current_ai_score=72,
+            held_sec=75,
+            shallow_min_buy_pressure_override=80.0,
+            now_ts=1_000.0,
+        )
+        assert current["should_add"] is False
+        assert current["shallow_volatility_blocked_reason"].startswith(
+            "shallow_volatility_buy_pressure_not_met"
+        )
+        assert candidate["should_add"] is True
+        assert candidate["reason"] == "shallow_volatility_avg_down"
+        assert candidate["probe"]["shallow_configured_min_buy_pressure"] == 85.0
+        assert candidate["probe"]["shallow_min_buy_pressure"] == 80.0
+        assert candidate["probe"]["shallow_min_buy_pressure_override_applied"] is True
+        assert stock == before
+    finally:
+        scale_in.TRADING_RULES = ORIGINAL_CONFIG
+
+
+def test_avg_down_route_observation_uses_no_extra_account_api_and_is_source_only(
+    monkeypatch,
+):
+    stock = {
+        "id": 77,
+        "name": "AVG",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "scanner_promotion_id": "promotion-77",
+        "last_reversal_features": {"feature_extracted_at": "2026-07-10T09:00:00+09:00"},
+    }
+    before = json.loads(json.dumps(stock))
+    captured = {}
+    monkeypatch.setattr(state_handlers, "_rule_float", lambda key, default: 85.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_reversal_add",
+        lambda *args, **kwargs: {
+            "should_add": kwargs.get("shallow_min_buy_pressure_override") == 80.0,
+            "add_type": "AVG_DOWN",
+            "reason": (
+                "shallow_volatility_avg_down"
+                if kwargs.get("shallow_min_buy_pressure_override") == 80.0
+                else "blocked"
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "order_price": 100,
+            "price_source": "same_evaluation_ws_bbo",
+        },
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock_arg, code, stage, **fields: captured.update(
+            {"stage": stage, **fields}
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: pytest.fail("observation must not call account API"),
+    )
+
+    state_handlers._observe_avg_down_route_arbitration(
+        stock=stock,
+        code="123456",
+        profit_rate=-0.5,
+        peak_profit=0.1,
+        current_ai_score=70,
+        held_sec=75,
+        curr_price=100,
+        ws_data={"best_bid": 99, "best_ask": 100, "curr": 100},
+        current_reversal={
+            "should_add": False,
+            "reason": "blocked",
+            "shallow_volatility_probe": {"pnl_ok": True, "hold_ok": True},
+        },
+        current_downstream_action={"should_add": False, "reason": "adm_blocked"},
+        current_downstream_evaluated=True,
+        now_ts=1_000.0,
+    )
+
+    assert captured["stage"] == "avg_down_route_arbitration_observed"
+    assert captured["avg_down_route_schema"] == "avg_down_route_arbitration_v2"
+    assert captured["evidence_authority"] == "fixed_observed_exit_source_only"
+    assert captured["runtime_effect"] is False
+    assert captured["actual_order_submitted"] is False
+    assert captured["runtime_candidate_selected"] is False
+    assert captured["runtime_attribution_state"] == (
+        "no_selected_candidate_observation"
+    )
+    replay = json.loads(captured["route_replay"])
+    assert replay["80"]["should_add"] is True
+    assert replay["80"]["sizing_status"] == (
+        "real_budget_not_available_without_extra_api_call"
+    )
+    assert replay["85"]["should_add"] is False
+    assert stock == before
+
+
+def test_avg_down_route_observation_binds_selected_preopen_identity_to_pid(
+    monkeypatch,
+):
+    stock = {
+        "id": 78,
+        "name": "AVG-SELECTED",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "scanner_promotion_id": "promotion-78",
+        "last_reversal_features": {"feature_extracted_at": "2026-07-10T09:00:00+09:00"},
+    }
+    captured = {}
+    monkeypatch.setattr(state_handlers, "_rule_float", lambda key, default: 80.0)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_reversal_add",
+        lambda *args, **kwargs: {"should_add": False, "reason": "blocked"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {"allowed": True, "order_price": 100},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock_arg, code, stage, **fields: captured.update(fields),
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", "80"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID", "avg-down-quality-1"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_CONTRACT_VERSION",
+        "avg_down_paired_economics_v2",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST", "c" * 64)
+
+    state_handlers._observe_avg_down_route_arbitration(
+        stock=stock,
+        code="123456",
+        profit_rate=-0.5,
+        peak_profit=0.1,
+        current_ai_score=70,
+        held_sec=75,
+        curr_price=100,
+        ws_data={"best_bid": 99, "best_ask": 100, "curr": 100},
+        current_reversal={
+            "should_add": True,
+            "add_type": "AVG_DOWN",
+            "reason": "shallow_volatility_avg_down",
+            "shallow_volatility_probe": {"pnl_ok": True, "hold_ok": True},
+        },
+        current_downstream_action=None,
+        current_downstream_evaluated=False,
+        now_ts=1_000.0,
+    )
+
+    assert captured["runtime_candidate_selected"] is True
+    assert captured["runtime_env_written"] is True
+    assert captured["runtime_pid_value_verified"] is True
+    assert captured["runtime_natural_match"] is True
+    assert captured["runtime_attribution_state"] == (
+        "natural_match_decision_terminal_pending"
+    )
+    assert captured["runtime_candidate_quality_update_id"] == "avg-down-quality-1"
+
+
+def test_avg_down_route_observation_failure_is_fail_open(monkeypatch):
+    stock = {"id": 79, "buy_price": 100, "buy_qty": 10}
+    before = dict(stock)
+    errors = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_observe_avg_down_route_arbitration_impl",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("observer failure")),
+    )
+    monkeypatch.setattr(state_handlers, "log_error", errors.append)
+
+    state_handlers._observe_avg_down_route_arbitration(stock=stock)
+
+    assert stock == before
+    assert errors == [
+        "[AVG_DOWN_ROUTE_OBSERVER] source-only replay failed: observer failure"
+    ]
+
+
+def test_avg_down_runtime_config_snapshot_retries_failed_append_and_deduplicates(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+    from src.engine.lifecycle.avg_down_replay import runtime_config_valid
+
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85.0, SCALP_STOP=-1.5
+        ),
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", raising=False
+    )
+    monkeypatch.setattr(state_handlers, "_AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE", None)
+    calls = []
+
+    def emit(stock, code, stage, **fields):
+        calls.append(fields)
+        return {"structured_append_succeeded": len(calls) > 1}
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", emit)
+    stock = {"strategy": "SCALPING"}
+    for _ in range(3):
+        state_handlers._observe_avg_down_runtime_config(
+            stock, "005930", 1_788_483_600.0
+        )
+    assert len(calls) == 2
+    assert all(runtime_config_valid(fields) for fields in calls)
+    assert stock == {"strategy": "SCALPING"}
+
+
+def test_avg_down_runtime_config_default_fallback_not_pid_verified(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        state_handlers, "TRADING_RULES", SimpleNamespace(SCALP_STOP=-1.5)
+    )
+    monkeypatch.delenv(
+        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", raising=False
+    )
+    assert (
+        state_handlers._avg_down_runtime_config_fields()["runtime_pid_value_verified"]
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "age,price,changed_action",
+    [(1.0, 100, False), (3.0, 100, False), (1.0, 101, False), (1.0, 100, True)],
+)
+def test_avg_down_sizing_enrichment_reuses_only_exact_existing_result(
+    monkeypatch, age, price, changed_action
+):
+    stock = {"id": 1, "buy_price": 100, "buy_qty": 10}
+    action = {
+        "should_add": True,
+        "add_type": "AVG_DOWN",
+        "reason": "shallow_volatility_avg_down",
+    }
+    token = state_handlers._AVG_DOWN_ROUTE_CONTEXT.set(
+        {
+            "code": "005930",
+            "record_id": 1,
+            "position_basis": (100, 10),
+            "observed_monotonic": 10.0,
+            "source_event_id": "source-1",
+            "decision_id": "decision-1",
+            "position_episode_id": "episode-1",
+            "actions": {"85": dict(action)},
+            "route_replay": {
+                "85": {
+                    "should_add": True,
+                    "price_allowed": True,
+                    "proposed_add_price": 100,
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(state_handlers.time, "monotonic", lambda: 10.0 + age)
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "describe_dynamic_scale_in_qty",
+        lambda **kwargs: pytest.fail("must reuse final existing result"),
+    )
+    if changed_action:
+        action["reason"] = "different_owner"
+    try:
+        state_handlers._observe_avg_down_route_sizing(
+            stock, "005930", price, {"cash_orderable_qty_cap": 3}, action, {"qty": 3}
+        )
+    finally:
+        state_handlers._AVG_DOWN_ROUTE_CONTEXT.reset(token)
+    assert bool(calls) is (age <= 2.0 and price == 100 and not changed_action)
+    if calls:
+        assert json.loads(calls[0]["sizing_replay"])["85"]["proposed_add_qty"] == 3
+    assert stock == {"id": 1, "buy_price": 100, "buy_qty": 10}
+
+
+def test_avg_down_no_add_reason_difference_is_not_behavior_change():
+    def arm(reason):
+        return state_handlers._avg_down_route_arm_observation(
+            stock={},
+            ws_data={},
+            curr_price=100,
+            action={"should_add": False, "reason": reason},
+            downstream_action=None,
+            downstream_evaluated=True,
+        )
+
+    assert (
+        arm("pressure_blocked")["behavior_signature"]
+        == arm("micro_blocked")["behavior_signature"]
+    )
+
+
+def test_avg_down_route_observation_skips_outside_shallow_parent_scope(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_scalping_reversal_add",
+        lambda *args, **kwargs: calls.append("evaluated"),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: calls.append("logged"),
+    )
+
+    state_handlers._observe_avg_down_route_arbitration(
+        stock={},
+        code="123456",
+        profit_rate=0.1,
+        peak_profit=0.1,
+        current_ai_score=70,
+        held_sec=75,
+        curr_price=100,
+        ws_data={},
+        current_reversal={
+            "should_add": False,
+            "shallow_volatility_probe": {"pnl_ok": False, "hold_ok": True},
+        },
+        current_downstream_action=None,
+        current_downstream_evaluated=True,
+        now_ts=1_000.0,
+    )
+
+    assert calls == []
 
 
 def test_shallow_volatility_avg_down_allows_dedicated_retries_after_cooldown(

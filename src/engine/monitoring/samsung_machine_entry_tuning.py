@@ -13,6 +13,7 @@ import math
 import os
 import tempfile
 from collections import defaultdict
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -26,17 +27,24 @@ from src.trading.order.samsung_entry_policy import (
     CANDIDATE_SCHEMA,
     OPERATOR_OVERRIDE_RUNTIME_SOURCE,
     atomic_write_json,
-    candidate_policies_with_current_baselines,
+    candidate_artifact_hash,
+    canonical_hash,
+    file_sha256,
     load_applied_machine_policy,
     policy_hash,
+    policy_mutations_between,
     validate_candidate,
+    report_artifact_hash,
 )
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 REPORT_TYPE = "samsung_machine_entry_tuning"
-REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v7"
+REPORT_SCHEMA = "samsung_machine_entry_tuning_report_v9"
+HASHED_REPORT_SCHEMAS = frozenset(
+    {"samsung_machine_entry_tuning_report_v8", REPORT_SCHEMA}
+)
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "samsung_machine_entry_tuning_report_v2",
@@ -44,21 +52,31 @@ SUPPORTED_REPORT_SCHEMAS = frozenset(
         "samsung_machine_entry_tuning_report_v4",
         "samsung_machine_entry_tuning_report_v5",
         "samsung_machine_entry_tuning_report_v6",
+        "samsung_machine_entry_tuning_report_v7",
+        "samsung_machine_entry_tuning_report_v8",
         REPORT_SCHEMA,
     }
 )
 CLEAN_BASELINE_DATE = date.fromisoformat("2026-06-05")
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
 ROLLING_WINDOWS = {"rolling_10d": 10, "rolling_20d": 20}
+POST_APPLY_WINDOW_NAME = "post_apply_version"
 BOUNDED_MIN_OBSERVED_DAYS = 5
 SAMPLE_FLOOR = 8
 AUTO_MIN_COMPLETED_LEGS = 8
 ROLLING_10D_MIN_COMPLETED_EPISODES = 4
 MIN_NOTIONAL_EV_UPLIFT_PCT = 0.005
+LOW_SIGNAL_RATE_THRESHOLD = 0.20
+RATE_ASSESSMENT_MIN_OBSERVATION_DAYS = 5
 MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
 MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
+MANUAL_EXIT_RECEIPT_REGISTRY_PATH = (
+    DATA_DIR / "runtime" / "episode_manual_exit_receipts.json"
+)
+MANUAL_CLOSE_RECONCILIATION_DIR = DATA_DIR / "runtime" / "manual_close_reconciliation"
+OUTCOME_AMENDMENT_SCHEMA = "samsung_machine_outcome_amendment_v1"
 MACHINE_FILES = {
     "morning": "samsung_morning_one_share_state.json",
     "morning_reentry": "samsung_morning_sor_reentry_state.json",
@@ -105,13 +123,15 @@ METRIC_CONTRACT = {
         "clean_baseline_cumulative_completed_signal_episodes": SAMPLE_FLOOR,
         "clean_baseline_cumulative_completed_legs": AUTO_MIN_COMPLETED_LEGS,
         "broker_priced_completed_legs": AUTO_MIN_COMPLETED_LEGS,
-        "rolling_10d_completed_signal_episodes": (ROLLING_10D_MIN_COMPLETED_EPISODES),
+        "post_apply_rollback_completed_signal_episodes": ROLLING_10D_MIN_COMPLETED_EPISODES,
         "minimum_notional_ev_uplift_pct": MIN_NOTIONAL_EV_UPLIFT_PCT,
     },
     "primary_decision_metric": [
-        "completed_signal_episodes",
-        "completed_legs_per_attempted_leg",
-        "equal_weight_avg_profit_pct",
+        "notional_weighted_ev_pct",
+        "broker_realized_net_profit_krw",
+        "expected_net_profit_krw_per_observation_day",
+        "retained_signal_rate",
+        "avg_realized_holding_minutes",
     ],
     "profit_cost_model": (
         "broker_exit_fill_price_minus_fixed_round_trip_cost_pct_including_"
@@ -127,8 +147,10 @@ METRIC_CONTRACT = {
         "target_date_krx_trading_day_for_candidate",
         "prebaseline_and_nontrading_reports_excluded",
         "historical_replay_not_mixed_with_actual_outcomes",
-        "positive_rolling_10d_20d_and_cumulative_notional_ev",
-        "candidate_improves_same_policy_cohort_cumulative_and_rolling_10d_ev",
+        "subset_is_diagnostic_only_causal_confirmation_owned_by_entry_timing",
+        "candidate_does_not_reduce_same_opportunity_broker_realized_net_profit",
+        "machine_local_effective_policy_target_quantity_and_timing_cohort",
+        "append_only_outcome_amendment_ledger",
         "exact_date_applied_policy_hash_and_fields",
         "verified_manual_operator_exit_is_realized_pnl_not_machine_target_success",
     ],
@@ -142,6 +164,7 @@ METRIC_CONTRACT = {
         "manual_operator_exit_as_machine_target_fill_success",
         "provider_route_cap_bot_or_broker_guard_change",
         "real_runtime_approval",
+        "cross_runtime_policy_hash_target_or_quantity_cohort_mixing",
     ],
 }
 
@@ -173,6 +196,11 @@ def _as_float(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def _is_sha256(value: Any) -> bool:
+    text = str(value or "")
+    return len(text) == 64 and all(char in "0123456789abcdef" for char in text)
+
+
 def _exit_execution_class(
     *, completed: bool, exit_fill_source: str, profit_price_source: str
 ) -> str:
@@ -198,26 +226,92 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _known_by_report_date(value: Any, target_date: str) -> bool:
+    """Compare KST observation time to an exclusive end-of-report-day cutoff."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            if len(value) != 10:
+                return False
+            parsed = parsed.replace(tzinfo=KST)
+        cutoff = datetime.fromisoformat(target_date).replace(tzinfo=KST) + timedelta(
+            days=1
+        )
+        return parsed < cutoff
+    except (TypeError, ValueError):
+        return False
+
+
+def _row_known_by_report_date(
+    row: dict[str, Any], target_date: str, *, require_exit_timestamp: bool = False
+) -> bool:
+    if require_exit_timestamp and any(
+        leg.get("completed") is True and not leg.get("target_filled_at")
+        for leg in row.get("legs", [])
+        if isinstance(leg, dict)
+    ):
+        # Unlike a frozen historical daily report, a mutable durable state has
+        # no report-date knowledge boundary when its exit time is absent.
+        return False
+    timestamps = [
+        leg.get(key)
+        for leg in row.get("legs", [])
+        if isinstance(leg, dict)
+        for key in ("buy_filled_at", "target_filled_at")
+        if leg.get(key)
+    ]
+    return all(_known_by_report_date(value, target_date) for value in timestamps)
+
+
+def _receipt_known_by_report_date(receipt: dict[str, Any], target_date: str) -> bool:
+    # Economic time AND first knowledge must be causal. An old entry date does
+    # not backdate an operator correction.
+    economic_time = receipt.get("filled_at_kst") or receipt.get("order_date")
+    knowledge_time = receipt.get("applied_at_kst") or receipt.get("recorded_at_kst")
+    return bool(
+        _known_by_report_date(economic_time, target_date)
+        and _known_by_report_date(knowledge_time, target_date)
+    )
+
+
 def _source_quality_preflight(
     target_date: str, source_quality_dir: Path
 ) -> dict[str, Any]:
     path = source_quality_dir / f"observation_source_quality_audit_{target_date}.json"
     payload = _read_json(path)
     if payload is None:
-        return {
+        preflight = {
             "status": "blocked",
             "tuning_input_allowed": False,
             "reason": "observation_source_quality_audit_missing_or_invalid",
             "source_path": str(path),
+            "source_artifact_present": False,
+            "audit_status": "missing",
         }
+        preflight["source_sha256"] = canonical_hash(preflight)
+        return preflight
     status = str(payload.get("status") or "").strip().lower()
-    allowed = (payload.get("summary") or {}).get("tuning_input_allowed") is True
-    passed = allowed and status in {"pass", "warning"}
+    summary = payload.get("summary")
+    allowed = isinstance(summary, dict) and summary.get("tuning_input_allowed") is True
+    passed = (
+        allowed
+        and status in {"pass", "warning"}
+        and payload.get("target_date") == target_date
+        and payload.get("report_type") == "observation_source_quality_audit"
+    )
+    try:
+        source_sha256 = file_sha256(path)
+    except OSError:
+        source_sha256 = ""
     return {
         "status": "pass" if passed else "blocked",
         "tuning_input_allowed": passed,
         "reason": "ready" if passed else "observation_source_quality_audit_blocked",
         "source_path": str(path),
+        "source_sha256": source_sha256,
+        "source_artifact_present": True,
         "audit_status": status,
     }
 
@@ -310,6 +404,10 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         exit_fill_source=exit_fill_source,
         profit_price_source=profit_price_source,
     )
+    holding_duration_sec = _holding_duration_sec(
+        str(leg.get("buy_filled_at") or ""),
+        str(leg.get("target_filled_at") or ""),
+    )
     return {
         "leg_id": str(leg.get("leg_id") or ""),
         "price_role": str(leg.get("price_role") or ""),
@@ -339,7 +437,26 @@ def _sanitize_leg(leg: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "held": held,
         "unresolved": not terminal,
         "equal_weight_profit_pct": profit_pct,
+        "holding_duration_sec": holding_duration_sec,
     }
+
+
+def _holding_duration_sec(started_at: str, completed_at: str) -> int | None:
+    if not started_at or not completed_at:
+        return None
+    try:
+        started = datetime.fromisoformat(started_at)
+        completed = datetime.fromisoformat(completed_at)
+    except ValueError:
+        return None
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=KST)
+    if completed.tzinfo is None:
+        completed = completed.replace(tzinfo=KST)
+    duration = int(
+        (completed.astimezone(KST) - started.astimezone(KST)).total_seconds()
+    )
+    return duration if duration >= 0 else None
 
 
 def _summarize_legs(attempted: bool, legs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -460,6 +577,14 @@ def _normalize_historical_machine_row(row: dict[str, Any]) -> dict[str, Any]:
                 "realized_loss": bool(
                     leg.get("completed") and net_profit is not None and net_profit < 0.0
                 ),
+                "holding_duration_sec": (
+                    _as_int(leg.get("holding_duration_sec"))
+                    if leg.get("holding_duration_sec") is not None
+                    else _holding_duration_sec(
+                        str(leg.get("buy_filled_at") or ""),
+                        str(leg.get("target_filled_at") or ""),
+                    )
+                ),
             }
         )
     normalized["legs"] = normalized_legs
@@ -482,7 +607,480 @@ def _normalize_historical_machine_row(row: dict[str, Any]) -> dict[str, Any]:
         bool(normalized.get("eligible_for_cumulative_tuning"))
         and outcome_complete_for_ev
     )
+    normalized["summary"] = _summarize_legs(attempted, normalized_legs)
     return normalized
+
+
+def _build_outcome_amendment(
+    *,
+    machine: str,
+    source_date: str,
+    recorded_report_date: str,
+    row: dict[str, Any],
+    source_kind: str,
+    source_ref: str,
+    source_sha256: str,
+) -> dict[str, Any]:
+    normalized = _normalize_historical_machine_row(row)
+    normalized["outcome_amendment_source_kind"] = source_kind
+    core = {
+        "schema": OUTCOME_AMENDMENT_SCHEMA,
+        "machine": machine,
+        "source_date": source_date,
+        "recorded_report_date": recorded_report_date,
+        "source_kind": source_kind,
+        "source_ref": source_ref,
+        "source_sha256": source_sha256,
+        "row_sha256": canonical_hash(normalized),
+        "row": normalized,
+    }
+    return {**core, "amendment_id": canonical_hash(core)}
+
+
+def _validate_outcome_amendment(value: Any) -> tuple[bool, str]:
+    if not isinstance(value, dict) or value.get("schema") != OUTCOME_AMENDMENT_SCHEMA:
+        return False, "amendment_schema_invalid"
+    machine = str(value.get("machine") or "")
+    if machine not in MACHINE_FILES:
+        return False, "amendment_machine_invalid"
+    try:
+        source_date = date.fromisoformat(str(value.get("source_date") or ""))
+        recorded_date = date.fromisoformat(str(value.get("recorded_report_date") or ""))
+    except ValueError:
+        return False, "amendment_date_invalid"
+    if (
+        source_date < CLEAN_BASELINE_DATE
+        or recorded_date < source_date
+        or not is_krx_trading_day(source_date)
+    ):
+        return False, "amendment_date_contract_invalid"
+    if str(value.get("source_kind") or "") not in {
+        "durable_state_reconciliation",
+        "legacy_prior_state_reconciliation",
+        "broker_verified_manual_exit_receipt_registry",
+        "operator_custody_close_source_only",
+    }:
+        return False, "amendment_source_kind_invalid"
+    if not str(value.get("source_ref") or ""):
+        return False, "amendment_source_ref_missing"
+    source_sha256 = str(value.get("source_sha256") or "")
+    if not _is_sha256(source_sha256):
+        return False, "amendment_source_hash_invalid"
+    row = value.get("row")
+    if (
+        not isinstance(row, dict)
+        or row.get("machine") != machine
+        or row.get("target_date") != source_date.isoformat()
+        or row.get("outcome_amendment_source_kind") != value.get("source_kind")
+    ):
+        return False, "amendment_row_identity_invalid"
+    if value.get("row_sha256") != canonical_hash(row):
+        return False, "amendment_row_hash_mismatch"
+    if not _row_known_by_report_date(row, recorded_date.isoformat()):
+        return False, "amendment_outcome_after_report_cutoff"
+    legs = row.get("legs")
+    if not isinstance(legs, list) or any(not isinstance(leg, dict) for leg in legs):
+        return False, "amendment_row_legs_invalid"
+    if row.get("summary") != _summarize_legs(bool(row.get("attempted")), legs):
+        return False, "amendment_row_summary_mismatch"
+    expected_complete = bool(
+        not row.get("attempted")
+        or (
+            len(legs) == 2
+            and all(
+                str(leg.get("status") or "") in TERMINAL_LEG_STATUSES for leg in legs
+            )
+        )
+    )
+    if row.get("outcome_complete_for_ev") is not expected_complete:
+        return False, "amendment_row_completion_mismatch"
+    if row.get("eligible_for_cumulative_tuning") is True and (
+        row.get("source_quality") != "pass" or not expected_complete
+    ):
+        return False, "amendment_row_eligibility_invalid"
+    core = {key: item for key, item in value.items() if key != "amendment_id"}
+    if value.get("amendment_id") != canonical_hash(core):
+        return False, "amendment_id_mismatch"
+    return True, "valid"
+
+
+def _outcome_resolution_rank(row: dict[str, Any]) -> tuple[int, int, int, int, int]:
+    summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+    resolution = (
+        row.get("custody_resolution")
+        if isinstance(row.get("custody_resolution"), dict)
+        else {}
+    )
+    source_priority = {
+        "broker_verified_manual_exit_receipt_registry": 3,
+        "durable_state_reconciliation": 2,
+        "legacy_prior_state_reconciliation": 1,
+        "operator_custody_close_source_only": 0,
+    }.get(str(row.get("outcome_amendment_source_kind") or ""), 0)
+    return (
+        int(bool(row.get("outcome_complete_for_ev"))),
+        int(resolution.get("inventory_resolved") is True),
+        source_priority,
+        _as_int(summary.get("completed_legs")),
+        -_as_int(summary.get("unresolved_legs")),
+    )
+
+
+def _effective_inventory_counts(row: dict[str, Any]) -> tuple[int, int]:
+    summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+    resolution = (
+        row.get("custody_resolution")
+        if isinstance(row.get("custody_resolution"), dict)
+        else {}
+    )
+    if resolution.get("inventory_resolved") is True:
+        return 0, 0
+    return _as_int(summary.get("held_legs")), _as_int(summary.get("unresolved_legs"))
+
+
+def _resolve_row_with_broker_receipts(
+    row: dict[str, Any], receipts: list[dict[str, Any]], *, cost_pct: float
+) -> dict[str, Any] | None:
+    normalized = _normalize_historical_machine_row(row)
+    held_legs = [
+        leg
+        for leg in normalized.get("legs", [])
+        if _as_int(leg.get("position_qty")) > 0
+    ]
+    held_quantity = sum(_as_int(leg.get("position_qty")) for leg in held_legs)
+    receipt_lots = [
+        {
+            "quantity": _as_int(item.get("filled_qty")),
+            "price": _as_int(item.get("fill_price")),
+            "filled_at": str(item.get("filled_at_kst") or item.get("order_date") or ""),
+        }
+        for item in receipts
+        if str(item.get("status") or "") == "applied"
+        and _as_int(item.get("filled_qty")) > 0
+        and _as_int(item.get("fill_price")) > 0
+    ]
+    if not held_legs or sum(item["quantity"] for item in receipt_lots) != held_quantity:
+        return None
+    remaining_lots = [dict(item) for item in receipt_lots]
+    for leg in held_legs:
+        required = _as_int(leg.get("position_qty"))
+        allocated = 0
+        proceeds = 0
+        allocated_at: list[str] = []
+        while required > 0 and remaining_lots:
+            lot = remaining_lots[0]
+            take = min(required, lot["quantity"])
+            proceeds += take * lot["price"]
+            allocated += take
+            if lot["filled_at"]:
+                allocated_at.append(lot["filled_at"])
+            required -= take
+            lot["quantity"] -= take
+            if lot["quantity"] == 0:
+                remaining_lots.pop(0)
+        if required or allocated <= 0:
+            return None
+        exit_price = proceeds / allocated
+        entry_price = _as_int(leg.get("fill_price"))
+        if entry_price <= 0:
+            return None
+        leg.update(
+            {
+                "status": "COMPLETE",
+                "position_qty": 0,
+                "target_filled_qty": _as_int(leg.get("buy_filled_qty")),
+                "target_fill_price": exit_price,
+                "target_filled_at": max(allocated_at, default=""),
+                "exit_fill_source": MANUAL_EXIT_FILL_SOURCE,
+                "profit_exit_price": exit_price,
+                "profit_price_source": MANUAL_EXIT_PRICE_SOURCE,
+                "exit_execution_class": "manual_operator_exit",
+                "manual_exit_realized": True,
+                "autonomous_target_filled": False,
+                "completed": True,
+                "held": False,
+                "unresolved": False,
+                "equal_weight_profit_pct": round(
+                    (exit_price / entry_price - 1.0) * 100.0 - cost_pct, 6
+                ),
+                "holding_duration_sec": _holding_duration_sec(
+                    str(leg.get("buy_filled_at") or ""),
+                    max(allocated_at, default=""),
+                ),
+            }
+        )
+        leg["realized_loss"] = leg["equal_weight_profit_pct"] < 0.0
+    if remaining_lots:
+        return None
+    normalized["state_status"] = "COMPLETE"
+    normalized["outcome_complete_for_ev"] = bool(
+        all(
+            str(leg.get("status") or "") in TERMINAL_LEG_STATUSES
+            for leg in normalized.get("legs", [])
+        )
+    )
+    normalized["outcome_exclusion_reasons"] = (
+        []
+        if normalized["outcome_complete_for_ev"]
+        else ["held_or_unresolved_inventory"]
+    )
+    source_reasons = [
+        str(item)
+        for item in normalized.get("source_quality_reasons") or []
+        if str(item) != "held_or_unresolved_inventory"
+    ]
+    normalized["source_quality_reasons"] = source_reasons
+    normalized["source_quality"] = "pass" if not source_reasons else "gap"
+    normalized["eligible_for_cumulative_tuning"] = bool(
+        normalized["source_quality"] == "pass" and normalized["outcome_complete_for_ev"]
+    )
+    normalized["summary"] = _summarize_legs(
+        bool(normalized.get("attempted")), normalized.get("legs", [])
+    )
+    return normalized
+
+
+def _completed_manual_row_matches_receipts(
+    row: dict[str, Any], receipts: list[dict[str, Any]]
+) -> bool:
+    if row.get("outcome_amendment_source_kind") == (
+        "broker_verified_manual_exit_receipt_registry"
+    ):
+        return False
+    manual_legs = [
+        leg
+        for leg in row.get("legs", [])
+        if isinstance(leg, dict)
+        and leg.get("exit_execution_class") == "manual_operator_exit"
+        and leg.get("completed") is True
+    ]
+    if not manual_legs:
+        return False
+    row_quantity = sum(_as_int(leg.get("buy_filled_qty")) for leg in manual_legs)
+    row_proceeds = sum(
+        (_as_float(leg.get("target_fill_price")) or 0.0)
+        * _as_int(leg.get("buy_filled_qty"))
+        for leg in manual_legs
+    )
+    receipt_quantity = sum(_as_int(item.get("filled_qty")) for item in receipts)
+    receipt_proceeds = sum(
+        _as_int(item.get("fill_price")) * _as_int(item.get("filled_qty"))
+        for item in receipts
+    )
+    return bool(
+        row_quantity > 0
+        and row_quantity == receipt_quantity
+        and math.isclose(row_proceeds, receipt_proceeds, abs_tol=1e-6)
+    )
+
+
+def _policy_cohort_contract(
+    row: dict[str, Any], machine: str, applied_dir: Path
+) -> tuple[dict[str, Any] | None, str]:
+    try:
+        target_date = date.fromisoformat(str(row.get("target_date") or ""))
+    except ValueError:
+        return None, "policy_cohort_target_date_invalid"
+    features = (
+        row.get("signal_features")
+        if isinstance(row.get("signal_features"), dict)
+        else {}
+    )
+    as_of = (
+        _signal_policy_as_of(features, target_date) if row.get("attempted") else None
+    )
+    if row.get("attempted") and as_of is None:
+        return None, "policy_cohort_signal_timestamp_invalid"
+    policy_machine = "morning" if machine == "morning_reentry" else machine
+    policy, effective_hash, reason = load_applied_machine_policy(
+        policy_machine,
+        target_date=target_date,
+        applied_dir=applied_dir,
+        as_of=as_of,
+    )
+    if policy is None:
+        if target_date >= APPLIED_POLICY_PROVENANCE_REQUIRED_DATE or not row.get(
+            "attempted"
+        ):
+            return None, f"policy_cohort_applied_unavailable:{reason}"
+        leg_quantities = {
+            _as_int(item.get("quantity"))
+            for item in row.get("legs", [])
+            if isinstance(item, dict) and _as_int(item.get("quantity")) > 0
+        }
+        if len(leg_quantities) != 1 or not _signal_feature_contract_valid(
+            machine, features
+        ):
+            return None, "legacy_policy_cohort_features_invalid"
+        leg_quantity = leg_quantities.pop()
+        cohort = {
+            "machine": machine,
+            "target_ticks": _as_int(features.get("target_ticks")),
+            "episode_quantity": leg_quantity * 2,
+            "leg_quantity_each": leg_quantity,
+        }
+        if machine == "morning":
+            drawdowns = features.get("required_drawdown_pct_by_route") or {}
+            cohort.update(
+                {
+                    "nxt_drawdown_pct": _as_float(drawdowns.get("NXT")),
+                    "sor_drawdown_pct": _as_float(drawdowns.get("SOR")),
+                }
+            )
+        elif machine == "morning_reentry":
+            cohort["entry_policy"] = "fixed_user_approved_reentry_policy"
+        else:
+            cohort.update(
+                {
+                    "rolling_high_drawdown_pct": _as_float(
+                        features.get("required_drawdown_pct")
+                    ),
+                    "rolling_low_proximity_pct": _as_float(
+                        features.get("max_near_low_pct")
+                    ),
+                    "lookback_bars": _as_int(features.get("lookback_bars")),
+                    "entry_valid_completed_bars": _as_int(
+                        features.get("entry_valid_completed_bars")
+                    ),
+                }
+            )
+        cohort["effective_runtime_policy_hash"] = canonical_hash(cohort)
+        return cohort, "ready_legacy_signal_feature_cohort"
+    cohort = {
+        "machine": machine,
+        # Artifact-wide identity remains on signal_features for integrity. It
+        # must not reset this machine's economic cohort when a sibling changes.
+        "effective_runtime_policy_hash": canonical_hash(policy),
+        "target_ticks": int(policy["target_ticks"]),
+        "episode_quantity": int(policy["quantity"]),
+        "leg_quantity_each": int(policy["quantity"]) // 2,
+    }
+    if machine == "morning":
+        cohort.update(
+            {
+                "nxt_drawdown_pct": float(policy["nxt_drawdown_pct"]),
+                "sor_drawdown_pct": float(policy["sor_drawdown_pct"]),
+            }
+        )
+    elif machine == "morning_reentry":
+        cohort["entry_policy"] = "fixed_user_approved_reentry_policy"
+    else:
+        cohort.update(
+            {
+                "rolling_high_drawdown_pct": float(policy["rolling_high_drawdown_pct"]),
+                "rolling_low_proximity_pct": float(policy["rolling_low_proximity_pct"]),
+                "lookback_bars": int(policy["lookback_bars"]),
+                "entry_valid_completed_bars": int(policy["entry_valid_completed_bars"]),
+            }
+        )
+    return cohort, "ready"
+
+
+def _attach_policy_cohort(
+    row: dict[str, Any], machine: str, applied_dir: Path
+) -> dict[str, Any]:
+    normalized = dict(row)
+    cohort, reason = _policy_cohort_contract(normalized, machine, applied_dir)
+    if cohort:
+        features = normalized.get("signal_features") or {}
+        if normalized.get("attempted"):
+            timing = features.get("entry_timing_policy_provenance") or {}
+            delay = _as_int(features.get("entry_confirmation_delay_sec"))
+            mode = str(
+                timing.get("entry_confirmation_mode")
+                or ("fixed_delay" if delay else "baseline_immediate")
+            )
+            recipe = str(
+                (timing.get("dynamic_runtime_decision") or {}).get("policy_id") or ""
+            )
+            if mode == "per_signal_dynamic_0_1_3_5":
+                # Realized 1/3/5-second decisions are outcomes of one recipe,
+                # not different applied policies or independent EV cohorts.
+                delay = 0
+        else:
+            from src.trading.config.machine_entry_timing_policy import (
+                resolve_entry_confirmation_policy,
+            )
+            from src.trading.market.micro_confirmation import dynamic_policy_for_scope
+
+            scope = "morning_sor_reentry" if machine == "morning_reentry" else machine
+            timing = resolve_entry_confirmation_policy(
+                target_date=date.fromisoformat(str(row["target_date"])),
+                owner="episode",
+                scope_id=scope,
+                symbol="005930",
+                session="KRX_REGULAR",
+                entry_state="UNSPECIFIED",
+            )
+            mode, delay = timing["mode"], timing["delay_sec"]
+            recipe = (
+                dynamic_policy_for_scope(
+                    owner="episode", scope_id=scope, symbol="005930"
+                ).policy_id
+                if mode == "per_signal_dynamic_0_1_3_5"
+                else ""
+            )
+        cohort["entry_confirmation"] = {
+            "mode": mode,
+            "delay_sec": delay,
+            "recipe_id": recipe,
+        }
+    normalized["policy_cohort"] = cohort or {}
+    normalized["policy_cohort_id"] = canonical_hash(cohort) if cohort else ""
+    normalized["policy_cohort_status"] = reason
+    if normalized.get("attempted") and cohort is None:
+        normalized["eligible_for_cumulative_tuning"] = False
+        normalized["source_quality"] = "gap"
+        reasons = list(normalized.get("source_quality_reasons") or [])
+        if reason not in reasons:
+            reasons.append(reason)
+        normalized["source_quality_reasons"] = reasons
+    return normalized
+
+
+def _runtime_policy_binding(target_date: str, applied_dir: Path) -> dict[str, Any]:
+    """Freeze the ACTUALLY applied source-date policy, not an unconsumed candidate."""
+    path = applied_dir / f"samsung_machine_entry_policy_{target_date}.json"
+    policies = {}
+    for machine, baseline in BASELINE_POLICIES.items():
+        effective, _, reason = load_applied_machine_policy(
+            machine,
+            target_date=date.fromisoformat(target_date),
+            applied_dir=applied_dir,
+        )
+        if effective is None:
+            return {
+                "status": "invalid" if path.exists() else "missing_baseline_only",
+                "source_date": target_date,
+                "source_artifact_present": path.exists(),
+                "reason": reason,
+                "policies": deepcopy(BASELINE_POLICIES),
+            }
+        # The separate approved +3 target overlay is not this tuner's axis.
+        policies[machine] = {**effective, "target_ticks": baseline["target_ticks"]}
+    return {
+        "status": "ready",
+        "source_date": target_date,
+        "source_artifact_present": True,
+        "source_sha256": file_sha256(path),
+        "policies": policies,
+    }
+
+
+def _same_machine_entry_policy(cohort: Any, policy: dict[str, Any]) -> bool:
+    return (
+        isinstance(cohort, dict)
+        and all(
+            _as_float(cohort.get(key)) == _as_float(policy.get(key))
+            for key in (
+                "rolling_high_drawdown_pct",
+                "rolling_low_proximity_pct",
+                "lookback_bars",
+                "entry_valid_completed_bars",
+            )
+        )
+        and _as_int(cohort.get("episode_quantity")) == _as_int(policy.get("quantity"))
+    )
 
 
 def _sanitize_signal_features(machine: str, raw: Any) -> dict[str, Any]:
@@ -610,7 +1208,7 @@ def _signal_feature_contract_valid(machine: str, features: dict[str, Any]) -> bo
         or len({item.get("leg_id") for item in entry_legs}) != 2
         or any(_as_int(item.get("entry_price")) <= 0 for item in entry_legs)
         or _as_int(features.get("target_ticks")) <= 0
-        or len(str(features.get("runtime_policy_hash") or "")) != 64
+        or not _is_sha256(features.get("runtime_policy_hash"))
     ):
         return False
     if machine == "morning_reentry":
@@ -624,7 +1222,7 @@ def _signal_feature_contract_valid(machine: str, features: dict[str, Any]) -> bo
         )
         override_target_provenance = bool(
             features.get("runtime_policy_source") == OPERATOR_OVERRIDE_RUNTIME_SOURCE
-            and len(str(features.get("runtime_policy_hash") or "")) == 64
+            and _is_sha256(features.get("runtime_policy_hash"))
             and _as_int(features.get("target_ticks")) == 3
         )
         return bool(
@@ -933,12 +1531,16 @@ def extract_machine_row(
     }
 
 
-def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _aggregate_rows(
+    rows: list[dict[str, Any]],
+    *,
+    observation_day_count: int | None = None,
+    current_policy_signal_count: int | None = None,
+) -> dict[str, Any]:
     eligible = [row for row in rows if row.get("eligible_for_cumulative_tuning")]
     attempted = [row for row in eligible if row.get("attempted")]
     all_attempted = [row for row in rows if row.get("attempted")]
     summaries = [row.get("summary", {}) for row in attempted]
-    all_summaries = [row.get("summary", {}) for row in all_attempted]
     completed_returns = [
         float(leg["equal_weight_profit_pct"])
         for row in attempted
@@ -973,6 +1575,13 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if leg.get("equal_weight_profit_pct") is not None
         and leg.get("profit_price_source") == "configured_target_price_proxy"
     ]
+    duration_completed = [
+        leg
+        for row in attempted
+        for leg in row.get("legs", [])
+        if leg.get("completed") is True
+        if _as_float(leg.get("holding_duration_sec")) is not None
+    ]
     attempted_notional = sum(
         _as_int(leg.get("entry_price")) * _as_int(leg.get("quantity"))
         for row in attempted
@@ -1002,10 +1611,9 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     attempted_legs = sum(_as_int(item.get("attempted_legs")) for item in summaries)
     submitted_legs = sum(_as_int(item.get("submitted_legs")) for item in summaries)
     completed_legs = sum(_as_int(item.get("completed_legs")) for item in summaries)
-    held_legs = sum(_as_int(item.get("held_legs")) for item in all_summaries)
-    unresolved_legs = sum(
-        _as_int(item.get("unresolved_legs")) for item in all_summaries
-    )
+    inventory_counts = [_effective_inventory_counts(row) for row in all_attempted]
+    held_legs = sum(item[0] for item in inventory_counts)
+    unresolved_legs = sum(item[1] for item in inventory_counts)
     complete_episodes = sum(
         bool(item.get("completed_signal_episode")) for item in summaries
     )
@@ -1020,16 +1628,71 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         and row.get("source_quality") != "pass"
         for row in rows
     )
+    resolved_observation_days = (
+        max(0, int(observation_day_count))
+        if observation_day_count is not None
+        else len(rows)
+    )
+    signal_rate = (
+        len(attempted) / resolved_observation_days
+        if resolved_observation_days > 0
+        else None
+    )
     if held_legs or unresolved_legs:
         candidate_status = "inventory_or_order_unresolved"
     elif complete_episodes < SAMPLE_FLOOR:
-        candidate_status = "collect_sample"
+        if (
+            resolved_observation_days >= RATE_ASSESSMENT_MIN_OBSERVATION_DAYS
+            and not attempted
+        ):
+            candidate_status = "structural_no_signal_observation"
+        elif (
+            resolved_observation_days >= RATE_ASSESSMENT_MIN_OBSERVATION_DAYS
+            and signal_rate is not None
+            and signal_rate < LOW_SIGNAL_RATE_THRESHOLD
+        ):
+            candidate_status = "evidence_accumulating_low_signal_rate"
+        else:
+            candidate_status = "collect_sample"
     elif len(broker_priced_completed) < AUTO_MIN_COMPLETED_LEGS:
         candidate_status = "collect_broker_sell_fill_price"
-    elif equal_weight_avg_profit_pct is None or equal_weight_avg_profit_pct <= 0:
-        candidate_status = "hold_non_positive_ev"
     else:
-        candidate_status = "operator_review_candidate"
+        # Source/sample readiness is independent of the control strategy's PnL.
+        # A losing control must not veto an independently positive challenger.
+        candidate_status = "auto_bounded_candidate_ready"
+    retained_signal_rate = (
+        round(len(attempted) / current_policy_signal_count, 6)
+        if current_policy_signal_count
+        else None
+    )
+    broker_completed_notional = sum(
+        _as_int(leg.get("fill_price")) * _as_int(leg.get("buy_filled_qty"))
+        for leg in broker_priced_completed
+    )
+    episode_days_remaining = (
+        max(
+            0,
+            math.ceil(
+                (SAMPLE_FLOOR - complete_episodes)
+                * resolved_observation_days
+                / complete_episodes
+            ),
+        )
+        if complete_episodes and resolved_observation_days
+        else None
+    )
+    broker_days_remaining = (
+        max(
+            0,
+            math.ceil(
+                (AUTO_MIN_COMPLETED_LEGS - len(broker_priced_completed))
+                * resolved_observation_days
+                / len(broker_priced_completed)
+            ),
+        )
+        if broker_priced_completed and resolved_observation_days
+        else None
+    )
     return {
         "report_days": len(rows),
         "eligible_report_days": len(eligible),
@@ -1071,8 +1734,65 @@ def _aggregate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "equal_weight_avg_profit_pct": equal_weight_avg_profit_pct,
         "notional_weighted_ev_pct": (
+            round(broker_completed_net_profit / broker_completed_notional * 100.0, 6)
+            if broker_completed_notional > 0
+            else None
+        ),
+        "attempted_notional_return_pct_diagnostic": (
             round(broker_completed_net_profit / attempted_notional * 100.0, 6)
             if attempted_notional > 0
+            else None
+        ),
+        "broker_completed_notional_krw": broker_completed_notional,
+        "observation_coverage_pct": (
+            round(len(eligible) / len(rows) * 100, 6) if rows else None
+        ),
+        "open_inventory_notional_krw_diagnostic": sum(
+            _as_int(leg.get("position_qty")) * _as_int(leg.get("fill_price"))
+            for row in rows
+            if not (row.get("custody_resolution") or {}).get("inventory_resolved")
+            for leg in row.get("legs", [])
+        ),
+        "broker_realized_net_profit_krw": round(broker_completed_net_profit, 3),
+        "expected_net_profit_krw_per_observation_day": (
+            round(broker_completed_net_profit / resolved_observation_days, 3)
+            if resolved_observation_days > 0
+            else None
+        ),
+        "observation_day_count": resolved_observation_days,
+        "signal_rate_per_observation_day": (
+            round(signal_rate, 6) if signal_rate is not None else None
+        ),
+        "retained_signal_rate": retained_signal_rate,
+        "estimated_observation_days_to_sample_floor": (
+            max(episode_days_remaining, broker_days_remaining)
+            if episode_days_remaining is not None and broker_days_remaining is not None
+            else None
+        ),
+        "sample_floor_estimate_contract": {
+            "status": (
+                "rate_projection_not_runtime_approval_eta"
+                if broker_days_remaining is not None
+                else "no_broker_completion_rate_available"
+            ),
+            "completed_episode_days_remaining": episode_days_remaining,
+            "broker_priced_leg_days_remaining": broker_days_remaining,
+            "assumes_stationary_completion_rate": True,
+            "does_not_predict_positive_ev_or_source_recovery": True,
+        },
+        "realized_holding_duration_coverage": (
+            round(len(duration_completed) / completed_legs, 6)
+            if completed_legs
+            else None
+        ),
+        "avg_realized_holding_minutes": (
+            round(
+                sum(float(leg["holding_duration_sec"]) for leg in duration_completed)
+                / len(duration_completed)
+                / 60.0,
+                3,
+            )
+            if duration_completed
             else None
         ),
         "manual_exit_fixed_cost_estimate_net_profit_krw": round(
@@ -1097,10 +1817,11 @@ def _axis_observations(
         if row.get("eligible_for_cumulative_tuning") and row.get("attempted")
     ]
     if machine == "morning":
-        segments: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        segments: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
         for row in attempted:
             features = row.get("signal_features", {})
             key = (
+                str(row.get("policy_cohort_id") or ""),
                 str(features.get("route") or "UNKNOWN"),
                 json.dumps(
                     features.get("required_drawdown_pct_by_route", {}),
@@ -1111,43 +1832,61 @@ def _axis_observations(
         return [
             {
                 "axis": "current_route_drawdown_policy",
+                "policy_cohort_id": policy_cohort_id,
                 "route": route,
                 "required_drawdown_pct_by_route": json.loads(drawdown_policy),
                 "outcome": _aggregate_rows(group),
                 "interpretation": "current_policy_outcome_only_no_relaxation_counterfactual",
             }
-            for (route, drawdown_policy), group in sorted(segments.items())
+            for (policy_cohort_id, route, drawdown_policy), group in sorted(
+                segments.items()
+            )
         ]
 
     if machine == "morning_reentry":
+        latest_cohort_id = (
+            str(attempted[-1].get("policy_cohort_id") or "") if attempted else ""
+        )
+        cohort_attempted = [
+            row
+            for row in attempted
+            if str(row.get("policy_cohort_id") or "") == latest_cohort_id
+        ]
         return (
             [
                 {
                     "axis": "fixed_user_approved_reentry_policy",
-                    "outcome": _aggregate_rows(attempted),
+                    "policy_cohort_id": latest_cohort_id,
+                    "outcome": _aggregate_rows(cohort_attempted),
                     "interpretation": (
                         "actual_outcome_observation_only_no_automatic_policy_mutation"
                     ),
                 }
             ]
-            if attempted
+            if cohort_attempted
             else []
         )
 
     if not attempted:
         return []
-    latest_features = attempted[-1].get("signal_features", {})
-    current_drawdown = _as_float(latest_features.get("required_drawdown_pct"))
-    current_near_low = _as_float(latest_features.get("max_near_low_pct"))
+    latest_cohort_id = str(attempted[-1].get("policy_cohort_id") or "")
+    if not latest_cohort_id:
+        return []
+    current_cohort_rows = [
+        row
+        for row in rows
+        if row.get("eligible_for_cumulative_tuning")
+        and str(row.get("policy_cohort_id") or "") == latest_cohort_id
+    ]
+    current_cohort = attempted[-1].get("policy_cohort") or {}
+    current_drawdown = _as_float(current_cohort.get("rolling_high_drawdown_pct"))
+    current_near_low = _as_float(current_cohort.get("rolling_low_proximity_pct"))
     if current_drawdown is None or current_near_low is None:
         return []
     current_cohort = [
         row
         for row in attempted
-        if _as_float(row.get("signal_features", {}).get("required_drawdown_pct"))
-        == current_drawdown
-        and _as_float(row.get("signal_features", {}).get("max_near_low_pct"))
-        == current_near_low
+        if str(row.get("policy_cohort_id") or "") == latest_cohort_id
     ]
     policy_grid = {
         (current_drawdown, current_near_low),
@@ -1182,7 +1921,13 @@ def _axis_observations(
                     "rolling_high_drawdown_pct": current_drawdown,
                     "rolling_low_proximity_pct": current_near_low,
                 },
-                "outcome": _aggregate_rows(matching),
+                "policy_cohort_id": latest_cohort_id,
+                "policy_cohort": attempted[-1].get("policy_cohort") or {},
+                "outcome": _aggregate_rows(
+                    matching,
+                    observation_day_count=len(current_cohort_rows),
+                    current_policy_signal_count=len(current_cohort),
+                ),
                 "interpretation": "tightening_subset_only_not_a_relaxation_backtest",
             }
         )
@@ -1194,300 +1939,170 @@ def build_policy_candidate(
     *,
     prior_policies: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    machines: dict[str, dict[str, Any]] = {}
-    starting_policies: dict[str, dict[str, Any]] = {}
+    """Maintain actual policy custody; causal optimization belongs to entry timing.
+
+    Historical signal subsets cannot model a later first signal or fill, so
+    they have no new tightening authority. The only remaining mutation here is
+    an evidence-bound unwind of a previously APPLIED legacy tightening.
+    """
+    binding = report.get("source_runtime_policy_binding") or {}
+    starting = deepcopy(
+        binding.get("policies")
+        if binding.get("status") == "ready"
+        else BASELINE_POLICIES
+    )
+    machines: dict[str, Any] = {}
+    rollback_choices = []
     for machine, baseline in BASELINE_POLICIES.items():
-        if machine == "morning":
-            machines[machine] = {
-                "selection_status": "baseline_only_no_observed_alternative",
-                "selected_axis": "current_route_drawdown_policy",
-                "policy": dict(baseline),
-                "evidence": report["operator_review_gate"][machine],
-                "allowed_runtime_apply": True,
-            }
-            starting_policies[machine] = dict(baseline)
-            continue
-        clean_window_axes = {
-            item["axis"]: item
-            for item in report["windows"][CLEAN_WINDOW_NAME][machine][
-                "entry_axis_observations"
-            ]
-        }
-        rolling_window_axes = {
-            window_name: {
-                item["axis"]: item
-                for item in report["windows"][window_name][machine][
-                    "entry_axis_observations"
-                ]
-            }
-            for window_name in ROLLING_WINDOWS
-        }
-        current_policy = dict((prior_policies or {}).get(machine, baseline))
-        starting_policies[machine] = dict(current_policy)
-        eligible: list[tuple[float, str, dict[str, Any]]] = []
-        machine_gate_ready = (
-            report.get("target_date_is_krx_trading_day") is True
-            and report["operator_review_gate"][machine]["status"]
-            == "operator_review_candidate"
+        current = dict(starting[machine])
+        gate = report["operator_review_gate"][machine]
+        post_apply = (
+            report.get("windows", {}).get(POST_APPLY_WINDOW_NAME, {}).get(machine, {})
+        )
+        summary = post_apply.get("summary") or {}
+        cohort = post_apply.get("policy_cohort") or {}
+        active_axes = [
+            key
+            for key in ("rolling_high_drawdown_pct", "rolling_low_proximity_pct")
+            if key in current and current[key] != baseline[key]
+        ]
+        ev = _as_float(summary.get("notional_weighted_ev_pct"))
+        net = _as_float(summary.get("broker_realized_net_profit_krw"))
+        ready = bool(
+            machine != "morning"
+            and len(active_axes) == 1
+            and binding.get("status") == "ready"
+            and report.get("target_date_is_krx_trading_day") is True
             and report.get("source_quality_preflight", {}).get("tuning_input_allowed")
             is True
-        )
-        axis_items = clean_window_axes.items() if machine_gate_ready else ()
-
-        def matches_current_entry_axes(candidate_policy: Any) -> bool:
-            return bool(
-                isinstance(candidate_policy, dict)
-                and all(
-                    _as_float(candidate_policy.get(key))
-                    == _as_float(current_policy.get(key))
-                    for key in (
-                        "rolling_high_drawdown_pct",
-                        "rolling_low_proximity_pct",
-                    )
-                )
-            )
-
-        current_clean_item = next(
-            (
-                item
-                for item in clean_window_axes.values()
-                if matches_current_entry_axes(item.get("resulting_policy"))
-            ),
-            None,
-        )
-        current_clean_outcome = (
-            current_clean_item.get("outcome")
-            if isinstance(current_clean_item, dict)
-            and isinstance(current_clean_item.get("outcome"), dict)
-            else None
-        )
-        for axis, item in axis_items:
-            outcome = item["outcome"]
-            resulting_policy = item["resulting_policy"]
-            if float(resulting_policy["rolling_high_drawdown_pct"]) < float(
-                current_policy["rolling_high_drawdown_pct"]
-            ) or float(resulting_policy["rolling_low_proximity_pct"]) > float(
-                current_policy["rolling_low_proximity_pct"]
-            ):
-                continue
-            changed_axes = [
-                key
-                for key in (
-                    "rolling_high_drawdown_pct",
-                    "rolling_low_proximity_pct",
-                )
-                if float(resulting_policy[key]) != float(current_policy[key])
-            ]
-            if len(changed_axes) != 1:
-                continue
-            if outcome.get("candidate_status") != "operator_review_candidate":
-                continue
-            if outcome.get("completed_legs", 0) < AUTO_MIN_COMPLETED_LEGS:
-                continue
-            if outcome.get("broker_priced_completed_legs", 0) < AUTO_MIN_COMPLETED_LEGS:
-                continue
-            ev = outcome.get("notional_weighted_ev_pct")
-            rolling_outcomes = {
-                window_name: (axes.get(axis) or {}).get("outcome")
-                for window_name, axes in rolling_window_axes.items()
+            and report.get("outcome_amendment_ledger", {}).get("status") == "pass"
+            and gate.get("status")
+            not in {
+                "inventory_or_order_unresolved",
+                "source_quality_blocked",
+                "outcome_amendment_contract_blocked",
             }
-            rolling_current_outcomes = {
-                window_name: next(
-                    (
-                        candidate_item.get("outcome")
-                        for candidate_item in axes.values()
-                        if matches_current_entry_axes(
-                            candidate_item.get("resulting_policy")
-                        )
-                        and isinstance(candidate_item.get("outcome"), dict)
-                    ),
-                    None,
-                )
-                for window_name, axes in rolling_window_axes.items()
-            }
-            current_ev = (
-                current_clean_outcome.get("notional_weighted_ev_pct")
-                if isinstance(current_clean_outcome, dict)
-                else None
+            and post_apply.get("matches_source_date_applied_policy") is True
+            and _same_machine_entry_policy(cohort, current)
+            and bool(post_apply.get("applied_epoch_start"))
+            and all(
+                post_apply["applied_epoch_start"] <= day <= report["target_date"]
+                for day in post_apply.get("observed_trading_dates", [])
             )
-            cumulative_uplift = (
-                float(ev) - float(current_ev)
-                if ev is not None and current_ev is not None
-                else None
-            )
-            rolling_10d = rolling_outcomes.get("rolling_10d")
-            rolling_10d_current = rolling_current_outcomes.get("rolling_10d")
-            rolling_10d_ev = (
-                rolling_10d.get("notional_weighted_ev_pct")
-                if isinstance(rolling_10d, dict)
-                else None
-            )
-            rolling_10d_current_ev = (
-                rolling_10d_current.get("notional_weighted_ev_pct")
-                if isinstance(rolling_10d_current, dict)
-                else None
-            )
-            rolling_10d_uplift = (
-                float(rolling_10d_ev) - float(rolling_10d_current_ev)
-                if rolling_10d_ev is not None and rolling_10d_current_ev is not None
-                else None
-            )
-            rolling_20d = rolling_outcomes.get("rolling_20d")
-            rolling_20d_ev = (
-                rolling_20d.get("notional_weighted_ev_pct")
-                if isinstance(rolling_20d, dict)
-                else None
-            )
-            evidence_ready = bool(
-                isinstance(current_clean_outcome, dict)
-                and outcome.get("eligible_report_days", 0) >= BOUNDED_MIN_OBSERVED_DAYS
-                and outcome.get("completed_signal_episodes", 0) >= SAMPLE_FLOOR
-                and outcome.get("completed_legs", 0) >= AUTO_MIN_COMPLETED_LEGS
-                and outcome.get("broker_priced_completed_legs", 0)
-                >= AUTO_MIN_COMPLETED_LEGS
-                and cumulative_uplift is not None
-                and cumulative_uplift >= MIN_NOTIONAL_EV_UPLIFT_PCT
-                and isinstance(rolling_10d, dict)
-                and rolling_10d.get("completed_signal_episodes", 0)
-                >= ROLLING_10D_MIN_COMPLETED_EPISODES
-                and rolling_10d_ev is not None
-                and float(rolling_10d_ev) > 0
-                and rolling_10d_uplift is not None
-                and rolling_10d_uplift >= MIN_NOTIONAL_EV_UPLIFT_PCT
-                and rolling_20d_ev is not None
-                and float(rolling_20d_ev) > 0
-            )
-            if ev is not None and float(ev) > 0 and evidence_ready:
-                item = dict(item)
-                item["rolling_outcomes"] = rolling_outcomes
-                item["current_policy_outcomes"] = {
-                    CLEAN_WINDOW_NAME: current_clean_outcome,
-                    **rolling_current_outcomes,
-                }
-                item["notional_ev_uplift_pct"] = cumulative_uplift
-                item["rolling_10d_notional_ev_uplift_pct"] = rolling_10d_uplift
-                eligible.append((float(cumulative_uplift), axis, item))
-        if eligible:
-            selection_ev, selected_axis, selected = max(
-                eligible,
-                key=lambda item: (
-                    item[0],
-                    item[2]["resulting_policy"] == item[2]["current_policy_cohort"],
-                ),
-            )
-            current_policy.update(selected["resulting_policy"])
-            selection_status = (
-                "carry_forward_current_policy_best_ev"
-                if selected["resulting_policy"] == selected["current_policy_cohort"]
-                else "bounded_tightening_selected"
-            )
-            evidence = {
-                CLEAN_WINDOW_NAME: selected["outcome"],
-                **selected["rolling_outcomes"],
-                "current_policy_outcomes": selected["current_policy_outcomes"],
-                "notional_ev_uplift_pct": selected["notional_ev_uplift_pct"],
-                "rolling_10d_notional_ev_uplift_pct": selected[
-                    "rolling_10d_notional_ev_uplift_pct"
-                ],
-            }
-        else:
-            selection_ev = None
-            selected_axis = None
-            selection_status = "carry_forward_current_policy_insufficient_evidence"
-            evidence = report["operator_review_gate"][machine]
-        machines[machine] = {
-            "selection_status": selection_status,
-            "selected_axis": selected_axis,
-            "policy": current_policy,
-            "evidence": evidence,
-            "allowed_runtime_apply": True,
-            "selection_ev": selection_ev,
+            and summary.get("completed_signal_episodes", 0)
+            >= ROLLING_10D_MIN_COMPLETED_EPISODES
+            and summary.get("broker_priced_completed_legs", 0)
+            >= ROLLING_10D_MIN_COMPLETED_EPISODES
+            and summary.get("broker_sell_fill_price_coverage") == 1.0
+            and summary.get("held_legs", 0) == 0
+            and summary.get("unresolved_legs", 0) == 0
+            and ev is not None
+            and net is not None
+            and (ev <= 0.0 or net <= 0.0)
+        )
+        evidence = {
+            "operator_review_gate": gate,
+            "post_apply_version": post_apply,
+            "optimization_owner": "machine_entry_timing_tuning",
+            "subset_new_runtime_authority": False,
         }
-    requested_mutations: list[dict[str, Any]] = []
-    for machine in ("midday", "afternoon"):
-        before = starting_policies[machine]
-        after = machines[machine]["policy"]
-        changed = [key for key in before if after[key] != before[key]]
-        if len(changed) > 1:
-            raise ValueError("same_stage_multiple_axis_candidate_forbidden")
-        if changed:
-            key = changed[0]
-            requested_mutations.append(
-                {
-                    "machine": machine,
-                    "axis": key,
-                    "before": before[key],
-                    "after": after[key],
-                    "selection_ev": machines[machine]["selection_ev"],
-                }
-            )
-    if len(requested_mutations) > 1:
-        winner = max(
-            requested_mutations,
-            key=lambda item: float(item["selection_ev"] or float("-inf")),
+        status = (
+            "baseline_only_entry_timing_owns_confirmation"
+            if machine == "morning"
+            else "carry_forward_entry_timing_owns_confirmation"
         )
-        for mutation in requested_mutations:
-            if mutation is winner:
-                continue
-            machine = mutation["machine"]
-            machines[machine]["policy"] = dict(starting_policies[machine])
-            machines[machine][
-                "selection_status"
-            ] = "carry_forward_same_stage_single_axis_guard"
-        requested_mutations = [winner]
-    for item in machines.values():
-        item.pop("selection_ev", None)
-    policy_mutations = [
-        {key: value for key, value in item.items() if key != "selection_ev"}
-        for item in requested_mutations
-    ]
+        if gate.get("status") in {
+            "source_quality_blocked",
+            "outcome_amendment_contract_blocked",
+            "inventory_or_order_unresolved",
+        }:
+            status = f"carry_forward_{gate['status']}"
+        if (
+            active_axes
+            and not ready
+            and gate.get("status")
+            not in {
+                "source_quality_blocked",
+                "outcome_amendment_contract_blocked",
+                "inventory_or_order_unresolved",
+            }
+        ):
+            status = (
+                "carry_forward_legacy_axis_review_required"
+                if summary.get("observation_day_count", 0) >= BOUNDED_MIN_OBSERVED_DAYS
+                else "carry_forward_legacy_axis_post_apply_observation"
+            )
+        machines[machine] = {
+            "selection_status": status,
+            "selected_axis": None,
+            "policy": current,
+            "evidence": evidence,
+            "evidence_digest": canonical_hash(evidence),
+            "allowed_runtime_apply": True,
+        }
+        if ready:
+            rollback_choices.append((float(ev), machine, active_axes[0]))
+    if rollback_choices:
+        _, machine, axis = min(rollback_choices)
+        machines[machine]["policy"][axis] = BASELINE_POLICIES[machine][axis]
+        machines[machine]["selected_axis"] = axis
+        machines[machine][
+            "selection_status"
+        ] = "bounded_rollback_selected_negative_post_apply_ev"
     policies = {machine: item["policy"] for machine, item in machines.items()}
-    return {
+    candidate = {
         "schema": CANDIDATE_SCHEMA,
         "source_date": report["target_date"],
         "generated_at_kst": report["generated_at_kst"],
         "source_report": REPORT_TYPE,
-        "source_report_schema": REPORT_SCHEMA,
+        "source_report_schema": report["schema"],
+        "source_report_binding": {
+            "schema": report["schema"],
+            "target_date": report["target_date"],
+            "sha256": report["artifact_hash"],
+        },
+        "source_runtime_policy_binding": binding,
+        "runtime_optimization_owner": "machine_entry_timing_tuning",
         "clean_tuning_baseline_date": report["clean_tuning_baseline_date"],
         "source_quality_preflight": report.get("source_quality_preflight", {}),
         "policy_hash": policy_hash(policies),
-        "policy_mutations": policy_mutations,
+        "policy_mutations": policy_mutations_between(
+            starting, policies, include_kind=True
+        ),
         "machines": machines,
         "decision_authority": "postclose_bounded_candidate_only",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
-        "rollback": "next_preopen_exact_date_artifact_or_verified_baseline",
+        "rollback": {
+            "trigger": "non_positive_actual_applied_epoch_ev_or_net_profit",
+            "action": "restore_one_legacy_axis_toward_baseline_next_preopen",
+            "floor": {
+                "completed_signal_episodes": ROLLING_10D_MIN_COMPLETED_EPISODES,
+                "broker_priced_completed_legs": ROLLING_10D_MIN_COMPLETED_EPISODES,
+            },
+        },
         "forbidden_uses": [
-            "threshold_relaxation_below_baseline",
+            "subset_only_new_tightening_authority",
+            "unconsumed_candidate_as_applied_policy",
+            "threshold_relaxation_beyond_baseline",
             "quantity_target_or_entry_validity_change",
             "stop_loss_or_forced_exit_creation",
             "same_day_intraday_runtime_mutation",
             "provider_bot_cap_or_broker_guard_change",
         ],
     }
+    candidate["candidate_hash"] = candidate_artifact_hash(candidate)
+    return candidate
 
 
 def write_policy_candidate(
     report: dict[str, Any], candidate_dir: Path = CANDIDATE_DIR
 ) -> Path:
-    prior_policies: dict[str, dict[str, Any]] | None = None
-    prior_paths = sorted(
-        candidate_dir.glob("samsung_machine_entry_policy_candidate_*.json"),
-        reverse=True,
-    )
-    for prior_path in prior_paths:
-        prior = _read_json(prior_path)
-        if prior and str(prior.get("source_date") or "") >= report["target_date"]:
-            continue
-        if not prior:
-            raise ValueError("latest_prior_candidate_unreadable")
-        valid, _ = validate_candidate(prior)
-        if not valid:
-            raise ValueError("latest_prior_candidate_invalid")
-        prior_policies = candidate_policies_with_current_baselines(prior)
-        break
-    candidate = build_policy_candidate(report, prior_policies=prior_policies)
+    candidate = build_policy_candidate(report)
+    valid, reason = validate_candidate(candidate, source_report=report)
+    if not valid:
+        raise ValueError(f"generated_candidate_invalid:{reason}")
     path = candidate_dir / (
         f"samsung_machine_entry_policy_candidate_{report['target_date']}.json"
     )
@@ -1497,27 +2112,35 @@ def write_policy_candidate(
 
 def _load_prior_daily_rows(
     output_dir: Path, target_date: date, cost_pct: float
-) -> dict[str, dict[str, dict[str, Any]]]:
+) -> tuple[
+    dict[str, dict[str, dict[str, Any]]],
+    list[dict[str, Any]],
+    list[str],
+]:
     by_date: dict[str, dict[str, dict[str, Any]]] = {}
+    amendments_by_id: dict[str, dict[str, Any]] = {}
+    issues: list[str] = []
     for path in sorted(output_dir.glob(f"{REPORT_TYPE}_*.json")):
         filename_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
         try:
             report_date = date.fromisoformat(filename_date)
         except ValueError:
             continue
-        if not CLEAN_BASELINE_DATE <= report_date < target_date:
+        # A same-day rerun must retain the append-only outcome ledger even if
+        # the mutable runtime state or receipt registry has since rotated.
+        if not CLEAN_BASELINE_DATE <= report_date <= target_date:
             continue
-        if not is_krx_trading_day(report_date):
-            continue
+        report_is_trading = is_krx_trading_day(report_date)
         payload = _read_json(path)
         if not payload:
-            by_date[filename_date] = {
-                machine: _empty_machine_row(
-                    machine, filename_date, "prior_report_missing_or_invalid_json"
-                )
-                for machine in MACHINE_FILES
-                if _machine_effective(machine, report_date)
-            }
+            if report_is_trading:
+                by_date[filename_date] = {
+                    machine: _empty_machine_row(
+                        machine, filename_date, "prior_report_missing_or_invalid_json"
+                    )
+                    for machine in MACHINE_FILES
+                    if _machine_effective(machine, report_date)
+                }
             continue
         try:
             payload_date = date.fromisoformat(str(payload.get("target_date") or ""))
@@ -1531,20 +2154,35 @@ def _load_prior_daily_rows(
             or payload_date != report_date
             or abs(payload_cost - cost_pct) > 1e-9
         ):
-            by_date[filename_date] = {
-                machine: _empty_machine_row(
-                    machine, filename_date, "prior_report_contract_mismatch"
-                )
-                for machine in MACHINE_FILES
-                if _machine_effective(machine, report_date)
-            }
+            if report_is_trading:
+                by_date[filename_date] = {
+                    machine: _empty_machine_row(
+                        machine, filename_date, "prior_report_contract_mismatch"
+                    )
+                    for machine in MACHINE_FILES
+                    if _machine_effective(machine, report_date)
+                }
+            continue
+        if payload.get("schema") in HASHED_REPORT_SCHEMAS and payload.get(
+            "artifact_hash"
+        ) != report_artifact_hash(payload):
+            issues.append(f"{filename_date}:prior_report_artifact_hash_invalid")
+            if report_is_trading:
+                by_date[filename_date] = {
+                    machine: _empty_machine_row(
+                        machine, filename_date, "prior_report_artifact_hash_invalid"
+                    )
+                    for machine in MACHINE_FILES
+                    if _machine_effective(machine, report_date)
+                }
             continue
         machines = payload.get("daily", {}).get("machines", {})
-        if isinstance(machines, dict):
+        if report_is_trading and isinstance(machines, dict):
             by_date[filename_date] = {
                 machine: (
                     _normalize_historical_machine_row(machines[machine])
                     if isinstance(machines.get(machine), dict)
+                    and _row_known_by_report_date(machines[machine], filename_date)
                     else _empty_machine_row(
                         machine, filename_date, "prior_report_machine_row_missing"
                     )
@@ -1552,7 +2190,7 @@ def _load_prior_daily_rows(
                 for machine in MACHINE_FILES
                 if _machine_effective(machine, report_date)
             }
-        else:
+        elif report_is_trading:
             by_date[filename_date] = {
                 machine: _empty_machine_row(
                     machine, filename_date, "prior_report_machine_map_invalid"
@@ -1560,7 +2198,267 @@ def _load_prior_daily_rows(
                 for machine in MACHINE_FILES
                 if _machine_effective(machine, report_date)
             }
-    return by_date
+        ledger = payload.get("outcome_amendment_ledger")
+        records = ledger.get("records") if isinstance(ledger, dict) else []
+        if payload.get("schema") in HASHED_REPORT_SCHEMAS and (
+            not isinstance(ledger, dict)
+            or ledger.get("status") != "pass"
+            or ledger.get("issues") != []
+            or not isinstance(records, list)
+            or ledger.get("record_count") != len(records or [])
+            or ledger.get("records_sha256") != canonical_hash(records)
+        ):
+            issues.append(f"{filename_date}:outcome_amendment_ledger_hash_invalid")
+            records = []
+        if records is not None and not isinstance(records, list):
+            issues.append(f"{filename_date}:outcome_amendment_records_invalid")
+            records = []
+        for record in records or []:
+            valid, reason = _validate_outcome_amendment(record)
+            if not valid:
+                issues.append(f"{filename_date}:{reason}")
+                continue
+            if str(record["recorded_report_date"]) > filename_date:
+                issues.append(f"{filename_date}:amendment_recorded_after_parent_report")
+                continue
+            amendments_by_id[str(record["amendment_id"])] = record
+        legacy_reconciliations = (
+            payload.get("prior_state_reconciliations")
+            if payload.get("schema") not in HASHED_REPORT_SCHEMAS
+            else None
+        )
+        if isinstance(legacy_reconciliations, dict):
+            for machine, item in legacy_reconciliations.items():
+                if machine not in MACHINE_FILES or not isinstance(item, dict):
+                    continue
+                row = item.get("row")
+                source_date = str(item.get("source_date") or "")
+                if not isinstance(row, dict) or not source_date:
+                    continue
+                amendment = _build_outcome_amendment(
+                    machine=machine,
+                    source_date=source_date,
+                    recorded_report_date=filename_date,
+                    row=row,
+                    source_kind="legacy_prior_state_reconciliation",
+                    source_ref=str(path),
+                    source_sha256=file_sha256(path),
+                )
+                valid, reason = _validate_outcome_amendment(amendment)
+                if not valid:
+                    issues.append(f"{filename_date}:{reason}")
+                    continue
+                amendments_by_id[amendment["amendment_id"]] = amendment
+    ordered_amendments = sorted(
+        amendments_by_id.values(),
+        key=lambda item: (
+            str(item.get("recorded_report_date") or ""),
+            str(item.get("source_date") or ""),
+            str(item.get("machine") or ""),
+            str(item.get("amendment_id") or ""),
+        ),
+    )
+    applied_rank: dict[tuple[str, str], tuple[int, int, int, int, int]] = {}
+    for amendment in ordered_amendments:
+        source_date = str(amendment["source_date"])
+        machine = str(amendment["machine"])
+        row = _normalize_historical_machine_row(amendment["row"])
+        rank = _outcome_resolution_rank(row)
+        key = (source_date, machine)
+        if key in applied_rank and rank < applied_rank[key]:
+            continue
+        by_date.setdefault(
+            source_date,
+            {
+                item: _empty_machine_row(
+                    item,
+                    source_date,
+                    "prior_report_missing_during_outcome_amendment",
+                )
+                for item in MACHINE_FILES
+                if _machine_effective(item, date.fromisoformat(source_date))
+            },
+        )
+        by_date[source_date][machine] = row
+        applied_rank[key] = rank
+    return by_date, ordered_amendments, sorted(set(issues))
+
+
+def _upsert_outcome_amendment(
+    history: dict[str, dict[str, dict[str, Any]]],
+    amendments_by_id: dict[str, dict[str, Any]],
+    amendment: dict[str, Any],
+    issues: list[str],
+) -> None:
+    valid, reason = _validate_outcome_amendment(amendment)
+    if not valid:
+        issues.append(reason)
+        return
+    source_date = str(amendment["source_date"])
+    machine = str(amendment["machine"])
+    current = history.get(source_date, {}).get(machine)
+    amended = _normalize_historical_machine_row(amendment["row"])
+    if isinstance(current, dict) and _outcome_resolution_rank(amended) < (
+        _outcome_resolution_rank(current)
+    ):
+        return
+    amendments_by_id[str(amendment["amendment_id"])] = amendment
+    history.setdefault(
+        source_date,
+        {
+            item: _empty_machine_row(
+                item, source_date, "outcome_amendment_without_base_daily_row"
+            )
+            for item in MACHINE_FILES
+            if _machine_effective(item, date.fromisoformat(source_date))
+        },
+    )
+    history[source_date][machine] = amended
+
+
+def _apply_broker_receipt_amendments(
+    history: dict[str, dict[str, dict[str, Any]]],
+    *,
+    target_date: str,
+    cost_pct: float,
+    receipt_registry_path: Path,
+    amendments_by_id: dict[str, dict[str, Any]],
+    issues: list[str],
+) -> None:
+    registry = _read_json(receipt_registry_path)
+    if registry is None:
+        return
+    if registry.get("schema") != "episode_manual_exit_receipt_registry_v1":
+        issues.append("manual_exit_receipt_registry_schema_invalid")
+        return
+    raw_receipts = registry.get("receipts")
+    if not isinstance(raw_receipts, list):
+        issues.append("manual_exit_receipt_registry_rows_invalid")
+        return
+    try:
+        registry_sha256 = file_sha256(receipt_registry_path)
+    except OSError:
+        issues.append("manual_exit_receipt_registry_hash_unavailable")
+        return
+    for source_date, machines in history.items():
+        for machine, row in machines.items():
+            if machine not in MACHINE_FILES:
+                continue
+            owner_id = f"samsung_{machine}"
+            matches = [
+                item
+                for item in raw_receipts
+                if isinstance(item, dict)
+                and item.get("owner_id") == owner_id
+                and item.get("entry_trade_date") == source_date
+                and item.get("symbol") == "005930"
+                and item.get("status") == "applied"
+                and _receipt_known_by_report_date(item, target_date)
+            ]
+            if not matches:
+                continue
+            held, unresolved = _effective_inventory_counts(row)
+            if held or unresolved:
+                resolved = _resolve_row_with_broker_receipts(
+                    row, matches, cost_pct=cost_pct
+                )
+            elif _completed_manual_row_matches_receipts(row, matches):
+                resolved = _normalize_historical_machine_row(row)
+            else:
+                continue
+            if resolved is None:
+                issues.append(
+                    f"{source_date}:{machine}:manual_exit_receipt_allocation_invalid"
+                )
+                continue
+            amendment = _build_outcome_amendment(
+                machine=machine,
+                source_date=source_date,
+                recorded_report_date=target_date,
+                row=resolved,
+                source_kind="broker_verified_manual_exit_receipt_registry",
+                source_ref=str(receipt_registry_path),
+                source_sha256=registry_sha256,
+            )
+            _upsert_outcome_amendment(history, amendments_by_id, amendment, issues)
+
+
+def _apply_source_only_custody_resolutions(
+    history: dict[str, dict[str, dict[str, Any]]],
+    *,
+    target_date: str,
+    reconciliation_dir: Path,
+    amendments_by_id: dict[str, dict[str, Any]],
+    issues: list[str],
+) -> None:
+    if not reconciliation_dir.exists():
+        return
+    for path in sorted(reconciliation_dir.glob("*.json")):
+        payload = _read_json(path)
+        if (
+            payload is None
+            or payload.get("schema") != "episode_manual_close_reconciliation_receipt_v1"
+            or payload.get("authority") != "explicit_operator_manual_sale_confirmation"
+            or payload.get("runtime_effect") != "owner_ledger_custody_close_only"
+            or payload.get("broker_order_submitted") is not False
+        ):
+            continue
+        recorded_at = payload.get("reconciled_at_kst") or payload.get(
+            "generated_at_kst"
+        )
+        if not _known_by_report_date(recorded_at, target_date):
+            continue
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            issues.append(f"{path.name}:manual_close_targets_invalid")
+            continue
+        for item in targets:
+            if not isinstance(item, dict):
+                continue
+            owner = str(item.get("owner") or "")
+            if not owner.startswith("samsung_"):
+                continue
+            machine = owner.removeprefix("samsung_")
+            source_date = str(item.get("prior_trade_date") or "")
+            row = history.get(source_date, {}).get(machine)
+            if machine not in MACHINE_FILES or not isinstance(row, dict):
+                continue
+            held, unresolved = _effective_inventory_counts(row)
+            if not (held or unresolved):
+                continue
+            held_quantity = sum(
+                _as_int(leg.get("position_qty")) for leg in row.get("legs", [])
+            )
+            if (
+                held_quantity <= 0
+                or _as_int(item.get("reconciled_quantity")) != held_quantity
+            ):
+                issues.append(f"{path.name}:{machine}:manual_close_quantity_mismatch")
+                continue
+            resolved = deepcopy(row)
+            resolved["custody_resolution"] = {
+                "inventory_resolved": True,
+                "economics_eligible": False,
+                "reason": "operator_confirmed_close_without_unique_broker_owner_fill",
+                "receipt_id": str(payload.get("receipt_id") or ""),
+                "reconciled_quantity": _as_int(item.get("reconciled_quantity")),
+            }
+            resolved["eligible_for_cumulative_tuning"] = False
+            resolved["source_quality"] = "gap"
+            reasons = list(resolved.get("source_quality_reasons") or [])
+            if "manual_close_unpriced_source_only" not in reasons:
+                reasons.append("manual_close_unpriced_source_only")
+            resolved["source_quality_reasons"] = reasons
+            amendment = _build_outcome_amendment(
+                machine=machine,
+                source_date=source_date,
+                recorded_report_date=target_date,
+                row=resolved,
+                source_kind="operator_custody_close_source_only",
+                source_ref=str(path),
+                source_sha256=file_sha256(path),
+            )
+            _upsert_outcome_amendment(history, amendments_by_id, amendment, issues)
 
 
 def build_report(
@@ -1571,6 +2469,8 @@ def build_report(
     cost_pct: float,
     source_quality_dir: Path = SOURCE_QUALITY_DIR,
     applied_dir: Path = APPLIED_DIR,
+    manual_exit_receipt_registry_path: Path = MANUAL_EXIT_RECEIPT_REGISTRY_PATH,
+    manual_close_reconciliation_dir: Path = MANUAL_CLOSE_RECONCILIATION_DIR,
 ) -> dict[str, Any]:
     parsed_date = date.fromisoformat(target_date)
     expected_clean_dates = _clean_trading_dates_through(parsed_date)
@@ -1618,6 +2518,10 @@ def build_report(
                 "row": resolved_row,
                 "source_quality_preflight": original_preflight,
             }
+            if not _row_known_by_report_date(
+                resolved_row, target_date, require_exit_timestamp=True
+            ):
+                prior_state_reconciliations.pop(machine)
             daily_machines[machine] = _empty_machine_row(
                 machine,
                 target_date,
@@ -1631,6 +2535,10 @@ def build_report(
             cost_pct=cost_pct,
             applied_dir=applied_dir,
         )
+        if not _row_known_by_report_date(daily_machines[machine], target_date):
+            daily_machines[machine] = _empty_machine_row(
+                machine, target_date, "durable_outcome_after_report_cutoff"
+            )
     source_quality_preflight = _source_quality_preflight(
         target_date, source_quality_dir
     )
@@ -1644,24 +2552,58 @@ def build_report(
             if "observation_source_quality_audit_blocked" not in reasons:
                 reasons.append("observation_source_quality_audit_blocked")
             row["source_quality_reasons"] = reasons
-    history = _load_prior_daily_rows(output_dir, parsed_date, cost_pct)
+    history, prior_amendments, amendment_issues = _load_prior_daily_rows(
+        output_dir, parsed_date, cost_pct
+    )
+    amendments_by_id = {str(item["amendment_id"]): item for item in prior_amendments}
     for machine, reconciliation in prior_state_reconciliations.items():
         source_date = reconciliation["source_date"]
-        history.setdefault(
-            source_date,
-            {
-                item: _empty_machine_row(
-                    item,
-                    source_date,
-                    "prior_report_missing_during_state_reconciliation",
-                )
-                for item in MACHINE_FILES
-                if _machine_effective(item, date.fromisoformat(source_date))
-            },
+        state_path = state_dir / MACHINE_FILES[machine]
+        amendment = _build_outcome_amendment(
+            machine=machine,
+            source_date=source_date,
+            recorded_report_date=target_date,
+            row=reconciliation["row"],
+            source_kind="durable_state_reconciliation",
+            source_ref=str(state_path),
+            source_sha256=file_sha256(state_path),
         )
-        history[source_date][machine] = reconciliation["row"]
+        _upsert_outcome_amendment(
+            history, amendments_by_id, amendment, amendment_issues
+        )
     if target_date_is_trading:
         history[target_date] = daily_machines
+    _apply_broker_receipt_amendments(
+        history,
+        target_date=target_date,
+        cost_pct=cost_pct,
+        receipt_registry_path=manual_exit_receipt_registry_path,
+        amendments_by_id=amendments_by_id,
+        issues=amendment_issues,
+    )
+    _apply_source_only_custody_resolutions(
+        history,
+        target_date=target_date,
+        reconciliation_dir=manual_close_reconciliation_dir,
+        amendments_by_id=amendments_by_id,
+        issues=amendment_issues,
+    )
+    for day, machine_rows in history.items():
+        for machine, row in list(machine_rows.items()):
+            if not isinstance(row, dict):
+                continue
+            machine_rows[machine] = _attach_policy_cohort(row, machine, applied_dir)
+        if day == target_date:
+            daily_machines = machine_rows
+    outcome_amendments = sorted(
+        amendments_by_id.values(),
+        key=lambda item: (
+            str(item.get("recorded_report_date") or ""),
+            str(item.get("source_date") or ""),
+            str(item.get("machine") or ""),
+            str(item.get("amendment_id") or ""),
+        ),
+    )
     ordered_dates = sorted(history)
     observed_date_set = {date.fromisoformat(item) for item in ordered_dates}
     unobserved_dates = [
@@ -1672,6 +2614,7 @@ def build_report(
     windows: dict[str, dict[str, Any]] = {
         CLEAN_WINDOW_NAME: {},
         **{name: {} for name in ROLLING_WINDOWS},
+        POST_APPLY_WINDOW_NAME: {},
     }
     rolling_date_sets = {
         name: set(item.isoformat() for item in expected_clean_dates[-days:])
@@ -1680,14 +2623,31 @@ def build_report(
     for machine in MACHINE_FILES:
         dated_rows = [(day, history[day].get(machine)) for day in ordered_dates]
         rows = [row for _, row in dated_rows]
-        clean_rows = [
+        latest_policy_cohort_id = next(
+            (
+                str(row.get("policy_cohort_id") or "")
+                for _, row in reversed(dated_rows)
+                if isinstance(row, dict) and row.get("policy_cohort_id")
+            ),
+            "",
+        )
+        all_policy_cohort_rows = [
             row
             for row in rows
             if isinstance(row, dict)
             and row.get("cohort") != "pre_effective_not_applicable"
         ]
+        clean_rows = [
+            row
+            for row in all_policy_cohort_rows
+            if str(row.get("policy_cohort_id") or "") == latest_policy_cohort_id
+        ]
         windows[CLEAN_WINDOW_NAME][machine] = {
+            "policy_cohort_id": latest_policy_cohort_id,
             "summary": _aggregate_rows(clean_rows),
+            "all_policy_cohorts_summary_audit_only": _aggregate_rows(
+                all_policy_cohort_rows
+            ),
             "entry_axis_observations": _axis_observations(clean_rows, machine),
         }
         for window_name, window_dates in rolling_date_sets.items():
@@ -1697,18 +2657,60 @@ def build_report(
                 if day in window_dates
                 and isinstance(row, dict)
                 and row.get("cohort") != "pre_effective_not_applicable"
+                and str(row.get("policy_cohort_id") or "") == latest_policy_cohort_id
             ]
             windows[window_name][machine] = {
                 "summary": _aggregate_rows(rolling_rows),
                 "entry_axis_observations": _axis_observations(rolling_rows, machine),
                 "expected_trading_dates": sorted(window_dates),
             }
+        # An A -> B -> A policy sequence has two A apply epochs. Earlier A
+        # economics may inform cumulative diagnostics but cannot roll back A2.
+        post_apply_rows = []
+        for observed_date in reversed(expected_clean_dates):
+            row = history.get(observed_date.isoformat(), {}).get(machine)
+            if (
+                not isinstance(row, dict)
+                or str(row.get("policy_cohort_id") or "") != latest_policy_cohort_id
+            ):
+                break
+            post_apply_rows.append(row)
+        post_apply_rows.reverse()
+        current_row = _attach_policy_cohort(
+            {"target_date": target_date, "attempted": False}, machine, applied_dir
+        )
+        current_cohort = current_row["policy_cohort"]
+        current_reason = current_row["policy_cohort_status"]
+        windows[POST_APPLY_WINDOW_NAME][machine] = {
+            "policy_cohort_id": latest_policy_cohort_id,
+            "policy_cohort": (
+                post_apply_rows[-1].get("policy_cohort") if post_apply_rows else {}
+            ),
+            "summary": _aggregate_rows(post_apply_rows),
+            "entry_axis_observations": _axis_observations(post_apply_rows, machine),
+            "observed_trading_dates": [
+                str(row.get("target_date") or "") for row in post_apply_rows
+            ],
+            "applied_epoch_start": (
+                post_apply_rows[0]["target_date"] if post_apply_rows else None
+            ),
+            "matches_source_date_applied_policy": bool(
+                current_reason == "ready"
+                and current_cohort
+                and latest_policy_cohort_id == canonical_hash(current_cohort)
+            ),
+        }
     review_gate: dict[str, dict[str, Any]] = {}
     for machine in MACHINE_FILES:
         clean_cumulative = windows[CLEAN_WINDOW_NAME][machine]["summary"]
-        status = str(clean_cumulative["candidate_status"])
+        post_apply = windows[POST_APPLY_WINDOW_NAME][machine]["summary"]
+        status = str(post_apply["candidate_status"])
         if daily_machines[machine].get("cohort") == "pre_effective_not_applicable":
             status = "not_effective"
+        elif amendment_issues:
+            status = "outcome_amendment_contract_blocked"
+        elif post_apply["held_legs"] or post_apply["unresolved_legs"]:
+            status = "inventory_or_order_unresolved"
         elif (
             not source_quality_preflight["tuning_input_allowed"]
             or daily_machines[machine].get("source_quality") != "pass"
@@ -1725,6 +2727,35 @@ def build_report(
             "clean_baseline_notional_weighted_ev_pct": clean_cumulative[
                 "notional_weighted_ev_pct"
             ],
+            "post_apply_policy_cohort_id": windows[POST_APPLY_WINDOW_NAME][machine][
+                "policy_cohort_id"
+            ],
+            "post_apply_completed_signal_episodes": post_apply[
+                "completed_signal_episodes"
+            ],
+            "post_apply_broker_priced_completed_legs": post_apply[
+                "broker_priced_completed_legs"
+            ],
+            "post_apply_held_legs": post_apply["held_legs"],
+            "post_apply_unresolved_legs": post_apply["unresolved_legs"],
+            "post_apply_notional_weighted_ev_pct": post_apply[
+                "notional_weighted_ev_pct"
+            ],
+            "post_apply_broker_realized_net_profit_krw": post_apply[
+                "broker_realized_net_profit_krw"
+            ],
+            "post_apply_expected_net_profit_krw_per_observation_day": post_apply[
+                "expected_net_profit_krw_per_observation_day"
+            ],
+            "post_apply_signal_rate_per_observation_day": post_apply[
+                "signal_rate_per_observation_day"
+            ],
+            "post_apply_avg_realized_holding_minutes": post_apply[
+                "avg_realized_holding_minutes"
+            ],
+            "estimated_observation_days_to_sample_floor": post_apply[
+                "estimated_observation_days_to_sample_floor"
+            ],
             "rolling_10d_notional_weighted_ev_pct": windows["rolling_10d"][machine][
                 "summary"
             ]["notional_weighted_ev_pct"],
@@ -1735,8 +2766,41 @@ def build_report(
                 "broker_priced_completed_legs"
             ],
             "allowed_runtime_apply": False,
+            "condition_feasibility": {
+                "optimization_owner": "machine_entry_timing_tuning",
+                "subset_promotion_retired": True,
+                "control_profit_state": (
+                    "not_broker_realized"
+                    if clean_cumulative["notional_weighted_ev_pct"] is None
+                    else (
+                        "positive"
+                        if clean_cumulative["notional_weighted_ev_pct"] > 0
+                        else "non_positive"
+                    )
+                ),
+                "sample_floor_estimate": clean_cumulative[
+                    "sample_floor_estimate_contract"
+                ],
+                "axes": [
+                    {
+                        "axis": item["axis"],
+                        "status": (
+                            "no_candidate_signal_observed"
+                            if item["outcome"]["signal_attempts"] == 0
+                            else (
+                                "no_distinct_behavior_observed"
+                                if item["outcome"].get("retained_signal_rate") == 1.0
+                                else "diagnostic_only_causal_path_required"
+                            )
+                        ),
+                    }
+                    for item in windows[CLEAN_WINDOW_NAME][machine][
+                        "entry_axis_observations"
+                    ]
+                ],
+            },
         }
-    return {
+    report = {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
@@ -1747,12 +2811,32 @@ def build_report(
         "cost_pct": cost_pct,
         "metric_contract": METRIC_CONTRACT,
         "source_quality_preflight": source_quality_preflight,
+        "source_runtime_policy_binding": _runtime_policy_binding(
+            target_date, applied_dir
+        ),
+        "runtime_optimization_handoff": {
+            "owner": "machine_entry_timing_tuning",
+            "source_consumer": "machine_microstructure_attribution",
+            "objective": "causal_rise_or_rebound_confirmation_ev_and_net_profit",
+            "subset_new_runtime_authority": False,
+            "required_evidence": "exact_route_causal_confirmation_and_paired_outcomes",
+            "status": "existing_entry_timing_chain_owns_candidate_selection",
+            "actual_order_submitted": False,
+        },
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "observes_actual_order_outcomes": True,
         "daily": {"machines": daily_machines},
         "prior_state_reconciliations": prior_state_reconciliations,
+        "outcome_amendment_ledger": {
+            "schema": "samsung_machine_outcome_amendment_ledger_v1",
+            "status": "blocked" if amendment_issues else "pass",
+            "issues": sorted(set(amendment_issues)),
+            "record_count": len(outcome_amendments),
+            "records_sha256": canonical_hash(outcome_amendments),
+            "records": outcome_amendments,
+        },
         "clean_baseline_window": {
             "start_date": CLEAN_BASELINE_DATE.isoformat(),
             "end_date": target_date,
@@ -1773,25 +2857,28 @@ def build_report(
             "no_entry_threshold_or_runtime_change"
         ),
         "next_action": (
-            "collect_clean_two_leg_episodes_until_rare_machine_bounded_floors; "
-            "require_5_observed_days_8_completed_episodes_8_broker_priced_legs; "
-            "require_positive_rolling_10d_20d_and_cumulative_broker_priced_ev_and_"
-            "same_policy_cohort_ev_uplift; "
-            "eligible_tightening_is_materialized_only_for_next_preopen; "
-            "held_or_unresolved_inventory_must_close_naturally_before_candidate_readiness"
+            "retain_actual_outcome_and_subset_diagnostics; "
+            "causal_confirmation_optimization_owned_by_machine_entry_timing_tuning; "
+            "subset_only_tightening_is_not_a_runtime_candidate; "
+            "held_or_unresolved_inventory_requires_durable_resolution_before_candidate_readiness; "
+            "negative_post_apply_version_ev_triggers_single_axis_bounded_rollback"
         ),
     }
+    report["artifact_hash"] = report_artifact_hash(report)
+    return report
 
 
 def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         f"# Samsung machine entry tuning — {report['target_date']}",
         "",
-        "- Decision: actual-state observation plus a bounded next-PREOPEN candidate; no same-day runtime change.",
+        "- Decision: actual-state audit; causal rise/rebound optimization belongs to machine entry timing. No subset-only promotion or same-day runtime change.",
         "- Source: target-date machine state plus prior artifacts from this producer only; no market-history query.",
         f"- Clean baseline: {report['clean_tuning_baseline_date']}",
         f"- Clean-baseline actual observations: {report['clean_baseline_window']['available_actual_observation_date_count']}/{report['clean_baseline_window']['expected_trading_date_count']} trading dates; missing dates are coverage only and are not imputed.",
-        "- Held/unresolved inventory blocks candidate readiness; there is no stop-loss or forced exit.",
+        "- Decision windows use only the latest exact runtime-policy/target/quantity cohort; cross-version totals are audit-only.",
+        f"- Outcome amendment ledger: {report['outcome_amendment_ledger']['status']} / {report['outcome_amendment_ledger']['record_count']} records.",
+        "- Held/unresolved inventory in the latest exact cohort blocks candidate readiness; there is no stop-loss or forced exit.",
         "",
         "## Daily",
         "",
@@ -1818,12 +2905,17 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{gate['clean_baseline_notional_weighted_ev_pct']}; rolling10/20 "
             f"{gate['rolling_10d_notional_weighted_ev_pct']}/"
             f"{gate['rolling_20d_notional_weighted_ev_pct']}; broker-priced legs "
-            f"{gate['broker_priced_completed_legs']}/{AUTO_MIN_COMPLETED_LEGS}."
+            f"{gate['broker_priced_completed_legs']}/{AUTO_MIN_COMPLETED_LEGS}; "
+            f"post-apply net/day KRW {gate['post_apply_broker_realized_net_profit_krw']}/"
+            f"{gate['post_apply_expected_net_profit_krw_per_observation_day']}; "
+            f"signal rate {gate['post_apply_signal_rate_per_observation_day']}; "
+            f"avg realized hold min {gate['post_apply_avg_realized_holding_minutes']}; "
+            f"estimated days to floor {gate['estimated_observation_days_to_sample_floor']}."
         )
     lines.extend(
         [
             "",
-            "Only source-quality-passed tightening subsets may enter the next-PREOPEN candidate. Relaxation, alternate cancel windows, and price-touch fill assumptions are not evaluated.",
+            "Signal subsets are diagnostic only. New confirmation candidates require the entry-timing causal replay and apply contracts. Only an actually applied legacy tightening can be unwound here using exact-epoch evidence.",
             "",
         ]
     )
@@ -1831,6 +2923,8 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def write_report(report: dict[str, Any], output_dir: Path) -> tuple[Path, Path]:
+    if report.get("artifact_hash") != report_artifact_hash(report):
+        raise ValueError("report_artifact_hash_invalid")
     stem = f"{REPORT_TYPE}_{report['target_date']}"
     json_path = output_dir / f"{stem}.json"
     md_path = output_dir / f"{stem}.md"

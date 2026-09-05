@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -315,8 +316,7 @@ def _real_entry_lifecycle_record(
         "record_id": str(row.get("record_id") or fields.get("record_id") or "").strip(),
         "record_key": record_key,
         "attempt_id": attempt_id or None,
-        "main_lifecycle_id": str(fields.get("main_lifecycle_id") or "").strip()
-        or None,
+        "main_lifecycle_id": str(fields.get("main_lifecycle_id") or "").strip() or None,
         "stock_code": row.get("stock_code") or fields.get("stock_code"),
         "stock_name": row.get("stock_name") or fields.get("stock_name"),
         "strategy": fields.get("strategy") or "SCALPING",
@@ -333,9 +333,7 @@ def _real_entry_lifecycle_record(
     return item
 
 
-def _real_entry_lifecycle_key(
-    row: dict[str, Any], fields: dict[str, Any]
-) -> str:
+def _real_entry_lifecycle_key(row: dict[str, Any], fields: dict[str, Any]) -> str:
     """Return the narrowest stable identity for one real entry attempt.
 
     Scanner records can be recycled for a later promotion of the same symbol.  A
@@ -925,6 +923,42 @@ def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
         "scale_in_blocker_namespace": fields.get("scale_in_blocker_namespace"),
         "profit_rate": _safe_float(fields.get("profit_rate")),
         "peak_profit": _safe_float(fields.get("peak_profit")),
+        "pyramid_evaluation_schema": fields.get("pyramid_evaluation_schema"),
+        "profit_gate_mode": fields.get("profit_gate_mode"),
+        "configured_min_profit_pct": _safe_float(
+            fields.get("configured_min_profit_pct") or fields.get("base_min_profit_pct")
+        ),
+        "effective_min_profit_pct": _safe_float(
+            fields.get("effective_min_profit_pct") or fields.get("min_profit_pct")
+        ),
+        "base_min_profit_pct": _safe_float(fields.get("base_min_profit_pct")),
+        "current_price_observed": _safe_float(
+            fields.get("current_price_observed") or fields.get("curr_price")
+        ),
+        "position_buy_price": _safe_float(
+            fields.get("position_buy_price") or fields.get("buy_price")
+        ),
+        "executable_best_ask": _safe_float(fields.get("executable_best_ask")),
+        "executable_best_bid": _safe_float(fields.get("executable_best_bid")),
+        "pyramid_price_observation_source": fields.get(
+            "pyramid_price_observation_source"
+        ),
+        "pyramid_price_resolver_observation_status": fields.get(
+            "pyramid_price_resolver_observation_status"
+        ),
+        "pyramid_price_resolver_observed": _optional_boolish(
+            fields.get("pyramid_price_resolver_observed")
+        ),
+        "pyramid_price_resolver_allowed": _optional_boolish(
+            fields.get("pyramid_price_resolver_allowed")
+        ),
+        "pyramid_price_resolver_reason": fields.get("pyramid_price_resolver_reason"),
+        "pyramid_price_resolver_order_price": _safe_float(
+            fields.get("pyramid_price_resolver_order_price")
+        ),
+        "pyramid_price_resolver_price_source": fields.get(
+            "pyramid_price_resolver_price_source"
+        ),
         "current_ai_score": _safe_float(
             fields.get("current_ai_score") or fields.get("ai_score")
         ),
@@ -941,6 +975,31 @@ def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
         "minute_candle_window_fresh": _optional_boolish(
             fields.get("minute_candle_window_fresh")
         ),
+        "quote_stale": _optional_boolish(fields.get("quote_stale")),
+        "quote_age_ms": _safe_float(fields.get("quote_age_ms")),
+        "drawdown_from_peak": _safe_float(fields.get("drawdown_from_peak")),
+        "is_new_high": _optional_boolish(fields.get("is_new_high")),
+        "ai_score_available": _optional_boolish(fields.get("ai_score_available")),
+        "large_sell_print_detected": _optional_boolish(
+            fields.get("large_sell_print_detected")
+        ),
+        "reversal_feature_stale": _optional_boolish(
+            fields.get("reversal_feature_stale")
+        ),
+        "tick_context_stale": _optional_boolish(fields.get("tick_context_stale")),
+        "strong_continuation_min_profit_pct": _safe_float(
+            fields.get("strong_continuation_min_profit_pct")
+        ),
+        "strong_continuation_allowed": _optional_boolish(
+            fields.get("strong_continuation_allowed")
+        ),
+        "pyramid_quality_support_score": _safe_float(
+            fields.get("pyramid_quality_support_score")
+        ),
+        "pyramid_quality_required_support_score": _safe_float(
+            fields.get("pyramid_quality_required_support_score")
+        ),
+        "pyramid_quality_hard_blockers": fields.get("pyramid_quality_hard_blockers"),
         "min_profit_pct": _safe_float(fields.get("min_profit_pct")),
         "min_ai_score": _safe_float(fields.get("min_ai_score")),
         "min_buy_pressure": _safe_float(fields.get("min_buy_pressure")),
@@ -948,6 +1007,506 @@ def _pyramid_blocked_record(row: dict[str, Any]) -> dict[str, Any] | None:
         "max_micro_vwap_bps": _safe_float(fields.get("max_micro_vwap_bps")),
         "pyramid_runtime_prior_status": fields.get("pyramid_runtime_prior_status"),
         "pyramid_runtime_prior_signal": fields.get("pyramid_runtime_prior_signal"),
+        "pyramid_runtime_prior_support_applied": _optional_boolish(
+            fields.get("pyramid_runtime_prior_support_applied")
+        ),
+        "pyramid_runtime_prior_risk_applied": _optional_boolish(
+            fields.get("pyramid_runtime_prior_risk_applied")
+        ),
+        "runtime_family": fields.get("runtime_family"),
+        "rising_missed_scout_pyramid_bridge_lineage": _optional_boolish(
+            fields.get("rising_missed_scout_pyramid_bridge_lineage")
+        ),
+    }
+
+
+_PYRAMID_REPLAY_CONTEXT_FIELDS = (
+    "profit_gate_mode",
+    "configured_min_profit_pct",
+    "effective_min_profit_pct",
+    "base_min_profit_pct",
+    "strong_continuation_min_profit_pct",
+    "strong_continuation_allowed",
+    "drawdown_from_peak",
+    "is_new_high",
+    "current_ai_score",
+    "ai_score_available",
+    "min_ai_score",
+    "buy_pressure_10t",
+    "min_buy_pressure",
+    "tick_acceleration_ratio",
+    "min_tick_accel",
+    "large_sell_print_detected",
+    "curr_vs_micro_vwap_bp",
+    "max_micro_vwap_bps",
+    "micro_vwap_available",
+    "reversal_feature_stale",
+    "tick_context_stale",
+    "tick_aggressor_trusted_count",
+    "tick_aggressor_pressure_usable",
+    "quote_stale",
+    "quote_age_ms",
+    "pyramid_runtime_prior_status",
+    "pyramid_runtime_prior_signal",
+    "pyramid_runtime_prior_support_applied",
+    "pyramid_runtime_prior_risk_applied",
+    "runtime_family",
+    "rising_missed_scout_pyramid_bridge_lineage",
+    "pyramid_price_resolver_observation_status",
+    "pyramid_price_resolver_observed",
+    "pyramid_price_resolver_allowed",
+    "pyramid_price_resolver_reason",
+    "pyramid_price_resolver_order_price",
+    "pyramid_price_resolver_price_source",
+    "pyramid_price_resolver_best_bid",
+    "pyramid_price_resolver_best_ask",
+    "pyramid_price_resolver_spread_bps",
+    "pyramid_price_resolver_max_spread_bps",
+)
+
+
+def _pyramid_evaluation_event(row: dict[str, Any]) -> dict[str, Any] | None:
+    fields = _fields(row)
+    stage = str(row.get("stage") or "")
+    arm = str(fields.get("scale_in_arm") or fields.get("scale_in_action_type") or "")
+    if stage != "pyramid_blocked_reason" and not (
+        stage == "stat_action_decision_snapshot" and arm.upper() == "PYRAMID"
+    ):
+        return None
+    configured = _safe_float(
+        fields.get("configured_min_profit_pct")
+        or fields.get("base_min_profit_pct")
+        or fields.get("min_profit_pct")
+    )
+    effective = _safe_float(
+        fields.get("effective_min_profit_pct") or fields.get("min_profit_pct")
+    )
+    action_reason = str(
+        fields.get("scale_in_action_reason")
+        or fields.get("scale_in_blocker_reason")
+        or fields.get("blocked_reason")
+        or "-"
+    )
+    observed_selected = bool(
+        stage == "stat_action_decision_snapshot"
+        and str(fields.get("chosen_action") or "") == "pyramid_wait"
+        and action_reason
+        in {"scalping_pyramid_ok", "rising_missed_scout_pyramid_bridge_ok"}
+    )
+    gate_allowed = _optional_boolish(fields.get("scale_in_gate_allowed"))
+    if gate_allowed is None:
+        gate_allowed = str(fields.get("gate_reason") or "").strip().lower() == "ok"
+    event = {
+        "source_stage": stage,
+        "source_event_ts": row.get("emitted_at"),
+        "record_id": str(row.get("record_id") or "").strip(),
+        "stock_code": str(row.get("stock_code") or "").strip(),
+        "stock_name": row.get("stock_name"),
+        "observed_gate_selected": observed_selected,
+        "observed_gate_reason": action_reason,
+        "scale_in_gate_allowed": gate_allowed,
+        "scale_in_gate_reason": fields.get("scale_in_gate_reason")
+        or fields.get("gate_reason"),
+        "profit_rate": _safe_float(fields.get("profit_rate")),
+        "peak_profit": _safe_float(fields.get("peak_profit")),
+        "configured_min_profit_pct": configured,
+        "effective_min_profit_pct": effective,
+        "pyramid_evaluation_schema": fields.get("pyramid_evaluation_schema")
+        or "legacy_pyramid_gate_observation",
+        "current_price_observed": _safe_float(
+            fields.get("current_price_observed") or fields.get("curr_price")
+        ),
+        "position_buy_price": _safe_float(
+            fields.get("position_buy_price") or fields.get("buy_price")
+        ),
+        "executable_best_ask": _safe_float(fields.get("executable_best_ask")),
+        "executable_best_bid": _safe_float(fields.get("executable_best_bid")),
+        "pyramid_price_observation_source": fields.get(
+            "pyramid_price_observation_source"
+        ),
+        "effective_venue": _venue_token(
+            fields.get("effective_venue") or fields.get("holding_context_venue")
+        )
+        or "UNKNOWN",
+        "market_session_bucket": fields.get("market_session_bucket")
+        or fields.get("holding_context_session"),
+        "runtime_family": fields.get("runtime_family"),
+        "rising_missed_scout_pyramid_bridge_lineage": _optional_boolish(
+            fields.get("rising_missed_scout_pyramid_bridge_lineage")
+        ),
+        "pyramid_runtime_prior_support_applied": _optional_boolish(
+            fields.get("pyramid_runtime_prior_support_applied")
+        ),
+        "pyramid_runtime_prior_risk_applied": _optional_boolish(
+            fields.get("pyramid_runtime_prior_risk_applied")
+        ),
+    }
+    for key in _PYRAMID_REPLAY_CONTEXT_FIELDS:
+        if key in event and event.get(key) is not None:
+            continue
+        raw = fields.get(key)
+        if key in {
+            "configured_min_profit_pct",
+            "effective_min_profit_pct",
+            "base_min_profit_pct",
+            "strong_continuation_min_profit_pct",
+            "drawdown_from_peak",
+            "current_ai_score",
+            "min_ai_score",
+            "buy_pressure_10t",
+            "min_buy_pressure",
+            "tick_acceleration_ratio",
+            "min_tick_accel",
+            "curr_vs_micro_vwap_bp",
+            "max_micro_vwap_bps",
+            "quote_age_ms",
+            "tick_aggressor_trusted_count",
+            "pyramid_price_resolver_order_price",
+            "pyramid_price_resolver_best_bid",
+            "pyramid_price_resolver_best_ask",
+            "pyramid_price_resolver_spread_bps",
+            "pyramid_price_resolver_max_spread_bps",
+        }:
+            event[key] = _safe_float(raw)
+        elif key in {
+            "strong_continuation_allowed",
+            "is_new_high",
+            "ai_score_available",
+            "large_sell_print_detected",
+            "micro_vwap_available",
+            "reversal_feature_stale",
+            "tick_context_stale",
+            "tick_aggressor_pressure_usable",
+            "quote_stale",
+            "pyramid_runtime_prior_support_applied",
+            "pyramid_runtime_prior_risk_applied",
+            "rising_missed_scout_pyramid_bridge_lineage",
+            "pyramid_price_resolver_observed",
+            "pyramid_price_resolver_allowed",
+        }:
+            event[key] = _optional_boolish(raw)
+        else:
+            event[key] = raw
+    return event
+
+
+def _events_match(
+    blocked: dict[str, Any], snapshot: dict[str, Any], *, max_gap_sec: float = 5.0
+) -> bool:
+    left = _event_epoch(blocked.get("source_event_ts"))
+    right = _event_epoch(snapshot.get("source_event_ts"))
+    if left is None or right is None or abs(right - left) > max_gap_sec:
+        return False
+    left_profit = _safe_float(blocked.get("profit_rate"), None)
+    right_profit = _safe_float(snapshot.get("profit_rate"), None)
+    return bool(
+        left_profit is not None
+        and right_profit is not None
+        and abs(left_profit - right_profit) <= 0.011
+        and str(blocked.get("observed_gate_reason") or "")
+        == str(snapshot.get("observed_gate_reason") or "")
+    )
+
+
+def _finalize_pyramid_threshold_replay_rows(
+    event_streams: dict[str, list[dict[str, Any]]],
+    candidates: dict[str, dict[str, Any]],
+    one_share_records: dict[str, dict[str, Any]],
+    terminal_sell_records: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for record_key, stream in event_streams.items():
+        ordered = sorted(
+            stream,
+            key=lambda event: (
+                _event_epoch(event.get("source_event_ts")) or float("inf"),
+                str(event.get("source_stage") or ""),
+            ),
+        )
+        blocked_events = [
+            event
+            for event in ordered
+            if event.get("source_stage") == "pyramid_blocked_reason"
+        ]
+        primary: list[dict[str, Any]] = []
+        for event in ordered:
+            if event.get(
+                "source_stage"
+            ) == "stat_action_decision_snapshot" and not event.get(
+                "observed_gate_selected"
+            ):
+                match = next(
+                    (
+                        blocked
+                        for blocked in blocked_events
+                        if _events_match(blocked, event)
+                    ),
+                    None,
+                )
+                if match is not None:
+                    for key in (
+                        "current_price_observed",
+                        "position_buy_price",
+                        "executable_best_ask",
+                        "executable_best_bid",
+                        "pyramid_price_observation_source",
+                        "pyramid_price_resolver_observation_status",
+                        "pyramid_price_resolver_observed",
+                        "pyramid_price_resolver_allowed",
+                        "pyramid_price_resolver_reason",
+                        "pyramid_price_resolver_order_price",
+                        "pyramid_price_resolver_price_source",
+                        "pyramid_price_resolver_best_bid",
+                        "pyramid_price_resolver_best_ask",
+                        "pyramid_price_resolver_spread_bps",
+                        "pyramid_price_resolver_max_spread_bps",
+                        "effective_venue",
+                        "market_session_bucket",
+                    ):
+                        if match.get(key) in (
+                            None,
+                            "",
+                            0,
+                            0.0,
+                            "UNKNOWN",
+                        ) and event.get(key) not in (None, "", 0, 0.0, "UNKNOWN"):
+                            match[key] = event.get(key)
+                    continue
+            primary.append(event)
+
+        terminal = (
+            terminal_sell_records.get(record_key)
+            or one_share_records.get(record_key)
+            or candidates.get(record_key)
+            or {}
+        )
+        final_ts = terminal.get("final_ts")
+        sell_price = _safe_float(terminal.get("sell_price"), None)
+        final_profit = _safe_float(terminal.get("final_profit_rate"), None)
+        if sell_price is not None and not math.isfinite(sell_price):
+            sell_price = None
+        if final_profit is not None and (
+            not math.isfinite(final_profit) or final_profit < -100.0
+        ):
+            final_profit = None
+        terminal_venue = _venue_token(terminal.get("effective_venue"))
+        for index, event in enumerate(primary):
+            item = dict(event)
+            event_ts = item.get("source_event_ts")
+            event_epoch = _event_epoch(event_ts)
+            final_epoch = _event_epoch(final_ts)
+            reasons: list[str] = []
+            if event_epoch is None:
+                reasons.append("invalid_evaluation_timestamp")
+            if item.get("profit_rate") is None:
+                reasons.append("profit_rate_missing")
+            if _safe_float(item.get("configured_min_profit_pct"), 0.0) <= 0:
+                reasons.append("configured_min_profit_missing")
+            if item.get("scale_in_gate_allowed") is not True:
+                reasons.append("upstream_scale_in_gate_not_allowed")
+            if final_epoch is None or sell_price is None or sell_price <= 0:
+                reasons.append("terminal_sell_price_missing")
+            elif event_epoch is not None and final_epoch <= event_epoch:
+                reasons.append("terminal_not_after_evaluation")
+            if final_profit is None:
+                reasons.append("terminal_profit_rate_missing")
+            if item.get("effective_venue") == "UNKNOWN" and terminal_venue:
+                item["effective_venue"] = terminal_venue
+                item["effective_venue_source"] = "terminal_cycle_fallback"
+                reasons.append("evaluation_venue_missing_terminal_only")
+            elif item.get("effective_venue") == "UNKNOWN":
+                reasons.append("effective_venue_missing")
+            if not str(item.get("market_session_bucket") or "").strip():
+                reasons.append("evaluation_market_session_missing")
+            competing_owner = bool(
+                item.get("rising_missed_scout_pyramid_bridge_lineage")
+                or str(item.get("runtime_family") or "")
+                == "rising_missed_scout_pyramid_bridge"
+            )
+            prior_applied = bool(
+                item.get("pyramid_runtime_prior_support_applied")
+                or item.get("pyramid_runtime_prior_risk_applied")
+            )
+            if competing_owner:
+                reasons.append("same_stage_competing_bridge_owner")
+            if prior_applied:
+                reasons.append("runtime_prior_action_applied")
+            best_ask = _safe_float(item.get("executable_best_ask"), 0.0) or 0.0
+            best_bid = _safe_float(item.get("executable_best_bid"), 0.0) or 0.0
+            quote_stale = item.get("quote_stale")
+            executable_price_valid = bool(
+                best_ask > 0
+                and best_bid > 0
+                and best_ask >= best_bid
+                and quote_stale is False
+            )
+            if not executable_price_valid:
+                reasons.append("fresh_executable_bbo_missing")
+            resolver_observed = item.get("pyramid_price_resolver_observed") is True
+            resolver_allowed = item.get("pyramid_price_resolver_allowed") is True
+            resolver_price = (
+                _safe_float(item.get("pyramid_price_resolver_order_price"), 0.0) or 0.0
+            )
+            resolver_reason = str(item.get("pyramid_price_resolver_reason") or "")
+            resolver_price_source = str(
+                item.get("pyramid_price_resolver_price_source") or ""
+            )
+            resolver_limit_price_valid = bool(
+                resolver_reason == "scale_in_price_resolved"
+                and resolver_price_source
+                in {"best_bid", "defensive_ticks", "best_bid_defensive_clamp"}
+            )
+            if not resolver_observed:
+                reasons.append("pyramid_price_resolver_observation_missing")
+            elif not resolver_allowed:
+                reasons.append("pyramid_price_resolver_blocked")
+            elif not resolver_limit_price_valid:
+                reasons.append("pyramid_price_resolver_limit_contract_invalid")
+            if resolver_price <= 0:
+                reasons.append("pyramid_price_resolver_order_price_missing")
+            item.update(
+                {
+                    "pyramid_evaluation_id": (
+                        f"{record_key}:{event_ts or 'missing'}:{index}"
+                    ),
+                    "position_key": record_key,
+                    "final_ts": final_ts,
+                    "sell_price": sell_price,
+                    "final_profit_rate": final_profit,
+                    "outcome_status": (
+                        "closed"
+                        if final_epoch is not None
+                        and event_epoch is not None
+                        and final_epoch > event_epoch
+                        and sell_price is not None
+                        and sell_price > 0
+                        else "pending_or_unusable"
+                    ),
+                    "same_stage_competing_owner": competing_owner,
+                    "runtime_prior_action_applied": prior_applied,
+                    "price_evidence_level": (
+                        "fresh_quote_existing_resolver_limit_price"
+                        if executable_price_valid
+                        and resolver_observed
+                        and resolver_allowed
+                        and resolver_limit_price_valid
+                        and resolver_price > 0
+                        else (
+                            "mark_price_only"
+                            if _safe_float(item.get("current_price_observed"), 0.0) > 0
+                            else "price_missing"
+                        )
+                    ),
+                    "replay_entry_price": (
+                        resolver_price
+                        if executable_price_valid
+                        and resolver_observed
+                        and resolver_allowed
+                        and resolver_limit_price_valid
+                        and resolver_price > 0
+                        else None
+                    ),
+                    "mark_price_diagnostic": _safe_float(
+                        item.get("current_price_observed"), None
+                    ),
+                    "gate_replay_source_quality_valid": not any(
+                        reason
+                        in {
+                            "invalid_evaluation_timestamp",
+                            "profit_rate_missing",
+                            "configured_min_profit_missing",
+                            "upstream_scale_in_gate_not_allowed",
+                            "terminal_sell_price_missing",
+                            "terminal_profit_rate_missing",
+                            "terminal_not_after_evaluation",
+                            "same_stage_competing_bridge_owner",
+                            "runtime_prior_action_applied",
+                            "evaluation_venue_missing_terminal_only",
+                            "effective_venue_missing",
+                            "evaluation_market_session_missing",
+                        }
+                        for reason in reasons
+                    ),
+                    "fixed_exit_economic_replay_ready": not reasons,
+                    "source_quality_reasons": reasons,
+                    "decision_layer": "pyramid_gate_only",
+                    "submit_evaluable": False,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": bool(terminal.get("pyramid_submit_seen")),
+                    "broker_order_forbidden": not bool(
+                        terminal.get("pyramid_submit_seen")
+                    ),
+                    "decision_authority": (
+                        "source_only_fixed_observed_exit_pyramid_gate_replay"
+                    ),
+                    "forbidden_uses": FORBIDDEN_USES,
+                }
+            )
+            rows.append(item)
+    return sorted(
+        rows,
+        key=lambda item: (
+            str(item.get("source_event_ts") or ""),
+            str(item.get("pyramid_evaluation_id") or ""),
+        ),
+    )
+
+
+def _pyramid_threshold_replay_coverage(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    reason_counts = Counter(
+        str(reason)
+        for row in rows
+        for reason in row.get("source_quality_reasons") or []
+        if str(reason)
+    )
+    ready_count = sum(
+        1 for row in rows if row.get("fixed_exit_economic_replay_ready") is True
+    )
+    return {
+        "evaluation_event_count": len(rows),
+        "fixed_exit_economic_replay_ready_count": ready_count,
+        "explicitly_unusable_or_pending_count": len(rows) - ready_count,
+        "gate_replay_source_quality_valid_count": sum(
+            1 for row in rows if row.get("gate_replay_source_quality_valid") is True
+        ),
+        "pending_outcome_count": sum(
+            1
+            for row in rows
+            if "terminal_sell_price_missing"
+            in (row.get("source_quality_reasons") or [])
+        ),
+        "price_or_resolver_gap_count": sum(
+            1
+            for row in rows
+            if any(
+                reason
+                in {
+                    "fresh_executable_bbo_missing",
+                    "pyramid_price_resolver_observation_missing",
+                    "pyramid_price_resolver_blocked",
+                    "pyramid_price_resolver_limit_contract_invalid",
+                    "pyramid_price_resolver_order_price_missing",
+                }
+                for reason in row.get("source_quality_reasons") or []
+            )
+        ),
+        "owner_or_prior_conflict_count": sum(
+            1
+            for row in rows
+            if any(
+                reason
+                in {
+                    "same_stage_competing_bridge_owner",
+                    "runtime_prior_action_applied",
+                }
+                for reason in row.get("source_quality_reasons") or []
+            )
+        ),
+        "source_quality_reason_counts": dict(sorted(reason_counts.items())),
+        "coverage_scope": "observed_pyramid_gate_events_only_not_full_tick_universe",
+        "accounting_complete": ready_count + (len(rows) - ready_count) == len(rows),
+        "runtime_effect": False,
     }
 
 
@@ -1205,10 +1764,355 @@ _POST_PROBE_RECOVERY_AUTHORITIES = {
     "source_only_post_hard_abort_recovery_observation_no_runtime_mutation",
     "source_only_post_terminal_abort_recovery_observation_no_runtime_mutation",
 }
+_WINNER_RECOVERY_GATE_STAGES = {
+    "post_probe_winner_recovery_selected",
+    "post_probe_winner_recovery_blocked",
+}
+_WINNER_RECOVERY_DOWNSTREAM_BLOCK_STAGES = {
+    "scale_in_margin_authority_block",
+    "scale_in_execution_limit_block",
+    "scale_in_quantity_limit_block",
+    "scale_in_price_guard_block",
+    "scale_in_pyramid_micro_context_guard_block",
+    "scale_in_qty_block",
+    "scale_in_owner_registry_reconciliation_required",
+}
+_WINNER_RECOVERY_SUBMIT_STAGES = {
+    "scale_in_order_leg_submitted",
+    "scale_in_order_submitted",
+}
+_WINNER_RECOVERY_FUNNEL_STAGES = (
+    _WINNER_RECOVERY_GATE_STAGES
+    | _WINNER_RECOVERY_DOWNSTREAM_BLOCK_STAGES
+    | _WINNER_RECOVERY_SUBMIT_STAGES
+    | {"scale_in_executed", "sell_completed"}
+)
+_WINNER_RECOVERY_FUNNEL_FIELD_NAMES = {
+    "actual_order_submitted",
+    "add_reason",
+    "add_type",
+    "allowed_runtime_apply",
+    "blocked_reason",
+    "broker_order_forbidden",
+    "effective_venue",
+    "post_probe_winner_recovery_action",
+    "post_probe_winner_recovery_block_reason",
+    "post_probe_winner_recovery_confirmation_count",
+    "post_probe_winner_recovery_confirmation_ready",
+    "post_probe_winner_recovery_qty_cap",
+    "reason",
+    "runtime_effect",
+    "scale_in_arm",
+    "scale_in_blocker_reason",
+    "scale_in_type",
+}
 _SOFT_RESIDUAL_ABORT_REASONS = {
     "residual_leg_direction_deferred",
     "residual_revalidation_timeout",
 }
+
+
+def _winner_recovery_funnel_event(row: dict[str, Any]) -> dict[str, Any] | None:
+    stage = str(row.get("stage") or "")
+    if stage not in _WINNER_RECOVERY_FUNNEL_STAGES:
+        return None
+    fields = _fields(row)
+    return {
+        "stage": stage,
+        "emitted_at": row.get("emitted_at"),
+        "record_id": str(row.get("record_id") or fields.get("record_id") or "").strip(),
+        "stock_code": str(
+            row.get("stock_code") or fields.get("stock_code") or ""
+        ).strip(),
+        "stock_name": str(
+            row.get("stock_name") or fields.get("stock_name") or ""
+        ).strip(),
+        "fields": {
+            key: value
+            for key, value in fields.items()
+            if key in _WINNER_RECOVERY_FUNNEL_FIELD_NAMES
+        },
+    }
+
+
+def _winner_recovery_block_reason(event: dict[str, Any]) -> str:
+    fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+    return str(
+        fields.get("post_probe_winner_recovery_block_reason")
+        or fields.get("scale_in_blocker_reason")
+        or fields.get("blocked_reason")
+        or fields.get("reason")
+        or "unknown"
+    ).strip()
+
+
+def _winner_recovery_runtime_funnel(
+    event_streams: dict[str, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    runtime_block_reasons: Counter[str] = Counter()
+    downstream_block_reasons: Counter[str] = Counter()
+    selected_count = 0
+    selected_downstream_blocked_count = 0
+    selected_order_submitted_count = 0
+    selected_executed_count = 0
+    selected_open_or_unresolved_count = 0
+    selected_closed_without_submit_count = 0
+    runtime_gate_blocked_count = 0
+    invalid_timestamp_event_count = 0
+
+    for record_key, unsorted_events in event_streams.items():
+        if not any(
+            event.get("stage") in _WINNER_RECOVERY_GATE_STAGES
+            for event in unsorted_events
+        ):
+            continue
+        invalid_timestamp_event_count += sum(
+            1
+            for event in unsorted_events
+            if _event_epoch(event.get("emitted_at")) is None
+        )
+        timestamp_valid_events = [
+            event
+            for event in unsorted_events
+            if _event_epoch(event.get("emitted_at")) is not None
+        ]
+        events = sorted(
+            timestamp_valid_events,
+            key=lambda item: (
+                _event_epoch(item.get("emitted_at")) or 0.0,
+                str(item.get("stage") or ""),
+            ),
+        )
+        gate_indexes = [
+            index
+            for index, event in enumerate(events)
+            if event.get("stage") in _WINNER_RECOVERY_GATE_STAGES
+        ]
+        if not gate_indexes:
+            continue
+        for gate_position, event_index in enumerate(gate_indexes):
+            event = events[event_index]
+            stage = str(event.get("stage") or "")
+            fields = (
+                event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            )
+            common = {
+                "record_key": record_key,
+                "record_id": event.get("record_id"),
+                "stock_code": event.get("stock_code"),
+                "stock_name": event.get("stock_name"),
+                "effective_venue": str(fields.get("effective_venue") or "UNKNOWN")
+                .strip()
+                .upper(),
+                "gate_at": event.get("emitted_at"),
+                "confirmation_ready": _boolish(
+                    fields.get("post_probe_winner_recovery_confirmation_ready")
+                ),
+                "confirmation_count": int(
+                    _safe_float(
+                        fields.get("post_probe_winner_recovery_confirmation_count"),
+                        0.0,
+                    )
+                    or 0
+                ),
+                "observed_runtime_effect": _boolish(fields.get("runtime_effect")),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": (
+                    "source_only_winner_recovery_runtime_funnel_attribution"
+                ),
+                "forbidden_uses": FORBIDDEN_USES,
+            }
+            if stage == "post_probe_winner_recovery_blocked":
+                reason = _winner_recovery_block_reason(event)
+                runtime_gate_blocked_count += 1
+                runtime_block_reasons[reason] += 1
+                rows.append(
+                    {
+                        **common,
+                        "gate_outcome": "runtime_gate_blocked",
+                        "terminal_stage": stage,
+                        "terminal_reason": reason,
+                    }
+                )
+                continue
+
+            selected_count += 1
+            next_gate_index = (
+                gate_indexes[gate_position + 1]
+                if gate_position + 1 < len(gate_indexes)
+                else len(events)
+            )
+            terminal_stage = "selected_open_or_unresolved"
+            terminal_reason = "no_downstream_terminal_event"
+            submitted = False
+            executed = False
+            for downstream in events[event_index + 1 : next_gate_index]:
+                downstream_stage = str(downstream.get("stage") or "")
+                downstream_fields = (
+                    downstream.get("fields")
+                    if isinstance(downstream.get("fields"), dict)
+                    else {}
+                )
+                add_type = str(
+                    downstream_fields.get("add_type")
+                    or downstream_fields.get("scale_in_type")
+                    or downstream_fields.get("scale_in_arm")
+                    or ""
+                ).upper()
+                if downstream_stage.startswith("scale_in_") and add_type not in {
+                    "",
+                    "PYRAMID",
+                }:
+                    continue
+                if downstream_stage in _WINNER_RECOVERY_SUBMIT_STAGES:
+                    submitted = submitted or _boolish(
+                        downstream_fields.get("actual_order_submitted")
+                    )
+                    if submitted:
+                        terminal_stage = "scale_in_order_submitted"
+                        terminal_reason = "awaiting_execution_receipt"
+                    continue
+                if downstream_stage == "scale_in_executed":
+                    add_reason = str(downstream_fields.get("add_reason") or "")
+                    if (
+                        add_reason
+                        and add_reason != "post_probe_winner_recovery_first_leg"
+                    ):
+                        continue
+                    executed = True
+                    submitted = True
+                    terminal_stage = downstream_stage
+                    terminal_reason = "real_execution_observed"
+                    break
+                if downstream_stage in _WINNER_RECOVERY_DOWNSTREAM_BLOCK_STAGES:
+                    if submitted:
+                        continue
+                    terminal_stage = downstream_stage
+                    terminal_reason = _winner_recovery_block_reason(downstream)
+                    downstream_block_reasons[terminal_reason] += 1
+                    break
+                if downstream_stage == "sell_completed":
+                    terminal_stage = downstream_stage
+                    terminal_reason = (
+                        "position_closed_after_submit_without_execution_receipt"
+                        if submitted
+                        else "position_closed_without_scale_in_submit"
+                    )
+                    break
+            downstream_blocked = (
+                terminal_stage in _WINNER_RECOVERY_DOWNSTREAM_BLOCK_STAGES
+            )
+            selected_downstream_blocked_count += int(downstream_blocked)
+            selected_order_submitted_count += int(submitted)
+            selected_executed_count += int(executed)
+            unresolved = terminal_stage == "selected_open_or_unresolved"
+            selected_open_or_unresolved_count += int(unresolved)
+            closed_without_submit = bool(
+                terminal_stage == "sell_completed" and not submitted
+            )
+            selected_closed_without_submit_count += int(closed_without_submit)
+            rows.append(
+                {
+                    **common,
+                    "gate_outcome": "selected",
+                    "selected_action": fields.get("post_probe_winner_recovery_action"),
+                    "selected_qty_cap": int(
+                        _safe_float(
+                            fields.get("post_probe_winner_recovery_qty_cap"), 0.0
+                        )
+                        or 0
+                    ),
+                    "terminal_stage": terminal_stage,
+                    "terminal_reason": terminal_reason,
+                    "downstream_guard_blocked": downstream_blocked,
+                    "closed_without_scale_in_submit": closed_without_submit,
+                    "actual_order_submitted": submitted,
+                    "broker_order_forbidden": not submitted,
+                    "real_execution_observed": executed,
+                }
+            )
+
+    if selected_executed_count:
+        state = "real_execution_observed"
+    elif selected_order_submitted_count:
+        state = "selected_order_submitted_no_execution"
+    elif selected_downstream_blocked_count:
+        state = "selected_downstream_guard_blocked"
+    elif selected_closed_without_submit_count:
+        state = "selected_closed_without_submit"
+    elif selected_count:
+        state = "selected_open_or_unresolved"
+    elif runtime_gate_blocked_count:
+        state = "runtime_gate_only_no_selection"
+    else:
+        state = "no_runtime_gate_observation"
+    non_execution_layers = {
+        "winner_recovery_runtime_gate": runtime_gate_blocked_count,
+        "downstream_scale_in_guard": selected_downstream_blocked_count,
+        "execution_receipt_or_fill": max(
+            0, selected_order_submitted_count - selected_executed_count
+        ),
+        "downstream_event_provenance": selected_open_or_unresolved_count,
+        "position_closed_without_submit": selected_closed_without_submit_count,
+        "invalid_event_timestamp": invalid_timestamp_event_count,
+    }
+    dominant_non_execution_layer = max(
+        non_execution_layers,
+        key=lambda key: (non_execution_layers[key], key),
+    )
+    if non_execution_layers[dominant_non_execution_layer] == 0:
+        dominant_non_execution_layer = "none"
+    summary = {
+        "state": state,
+        "runtime_gate_evaluation_count": runtime_gate_blocked_count + selected_count,
+        "runtime_gate_selected_count": selected_count,
+        "runtime_gate_blocked_count": runtime_gate_blocked_count,
+        "runtime_gate_block_reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in runtime_block_reasons.most_common()
+        ],
+        "selected_downstream_guard_blocked_count": (selected_downstream_blocked_count),
+        "selected_order_submitted_count": selected_order_submitted_count,
+        "selected_executed_count": selected_executed_count,
+        "selected_open_or_unresolved_count": selected_open_or_unresolved_count,
+        "selected_closed_without_submit_count": selected_closed_without_submit_count,
+        "invalid_timestamp_event_count": invalid_timestamp_event_count,
+        "source_quality_status": (
+            "pass" if invalid_timestamp_event_count == 0 else "timestamp_invalid"
+        ),
+        "downstream_guard_block_reason_counts": [
+            {"reason": reason, "count": count}
+            for reason, count in downstream_block_reasons.most_common()
+        ],
+        "selection_to_submit_rate": (
+            round(selected_order_submitted_count / selected_count, 4)
+            if selected_count
+            else 0.0
+        ),
+        "selection_to_execution_rate": (
+            round(selected_executed_count / selected_count, 4)
+            if selected_count
+            else 0.0
+        ),
+        "dominant_non_execution_layer": dominant_non_execution_layer,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": (
+            "source_only_winner_recovery_runtime_funnel_attribution"
+        ),
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+    rows.sort(
+        key=lambda item: (
+            str(item.get("gate_at") or ""),
+            str(item.get("record_key") or ""),
+        )
+    )
+    return rows, summary
 
 
 def _update_probe_residual_observation(
@@ -2017,17 +2921,45 @@ def _finalize_probe_residual_real_outcome(item: dict[str, Any]) -> None:
 def _apply_daily_pyramid_threshold_provenance(
     one_share_records: dict[str, dict[str, Any]],
     candidates: dict[str, dict[str, Any]],
+    evaluation_event_streams: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
+    evaluation_event_streams = evaluation_event_streams or {}
+    threshold_observations = [
+        *candidates.values(),
+        *(event for stream in evaluation_event_streams.values() for event in stream),
+    ]
     observed_thresholds = sorted(
         {
             round(float(value), 6)
-            for item in candidates.values()
-            for value in [_safe_float(item.get("min_profit_pct"), None)]
+            for item in threshold_observations
+            for value in [
+                _safe_float(
+                    item.get("configured_min_profit_pct")
+                    or item.get("base_min_profit_pct")
+                    or item.get("min_profit_pct"),
+                    None,
+                )
+            ]
+            if value is not None and value > 0
+        }
+    )
+    configured_v2_thresholds = sorted(
+        {
+            round(float(value), 6)
+            for item in threshold_observations
+            if str(item.get("pyramid_evaluation_schema") or "")
+            == "pyramid_gate_observation_v2"
+            for value in [_safe_float(item.get("configured_min_profit_pct"), None)]
             if value is not None and value > 0
         }
     )
     unique_runtime_threshold = (
         observed_thresholds[0] if len(observed_thresholds) == 1 else None
+    )
+    configured_contract_valid = bool(
+        len(configured_v2_thresholds) == 1
+        and len(observed_thresholds) == 1
+        and configured_v2_thresholds == observed_thresholds
     )
     for item in one_share_records.values():
         threshold_source = str(item.get("pyramid_opportunity_threshold_source") or "")
@@ -2036,6 +2968,8 @@ def _apply_daily_pyramid_threshold_provenance(
                 item["pyramid_opportunity_min_profit_pct"] = unique_runtime_threshold
                 item["pyramid_opportunity_threshold_source"] = (
                     "same_day_unique_runtime_pyramid_evaluation"
+                    if configured_contract_valid
+                    else "legacy_unique_threshold_observation_diagnostic_only"
                 )
             else:
                 item["pyramid_opportunity_min_profit_pct"] = _pyramid_min_profit_pct()
@@ -2065,6 +2999,8 @@ def _apply_daily_pyramid_threshold_provenance(
                 )
     return {
         "observed_min_profit_pct_values": observed_thresholds,
+        "configured_v2_min_profit_pct_values": configured_v2_thresholds,
+        "configured_threshold_contract_valid": configured_contract_valid,
         "selected_min_profit_pct": (
             unique_runtime_threshold
             if unique_runtime_threshold is not None
@@ -2072,8 +3008,12 @@ def _apply_daily_pyramid_threshold_provenance(
         ),
         "selection_source": (
             "same_day_unique_runtime_pyramid_evaluation"
-            if unique_runtime_threshold is not None
-            else "static_fallback_no_unique_runtime_threshold"
+            if configured_contract_valid
+            else (
+                "legacy_unique_threshold_observation_no_runtime_authority"
+                if unique_runtime_threshold is not None
+                else "static_fallback_no_unique_runtime_threshold"
+            )
         ),
         "ambiguous": len(observed_thresholds) > 1,
     }
@@ -2131,10 +3071,7 @@ def _update_normal_winner_expansion_candidate(
     )
     source_quality_valid = bool(
         not _pressure_provenance_missing(blocked)
-        and (
-            not _pressure_provenance_unusable(blocked)
-            or ai_tape_substitution_applied
-        )
+        and (not _pressure_provenance_unusable(blocked) or ai_tape_substitution_applied)
         and not _micro_vwap_provenance_missing(blocked)
         and not _micro_vwap_provenance_unusable(blocked)
     )
@@ -2384,9 +3321,18 @@ def _update_sell(item: dict[str, Any], row: dict[str, Any]) -> None:
     final_profit = _safe_float(fields.get("profit_rate"))
     if final_profit is None:
         return
+    incoming_epoch = _event_epoch(row.get("emitted_at"))
+    current_epoch = _event_epoch(item.get("final_ts"))
+    if current_epoch is not None and (
+        incoming_epoch is None or incoming_epoch < current_epoch
+    ):
+        return
     item["final_ts"] = row.get("emitted_at")
     item["final_stage"] = row.get("stage")
     item["final_profit_rate"] = final_profit
+    item["sell_price"] = _safe_float(
+        fields.get("sell_price") or fields.get("last_sell_fill_price"), None
+    )
     item["sell_reason_type"] = fields.get("sell_reason_type")
     item["exit_rule_candidate"] = fields.get("exit_rule_candidate") or fields.get(
         "exit_rule"
@@ -2586,14 +3532,12 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "scout_ai_attribution_incomplete_count": sum(
             1
             for item in rows
-            if item.get("scout_ai_attribution_status")
-            == "parent_provenance_incomplete"
+            if item.get("scout_ai_attribution_status") == "parent_provenance_incomplete"
         ),
         "scout_ai_attribution_pre_ai_pending_count": sum(
             1
             for item in rows
-            if item.get("scout_ai_attribution_status")
-            == "parent_ai_not_evaluated_yet"
+            if item.get("scout_ai_attribution_status") == "parent_ai_not_evaluated_yet"
         ),
         "scout_ai_attribution_probe_bundle_pending_count": sum(
             1
@@ -2691,9 +3635,7 @@ def _one_share_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "post_terminal_abort_recovery_ai_tape_substitution_count": sum(
             int(
-                item.get(
-                    "post_probe_hard_abort_recovery_ai_tape_substitution_count"
-                )
+                item.get("post_probe_hard_abort_recovery_ai_tape_substitution_count")
                 or 0
             )
             for item in post_probe_closed
@@ -2938,14 +3880,11 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
             )
         ),
         "recovery_ai_thesis_state": lambda item: str(
-            item.get("normal_winner_expansion_recovery_ai_thesis_state")
-            or "unreported"
+            item.get("normal_winner_expansion_recovery_ai_thesis_state") or "unreported"
         ),
         "recovery_ai_tape_substitution": lambda item: (
             "applied"
-            if item.get(
-                "normal_winner_expansion_recovery_ai_tape_substitution_applied"
-            )
+            if item.get("normal_winner_expansion_recovery_ai_tape_substitution_applied")
             else "not_applied"
         ),
         "recovery_ai_parent_prompt_version": lambda item: str(
@@ -3212,8 +4151,7 @@ def _real_scale_in_execution_record(
             fields.get("post_probe_winner_recovery_ai_thesis_state") or "unreported"
         ),
         "recovery_ai_parent_action": str(
-            fields.get("post_probe_winner_recovery_ai_parent_action")
-            or "NOT_EVALUATED"
+            fields.get("post_probe_winner_recovery_ai_parent_action") or "NOT_EVALUATED"
         ),
         "recovery_ai_parent_prompt_version": str(
             fields.get("post_probe_winner_recovery_ai_parent_prompt_version") or "-"
@@ -3290,9 +4228,7 @@ def _update_real_scale_in_outcome(item: dict[str, Any], row: dict[str, Any]) -> 
         fields.get("broker_execution_provenance_complete")
     )
     item["sell_broker_actual_execution_venue"] = (
-        str(fields.get("broker_actual_execution_venue") or "UNKNOWN")
-        .strip()
-        .upper()
+        str(fields.get("broker_actual_execution_venue") or "UNKNOWN").strip().upper()
     )
     item["sell_broker_actual_execution_venue_source"] = str(
         fields.get("broker_actual_execution_venue_source") or "unknown"
@@ -3470,17 +4406,14 @@ def _real_scale_in_performance_summary(rows: list[dict[str, Any]]) -> dict[str, 
                 for item in bucket_closed
             ]
             source_quality_valid = [
-                item
-                for item in bucket_closed
-                if item.get("source_quality_valid")
+                item for item in bucket_closed if item.get("source_quality_valid")
             ]
             valid_notional = sum(
                 _safe_float(item.get("fill_notional_krw"), 0.0) or 0.0
                 for item in source_quality_valid
             )
             valid_net_pnl = sum(
-                _safe_float(item.get("scale_in_leg_net_pnl_proxy_krw"), 0.0)
-                or 0.0
+                _safe_float(item.get("scale_in_leg_net_pnl_proxy_krw"), 0.0) or 0.0
                 for item in source_quality_valid
             )
             result.append(
@@ -3598,12 +4531,28 @@ def build_report(
     one_share_plans: dict[str, dict[str, Any]] = {}
     real_entry_lifecycle_records: dict[str, dict[str, Any]] = {}
     real_scale_in_records: dict[str, dict[str, Any]] = {}
+    winner_recovery_event_streams: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    pyramid_evaluation_event_streams: dict[str, list[dict[str, Any]]] = defaultdict(
+        list
+    )
+    terminal_sell_records: dict[str, dict[str, Any]] = {}
 
     for row in iter_jsonl(pipeline_path):
         fields = _fields(row)
         key = _record_key(row, fields)
         if not key:
             continue
+        pyramid_evaluation_event = _pyramid_evaluation_event(row)
+        if pyramid_evaluation_event:
+            pyramid_evaluation_event_streams[key].append(pyramid_evaluation_event)
+        if str(row.get("stage") or "") == "sell_completed":
+            terminal = terminal_sell_records.setdefault(key, {})
+            _update_venue_provenance(terminal, row)
+            _update_sell(terminal, row)
+            terminal["pyramid_submit_seen"] = bool(terminal.get("pyramid_submit_seen"))
+        winner_recovery_event = _winner_recovery_funnel_event(row)
+        if winner_recovery_event:
+            winner_recovery_event_streams[key].append(winner_recovery_event)
         real_scale_in = _real_scale_in_execution_record(row, fields)
         if real_scale_in:
             execution_key = f"{key}:{real_scale_in['order_no']}"
@@ -3638,9 +4587,7 @@ def build_report(
                             existing_execution.get(
                                 "scale_in_receipt_economics_complete"
                             )
-                            and real_scale_in.get(
-                                "scale_in_receipt_economics_complete"
-                            )
+                            and real_scale_in.get("scale_in_receipt_economics_complete")
                         ),
                         "scale_in_receipt_quantity_contract_complete": bool(
                             existing_execution.get(
@@ -3735,6 +4682,7 @@ def build_report(
                 )
                 _update_snapshot(one_share_records[key], row)
         if _is_pyramid_submit_event(row):
+            terminal_sell_records.setdefault(key, {})["pyramid_submit_seen"] = True
             submitted = _pyramid_submit_record(row)
             item = candidates.setdefault(key, submitted)
             item.update({k: v for k, v in submitted.items() if v not in (None, "")})
@@ -3796,6 +4744,16 @@ def build_report(
     pyramid_threshold_provenance = _apply_daily_pyramid_threshold_provenance(
         one_share_records,
         candidates,
+        pyramid_evaluation_event_streams,
+    )
+    pyramid_threshold_replay_rows = _finalize_pyramid_threshold_replay_rows(
+        pyramid_evaluation_event_streams,
+        candidates,
+        one_share_records,
+        terminal_sell_records,
+    )
+    pyramid_threshold_replay_coverage = _pyramid_threshold_replay_coverage(
+        pyramid_threshold_replay_rows
     )
 
     rows = []
@@ -3909,10 +4867,12 @@ def build_report(
     real_scale_in_performance_summary = _real_scale_in_performance_summary(
         real_scale_in_rows
     )
+    (
+        winner_recovery_runtime_funnel_rows,
+        winner_recovery_runtime_funnel_summary,
+    ) = _winner_recovery_runtime_funnel(winner_recovery_event_streams)
     real_scale_in_source_quality_blocked_closed_count = int(
-        real_scale_in_performance_summary.get(
-            "source_quality_blocked_closed_count", 0
-        )
+        real_scale_in_performance_summary.get("source_quality_blocked_closed_count", 0)
         or 0
     )
     winner_recovery_qty_cap_invalid_count = int(
@@ -3960,7 +4920,7 @@ def build_report(
     if winner_recovery_qty_cap_invalid_count:
         source_quality_status = "winner_recovery_qty_cap_invalid"
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at": generated_at,
@@ -3977,6 +4937,25 @@ def build_report(
             "source_quality_gate": (
                 "pipeline_event_record_id_or_stock_code_join_with_required_provenance_and_"
                 "tick_aggressor_pressure_provenance_for_buy_pressure_and_fresh_minute_candle_for_micro_vwap"
+            ),
+            "forbidden_uses": FORBIDDEN_USES,
+        },
+        "pyramid_threshold_replay_metric_contract": {
+            "contract_version": "pyramid_gate_replay_source_v1",
+            "metric_role": "bounded_tunable_threshold_gate_counterfactual",
+            "decision_authority": (
+                "source_only_fixed_observed_exit_pyramid_gate_replay"
+            ),
+            "window_policy": (
+                "same_day_timestamp_ordered_evaluation_events_then_rolling_clean_"
+                "baseline_parent_episode_window"
+            ),
+            "sample_floor": "rolling_fixed_exit_economic_replay_ready_gate_events_ge_20",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": (
+                "same_episode_timestamp_ordered_gate_context_with_conflict_free_owner_"
+                "fresh_same_route_bbo_existing_price_resolver_observation_and_later_"
+                "terminal_sell_price"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -4024,6 +5003,27 @@ def build_report(
             "source_quality_gate": (
                 "fresh_quote_tick_micro_and_two_independent_market_tape_or_"
                 "trusted_ai_groups_same_probe_terminal_cycle"
+            ),
+            "forbidden_uses": FORBIDDEN_USES,
+        },
+        "winner_recovery_runtime_funnel_metric_contract": {
+            "metric_role": "winner_recovery_runtime_funnel_attribution",
+            "decision_authority": (
+                "source_only_winner_recovery_runtime_funnel_attribution"
+            ),
+            "window_policy": (
+                "same_day_winner_recovery_gate_selection_to_scale_in_guard_submit_"
+                "execution_or_position_close"
+            ),
+            "sample_floor": "1_winner_recovery_runtime_gate_evaluation",
+            "primary_decision_metric": (
+                "runtime_gate_selected_count_selected_downstream_guard_blocked_count_"
+                "selected_closed_without_submit_count_selected_order_submitted_count_"
+                "selected_executed_count"
+            ),
+            "source_quality_gate": (
+                "record_id_or_stock_code_join_and_timestamp_ordered_gate_to_first_"
+                "downstream_terminal_event"
             ),
             "forbidden_uses": FORBIDDEN_USES,
         },
@@ -4094,9 +5094,15 @@ def build_report(
                 else (
                     "pass"
                     if pyramid_threshold_provenance.get(
-                        "observed_min_profit_pct_values"
+                        "configured_threshold_contract_valid"
                     )
-                    else "static_fallback_no_runtime_observation"
+                    else (
+                        "legacy_diagnostic_only_no_runtime_authority"
+                        if pyramid_threshold_provenance.get(
+                            "observed_min_profit_pct_values"
+                        )
+                        else "static_fallback_no_runtime_observation"
+                    )
                 )
             ),
             "pressure_provenance_missing_count": pressure_provenance_missing_count,
@@ -4113,6 +5119,13 @@ def build_report(
             "real_scale_in_source_quality_blocked_closed_count": (
                 real_scale_in_source_quality_blocked_closed_count
             ),
+            "pyramid_threshold_replay_row_count": len(pyramid_threshold_replay_rows),
+            "pyramid_threshold_replay_ready_count": sum(
+                1
+                for item in pyramid_threshold_replay_rows
+                if item.get("fixed_exit_economic_replay_ready")
+            ),
+            "pyramid_threshold_replay_coverage": pyramid_threshold_replay_coverage,
             "source_quality_excluded_row_count": (
                 real_scale_in_source_quality_blocked_closed_count
             ),
@@ -4159,14 +5172,18 @@ def build_report(
             ],
             **one_share_opportunity_summary,
             "normal_winner_expansion": normal_winner_expansion_summary,
+            "winner_recovery_runtime_funnel": (winner_recovery_runtime_funnel_summary),
             "whole_day_real_entry_lifecycle": real_entry_lifecycle_summary,
             "real_scale_in_performance": real_scale_in_performance_summary,
         },
         "blocker_metrics": blocker_metrics,
         "pyramid_feedback_rows": rows[:300],
+        "pyramid_threshold_replay_rows": pyramid_threshold_replay_rows,
+        "pyramid_threshold_replay_coverage": pyramid_threshold_replay_coverage,
         "one_share_pyramid_opportunity_rows": one_share_rows,
         "whole_day_real_entry_lifecycle_rows": real_entry_lifecycle_rows,
         "real_scale_in_performance_rows": real_scale_in_rows,
+        "winner_recovery_runtime_funnel_rows": (winner_recovery_runtime_funnel_rows),
         "normal_winner_expansion_rows": [
             {
                 key: item.get(key)
@@ -4288,6 +5305,7 @@ def write_outputs(
         f"- probe_residual_confirmation_ready_simple_sum_profit_proxy_krw: {_safe_float(summary.get('probe_residual_confirmation_ready_simple_sum_profit_proxy_krw'), 0.0):.2f}",
         f"- probe_residual_pyramid_evaluation_seen_count: {summary.get('probe_residual_pyramid_evaluation_seen_count')}",
         f"- normal_winner_expansion: {json.dumps(summary.get('normal_winner_expansion') or {}, ensure_ascii=False, sort_keys=True)}",
+        f"- winner_recovery_runtime_funnel: {json.dumps(summary.get('winner_recovery_runtime_funnel') or {}, ensure_ascii=False, sort_keys=True)}",
         f"- whole_day_real_entry_lifecycle: {json.dumps(summary.get('whole_day_real_entry_lifecycle') or {}, ensure_ascii=False, sort_keys=True)}",
         f"- real_scale_in_performance: {json.dumps(summary.get('real_scale_in_performance') or {}, ensure_ascii=False, sort_keys=True)}",
         f"- pyramid_min_profit_pct: {(report.get('pyramid_threshold_provenance') or {}).get('selected_min_profit_pct')}",
@@ -4334,8 +5352,21 @@ def write_outputs(
                     "scale_in_leg_net_return_proxy_pct": item.get(
                         "scale_in_leg_net_return_proxy_pct"
                     ),
-                    "source_quality_valid": bool(
-                        item.get("source_quality_valid")
+                    "source_quality_valid": bool(item.get("source_quality_valid")),
+                }
+            )
+        )
+    lines.extend(["", "## Winner Recovery Runtime Funnel Rows", ""])
+    for item in report.get("winner_recovery_runtime_funnel_rows") or []:
+        lines.append(
+            "- record_id={record_id} code={stock_code} name={stock_name} "
+            "venue={effective_venue} gate={gate_outcome} confirmations={confirmation_count} "
+            "terminal={terminal_stage} reason={terminal_reason} "
+            "submitted={actual_order_submitted} executed={real_execution_observed}".format(
+                **{
+                    **item,
+                    "real_execution_observed": bool(
+                        item.get("real_execution_observed")
                     ),
                 }
             )

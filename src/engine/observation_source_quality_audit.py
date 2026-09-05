@@ -4,7 +4,9 @@ import argparse
 import fcntl
 import gzip
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 from collections import Counter, defaultdict
@@ -20,6 +22,7 @@ from src.engine.ai_response_contracts import (
     normalize_gatekeeper_action_key,
 )
 from src.engine.monitoring.market_halt_windows import load_market_halt_windows
+from src.engine.lifecycle.avg_down_replay import runtime_config_valid
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
@@ -1941,6 +1944,145 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "forbidden_uses",
         )
     ),
+    "avg_down_exit_replay_frame_observed": StageContract(
+        required_fields=(
+            "source_observation_id",
+            "source_event_id",
+            "position_episode_id",
+            "stock_code",
+            "venue",
+            "exit_policy_version",
+            "replay_frame_schema",
+            "sequence",
+            "market",
+            "full_policy_decisions",
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ),
+        decision_authority="source_only_paired_exit_replay",
+    ),
+    "avg_down_route_sizing_observed": StageContract(
+        required_fields=(
+            "source_observation_id",
+            "scale_in_decision_id",
+            "position_episode_id",
+            "pre_add_buy_price",
+            "pre_add_buy_qty",
+            "sizing_replay",
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ),
+        decision_authority="source_only_route_sizing_observation",
+    ),
+    "avg_down_runtime_config_observed": StageContract(
+        required_fields=(
+            "runtime_config_schema",
+            "configured_min_buy_pressure",
+            "effective_min_buy_pressure",
+            "runtime_value_source",
+            "runtime_value_raw",
+            "runtime_pid_value_verified",
+            "avg_down_policy_version",
+            "sizing_policy_version",
+            "cost_policy_version",
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ),
+        decision_authority="source_only_runtime_config_observation",
+    ),
+    "avg_down_route_arbitration_observed": StageContract(
+        required_fields=(
+            "avg_down_route_schema",
+            "source_event_id",
+            "scale_in_decision_id",
+            "position_episode_id",
+            "route_behavior_signature",
+            "configured_min_buy_pressure",
+            "effective_min_buy_pressure",
+            "runtime_value_source",
+            "runtime_value_raw",
+            "runtime_candidate_quality_update_id",
+            "runtime_candidate_evidence_contract_version",
+            "runtime_candidate_evidence_digest",
+            "runtime_candidate_selected",
+            "runtime_env_written",
+            "runtime_pid_value_verified",
+            "runtime_natural_match",
+            "runtime_attribution_state",
+            "candidate_grid",
+            "route_replay",
+            "pre_add_buy_price",
+            "pre_add_buy_qty",
+            "shallow_scope_pnl_ok",
+            "shallow_scope_hold_ok",
+            "avg_down_policy_version",
+            "sizing_policy_version",
+            "cost_policy_version",
+            "evidence_layer",
+            "evidence_authority",
+            "exit_replay_feasibility",
+            "metric_role",
+            "decision_authority",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ),
+        zero_sensitive_fields=("pre_add_buy_price", "pre_add_buy_qty"),
+    ),
+    "avg_down_route_arbitration_terminal": StageContract(
+        required_fields=(
+            "terminal_replay_schema",
+            "position_episode_id",
+            "scale_in_decision_id",
+            "terminal_status",
+            "configured_min_buy_pressure",
+            "candidate_grid",
+            "evidence_authority",
+            "paired_exit_replay",
+            "metric_role",
+            "decision_authority",
+            "source_quality_gate",
+            "forbidden_uses",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+            "broker_order_forbidden",
+        ),
+        decision_authority="source_only_paired_exit_replay",
+    ),
     "scalp_sim_scale_in_order_assumed_filled": StageContract(
         required_fields=SCALP_SIM_PROVENANCE_FIELDS
     ),
@@ -2594,6 +2736,18 @@ def _safe_list(value: Any) -> list[Any]:
             return []
         return parsed if isinstance(parsed, list) else []
     return []
+
+
+def _safe_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _is_present(value: Any) -> bool:
@@ -4510,6 +4664,196 @@ def _contract_bool(value: Any, expected: bool) -> bool:
     return normalized in {"", "0", "false", "none", "no"}
 
 
+def _avg_down_route_contract_violated(fields: dict[str, Any]) -> bool:
+    configured = _safe_float(fields.get("configured_min_buy_pressure"))
+    effective = _safe_float(fields.get("effective_min_buy_pressure"))
+    pre_price = _safe_float(fields.get("pre_add_buy_price"))
+    pre_qty = _safe_float(fields.get("pre_add_buy_qty"))
+    grid = _safe_list(fields.get("candidate_grid"))
+    replay = _safe_dict(fields.get("route_replay"))
+    replay_key = f"{effective:g}" if effective is not None else ""
+    runtime_source = str(fields.get("runtime_value_source") or "")
+    runtime_raw = _safe_float(fields.get("runtime_value_raw"))
+    runtime_candidate_selected = _contract_bool(
+        fields.get("runtime_candidate_selected"), True
+    )
+    runtime_env_written = _contract_bool(fields.get("runtime_env_written"), True)
+    runtime_pid_verified = _contract_bool(
+        fields.get("runtime_pid_value_verified"), True
+    )
+    runtime_natural_match = _contract_bool(fields.get("runtime_natural_match"), True)
+    runtime_quality_update_id = str(
+        fields.get("runtime_candidate_quality_update_id") or ""
+    )
+    runtime_evidence_version = str(
+        fields.get("runtime_candidate_evidence_contract_version") or ""
+    )
+    runtime_evidence_digest = str(fields.get("runtime_candidate_evidence_digest") or "")
+    runtime_attribution_state = str(fields.get("runtime_attribution_state") or "")
+    required_forbidden_uses = {
+        "real_scale_in_submit",
+        "intraday_threshold_mutation",
+        "fixed_exit_source_only_runtime_promotion",
+    }
+    forbidden_uses = {
+        value.strip()
+        for value in str(fields.get("forbidden_uses") or "").split("|")
+        if value.strip()
+    }
+    return bool(
+        str(fields.get("avg_down_route_schema") or "")
+        != "avg_down_route_arbitration_v2"
+        or not re.fullmatch(
+            r"mlc-[0-9a-f]{32}", str(fields.get("position_episode_id") or "")
+        )
+        or not str(fields.get("scale_in_decision_id") or "").strip()
+        or not re.fullmatch(
+            r"[0-9a-f]{64}", str(fields.get("route_behavior_signature") or "")
+        )
+        or configured is None
+        or effective is None
+        or not math.isfinite(configured)
+        or not math.isfinite(effective)
+        or configured != effective
+        or runtime_source not in {"exact_process_env", "runtime_rules_loaded_value"}
+        or (
+            runtime_source == "exact_process_env"
+            and (
+                runtime_raw is None
+                or not math.isfinite(runtime_raw)
+                or runtime_raw != effective
+            )
+        )
+        or not {80.0, 85.0, 90.0}.issubset(
+            {
+                number
+                for value in grid
+                if (number := _safe_float(value)) is not None and math.isfinite(number)
+            }
+        )
+        or replay_key not in replay
+        or any(not isinstance(arm, dict) for arm in replay.values())
+        or pre_price is None
+        or not math.isfinite(pre_price)
+        or pre_price <= 0
+        or pre_qty is None
+        or not math.isfinite(pre_qty)
+        or pre_qty <= 0
+        or not pre_qty.is_integer()
+        or not _contract_bool(fields.get("shallow_scope_pnl_ok"), True)
+        or not _contract_bool(fields.get("shallow_scope_hold_ok"), True)
+        or str(fields.get("avg_down_policy_version") or "") in {"", "unknown"}
+        or str(fields.get("sizing_policy_version") or "") in {"", "unknown"}
+        or str(fields.get("cost_policy_version") or "") in {"", "unknown"}
+        or str(fields.get("evidence_layer") or "") != "gate_observed"
+        or str(fields.get("evidence_authority") or "")
+        != "fixed_observed_exit_source_only"
+        or str(fields.get("exit_replay_feasibility") or "")
+        != "requires_paired_exit_replay"
+        or str(fields.get("metric_role") or "") != "bounded_tunable_route_observation"
+        or str(fields.get("decision_authority") or "")
+        != "source_only_route_arbitration_observation"
+        or str(fields.get("source_quality_gate") or "")
+        != "exact_position_identity_present"
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+        or not _contract_bool(fields.get("actual_order_submitted"), False)
+        or not _contract_bool(fields.get("broker_order_forbidden"), True)
+        or not required_forbidden_uses.issubset(forbidden_uses)
+        or (
+            runtime_candidate_selected
+            and (
+                not runtime_env_written
+                or not runtime_pid_verified
+                or runtime_quality_update_id == "baseline_no_selected_candidate"
+                or runtime_evidence_version != "avg_down_paired_economics_v2"
+                or not re.fullmatch(r"[0-9a-f]{64}", runtime_evidence_digest)
+                or runtime_attribution_state
+                not in {
+                    "natural_match_decision_terminal_pending",
+                    "selected_no_natural_match",
+                }
+            )
+        )
+        or (
+            not runtime_candidate_selected
+            and (
+                runtime_env_written
+                or runtime_natural_match
+                or runtime_attribution_state != "no_selected_candidate_observation"
+            )
+        )
+    )
+
+
+def _avg_down_paired_terminal_contract_violated(fields: dict[str, Any]) -> bool:
+    configured = _safe_float(fields.get("configured_min_buy_pressure"))
+    grid = [
+        number
+        for value in _safe_list(fields.get("candidate_grid"))
+        if (number := _safe_float(value)) is not None and math.isfinite(number)
+    ]
+    replay = _safe_dict(fields.get("paired_exit_replay"))
+    required_keys = {"NO_ADD", *(f"{value:g}" for value in grid)}
+    outcomes = [replay.get(key) for key in required_keys]
+    outcome_rows = [value for value in outcomes if isinstance(value, dict)]
+    exit_policy_versions = {
+        str(value.get("exit_policy_version") or "") for value in outcome_rows
+    }
+    source_event_ids = [
+        str(value.get("terminal_source_event_id") or "") for value in outcome_rows
+    ]
+    outcome_invalid = any(
+        str(value.get("status") or "").upper() != "COMPLETED"
+        or (exit_price := _safe_float(value.get("exit_price"))) is None
+        or not math.isfinite(exit_price)
+        or exit_price <= 0
+        or not exit_price.is_integer()
+        or not str(value.get("terminal_source_event_id") or "").strip()
+        or str(value.get("exit_policy_version") or "").strip() in {"", "unknown"}
+        or str(value.get("evaluation_method") or "")
+        != "paired_add_no_add_lifecycle_replay"
+        or str(value.get("evidence_authority") or "")
+        != "paired_add_no_add_lifecycle_replay"
+        for value in outcome_rows
+    )
+    forbidden_uses = {
+        value.strip()
+        for value in str(fields.get("forbidden_uses") or "").split("|")
+        if value.strip()
+    }
+    return bool(
+        str(fields.get("terminal_replay_schema") or "")
+        != "avg_down_paired_exit_terminal_v1"
+        or not re.fullmatch(
+            r"mlc-[0-9a-f]{32}", str(fields.get("position_episode_id") or "")
+        )
+        or str(fields.get("terminal_status") or "").upper() != "COMPLETED"
+        or configured is None
+        or not math.isfinite(configured)
+        or configured not in grid
+        or not {80.0, 85.0, 90.0}.issubset(set(grid))
+        or set(replay) != required_keys
+        or len(outcome_rows) != len(required_keys)
+        or outcome_invalid
+        or len(exit_policy_versions) != 1
+        or "" in exit_policy_versions
+        or len(source_event_ids) != len(set(source_event_ids))
+        or str(fields.get("evidence_authority") or "")
+        != "paired_add_no_add_lifecycle_replay"
+        or str(fields.get("metric_role") or "") != "paired_add_no_add_exit_replay"
+        or str(fields.get("decision_authority") or "")
+        != "source_only_paired_exit_replay"
+        or str(fields.get("source_quality_gate") or "")
+        != "exact_paired_terminal_contract"
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+        or not _contract_bool(fields.get("actual_order_submitted"), False)
+        or not _contract_bool(fields.get("broker_order_forbidden"), True)
+        or "fixed_exit_source_only_runtime_promotion" not in forbidden_uses
+    )
+
+
 def _sim_submit_guard_contract_violations(
     stage: str, fields: dict[str, Any]
 ) -> dict[str, bool]:
@@ -4916,6 +5260,49 @@ def _row_contract_violations(
             ).items()
             if violated
         )
+    if stage == "avg_down_route_arbitration_observed" and (
+        _avg_down_route_contract_violated(fields)
+    ):
+        invalid.append("avg_down_route_arbitration_source_contract")
+    if stage == "avg_down_runtime_config_observed" and (
+        not runtime_config_valid(
+            {
+                **fields,
+                "runtime_pid_value_verified": _contract_bool(
+                    fields.get("runtime_pid_value_verified"), True
+                ),
+            }
+        )
+        or fields.get("decision_authority") != "source_only_runtime_config_observation"
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+        or not _contract_bool(fields.get("actual_order_submitted"), False)
+        or not _contract_bool(fields.get("broker_order_forbidden"), True)
+    ):
+        invalid.append("avg_down_runtime_config_contract")
+    if stage == "avg_down_exit_replay_frame_observed" and (
+        fields.get("replay_frame_schema") != "avg_down_exit_replay_frame_v1"
+        or fields.get("decision_authority") != "source_only_paired_exit_replay"
+        or not _safe_dict(fields.get("market"))
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+        or not _contract_bool(fields.get("actual_order_submitted"), False)
+        or not _contract_bool(fields.get("broker_order_forbidden"), True)
+    ):
+        invalid.append("avg_down_exit_replay_frame_contract")
+    if stage == "avg_down_route_sizing_observed" and (
+        fields.get("decision_authority") != "source_only_route_sizing_observation"
+        or not _safe_dict(fields.get("sizing_replay"))
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+        or not _contract_bool(fields.get("actual_order_submitted"), False)
+        or not _contract_bool(fields.get("broker_order_forbidden"), True)
+    ):
+        invalid.append("avg_down_route_sizing_contract")
+    if stage == "avg_down_route_arbitration_terminal" and (
+        _avg_down_paired_terminal_contract_violated(fields)
+    ):
+        invalid.append("avg_down_paired_terminal_source_contract")
     if stage in {
         "scalping_scanner_prune_bbo_source_loaded",
         "scalping_scanner_iteration_timing",
@@ -5014,10 +5401,7 @@ def _row_contract_violations(
                 and observed_start_to_start_raw
                 != "not_available_first_iteration_in_buy_window"
             )
-            or (
-                observed_start_to_start is not None
-                and observed_start_to_start < 0
-            )
+            or (observed_start_to_start is not None and observed_start_to_start < 0)
             or not _contract_bool(
                 fields.get("scanner_iteration_sleep_is_post_work"), True
             )

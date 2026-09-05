@@ -17,13 +17,18 @@ from src.engine.automation.machine_entry_timing_tuning import (
     write_outputs,
 )
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
-from src.trading.market.micro_confirmation import evaluate_dynamic_micro_confirmation
+from src.trading.market.micro_confirmation import (
+    SAMSUNG_RISE_REBOUND_POLICY,
+    build_dynamic_micro_confirmation_checkpoints,
+    evaluate_dynamic_micro_confirmation,
+)
 from src.trading.config.machine_entry_timing_policy import (
     AUTHORITY,
     DYNAMIC_MODE,
     EXECUTABLE_MICRO_CONFIRMATION_MODE,
     policy_hash,
     resolve_entry_confirmation_delay,
+    resolve_entry_confirmation_policy,
     scope_key,
     validate_applied_policy,
 )
@@ -331,6 +336,123 @@ def _executable_confirmation() -> dict:
         "cost_trade_date": "2026-08-28",
         "cost_contract_sha256": "b" * 64,
     }
+
+
+def _samsung_rising_entry_row(source_date: date, index: int) -> dict:
+    row = _entry_row(source_date, index)
+    row["scope_id"] = row["entry_timing_scope_id"] = "midday"
+    row["entry_confirmation_bbo_anchor"]["best_bid"] = 98.9
+    row["entry_confirmation_bbo_anchor"]["spread_bps"] = (100 / 98.9 - 1) * 10_000
+    checkpoints = build_dynamic_micro_confirmation_checkpoints(
+        anchor_bbo=row["entry_confirmation_bbo_anchor"],
+        future_bbo=row["entry_confirmation_bbo_horizons"],
+        checkpoint_ask_depletion=row["entry_confirmation_checkpoint_ask_depletion"],
+        anchor_id=row["anchor_id"],
+        signal_decision_at=row["anchor_at"],
+        symbol=row["symbol"],
+        expected_venues=row["expected_venues"],
+        expected_session_buckets=row["expected_session_buckets"],
+        owner=row["owner"],
+        baseline_fill_price=row["anchor_price"],
+        owner_entry_limit_price=row["owner_entry_limit_price"],
+        owner_target_price=row["owner_target_price"],
+        round_trip_cost_pct=row["owner_round_trip_cost_pct"],
+        widget_take_profit=False,
+    )
+    binding = {
+        **row["dynamic_confirmation_source_only_replay"]["signal_binding"],
+        "scope_id": "midday",
+        "causal_anchor_bid": 98.9,
+    }
+    replay = evaluate_dynamic_micro_confirmation(
+        checkpoints, policy=SAMSUNG_RISE_REBOUND_POLICY
+    )
+    replay["signal_binding"] = binding
+    row["dynamic_confirmation_source_only_replay"] = replay
+    return row
+
+
+def test_samsung_rising_candidate_survives_sparse_days_and_loads_exact_recipe(
+    tmp_path: Path,
+) -> None:
+    target_date = date(2026, 8, 27)
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    dates = _trading_dates(target_date, 12)
+    for index, source_date in enumerate(dates):
+        rows = [_samsung_rising_entry_row(source_date, index)] if index < 10 else []
+        payload = {
+            "schema": "machine_microstructure_attribution_v1",
+            "target_date": source_date.isoformat(),
+            "clean_tuning_baseline_date": "2026-06-05",
+            "clean_baseline_allowed": True,
+            "authority": {
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            },
+            "micro_entry_confirmation": {"entry_anchors": rows},
+        }
+        (
+            source_dir / f"machine_microstructure_attribution_{source_date}.json"
+        ).write_text(json.dumps(payload))
+    report = build_report(
+        target_date=target_date,
+        source_dir=source_dir,
+        low_price_candidate_dir=tmp_path / "low-price",
+        samsung_candidate_dir=tmp_path / "samsung",
+        widget_policy_dir=tmp_path / "widget",
+    )
+    assert report["winner"] is None
+    assert report["decision"] == "select_one_next_session_dynamic_entry_confirmation"
+    report_path = tmp_path / f"machine_entry_timing_tuning_{target_date}.json"
+    report_path.write_text(json.dumps(report))
+    applied = build_applied_policy(report, source_report_path=report_path)
+    effective_date = date.fromisoformat(applied["target_date"])
+    assert validate_applied_policy(applied, target_date=effective_date) == (
+        True,
+        "ready",
+    )
+    scope = next(iter(applied["scopes"].values()))
+    assert (
+        scope["dynamic_confirmation"]["policy_id"]
+        == SAMSUNG_RISE_REBOUND_POLICY.policy_id
+    )
+    assert (
+        scope["dynamic_confirmation"]["source_gap_action"] == "reject_unconfirmed_entry"
+    )
+    policy_dir = tmp_path / "policy"
+    policy_dir.mkdir()
+    (policy_dir / f"machine_entry_timing_policy_{effective_date}.json").write_text(
+        json.dumps(applied)
+    )
+    resolved = resolve_entry_confirmation_policy(
+        target_date=effective_date,
+        owner="episode",
+        scope_id="midday",
+        symbol="005930",
+        session="KRX_REGULAR",
+        entry_state="UNSPECIFIED",
+        policy_dir=policy_dir,
+        source_report_dir=tmp_path,
+    )
+    assert resolved["mode"] == DYNAMIC_MODE, resolved
+
+
+def test_samsung_flat_legacy_replay_is_not_confirmation_evidence() -> None:
+    rows = []
+    target_date = date(2026, 8, 27)
+    for index, source_date in enumerate(_trading_dates(target_date, 12)):
+        row = _entry_row(source_date, index)
+        row["scope_id"] = row["entry_timing_scope_id"] = "midday"
+        row["dynamic_confirmation_source_only_replay"]["signal_binding"][
+            "scope_id"
+        ] = "midday"
+        row["source_date"] = source_date.isoformat()
+        rows.append((source_date, row))
+    evaluated = _evaluate_dynamic_cohort(cohort_rows=rows, target_date=target_date)
+    assert evaluated["source_only_candidate_ready"] is False
 
 
 def _add_supportive_confirmation_evidence(evidence: dict) -> dict:
@@ -899,7 +1021,7 @@ def test_dynamic_confirmation_rejects_two_source_days_without_a_natural_signal()
         source_report_dates=source_dates,
     )
 
-    assert result["latest_observation_lag_trading_days"] is None
+    assert result["latest_observation_lag_trading_days"] == 2
     assert result["latest_observation_fresh_for_bounded_canary"] is False
     assert result["source_only_candidate_ready"] is False
 
@@ -1324,9 +1446,7 @@ def test_report_does_not_classify_mixed_valid_inflow_as_population_exhaustion():
     )
 
     assert assessment["state"] == "terminal_or_right_censored_gap"
-    assert assessment["shortage_classification_status"] == (
-        "blocked_missing_evidence"
-    )
+    assert assessment["shortage_classification_status"] == ("blocked_missing_evidence")
     assert assessment["shortage_class"] is None
     assert assessment["target_actual_entry_anchor_count"] == 2
     assert assessment["target_source_quality_blocked_anchor_count"] == 1
@@ -1351,9 +1471,7 @@ def test_report_quarantines_missing_runtime_receipt_instead_of_blind_rerun():
             )
         ],
         target_source_ready=True,
-        cohorts=[
-            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
-        ],
+        cohorts=[{"sample_floor_assessment": {"state": "source_quality_blocked"}}],
         winner=None,
     )
 
@@ -1382,9 +1500,7 @@ def test_report_quarantines_exact_route_receipt_gap_instead_of_blind_rerun():
             )
         ],
         target_source_ready=True,
-        cohorts=[
-            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
-        ],
+        cohorts=[{"sample_floor_assessment": {"state": "source_quality_blocked"}}],
         winner=None,
     )
 
@@ -1414,9 +1530,7 @@ def test_report_does_not_quarantine_receipt_gap_that_masks_repairable_contract_g
             )
         ],
         target_source_ready=True,
-        cohorts=[
-            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
-        ],
+        cohorts=[{"sample_floor_assessment": {"state": "source_quality_blocked"}}],
         winner=None,
     )
 
@@ -1450,9 +1564,7 @@ def test_report_receipt_quarantine_allows_normal_policy_ineligible_anchor():
             )
         ],
         target_source_ready=True,
-        cohorts=[
-            {"sample_floor_assessment": {"state": "source_quality_blocked"}}
-        ],
+        cohorts=[{"sample_floor_assessment": {"state": "source_quality_blocked"}}],
         winner=None,
     )
 
@@ -1842,12 +1954,18 @@ def test_malformed_next_widget_policy_fails_closed(tmp_path: Path) -> None:
 def test_policy_publication_gate_allows_staging_and_preopen_only() -> None:
     report = {"target_date": "2026-09-03", "effective_date": "2026-09-04"}
 
-    assert policy_publication_gate(
-        report, now=datetime.fromisoformat("2026-09-03T21:15:00+09:00")
-    )["status"] == "allowed_next_session_staging"
-    assert policy_publication_gate(
-        report, now=datetime.fromisoformat("2026-09-04T07:59:59+09:00")
-    )["status"] == "allowed_effective_date_preopen"
+    assert (
+        policy_publication_gate(
+            report, now=datetime.fromisoformat("2026-09-03T21:15:00+09:00")
+        )["status"]
+        == "allowed_next_session_staging"
+    )
+    assert (
+        policy_publication_gate(
+            report, now=datetime.fromisoformat("2026-09-04T07:59:59+09:00")
+        )["status"]
+        == "allowed_effective_date_preopen"
+    )
     blocked = policy_publication_gate(
         report, now=datetime.fromisoformat("2026-09-04T08:00:00+09:00")
     )
