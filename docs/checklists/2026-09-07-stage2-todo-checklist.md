@@ -24,10 +24,12 @@
   - 검증: 현재 PID 복제 환경에 새 정규화만 적용한 비거래 임시 process의 exact-date verifier가 `status=pass`, `pid_passed=true`, mismatch/missing 0이다. retirement/wrapper/PID/Samsung preflight·handoff 회귀와 정적·구문 검증을 review→fix→re-review로 닫고 미해결 finding 0일 때만 구현 완료로 유지한다.
   - 권한 경계: 실행 중 PID, 주문, threshold/provider/수량/cap/broker/hard-safety를 변경하지 않았고 bot 재기동도 수행하지 않았다. 실제 PID 교체와 Samsung authority 재발행은 아래 별도 acceptance가 소유한다.
 
-- [ ] `[RuntimeStartupRetirementEnvAcceptance0908] 보완 launcher의 exact-date PID handoff·Samsung/episode 자연 기동 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 07:30~09:10`, `Track: RuntimeStability`)
-  - 확인: 사용자 승인 또는 표준 예약 기동으로 생긴 신규 main PID에서 source commit/dirty, threshold runtime env, dated override, owner custody identity를 대사하고 `verify --pid`의 `status=pass`, `pid_passed=true`, mismatch/missing 0을 확인한다. Samsung preflight가 같은 PID를 결속해 authority를 게시하고 저가주 profile preflight가 50 active/3 excluded 정책 hash로 자연 종결되는지 확인한다.
-  - Entry recheck: 9/4 원천을 현재 controller v4로 재생성한 뒤 다음 PREOPEN이 `drought_policy_version_invalid` 없이 경제성·source-quality 계약에 따라 선택 또는 명시 차단하는지 확인한다. `entry_split_order_plan=hold_sample`은 강제 적용하지 않는다.
-  - 권한 경계: acceptance를 위한 주문·표본 생성, guard 우회, cap/수량/threshold/provider 변경은 금지한다. bot 재기동은 별도 사용자 승인 없이는 실행하지 않는다.
+- [x] `[RuntimeStartupRetirementEnvAcceptance0907] 보완 launcher의 exact-date PID handoff·Samsung 자연 기동 확인` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 08:35~08:45`, `Track: RuntimeStability`)
+  - 완료: 사용자 승인에 따라 검증 커밋 `327e8722`를 기능 브랜치와 `main`에 push하고 저장소 표준 `restart.sh`로 우아하게 재기동했다. 구 PID `8833`이 restart flag를 소비해 종료됐고 launcher hash drift를 감지한 wrapper가 drained tmux supervisor를 교체한 뒤 신규 PID `46656`을 기동했다.
+  - PID/계약: 신규 PID의 source/launcher commit=`327e8722`, source dirty=`false`, exact-date threshold verify `status=pass`, `pid_passed=true`, mismatch/missing=`0/0`, runtime/dated policy fail=`0/0`이다. 퇴역 canonical env 15개는 모두 명시적 `false`이며 Samsung authority v7은 같은 PID, blocker 0으로 결속되어 08:40:43 전용 service PID `46969`가 기동됐다. WS login ACK, 조건검색/주문체결망 등록, 첫 0B/0D 데이터와 main/sniper/scanner heartbeat를 확인했고 08:41:31 process health가 `recovered to pass`로 종결됐다.
+  - 주문/소유권: 재기동 전후 전시장 broker snapshot hash=`20fd0a69cc986e422b12c97aecb22a7c27d5d4ac45cb529d0e12cced990e6ff3`가 동일하다. 005930·015760 각 20주와 대응 미체결 2건/40주는 `unmigrated_broker_custody` manual exclusion으로 그대로 보존됐고 나머지 16개 공유 scope는 broker/registry 0주로 유지되어 취소·중복제출·owner 흡수가 없다.
+  - 남은 범위: 저가주 50 active/3 excluded profile은 이후 예약 service별 자연 preflight가 소유한다. Entry recheck는 9/4 원천의 controller v4 재생성과 다음 PREOPEN 선택/명시 차단 확인이 별도 owner이며 `entry_split_order_plan=hold_sample`을 강제 적용하지 않는다.
+  - 권한 경계: 재기동 과정에서 주문·보유·threshold/provider/수량/cap/broker/hard-safety를 변경하지 않았다.
 
 - [x] `[ScaleInSplitFinalReviewRepair0907] AVG_DOWN 분할 실제 청산 결합·유효시간·control/R6·적용 조건 수리` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:40`, `Track: ScalpingLogic`)
   - Source: [Scale-in split 보완 §6](../audit-reports/2026-09-06-scale-in-split-order-plan-final-review.md#6-f1f7-구현-및-반복-리뷰), [상세검토 목록 #47](../audit-reports/2026-09-05-postclose-work-inventory.md).
