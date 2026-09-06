@@ -2,13 +2,15 @@
 
 작성 기준: `2026-09-06 KST` (기존 review index 유지)
 
+통합 기준: 기능 커밋 `7d809a02`, `main` 병합 커밋 `d96532da`가 `origin/main`에 반영된 상태.
+
 목적: 설치된 장후 자동화의 각 실행 단위를 순서대로 검토하면서 목적·목표·기대효과·운영상태·상세검토 상태·연결 lock을 한 표에서 추적한다. 실행 원칙과 owner는 [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md) §1~§8과 [2026-09-07 체크리스트](../checklists/2026-09-07-stage2-todo-checklist.md)가 우선한다.
 
 ## 1. 이번 갱신 판정
 
+- **main 통합 완료**: 누적 장후 runtime 계약 보완을 전용 브랜치에 커밋·푸시한 뒤 명시적 merge commit으로 main에 병합했다. 병합 전 수정·신규 테스트 전체 2,928건, 포맷 보완 후 receipt·수익 귀속 관련 1,184건, Entry/Institutional/Microstructure 관련 1,260건을 각각 PASS했다. Python 97개 변경 파일 Black/compile, wrapper 3개 `bash -n`, 신규 systemd unit verify, checklist parser와 diff check도 PASS했다.
 - #15~16, #21, #23, #26~27까지 상세검토·보완 결과를 반영했다. 현재 완료 범위는 저가 2-leg/확장 추천의 source-only 경제성, one-share 기회 진단과 일일 drought controller, Institutional 전용 aggregate 폐기, Microstructure freshness/delivery v3/finite outcome 진단이다. 다음 자연 PID·PREOPEN·장후 성과 확인은 각 checklist OPEN owner가 소유한다.
 - Entry AI gate 누적 backtest는 `on_demand only`이고 20:10 정기 wrapper producer가 아니다. 병합 전 gate에서 이를 반대로 요구하던 stale retirement 회귀를 정정해 일일 controller 유지와 누적 backtest 미호출을 함께 고정했다.
-- 병합 전 누적 변경의 수정·신규 테스트 전체 **2,928 PASS**를 확인했다. 이 수치는 서로 다른 과거 검증 수치의 합계가 아니며, 실제 PID 소비·자연 장후 실행·실현 수익 개선 증거로 사용하지 않는다.
 - #23 R1→R5 구현·재리뷰: **코드 보완 종결, 자연 적용/성과 확인 OPEN**. 새 평가/과거 arm 분리, 잔량 확장 full-position 경제성, 시장·세션별 stop/재심, 기존 총량 내 durable submit 예약, 누적 진단 정기 실행 제외를 구현했다. 최종 통합 회귀 **2,088 PASS**, 관련 파일의 검증 전후 해시 동일, 검토 범위 미해결 finding 0건이다. 실제 env/PID·보고서는 이번에 덮어쓰지 않았으며 새 schema 산출물과 자연 비용 차감 EV는 별도 확인이다. 현재 판정은 [리뷰 §10](2026-09-06-one-share-drought-final-review.md#10-r1r5-구현수정재리뷰), 완료 증거는 `EntryRecheckFeasibilityRepairReview0907`, OPEN owner는 `EntryRecheckNaturalAttribution0907`이다.
 - 9월 6일 ADM/LDM 정리: #22, #29~42, #52~53의 scalping matrix·context·bucket·bridge 실행/승인 경로를 폐기했다. #28은 LDM 전용 단독 실행만 제거하고 #13 AVG_DOWN의 증분 CF·full-policy replay helper는 유지한다. raw candidate/order/fill/terminal lineage, Samsung·Entry AI gate·AVG_DOWN·PYRAMID 및 hard safety는 폐기 대상이 아니다.
 - PREOPEN은 폐기 namespace를 OFF로 고정하고 보관 산출물의 재승격을 차단한다. 상세검토·검증 근거는 [ADM/LDM 정리 리뷰](2026-09-06-adm-ldm-retirement-review.md)를 따른다. bot 재기동이나 기존 다음-session env의 수동 재적용은 하지 않았다.
