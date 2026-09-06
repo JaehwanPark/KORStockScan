@@ -13,13 +13,9 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
     assert producers["src.engine.threshold_cycle_ev_report"] == 5
     assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 2
     assert producers["src.engine.monitoring.quote_consistency_report"] == 0
-    lifecycle_context = next(
-        item
-        for item in report["step_inventory"]
-        if item["producer"] == "src.engine.lifecycle_ai_context"
-    )
-    assert "RUN_LIFECYCLE_AI_CONTEXT" in lifecycle_context["default_flags"]
-    assert lifecycle_context["default_enabled"] is True
+    assert producers["src.engine.lifecycle_ai_context"] == 0
+    assert producers["src.engine.lifecycle_decision_matrix"] == 0
+    assert producers["src.engine.lifecycle_bucket_discovery"] == 0
 
     candidates = report["slimming_candidates"]
     assert any(
@@ -27,17 +23,6 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
         and item["classification"] == "duplicate_refresh_candidate"
         and item["classification_group"] == "change_triggered"
         for item in candidates
-    )
-    assert any(
-        item["producer"] == "src.engine.lifecycle_decision_matrix"
-        and item["classification"] == "dependent_refresh"
-        and item["classification_reason"] == "upstream_dependent_refresh_keep_daily"
-        for item in report["step_inventory"]
-    )
-    assert any(
-        item["producer"] == "src.engine.lifecycle_ai_context"
-        and item["classification"] == "dependent_refresh"
-        for item in report["step_inventory"]
     )
     assert any(
         item["producer"] == "src.engine.swing_strategy_discovery_sim"
@@ -60,10 +45,13 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
         and item["classification_reason"] == "final_fail_closed_postclose_verifier"
         for item in report["step_inventory"]
     )
-    assert any(
-        item["producer"] == "src.engine.lifecycle_decision_matrix"
-        and item["classification"] == "change_triggered_candidate"
-        and item["classification_group"] == "change_triggered"
+    assert not any(
+        item["producer"]
+        in {
+            "src.engine.lifecycle_decision_matrix",
+            "src.engine.lifecycle_ai_context",
+            "src.engine.lifecycle_bucket_discovery",
+        }
         for item in candidates
     )
     assert any(
@@ -84,7 +72,7 @@ def test_slimming_candidates_and_workorders_are_report_only():
         report["summary"]["true_duplicate_refresh_candidates"]
         == report["summary"]["duplicate_refresh_candidates"]
     )
-    assert report["summary"]["dependent_refresh_steps"] >= 2
+    assert report["summary"]["dependent_refresh_steps"] == 0
     assert report["summary"]["mutually_exclusive_static_duplicates"] >= 1
     assert "deprecated_candidate" in report["summary"]["classification_group_counts"]
     assert report["protected_refreshes"]
@@ -315,7 +303,7 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     assert "trigger_reason=$trigger_reason" in script
     assert "trigger_source=$trigger_source" in script
     assert "duplicate_refresh_fresh" in script
-    assert "lifecycle_window_${lifecycle_bucket_window}" in script
+    assert "lifecycle_window_${lifecycle_bucket_window}" not in script
     assert "fresh_outputs_no_trigger" in script
     assert 'run_threshold_cycle_ev_and_wait "pre_workorder"' in script
     assert "code_improvement_workorder_${TARGET_DATE}.json" in script

@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import (
-    retired_artifact,
-    RETIRED_REPORTS,
-    current_report_view,
-)
-
 import argparse
 import copy
 import gzip
@@ -24,6 +18,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.engine.ai_response_contracts import build_openai_response_text_format
+from src.engine.lifecycle.retirement import (
+    RETIRED_REPORTS,
+    SCALP_OVERNIGHT_RETIRED_STAGES,
+    current_report_view,
+    retired_artifact,
+)
 from src.engine.scalping.entry_split_order_plan import (
     generation_policy_snapshot_path,
     runtime_apply_authority_contract_status,
@@ -36,6 +36,7 @@ from src.engine.scalping.position_sizing_allocator import (
     max_position_qty_cap_from_budget,
     resolve_scalping_allocation,
 )
+from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
 from src.utils.constants import (
     CONFIG_PATH,
     DATA_DIR,
@@ -1787,11 +1788,6 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
             / "statistical_action_weight"
             / f"statistical_action_weight_{target_date}.json"
         ),
-        "latency_classifier_recommendation": (
-            REPORT_DIR
-            / "latency_classifier_recommendation"
-            / f"latency_classifier_recommendation_{target_date}.json"
-        ),
         "microstructure_reaction_context": (
             REPORT_DIR
             / "microstructure_reaction_context"
@@ -2177,9 +2173,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     panic_sell_defense = _read_json_dict(source_paths["panic_sell_defense"])
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
-    latency_recommendation = _read_json_dict(
-        source_paths["latency_classifier_recommendation"]
-    )
     microstructure_reaction_context = _read_json_dict(
         source_paths["microstructure_reaction_context"]
     )
@@ -2309,16 +2302,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     perf_latency_section = (
         perf_sections.get("latency_guard_miss_ev_recovery")
         if isinstance(perf_sections.get("latency_guard_miss_ev_recovery"), dict)
-        else {}
-    )
-    latency_recommendation_candidate = (
-        latency_recommendation.get("calibration_candidate")
-        if isinstance(latency_recommendation.get("calibration_candidate"), dict)
-        else {}
-    )
-    latency_recommendation_metrics = (
-        latency_recommendation_candidate.get("source_metrics")
-        if isinstance(latency_recommendation_candidate.get("source_metrics"), dict)
         else {}
     )
     microstructure_reaction_summary = (
@@ -2829,123 +2812,32 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 "backfill_latency_block_counterfactual_join"
                 if (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
                 > (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0)
-                else "use_latency_block_ev_for_refined_guard_review"
+                else "use_latency_block_attribution_for_existing_guard_review"
             ),
-            "latency_classifier_recommendation_status": (
-                "loaded" if latency_recommendation else "missing"
+            "latency_classifier_recommendation_status": "retired",
+            "latency_classifier_runtime_semantics": (
+                "SAFE/CAUTION continue after slippage checks; DANGER and stale quote remain blocking; "
+                "spread-only relief is owned separately by its explicit operator lock"
             ),
-            "latency_classifier_selected_profile_id": latency_recommendation.get(
-                "selected_profile_id"
+            "latency_diagnostic_owner": (
+                "buy_funnel_sentinel+performance_tuning+daily_threshold_cycle_report"
             ),
-            "latency_classifier_runtime_semantics": latency_recommendation_metrics.get(
-                "profile_runtime_semantics"
-            ),
-            "latency_classifier_profile_generation": (
-                latency_recommendation.get("profile_generation")
-                if isinstance(latency_recommendation, dict)
-                else {}
-            ),
-            "latency_classifier_counterfactual_source": (
-                latency_recommendation.get("counterfactual_source")
-                if isinstance(latency_recommendation, dict)
-                else {}
-            ),
-            "recommended_action": latency_recommendation_metrics.get(
-                "recommended_action"
-            ),
-            "recommended_action_reason": latency_recommendation_metrics.get(
-                "recommended_action_reason"
-            ),
-            "would_safe_pass_events": _safe_int(
-                latency_recommendation_metrics.get("would_safe_pass_events"),
-                0,
-            )
-            or 0,
-            "would_caution_normal_events": _safe_int(
-                (
-                    latency_recommendation_metrics.get("would_caution_normal_events")
-                    if latency_recommendation_metrics.get("would_caution_normal_events")
-                    is not None
-                    else latency_recommendation_metrics.get(
-                        "would_caution_reject_events"
-                    )
-                ),
-                0,
-            )
-            or 0,
-            "would_recovery_canary_events": _safe_int(
-                latency_recommendation_metrics.get("would_recovery_canary_events"),
-                0,
-            )
-            or 0,
-            "would_recovery_canary_attempts": _safe_int(
-                latency_recommendation_metrics.get("would_recovery_canary_attempts"),
-                0,
-            )
-            or 0,
-            "hard_reject_events": _safe_int(
-                latency_recommendation_metrics.get("hard_reject_events"), 0
-            )
-            or 0,
-            "stale_quote_override_events": _safe_int(
-                latency_recommendation_metrics.get("stale_quote_override_events"),
-                0,
-            )
-            or 0,
-            "broker_guard_bypass_candidates": _safe_int(
-                latency_recommendation_metrics.get("broker_guard_bypass_candidates"),
-                0,
-            )
-            or 0,
-            "fallback_deprecated_excluded_from_pass_events": _safe_int(
-                latency_recommendation_metrics.get(
-                    "fallback_deprecated_excluded_from_pass_events"
-                ),
-                0,
-            )
-            or 0,
-            "counterfactual_joined_sample": _safe_int(
-                latency_recommendation_metrics.get("counterfactual_joined_sample"),
-                0,
-            )
-            or 0,
-            "counterfactual_join_rate_pct": _safe_float(
-                latency_recommendation_metrics.get("counterfactual_join_rate_pct"),
-                None,
-            ),
-            "counterfactual_ev_pct": _safe_float(
-                latency_recommendation_metrics.get("counterfactual_ev_pct"),
-                None,
-            ),
-            "missed_winner_recovered": _safe_int(
-                latency_recommendation_metrics.get("missed_winner_recovered"),
-                0,
-            )
-            or 0,
-            "avoided_loser_lost": _safe_int(
-                latency_recommendation_metrics.get("avoided_loser_lost"),
-                0,
-            )
-            or 0,
-            "latency_submit_routing": (
-                "latency_submit_recovery_candidate"
-                if str(latency_recommendation_metrics.get("recommended_action") or "")
-                == "bounded_apply"
-                else (
-                    "latency_submit_recovery_hold"
-                    if (
-                        _safe_int(
-                            latency_recommendation_metrics.get(
-                                "would_recovery_canary_events"
-                            ),
-                            0,
-                        )
-                        or 0
-                    )
-                    > 0
-                    else "latency_classifier_runtime_semantics_gap"
-                )
-            ),
+            "latency_submit_routing": "buy_funnel_diagnostic_only",
+            "metric_role": "source_quality_and_funnel_diagnostic",
+            "decision_authority": "diagnostic_only",
+            "window_policy": "same_day_clean_baseline_observation",
+            "sample_floor": "not_applicable_no_runtime_candidate",
+            "primary_decision_metric": "not_applicable_no_runtime_candidate",
+            "source_quality_gate": "observation_source_quality_preflight",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": [
+                "runtime_threshold_mutation",
+                "stale_quote_submit",
+                "broker_guard_bypass",
+                "operator_lock_override",
+                "gross_counterfactual_live_promotion",
+            ],
         },
         "liquidity_gate_refined_candidate": {
             "evaluated_candidates": _safe_int(
@@ -4972,22 +4864,11 @@ def _is_scalp_sim_event(event: dict) -> bool:
 
 
 def _is_synthetic_test_event(event: dict) -> bool:
-    fields = _event_fields(event)
-    code = str(
-        fields.get("code") or event.get("stock_code") or event.get("code") or ""
-    ).strip()
-    name = (
-        str(fields.get("name") or event.get("stock_name") or event.get("name") or "")
-        .strip()
-        .upper()
-    )
-    return name == "TEST" or (code == "123456" and name.startswith("TEST"))
+    return is_synthetic_scalp_sim(event)
 
 
 def _is_synthetic_test_row(row: dict) -> bool:
-    code = str(row.get("stock_code") or row.get("code") or "").strip()
-    name = str(row.get("stock_name") or row.get("name") or "").strip().upper()
-    return name == "TEST" or (code == "123456" and name.startswith("TEST"))
+    return is_synthetic_scalp_sim(row)
 
 
 def _extract_scalp_sim_completed_rows(events: list[dict]) -> list[dict]:
@@ -5151,7 +5032,10 @@ def _scalp_simulator_event_summary(
         event for event in raw_sim_events if _is_synthetic_test_event(event)
     ]
     sim_events = [
-        event for event in raw_sim_events if not _is_synthetic_test_event(event)
+        event
+        for event in raw_sim_events
+        if not _is_synthetic_test_event(event)
+        and str(event.get("stage") or "") not in SCALP_OVERNIGHT_RETIRED_STAGES
     ]
     stage_counts = Counter(str(event.get("stage") or "-") for event in sim_events)
     duplicate_events = _events_for_stage(sim_events, "scalp_sim_duplicate_buy_signal")
@@ -5176,7 +5060,10 @@ def _scalp_simulator_event_summary(
         else _extract_scalp_sim_completed_rows(events)
     )
     completed_rows = [
-        row for row in raw_completed_rows or [] if not _is_synthetic_test_row(row)
+        row
+        for row in raw_completed_rows or []
+        if not _is_synthetic_test_row(row)
+        and str(row.get("exit_rule") or "") != "scalp_sim_overnight_sell_today"
     ]
     lifecycle_bucket_match = _sim_lifecycle_bucket_match_aggregation(sim_events)
     swing_micro_quality = _swing_micro_source_quality_breakdown(events)
@@ -5241,22 +5128,16 @@ def _scalp_simulator_event_summary(
         ),
         "sim_ai_budget_exhausted": int(stage_counts.get("sim_ai_budget_exhausted", 0)),
         "sim_ai_critical_bypass": int(stage_counts.get("sim_ai_critical_bypass", 0)),
-        "overnight_decision": int(stage_counts.get("scalp_sim_overnight_decision", 0)),
-        "overnight_sell_today": int(
-            stage_counts.get("scalp_sim_overnight_sell_today", 0)
-        ),
-        "overnight_hold": int(stage_counts.get("scalp_sim_overnight_hold", 0)),
-        "overnight_carry_restored": int(
-            stage_counts.get("scalp_sim_overnight_carry_restored", 0)
-        ),
-        "overnight_completed_sell": sum(
+        "overnight_status": "retired",
+        "overnight_decision": 0,
+        "overnight_sell_today": 0,
+        "overnight_hold": 0,
+        "overnight_carry_restored": 0,
+        "overnight_completed_sell": 0,
+        "overnight_retired_event_count": sum(
             1
-            for event in sim_events
-            if str(event.get("stage") or "") == "scalp_sim_sell_order_assumed_filled"
-            and (
-                (event.get("fields") or {}).get("exit_rule")
-                == "scalp_sim_overnight_sell_today"
-            )
+            for event in raw_sim_events
+            if str(event.get("stage") or "") in SCALP_OVERNIGHT_RETIRED_STAGES
         ),
         "completed_profit_summary": _completed_profit_summary(completed_rows or []),
         "post_sell_join": _scalp_simulator_post_sell_join_summary(
@@ -5614,10 +5495,6 @@ _LIFECYCLE_MATCH_ELIGIBLE_STAGES: set[str] = {
     "scalp_sim_pre_submit_overbought_guard_would_block",
     "scalp_sim_pre_submit_overbought_guard_would_pass",
     "scalp_sim_entry_unpriced",
-    "scalp_sim_overnight_decision",
-    "scalp_sim_overnight_sell_today",
-    "scalp_sim_overnight_hold",
-    "scalp_sim_overnight_carry_restored",
     "scalp_sim_entry_ai_price_applied",
     "scalp_sim_entry_ai_price_skip_order",
 }

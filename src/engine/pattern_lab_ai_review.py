@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import retired_artifact, current_report_view
-
 import argparse
 import hashlib
 import json
@@ -21,6 +19,7 @@ from src.engine.ai.postclose_review_config import (
     resolve_postclose_ai_review_config,
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.lifecycle.retirement import current_report_view, retired_artifact
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_ai_review"
@@ -129,21 +128,6 @@ def _source_paths(target_date: str, *, include_swing: bool = True) -> dict[str, 
         "code_improvement_workorder": REPORT_DIR
         / "code_improvement_workorder"
         / f"code_improvement_workorder_{target_date}.json",
-        "lifecycle_decision_matrix": REPORT_DIR
-        / "lifecycle_decision_matrix"
-        / f"lifecycle_decision_matrix_{target_date}.json",
-        "lifecycle_bucket_discovery": REPORT_DIR
-        / "lifecycle_bucket_discovery"
-        / f"lifecycle_bucket_discovery_{target_date}.json",
-        "lifecycle_bucket_discovery_rolling5d": REPORT_DIR
-        / "lifecycle_bucket_discovery"
-        / f"lifecycle_bucket_discovery_{target_date}_rolling5d.json",
-        "lifecycle_bucket_discovery_rolling10d": REPORT_DIR
-        / "lifecycle_bucket_discovery"
-        / f"lifecycle_bucket_discovery_{target_date}_rolling10d.json",
-        "lifecycle_bucket_discovery_mtd": REPORT_DIR
-        / "lifecycle_bucket_discovery"
-        / f"lifecycle_bucket_discovery_{target_date}_mtd.json",
         "swing_lifecycle_decision_matrix": REPORT_DIR
         / "swing_lifecycle_decision_matrix"
         / f"swing_lifecycle_decision_matrix_{target_date}.json",
@@ -292,8 +276,6 @@ def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, 
     )
     feedback_labels = [
         "threshold_cycle_ev",
-        "lifecycle_decision_matrix",
-        "lifecycle_bucket_discovery",
         "swing_lifecycle_decision_matrix",
         "swing_lifecycle_bucket_discovery",
         "swing_strategy_discovery_ev",
@@ -1561,7 +1543,40 @@ def _apply_source_contract_resolutions(
     for item in conclusions:
         if not isinstance(item, dict):
             continue
-        if _is_resolved_swing_micro_context_gap(item, context):
+        retirement_text = " ".join(
+            (
+                str(item.get("review_id") or ""),
+                str(item.get("reason") or ""),
+            )
+        ).lower()
+        retired_scalp_ldm_gap = bool(
+            "swing_lifecycle" not in retirement_text
+            and any(
+                token in retirement_text
+                for token in (
+                    "lifecycle_decision_matrix",
+                    "lifecycle_bucket_discovery",
+                    "scalp_entry_adm",
+                )
+            )
+        )
+        if retired_scalp_ldm_gap:
+            review_id = str(item.get("review_id") or "unknown")
+            resolved_ids.append(review_id)
+            source_context_resolution_ids.append(review_id)
+            resolved_conclusions.append(
+                _resolved_source_context_conclusion(
+                    item,
+                    status="resolved_as_retired_not_applicable",
+                    contract_id="scalping_adm_ldm_retirement_20260906",
+                    details={
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "required_action": "do_not_regenerate_retired_chain",
+                    },
+                )
+            )
+        elif _is_resolved_swing_micro_context_gap(item, context):
             review_id = str(item.get("review_id") or "unknown")
             resolved_ids.append(review_id)
             source_contract_resolution_ids.append(review_id)
@@ -2195,8 +2210,6 @@ def _source_path_labels_for_domain(context: dict[str, Any], domain: str) -> list
             "observation_source_quality_audit",
             "threshold_cycle_ev",
             "code_improvement_workorder",
-            "lifecycle_decision_matrix",
-            "lifecycle_bucket_discovery",
             "pattern_lab_propagation_audit",
         ]
     elif domain == "swing":
@@ -3611,7 +3624,7 @@ def build_pattern_lab_ai_review_report(
         "window_policy": "same_day_postclose_pattern_lab_feedback_review",
         "sample_floor": "report_only_no_hard_decision",
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "pattern_lab_currentness + LDM/threshold feedback re-entry contract",
+        "source_quality_gate": "pattern_lab_currentness + active threshold/swing feedback re-entry contract",
         "forbidden_uses": FORBIDDEN_USES,
         "feedback_handoff_summary": context.get("feedback_handoff_summary") or {},
         "status": status,

@@ -95,7 +95,6 @@ def _operator_directed_exact_v2_env_readback(
         "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_NXT_ENABLED": "true",
         "KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED": "true",
         "KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED": "true",
-        "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED": "true",
     }
     missing = tuple(
         name

@@ -1072,10 +1072,6 @@ _LINEAGE_LIFECYCLE_MATCH_ELIGIBLE_STAGES: set[str] = {
     "scalp_sim_pre_submit_overbought_guard_would_block",
     "scalp_sim_pre_submit_overbought_guard_would_pass",
     "scalp_sim_entry_unpriced",
-    "scalp_sim_overnight_decision",
-    "scalp_sim_overnight_sell_today",
-    "scalp_sim_overnight_hold",
-    "scalp_sim_overnight_carry_restored",
     "scalp_sim_entry_ai_price_applied",
     "scalp_sim_entry_ai_price_skip_order",
 }

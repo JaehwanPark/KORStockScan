@@ -40,6 +40,17 @@ def _enable(monkeypatch) -> None:
     )
 
 
+def test_overnight_context_is_permanently_retired(monkeypatch):
+    _enable(monkeypatch)
+
+    assert holding_decision_context_enabled(
+        venue="KRX",
+        session="krx_regular",
+        decision_kind="overnight",
+        now_ts=datetime(2026, 7, 23, 15, 10, tzinfo=KST),
+    ) is False
+
+
 def test_holding_snapshot_collects_null_aware_investor_source(monkeypatch):
     _enable(monkeypatch)
     source_date = datetime(2026, 7, 23, tzinfo=KST)
@@ -1061,7 +1072,7 @@ def test_premarket_uses_nxt_route_and_al_requires_equivalence_proof(monkeypatch)
         _stock(),
         "PREMARKET_KRX_LIKE",
         "premarket_krx_like",
-        "overnight",
+        "holding_flow",
         now_ts=now,
         recent_candles=bars,
     )
@@ -1072,7 +1083,7 @@ def test_premarket_uses_nxt_route_and_al_requires_equivalence_proof(monkeypatch)
         _stock(),
         "PREMARKET_KRX_LIKE",
         "premarket_krx_like",
-        "overnight",
+        "holding_flow",
         now_ts=now,
         recent_candles=bars,
     )
@@ -1416,7 +1427,7 @@ def test_runtime_fetch_request_code_matches_actual_holding_venue(monkeypatch):
             decision_kind="overnight",
             now_ts=premarket,
         )
-        == "000660_NX"
+        == "000660"
     )
     assert (
         state_handlers._resolve_holding_context_request_code(

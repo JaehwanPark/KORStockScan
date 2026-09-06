@@ -50,7 +50,6 @@ from src.engine.sniper_time import (
     TIME_09_05,
     TIME_15_30,
     TIME_20_00,
-    TIME_SCALPING_OVERNIGHT_DECISION,
     TIME_SCALPING_NEW_BUY_CUTOFF,
     describe_scalping_buy_windows,
     is_scalping_buy_time_allowed,
@@ -199,6 +198,10 @@ from src.engine.scalping.position_sizing_allocator import (
 )
 from src.engine.scalping.rising_missed_selection_prior import (
     rising_missed_selection_prior_fields,
+)
+from src.engine.scalping.sim_source_quality import (
+    is_synthetic_scalp_sim,
+    synthetic_scalp_sim_reason,
 )
 from src.engine.scalping.watch_budget import market_gainer_first_ai_retention
 from src.engine.sniper_scale_in_utils import record_add_history_event
@@ -1231,6 +1234,7 @@ _SCALP_FRESH_QUOTE_REQUIRED_DISCRETIONARY_EXIT_RULES = {
     "scalp_trailing_take_profit",
     "scalp_profit_stagnation_time_exit",
     "scalp_low_profit_stagnation_hard_exit",
+    "scalp_same_session_terminal_exit",
 }
 _PROFIT_STAGNATION_STATE_FIELDS = (
     "profit_stagnation_started_at",
@@ -1245,7 +1249,10 @@ _LOW_PROFIT_STAGNATION_STATE_FIELDS = (
 )
 SCALP_SIMULATION_BOOK = "scalp_ai_buy_all"
 SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
-SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
+DEFAULT_SCALP_SIM_STATE_PATH = (
+    DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
+)
+SCALP_SIM_STATE_PATH = DEFAULT_SCALP_SIM_STATE_PATH
 _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS: int | None = None
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = (
@@ -7074,6 +7081,39 @@ def _swing_probe_identity(row: dict | None) -> str:
     return f"code:{code}" if code else ""
 
 
+def _scalp_simulator_state_row_is_current_session(
+    row: dict | None,
+    *,
+    current_date=None,
+) -> bool:
+    """Reject persisted simulator custody that would cross a KST session."""
+
+    if SCALP_SIM_STATE_PATH != DEFAULT_SCALP_SIM_STATE_PATH:
+        return True
+    row = row if isinstance(row, dict) else {}
+    entry_ts = next(
+        (
+            _safe_float(row.get(key), 0.0)
+            for key in (
+                "holding_started_at",
+                "buy_time",
+                "scalp_sim_filled_at",
+                "order_time",
+            )
+            if _safe_float(row.get(key), 0.0) > 0.0
+        ),
+        0.0,
+    )
+    if entry_ts <= 0.0:
+        return False
+    expected_date = current_date or datetime.now(tz=_KST).date()
+    try:
+        entry_date = datetime.fromtimestamp(entry_ts, tz=_KST).date()
+    except (OverflowError, OSError, ValueError):
+        return False
+    return entry_date == expected_date
+
+
 def persist_scalp_simulator_state(targets=None) -> None:
     global _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS
     try:
@@ -7100,6 +7140,8 @@ def persist_scalp_simulator_state(targets=None) -> None:
                     [
                         _json_safe_value(dict(target))
                         for target in _scalp_simulator_active_targets(target_list)
+                        if not is_synthetic_scalp_sim(target)
+                        and _scalp_simulator_state_row_is_current_session(target)
                     ]
                 )
                 if capped:
@@ -7149,6 +7191,9 @@ def restore_scalp_simulator_targets(targets=None) -> int:
     }
     open_count = len(_scalp_simulator_active_targets(target_list))
     cap_skipped = 0
+    stale_skipped = 0
+    synthetic_skipped = 0
+    current_date = datetime.now(tz=_KST).date()
     for row in rows:
         if not isinstance(row, dict) or not _active_runtime_status(row):
             continue
@@ -7162,11 +7207,36 @@ def restore_scalp_simulator_targets(targets=None) -> int:
         if not code:
             continue
         name = str(row.get("name") or "").strip().upper()
-        if code == "123456" or name in {"TEST", "DUMMY", "MOCK"}:
+        synthetic_reason = synthetic_scalp_sim_reason(row)
+        if synthetic_reason:
             log_info(
-                f"[SCALP_SIM_STATE] skipped synthetic simulator target code={code} name={name or '-'}"
+                "[SCALP_SIM_STATE] skipped synthetic simulator target "
+                f"code={code} name={name or '-'} reason={synthetic_reason}"
             )
+            synthetic_skipped += 1
             continue
+        if not _scalp_simulator_state_row_is_current_session(
+            row, current_date=current_date
+        ):
+            log_info(
+                "[SCALP_SIM_STATE] skipped non-current-session simulator target "
+                f"code={code} name={name or '-'}"
+            )
+            stale_skipped += 1
+            continue
+        legacy_overnight_status = str(
+            row.pop("scalp_sim_overnight_status", "") or ""
+        ).strip()
+        row.pop("scalp_sim_overnight_decision_date", None)
+        row.pop("scalp_sim_overnight_decision_at", None)
+        row.pop("scalp_sim_overnight_ai_confidence", None)
+        row.pop("scalp_sim_overnight_reason", None)
+        row.pop("scalp_sim_overnight_schema", None)
+        if legacy_overnight_status:
+            log_info(
+                "[SCALP_SIM_STATE] normalized retired overnight state into "
+                f"same-session holding code={code} prior={legacy_overnight_status}"
+            )
         row["code"] = code
         row["strategy"] = "SCALPING"
         row["simulation_book"] = SCALP_SIMULATION_BOOK
@@ -7179,44 +7249,15 @@ def restore_scalp_simulator_targets(targets=None) -> int:
         row["broker_order_forbidden"] = True
         row["simulated_order"] = True
         target_list.append(row)
-        if str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT":
-            try:
-                emit_pipeline_event(
-                    "HOLDING_PIPELINE",
-                    str(row.get("name") or row.get("stock_name") or code),
-                    code,
-                    "scalp_sim_overnight_carry_restored",
-                    fields={
-                        "sim_record_id": row.get("sim_record_id"),
-                        "sim_parent_record_id": row.get("sim_parent_record_id"),
-                        "simulation_book": SCALP_SIMULATION_BOOK,
-                        "scalp_live_simulator": True,
-                        "actual_order_submitted": False,
-                        "broker_order_forbidden": True,
-                        "decision_authority": "sim_observation_only",
-                        "runtime_effect": "sim_observation_only_active_carry",
-                        "overnight_schema": "overnight_v1",
-                        "scalp_sim_overnight_status": row.get(
-                            "scalp_sim_overnight_status"
-                        ),
-                        "scalp_sim_overnight_decision_date": row.get(
-                            "scalp_sim_overnight_decision_date"
-                        ),
-                        "scalp_sim_overnight_decision_at": row.get(
-                            "scalp_sim_overnight_decision_at"
-                        ),
-                    },
-                )
-            except Exception as exc:
-                log_error(f"[SCALP_SIM_STATE] carry restore event failed: {exc}")
         if sim_id:
             existing_ids.add(sim_id)
         restored += 1
         open_count += 1
-    if restored or cap_skipped:
+    if restored or cap_skipped or stale_skipped or synthetic_skipped:
         log_info(
             f"[SCALP_SIM_STATE] restored active simulator targets={restored} "
-            f"cap_skipped={cap_skipped} max_open={max_open}"
+            f"cap_skipped={cap_skipped} stale_skipped={stale_skipped} "
+            f"synthetic_skipped={synthetic_skipped} max_open={max_open}"
         )
     return restored
 
@@ -7238,6 +7279,8 @@ def sync_scalp_simulator_targets_from_state(targets=None) -> dict:
                         row
                         for row in rows
                         if isinstance(row, dict) and _active_runtime_status(row)
+                        if not is_synthetic_scalp_sim(row)
+                        if _scalp_simulator_state_row_is_current_session(row)
                     ]
                 )
                 active_ids = {
@@ -52394,34 +52437,6 @@ def _clear_holding_flow_override_candidate(
     )
 
 
-def _overnight_flow_override_worsen_from_candidate(
-    stock: dict, profit_rate: float
-) -> float:
-    candidate_profit = _safe_float(
-        stock.get("overnight_flow_override_candidate_profit"), profit_rate
-    )
-    return float(candidate_profit or 0.0) - float(profit_rate or 0.0)
-
-
-def _should_revert_overnight_flow_override_hold(
-    stock: dict, profit_rate: float, now_t
-) -> bool:
-    if not stock.get("overnight_flow_override_hold"):
-        return False
-    if not (TIME_SCALPING_OVERNIGHT_DECISION <= now_t < TIME_15_30):
-        return False
-    worsen_pct = max(
-        0.0,
-        _safe_float(
-            stock.get("overnight_flow_override_worsen_pct"),
-            _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80),
-        ),
-    )
-    return (
-        _overnight_flow_override_worsen_from_candidate(stock, profit_rate) + 1e-9
-    ) >= worsen_pct
-
-
 _SCALP_TRAILING_CONTINUATION_RECHECK_STATE_FIELDS = (
     "scalp_trailing_continuation_recheck_started_at",
     "scalp_trailing_continuation_recheck_until_epoch",
@@ -77099,6 +77114,121 @@ def _resolve_holding_sell_dmst_stex_tp(
     }
 
 
+_SCALPING_KRX_TERMINAL_EXIT_START = datetime_time(hour=15, minute=15)
+_SCALPING_NXT_TERMINAL_EXIT_START = datetime_time(hour=19, minute=45)
+
+
+def _scalping_same_session_terminal_exit_fields(
+    stock: dict | None,
+    code: str,
+    *,
+    strategy: str,
+    now_t,
+) -> dict[str, Any]:
+    """Select the existing SELL path before the held symbol's last session closes.
+
+    This is an operational position-finalization rule, not a tuning axis.  It
+    chooses no price, quantity, or order route and therefore remains subject to
+    the existing quote, account, order, receipt, venue, and sell-window guards.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    base = {
+        "enabled": strategy == "SCALPING",
+        "should_exit": False,
+        "exit_rule": "scalp_same_session_terminal_exit",
+        "sell_reason_type": "SESSION_END",
+        "decision_authority": "same_session_position_finalization_only",
+        "metric_role": "operational_terminal_reconciliation",
+        "window_policy": "last_executable_sell_window_by_confirmed_venue",
+        "sample_floor": "not_applicable_operational_rule",
+        "primary_decision_metric": "same_session_terminal_receipt",
+        "source_quality_gate": "fresh_executable_quote_and_existing_sell_guards",
+        "runtime_effect": True,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": False,
+        "forbidden_uses": (
+            "overnight_carry|ai_hold_override|price_or_quantity_override|"
+            "broker_guard_bypass|hard_safety_relaxation"
+        ),
+    }
+    if strategy != "SCALPING" or str(stock.get("status") or "").upper() != "HOLDING":
+        return {**base, "reason": "not_active_scalping_holding"}
+    if now_t >= TIME_20_00:
+        return {**base, "reason": "sell_session_closed"}
+
+    if _is_scalp_simulated_position(stock, strategy):
+        due = now_t >= _SCALPING_NXT_TERMINAL_EXIT_START
+        return {
+            **base,
+            "should_exit": due,
+            "terminal_venue": "SIM",
+            "terminal_start": _SCALPING_NXT_TERMINAL_EXIT_START.isoformat(),
+            "venue_source": "simulator_same_session",
+            "reason": "simulator_terminal_window" if due else "before_simulator_terminal_window",
+        }
+
+    is_nxt_enabled, venue_source = _holding_sell_nxt_enabled_status(stock, code)
+    confirmed_nxt_entry = (
+        str(stock.get("entry_execution_broker_route") or "").strip().upper() == "NXT"
+    )
+    if confirmed_nxt_entry:
+        is_nxt_enabled = True
+        venue_source = "confirmed_entry_execution_route"
+    if is_nxt_enabled is True:
+        due = now_t >= _SCALPING_NXT_TERMINAL_EXIT_START
+        terminal_venue = "NXT"
+        terminal_start = _SCALPING_NXT_TERMINAL_EXIT_START
+    else:
+        due = _SCALPING_KRX_TERMINAL_EXIT_START <= now_t < TIME_15_30
+        terminal_venue = "KRX"
+        terminal_start = _SCALPING_KRX_TERMINAL_EXIT_START
+    return {
+        **base,
+        "should_exit": due,
+        "terminal_venue": terminal_venue,
+        "terminal_start": terminal_start.isoformat(),
+        "nxt_enabled": is_nxt_enabled,
+        "venue_source": venue_source,
+        "reason": (
+            "last_executable_sell_window"
+            if due
+            else "before_last_executable_sell_window"
+        ),
+    }
+
+
+def unresolved_scalping_terminal_positions(targets: list[dict] | None) -> list[dict]:
+    """Return compact unresolved position custody at process shutdown."""
+
+    unresolved: list[dict] = []
+    for stock in targets or []:
+        if not isinstance(stock, dict):
+            continue
+        strategy = str(stock.get("strategy") or "").strip().upper()
+        status = str(stock.get("status") or "").strip().upper()
+        if strategy not in {"SCALP", "SCALPING"} or status not in {
+            "BUY_ORDERED",
+            SCALP_SIM_PENDING_STATUS,
+            "HOLDING",
+            "SELL_ORDERED",
+        }:
+            continue
+        unresolved.append(
+            {
+                "id": stock.get("id"),
+                "code": str(stock.get("code") or "").strip()[:6],
+                "name": stock.get("name"),
+                "status": status,
+                "buy_qty": _safe_int(stock.get("buy_qty"), 0),
+                "sell_order_no": stock.get("sell_odno") or stock.get("odno"),
+                "simulation": _is_scalp_simulated_position(stock, strategy),
+            }
+        )
+    return unresolved
+
+
 _NXT_AFTERMARKET_EARLY_SELL_START = datetime_time(hour=15, minute=45)
 _NXT_AFTERMARKET_EARLY_SELL_END = datetime_time(hour=20)
 _NXT_AFTERMARKET_EARLY_SELL_MAX_0D_AGE_MS = 1000.0
@@ -84593,6 +84723,36 @@ def handle_holding_state(
     opening_rotation_active = bool(
         strategy == "SCALPING" and is_opening_rotation_position(pos_tag)
     )
+    same_session_terminal_exit = _scalping_same_session_terminal_exit_fields(
+        stock,
+        code,
+        strategy=strategy,
+        now_t=now_t,
+    )
+    if same_session_terminal_exit.get("should_exit"):
+        is_sell_signal = True
+        sell_reason_type = str(
+            same_session_terminal_exit.get("sell_reason_type") or "SESSION_END"
+        )
+        exit_rule = str(
+            same_session_terminal_exit.get("exit_rule")
+            or "scalp_same_session_terminal_exit"
+        )
+        reason = (
+            "🌙 스캘핑 당일 포지션 종결 "
+            f"({same_session_terminal_exit.get('terminal_venue')} final window)"
+        )
+        terminal_log_key = (
+            f"{now_dt.date().isoformat()}:{same_session_terminal_exit.get('terminal_venue')}"
+        )
+        if stock.get("_same_session_terminal_exit_log_key") != terminal_log_key:
+            stock["_same_session_terminal_exit_log_key"] = terminal_log_key
+            _log_holding_pipeline(
+                stock,
+                code,
+                "same_session_terminal_exit_selected",
+                **same_session_terminal_exit,
+            )
     holding_context_forbidden_exit_candidate = (
         _holding_context_prohibited_exit_candidate(
             strategy=strategy,
@@ -86167,7 +86327,11 @@ def handle_holding_state(
             reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
             exit_rule = "protect_trailing_stop"
 
-    elif strategy == "SCALPING" and not opening_rotation_active:
+    elif (
+        strategy == "SCALPING"
+        and not opening_rotation_active
+        and not is_sell_signal
+    ):
         base_stop_pct = _rule_float("SCALP_STOP", -1.5)
         hard_stop_pct = _rule_float("SCALP_HARD_STOP", -2.5)
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)
@@ -86357,36 +86521,6 @@ def handle_holding_state(
                 f"{_holding_exit_ai_reason_label(current_ai_score, holding_score_exit_role_ctx)}"
             )
             exit_rule = "scalp_hard_stop_pct"
-
-        elif _should_revert_overnight_flow_override_hold(stock, profit_rate, now_t):
-            overnight_candidate_profit = _safe_float(
-                stock.get("overnight_flow_override_candidate_profit"), profit_rate
-            )
-            overnight_worsen_pct = max(
-                0.0,
-                _safe_float(
-                    stock.get("overnight_flow_override_worsen_pct"),
-                    _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80),
-                ),
-            )
-            overnight_worsen = overnight_candidate_profit - float(profit_rate or 0.0)
-            is_sell_signal = True
-            sell_reason_type = "LOSS" if profit_rate < 0 else "TRAILING"
-            reason = (
-                f"🌙 오버나이트 flow 보류 후 추가악화 "
-                f"({overnight_worsen:.2f}%p >= {overnight_worsen_pct:.2f}%p)"
-            )
-            exit_rule = "overnight_flow_worsen_revert"
-            _log_holding_pipeline(
-                stock,
-                code,
-                "overnight_flow_override_revert_sell_today",
-                exit_rule=exit_rule,
-                profit_rate=f"{profit_rate:+.2f}",
-                candidate_profit=f"{overnight_candidate_profit:+.2f}",
-                worsen_from_candidate=f"{overnight_worsen:.2f}",
-                worsen_pct=f"{overnight_worsen_pct:.2f}",
-            )
 
         elif bad_entry_refined_decision.get("should_exit"):
             is_sell_signal = True
@@ -87745,7 +87879,10 @@ def handle_holding_state(
                 quote_fields=holding_ws_fields,
             ):
                 return
-        if not opening_rotation_active:
+        if (
+            not opening_rotation_active
+            and exit_rule != "scalp_same_session_terminal_exit"
+        ):
             if not _evaluate_holding_flow_override(
                 stock=stock,
                 code=code,
@@ -87838,6 +87975,7 @@ def handle_holding_state(
         stop_touch_avg_down_result = (
             {"submitted": False, "deferred": False}
             if opening_rotation_active
+            or exit_rule == "scalp_same_session_terminal_exit"
             else _attempt_stop_line_touch_mandatory_avg_down(
                 stock=stock,
                 code=code,

@@ -1580,6 +1580,35 @@ def test_targeted_scan_verifies_top_level_record_id_after_nested_prefilter_candi
     assert report["threshold_opportunities"] == []
 
 
+def test_latency_primary_blocker_remains_diagnostic_with_positive_sample_floor():
+    rows = [
+        {
+            "post_sell_joined": True,
+            "primary_threshold_group": "latency_or_freshness",
+            "profit_rate": profit,
+            "record_id": str(index),
+            "stock_code": f"00000{index}",
+            "stock_name": "sample",
+            "primary_blocker_event": "latency_block",
+        }
+        for index, profit in enumerate([0.8, 0.5, 0.2], start=1)
+    ]
+
+    evaluations = mod._primary_blocker_evaluations(rows)
+    opportunities = mod._threshold_opportunities(evaluations)
+    orders = mod._build_code_orders(opportunities, {})
+
+    assert len(evaluations) == 1
+    assert evaluations[0]["valid_profit_sample"] == 3
+    assert evaluations[0]["equal_weight_avg_profit_pct"] == 0.5
+    assert evaluations[0]["candidate_status"] == "diagnostic_not_actionable"
+    assert evaluations[0]["candidate_ineligibility_reason"] == (
+        "hard_safety_diagnostic_only"
+    )
+    assert opportunities == []
+    assert orders == []
+
+
 def test_primary_blocker_uses_event_time_and_rejects_post_force_only(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
     post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"

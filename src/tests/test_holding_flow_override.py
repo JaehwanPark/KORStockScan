@@ -2918,28 +2918,5 @@ def test_overnight_sell_today_flow_trim_keeps_sell_today(monkeypatch):
     )
 
 
-def test_overnight_flow_hold_reverts_between_1520_and_1530_on_worsen_floor():
-    stock = {
-        "overnight_flow_override_hold": True,
-        "overnight_flow_override_candidate_profit": 0.10,
-        "overnight_flow_override_worsen_pct": 0.80,
-    }
-
-    assert (
-        handlers._should_revert_overnight_flow_override_hold(
-            stock, -0.70, dt_time(15, 25)
-        )
-        is True
-    )
-    assert (
-        handlers._should_revert_overnight_flow_override_hold(
-            stock, -0.69, dt_time(15, 25)
-        )
-        is False
-    )
-    assert (
-        handlers._should_revert_overnight_flow_override_hold(
-            stock, -0.80, dt_time(15, 30)
-        )
-        is False
-    )
+def test_retired_overnight_flow_hold_has_no_current_holding_runtime_hook():
+    assert not hasattr(handlers, "_should_revert_overnight_flow_override_hold")

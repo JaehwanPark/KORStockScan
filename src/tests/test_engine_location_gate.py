@@ -38,7 +38,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "kiwoom_orders.py",
     "kiwoom_sniper_v2.py",
     "kiwoom_websocket.py",
-    "latency_classifier_recommendation.py",
     "lifecycle_ai_context.py",
     "lifecycle_bucket_discovery.py",
     "lifecycle_decision_matrix.py",

@@ -65,10 +65,57 @@ def _position(**overrides):
     return row
 
 
+def _run_archived_fixture(*, target_date, ai_engine, state_path, emit_events=False):
+    """Exercise archived decision semantics without exposing a current runner."""
+
+    return overnight._run_sim_overnight_locked(
+        target_date=target_date,
+        ai_engine=ai_engine,
+        state_path=state_path,
+        mutate_state=True,
+        emit_events=emit_events,
+        already_locked=False,
+    )
+
+
+def test_current_runner_is_retired_and_does_not_mutate_state(tmp_path):
+    path = _state_path(tmp_path, [_position()])
+    before = path.read_bytes()
+
+    report = overnight.run_sim_overnight(
+        target_date="2026-09-06",
+        ai_engine=_FakeOvernightAI("HOLD_OVERNIGHT"),
+        state_path=path,
+    )
+
+    assert report["status"] == "retired"
+    assert report["retirement_id"] == "scalping_overnight_retirement_20260906"
+    assert path.read_bytes() == before
+
+
+def test_offline_replay_excludes_synthetic_position(tmp_path):
+    path = _state_path(
+        tmp_path,
+        [_position(code="123456", name="ARMED", sim_record_id="SYNTHETIC")],
+    )
+
+    report = overnight.run_sim_overnight(
+        target_date="2026-05-19",
+        ai_engine=_FakeOvernightAI("SELL_TODAY"),
+        state_path=path,
+        mutate_state=False,
+        emit_events=False,
+        allow_retired_offline_replay=True,
+    )
+
+    assert report["summary"]["decision_target"] == 0
+    assert report["summary"]["active_after"] == 1
+
+
 def test_sell_today_closes_sim_without_real_order(tmp_path):
     path = _state_path(tmp_path, [_position()])
 
-    report = overnight.run_sim_overnight(
+    report = _run_archived_fixture(
         target_date="2026-05-19",
         ai_engine=_FakeOvernightAI("SELL_TODAY"),
         state_path=path,
@@ -112,7 +159,7 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(
         tmp_path, [_position(entry_adm_candidate_id="ADM-000001-PARENT-1")]
     )
 
-    overnight.run_sim_overnight(
+    _run_archived_fixture(
         target_date="2026-05-19",
         ai_engine=_FakeOvernightAI("SELL_TODAY"),
         state_path=path,
@@ -170,7 +217,7 @@ def test_emitted_events_include_metric_contract_and_openai_provenance(
 def test_hold_overnight_keeps_active_state_with_carry_fields(tmp_path):
     path = _state_path(tmp_path, [_position()])
 
-    report = overnight.run_sim_overnight(
+    report = _run_archived_fixture(
         target_date="2026-05-19",
         ai_engine=_FakeOvernightAI("HOLD_OVERNIGHT"),
         state_path=path,
@@ -194,7 +241,7 @@ def test_ai_failure_falls_back_to_sell_today(tmp_path):
 
     path = _state_path(tmp_path, [_position()])
 
-    report = overnight.run_sim_overnight(
+    report = _run_archived_fixture(
         target_date="2026-05-19",
         ai_engine=_FailingAI(),
         state_path=path,
@@ -221,7 +268,7 @@ def test_ai_timeout_fallback_is_attributed(tmp_path):
 
     path = _state_path(tmp_path, [_position()])
 
-    report = overnight.run_sim_overnight(
+    report = _run_archived_fixture(
         target_date="2026-05-19",
         ai_engine=_TimeoutAI(),
         state_path=path,
@@ -246,7 +293,7 @@ def test_idempotency_skips_same_date_decision(tmp_path):
     )
     ai = _FakeOvernightAI("SELL_TODAY")
 
-    report = overnight.run_sim_overnight(
+    report = _run_archived_fixture(
         target_date="2026-05-19",
         ai_engine=ai,
         state_path=path,
@@ -268,7 +315,7 @@ def test_excludes_real_non_sim_and_completed_rows(tmp_path):
         ],
     )
 
-    report = overnight.run_sim_overnight(
+    report = _run_archived_fixture(
         target_date="2026-05-19",
         ai_engine=_FakeOvernightAI("SELL_TODAY"),
         state_path=path,

@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import (
-    retired_artifact,
-    retired_status,
-    current_report_view,
-)
-
 import argparse
 import json
 import math
@@ -17,6 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.approval_contracts import approval_contract_for
+from src.engine.lifecycle.retirement import (
+    RETIRED_CALIBRATION_FAMILIES,
+    current_report_view,
+    retired_artifact,
+    retired_status,
+)
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     policy_warning_for_date,
@@ -85,6 +85,9 @@ _REASON_LABELS = {
     "counterfactual_join_gap": "counterfactual join gap",
     "recovery_floor_not_met": "recovery floor 미달",
     "latency_classifier_runtime_semantics_gap": "latency semantics gap",
+    "latency_recommendation_retired_diagnostic_preserved": (
+        "독립 latency 추천 폐기·hard-safety 진단 유지"
+    ),
     "source_quality_blocker": "소스 품질 차단",
     "missing_action_bucket": "ADM action bucket 누락",
     "prompt_context_not_loaded": "ADM prompt context 미적재",
@@ -116,7 +119,7 @@ _FAMILY_DESCRIPTIONS = {
     "entry_split_order_plan": "기존 requested_qty를 보존하면서 planned_orders를 bucket별 leg/price offset/비중 policy로 분해하는 submit 직전 튜닝 축",
     "scale_in_split_order_plan": "기존 scale-in qty를 보존하면서 AVG_DOWN 물타기 주문을 leg/price offset policy로 분해하는 scale-in 직전 튜닝 축",
     "entry_price_execution_quality": "real-only 제출/체결/취소/late-fill/partial/full fill 품질을 감사하는 실행품질 축",
-    "latency_classifier_runtime_profile": "latency SAFE/CAUTION/DANGER classifier와 bounded submit recovery canary를 분리 적용하는 진입 실행품질 축",
+    "latency_classifier_runtime_profile": "SAFE/CAUTION/DANGER runtime hard-safety 판정과 latency blocker를 기록하는 진입 실행품질 진단축",
     "score65_74_recovery_probe": "family id는 score65_74로 유지하지만 현 runtime floor 기준 AI 점수 60~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 기본 신규 BUY sizing으로 회수하는 축",
     "liquidity_gate_refined_candidate": "유동성 gate가 막은 후보의 후행 EV를 보고 gate 완화/유지 필요성을 판단하는 축",
     "overbought_gate_refined_candidate": "과열 gate가 막은 후보의 후행 EV를 보고 과열 차단 기준을 다듬는 축",
@@ -139,7 +142,6 @@ _FAMILY_DESCRIPTIONS = {
     "swing_exit_ofi_qi_smoothing": "스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축",
     "panic_sell_defense": "패닉셀 구간의 stop/rebound simulation 결과로 방어 guard와 rollback 조건을 설계하는 축",
     "panic_entry_freeze_guard": "패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축",
-    "scalp_sim_overnight_ai_carry": "장마감 후 open 스캘핑 sim 포지션을 overnight_v1로 SELL_TODAY/HOLD_OVERNIGHT 분리해 다음날 lifecycle/EV label로 연결하는 source-only 축",
     "swing_strategy_discovery_sim": "스윙 safe pool 전체를 공격적 sim-only lifecycle arm으로 전개하고 label/EV를 축적하는 source-only 탐색 축",
     "swing_lifecycle_decision_matrix": "스윙 probe와 discovery sim을 하나의 lifecycle bucket attribution으로 통합하는 source-only Swing LDM",
     "swing_lifecycle_bucket_discovery": "Swing LDM bucket을 sim-only 자동승인 후보와 source-quality workorder 후보로 분류하는 postclose handoff 축",
@@ -157,7 +159,7 @@ _BASELINE_APPLICATION = {
     "entry_split_order_plan": "선택 시 다음 PREOPEN entry split order policy env/file/version만 적용, requested_qty 산정과 broker/account/order/quantity/cooldown guard는 변경 없음",
     "scale_in_split_order_plan": "선택 시 다음 PREOPEN scale-in split order policy env/file/version만 적용, scale-in qty 산정과 broker/account/order/quantity/cooldown guard는 변경 없음",
     "entry_price_execution_quality": "real-only audit: submit/fill/cancel 품질 기록만 수행, runtime threshold apply 권한 없음",
-    "latency_classifier_runtime_profile": "선택 시 다음 PREOPEN latency classifier/recovery env만 적용",
+    "latency_classifier_runtime_profile": "baseline runtime hard-safety 판정 유지; 독립 PREOPEN 추천·임계값 적용 권한 없음",
     "holding_exit_decision_matrix_advisory": "관찰/리포트 only: advisory live 적용 아님",
     "scalp_entry_action_decision_matrix_advisory": "운영 override runtime bias: AI BUY를 WAIT/DROP 또는 defensive bias로 보정, submit safety guard 우선",
     "lifecycle_decision_matrix_runtime": "기본 OFF: 선택 시 micro canary env로 policy file/version만 연결, hard safety/submit guard 우선",
@@ -168,7 +170,6 @@ _BASELINE_APPLICATION = {
     "overbought_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "panic_sell_defense": "report-only: 주문/청산/threshold/runtime env 변경 없음",
     "panic_entry_freeze_guard": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
-    "scalp_sim_overnight_ai_carry": "source-only: sim 가상 청산/carry 기록만 수행, runtime threshold apply 권한 없음",
     "swing_strategy_discovery_sim": "source-only: 가상 후보/arm/label/EV 분석만 수행, runtime threshold apply 권한 없음",
     "swing_lifecycle_decision_matrix": "source-only: sim 후보 자동승인 입력만 만들며 real order/approval/env apply 권한 없음",
     "swing_lifecycle_bucket_discovery": "source-only: 다음 PREOPEN swing sim policy 입력으로만 surfaced candidate를 전달",
@@ -248,11 +249,11 @@ _SCALPING_GATE_REVIEW = {
         "analysis_coverage": "broker result, cancel, late-fill, partial/full fill join",
     },
     "latency_classifier_runtime_profile": {
-        "gate_review_class": "entry_execution_quality_bounded_tunable",
+        "gate_review_class": "entry_execution_quality_hard_safety_diagnostic",
         "legacy_hard_gate_risk": "no_unreviewed_hard_gate",
         "hard_gate_review": "CAUTION은 slippage check 후 normal submit으로 단순화하고, DANGER/stale/broker safety만 차단한다",
-        "tuning_route": "threshold-cycle latency audit plus post-apply latency_pass/order_bundle attribution",
-        "analysis_coverage": "latency_block DANGER/stale/broker audit and submit drought attribution",
+        "tuning_route": "BUY Funnel plus daily performance latency_block attribution; no independent PREOPEN candidate",
+        "analysis_coverage": "latency_block DANGER/stale/broker audit and submit drought attribution; spread-only operator lock remains separate",
     },
     "score65_74_recovery_probe": {
         "gate_review_class": "entry_unlock_probe",
@@ -734,6 +735,7 @@ def _runtime_selection_by_family(
         str(item or "").strip()
         for item in (runtime_apply.get("selected_families") or [])
         if str(item or "").strip()
+        and str(item or "").strip() not in RETIRED_CALIBRATION_FAMILIES
     }
     apply_manifest_path = str(runtime_apply.get("apply_manifest") or "").strip()
     apply_manifest = (
@@ -761,7 +763,7 @@ def _runtime_selection_by_family(
         if not isinstance(item, dict) or not item.get("selected"):
             continue
         family = str(item.get("family") or "").strip()
-        if not family:
+        if not family or family in RETIRED_CALIBRATION_FAMILIES:
             continue
         result[family] = {
             **item,
@@ -1061,9 +1063,13 @@ def _scalping_rows(
         calibration_report, ai_review or {}, require_ai=require_ai
     )
     runtime_selections = _runtime_selection_by_family(ev_report)
-    selected = set(
-        (ev_report.get("runtime_apply") or {}).get("selected_families") or []
-    )
+    selected = {
+        str(family)
+        for family in (
+            (ev_report.get("runtime_apply") or {}).get("selected_families") or []
+        )
+        if str(family) not in RETIRED_CALIBRATION_FAMILIES
+    }
     lifecycle_matrix = (
         ev_report.get("lifecycle_decision_matrix")
         if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
@@ -1258,135 +1264,48 @@ def _scalping_rows(
         if isinstance(ev_report.get("entry_funnel"), dict)
         else {}
     )
-    if "latency_classifier_runtime_profile" in selected or entry_funnel.get(
-        "latency_submit_routing"
+    if entry_funnel.get("latency_submit_routing") or entry_funnel.get(
+        "latency_block_events"
     ):
-        selected_family = "latency_classifier_runtime_profile" in selected
-        recommended_action = str(entry_funnel.get("recommended_action") or "")
-        recommended_reason = str(entry_funnel.get("recommended_action_reason") or "")
-        allowed_runtime_apply = bool(entry_funnel.get("allowed_runtime_apply"))
-        next_preopen_selected = (
-            selected_family
-            and recommended_action == "bounded_apply"
-            and allowed_runtime_apply
-        )
-        recovery_candidates = _as_int(entry_funnel.get("would_recovery_canary_events"))
-        recovery_attempts = _as_int(entry_funnel.get("would_recovery_canary_attempts"))
-        caution_normal_semantics = _as_int(
-            entry_funnel.get("would_caution_normal_events")
-            if entry_funnel.get("would_caution_normal_events") is not None
-            else entry_funnel.get("would_caution_reject_events")
-        )
-        if next_preopen_selected:
-            state = "adjust_up"
-            reasons = ["selected_auto_bounded_live"]
-        elif recovery_candidates > 0:
-            state = (
-                "hold_sample"
-                if _as_int(entry_funnel.get("counterfactual_joined_sample")) < 3
-                else "hold_no_edge"
-            )
-            reasons = ["latency_recovery_hold_by_counterfactual_ev"]
-        else:
-            state = "hold_sample"
-            reasons = ["latency_classifier_runtime_semantics_gap"]
+        state = "baseline_hard_safety"
+        reasons = ["latency_recommendation_retired_diagnostic_preserved"]
         row = {
             "domain": "scalping",
             "family": "latency_classifier_runtime_profile",
             "description": _description("latency_classifier_runtime_profile"),
             "state": state,
             "current_application": (
-                _current_application("latency_classifier_runtime_profile", state, True)
-                if next_preopen_selected
-                else "보류: 최신 recommendation 기준 다음 PREOPEN latency env 변경 없음"
+                "기존 SAFE/CAUTION/DANGER hard-safety 판정과 blocker 계측 유지; "
+                "독립 PREOPEN 추천·임계값 적용은 폐기"
             ),
             "state_interpretation": (
                 "SAFE/CAUTION은 slippage check 후 normal submit으로 보내고, "
-                "DANGER/stale/broker safety만 submit 차단으로 유지한다."
+                "DANGER/stale/broker safety만 submit 차단으로 유지한다. "
+                "spread-only 완화는 별도 명시적 operator lock이 소유한다."
             ),
-            "score": recovery_candidates,
-            "score_label": str(recovery_candidates),
+            "score": _as_int(entry_funnel.get("latency_block_events")),
+            "score_label": str(_as_int(entry_funnel.get("latency_block_events"))),
             "sample": {
                 "count": _as_int(entry_funnel.get("latency_block_events")),
-                "floor": 20,
-                "would_safe_pass_events": _as_int(
-                    entry_funnel.get("would_safe_pass_events")
-                ),
-                "historical_caution_audit_events": caution_normal_semantics,
-                "would_recovery_canary_events": recovery_candidates,
-                "would_recovery_canary_attempts": recovery_attempts,
+                "floor": "not_applicable_no_runtime_candidate",
                 "latency_pass_events": _as_int(entry_funnel.get("latency_pass_events")),
                 "order_bundle_submitted_events": _as_int(
                     entry_funnel.get("order_bundle_submitted_events")
                 ),
-                "counterfactual_joined_sample": _as_int(
-                    entry_funnel.get("counterfactual_joined_sample")
-                ),
-                "counterfactual_ev_pct": entry_funnel.get("counterfactual_ev_pct"),
-                "missed_winner_recovered": _as_int(
-                    entry_funnel.get("missed_winner_recovered")
-                ),
-                "avoided_loser_lost": _as_int(entry_funnel.get("avoided_loser_lost")),
-                "stale_quote_override_events": _as_int(
-                    entry_funnel.get("stale_quote_override_events")
-                ),
-                "broker_guard_bypass_candidates": _as_int(
-                    entry_funnel.get("broker_guard_bypass_candidates")
-                ),
             },
             "reasons": reasons,
             "reason_label": _reason_text(reasons),
-            "selected_auto_bounded_live": next_preopen_selected,
-            "previous_selected_auto_bounded_live": selected_family
-            and not next_preopen_selected,
-            "allowed_runtime_apply": allowed_runtime_apply,
-            "runtime_bias_scope": "latency_submit_recovery_bounded_canary",
+            "selected_auto_bounded_live": False,
+            "previous_selected_auto_bounded_live": False,
+            "allowed_runtime_apply": False,
+            "runtime_effect": False,
+            "runtime_bias_scope": "hard_safety_and_diagnostic_only",
             "latency_submit_routing": entry_funnel.get("latency_submit_routing"),
-            "recommended_action": recommended_action,
-            "recommended_action_reason": recommended_reason,
+            "latency_diagnostic_owner": entry_funnel.get("latency_diagnostic_owner"),
+            "recommendation_status": "retired",
         }
         row.update(
             _gate_review("scalping", "latency_classifier_runtime_profile", reasons)
-        )
-        rows.append(row)
-    target_date = str(ev_report.get("date") or "").strip()
-    overnight_path = (
-        REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
-    )
-    overnight_report = _load_json(overnight_path)
-    if overnight_report:
-        summary = (
-            overnight_report.get("summary")
-            if isinstance(overnight_report.get("summary"), dict)
-            else {}
-        )
-        sample = _as_int(summary.get("decision_target"))
-        row = {
-            "domain": "scalping",
-            "family": "scalp_sim_overnight_ai_carry",
-            "description": _description("scalp_sim_overnight_ai_carry"),
-            "state": "observe_only",
-            "current_application": _current_application(
-                "scalp_sim_overnight_ai_carry", "observe_only", False
-            ),
-            "state_interpretation": "runtime_effect=false source다. SELL_TODAY는 sim 가상 청산, HOLD_OVERNIGHT는 active_unrealized carry로만 남긴다.",
-            "score": None,
-            "score_label": "-",
-            "sample": {
-                "count": sample,
-                "sell_today": _as_int(summary.get("sell_today")),
-                "hold_overnight": _as_int(summary.get("hold_overnight")),
-                "carry_open_count": _as_int(summary.get("carry_open_count")),
-            },
-            "reasons": ["observe_only"],
-            "reason_label": "관찰 전용",
-            "selected_auto_bounded_live": False,
-            "runtime_effect": bool(overnight_report.get("runtime_effect")),
-            "decision_authority": overnight_report.get("decision_authority"),
-            "artifact": str(overnight_path),
-        }
-        row.update(
-            _gate_review("scalping", "scalp_sim_overnight_ai_carry", ["observe_only"])
         )
         rows.append(row)
     for row in rows:

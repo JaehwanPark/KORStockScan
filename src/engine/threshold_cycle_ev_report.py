@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import (
-    retired_artifact,
-    retired_status,
-    current_report_view,
-)
-
 import argparse
 import json
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.lifecycle.retirement import (
+    current_report_view,
+    retired_artifact,
+    retired_status,
+)
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
@@ -56,7 +55,6 @@ from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 MONITOR_SNAPSHOT_DIR = REPORT_DIR / "monitor_snapshots"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 EV_REPORT_DIR = REPORT_DIR / "threshold_cycle_ev"
-LATENCY_CLASSIFIER_RECOMMENDATION_DIR = REPORT_DIR / "latency_classifier_recommendation"
 PATTERN_LAB_CURRENTNESS_AUDIT_DIR = REPORT_DIR / "pattern_lab_currentness_audit"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 TIME_WINDOW_REGIME_COUNTERFACTUAL_DIR = REPORT_DIR / "time_window_regime_counterfactual"
@@ -323,57 +321,6 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
 def ev_report_paths(target_date: str) -> tuple[Path, Path]:
     base = EV_REPORT_DIR / f"threshold_cycle_ev_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
-
-
-def _latency_classifier_recommendation_path(target_date: str) -> Path:
-    return (
-        LATENCY_CLASSIFIER_RECOMMENDATION_DIR
-        / f"latency_classifier_recommendation_{target_date}.json"
-    )
-
-
-def _latency_classifier_source_metrics(
-    target_date: str,
-    calibration: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    recommendation = _load_json(_latency_classifier_recommendation_path(target_date))
-    candidate = (
-        recommendation.get("calibration_candidate")
-        if isinstance(recommendation, dict)
-        else {}
-    )
-    if isinstance(candidate, dict):
-        metrics = candidate.get("source_metrics")
-        if isinstance(metrics, dict):
-            merged = dict(metrics)
-            for key in (
-                "allowed_runtime_apply",
-                "calibration_state",
-                "calibration_reason",
-            ):
-                if key in candidate and key not in merged:
-                    merged[key] = candidate.get(key)
-            return merged, recommendation
-
-    for family in (
-        "latency_classifier_runtime_profile",
-        "dynamic_entry_price_resolver",
-        "pre_submit_price_guard",
-    ):
-        for item in calibration.get("calibration_candidates") or []:
-            if isinstance(item, dict) and item.get("family") == family:
-                metrics = item.get("source_metrics")
-                if isinstance(metrics, dict):
-                    merged = dict(metrics)
-                    for key in (
-                        "allowed_runtime_apply",
-                        "calibration_state",
-                        "calibration_reason",
-                    ):
-                        if key in item and key not in merged:
-                            merged[key] = item.get(key)
-                    return merged, recommendation
-    return {}, recommendation
 
 
 def _calibration_path(target_date: str) -> Path:
@@ -2646,24 +2593,7 @@ def build_threshold_cycle_ev_report(
     full_fill_completed_avg = _safe_float(
         perf_metrics.get("full_fill_completed_avg_profit_rate"), 0.0
     )
-    latency_source_metrics, latency_recommendation = _latency_classifier_source_metrics(
-        target_date, calibration
-    )
-    latency_recommended_action = str(
-        latency_source_metrics.get("recommended_action") or ""
-    )
-    latency_recovery_count = _safe_int(
-        latency_source_metrics.get("would_recovery_canary_events"), 0
-    )
-    latency_submit_routing = latency_source_metrics.get("latency_submit_routing") or (
-        "latency_submit_recovery_candidate"
-        if latency_recommended_action == "bounded_apply"
-        else (
-            "latency_submit_recovery_hold"
-            if latency_recovery_count > 0
-            else "latency_classifier_runtime_semantics_gap"
-        )
-    )
+    latency_submit_routing = "buy_funnel_diagnostic_only"
 
     source_load_warnings = [
         f"source_load_{item.get('status')}:{Path(str(item.get('path') or '')).name}"
@@ -2799,69 +2729,29 @@ def build_threshold_cycle_ev_report(
                 perf_metrics.get("latency_pass_events"), 0
             ),
             "latency_submit_routing": latency_submit_routing,
-            "latency_classifier_runtime_semantics": latency_source_metrics.get(
-                "latency_classifier_runtime_semantics"
-            )
-            or latency_source_metrics.get("profile_runtime_semantics"),
-            "latency_classifier_recommendation_status": (
-                "loaded" if latency_recommendation else "missing"
+            "latency_classifier_runtime_semantics": (
+                "SAFE/CAUTION continue after slippage checks; DANGER and stale quote remain blocking; "
+                "spread-only relief is owned separately by its explicit operator lock"
             ),
-            "latency_classifier_profile_generation": latency_source_metrics.get(
-                "latency_classifier_profile_generation"
-            )
-            or (
-                latency_recommendation.get("profile_generation")
-                if isinstance(latency_recommendation, dict)
-                else {}
+            "latency_diagnostic_owner": (
+                "buy_funnel_sentinel+performance_tuning+daily_threshold_cycle_report"
             ),
-            "recommended_action": latency_recommended_action or None,
-            "recommended_action_reason": latency_source_metrics.get(
-                "recommended_action_reason"
+            "latency_classifier_recommendation_status": "retired",
+            "latency_classifier_profile_generation": {},
+            "recommended_action": None,
+            "recommended_action_reason": (
+                "independent latency threshold recommendation retired; no PREOPEN calibration candidate"
             ),
-            "allowed_runtime_apply": bool(
-                latency_source_metrics.get("allowed_runtime_apply")
-            ),
-            "calibration_state": latency_source_metrics.get("calibration_state"),
-            "would_safe_pass_events": _safe_int(
-                latency_source_metrics.get("would_safe_pass_events"), 0
-            ),
-            "would_caution_normal_events": _safe_int(
-                (
-                    latency_source_metrics.get("would_caution_normal_events")
-                    if latency_source_metrics.get("would_caution_normal_events")
-                    is not None
-                    else latency_source_metrics.get("would_caution_reject_events")
-                ),
-                0,
-            ),
-            "would_recovery_canary_events": _safe_int(
-                latency_source_metrics.get("would_recovery_canary_events"),
-                0,
-            ),
-            "would_recovery_canary_attempts": _safe_int(
-                latency_source_metrics.get("would_recovery_canary_attempts"),
-                0,
-            ),
-            "stale_quote_override_events": _safe_int(
-                latency_source_metrics.get("stale_quote_override_events"), 0
-            ),
-            "broker_guard_bypass_candidates": _safe_int(
-                latency_source_metrics.get("broker_guard_bypass_candidates"),
-                0,
-            ),
-            "counterfactual_joined_sample": _safe_int(
-                latency_source_metrics.get("counterfactual_joined_sample"),
-                0,
-            ),
-            "counterfactual_ev_pct": latency_source_metrics.get(
-                "counterfactual_ev_pct"
-            ),
-            "missed_winner_recovered": _safe_int(
-                latency_source_metrics.get("missed_winner_recovered"), 0
-            ),
-            "avoided_loser_lost": _safe_int(
-                latency_source_metrics.get("avoided_loser_lost"), 0
-            ),
+            "allowed_runtime_apply": False,
+            "calibration_state": "retired",
+            "decision_authority": "diagnostic_only",
+            "runtime_effect": False,
+            "forbidden_uses": [
+                "runtime_threshold_mutation",
+                "stale_quote_submit",
+                "broker_guard_bypass",
+                "operator_lock_override",
+            ],
             "full_fill_events": _safe_int(perf_metrics.get("full_fill_events"), 0),
             "partial_fill_events": _safe_int(
                 perf_metrics.get("partial_fill_events"), 0
@@ -3159,12 +3049,8 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- budget_pass_to_submitted: `{funnel.get('order_bundle_submitted_events')}` / `{funnel.get('budget_pass_events')}` (`{funnel.get('budget_pass_to_submitted_rate_pct')}`%)",
         f"- latency pass/block: `{funnel.get('latency_pass_events')}` / `{funnel.get('latency_block_events')}`",
         f"- latency submit routing: `{funnel.get('latency_submit_routing') or '-'}`",
-        f"- latency recommended action: `{funnel.get('recommended_action') or '-'}` (`{funnel.get('recommended_action_reason') or '-'}`)",
-        f"- latency profile generation: `{funnel.get('latency_classifier_profile_generation') or {}}`",
-        f"- safe/caution_normal/recovery: `{funnel.get('would_safe_pass_events')}` / `{funnel.get('would_caution_normal_events')}` / `{funnel.get('would_recovery_canary_events')}`",
-        f"- recovery attempts/cf sample/cf ev: `{funnel.get('would_recovery_canary_attempts')}` / `{funnel.get('counterfactual_joined_sample')}` / `{funnel.get('counterfactual_ev_pct')}`%",
-        f"- recovered/lost labels: `{funnel.get('missed_winner_recovered')}` / `{funnel.get('avoided_loser_lost')}`",
-        f"- stale/broker override excluded: `{funnel.get('stale_quote_override_events')}` / `{funnel.get('broker_guard_bypass_candidates')}`",
+        f"- latency recommendation: `{funnel.get('latency_classifier_recommendation_status')}` (`{funnel.get('recommended_action_reason') or '-'}`)",
+        f"- latency diagnostic owner: `{funnel.get('latency_diagnostic_owner') or '-'}`",
         f"- full/partial fill: `{funnel.get('full_fill_events')}` / `{funnel.get('partial_fill_events')}`",
         f"- entry_split_order_plan: status=`{entry_split_order_plan.get('status') or '-'}` candidates=`{entry_split_order_plan.get('recommended_policy_candidate_count')}` policy=`{entry_split_order_plan.get('policy_version') or '-'}`",
         f"- scale_in_split_order_plan: status=`{scale_in_split_order_plan.get('status') or '-'}` candidates=`{scale_in_split_order_plan.get('recommended_policy_candidate_count')}` policy=`{scale_in_split_order_plan.get('policy_version') or '-'}`",

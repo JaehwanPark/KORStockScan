@@ -10,40 +10,74 @@ from pathlib import Path
 from typing import Any
 
 RETIREMENT_ID = "scalping_adm_ldm_retirement_20260906"
-RETIRED_REPORTS = frozenset(
+SCALP_OVERNIGHT_RETIREMENT_ID = "scalping_overnight_retirement_20260906"
+LATENCY_RECOMMENDATION_RETIREMENT_ID = "latency_recommendation_retirement_20260906"
+LATENCY_RECOMMENDATION_RETIRED_REPORTS = frozenset(
+    {"latency_classifier_recommendation"}
+)
+RETIRED_CALIBRATION_FAMILIES = frozenset({"latency_classifier_runtime_profile"})
+SCALP_OVERNIGHT_RETIRED_REPORTS = frozenset({"scalp_sim_overnight"})
+SCALP_OVERNIGHT_RETIRED_STAGES = frozenset(
     {
-        "scalp_entry_action_decision_matrix",
-        "holding_exit_decision_matrix",
-        "statistical_action_weight",
-        "lifecycle_decision_matrix",
-        "lifecycle_ai_context",
-        "lifecycle_ai_context_attribution",
-        "lifecycle_bucket_discovery",
-        "ldm_hypothesis_parent_refinement",
-        "runtime_apply_bridge",
-        "ldm_hypothesis_discovery",
-        "institutional_flow_context",
+        "scalp_sim_overnight_decision",
+        "scalp_sim_overnight_sell_today",
+        "scalp_sim_overnight_hold",
+        "scalp_sim_overnight_carry_restored",
     }
 )
-RETIRED_FAMILIES = RETIRED_REPORTS | frozenset(
-    {
-        "scalp_entry_action_decision_matrix_advisory",
-        "scalp_entry_adm_runtime_bias_p1",
-        "holding_exit_decision_matrix_advisory",
-        "holding_exit_matrix_runtime_bias_p1",
-        "holding_exit_matrix_avg_down_bias",
-        "holding_exit_matrix_pyramid_bias",
-        "lifecycle_decision_matrix_runtime",
-        "ldm_scale_in_runtime_bridge",
-        "greenfield_real_environment_authority",
-        "lifecycle_bucket_sim_policy",
-        "lifecycle_sim_auto_approval",
-        "lifecycle_bucket_sim_auto_approval",
-        "ldm_hypothesis_observation_plan",
-        "lifecycle_bucket_catalog",
-        "scalp_sim_scale_in_window_expansion",
-        "scalp_sim_scale_in_window_approval",
-    }
+SCALP_OVERNIGHT_RETIRED_FAMILIES = (
+    frozenset(
+        {
+            "scalp_sim_overnight",
+            "scalp_sim_overnight_ai_carry",
+            "scalping_overnight_gatekeeper",
+        }
+    )
+    | SCALP_OVERNIGHT_RETIRED_STAGES
+)
+RETIRED_REPORTS = (
+    frozenset(
+        {
+            "scalp_entry_action_decision_matrix",
+            "holding_exit_decision_matrix",
+            "statistical_action_weight",
+            "lifecycle_decision_matrix",
+            "lifecycle_ai_context",
+            "lifecycle_ai_context_attribution",
+            "lifecycle_bucket_discovery",
+            "ldm_hypothesis_parent_refinement",
+            "runtime_apply_bridge",
+            "ldm_hypothesis_discovery",
+            "institutional_flow_context",
+            "scale_in_incremental_counterfactual",
+        }
+    )
+    | SCALP_OVERNIGHT_RETIRED_REPORTS
+    | LATENCY_RECOMMENDATION_RETIRED_REPORTS
+)
+RETIRED_FAMILIES = (
+    RETIRED_REPORTS
+    | frozenset(
+        {
+            "scalp_entry_action_decision_matrix_advisory",
+            "scalp_entry_adm_runtime_bias_p1",
+            "holding_exit_decision_matrix_advisory",
+            "holding_exit_matrix_runtime_bias_p1",
+            "holding_exit_matrix_avg_down_bias",
+            "holding_exit_matrix_pyramid_bias",
+            "lifecycle_decision_matrix_runtime",
+            "ldm_scale_in_runtime_bridge",
+            "greenfield_real_environment_authority",
+            "lifecycle_bucket_sim_policy",
+            "lifecycle_sim_auto_approval",
+            "lifecycle_bucket_sim_auto_approval",
+            "ldm_hypothesis_observation_plan",
+            "lifecycle_bucket_catalog",
+            "scalp_sim_scale_in_window_expansion",
+            "scalp_sim_scale_in_window_approval",
+        }
+    )
+    | SCALP_OVERNIGHT_RETIRED_FAMILIES
 )
 RETIRED_ENV_PREFIXES = (
     "KORSTOCKSCAN_SCALP_ENTRY_ADM_",
@@ -54,6 +88,8 @@ RETIRED_ENV_PREFIXES = (
     "KORSTOCKSCAN_LDM_SCALE_IN_",
     "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_",
     "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_",
+    "KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_",
+    "KORSTOCKSCAN_OVERNIGHT_CONTEXT_",
 )
 RETIRED_OWNER_PREFIXES = tuple(
     owner + separator for owner in RETIRED_FAMILIES for separator in (":", "_", ".")
@@ -74,10 +110,19 @@ RETIRED_STAGE_FLAGS = frozenset(
 
 def retired_status(report_type: str = "adm_ldm") -> dict[str, Any]:
     """Explicit terminal state; never a source-quality failure or retry request."""
+    retirement_id = (
+        LATENCY_RECOMMENDATION_RETIREMENT_ID
+        if report_type in LATENCY_RECOMMENDATION_RETIRED_REPORTS
+        else (
+            SCALP_OVERNIGHT_RETIREMENT_ID
+            if report_type in SCALP_OVERNIGHT_RETIRED_FAMILIES
+            else RETIREMENT_ID
+        )
+    )
     return {
         "status": "retired",
         "report_type": report_type,
-        "retirement_id": RETIREMENT_ID,
+        "retirement_id": retirement_id,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "decision_authority": "archive_only",
@@ -122,6 +167,8 @@ def retirement_env() -> dict[str, str]:
             ),
             ("KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_", "ENABLED", "false"),
             ("KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_", "ENABLED", "false"),
+            ("KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_", "ENABLED", "false"),
+            ("KORSTOCKSCAN_OVERNIGHT_CONTEXT_", "ENABLED", "false"),
         )
     }
 

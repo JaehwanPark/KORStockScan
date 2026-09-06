@@ -26405,10 +26405,10 @@ def test_buy_side_time_block_respects_scalping_morning_buy_window(monkeypatch):
         datetime.combine(today, dt_time(8, 41, 0))
     )
     assert not kiwoom_orders.is_buy_side_time_blocked(
-        datetime.combine(today, dt_time(15, 20, 0))
+        datetime.combine(today, dt_time(15, 9, 59))
     )
     assert kiwoom_orders.is_buy_side_time_blocked(
-        datetime.combine(today, dt_time(15, 20, 1))
+        datetime.combine(today, dt_time(15, 10, 0))
     )
 
 
@@ -26435,10 +26435,30 @@ def test_buy_side_time_block_allows_scalping_nxt_buy_window(monkeypatch):
         datetime.combine(today, dt_time(16, 41, 0))
     )
     assert not kiwoom_orders.is_buy_side_time_blocked(
-        datetime.combine(today, dt_time(19, 45, 0))
+        datetime.combine(today, dt_time(19, 39, 59))
     )
     assert kiwoom_orders.is_buy_side_time_blocked(
-        datetime.combine(today, dt_time(19, 45, 1))
+        datetime.combine(today, dt_time(19, 40, 0))
+    )
+
+
+def test_same_session_entry_cutoff_cannot_be_disabled_or_widened(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            BUY_SIDE_TIME_BLOCK_ENABLED=False,
+            SCALPING_BUY_WINDOWS="09:00:00-15:20:00,16:00:00-19:50:00",
+        ),
+    )
+    today = datetime.now().date()
+
+    assert kiwoom_orders.is_scalping_buy_window_blocked(
+        datetime.combine(today, dt_time(15, 10, 0))
+    )
+    assert kiwoom_orders.is_scalping_buy_window_blocked(
+        datetime.combine(today, dt_time(19, 40, 0))
     )
 
 

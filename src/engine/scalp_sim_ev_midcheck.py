@@ -10,11 +10,10 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+from src.engine.lifecycle.retirement import SCALP_OVERNIGHT_RETIRED_STAGES
+from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_jsonl
-
-SYNTHETIC_NAMES = {"TEST", "DUMMY", "MOCK"}
-
 
 def _as_float(value, default=None):
     try:
@@ -31,9 +30,7 @@ def _load_jsonl(path: Path) -> list[dict]:
 
 
 def _is_synthetic_event(row: dict) -> bool:
-    name = str(row.get("stock_name") or "").strip().upper()
-    code = str(row.get("stock_code") or "").strip()[:6]
-    return name in SYNTHETIC_NAMES or code == "123456"
+    return is_synthetic_scalp_sim(row)
 
 
 def _percentile(values: list[float], pct: float):
@@ -384,6 +381,7 @@ def build_report(target_date: str) -> dict:
     positions: dict[str, dict] = {}
     latest = None
     synthetic_excluded = 0
+    retired_overnight_events = 0
 
     for row in rows:
         latest = row.get("emitted_at") or latest
@@ -395,6 +393,9 @@ def build_report(target_date: str) -> dict:
         )
         if is_sim and _is_synthetic_event(row):
             synthetic_excluded += 1
+            continue
+        if is_sim and stage in SCALP_OVERNIGHT_RETIRED_STAGES:
+            retired_overnight_events += 1
             continue
         if is_sim:
             sim_counts[stage] += 1
@@ -435,7 +436,12 @@ def build_report(target_date: str) -> dict:
                     position["entry_fill"] = row
                 if stage == "scalp_sim_sell_order_assumed_filled":
                     position["completed"] = row
-        if stage == "scalp_sim_sell_order_assumed_filled" and is_sim:
+        if (
+            stage == "scalp_sim_sell_order_assumed_filled"
+            and is_sim
+            and str(fields.get("exit_rule") or "")
+            != "scalp_sim_overnight_sell_today"
+        ):
             completed.append(
                 {
                     "emitted_at": row.get("emitted_at"),
@@ -481,14 +487,6 @@ def build_report(target_date: str) -> dict:
     ai_reuse = int(sim_counts.get("scalp_sim_ai_holding_reuse", 0))
     ai_deferred = int(sim_counts.get("scalp_sim_ai_holding_deferred", 0))
     ai_critical_bypass = int(sim_counts.get("sim_ai_critical_bypass", 0))
-    overnight_decisions = int(sim_counts.get("scalp_sim_overnight_decision", 0))
-    overnight_sell_today = int(sim_counts.get("scalp_sim_overnight_sell_today", 0))
-    overnight_hold = int(sim_counts.get("scalp_sim_overnight_hold", 0))
-    overnight_sell_filled = sum(
-        1
-        for row in completed
-        if str(row.get("exit_rule") or "") == "scalp_sim_overnight_sell_today"
-    )
     return {
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -515,11 +513,13 @@ def build_report(target_date: str) -> dict:
             ),
         },
         "overnight_counts": {
-            "decision": overnight_decisions,
-            "sell_today": overnight_sell_today,
-            "hold_overnight": overnight_hold,
-            "sell_assumed_filled": overnight_sell_filled,
-            "carry_open_count": overnight_hold,
+            "status": "retired",
+            "decision": 0,
+            "sell_today": 0,
+            "hold_overnight": 0,
+            "sell_assumed_filled": 0,
+            "carry_open_count": 0,
+            "retired_event_count": retired_overnight_events,
             "runtime_effect": False,
             "decision_authority": "sim_observation_only",
         },

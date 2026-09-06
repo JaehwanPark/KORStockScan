@@ -373,7 +373,6 @@ def full_market_env(target_date: str) -> dict[str, str]:
         "KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_NXT_ENABLED": "true",
         "KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED": "true",
         "KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED": "true",
-        "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED": "true",
     }
 
 

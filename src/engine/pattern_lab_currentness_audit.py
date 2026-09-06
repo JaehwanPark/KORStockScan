@@ -46,8 +46,6 @@ RETIRED_PATTERN_LABS = {
 
 SCALPING_REENTRY_TERMS = (
     "threshold_cycle_ev",
-    "lifecycle_decision_matrix",
-    "lifecycle_bucket_discovery",
 )
 SWING_REENTRY_TERMS = (
     "threshold_cycle_ev",
@@ -61,14 +59,6 @@ FEEDBACK_SOURCE_CONTRACTS = {
         "terms": SCALPING_REENTRY_TERMS,
         "artifact_dirs": {
             "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-            "lifecycle_decision_matrix": (
-                "lifecycle_decision_matrix",
-                "lifecycle_decision_matrix",
-            ),
-            "lifecycle_bucket_discovery": (
-                "lifecycle_bucket_discovery",
-                "lifecycle_bucket_discovery",
-            ),
             "runtime_approval_summary": (
                 "runtime_approval_summary",
                 "runtime_approval_summary",
@@ -626,8 +616,8 @@ def build_pattern_lab_currentness_audit(
             ok=_source_mentions_all(scalping_lab_dirs, SCALPING_REENTRY_TERMS)
             and not feedback_sources["scalping"]["missing_feedback_sources"],
             finding=(
-                "Scalping pattern labs must consume threshold_cycle_ev, lifecycle_decision_matrix, "
-                "and lifecycle_bucket_discovery as re-entry sources so LDM/threshold outcomes improve the next lab run."
+                "Scalping pattern labs must consume threshold_cycle_ev as the current re-entry source; "
+                "retired ADM/LDM artifacts are archive-only and not required."
             ),
             source_paths=scalping_lab_dirs,
             severity="automation_handoff_gap",

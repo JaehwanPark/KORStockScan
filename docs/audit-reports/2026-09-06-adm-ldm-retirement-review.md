@@ -67,3 +67,7 @@ Scalping ADM/LDM의 정책·프롬프트·장후 생성·PREOPEN 승격 경로�
 자연 확인 owner는 [2026-09-07 체크리스트](../checklists/2026-09-07-stage2-todo-checklist.md)의 `AdmLdmRetirementNaturalEvidence0907`이다. PREOPEN OFF·PID 무주입·폐기 산출물 누락 FAIL 없음·전용 분석 handoff를 확인한다. Institutional flow context의 독립 소비 실효성은 별도 후속 검토 대상이며 이번에 임의 삭제하지 않았다.
 
 기존 작업의 dirty 변경은 보존했다. 특히 다른 작업의 recheck/lock 수정과 이번 ADM/LDM 정리를 혼동하지 않는다. 18개 operator lock 일괄해제·삭제, bot/provider/수량/cap 변경, broker·hard/protect/emergency guard 완화는 수행하지 않았다. 폐기된 정책을 재도입하려면 단순 env 전환이 아니라 별도 사용자 지시·새 owner/근거/롤백 계약이 필요하다.
+
+### 5.1 Scale-in incremental CF 문서 현행화
+
+2026-09-06 후속 점검에서 traceability의 과거 `postclose wrapper before LDM` 설명을 현행 계약으로 교정했다. 독립 producer·artifact wait·LDM 소비는 폐기됐고, 보존 모듈의 순수 `compute_fixed_exit_incremental_economics` 계산만 AVG_DOWN 전용 replay가 재사용한다. wrapper에 남은 소스 파일 경로는 AVG_DOWN artifact reuse의 코드 fingerprint 입력이며 실행 명령이 아니다. report namespace는 공통 retirement filter에도 등록해 과거 산출물이 일반 current automation bundle에 재유입되지 않게 했다. exact-date 과거 report를 조회하는 forensic inventory는 비권한 진단으로만 유지되고, 파일 부재가 runtime/PREOPEN blocker나 재생성 요청이 되어서는 안 된다.

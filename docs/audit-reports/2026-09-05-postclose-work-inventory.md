@@ -49,11 +49,10 @@
 
 ## 3. 상위 장후 실행 목록
 
-아래 표는 20:10 main wrapper 내부 단계만 나열했을 때 빠지는 병렬·후행 작업을 포함한 상위 스케줄이다. 15:10 sim preclose는 장후 체인의 선행 작업으로만 병기한다.
+아래 표는 20:10 main wrapper 내부 단계만 나열했을 때 빠지는 병렬·후행 작업을 포함한 상위 스케줄이다. 기존 15:10 sim overnight preclose는 2026-09-06 폐기되어 현행 스케줄에서 제외한다.
 
 | 시각 | 작업/owner | 목적·목표 | 기대효과 | 운영상태 | 이번 상세검토 상태 | 연결 lock |
 | --- | --- | --- | --- | --- | --- | --- |
-| `15:10` | Scalp-sim overnight preclose | 미결 sim position의 당일 가상청산·overnight carry 판정 | postclose sim label 완결 | ON, sim-only | 이번 구간 외; 상세검토 대기 | E2, P16/P17 |
 | `20:05` | EOD KOSPI update | NXT 종료 뒤 일봉 DB·추천 원천 갱신 | 장후 producer의 최신 시장자료 확보 | ON | 상세검토 대기 | 없음 |
 | `20:10` | Main threshold-cycle wrapper | bot stop 뒤 tuning/source-quality/AI/approval/verifier 체인 실행 | 다음 PREOPEN 후보와 결손 workorder 생성 | ON, stop-only | 1~13 이전 종결; #22/#29~42/#52~53 폐기 검토, 나머지는 각 행 기준 | E1, E2, E3/E4/E6, P14~P18 |
 | `20:10` | Widget evaluation systemd | advisory·auto-trade calibration과 다음-session widget policy 생성 | widget 독립 정책의 당일 source-date 일치 | ON | 상세검토 대기 | E7 |
@@ -100,11 +99,11 @@
 | 21 | One-share threshold opportunity | 강제 1주 제한의 기회비용 진단 | primary blocker·실제 청산 후 결과를 분리해 기존 family source-only 작업지시 생성 | 불필요한 제한과 계측 결손 식별; 보고서 자체에는 주문 권한 없음 | ON, source-only | **구현·점검 종결**; runtime 전환·수익개선 증거와 분리 | E2; 신규 operator lock 없음 |
 | 22 | Scalp Entry ADM | entry 상태·행동 matrix | score 단독이 아닌 다차원 분류 | 진입 판단 정밀화 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 23 | Entry recheck daily controller + Entry AI gate diagnostic | 기존 recheck의 조건부 drought 대응과 누적 score/action 진단을 분리 | 같은 시장·세션 drought→고정 probe profile→PREOPEN→exact attempt/full-position receipt→fill-quality별 EV; 누적 sweep는 별도 CLI 수동 진단 | 허위 arm/정상 잔량 경제성 누락·scope 혼합 중단·미제출 한도 소진을 제거; 실제 EV·wall-clock 개선은 자연 확인 | **일일 controller ON 유지**, 누적 backtest 정기 실행 제외/on-demand only; 새 v4/v3 산출물·실제 PID 소비 확인 대기 | **R1~R5 구현 회귀 2,088 PASS, 폐기 후 최종 통합 2,345 PASS**. 고정 profile 운영 제어이며 최적 신호 자동 탐색은 아님. 구 9/4 artifact/기존 9/7 env ON을 새 계약 실적용으로 해석하지 않는다. 다음 자연 owner `EntryRecheckNaturalAttribution0907` | E2; 7/3 recheck lock archive-disabled, 이번 변경 없음 |
-| 24 | Scalp-sim overnight | 미결 sim 포지션 종결 | overnight outcome 완결 | sim label 누락 감소 | ON | 상세검토 대기 | E2, P16/P17 |
-| 25 | Overnight OpenAI recovery | 미결 sim 결과 보완 | active-undecided가 있을 때만 bounded 호출 | sim outcome 완결성 | 조건부 | 상세검토 대기 | provider budget lock |
+| 24 | Scalp-sim overnight | 미결 sim 포지션 종결 | 과거 overnight outcome 완결 | 과거 sim label 누락 감소 | RETIRED 2026-09-06 | 실제 SCALPING no-overnight 목적과 불일치하고 clean-baseline 327건 모두 `SELL_TODAY`, `HOLD_OVERNIGHT=0`이었다. 15:10 producer·current report/EV/verifier 소비를 제거하고 기존 holding loop의 venue별 마지막 매도 가능 구간에서 `scalp_same_session_terminal_exit`로 통합했다. historical artifact/내부 replay는 archive-only | 별도 튜닝축 없음; same-session sim post-sell feedback이 종결 증거 소유 |
+| 25 | Overnight OpenAI recovery | 미결 sim 결과 보완 | active-undecided가 있을 때만 OpenAI 호출 | 과거 sim outcome 완결성 | RETIRED 2026-09-06 | 20:10 live OpenAI recovery와 provider env를 제거했다. CLI와 잔존 preclose wrapper는 폐기 상태만 반환하며 current artifact를 생성·변경하지 않는다 | provider budget 불필요; 종결 실패는 terminal reconciliation incident로 분리 |
 | 26 | Institutional flow context | 기관수급 context 생성 | lifecycle feature 제공 | regime 구분 개선 | RETIRED 2026-09-06 | sole consumer인 scalping ADM/LDM 폐기에 따라 scheduled producer와 current EV/runtime 소비 제거. exact AI investor/program context는 유지하고 historical artifact·CLI는 archive/offline only | E2 |
 | 27 | Microstructure reaction context | micro 반응 feature 생성 | entry/holding receipt 및 같은 시점 결과 진단 | 정확한 source-quality·기회 진단과 기존 개선 작업 전달 | ON diagnostic; A~D 구현, 자연 PID 미확인 | [구현 후 재리뷰 §7](./2026-09-06-institutional-microstructure-context-final-review.md#7-ad-구현-후-재리뷰): 공통 freshness/feature v2, delivery v3·cache/logger, finite same-attempt EV/rollup schema2, 독립 후보 제거, unique coverage/workorder 검증. 20건은 진단 기준이고 PREOPEN 승격은 N/A. stale wrapper 회귀는 on-demand 계약으로 정합화했으며 다음 정상 기동/장후 receipt만 checklist OPEN으로 유지 | E2 |
-| 28 | Scale-in incremental CF | 추가 leg의 증분 효과 분리 | 기존 보유와 추가분 손익 분리 | scale-in 착시 제거 | 독립 단계 RETIRED | #13 경제성 replay helper 유지 | 독립 E2 사용 종료 |
+| 28 | Scale-in incremental CF | 추가 leg의 증분 효과 분리 | 기존 보유와 추가분 손익 분리 | scale-in 착시 제거 | 독립 단계 RETIRED | #13 경제성 replay helper 유지; report namespace 공통 retirement filter 등록 | 독립 E2 사용 종료; wrapper `-m`/artifact wait 없음 |
 | 29 | LDM daily | lifecycle 단계별 귀속 | entry→exit 병목 분류 | 개선 owner 식별 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 30 | Scalp-sim scale-in approval | sim scale-in window 판정 | sim-only 확대 여부 결정 | 표본 수집 가속 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 31 | Lifecycle AI attribution | AI 결과의 단계 귀속 | prompt 영향 분리 | AI 경제성 분석 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
@@ -120,7 +119,7 @@
 | 41 | Bucket MTD | 월간 parent 집계 | sim/live candidate 입력 | promotion 안정화 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 42 | Runtime apply bridge | 후보와 실제 consumer 연결 | blocker/owner/env mapping 명시 | 보고서만 생성되는 경로 차단 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 43 | Scalp-sim auto-approval | sim catalog 자동 생성 | 다음 PREOPEN sim handoff | sim 연구 자동화 | ON | LDM 정책·가설 제외; rising-missed 독립 source 유지 | E2, P16/P17 |
-| 44 | Latency recommendation | non-entry 원인 분류 | latency/liquidity/AI/overbought 분리 | submit drought 개선 | ON | 상세검토 대기 | E2 |
+| 44 | Latency recommendation | 독립 latency 임계값 추천(구 목적) | BUY Funnel/performance diagnostic으로 통합 | 죽은 후보·중복 권한 제거, hard safety 유지 | RETIRED (2026-09-06) | [구현·최종 리뷰](2026-09-06-latency-recommendation-retirement-review.md); producer/PREOPEN/AI exemption 및 one-share 재승격 경로 제거 | 없음; 과거 artifact archive only, spread-only operator lock 별도 유지 |
 | 45 | Market panic breadth | 시장 panic 폭 계산 | 개별종목과 시장 위험 분리 | 과잉 매도 방지 | ON | 상세검토 대기 | E2 |
 | 46 | Panic-sell defense report | panic regime 종결 | recovery 상태 귀속 | exit 안정화 | ON | 상세검토 대기 | E2 |
 | 47 | Scale-in split plan | 추가매수 분할 정책 | scale-in policy 생성 | 체결·slippage 개선 | ON | 상세검토 대기 | E2 |
@@ -221,7 +220,6 @@
 ## 6. 다음 상세검토 우선순위
 
 1. #14 `Samsung machine entry tuning`: 목적·기대효과, 기존 전용 timing owner와 PREOPEN 자동 적용, 상승·반등 원천 및 자연 PID 소비를 점검한다.
-2. #24 `Scalp-sim overnight`: sim position 종결·carry label의 source-quality와 실제 후속 소비를 점검한다.
-3. #25 `Overnight OpenAI recovery`: active-undecided 조건, provider budget, fail-closed 결과와 과도한 재호출 가능성을 점검한다.
+2. #24/#25 폐기 후 venue별 same-session terminal SELL과 20:00 미종결 reconciliation incident가 자연 런타임에서 정확히 귀속되는지 확인한다.
 
 번호 순서보다 이미 시작된 사용자 지정 항목을 우선 반영했으므로 #14가 아직 `상세검토 대기`다. 다음 검토 시작 시 Plan Rebase와 당일 checklist의 current owner를 다시 확인한다.

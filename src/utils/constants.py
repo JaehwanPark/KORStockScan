@@ -1117,8 +1117,8 @@ class TradingConfig:
     MARKET_OPEN_TIME: str = "09:00:00"
     SCALPING_EARLIEST_BUY_TIME: str = "09:03:00"
     SWING_EARLIEST_BUY_TIME: str = "09:05:00"
-    SCALPING_BUY_WINDOWS: str = "08:03:00-08:40:00,09:03:00-15:20:00,16:00:00-19:45:00"
-    SCALPING_NEW_BUY_CUTOFF: str = "19:45:00"
+    SCALPING_BUY_WINDOWS: str = "08:03:00-08:40:00,09:03:00-15:10:00,16:00:00-19:40:00"
+    SCALPING_NEW_BUY_CUTOFF: str = "19:40:00"
     SCALPING_OVERNIGHT_DECISION_TIME: str = "15:10:00"
     MARKET_CLOSE_TIME: str = "15:30:00"
     SYSTEM_SHUTDOWN_TIME: str = "20:00:00"
@@ -1390,7 +1390,7 @@ class TradingConfig:
     HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE: int = 75
     HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT: float = 0.35
     SCALPING_OVERNIGHT_GATEKEEPER_ENABLED: bool = (
-        False  # real-only overnight 판정/청산 기본 OFF, runtime env로만 ON
+        False  # permanently retired; environment overrides are ignored
     )
     HOLDING_FLOW_OVERRIDE_ENABLED: bool = (
         True  # 운영 override: 단일 보유/청산 점수 대신 흐름 판단으로 최종 청산
@@ -6177,9 +6177,6 @@ def _build_trading_rules() -> TradingConfig:
     env_holding_exit_matrix_pyramid_max_drawdown = _env_float(
         "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT"
     )
-    env_scalping_overnight_gatekeeper_enabled = _env_bool(
-        "KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_ENABLED"
-    )
     env_holding_flow_override_enabled = _env_bool(
         "KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_ENABLED"
     )
@@ -6264,7 +6261,6 @@ def _build_trading_rules() -> TradingConfig:
         or env_holding_exit_matrix_pyramid_min_profit is not None
         or env_holding_exit_matrix_pyramid_min_ai is not None
         or env_holding_exit_matrix_pyramid_max_drawdown is not None
-        or env_scalping_overnight_gatekeeper_enabled is not None
         or env_holding_flow_override_enabled is not None
         or env_holding_flow_worsen is not None
         or env_holding_flow_max_defer is not None
@@ -6473,11 +6469,7 @@ def _build_trading_rules() -> TradingConfig:
                 if env_holding_exit_matrix_pyramid_max_drawdown is not None
                 else config.HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT
             ),
-            SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=(
-                env_scalping_overnight_gatekeeper_enabled
-                if env_scalping_overnight_gatekeeper_enabled is not None
-                else config.SCALPING_OVERNIGHT_GATEKEEPER_ENABLED
-            ),
+            SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=False,
             HOLDING_FLOW_OVERRIDE_ENABLED=(
                 env_holding_flow_override_enabled
                 if env_holding_flow_override_enabled is not None

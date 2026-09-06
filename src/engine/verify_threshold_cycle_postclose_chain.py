@@ -2,15 +2,6 @@
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import RETIRED_STAGE_FLAGS
-
-from src.engine.lifecycle.retirement import (
-    retired_artifact,
-    retired_status,
-    RETIRED_REPORTS,
-    current_report_view,
-)
-
 import argparse
 import ast
 import gzip
@@ -41,6 +32,13 @@ from src.engine.build_code_improvement_workorder import (
     lifecycle_entry_bucket_order_id,
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.lifecycle.retirement import (
+    RETIRED_REPORTS,
+    RETIRED_STAGE_FLAGS,
+    current_report_view,
+    retired_artifact,
+    retired_status,
+)
 from src.engine.monitoring.limit_down_watch_report import (
     CONTRACT as LIMIT_DOWN_WATCH_CONTRACT,
 )
@@ -202,9 +200,7 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "machine_entry_timing_tuning",
     "machine_entry_timing_policy",
 }
-_AI_EXEMPT_RUNTIME_FAMILIES = {
-    "latency_classifier_runtime_profile",
-}
+_AI_EXEMPT_RUNTIME_FAMILIES: frozenset[str] = frozenset()
 SCALE_IN_POLICY_FAMILY = "scale_in_bucket_runtime_policy_v1"
 SCALE_IN_POLICY_EXCLUSION_REASON = "paired_add_lifecycle_replay_or_final_label_missing"
 ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS = [
@@ -2439,12 +2435,6 @@ def _ai_review_path(target_date: str) -> Path:
         REPORT_DIR
         / "threshold_cycle_ai_review"
         / f"threshold_cycle_ai_review_{target_date}_postclose.json"
-    )
-
-
-def _scalp_sim_overnight_path(target_date: str) -> Path:
-    return (
-        REPORT_DIR / "scalp_sim_overnight" / f"scalp_sim_overnight_{target_date}.json"
     )
 
 
@@ -5236,43 +5226,19 @@ def _has_overnight_source(ldm_report: dict[str, Any]) -> bool:
     return int(summary.get("rows") or 0) > 0
 
 
-def _scalp_sim_overnight_source_quality(
-    report: dict[str, Any], *, report_exists: bool
-) -> dict[str, Any]:
-    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    active_undecided_count = int(summary.get("active_undecided_count") or 0)
-    decision_target = int(summary.get("decision_target") or 0)
-    source_quality_status = str(
-        summary.get("source_quality_status") or "missing"
-    ).strip()
-    warnings = (
-        summary.get("source_quality_warnings")
-        if isinstance(summary.get("source_quality_warnings"), list)
-        else []
-    )
-    missing: list[str] = []
-    if report_exists and not summary:
-        missing.append("scalp_sim_overnight_report_missing_or_invalid")
-    if active_undecided_count > 0 and decision_target == 0:
-        missing.append("scalp_sim_overnight_active_undecided_without_decision")
-    if source_quality_status == "source_quality_blocker":
-        missing.append("scalp_sim_overnight_source_quality_blocker")
+def _scalp_sim_overnight_source_quality() -> dict[str, Any]:
     return {
-        "status": "fail" if missing else ("missing" if not report_exists else "pass"),
-        "decision_target": decision_target,
-        "active_undecided_count": active_undecided_count,
-        "decision_coverage_rate": summary.get("decision_coverage_rate"),
-        "source_quality_status": source_quality_status,
-        "source_quality_warnings": warnings,
-        "missing": missing,
+        **retired_status("scalp_sim_overnight"),
+        "report_exists": False,
+        "decision_target": 0,
+        "active_undecided_count": 0,
+        "decision_coverage_rate": None,
+        "source_quality_status": "retired_not_applicable",
+        "source_quality_warnings": [],
+        "missing": [],
         "interpretation": (
-            "scalp sim overnight report was not present in this verification fixture/run"
-            if not report_exists
-            else (
-                "scalp sim overnight preclose decisions covered active sim positions"
-                if not missing
-                else "active scalp sim overnight positions were not covered by preclose decision events"
-            )
+            "retired: same-session simulator finalization and sim post-sell feedback "
+            "own terminal evidence; no overnight artifact is required"
         ),
     }
 
@@ -5897,14 +5863,7 @@ def build_threshold_cycle_postclose_verification(
     swing_bucket_discovery_report = _load_json(
         paths["swing_lifecycle_bucket_discovery"]
     )
-    scalp_sim_overnight_path = _scalp_sim_overnight_path(target_date)
-    scalp_sim_overnight = _load_json(scalp_sim_overnight_path)
-    scalp_sim_overnight_quality = _scalp_sim_overnight_source_quality(
-        scalp_sim_overnight,
-        report_exists=scalp_sim_overnight_path.exists(),
-    )
-    if scalp_sim_overnight_quality.get("status") == "fail":
-        log_issues.extend(scalp_sim_overnight_quality.get("missing") or [])
+    scalp_sim_overnight_quality = _scalp_sim_overnight_source_quality()
     ai_correction = _ai_correction_status(target_date)
     if ai_correction.get("status") == "fail":
         log_issues.append(

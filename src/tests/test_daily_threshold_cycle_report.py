@@ -7419,7 +7419,7 @@ def test_lifecycle_entry_armed_remains_contract_missing():
     assert result == "contract_missing"
 
 
-def test_sim_only_lifecycle_context_missing_status_backfilled_as_context_only():
+def test_retired_overnight_stage_is_not_backfilled_as_current_context():
     from src.engine import daily_threshold_cycle_report as target
 
     result = target._reclassify_match_status(
@@ -7433,7 +7433,7 @@ def test_sim_only_lifecycle_context_missing_status_backfilled_as_context_only():
         stage="scalp_sim_overnight_decision",
         active_seed_state="none",
     )
-    assert result == "candidate_context_only"
+    assert result == "not_instrumented"
 
 
 def test_sim_submit_path_lifecycle_context_missing_status_backfilled_as_context_only():
