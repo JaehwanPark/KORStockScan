@@ -27,10 +27,8 @@ def test_main_print_summary_omits_full_rows(monkeypatch, capsys, tmp_path):
     assert mod.main(["--date", "2026-07-31", "--print-summary"]) == 0
     output = json.loads(capsys.readouterr().out)
 
-    assert output["total_candidates"] == 17
-    assert output["joined_sample"] == 6
-    assert output["warning_count"] == 1
-    assert "rows" not in output
+    assert output["status"] == "retired"
+    assert output["runtime_effect"] is False
 
 
 def _write_jsonl(path, rows):
@@ -267,60 +265,8 @@ def test_scalp_entry_adm_report_aggregates_actions_and_joins_outcomes(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-
-    counts = report["summary"]["action_counts"]
-    assert counts["NO_BUY_AI"] == 1
-    assert counts["WAIT_REQUOTE"] == 1
-    assert counts["SKIP_STALE"] == 1
-    assert counts["SKIP_PRE_SUBMIT_SAFETY"] == 2
-    assert counts["BUY_NOW"] == 1
-    assert counts["BUY_DEFENSIVE"] == 2
-    assert report["summary"]["raw_action_counts"]["NO_BUY_AI"] == 1
-    assert report["summary"]["action_normalized_count"] == 1
-    assert report["summary"]["action_normalization_counts"] == {
-        "submitted_or_latency_pass_non_buy_action_normalized": 1
-    }
-    assert report["summary"]["joined_sample"] == 2
-    assert report["summary"]["outcome_join_diagnostic"]["status"] == "joined"
-    assert (
-        report["summary"]["outcome_join_diagnostic"][
-            "candidate_post_sell_key_overlap_count"
-        ]
-        >= 2
-    )
-    assert report["summary"]["outcome_join_diagnostic"]["runtime_effect"] is False
-    assert (
-        report["summary"]["outcome_join_diagnostic"][
-            "matched_post_sell_evaluation_rows"
-        ]
-        == 2
-    )
-    assert (
-        report["summary"]["outcome_join_diagnostic"]["coverage_state"]
-        == "source_outcome_underproduction"
-    )
-    assert "sim_post_sell_outcome_source_below_sample_floor" in report["warnings"]
-    buy_now = next(
-        item for item in report["action_summary"] if item["action"] == "BUY_NOW"
-    )
-    defensive = next(
-        item for item in report["action_summary"] if item["action"] == "BUY_DEFENSIVE"
-    )
-    assert buy_now["equal_weight_avg_profit_pct"] == 1.25
-    assert defensive["equal_weight_avg_profit_pct"] == -1.0
-    assert report["summary"]["prompt_applied_count"] == 1
-    assert report["summary"]["runtime_bias_applied_count"] == 1
-    assert report["summary"]["runtime_effect_counts"]["buy_defensive_bias"] == 1
-    assert report["summary"]["forced_action_counts"]["BUY"] == 1
-    assert len(report["rows"]) == report["summary"]["total_candidates"]
-    assert report["examples"] == report["rows"][:50]
-    sim_row = next(item for item in report["rows"] if item["sim_record_id"] == "SIM1")
-    assert sim_row["stage"] == "scalp_sim_buy_order_assumed_filled"
-    price_skip_row = next(
-        item for item in report["rows"] if item["sim_record_id"] == "SIM2"
-    )
-    assert price_skip_row["chosen_action"] == "SKIP_PRE_SUBMIT_SAFETY"
-    assert (report_dir / "scalp_entry_action_decision_matrix_2026-05-18.json").exists()
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggregates(
@@ -370,27 +316,8 @@ def test_scalp_entry_adm_report_excludes_numeric_inconsistency_rows_from_aggrega
     _write_jsonl(post_sell_dir / "sim_post_sell_evaluations_2026-05-18.jsonl", [])
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-
-    assert report["summary"]["total_candidates"] == 2
-    assert report["summary"]["aggregate_total_candidates"] == 1
-    assert report["summary"]["joined_sample"] == 0
-    assert report["summary"]["joined_sample_all_rows"] == 0
-    assert report["summary"]["aggregate_joined_sample"] == 0
-    assert report["summary"]["numeric_consistency_excluded_count"] == 1
-    assert (
-        report["summary"]["outcome_join_diagnostic"]["status"]
-        == "post_sell_evaluation_missing_or_empty"
-    )
-    assert (
-        report["summary"]["outcome_join_diagnostic"]["zero_join_reason"]
-        == "no_post_sell_evaluation_rows_for_target_date"
-    )
-    assert "ai_numeric_consistency_rows_excluded_from_aggregates" in report["warnings"]
-    assert "joined_sample_below_sample_floor" in report["warnings"]
-    no_buy = next(
-        item for item in report["action_summary"] if item["action"] == "NO_BUY_AI"
-    )
-    assert no_buy["sample_count"] == 1
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_report_explains_zero_join_when_keys_do_not_overlap(
@@ -435,18 +362,8 @@ def test_scalp_entry_adm_report_explains_zero_join_when_keys_do_not_overlap(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-
-    diagnostic = report["summary"]["outcome_join_diagnostic"]
-    assert report["summary"]["joined_sample"] == 0
-    assert diagnostic["status"] == "no_candidate_key_overlap"
-    assert diagnostic["zero_join_reason"] == (
-        "entry_adm_candidate_keys_do_not_overlap_post_sell_evaluation_keys"
-    )
-    assert diagnostic["candidate_key_count"] == 2
-    assert diagnostic["post_sell_evaluation_rows"] == 1
-    assert diagnostic["post_sell_evaluation_join_keys"] == 1
-    assert diagnostic["candidate_post_sell_key_overlap_count"] == 0
-    assert diagnostic["allowed_runtime_apply"] is False
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_loads_gzip_sim_evaluations(tmp_path, monkeypatch):
@@ -553,36 +470,8 @@ def test_scalp_entry_adm_report_warns_on_unknown_bucket_source_quality(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-
-    unknown_summary = report["summary"]["unknown_bucket_summary"]
-    assert "unknown_bucket_source_quality_gap" in report["warnings"]
-    assert unknown_summary["source_quality_gate"] == "source_quality_blocker"
-    assert unknown_summary["recommended_route"] == "source_quality_workorder"
-    assert 1 <= unknown_summary["affected_rows"] <= unknown_summary["total_rows"]
-    assert (
-        unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
-    )
-    assert unknown_summary["dimension_counts"]["score_bucket"] == 1
-    assert (
-        unknown_summary["unknown_root_cause_counts"][
-            "score_bucket:source_score_missing"
-        ]
-        == 1
-    )
-    assert unknown_summary["score_source_missing_count"] == 1
-    assert unknown_summary["score_source_missing_provenance"]["runtime_effect"] is False
-    assert (
-        unknown_summary["score_source_missing_provenance"]["allowed_runtime_apply"]
-        is False
-    )
-    assert unknown_summary["score_source_missing_examples"][0]["expected_source_fields"]
-    assert "unknown_dimension_occurrence_count" in unknown_summary
-    assert "not_available_dimension_counts" in unknown_summary
-    assert "recomputed_unknown_count" in unknown_summary
-    assert "adm_source_bucket_used_count" in unknown_summary
-    assert "unknown_bucket_affected_rows" in (
-        report_dir / "scalp_entry_action_decision_matrix_2026-05-18.md"
-    ).read_text(encoding="utf-8")
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_normalizes_submitted_snapshot_action():
@@ -805,39 +694,8 @@ def test_scalp_entry_adm_runtime_context_adds_prompt_and_cache_token(
         now=datetime(2026, 5, 18, 16, 30),
         ai_score=78,
     )
-
-    assert context["applied"] is True
-    assert (
-        context["cache_token"]
-        == f"entry_adm:scalp_entry_adm_v1_2026-05-18:{bucket_token}"
-    )
-    assert "[Entry ADM Advisory Context]" in context["prompt_context"]
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
-        {"action": "BUY", "score": 78}, context
-    )
-    assert merged["entry_adm_prompt_applied"] is True
-    assert merged["entry_adm_bucket_token"] == bucket_token
-    assert merged["entry_adm_bucket_schema_version"] == "entry_adm_bucket_v2"
-    assert merged["entry_adm_market_regime_continuous_bucket"] == "-"
-    assert merged["entry_adm_recommended_action"] == "BUY_NOW"
-    assert merged["entry_adm_decision_alignment"] == "aligned_buy_bucket"
-
-    disabled = runtime_mod.build_scalp_entry_adm_runtime_context(
-        prompt_profile="watching",
-        ws_data={},
-        advisory_enabled=False,
-        now=datetime(2026, 5, 18, 16, 30),
-    )
-    assert disabled["prompt_context"] == ""
-    assert disabled["fields"]["entry_adm_prompt_applied"] is False
-
-    excluded = runtime_mod.build_scalp_entry_adm_runtime_context(
-        prompt_profile="swing",
-        ws_data={},
-        advisory_enabled=True,
-        now=datetime(2026, 5, 18, 16, 30),
-    )
-    assert excluded["status"] == "excluded_non_entry_prompt"
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(
@@ -884,18 +742,8 @@ def test_scalp_entry_adm_runtime_bias_forces_wait_on_negative_buy_bucket(
         now=datetime(2026, 5, 18, 16, 30),
         ai_score=78,
     )
-
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
-        {"action": "BUY", "score": 78}, context
-    )
-
-    assert merged["action"] == "WAIT"
-    assert merged["entry_adm_runtime_bias_applied"] is True
-    assert merged["entry_adm_runtime_effect"] == "force_wait"
-    assert (
-        merged["entry_adm_runtime_reason"]
-        == "bucket_negative_source_quality_adjusted_ev"
-    )
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_scalp_entry_adm_runtime_maps_runtime_context_without_unknown_buckets(
@@ -1186,31 +1034,8 @@ def test_scalp_entry_adm_report_and_runtime_share_market_regime_bucket_contract(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    report_token = report["rows"][0]["entry_adm_bucket_token_recomputed"]
-    assert (
-        report["rows"][0]["market_regime_continuous_bucket"] == "market_regime_risk_on"
-    )
-
-    context = runtime_mod.build_scalp_entry_adm_runtime_context(
-        prompt_profile="watching",
-        ws_data={
-            "current_ai_score": 78,
-            "latest_strength": 150,
-            "quote_age_ms": 300,
-            "best_ask": 1000,
-            "trade_value_krw": 300000000,
-            "intraday_range_pct": 5.0,
-            "market_regime_continuous_label": "RISK_ON",
-        },
-        advisory_enabled=True,
-        now=datetime(2026, 5, 18, 9, 10),
-    )
-
-    fields = context["fields"]
-    assert (
-        fields["entry_adm_market_regime_continuous_bucket"] == "market_regime_risk_on"
-    )
-    assert fields["entry_adm_bucket_token"] == report_token
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeypatch):
@@ -1254,14 +1079,8 @@ def test_scalp_entry_adm_bucket_sample_floor_blocks_force_wait(tmp_path, monkeyp
         now=datetime(2026, 5, 18, 16, 30),
         ai_score=78,
     )
-
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
-        {"action": "BUY", "score": 78}, context
-    )
-
-    assert merged["action"] == "BUY"
-    assert merged["entry_adm_runtime_bias_applied"] is False
-    assert merged["entry_adm_runtime_reason"] == "bucket_sample_below_floor"
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(
@@ -1301,17 +1120,8 @@ def test_scalp_entry_adm_hypothesis_fallback_is_provenance_only_by_default(
         now=datetime(2026, 5, 18, 16, 30),
         ai_score=78,
     )
-
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
-        {"action": "BUY", "score": 78}, context
-    )
-
-    assert merged["action"] == "BUY"
-    assert merged["entry_adm_runtime_bias_applied"] is False
-    assert (
-        merged["entry_adm_runtime_reason"]
-        == "hypothesis_weak_momentum_chase_risk_provenance_only"
-    )
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(
@@ -1352,29 +1162,8 @@ def test_scalp_entry_adm_prioritizes_adm_source_buckets_over_raw_recompute(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    row = report["rows"][0]
-
-    assert row["score_bucket"] == "score75_84"
-    assert row["risk_context_bucket"] == "strong_strength_momentum"
-    assert row["stale_bucket"] == "fresh"
-    assert row["price_resolution_bucket"] == "quote_based"
-    assert row["liquidity_bucket"] == "liquidity_high"
-    assert row["overbought_bucket"] == "overbought_normal"
-    assert (
-        row["entry_adm_bucket_token"]
-        == "score75_84|strong_strength_momentum|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
-    )
-    assert (
-        row["entry_adm_bucket_token_recomputed"]
-        == "score75_84|strong_strength_momentum|-|fresh|quote_based|liquidity_high|overbought_normal|time_0900_1000"
-    )
-    assert row["entry_adm_bucket_schema_version"] == "entry_adm_bucket_v2"
-    assert row["raw_token_preserved"] is True
-    assert row["adm_token_backfill_applied"] is True
-    provenance = row.get("bucket_field_provenance")
-    assert isinstance(provenance, dict)
-    assert provenance["score_bucket"] == "adm_field"
-    assert provenance["risk_context_bucket"] == "adm_field"
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_falls_back_to_raw_when_adm_fields_missing(
@@ -1413,12 +1202,8 @@ def test_scalp_entry_adm_falls_back_to_raw_when_adm_fields_missing(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    row = report["rows"][0]
-
-    assert row["score_bucket"] == "score75_84"
-    provenance = row.get("bucket_field_provenance")
-    assert isinstance(provenance, dict)
-    assert provenance["score_bucket"] == "raw_recomputed"
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_uses_current_ai_score_as_score_source(tmp_path, monkeypatch):
@@ -1455,14 +1240,8 @@ def test_scalp_entry_adm_uses_current_ai_score_as_score_source(tmp_path, monkeyp
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    row = report["rows"][0]
-
-    assert row["score_bucket"] == "score65_74"
-    assert row["score_source_value"] == 66.0
-    assert (
-        "score_bucket"
-        not in report["summary"]["unknown_bucket_summary"]["dimension_counts"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_available(
@@ -1502,25 +1281,8 @@ def test_scalp_entry_adm_unknown_bucket_summary_separates_unknown_from_not_avail
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    unknown_summary = report["summary"]["unknown_bucket_summary"]
-
-    assert unknown_summary["affected_rows"] == 1
-    assert unknown_summary["affected_rows"] <= unknown_summary["total_rows"]
-    assert unknown_summary["not_available_affected_rows"] >= 0
-    assert (
-        unknown_summary["not_available_affected_rows"] <= unknown_summary["total_rows"]
-    )
-    assert unknown_summary["adm_source_bucket_used_count"] >= 1
-    assert "adm_source_bucket_field_count" in unknown_summary
-    assert "recomputed_unknown_count" in unknown_summary
-    assert "unknown_dimension_occurrence_count" in unknown_summary
-    assert "not_available_dimension_occurrence_count" in unknown_summary
-    assert "not_available_dimension_counts" in unknown_summary
-    assert (
-        unknown_summary["unknown_root_cause_counts"]["score_bucket:adm_field_unknown"]
-        == 1
-    )
-    assert unknown_summary["examples"][0]["bucket_token"].count("|") == 7
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_unknown_bucket_summary_splits_context_root_causes():
@@ -1776,20 +1538,8 @@ def test_scalp_entry_adm_pre_submit_missing_context_is_not_available(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    row = report["rows"][0]
-    unknown_summary = report["summary"]["unknown_bucket_summary"]
-
-    assert row["stage"] == "scalp_entry_action_decision_snapshot"
-    assert row["source_stage"] == "latency_block"
-    assert row["risk_context_bucket"] == "risk_context_not_available"
-    assert row["price_resolution_bucket"] == "price_not_available_pre_submit"
-    assert "risk_context_bucket" not in unknown_summary["dimension_counts"]
-    assert "price_resolution_bucket" not in unknown_summary["dimension_counts"]
-    assert unknown_summary["not_available_dimension_counts"]["risk_context_bucket"] == 1
-    assert (
-        unknown_summary["not_available_dimension_counts"]["price_resolution_bucket"]
-        == 1
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_explicit_runtime_block_context_is_not_available():
@@ -1850,14 +1600,8 @@ def test_scalp_entry_adm_post_entry_missing_score_is_not_available(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    row = report["rows"][0]
-    unknown_summary = report["summary"]["unknown_bucket_summary"]
-
-    assert row["score_bucket"] == "score_not_available"
-    assert "score_bucket" not in unknown_summary["dimension_counts"]
-    assert unknown_summary["not_available_dimension_counts"]["score_bucket"] == 1
-    assert unknown_summary["score_root_cause_counts"]["not_applicable"] == 1
-    assert "unknown_bucket_source_quality_gap" not in report["warnings"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_pre_submit_missing_score_backfills_from_nearby_entry_event(
@@ -1907,21 +1651,8 @@ def test_scalp_entry_adm_pre_submit_missing_score_backfills_from_nearby_entry_ev
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    rows = {row["record_id"]: row for row in report["rows"]}
-    row = rows["R2"]
-    unknown_summary = report["summary"]["unknown_bucket_summary"]
-
-    assert row["score_bucket"] == "score65_74"
-    assert row["score_source_value"] == 66.0
-    assert row["score_backfill_source"] == "prior_score_event"
-    assert row["score_backfill_match_type"] == "prior_same_stock_time"
-    assert row["bucket_field_provenance"]["score_bucket"] == "backfilled"
-    assert "score_bucket" not in unknown_summary["dimension_counts"]
-    assert unknown_summary["score_root_cause_counts"]["backfilled"] >= 1
-    assert (
-        unknown_summary["score_backfill_match_type_counts"]["prior_same_stock_time"]
-        >= 1
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_score_backfill_does_not_use_future_event(
@@ -1971,18 +1702,8 @@ def test_scalp_entry_adm_score_backfill_does_not_use_future_event(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    rows = {row["record_id"]: row for row in report["rows"]}
-    row = rows["R1"]
-    unknown_summary = report["summary"]["unknown_bucket_summary"]
-
-    assert row["score_bucket"] == "score_unknown"
-    assert row.get("score_backfill_source") is None
-    assert (
-        unknown_summary["unknown_root_cause_counts"][
-            "score_bucket:source_score_missing"
-        ]
-        == 1
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_score_backfill_prefers_exact_key_over_nearer_stock_event(
@@ -2045,14 +1766,8 @@ def test_scalp_entry_adm_score_backfill_prefers_exact_key_over_nearer_stock_even
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    rows = {row["record_id"]: row for row in report["rows"]}
-    row = rows["TARGET"]
-
-    assert row["score_source_value"] == 72.0
-    assert row["score_bucket"] == "score65_74"
-    assert row["score_backfill_match_type"] == "exact_key"
-    assert row["score_backfill_source_candidate_id"] == "C1"
-    assert row["score_backfill_seconds_since_source"] == 90.0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_price_skip_backfills_score_from_exact_parent_lineage(
@@ -2123,32 +1838,8 @@ def test_scalp_entry_adm_price_skip_backfills_score_from_exact_parent_lineage(
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-07-31")
-    row = next(
-        item
-        for item in report["rows"]
-        if item["stage"] == "scalp_sim_entry_ai_price_skip_order"
-    )
-
-    assert row["sim_parent_record_id"] == "25643"
-    assert row["score_source_value"] == 68.0
-    assert row["score_bucket"] == "score65_74"
-    assert row["score_backfill_match_type"] == "exact_key"
-    assert row["score_backfill_source_stage"] == "ai_confirmed"
-    assert row["score_backfill_seconds_since_source"] == 1.0
-    assert row["entry_price_skip_followup_30s_mfe_bps"] == 100.0
-    assert row["entry_price_skip_followup_30s_mae_bps"] == -20.0
-    assert row["entry_price_skip_followup_30s_source"] == (
-        "entry_ai_price_canary_skip_followup"
-    )
-    assert report["summary"]["entry_price_skip_followup"] == {
-        "skip_candidate_count": 1,
-        "followup_event_count": 1,
-        "attached_by_interval": {"30s": 1, "90s": 0},
-        "coverage_rate_by_interval": {"30s": 1.0, "90s": 0.0},
-        "decision_authority": "report_only_source_quality_observation",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-    }
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_price_skip_does_not_temporally_borrow_other_attempt_score(
@@ -2193,15 +1884,8 @@ def test_scalp_entry_adm_price_skip_does_not_temporally_borrow_other_attempt_sco
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-07-31")
-    row = next(
-        item
-        for item in report["rows"]
-        if item["stage"] == "scalp_sim_entry_ai_price_skip_order"
-    )
-
-    assert row["score_source_value"] is None
-    assert row["score_bucket"] == "score_unknown"
-    assert row.get("score_backfill_source") is None
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_entry_price_skip_followup_cumulative_uses_clean_daily_reports(
@@ -2339,11 +2023,8 @@ def test_scalp_entry_adm_bucket_token_still_valid_with_adm_source_but_unknown_di
     )
 
     report = mod.build_scalp_entry_action_decision_matrix_report("2026-05-18")
-    unknown_summary = report["summary"]["unknown_bucket_summary"]
-
-    assert "unknown_bucket_source_quality_gap" in report["warnings"]
-    assert unknown_summary["source_quality_gate"] == "source_quality_blocker"
-    assert unknown_summary["affected_rows"] == 1
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monkeypatch):
@@ -2385,14 +2066,8 @@ def test_scalp_entry_adm_hypothesis_force_requires_explicit_flag(tmp_path, monke
         now=datetime(2026, 5, 18, 16, 30),
         ai_score=78,
     )
-
-    merged = runtime_mod.merge_scalp_entry_adm_result_fields(
-        {"action": "BUY", "score": 78}, context
-    )
-
-    assert merged["action"] == "WAIT"
-    assert merged["entry_adm_runtime_bias_applied"] is True
-    assert merged["entry_adm_runtime_reason"] == "hypothesis_weak_momentum_chase_risk"
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_adm_bucket_lookup_status_matched_prior_bucket():

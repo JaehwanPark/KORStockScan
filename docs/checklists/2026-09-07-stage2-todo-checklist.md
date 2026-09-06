@@ -18,6 +18,74 @@
 
 ## 수동 보강 체크리스트
 
+- [x] `[AdmLdmRetirementImplementation0907] ADM/LDM 권장 정리·반복 리뷰·통합 검증 종결` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
+  - Source: [ADM/LDM 정리 리뷰](../audit-reports/2026-09-06-adm-ldm-retirement-review.md), [상세검토 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 완료 판정(2026-09-06): 폐기 producer·prompt/bias·PREOPEN·보관 산출물 재유입·누락 FAIL 경로를 보완하고 최종 관련 통합 회귀 3,036 PASS, 문법·정적 검사·wrapper·parser 검증을 통과했다. 검토 범위 미해결 finding은 0건이다. 원천자료·전용 전략 분석·주문 안전장치는 유지했다.
+  - 병행 작업 구분: 아래 recheck 항목의 1,797 PASS/25 FAIL 및 producer fixture 2 FAIL은 이번 최종 통합 검증 이전 기록이다. 관련 회귀 PASS가 report 재생성·exact-date PREOPEN 검증·실제 PID 소비 완료를 뜻하지는 않으므로 해당 OPEN owner와 남은 운영 작업은 유지한다.
+  - 권한 경계: bot 재기동·수동 PREOPEN 적용·장후 전체 실행·실거래·operator lock 일괄삭제는 하지 않았다. 다음 자연 실행 확인은 `AdmLdmRetirementNaturalEvidence0907`이 소유한다.
+
+- [x] `[InstitutionalMicroContextRepair0907] 기관수급 중복 경로 폐기·micro 전달/누적 판정 계약 보완` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:20~07:35`, `Track: RuntimeStability`)
+  - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-institutional-microstructure-context-final-review.md), [traceability](../report-based-automation-traceability.md), [상세검토 목록 #26~27](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 완료 판정: sole consumer가 폐기된 dedicated institutional producer를 wrapper/current EV/runtime summary에서 제거하고 offline/archive schema로 제한했다. 기존 exact AI investor/program context는 유지했다. Microstructure는 event-specific canonical quote freshness(기본 3000 ms), delivery telemetry v2 `computed/sent/consumed`, 누락·stale rollup 날짜 제외 판정을 구현했다. 20건 source-quality-pass와 양의 비용차감 EV 전에는 bounded candidate review가 열리지 않으며 직접 runtime apply는 없다.
+  - 권한 경계: 신규 튜닝축·PREOPEN env·실주문·threshold/provider/bot/cap/broker/hard-safety 변경은 없다. 코드 PASS를 실제 PID receipt나 수익 개선으로 해석하지 않는다.
+  - 재리뷰 정정: [리뷰 §6](../audit-reports/2026-09-06-institutional-microstructure-context-final-review.md#6-목적자동화조건-달성-가능성-재리뷰)의 R1~R5는 이후 A~D 구현/재리뷰로 보완했다. 위 v2 완료는 당시 기록이다. 현재 구현 근거는 `ContextObjectiveRepairReview0907` 및 리뷰 §7, 다음 운영 확인 owner는 `ContextDeliveryNaturalEvidence0907`이다.
+
+- [x] `[ContextObjectiveRepairReview0907] micro 신선도·실제 소비 계측·경제성 모집단 보완 및 불필요 후보 경로 제거 구현·재리뷰` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:15~07:35`, `Track: RuntimeStability`)
+  - Source: [목적/자동화/조건 달성 가능성 재리뷰 §6](../audit-reports/2026-09-06-institutional-microstructure-context-final-review.md#6-목적자동화조건-달성-가능성-재리뷰), [상세검토 목록 #26~27](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 구현 완료(2026-09-06): [A~D 보완계획 §9](../proposals/institutional-microstructure-context-remediation-plan-2026-09-06.md#9-구현-결과). 공통 freshness/feature v2, delivery v3·cache/logger, finite EV/같은 attempt 결과/rollup schema2, 독립 후보 제거·unique coverage·workorder 전달 검증을 구현하고 반례/회귀를 반복했다. 검증 수치와 범위 밖 회귀는 [리뷰 §7](../audit-reports/2026-09-06-institutional-microstructure-context-final-review.md#7-ad-구현-후-재리뷰)를 따른다. 이 체크는 실제 PID 소비나 수익 개선 완료를 뜻하지 않는다.
+  - 권고 순서: R1 missing-age/threshold 정규화→R2 cache/전송/내부 소비 receipt·logger 보완→R3 유효 EV 표본·version/적용효과 모집단 구분→R4 소비자 없는 후보 상태와 신규 signed-tape family 제안 제거 검토→R5 applicable 분모·실제 결손 workorder 연결. Institutional 전용 producer 폐기는 유지한다.
+  - 수용시험: age 결손 favorable0, threshold 정규화 일치, cache/문자열 이름의 허위 sent0, 실제 logger 필드 보존, pass20/finite1 허위 후보0, REST source1 신규 family0, 미평가 행 증가에도 정상 요청 coverage 불변, 진짜 결손만 기존 owner workorder 전달.
+  - 과거 재점검 근거: 구 계약의 39건/EV -0.636615%는 historical diagnostic이며 수정 후 feature v2 표본이나 적용효과가 아니다. 구현 후 20건은 finite diagnostic 해석에만 사용하고 PREOPEN 대기는 제거했다. 실제 receipt/성과는 자연 확인 전 승인하지 않는다.
+  - 계획 결정: 기존 20건·양의 EV는 코드 기동 gate가 아니라 누적 report 후보 표시 조건이다. 구현 시 소비자 없는 runtime 후보 상태와 PREOPEN 대기 요구를 제거하고 20건은 finite diagnostic 표본 해석에만 사용한다. 별도 signed-tape family 제안과 전체 event 기준 5% 경고도 제거한다. 단계별 반례·통합 회귀를 닫은 뒤 필요한 날짜만 재생성하고 기존 정상 기동/장후 자연 확인으로 이어간다.
+
+- [ ] `[AdmLdmRetirementNaturalEvidence0907] ADM/LDM 폐기 후 PREOPEN·PID·장후 자연 실행 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:50`, `Track: RuntimeStability`)
+  - Source: [ADM/LDM 정리 리뷰](../audit-reports/2026-09-06-adm-ldm-retirement-review.md), [상세검토 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 확인: 예정 PREOPEN에서 폐기 namespace OFF, 정상 기동 PID에서 matrix prompt/bias 미적용, 장후 폐기 artifact 누락 FAIL/복구 workorder 없음, Entry AI gate 원천자료·Samsung·AVG_DOWN/PYRAMID 정상 handoff. 코드/환경파일 PASS를 실제 PID 소비나 EV 개선으로 간주하지 않는다.
+  - 경계: raw candidate/order/fill/terminal lineage 유지. dedicated institutional report가 생성되지 않고 current summary가 `retired`인 것이 정상이다. 보관자료·operator lock 일괄삭제나 bot 재기동·주문·수량·provider·hard-safety 변경을 이 항목으로 승인하지 않는다.
+
+- [ ] `[ContextDeliveryNaturalEvidence0907] micro computed/sent/consumed 실제 PID·장후 receipt 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:50`, `Track: RuntimeStability`)
+  - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-institutional-microstructure-context-final-review.md), `data/pipeline_events/pipeline_events_2026-09-07.jsonl`, `data/report/microstructure_reaction_context/microstructure_reaction_context_2026-09-07.json`.
+  - 선행 구현: `ContextObjectiveRepairReview0907`의 A~D 수리는 완료했다. 실제 실행 전에는 `not_observed_yet`이며 이전 v1/v2 receipt를 새로운 v3 전달 증거로 소급 사용하지 않는다.
+  - 확인: 정상 기동 PID의 entry derived reaction 생략은 payload 포함 false, holding 내부 소비는 provider와 별도 receipt로 기록한다. timeout은 sent null/attempted_unconfirmed, cache는 computed/sent false와 reused true다. 동일 evaluation을 stage별로 중복 집계하지 않고 threshold·context/evaluation identity가 logger→report/trace에 보존되는지 대사한다. 기존 full snapshot 이후 발생한 attempt는 source coverage gap과 미확인 결과로 구분하고 순이익/실제 청산값으로 대체하지 않는다.
+  - 완료 조건: 공통/event-specific quote freshness threshold가 feature packet과 reaction context에서 일치하고, report의 usable coverage·excluded dates·20건 표본·비용차감 EV가 서로 모순 없이 집계된다. natural favorable/match 0건은 경고/표본 상태이지 실패나 threshold 완화 근거가 아니다.
+  - 권한 경계: 이 receipt는 source-quality/진단이며 standalone BUY, threshold/PREOPEN apply, provider/bot/cap, broker/hard-safety 변경 권한이 없다.
+
+- [x] `[ContextAdjacentWrapperRegression0907] 기존 Entry AI gate backtest wrapper/폐기 회귀 불일치 정합화` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:35~07:45`, `Track: RuntimeStability`)
+  - Source: [context 구현 리뷰 §7](../audit-reports/2026-09-06-institutional-microstructure-context-final-review.md#7-ad-구현-후-재리뷰), `src/tests/test_adm_ldm_retirement.py::test_wrapper_has_no_retired_producer_commands`, `deploy/run_threshold_cycle_postclose.sh`.
+  - 종결: Plan Rebase §7과 현재 checklist의 `일일 controller ON + 누적 backtest on-demand only`를 기준으로 wrapper가 맞고 구 회귀 assertion이 stale임을 확인했다. 테스트는 drought controller 호출, backtest 미호출, schedule=`on_demand`, 실행 flag=false, skip marker를 함께 고정한다.
+  - 경계: 예약 report 호출을 복구하지 않았고 ADM/LDM·bot·provider·runtime authority를 변경하지 않았다.
+
+- [x] `[EntryRecheckFinalReviewRepair0907] submit-drought recheck 최종 리뷰 F1~F6 판정·복귀·귀속 계약 보완` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: ScalpingLogic`)
+  - Source: [2026-09-06 최종 재점검](../audit-reports/2026-09-06-one-share-drought-final-review.md), [일일 controller](/home/ubuntu/KORStockScan/src/engine/scalping/entry_recheck_drought_controller.py), [누적 진단](/home/ubuntu/KORStockScan/src/engine/scalping/entry_ai_gate_backtest.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
+  - 완료 판정(2026-09-06): `review_passed_preopen_prepared_natural_attribution_pending`. F1~F6와 불량 source의 recovery 관측 오인, 폐기 필터의 생성기 해시 손실을 보완했다. 최종 공유 producer/consumer/wrapper/retirement/receipt 통합 회귀 **2,345 PASS**, 정적 검사·parser PASS이며 검토 범위 미해결 finding은 0건이다. 기존 병행 수정 중 실패 기록은 Source §6의 과거 증거이고 현재 상태는 §7을 따른다.
+  - 완료 조건: 유효 paired-economic floor·동일 scope/branch 인과·OFF/profile 복귀·version/window 재평가·durable attribution을 보완하고 producer→PREOPEN→실제 logger routing 회귀와 최종 재리뷰를 통과한다. 그 후에만 exact-date PREOPEN 재검증을 수행한다. 무기한 lock은 복원하지 않으며 신규 축·수량/cap·provider/bot·broker/hard-safety 완화로 해결하지 않는다.
+  - 운영 준비 완료: 9/4 report와 sim-only catalog, 9/7 PREOPEN 파일 재생성·verify PASS. recheck ON, `ALLOWED_SCOPES=KRX|KRX_REGULAR,NXT|NXT_AFTERMARKET`, 장중 확대 OFF다. selected 23개 중 missing/runtime-policy-fail/unverified는 0개이며 독립 rising-missed sim 정책 1개/active seed 2개는 유지한다. 7/3 lock은 disabled 유지, 폐기 LDM/bucket 선택은 제거했다.
+  - 권한 경계: `require_ai=true`와 기존 다른 family 승인 guard를 유지했다. bot 재기동·실주문·cron/provider/hard safety 변경은 하지 않았다. 파일→설정 소비 smoke는 격리 환경이며 실제 PID/순이익 증거가 아니다. 자연 확인은 아래 `EntryRecheckNaturalAttribution0907`가 소유한다.
+  - 추가 보완(2026-09-06): 일일 runtime controller와 clean-baseline 누적 score sweep를 분리했다. controller는 매일 `drought_triggered_bounded_live` 후보 최대 1건을 만들고 PREOPEN의 유일한 직접 소비원이 되며, 무거운 backtest는 금요일 운영일 기본 또는 명시적 on-demand 진단으로만 실행된다. `diagnostic_apply_ready`/`runtime_candidate_ready`를 분리하고 WAIT 상단을 74.999로 일치시켰으며, exact `evaluated→armed→submitted→filled→completed→paired` funnel·scope별 blocker와 scope별 escalation env/cap을 추가했다. 동일 target-date 중복 producer는 lock으로 fail-fast한다.
+
+- [ ] `[EntryRecheckNaturalAttribution0907] recheck 보완 후 정상 기동 PID 소비·exact submit/fill/청산 귀속 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:50`, `Track: ScalpingLogic`)
+  - Source: [2026-09-06 최종 재점검](../audit-reports/2026-09-06-one-share-drought-final-review.md), [9월 7일 runtime env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-09-07.json)
+  - 선행 조건: `EntryRecheckFeasibilityRepairReview0907` 보완·검증 종결. 기존 예정 07:35 PREOPEN와 07:55 기동 이후 실제 PID의 selected profile/의존 probe 계약과 장후 exact attempt→accepted submit→fill→valid terminal 귀속을 확인한다. env PASS를 실제 수익 개선으로 해석하지 않는다.
+  - 추가 확인: 일일 `entry_recheck_drought_controller`가 정상 생성되고 PREOPEN manifest의 `entry_recheck_drought_controller` source로만 소비되는지 확인한다. scope별 `evaluated/armed/submitted/filled/completed/paired`, dominant evaluation blocker, `INTRADAY_ESCALATION_SCOPES`와 실제 동일-scope recovery mark/cap을 대조하며 다른 scope의 경제성이나 cap을 재사용하지 않는다. 누적 backtest 미실행일의 artifact 부재는 정상이고 controller 부재만 결함이다.
+  - 완료 조건: applied/not-applied·원인별 blocker·유효 경제성 pair·source gap·현재 판정 window/다음 자동 ON/OFF 근거를 보고한다. 자연 match 또는 청산 0건은 계측/자연 표본 상태로 구분하고 성공·실패·확대 승인으로 단정하지 않는다. 사용자 추가 개입 없는 정책 복귀 경로도 회귀 증거와 대조한다.
+  - 현재 후속 owner: [리뷰 §10](../audit-reports/2026-09-06-one-share-drought-final-review.md#10-r1r5-구현수정재리뷰)의 controller v4/exact attempt v3 계약을 확인한다. 구 9/4 controller/기존 9/7 env의 ON을 새 코드 소비로 간주하지 않는다. 새 schema 산출물이 없어 PREOPEN에서 제외되면 버전/생성 순서 문제로 보고하고 기존 허용된 복구 절차로 source 생성→PREOPEN 재검증하며 구 성과/stop을 임의 삭제하지 않는다. 예약 원장의 ambiguous 건은 브로커 대사 없는 자동 반환을 금지한다. bot 재기동·실주문으로 검증하지 않는다.
+  - 자연 수용시험: scope별 평가→arm→예약→accepted→fill→terminal→동일 fill-quality paired와 20거래일 창의 실제 전환율/표본 ETA를 보고한다. 확대 floor 달성 가능성이 낮으면 단독 causal blocker/source-contract 수리를 먼저 제안하고 신호 완화·cap 증액으로 표본을 만들지 않는다. 누적 진단은 정기 호출/의존성에서 제외된 상태를 확인한다. 미제출 arm이 NXT 한도를 소진하지 않되 기존 실제 총량은 유지되는지, 새 장후 소요시간과 비용 차감 EV를 별도로 확인한다.
+
+- [x] `[EntryRecheckFeasibilityRepairReview0907] recheck 경제성 귀속·scope 중단·기회 한도·비필수 진단 보완 구현 및 수리 검증` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: ScalpingLogic`)
+  - Source: [목적/자동화/달성 가능성 재리뷰 §9](../audit-reports/2026-09-06-one-share-drought-final-review.md#9-목적자동화조건-달성-가능성-재리뷰), [상세검토 목록 #23](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 권장 순서: R1 새 평가/이전 arm lineage 분리→R2 probe-only/잔량 확장 full-position 경제성 대사→R3 scope별 경제성·전환율 stop/episode 분리→R4 기존 총량 내 평가/예약/accepted-submit 한도와 시장별 기회 배분 검토→R5 diagnostic 정기 실행 제외 또는 실패 격리. 숫자 완화보다 실제 모집단·귀속 계약을 먼저 수리한다.
+  - 수용시험: 거절 재평가 20건의 허위 arm/stop 없음; 1주·잔량·부분체결/청산·scale-in의 정확한 손익; KRX 흑자/NXT 적자 양방향 격리; 미제출/제출불명/accepted/restart/동시 처리의 중복·한도 초과 없음; diagnostic 실패가 필수 장후 경로로 전파되지 않으며 controller 부재는 계속 FAIL.
+  - 후속 소유: 20거래일 안 동일 scope/체결 cohort 10개 유효 pair의 실제 발생률·version/episode 누적 창·같은 원인 수리 후 인과적 재심·source-contract workorder 검토는 OPEN `EntryRecheckNaturalAttribution0907`으로 이관한다. 조건 충족 확률은 현재 자연 exact 0건으로 산정하지 않는다.
+  - 권한 경계: 후속 사용자 구현 지시에 따라 R1→R5를 구현했다. arm 귀속·full-position 경제성·scope별 stop·기존 총량 내 durable submit 예약·진단 on-demand 분리를 보완했으며 review→수정→재리뷰→통합 회귀로 종결한다. cap 증액·무기한 lock 복원·bot 재기동·실주문·provider/broker/hard-safety 변경으로 표본을 만들지 않는다.
+  - 완료 판정(2026-09-06): [리뷰 §10](../audit-reports/2026-09-06-one-share-drought-final-review.md#10-r1r5-구현수정재리뷰), 최종 통합 **2,088 PASS**, 관련 파일 검증 전후 해시 동일, syntax/compile/Ruff/format/diff와 parser PASS. 추가 체결 선도착·로컬 차단 예약 누수·원장 I/O 후 stale quote 재검증을 보완하고 미해결 finding 0건으로 종결했다. 실제 보고서/장전 env 재생성·봇 재기동은 이번에 하지 않았다.
+
+- [x] `[MachineFinalRefreshSingleOwnerCleanup0907] machine 20:10 중복 사본 제거와 21:15 단일 owner 전환` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:15~21:30`, `Track: RuntimeStability`)
+  - Source: [20:10 wrapper](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [21:15 final-refresh wrapper](/home/ubuntu/KORStockScan/deploy/run_machine_microstructure_final_refresh.sh), [systemd installer](/home/ubuntu/KORStockScan/deploy/install_machine_microstructure_final_refresh_systemd.sh), [운영 runbook](../time-based-operations-runbook.md)
+  - 완료 판정(2026-09-05): 20:10의 attribution·market-weakness-hysteresis·entry-timing·policy-approval 실행 블록과 override env를 제거하고, 네 기능은 21:15 `korstockscan-machine-microstructure-final-refresh.timer`만 실행하도록 단일화했다. 복구는 전용 wrapper가 해석한 최신 완료 거래일과 명시 날짜가 일치할 때만 허용한다.
+  - 운영 반영: 기존 timer의 2026-09-04 21:15 stamp를 승계한 뒤 새 timer를 `enabled + active`로 전환했고 다음 실행은 2026-09-07 21:15 KST다. 구 service/timer와 stamp는 제거했으며 전환 중 즉시 catch-up service 실행은 발생하지 않았다.
+  - 검증: 관련 producer·consumer·Main AI 공용 승인원장·wrapper·checklist builder·postclose verifier 회귀 604건, Bash syntax, systemd unit verify, Ruff, Black, diff whitespace와 checklist parser를 통과했다. 구현→review에서 Persistent timer 즉시 catch-up 위험과 source-not-ready retry 문서 오류를 찾아 보완한 뒤 재리뷰했으며 미해결 finding은 0건이다.
+  - 권한 경계: 산출물 본체와 PREOPEN/runtime consumer는 제거하지 않았다. 보고서 재생성, bot 재기동, 주문·취소, threshold·수량·provider·broker/hard-safety 변경은 수행하지 않았다.
+
 - [x] `[SamsungEntryFinalReviewDecision0907] Samsung 진입 목적 불일치·후보 근거 결함의 보완 범위 판정` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:20`, `Track: ScalpingLogic`)
   - Source: [Samsung 최종 목적·자동화·달성 가능성 리뷰](../audit-reports/2026-09-05-samsung-machine-entry-final-review.md), [samsung_machine_entry_tuning.py](/home/ubuntu/KORStockScan/src/engine/monitoring/samsung_machine_entry_tuning.py), [samsung_entry_policy.py](/home/ubuntu/KORStockScan/src/trading/order/samsung_entry_policy.py)
   - 완료 판정(2026-09-05): F1~F8을 식별하고 사용자 구현 지시에 따라 actual-policy/as-of → 기존 timing owner 상승·반등 → 불필요 veto/표본 분리 → 경제성 분모 순으로 범위를 확정했다. 신호 subset의 신규 tightening 권한은 제거하고 진단으로 유지한다.
@@ -216,10 +284,18 @@
   - 부분 종결(2026-09-05): episode 저가 연구 측은 공식 `ka10080` request contract와 bar content hash에 결속된 symbol checkpoint, 동일 continuation page bounded retry, exit 75 wrapper resume(최대 3회), 기존 정상 report 비덮어쓰기를 구현·검증했다. 위젯 evaluation의 동일 계약과 실제 동시실행 terminal 증거가 남아 있으므로 항목 전체는 OPEN이다.
   - 권한 경계: source/report/runtime-cost 최적화 전용이다. 매매 process 재기동, 종목·profile·target·threshold·수량·cap·provider·broker/order·hard-safety 변경 권한이 없다.
 
-- [ ] `[LegacyOneSharePostcloseYieldGate0907] legacy one-share opportunity 분석의 daily 핵심 경로 유지여부 판정` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:50`, `Track: RuntimeStability`)
+- [x] `[EntryOpportunityRecheckConditionalAutomation0907] BUY submit drought 조건부 recheck의 무기한 lock 제거·자동 PREOPEN 적용` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:20`, `Track: ScalpingLogic`)
+  - 후속 재점검(2026-09-06): 아래 완료 표시는 최초 구현·env 생성 기록이다. 이후 F1~F6 및 추가 반례 보완·장전 재검증은 완료 기록 `EntryRecheckFinalReviewRepair0907`에 종결했다. 현재 OPEN 소유자는 실소비·귀속 확인의 `EntryRecheckNaturalAttribution0907`이며, 과거 env 생성이나 코드 PASS를 실제 순이익 개선 입증으로 쓰지 않는다.
+  - Source: [entry AI gate report](/home/ubuntu/KORStockScan/data/report/entry_ai_gate_backtest/entry_ai_gate_backtest_2026-09-04.json), [2026-09-07 runtime env](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-09-07.json), [traceability](../report-based-automation-traceability.md)
+  - 완료 판정(2026-09-06): 2026-07-03 무기한 operator lock을 archive-disabled로 닫고, 최신 정확한 3개 KRX 거래일의 source-quality·BUY Funnel critical/addressable·causal axis를 검증하는 deterministic `drought_triggered_bounded_live` 후보만 기존 `entry_opportunity_recheck_runtime`을 ON/OFF하도록 단일화했다. Score sweep는 diagnostic-only로 내리고 별도 튜닝축을 만들지 않았다.
+  - 적용 결과: 2026-09-02~04가 모두 source-quality PASS 및 critical/addressable이고 exact 신규 attempt는 0건이므로 2026-09-07 env는 기본 69~74.999 band·10 recheck/3 recovery·1주 probe를 선택하되 intraday escalation은 `false`로 고정했다. PREOPEN manifest/env 무결성 verify는 PASS이며 실제 bot PID 소비 검증은 당일 preflight가 자동 수행한다.
+  - 자동 판정: 3일 연속 noncritical 또는 2일 연속 nonaddressable, exact arm 20건에서 direct submit율 10% 미만, exact completed 10건에서 비용 차감 EV/realized net PnL 비양수, source-quality/lineage 결손이면 자동 OFF한다. Intraday escalation은 exact completed 10건과 양의 비용 차감 EV·realized net PnL이 모두 있을 때만 허용한다.
+  - 권한 경계: normal BUY threshold, 69~74.999 band, fresh quote, danger, probe-first, 수량 1주, 일일 cap, broker/account/order/cooldown/hard-safety, provider와 bot state는 완화하지 않는다.
+
+- [x] `[LegacyOneSharePostcloseYieldGate0907] legacy one-share opportunity 분석의 daily 핵심 경로 유지여부 판정` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:50`, `Track: RuntimeStability`)
   - Source: [one_share_threshold_opportunity_2026-09-04.json](/home/ubuntu/KORStockScan/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_2026-09-04.json), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
-  - 판정 기준: forced record=`5523`, identity conflict=`3285`, post-sell joined=`0`, opportunity/workorder=`0`인 결과가 현재 신규 episode 2x10-share 계약에서 intended consumer를 갖는지 확인한다. current-owner event 또는 exact post-sell source가 없으면 daily core에서 제거하고 event-triggered 또는 manual/weekly diagnostic으로 전환한다.
-  - 다음 액션: `keep_daily_valid_consumer`, `convert_to_event_triggered`, `convert_to_manual_or_weekly`, `retire_legacy_orphan` 중 하나로 닫는다.
+  - 완료 판정(2026-09-06): `keep_daily_valid_consumer`. 과거 naive KST timestamp를 invalid로 처리하고 동일 record/종목/거래일의 반복 이벤트를 충돌로 오판하던 결함을 수정했다. 재산출은 forced=`5523`, identity conflict=`0`, exact post-sell joined=`360`, row-scoped gap=`6`, existing-family source-only opportunity/workorder=`2`이며 2026-09-04에도 forced record 85건이 존재한다.
+  - 유지 범위: `entry_opportunity_recheck_runtime`과 `entry_strength_momentum_recheck`의 source-only 기회비용 근거로 daily 경로를 유지한다. Partition cache hot run은 67/67 hit, source scan 0 byte, 약 0.17초로 종료되므로 더 무거운 weekly/manual 전환의 실익이 없다. 이 보고서는 runtime/PREOPEN 적용 권한을 갖지 않는다.
   - 권한 경계: 장후 분석 주기·소비자 정합성 전용이다. legacy custody, 신규 수량, 주문·취소, runtime env, threshold/provider/bot/cap 또는 broker/hard safety를 변경하지 않는다.
 
 - [ ] `[AutomationTriggerDecisionSummary0907] 자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: RuntimeStability`)

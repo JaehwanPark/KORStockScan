@@ -1,8 +1,10 @@
 """Build source-only foreign/institutional flow context features.
 
 Kiwoom API access stays in ``src.utils.kiwoom_utils`` and the websocket manager.
-This module only orchestrates helper calls, normalizes fields, and writes
-postclose/source-only artifacts for lifecycle matrix consumers.
+This module is retained for explicit offline/archive inspection only. Its sole
+scheduled consumer (the scalping ADM/LDM chain) was retired on 2026-09-06, so
+the postclose wrapper and current EV/runtime summaries never execute or consume
+this producer. Existing exact AI investor/program context remains active.
 """
 
 from __future__ import annotations
@@ -124,7 +126,7 @@ def normalize_institutional_flow_context(
     ws_data: dict[str, Any] | None = None,
     status_hint: str | None = None,
 ) -> dict[str, Any]:
-    """Normalize REST/WS helper outputs into lifecycle runtime features."""
+    """Normalize REST/WS helper outputs for explicit offline inspection."""
     code = _normalize_code(code)
     daily_summary = daily_summary if isinstance(daily_summary, dict) else {}
     period_summary = period_summary if isinstance(period_summary, dict) else {}
@@ -225,7 +227,7 @@ def normalize_institutional_flow_context(
         "institutional_flow_status": status,
         "institutional_flow_age_sec": _ws_age_sec(ws_data),
         "runtime_effect": False,
-        "decision_authority": "source_only_lifecycle_feature",
+        "decision_authority": "archive_offline_source_only",
     }
 
 
@@ -336,18 +338,29 @@ def build_institutional_flow_context_report(
         rows, key=lambda row: _safe_int(row.get("smart_money_net")), reverse=True
     )[:10]
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "institutional_flow_context",
         "runtime_effect": False,
-        "decision_authority": "source_only_lifecycle_feature",
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "scheduled_producer": False,
+        "consumer_status": "retired_with_scalping_adm_ldm",
+        "replacement_source": "exact_ai_context_investor_and_program_flow",
+        "decision_authority": "archive_offline_source_only",
         "metric_role": "source_quality_feature",
+        "window_policy": "explicit_offline_target_date_codes_only",
+        "sample_floor": "not_applicable_archive_offline_source_only",
+        "primary_decision_metric": "source_success_rate_pct",
+        "source_quality_gate": "row_status_ok_for_offline_inspection_only",
         "forbidden_uses": [
             "single_factor_buy_or_scale_in",
             "broker_guard_override",
             "threshold_mutation",
             "provider_route_mutation",
+            "current_ev_or_runtime_approval",
         ],
         "runtime_feature_keys": RUNTIME_FEATURE_KEYS,
         "summary": {
@@ -358,7 +371,13 @@ def build_institutional_flow_context_report(
             "missing_count": status_counts.get("MISSING", 0),
             "token_error_count": status_counts.get("TOKEN_ERROR", 0),
             "parse_error_count": status_counts.get("PARSE_ERROR", 0),
+            "source_success_rate_pct": (
+                round((ok_count / len(rows)) * 100.0, 2) if rows else 0.0
+            ),
+            # Kept only so archived readers do not fail. This never measured a
+            # consumer join and must not be used as runtime-connection evidence.
             "join_rate_pct": round((ok_count / len(rows)) * 100.0, 2) if rows else 0.0,
+            "join_rate_semantics": "deprecated_alias_of_source_success_rate_not_consumer_join",
             "source_mix": dict(sorted(source_counts.items())),
             "status_counts": dict(sorted(status_counts.items())),
             "top_net_buy": [
@@ -405,12 +424,14 @@ def render_institutional_flow_context_markdown(report: dict[str, Any]) -> str:
         "",
         "- runtime_effect: `False`",
         f"- decision_authority: `{report.get('decision_authority')}`",
+        f"- consumer_status: `{report.get('consumer_status')}`",
         "",
         "## Summary",
         f"- code_count: `{summary.get('code_count')}`",
         f"- row_count: `{summary.get('row_count')}`",
         f"- ok/partial/missing/token_error: `{summary.get('ok_count')}` / `{summary.get('partial_count')}` / `{summary.get('missing_count')}` / `{summary.get('token_error_count')}`",
-        f"- join_rate_pct: `{summary.get('join_rate_pct')}`",
+        f"- source_success_rate_pct: `{summary.get('source_success_rate_pct')}`",
+        f"- deprecated join_rate_pct: `{summary.get('join_rate_pct')}` ({summary.get('join_rate_semantics')})",
         f"- source_mix: `{summary.get('source_mix') or {}}`",
         f"- warnings: `{report.get('warnings') or []}`",
         "",

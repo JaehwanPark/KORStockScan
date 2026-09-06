@@ -1,8 +1,10 @@
 from src.engine.scalping.entry_opportunity_recheck import (
     EntryOpportunityRecheckConfig,
     EntryOpportunityRecheckState,
+    attribution_fields,
     config_from_env,
     evaluate_blocked_ai_score_recheck,
+    mint_attempt_id,
 )
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
@@ -10,6 +12,7 @@ from src.utils.threshold_cycle_registry import threshold_family_for_stage
 def _enabled_config(**overrides):
     values = {
         "enabled": True,
+        "allowed_scopes": frozenset({"KRX|KRX_REGULAR"}),
         "min_ai_score": 70.0,
         "max_ai_score": 74.999,
         "max_recheck_per_symbol": 1,
@@ -39,6 +42,8 @@ def _decision(config=None, state=None, **overrides):
         "ai_action": "WAIT",
         "ws_age_ms": 500,
         "latency_state": "SAFE",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
         "ai_contract_status": "pass",
         "ai_edge_state": "EDGE",
         "ai_probe_intent": True,
@@ -64,14 +69,41 @@ def test_default_off_blocks_without_order_authority():
     assert decision.fields["broker_order_forbidden"] is True
 
 
+def test_new_evaluation_never_inherits_previous_order_custody():
+    stock = {
+        "entry_opportunity_recheck_attempt_id": "previous",
+        "entry_opportunity_recheck_armed": True,
+        "entry_opportunity_recheck_broker_order_no": "B1",
+    }
+    before = dict(stock)
+    assert attribution_fields(stock, stage="entry_opportunity_recheck_evaluated") == {}
+    assert (
+        attribution_fields(
+            stock,
+            stage="entry_opportunity_recheck_probe_armed",
+            event_fields={"entry_opportunity_recheck_attempt_id": "new"},
+        )
+        == {}
+    )
+    assert (
+        attribution_fields(stock)["entry_opportunity_recheck_broker_order_no"] == "B1"
+    )
+    assert stock == before
+
+
 def test_config_from_env_parses_numeric_runtime_overrides(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE", "69.25")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE", "74.75")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES",
+        "KRX|KRX_REGULAR,INVALID",
+    )
 
     config = config_from_env()
 
     assert config.min_ai_score == 69.25
     assert config.max_ai_score == 74.75
+    assert config.intraday_escalation_scopes == frozenset({"KRX|KRX_REGULAR"})
     assert config.probe_qty == 0
 
 
@@ -90,6 +122,48 @@ def test_edge_wait_recovery_intent_can_arm_one_share_probe_path():
     assert "quantity_or_cap_change" not in decision.fields["forbidden_uses"]
 
 
+def test_unselected_or_missing_scope_cannot_arm_probe():
+    for overrides in (
+        {"effective_venue": "NXT", "market_session_bucket": "NXT_REGULAR"},
+        {"effective_venue": "", "market_session_bucket": ""},
+        {"config": _enabled_config(allowed_scopes=frozenset())},
+    ):
+        decision = _decision(**overrides)
+        assert not decision.allowed
+        assert decision.reason == "scope_not_selected_by_drought_policy"
+
+
+def test_runtime_nxt_overlap_maps_only_to_selected_nxt_scope():
+    config = _enabled_config(allowed_scopes=frozenset({"NXT|NXT_REGULAR"}))
+    decision = _decision(
+        config=config,
+        effective_venue="NXT",
+        market_session_bucket="nxt_regular_overlap",
+    )
+    assert decision.allowed
+    assert decision.fields["entry_opportunity_recheck_scope"] == "NXT|NXT_REGULAR"
+
+
+def test_terminal_pair_requires_exact_single_share_and_preserves_small_profit():
+    stock = {"entry_opportunity_recheck_attempt_id": "eor-one-share"}
+    for qty in (1, 1.9, 2, True, float("inf")):
+        fields = attribution_fields(
+            stock,
+            stage="sell_completed",
+            event_fields={
+                "sell_execution_receipt_economics_complete": True,
+                "cumulative_sell_qty": qty,
+                "entry_opportunity_recheck_cost_adjusted_profit_pct": 0.001,
+                "profit_rate": "+0.00",
+                "realized_pnl_krw": 1,
+            },
+        )
+        assert fields["entry_opportunity_recheck_cost_adjusted_profit_pct"] == 0.001
+        assert fields["entry_opportunity_recheck_economics_complete"] is (
+            qty == 1 and not isinstance(qty, bool)
+        )
+
+
 def test_exploration_can_bind_recovery_cap_to_verified_probe_submissions():
     state = EntryOpportunityRecheckState(
         trade_date="2026-07-02",
@@ -105,7 +179,7 @@ def test_exploration_can_bind_recovery_cap_to_verified_probe_submissions():
     assert decision.allowed is True
     assert (
         decision.fields["entry_opportunity_recheck_buy_recovery_cap_basis"]
-        == "caller_verified_submissions"
+        == "caller_verified_reservations_and_submissions"
     )
     state.record_exploration_probe_submit()
     capped = _decision(
@@ -239,10 +313,18 @@ def test_intraday_escalation_disabled_keeps_base_daily_caps():
         trade_date="2026-07-02", daily_recheck_count=10
     )
     state.record_recovery_mark(
-        "000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0
+        "000001",
+        profit_rate=0.4,
+        peak_profit=0.7,
+        now_ts=1_000.0,
+        scope="KRX|KRX_REGULAR",
     )
     state.record_recovery_mark(
-        "000002", profit_rate=0.2, peak_profit=0.4, now_ts=1_001.0
+        "000002",
+        profit_rate=0.2,
+        peak_profit=0.4,
+        now_ts=1_001.0,
+        scope="KRX|KRX_REGULAR",
     )
 
     decision = _decision(
@@ -268,16 +350,25 @@ def test_intraday_escalation_disabled_keeps_base_daily_caps():
 def test_intraday_escalation_does_not_revive_zero_base_caps():
     state = EntryOpportunityRecheckState(trade_date="2026-07-02")
     state.record_recovery_mark(
-        "000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0
+        "000001",
+        profit_rate=0.4,
+        peak_profit=0.7,
+        now_ts=1_000.0,
+        scope="KRX|KRX_REGULAR",
     )
     state.record_recovery_mark(
-        "000002", profit_rate=0.2, peak_profit=0.4, now_ts=1_001.0
+        "000002",
+        profit_rate=0.2,
+        peak_profit=0.4,
+        now_ts=1_001.0,
+        scope="KRX|KRX_REGULAR",
     )
 
     decision = _decision(
         state=state,
         config=_enabled_config(
             intraday_escalation_enabled=True,
+            intraday_escalation_scopes=frozenset({"KRX|KRX_REGULAR"}),
             max_daily_recheck=0,
             max_daily_buy_recovery=3,
             escalation_max_daily_recheck=30,
@@ -300,16 +391,25 @@ def test_intraday_escalation_raises_caps_when_exhausted_recoveries_are_profitabl
         daily_buy_recovery_count=3,
     )
     state.record_recovery_mark(
-        "000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0
+        "000001",
+        profit_rate=0.4,
+        peak_profit=0.7,
+        now_ts=1_000.0,
+        scope="KRX|KRX_REGULAR",
     )
     state.record_recovery_mark(
-        "000002", profit_rate=0.2, peak_profit=0.4, now_ts=1_001.0
+        "000002",
+        profit_rate=0.2,
+        peak_profit=0.4,
+        now_ts=1_001.0,
+        scope="KRX|KRX_REGULAR",
     )
 
     decision = _decision(
         state=state,
         config=_enabled_config(
             intraday_escalation_enabled=True,
+            intraday_escalation_scopes=frozenset({"KRX|KRX_REGULAR"}),
             max_daily_recheck=10,
             max_daily_buy_recovery=3,
             escalation_step_recheck=10,
@@ -344,16 +444,25 @@ def test_intraday_escalation_blocks_when_worst_profit_guard_fails():
         trade_date="2026-07-02", daily_recheck_count=10
     )
     state.record_recovery_mark(
-        "000001", profit_rate=0.4, peak_profit=0.7, now_ts=1_000.0
+        "000001",
+        profit_rate=0.4,
+        peak_profit=0.7,
+        now_ts=1_000.0,
+        scope="KRX|KRX_REGULAR",
     )
     state.record_recovery_mark(
-        "000002", profit_rate=-0.8, peak_profit=0.5, now_ts=1_001.0
+        "000002",
+        profit_rate=-0.8,
+        peak_profit=0.5,
+        now_ts=1_001.0,
+        scope="KRX|KRX_REGULAR",
     )
 
     decision = _decision(
         state=state,
         config=_enabled_config(
             intraday_escalation_enabled=True,
+            intraday_escalation_scopes=frozenset({"KRX|KRX_REGULAR"}),
             max_daily_recheck=10,
             escalation_min_successful_recoveries=1,
             escalation_max_worst_profit_pct=-0.6,
@@ -369,6 +478,71 @@ def test_intraday_escalation_blocks_when_worst_profit_guard_fails():
     assert (
         decision.fields["entry_opportunity_recheck_effective_max_daily_recheck"] == 10
     )
+
+
+def test_intraday_escalation_never_reuses_another_scope_recovery_marks():
+    state = EntryOpportunityRecheckState(
+        trade_date="2026-07-02", daily_recheck_count=10
+    )
+    for index in range(2):
+        state.record_recovery_mark(
+            f"00000{index + 1}",
+            profit_rate=0.4,
+            peak_profit=0.7,
+            now_ts=1_000.0 + index,
+            scope="NXT|NXT_AFTERMARKET",
+        )
+
+    decision = _decision(
+        state=state,
+        config=_enabled_config(
+            intraday_escalation_enabled=True,
+            intraday_escalation_scopes=frozenset({"KRX|KRX_REGULAR"}),
+        ),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "daily_recheck_cap_exhausted"
+    assert (
+        decision.fields["entry_opportunity_recheck_escalation_attempt_reason"]
+        == "successful_recovery_floor_not_met"
+    )
+    assert decision.fields["entry_opportunity_recheck_recovery_mark_count"] == 0
+
+
+def test_one_approved_scope_cannot_lend_its_raised_cap_to_another_scope():
+    state = EntryOpportunityRecheckState(
+        trade_date="2026-07-02", daily_recheck_count=10
+    )
+    for index in range(2):
+        state.record_recovery_mark(
+            f"00000{index + 1}",
+            profit_rate=0.4,
+            peak_profit=0.7,
+            now_ts=1_000.0 + index,
+            scope="KRX|KRX_REGULAR",
+        )
+    approved_scopes = frozenset({"KRX|KRX_REGULAR", "NXT|NXT_AFTERMARKET"})
+    config = _enabled_config(
+        allowed_scopes=approved_scopes,
+        intraday_escalation_enabled=True,
+        intraday_escalation_scopes=approved_scopes,
+    )
+
+    krx = _decision(state=state, config=config)
+    nxt = _decision(
+        state=state,
+        config=config,
+        code="000003",
+        effective_venue="NXT",
+        market_session_bucket="NXT_AFTERMARKET",
+    )
+
+    assert krx.allowed is True
+    assert krx.fields["entry_opportunity_recheck_effective_max_daily_recheck"] == 20
+    assert nxt.allowed is False
+    assert nxt.reason == "daily_recheck_cap_exhausted"
+    assert nxt.fields["entry_opportunity_recheck_effective_max_daily_recheck"] == 10
 
 
 def test_registry_maps_recheck_stages_to_family():
@@ -388,3 +562,34 @@ def test_registry_maps_recheck_stages_to_family():
         threshold_family_for_stage("entry_opportunity_recheck_evaluated")
         == "entry_opportunity_recheck_runtime"
     )
+    for stage in (
+        "entry_opportunity_recheck_submit_observed",
+        "entry_opportunity_recheck_direct_submitted",
+        "entry_opportunity_recheck_filled",
+        "entry_opportunity_recheck_sell_completed",
+    ):
+        assert threshold_family_for_stage(stage) == (
+            "entry_opportunity_recheck_runtime"
+        )
+
+
+def test_attempt_id_is_unique_by_default_and_terminal_economics_are_aliased():
+    first = mint_attempt_id(record_id=1, code="005930", observed_at=1.0)
+    second = mint_attempt_id(record_id=1, code="005930", observed_at=1.0)
+
+    assert first.startswith("eor-")
+    assert first != second
+    fields = attribution_fields(
+        {
+            "entry_opportunity_recheck_attempt_id": first,
+            "entry_opportunity_recheck_armed": True,
+        },
+        stage="sell_completed",
+        event_fields={
+            "profit_rate": 0.03,
+            "main_lifecycle_realized_net_pnl_krw": 15.0,
+        },
+    )
+    assert fields["entry_opportunity_recheck_terminal_outcome"] == "sell_completed"
+    assert fields["entry_opportunity_recheck_cost_adjusted_profit_pct"] == 0.03
+    assert fields["entry_opportunity_recheck_realized_net_pnl_krw"] == 15.0

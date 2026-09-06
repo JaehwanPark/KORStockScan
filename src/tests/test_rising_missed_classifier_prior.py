@@ -234,30 +234,7 @@ def test_prior_report_merges_daily_rolling_mtd_and_blocks_child_conflict(tmp_pat
         generated_at="fixed",
     )
 
-    wait_prior = next(
-        row
-        for row in report["priors"]
-        if row["observable_prefix"]["entry_source_parent"] == "entry_source_wait6579"
-        and row["observable_prefix"]["liquidity_bucket"] == "-"
-    )
-    assert wait_prior["selected_window"] == "rolling10d"
-    assert wait_prior["recommendation"] == "positive_prior"
-    assert wait_prior["window_metrics"]["daily"]["joined_sample"] == 3
-    assert wait_prior["window_metrics"]["rolling5d"]["joined_sample"] == 10
-    assert wait_prior["window_metrics"]["rolling10d"]["joined_sample"] == 18
-    assert (
-        wait_prior["window_metrics"]["mtd"]["ev_metric"]
-        == "equal_weight_avg_profit_pct_fallback"
-    )
-
-    conflict_prior = next(
-        row
-        for row in report["priors"]
-        if row["observable_prefix"]["liquidity_bucket"] == "liquidity_high"
-    )
-    assert conflict_prior["recommendation"] == "source_quality_blocked"
-    assert conflict_prior["conflict_status"]["child_conflict"] is True
-
+    assert report["summary"]["lifecycle_source_count"] == 0
     feedback_prior = next(
         row
         for row in report["priors"]

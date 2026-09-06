@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
+from src.engine.scalping.entry_observation_source import load_entry_observations
+
 import argparse
+import fcntl
 import json
+import os
+import re
+import tempfile
 from collections import Counter
-from datetime import datetime, timedelta
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from src.engine.scalping.entry_recheck_policy import (
+    ATTRIBUTION_VERSION,
+    BOUNDED_PROFILE,
+    EXACT_WINDOW_DAYS,
+    POLICY_VERSION,
+    PROFILE_VERSION,
+    controller_decision,
+    finite_number,
+    scope_summary,
+    SCOPES,
+    valid_previous_state,
+)
 
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
@@ -17,26 +37,40 @@ from src.engine.automation.source_quality_hard_gate import (
     apply_source_quality_preflight_block,
     filter_source_dates_by_preflight,
     load_source_quality_preflight,
+    source_quality_preflight_blocked,
 )
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "entry_ai_gate_backtest"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
+DROUGHT_REPORT_TYPE = "entry_recheck_drought_controller"
+DROUGHT_REPORT_DIR = DATA_DIR / "report" / DROUGHT_REPORT_TYPE
 ENTRY_OPPORTUNITY_RECHECK_FAMILY = "entry_opportunity_recheck_runtime"
-RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
+DROUGHT_RUNTIME_UPDATE_MODE = "drought_triggered_bounded_live"
+BUY_FUNNEL_SENTINEL_DIR = DATA_DIR / "report" / "buy_funnel_sentinel"
+THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 ENTRY_RECHECK_TARGET_ENV_KEYS = [
     "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
     "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
     "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY",
+    "ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS",
+    "ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER",
+    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE",
     "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
     "ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
     "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+    "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED",
+    "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES",
+    "ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES",
 ]
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
-SCALP_ENTRY_ADM_DIR = DATA_DIR / "report" / "scalp_entry_action_decision_matrix"
+
 MISSED_ENTRY_DIRS = [
     DATA_DIR / "report" / "monitor_snapshots",
     DATA_DIR / "report" / "missed_entry_counterfactual",
@@ -48,7 +82,7 @@ REALIZED_SAMPLE_FLOOR = 30
 COUNTERFACTUAL_SAMPLE_FLOOR = 100
 THRESHOLD_RANGE = range(55, 86)
 SUPPORTED_WAIT_MIN_SCORE = 60
-SUPPORTED_WAIT_MAX_SCORE = 74
+SUPPORTED_WAIT_MAX_SCORE = float(BOUNDED_PROFILE["max_ai_score"])
 SUPPORTED_WAIT_ACTIONS = {"WAIT", "WAIT_REQUOTE"}
 NON_DECISION_ACTION_TOKENS = {
     "",
@@ -122,117 +156,791 @@ FORBIDDEN_USES = [
     "quantity_or_cap_change",
     "entry_price_reprice",
 ]
+ADDRESSABLE_DROUGHT_AXES = {"UPSTREAM_GATE", "ENTRY_AI_AUTHORITY_REVALIDATION"}
+DROUGHT_HISTORY_DAYS = 3
+DROUGHT_REQUIRED_CRITICAL_DAYS = 2
+DROUGHT_REQUIRED_NONCRITICAL_DAYS_TO_DISABLE = 3
+DROUGHT_REQUIRED_NONADDRESSABLE_DAYS_TO_DISABLE = 2
+EXACT_ARMED_SAMPLE_FLOOR = 20
+EXACT_DIRECT_SUBMIT_RATE_FLOOR_PCT = 10.0
+EXACT_COMPLETED_SAMPLE_FLOOR = 10
 
 
-def _entry_recheck_calibration_candidates(
-    best_apply: dict[str, Any],
+def _date_from_path(path: Path) -> str:
+    match = re.search(r"\d{4}-\d{2}-\d{2}", path.name)
+    return match.group(0) if match else ""
+
+
+def _drought_day_summary(path: Path) -> dict[str, Any]:
+    payload = _load_json(path)
+    source_date = _date_from_path(path)
+    preflight = load_source_quality_preflight(source_date)
+    quality = bool(
+        payload.get("target_date") == source_date
+        and not source_quality_preflight_blocked(preflight)
+    )
+    contract = payload.get("entry_submit_drought_contract") or {}
+    if not isinstance(contract, dict):
+        contract = {}
+        quality = False
+    by_scope = contract.get("by_venue_session") or {}
+    scopes = (
+        [
+            scope_summary(key, raw)
+            for key, raw in by_scope.items()
+            if isinstance(key, str) and isinstance(raw, dict)
+        ]
+        if isinstance(by_scope, dict)
+        else []
+    )
+    eligible = [row for row in scopes if row["denominator_floor_passed"]]
+    return {
+        "source_date": source_date,
+        "source_path": str(path),
+        "report_loaded": bool(payload),
+        "source_quality_pass": quality,
+        "source_quality_preflight": preflight,
+        "denominator_floor_passed": bool(eligible),
+        "critical": any(row["critical"] for row in eligible),
+        "addressable": any(row["addressable"] for row in eligible),
+        "eligible_scopes": eligible,
+    }
+
+
+def _recent_trading_dates(
+    target_date: str, *, start_date: str, count: int
+) -> list[str]:
+    current = datetime.strptime(target_date, "%Y-%m-%d").date()
+    lower_bound = datetime.strptime(start_date, "%Y-%m-%d").date()
+    resolved: list[str] = []
+    while current >= lower_bound and len(resolved) < max(0, int(count)):
+        if is_krx_trading_day(current):
+            resolved.append(current.isoformat())
+        current -= timedelta(days=1)
+    return sorted(resolved)
+
+
+def _buy_funnel_drought_history(
+    target_date: str, *, start_date: str
+) -> list[dict[str, Any]]:
+    expected_dates = set(
+        _recent_trading_dates(
+            target_date,
+            start_date=start_date,
+            count=DROUGHT_HISTORY_DAYS,
+        )
+    )
+    candidates: list[tuple[str, Path]] = []
+    for path in BUY_FUNNEL_SENTINEL_DIR.glob("buy_funnel_sentinel_*.json"):
+        source_date = _date_from_path(path)
+        if source_date in expected_dates:
+            candidates.append((source_date, path))
+    return [
+        _drought_day_summary(path)
+        for _source_date, path in sorted(candidates)[-DROUGHT_HISTORY_DAYS:]
+    ]
+
+
+def _entry_recheck_partition_paths(start_date: str, end_date: str) -> list[Path]:
+    paths: list[Path] = []
+    for date_dir in THRESHOLD_CYCLE_DIR.glob("date=*"):
+        source_date = date_dir.name.removeprefix("date=")
+        if not (start_date <= source_date <= end_date):
+            continue
+        # General sell_completed rows retain the entire immutable attempt state.
+        # Their original family is not the recheck family (do not re-route it).
+        for family in (ENTRY_OPPORTUNITY_RECHECK_FAMILY, "statistical_action_weight"):
+            family_dir = date_dir / f"family={family}"
+            paths.extend(family_dir.glob("part-*.jsonl"))
+            paths.extend(family_dir.glob("part-*.jsonl.gz"))
+    return sorted(paths)
+
+
+def _entry_recheck_exact_attribution(
+    *,
+    start_date: str,
+    end_date: str,
+    scope_start_dates: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    attempts: dict[str, dict[str, Any]] = {}
+    legacy_armed_without_attempt_id = 0
+    invalid_json_row_count = 0
+    blocked_dates: set[str] = set()
+    preflight_by_date: dict[str, bool] = {}
+    source_paths = _entry_recheck_partition_paths(start_date, end_date)
+    epoch_start = (
+        datetime.fromisoformat(start_date)
+        .replace(tzinfo=timezone(timedelta(hours=9)))
+        .timestamp()
+    )
+    epoch_end = (
+        datetime.fromisoformat(end_date).replace(tzinfo=timezone(timedelta(hours=9)))
+        + timedelta(days=1)
+    ).timestamp()
+    for path in source_paths:
+        match = re.search(r"date=(\d{4}-\d{2}-\d{2})", str(path))
+        source_date = match.group(1) if match else ""
+        if source_date and source_date not in preflight_by_date:
+            preflight_by_date[source_date] = not source_quality_preflight_blocked(
+                load_source_quality_preflight(source_date)
+            )
+        with open_text_auto(path) as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                if (
+                    "family=statistical_action_weight" in str(path)
+                    and "entry_opportunity_recheck_attempt_id" not in line
+                ):
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    invalid_json_row_count += 1
+                    continue
+                if not isinstance(row, dict):
+                    invalid_json_row_count += 1
+                    continue
+                stage = str(row.get("stage") or "")
+                fields = (
+                    row.get("fields") if isinstance(row.get("fields"), dict) else {}
+                )
+                attempt_id = str(
+                    fields.get("entry_opportunity_recheck_attempt_id") or ""
+                ).strip()
+                if not attempt_id:
+                    if stage == "entry_opportunity_recheck_probe_armed":
+                        legacy_armed_without_attempt_id += 1
+                    continue
+                if (
+                    fields.get("entry_opportunity_recheck_attribution_schema")
+                    != ATTRIBUTION_VERSION
+                ):
+                    continue
+                armed_at = finite_number(
+                    fields.get("entry_opportunity_recheck_armed_at")
+                )
+                if armed_at is not None and not epoch_start <= armed_at < epoch_end:
+                    continue
+                scoped_start = (scope_start_dates or {}).get(
+                    str(fields.get("entry_opportunity_recheck_scope") or ""), start_date
+                )
+                if scoped_start > start_date:
+                    cutoff = (
+                        datetime.fromisoformat(scoped_start)
+                        .replace(tzinfo=timezone(timedelta(hours=9)))
+                        .timestamp()
+                    )
+                    if (armed_at is not None and armed_at < cutoff) or (
+                        armed_at is None and source_date < scoped_start
+                    ):
+                        continue
+                if source_date and not preflight_by_date[source_date]:
+                    blocked_dates.add(source_date)
+                    continue
+                item = attempts.setdefault(
+                    attempt_id,
+                    {
+                        "attempt_id": attempt_id,
+                        "record_id": str(row.get("record_id") or ""),
+                        "stock_code": str(row.get("stock_code") or "")[:6],
+                        "scope": str(
+                            fields.get("entry_opportunity_recheck_scope") or ""
+                        ),
+                        "evaluated": False,
+                        "evaluation_reason": "",
+                        "armed": False,
+                        "direct_submitted": False,
+                        "broker_order_no": "",
+                        "requested_qty": 0,
+                        "filled": False,
+                        "fill_order_no": "",
+                        "sell_completed": False,
+                        "profit_rate": None,
+                        "realized_net_pnl_krw": None,
+                        "economics_cohort": "unreconciled",
+                        "economics_decision_eligible": False,
+                        "identity_conflict": False,
+                        "contract_gap": False,
+                    },
+                )
+                row_record_id = str(row.get("record_id") or "")
+                row_code = str(row.get("stock_code") or "")[:6]
+                row_scope = str(fields.get("entry_opportunity_recheck_scope") or "")
+                if item["scope"] and row_scope and item["scope"] != row_scope:
+                    item["identity_conflict"] = True
+                if not item["scope"]:
+                    item["scope"] = row_scope
+                if (
+                    item["record_id"]
+                    and row_record_id
+                    and item["record_id"] != row_record_id
+                ) or (
+                    item["stock_code"] and row_code and item["stock_code"] != row_code
+                ):
+                    item["identity_conflict"] = True
+                if not item["record_id"] or not item["stock_code"]:
+                    item["contract_gap"] = True
+                if stage == "entry_opportunity_recheck_evaluated":
+                    item["evaluated"] = True
+                    evaluation_reason = str(
+                        fields.get("entry_opportunity_recheck_reason") or ""
+                    ).strip()
+                    if not evaluation_reason:
+                        item["contract_gap"] = True
+                    elif item["evaluation_reason"] and (
+                        item["evaluation_reason"] != evaluation_reason
+                    ):
+                        item["identity_conflict"] = True
+                    else:
+                        item["evaluation_reason"] = evaluation_reason
+                # A carried stock flag is not an arm event for this attempt.
+                if stage == "entry_opportunity_recheck_probe_armed":
+                    item["armed"] = True
+                    if armed_at is None or row_scope not in SCOPES:
+                        item["contract_gap"] = True
+                if _safe_bool(
+                    fields.get("entry_opportunity_recheck_direct_submit")
+                ) and _safe_bool(
+                    fields.get("entry_opportunity_recheck_submit_observed")
+                ):
+                    item["direct_submitted"] = True
+                    broker_order_no = str(
+                        fields.get("entry_opportunity_recheck_broker_order_no") or ""
+                    ).strip()
+                    if not broker_order_no:
+                        item["contract_gap"] = True
+                    elif item["broker_order_no"] and (
+                        item["broker_order_no"] != broker_order_no
+                    ):
+                        item["identity_conflict"] = True
+                    else:
+                        item["broker_order_no"] = broker_order_no
+                    requested_qty = (
+                        _safe_float(
+                            fields.get("entry_opportunity_recheck_requested_qty"),
+                            0.0,
+                        )
+                        or 0
+                    )
+                    item["requested_qty"] = requested_qty
+                    if requested_qty != 1:
+                        item["contract_gap"] = True
+                if stage == "entry_opportunity_recheck_filled" or _safe_bool(
+                    fields.get("entry_opportunity_recheck_fill_observed")
+                ):
+                    item["filled"] = True
+                    fill_order_no = str(
+                        fields.get("entry_opportunity_recheck_fill_order_no") or ""
+                    ).strip()
+                    if not fill_order_no:
+                        item["contract_gap"] = True
+                    elif (
+                        item["fill_order_no"] and item["fill_order_no"] != fill_order_no
+                    ):
+                        item["identity_conflict"] = True
+                    else:
+                        item["fill_order_no"] = fill_order_no
+                if stage in {
+                    "sell_completed",
+                    "entry_opportunity_recheck_sell_completed",
+                } and (
+                    str(fields.get("entry_opportunity_recheck_terminal_outcome") or "")
+                    == "sell_completed"
+                    or fields.get("entry_opportunity_recheck_cost_adjusted_profit_pct")
+                    is not None
+                ):
+                    item["sell_completed"] = True
+                    if not _safe_bool(
+                        fields.get("entry_opportunity_recheck_economics_complete")
+                    ):
+                        continue
+                    cohort = fields.get("entry_opportunity_recheck_economics_cohort")
+                    if (
+                        cohort
+                        not in {
+                            "probe_only",
+                            "probe_residual_full_fill",
+                            "probe_residual_partial_fill",
+                            "scale_in_mixed",
+                        }
+                        or fields.get("entry_opportunity_recheck_economics_schema")
+                        != "entry_recheck_position_economics_v1"
+                    ):
+                        continue
+                    if item["economics_cohort"] not in {"unreconciled", cohort}:
+                        item["identity_conflict"] = True
+                    item["economics_cohort"] = cohort
+                    item["economics_decision_eligible"] = bool(
+                        _safe_bool(
+                            fields.get(
+                                "entry_opportunity_recheck_economics_decision_eligible"
+                            )
+                        )
+                        and cohort != "scale_in_mixed"
+                    )
+                    profit_rate = _safe_float(
+                        fields.get(
+                            "entry_opportunity_recheck_cost_adjusted_profit_pct"
+                        ),
+                        None,
+                    )
+                    realized_net_pnl_krw = _safe_float(
+                        fields.get("entry_opportunity_recheck_realized_net_pnl_krw"),
+                        None,
+                    )
+                    if profit_rate is None or realized_net_pnl_krw is None:
+                        continue
+                    for key, value in (
+                        ("profit_rate", profit_rate),
+                        ("realized_net_pnl_krw", realized_net_pnl_krw),
+                    ):
+                        if value is not None:
+                            if item[key] is not None and item[key] != value:
+                                item["identity_conflict"] = True
+                            item[key] = value
+    for item in attempts.values():
+        if item["armed"] and not item["evaluated"]:
+            item["contract_gap"] = True
+        if (
+            item["direct_submitted"]
+            and item["filled"]
+            and item["broker_order_no"] != item["fill_order_no"]
+        ):
+            item["identity_conflict"] = True
+    valid = [
+        item
+        for item in attempts.values()
+        if not item["identity_conflict"] and not item["contract_gap"]
+    ]
+    evaluated = [item for item in valid if item["evaluated"]]
+    armed = [item for item in evaluated if item["armed"]]
+    submitted = [item for item in armed if item["direct_submitted"]]
+    filled = [item for item in submitted if item["filled"]]
+    completed = [item for item in filled if item["sell_completed"]]
+    diagnostic_paired = [
+        item
+        for item in completed
+        if item["profit_rate"] is not None and item["realized_net_pnl_krw"] is not None
+    ]
+    paired = [item for item in diagnostic_paired if item["economics_decision_eligible"]]
+    profits = [float(item["profit_rate"]) for item in paired]
+    net_pnls = [float(item["realized_net_pnl_krw"]) for item in paired]
+    by_scope = {}
+    by_scope_cohort = {}
+    for scope in sorted({item["scope"] for item in paired}):
+        scoped = [item for item in paired if item["scope"] == scope]
+        by_scope[scope] = {
+            "paired_sample": len(scoped),
+            "equal_weight_avg_profit_pct": sum(item["profit_rate"] for item in scoped)
+            / len(scoped),
+            "realized_net_pnl_krw": sum(
+                item["realized_net_pnl_krw"] for item in scoped
+            ),
+        }
+    for scope in sorted({item["scope"] for item in diagnostic_paired}):
+        by_scope_cohort[scope] = {}
+        for cohort in sorted(
+            {
+                item["economics_cohort"]
+                for item in diagnostic_paired
+                if item["scope"] == scope
+            }
+        ):
+            rows = [
+                item
+                for item in diagnostic_paired
+                if item["scope"] == scope and item["economics_cohort"] == cohort
+            ]
+            by_scope_cohort[scope][cohort] = {
+                "paired_sample": len(rows),
+                "equal_weight_avg_profit_pct": sum(item["profit_rate"] for item in rows)
+                / len(rows),
+                "realized_net_pnl_krw": sum(
+                    item["realized_net_pnl_krw"] for item in rows
+                ),
+                "decision_eligible": cohort != "scale_in_mixed",
+            }
+    funnel_by_scope = {
+        scope: {
+            key: sum(item["scope"] == scope for item in items)
+            for key, items in (
+                ("exact_evaluated_count", evaluated),
+                ("exact_armed_count", armed),
+                ("exact_direct_submitted_count", submitted),
+                ("exact_filled_count", filled),
+                ("exact_completed_count", completed),
+                ("exact_paired_economic_sample", paired),
+            )
+        }
+        for scope in sorted({item["scope"] for item in evaluated})
+    }
+    direct_rate = round(len(submitted) / len(armed) * 100.0, 6) if armed else None
+    evaluated_by_scope = Counter(item["scope"] or "UNKNOWN" for item in evaluated)
+    evaluation_reason_counts = Counter(
+        item["evaluation_reason"] or "missing_reason" for item in evaluated
+    )
+    evaluation_reason_counts_by_scope: dict[str, dict[str, int]] = {}
+    for scope in sorted(evaluated_by_scope):
+        evaluation_reason_counts_by_scope[scope] = dict(
+            Counter(
+                item["evaluation_reason"] or "missing_reason"
+                for item in evaluated
+                if (item["scope"] or "UNKNOWN") == scope
+            )
+        )
+    if not evaluated:
+        runtime_acceptance_state = "runtime_not_evaluated"
+    elif not armed:
+        runtime_acceptance_state = "evaluated_no_arm"
+    elif not submitted:
+        runtime_acceptance_state = "armed_no_submit"
+    elif not filled:
+        runtime_acceptance_state = "submitted_no_fill"
+    elif not completed:
+        runtime_acceptance_state = "filled_terminal_pending"
+    elif not paired:
+        runtime_acceptance_state = "terminal_economics_incomplete"
+    elif len(paired) < EXACT_COMPLETED_SAMPLE_FLOOR:
+        runtime_acceptance_state = "economics_sample_pending"
+    else:
+        runtime_acceptance_state = "economics_evaluable"
+    top_evaluation_reason = None
+    if evaluation_reason_counts:
+        top_evaluation_reason = sorted(
+            evaluation_reason_counts.items(), key=lambda item: (-item[1], item[0])
+        )[0][0]
+    return {
+        "attribution_schema": ATTRIBUTION_VERSION,
+        "source_paths": [str(path) for path in source_paths],
+        "attempt_count": len(attempts),
+        "identity_conflict_count": sum(
+            1 for item in attempts.values() if item["identity_conflict"]
+        ),
+        "contract_gap_count": sum(
+            1 for item in attempts.values() if item["contract_gap"]
+        ),
+        "excluded_attempts": [
+            {
+                "attempt_id": item["attempt_id"],
+                "reasons": [
+                    reason
+                    for reason in ("identity_conflict", "contract_gap")
+                    if item[reason]
+                ],
+            }
+            for item in attempts.values()
+            if item["identity_conflict"] or item["contract_gap"]
+        ],
+        "exclusion_policy": "exact_attempt_exclusion_before_conversion_and_economics",
+        "invalid_json_row_count": invalid_json_row_count,
+        "source_quality_blocked_date_count": len(blocked_dates),
+        "source_quality_blocked_dates": sorted(blocked_dates),
+        "legacy_armed_without_attempt_id": legacy_armed_without_attempt_id,
+        "exact_evaluated_count": len(evaluated),
+        "exact_evaluated_by_scope": dict(evaluated_by_scope),
+        "evaluation_reason_counts": dict(evaluation_reason_counts),
+        "evaluation_reason_counts_by_scope": evaluation_reason_counts_by_scope,
+        "runtime_acceptance_state": runtime_acceptance_state,
+        "top_evaluation_reason": top_evaluation_reason,
+        "exact_armed_count": len(armed),
+        "exact_direct_submitted_count": len(submitted),
+        "exact_filled_count": len(filled),
+        "exact_completed_count": len(completed),
+        "exact_paired_economic_sample": len(paired),
+        "incomplete_economic_count": len(completed) - len(paired),
+        "paired_economics_by_scope": by_scope,
+        "paired_economics_by_scope_and_cohort": by_scope_cohort,
+        "funnel_by_scope": funnel_by_scope,
+        "diagnostic_paired_economic_sample": len(diagnostic_paired),
+        "exact_profit_sample": len(profits),
+        "exact_net_pnl_sample": len(net_pnls),
+        "direct_submit_to_armed_pct": direct_rate,
+        "equal_weight_avg_profit_pct": (
+            round(sum(profits) / len(profits), 6) if profits else None
+        ),
+        "realized_net_pnl_krw": round(sum(net_pnls), 4) if net_pnls else None,
+        "metric_role": "primary_ev",
+        "decision_authority": "entry_opportunity_recheck_post_apply_attribution",
+        "window_policy": "rolling20_and_causal_episode",
+        "start_date": start_date,
+        "scope_start_dates": scope_start_dates or {},
+        "end_date": end_date,
+        "sample_floor": {
+            "armed_for_conversion_stop": EXACT_ARMED_SAMPLE_FLOOR,
+            "valid_paired_economics_for_stop_or_escalation": EXACT_COMPLETED_SAMPLE_FLOOR,
+        },
+        "primary_decision_metric": "equal_weight_avg_profit_pct",
+        "source_quality_gate": (
+            "immutable_attempt_id_record_id_stock_code_submit_fill_sell_completed"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": FORBIDDEN_USES,
+    }
+
+
+def _previous_drought_state(
+    target_date: str, baseline: str
+) -> tuple[dict[str, Any], str]:
+    paths = sorted(
+        path
+        for path in DROUGHT_REPORT_DIR.glob(f"{DROUGHT_REPORT_TYPE}_*.json")
+        if baseline <= _date_from_path(path) < target_date
+    )
+    legacy_migration = False
+    if not paths:
+        # One-time state migration only. PREOPEN never consumes the legacy
+        # backtest report, but a latched stop must survive the producer split.
+        paths = sorted(
+            path
+            for path in REPORT_DIR.glob("entry_ai_gate_backtest_*.json")
+            if baseline <= _date_from_path(path) < target_date
+        )
+        legacy_migration = bool(paths)
+    for path in reversed(paths):
+        payload, status = _load_json_with_status(path)
+        if status.get("status") != "loaded" or payload.get(
+            "target_date"
+        ) != _date_from_path(path):
+            return {"policy_version": POLICY_VERSION, "invalid": True}, str(path)
+        policy = payload.get("drought_conditional_policy") or {}
+        if not isinstance(policy, dict):
+            return {"policy_version": POLICY_VERSION, "invalid": True}, str(path)
+        prior_version = policy.get("policy_version")
+        if not legacy_migration and prior_version not in {
+            POLICY_VERSION,
+            "entry_opportunity_recheck_drought_controller_v3",
+        }:
+            return {"policy_version": POLICY_VERSION, "invalid": True}, str(path)
+        if prior_version in {
+            POLICY_VERSION,
+            "entry_opportunity_recheck_drought_controller_v3",
+        } or (
+            legacy_migration
+            and policy.get("policy_version")
+            == "entry_opportunity_recheck_drought_controller_v2"
+        ):
+            state = policy.get("controller_state") or {}
+            if not isinstance(state, dict):
+                return {"policy_version": POLICY_VERSION, "invalid": True}, str(path)
+            if (
+                legacy_migration
+                or prior_version == "entry_opportunity_recheck_drought_controller_v3"
+            ):
+                state = {**state, "policy_version": POLICY_VERSION}
+            # A freeze report is not a new checkpoint. Revisit its original
+            # bad input on the next run, so repairing that input can recover.
+            if (
+                state.get("invalid") is True
+                and isinstance(policy.get("previous_controller_state"), dict)
+                and policy["previous_controller_state"].get("invalid") is True
+                and policy.get("previous_controller_state_path")
+            ):
+                continue
+            if state.get("last_source_date") == _date_from_path(
+                path
+            ) and valid_previous_state(state, target_date, baseline):
+                return state, str(path)
+            # Never silently discard a newer corrupt stop record.
+            return {"policy_version": POLICY_VERSION, "invalid": True}, str(path)
+    return {}, ""
+
+
+def _drought_conditional_policy(
+    *, target_date: str, clean_baseline_date: str
+) -> dict[str, Any]:
+    history = _buy_funnel_drought_history(target_date, start_date=clean_baseline_date)
+    previous, previous_path = _previous_drought_state(target_date, clean_baseline_date)
+    window_dates = _recent_trading_dates(
+        target_date, start_date=clean_baseline_date, count=EXACT_WINDOW_DAYS
+    )
+    start = max(
+        window_dates[0] if window_dates else target_date,
+        str(previous.get("evidence_start_date") or clean_baseline_date),
+    )
+    scope_start_dates = {
+        scope: max(
+            window_dates[0] if window_dates else target_date,
+            str(state.get("evidence_start_date") or clean_baseline_date),
+        )
+        for scope, state in (previous.get("scope_states") or {}).items()
+        if isinstance(state, dict)
+    }
+    exact = _entry_recheck_exact_attribution(
+        start_date=start,
+        end_date=target_date,
+        scope_start_dates=scope_start_dates,
+    )
+    if previous.get("invalid"):
+        exact["contract_gap_count"] = int(exact.get("contract_gap_count") or 0) + 1
+    current, _provenance = _current_recheck_values(target_date)
+    decision = controller_decision(
+        history=history,
+        exact=exact,
+        previous=previous,
+        target_date=target_date,
+        baseline=clean_baseline_date,
+        current_enabled=current.get("enabled") is True,
+    )
+    return {
+        "policy_version": POLICY_VERSION,
+        "bounded_profile_version": PROFILE_VERSION,
+        "current_runtime_enabled": current.get("enabled") is True,
+        "history": history,
+        "previous_controller_state": previous,
+        "previous_controller_state_path": previous_path,
+        "exact_post_apply_attribution": exact,
+        "exact_evaluation_window": {
+            "start_date": start,
+            "end_date": target_date,
+            "window_policy": "rolling20_and_causal_episode",
+        },
+        **decision,
+    }
+
+
+def _entry_recheck_drought_candidate(
     *,
     target_date: str,
-    cumulative_quality_window: dict[str, Any],
+    clean_baseline_date: str,
+    drought_policy: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Preserve the bounded entry-recheck handoff without an aggregate report."""
-
-    if not isinstance(best_apply, dict) or not best_apply:
-        return []
-    policy = str(best_apply.get("policy") or "")
-    threshold = int(_safe_float(best_apply.get("threshold"), 0.0) or 0)
-    if policy != "supported_wait_recovery" or threshold <= 0:
-        return []
-    realized = (
-        best_apply.get("realized")
-        if isinstance(best_apply.get("realized"), dict)
-        else {}
-    )
-    counterfactual = (
-        best_apply.get("counterfactual")
-        if isinstance(best_apply.get("counterfactual"), dict)
-        else {}
-    )
-    primary_ev_positive = (
-        float(realized.get("source_quality_adjusted_ev_pct") or 0.0) > 0.0
-    )
-    counterfactual_opportunity_positive = bool(
-        float(counterfactual.get("source_quality_adjusted_ev_pct") or 0.0) > 0.0
-        and float(counterfactual.get("mfe_10m_pct") or 0.0) > 0.0
-    )
     current_values, current_values_provenance = _current_recheck_values(target_date)
     current_values_complete = bool(
         current_values_provenance.get("status") == "loaded"
         and all(value is not None for value in current_values.values())
     )
+    preflight = load_source_quality_preflight(target_date)
+    source_quality_blocked = source_quality_preflight_blocked(preflight)
+    history = [
+        item for item in (drought_policy.get("history") or []) if isinstance(item, dict)
+    ]
+    source_dates = [
+        str(item.get("source_date") or "")
+        for item in history
+        if str(item.get("source_date") or "")
+    ]
+    quality_window = {
+        "window_policy": "rolling_3_trading_days",
+        "start_date": source_dates[0] if source_dates else target_date,
+        "end_date": source_dates[-1] if source_dates else target_date,
+        "clean_tuning_baseline_date": clean_baseline_date,
+        "source_date_count": len(source_dates),
+        "source_dates": source_dates,
+    }
+    desired_enabled = bool(drought_policy.get("desired_enabled"))
+    if drought_policy.get("stop_triggered"):
+        decision_reason = "entry_recheck_drought_controller_stop_triggered"
+    elif drought_policy.get("activation_triggered"):
+        decision_reason = "entry_recheck_addressable_submit_drought_triggered"
+    else:
+        decision_reason = "entry_recheck_daily_policy_retain_pending_decisive_signal"
+    latest_current = bool(drought_policy.get("latest_source_is_target_date"))
+    history_complete = bool(drought_policy.get("history_complete"))
+    policy_evaluable = bool(latest_current and history_complete)
     allowed = bool(
-        _safe_bool(best_apply.get("allowed_runtime_apply"))
-        and _safe_bool(best_apply.get("sample_floor_passed"))
-        and primary_ev_positive
-        and counterfactual_opportunity_positive
-        and current_values_complete
+        current_values_complete and policy_evaluable and not source_quality_blocked
+    )
+    recommended_values = dict(BOUNDED_PROFILE)
+    recommended_values.update(
+        {
+            "enabled": desired_enabled,
+            "allowed_scopes": ",".join(drought_policy.get("allowed_scopes") or []),
+            # Intraday widening is withheld until exact submit/fill/terminal
+            # attribution proves a positive after-cost result at its own floor.
+            "intraday_escalation_enabled": bool(
+                drought_policy.get("intraday_escalation_allowed")
+            ),
+            "intraday_escalation_scopes": ",".join(
+                drought_policy.get("intraday_escalation_scopes") or []
+            ),
+        }
     )
     quality_update_id = (
-        f"{ENTRY_OPPORTUNITY_RECHECK_FAMILY}:cumulative:"
-        f"{cumulative_quality_window.get('start_date')}:"
-        f"{cumulative_quality_window.get('end_date')}:{threshold}"
+        f"{ENTRY_OPPORTUNITY_RECHECK_FAMILY}:drought:{quality_window['start_date']}:"
+        f"{quality_window['end_date']}:{'on' if desired_enabled else 'off'}"
     )
     return [
         {
             "family": ENTRY_OPPORTUNITY_RECHECK_FAMILY,
             "stage": "entry",
+            "manipulation_point": "blocked_ai_score_near_buy_recheck",
+            "same_stage_owner_claim": False,
+            "same_stage_coexistence_contract": (
+                "blocked_ai_score_recheck_disjoint_from_normal_entry_owner_v1"
+            ),
             "priority": 42,
             "threshold_version": (
-                f"entry_opportunity_recheck_runtime:{target_date}:{threshold}"
+                f"entry_opportunity_recheck_drought_controller:{target_date}"
             ),
             "quality_update_id": quality_update_id,
-            "runtime_update_mode": RUNTIME_UPDATE_MODE,
+            "runtime_update_mode": DROUGHT_RUNTIME_UPDATE_MODE,
+            "bounded_profile_version": PROFILE_VERSION,
             "max_runtime_apply_count": 1,
-            "cumulative_quality_window": cumulative_quality_window,
+            "cumulative_quality_window": quality_window,
             "post_apply_attribution_required": True,
-            "calibration_state": "adjust_down" if allowed else "hold_sample",
-            "calibration_reason": (
-                "entry_ai_gate_supported_wait_recovery_positive_ev"
-                if allowed
-                else "entry_ai_gate_candidate_not_apply_ready"
-            ),
+            "calibration_state": ("adjust_up" if desired_enabled else "adjust_down"),
+            "calibration_reason": decision_reason,
             "target_env_keys": ENTRY_RECHECK_TARGET_ENV_KEYS,
             "current_values": current_values,
             "current_values_provenance": current_values_provenance,
-            "recommended_values": {
-                "enabled": True,
-                "min_ai_score": threshold,
-                "max_ai_score": 74,
-                "require_explicit_buy_action": False,
-                "allow_wait_probe_intent": True,
-                "require_probe_first_contract": True,
-            },
+            "recommended_values": recommended_values,
+            "runtime_disable_family": not desired_enabled,
             "source_metrics": {
-                "policy": policy,
-                "realized": realized,
-                "counterfactual": counterfactual,
+                "drought_conditional_policy": drought_policy,
+                "exact_post_apply_attribution": drought_policy.get(
+                    "exact_post_apply_attribution"
+                ),
             },
-            "sample_floor_passed": _safe_bool(best_apply.get("sample_floor_passed")),
-            "primary_ev_positive": primary_ev_positive,
-            "counterfactual_opportunity_positive": (
-                counterfactual_opportunity_positive
+            "metric_role": "bounded_tunable",
+            "window_policy": "rolling_3_trading_days_plus_rolling20_causal_episode",
+            "sample_floor": {
+                "activation": "latest_critical_and_2_of_3_critical_with_denominators",
+                "conversion_stop_exact_armed": EXACT_ARMED_SAMPLE_FLOOR,
+                "economic_stop_exact_completed": EXACT_COMPLETED_SAMPLE_FLOOR,
+            },
+            "primary_decision_metric": (
+                "addressable_submit_drought_then_cost_adjusted_ev"
             ),
-            "source_quality_gate": "pass",
+            "source_quality_gate": "pass" if not source_quality_blocked else "blocked",
+            "source_quality_blocked": (
+                "" if not source_quality_blocked else "source_quality_preflight_blocked"
+            ),
             "allowed_runtime_apply": allowed,
             "apply_block_reason": (
                 ""
                 if allowed
                 else (
-                    "current_runtime_values_unavailable"
-                    if not current_values_complete
-                    else str(
-                        best_apply.get("apply_block_reason")
-                        or "upstream_candidate_blocked"
+                    "source_quality_preflight_blocked"
+                    if source_quality_blocked
+                    else (
+                        "current_runtime_values_unavailable"
+                        if not current_values_complete
+                        else "rolling_drought_history_not_current_or_complete"
                     )
                 )
             ),
+            "runtime_handoff_contract": {
+                "schema_version": 1,
+                "decision_authority": "next_preopen_bounded_candidate_only",
+                "runtime_effect": False,
+                "same_stage_max_selected": 1,
+                "preopen_selection_state": "pending_not_applied",
+                "post_apply_attribution_required": True,
+            },
             "runtime_effect": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
-            "decision_authority": "entry_ai_gate_backtest_postclose_candidate",
+            "decision_authority": "buy_funnel_drought_conditional_preopen_policy",
+            "operator_action_required": False,
             "forbidden_uses": [
                 *FORBIDDEN_USES,
-                "broad_buy_score_threshold_relaxation",
+                "latency_only_activation",
+                "intraday_escalation_before_exact_completed_floor",
+                "indefinite_operator_lock",
             ],
         }
     ]
@@ -248,8 +956,32 @@ def _current_recheck_values(target_date: str) -> tuple[dict[str, Any], dict[str,
     )
     mapping = {
         "enabled": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", False),
-        "min_ai_score": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE", 70.0),
+        "min_ai_score": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE", 69.0),
         "max_ai_score": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE", 74.999),
+        "max_recheck_per_symbol": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL",
+            1,
+        ),
+        "max_daily_recheck": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK",
+            10,
+        ),
+        "max_daily_buy_recovery": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY",
+            3,
+        ),
+        "max_ws_age_ms": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS",
+            1500,
+        ),
+        "forbid_danger": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER",
+            True,
+        ),
+        "require_fresh_quote": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE",
+            True,
+        ),
         "require_explicit_buy_action": (
             "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
             True,
@@ -262,6 +994,15 @@ def _current_recheck_values(target_date: str) -> tuple[dict[str, Any], dict[str,
             "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
             True,
         ),
+        "intraday_escalation_enabled": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED",
+            False,
+        ),
+        "intraday_escalation_scopes": (
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES",
+            "",
+        ),
+        "allowed_scopes": ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", ""),
     }
     values: dict[str, Any] = {}
     defaulted_env_keys: list[str] = []
@@ -271,11 +1012,16 @@ def _current_recheck_values(target_date: str) -> tuple[dict[str, Any], dict[str,
         if raw is None and manifest_loaded:
             raw = default
             defaulted_env_keys.append(env_key)
-        if value_key in {
+        if value_key in {"allowed_scopes", "intraday_escalation_scopes"}:
+            values[value_key] = str(raw or "") if manifest_loaded else None
+        elif value_key in {
             "enabled",
             "require_explicit_buy_action",
             "allow_wait_probe_intent",
             "require_probe_first_contract",
+            "forbid_danger",
+            "require_fresh_quote",
+            "intraday_escalation_enabled",
         }:
             values[value_key] = _safe_bool(raw) if raw is not None else None
         else:
@@ -293,11 +1039,31 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
+@contextmanager
+def _exclusive_report_lock(report_dir: Path, report_type: str, target_date: str):
+    """Fail fast when the same target-date producer is already running."""
+
+    report_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = report_dir / f".{report_type}_{target_date}.lock"
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError(
+                f"report producer already running: {report_type} {target_date}"
+            ) from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _safe_float(value: Any, default: float | None = 0.0) -> float | None:
     try:
         if value in (None, "", "null", "none", "-"):
             return default
-        return float(value)
+        parsed = finite_number(value)
+        return parsed if parsed is not None else default
     except Exception:
         return default
 
@@ -696,20 +1462,21 @@ def _realized_rows(
     source_dates: list[str],
     missing: list[dict[str, str]],
     consumed_dates: list[str] | None = None,
+    observations_by_date: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source_date in source_dates:
-        path = existing_or_gzip_path(
-            SCALP_ENTRY_ADM_DIR
-            / f"scalp_entry_action_decision_matrix_{source_date}.json"
+        report = (
+            observations_by_date[source_date]
+            if observations_by_date is not None
+            else load_entry_observations(source_date)
         )
-        report, load_status = _load_json_with_status(path)
-        if not report:
+        if not report.get("rows"):
             missing.append(
                 {
                     "date": source_date,
-                    "artifact": "scalp_entry_action_decision_matrix",
-                    **load_status,
+                    "artifact": "entry_observation_source",
+                    "status": "no_observations",
                 }
             )
             continue
@@ -731,7 +1498,7 @@ def _realized_rows(
                 raw.get("actual_order_submitted") or raw.get("broker_order_submitted")
             ):
                 profit = _safe_float(raw.get("profit_rate"), None)
-                outcome_source = "scalp_entry_action_decision_matrix"
+                outcome_source = "entry_observation_source"
             if profit is None:
                 continue
             row = dict(raw)
@@ -775,6 +1542,7 @@ def _counterfactual_rows(
     missing: list[dict[str, str]],
     consumed_dates: list[str] | None = None,
     context_join_counts: Counter[str] | None = None,
+    observations_by_date: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source_date in source_dates:
@@ -791,11 +1559,12 @@ def _counterfactual_rows(
             continue
         if consumed_dates is not None:
             consumed_dates.append(source_date)
-        context_path = existing_or_gzip_path(
-            SCALP_ENTRY_ADM_DIR
-            / f"scalp_entry_action_decision_matrix_{source_date}.json"
+        context_path = PIPELINE_EVENTS_DIR / f"pipeline_events_{source_date}.jsonl"
+        context_report = (
+            observations_by_date[source_date]
+            if observations_by_date is not None
+            else load_entry_observations(source_date)
         )
-        context_report = _load_json(context_path)
         by_record, by_candidate = _entry_context_indexes(context_report)
         for raw in report.get("full_rows") or []:
             if not isinstance(raw, dict):
@@ -1002,7 +1771,7 @@ def _policy_result(
     counterfactual_opportunity_positive = bool(
         counterfactual_ev > 0.0 and counterfactual_mfe > 0.0
     )
-    allowed = bool(
+    economic_filter_passed = bool(
         policy != "diagnostic_score_only"
         and sample_floor_passed
         and primary_ev_positive
@@ -1020,6 +1789,8 @@ def _policy_result(
         apply_block_reason = "non_positive_counterfactual_opportunity"
     else:
         apply_block_reason = ""
+    if economic_filter_passed:
+        apply_block_reason = "runtime_authority_owned_by_drought_controller"
     return {
         "policy": policy,
         "threshold": threshold,
@@ -1039,12 +1810,16 @@ def _policy_result(
         "sample_floor_passed": sample_floor_passed,
         "primary_ev_positive": primary_ev_positive,
         "counterfactual_opportunity_positive": counterfactual_opportunity_positive,
-        "calibration_state": "candidate_ready" if allowed else "hold_sample",
-        "allowed_runtime_apply": allowed,
+        "calibration_state": (
+            "diagnostic_filter_passed" if economic_filter_passed else "hold_sample"
+        ),
+        "economic_filter_passed": economic_filter_passed,
+        "allowed_runtime_apply": False,
         "apply_block_reason": apply_block_reason,
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "decision_authority": "entry_ai_score_sweep_diagnostic_only",
         "forbidden_uses": FORBIDDEN_USES,
     }
 
@@ -1072,9 +1847,9 @@ def _best_candidate(results: list[dict[str, Any]]) -> dict[str, Any]:
     return ranked[0] if ranked else {}
 
 
-def _best_allowed_candidate(results: list[dict[str, Any]]) -> dict[str, Any]:
+def _best_economic_filter_candidate(results: list[dict[str, Any]]) -> dict[str, Any]:
     return _best_candidate(
-        [item for item in results if item.get("allowed_runtime_apply")]
+        [item for item in results if item.get("economic_filter_passed")]
     )
 
 
@@ -1115,17 +1890,29 @@ def build_report(
     realized_consumed_dates: list[str] = []
     counterfactual_consumed_dates: list[str] = []
     context_join_counts: Counter[str] = Counter()
-    realized = _realized_rows(
-        source_dates,
-        missing_artifacts,
-        consumed_dates=realized_consumed_dates,
-    )
-    counterfactual = _counterfactual_rows(
-        source_dates,
-        missing_artifacts,
-        consumed_dates=counterfactual_consumed_dates,
-        context_join_counts=context_join_counts,
-    )
+    realized: list[dict[str, Any]] = []
+    counterfactual: list[dict[str, Any]] = []
+    for source_date in source_dates:
+        # One raw scan per date, shared by the real and counterfactual joins.
+        # Release the source bundle before loading the next date.
+        observations = {source_date: load_entry_observations(source_date)}
+        realized.extend(
+            _realized_rows(
+                [source_date],
+                missing_artifacts,
+                consumed_dates=realized_consumed_dates,
+                observations_by_date=observations,
+            )
+        )
+        counterfactual.extend(
+            _counterfactual_rows(
+                [source_date],
+                missing_artifacts,
+                consumed_dates=counterfactual_consumed_dates,
+                context_join_counts=context_join_counts,
+                observations_by_date=observations,
+            )
+        )
     effective_source_dates = sorted(
         set(realized_consumed_dates) & set(counterfactual_consumed_dates)
     )
@@ -1173,7 +1960,7 @@ def build_report(
     best = _best_candidate(
         [item for item in results if item["policy"] != "diagnostic_score_only"]
     )
-    best_allowed = _best_allowed_candidate(
+    best_economic_filter = _best_economic_filter_candidate(
         [item for item in results if item["policy"] != "diagnostic_score_only"]
     )
     diagnostic_results = [
@@ -1225,16 +2012,6 @@ def build_report(
         and supported_wait_contract["counterfactual_evaluable_rows"] > 0
         else "source_contract_not_evaluable"
     )
-    calibration_candidates = _entry_recheck_calibration_candidates(
-        best_allowed,
-        target_date=target_date,
-        cumulative_quality_window=cumulative_quality_window,
-    )
-    runtime_apply_ready = any(
-        _safe_bool(item.get("allowed_runtime_apply"))
-        and str(item.get("calibration_state") or "") == "adjust_down"
-        for item in calibration_candidates
-    )
     score_band_counts: Counter[str] = Counter()
     for row in counterfactual:
         score = _safe_float(row.get("_score"), -1.0) or -1.0
@@ -1274,14 +2051,14 @@ def build_report(
             },
         },
         "source_paths": {
-            "scalp_entry_action_decision_matrix": str(SCALP_ENTRY_ADM_DIR),
+            "entry_observation_source": str(PIPELINE_EVENTS_DIR),
             "missed_entry_counterfactual": [str(path) for path in MISSED_ENTRY_DIRS],
             "pipeline_events": str(PIPELINE_EVENTS_DIR),
             "post_sell": str(POST_SELL_DIR),
         },
         "metric_contract": {
             "metric_role": "primary_ev",
-            "decision_authority": "entry_ai_gate_backtest_postclose_candidate",
+            "decision_authority": "entry_ai_gate_backtest_diagnostic_only",
             "window_policy": "clean_baseline_cumulative",
             "requested_window": {"start_date": start, "end_date": end},
             "effective_window": cumulative_quality_window,
@@ -1299,17 +2076,19 @@ def build_report(
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
-        "allowed_runtime_apply": runtime_apply_ready,
+        "allowed_runtime_apply": False,
+        "diagnostic_apply_ready": bool(best_economic_filter),
+        "runtime_candidate_ready": False,
         "calibration_state": (
-            "candidate_ready"
-            if runtime_apply_ready
+            "diagnostic_filter_passed"
+            if best_economic_filter
             else (
                 "source_contract_not_evaluable"
                 if source_contract_status == "source_contract_not_evaluable"
                 else "hold_sample"
             )
         ),
-        "calibration_candidates": calibration_candidates,
+        "calibration_candidates": [],
         "summary": {
             "realized_joined_rows": len(realized),
             "counterfactual_rows": len(counterfactual),
@@ -1350,14 +2129,19 @@ def build_report(
                 "missed_upside_close_10m_pct"
             ),
             "sample_floor_passed": bool(best.get("sample_floor_passed", False)),
-            "best_apply_policy": best_allowed.get("policy"),
-            "best_apply_threshold": best_allowed.get("threshold"),
-            "best_apply_realized_source_quality_adjusted_ev_pct": (
-                best_allowed.get("realized") or {}
+            "best_apply_policy": None,
+            "best_apply_threshold": None,
+            "best_economic_filter_diagnostic_policy": best_economic_filter.get(
+                "policy"
+            ),
+            "best_economic_filter_diagnostic_threshold": best_economic_filter.get(
+                "threshold"
+            ),
+            "best_apply_realized_source_quality_adjusted_ev_pct": None,
+            "best_apply_counterfactual_close_10m_pct": None,
+            "best_economic_filter_diagnostic_ev_pct": (
+                best_economic_filter.get("realized") or {}
             ).get("source_quality_adjusted_ev_pct"),
-            "best_apply_counterfactual_close_10m_pct": (
-                best_allowed.get("counterfactual") or {}
-            ).get("missed_upside_close_10m_pct"),
             "best_diagnostic_score_only_threshold": best_diagnostic.get("threshold"),
             "best_diagnostic_score_only_realized_source_quality_adjusted_ev_pct": (
                 best_diagnostic.get("realized") or {}
@@ -1386,7 +2170,8 @@ def build_report(
             "best_positive_realized_diagnostic_counterfactual_sample": (
                 best_positive_diagnostic.get("counterfactual") or {}
             ).get("sample"),
-            "bounded_calibration_candidate_count": len(calibration_candidates),
+            "bounded_calibration_candidate_count": 0,
+            "runtime_candidate_ready": False,
             "diagnostic_conflict_detected": bool(
                 best_positive_diagnostic
                 and float(
@@ -1406,7 +2191,8 @@ def build_report(
             ),
         },
         "best_candidate": best,
-        "best_apply_candidate": best_allowed,
+        "best_apply_candidate": {},
+        "best_economic_filter_diagnostic_candidate": best_economic_filter,
         "best_diagnostic_score_only_candidate": best_diagnostic,
         "best_positive_realized_diagnostic_candidate": best_positive_diagnostic,
         "policy_results": results,
@@ -1415,32 +2201,20 @@ def build_report(
     }
     preflight = load_source_quality_preflight(target_date)
     report = apply_source_quality_preflight_block(report, preflight)
-    final_candidates = [
-        item
-        for item in report.get("calibration_candidates") or []
-        if isinstance(item, dict)
-    ]
-    allowed_candidates = [
-        item
-        for item in final_candidates
-        if _safe_bool(item.get("allowed_runtime_apply"))
-    ]
-    report["runtime_update_contract"] = {
+    report["allowed_runtime_apply"] = False
+    report["runtime_candidate_ready"] = False
+    report["calibration_candidates"] = []
+    report["diagnostic_apply_ready"] = bool(
+        report.get("status") != "source_quality_blocked" and best_economic_filter
+    )
+    report["diagnostic_contract"] = {
         "schema_version": 1,
-        "update_mode": RUNTIME_UPDATE_MODE,
-        "owner_family": ENTRY_OPPORTUNITY_RECHECK_FAMILY,
-        "max_runtime_apply_count": 1,
-        "runtime_apply_candidate_count": len(final_candidates),
-        "allowed_runtime_apply_count": len(allowed_candidates),
-        "quality_update_id": (
-            str(allowed_candidates[0].get("quality_update_id") or "")
-            if allowed_candidates
-            else ""
-        ),
-        "cumulative_quality_window": cumulative_quality_window,
+        "decision_authority": "diagnostic_only_no_preopen_consumer",
+        "window_policy": "clean_baseline_cumulative_weekly_or_on_demand",
+        "runtime_candidate_count": 0,
+        "allowed_runtime_apply": False,
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": report.get("source_quality_gate") or "pass",
-        "post_apply_attribution_required": True,
         "runtime_effect": False,
         "forbidden_uses": FORBIDDEN_USES,
     }
@@ -1449,11 +2223,6 @@ def build_report(
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    runtime_update_contract = (
-        report.get("runtime_update_contract")
-        if isinstance(report.get("runtime_update_contract"), dict)
-        else {}
-    )
     best = (
         report.get("best_candidate")
         if isinstance(report.get("best_candidate"), dict)
@@ -1469,15 +2238,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- calibration_state: `{report.get('calibration_state')}`",
         f"- allowed_runtime_apply: `{report.get('allowed_runtime_apply')}`",
+        f"- diagnostic_apply_ready: `{report.get('diagnostic_apply_ready')}`",
+        f"- runtime_candidate_ready: `{report.get('runtime_candidate_ready')}`",
         f"- bounded_calibration_candidate_count: "
         f"`{summary.get('bounded_calibration_candidate_count')}`",
         f"- diagnostic_conflict_detected: "
         f"`{summary.get('diagnostic_conflict_detected')}`",
-        f"- runtime_update_mode: `{runtime_update_contract.get('update_mode')}`",
-        f"- runtime_apply_candidate_count: "
-        f"`{runtime_update_contract.get('runtime_apply_candidate_count')}`",
-        f"- allowed_runtime_apply_count: "
-        f"`{runtime_update_contract.get('allowed_runtime_apply_count')}`",
+        "- decision_authority: `diagnostic_only_no_preopen_consumer`",
         f"- effective_source_date_count: "
         f"`{summary.get('effective_source_date_count')}`",
         f"- artifact_excluded_date_count: "
@@ -1513,6 +2280,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- best_counterfactual_close_10m_pct: `{summary.get('best_counterfactual_close_10m_pct')}`",
         f"- best_apply_policy: `{summary.get('best_apply_policy')}`",
         f"- best_apply_threshold: `{summary.get('best_apply_threshold')}`",
+        f"- best_economic_filter_diagnostic_policy: "
+        f"`{summary.get('best_economic_filter_diagnostic_policy')}`",
+        f"- best_economic_filter_diagnostic_threshold: "
+        f"`{summary.get('best_economic_filter_diagnostic_threshold')}`",
         f"- best_diagnostic_score_only_threshold: `{summary.get('best_diagnostic_score_only_threshold')}`",
         f"- best_diagnostic_score_only_realized_source_quality_adjusted_ev_pct: "
         f"`{summary.get('best_diagnostic_score_only_realized_source_quality_adjusted_ev_pct')}`",
@@ -1545,15 +2316,63 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
-    json_path, md_path = report_paths(str(report.get("target_date") or "unknown"))
+def _atomic_write_report_pair(
+    report: dict[str, Any],
+    *,
+    report_dir: Path,
+    report_type: str,
+    markdown: str,
+) -> tuple[Path, Path]:
+    base = report_dir / f"{report_type}_{report.get('target_date') or 'unknown'}"
+    json_path, md_path = base.with_suffix(".json"), base.with_suffix(".md")
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str),
-        encoding="utf-8",
-    )
-    md_path.write_text(render_markdown(report), encoding="utf-8")
+    contents = [
+        (md_path, markdown),
+        (
+            json_path,
+            json.dumps(
+                report,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                default=str,
+                allow_nan=False,
+            ),
+        ),
+    ]
+    for path, content in contents:
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
     return json_path, md_path
+
+
+def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
+    return _atomic_write_report_pair(
+        report,
+        report_dir=REPORT_DIR,
+        report_type=REPORT_TYPE,
+        markdown=render_markdown(report),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1563,20 +2382,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date")
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(
-        args.target_date, start_date=args.start_date, end_date=args.end_date
-    )
-    if args.write:
-        json_path, md_path = write_report(report)
-        print(
-            json.dumps({"json": str(json_path), "md": str(md_path)}, ensure_ascii=False)
-        )
-    else:
-        print(
-            json.dumps(
-                report, ensure_ascii=False, indent=2, sort_keys=True, default=str
+    try:
+        with _exclusive_report_lock(REPORT_DIR, REPORT_TYPE, args.target_date):
+            report = build_report(
+                args.target_date, start_date=args.start_date, end_date=args.end_date
             )
-        )
+            if args.write:
+                json_path, md_path = write_report(report)
+                print(
+                    json.dumps(
+                        {"json": str(json_path), "md": str(md_path)},
+                        ensure_ascii=False,
+                    )
+                )
+            else:
+                print(
+                    json.dumps(
+                        report,
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                        default=str,
+                    )
+                )
+    except RuntimeError as exc:
+        parser.error(str(exc))
     return 0
 
 

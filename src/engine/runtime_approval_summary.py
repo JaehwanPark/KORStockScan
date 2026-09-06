@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import (
+    retired_artifact,
+    retired_status,
+    current_report_view,
+)
+
 import argparse
 import json
 import math
@@ -137,8 +143,8 @@ _FAMILY_DESCRIPTIONS = {
     "swing_strategy_discovery_sim": "스윙 safe pool 전체를 공격적 sim-only lifecycle arm으로 전개하고 label/EV를 축적하는 source-only 탐색 축",
     "swing_lifecycle_decision_matrix": "스윙 probe와 discovery sim을 하나의 lifecycle bucket attribution으로 통합하는 source-only Swing LDM",
     "swing_lifecycle_bucket_discovery": "Swing LDM bucket을 sim-only 자동승인 후보와 source-quality workorder 후보로 분류하는 postclose handoff 축",
-    "institutional_flow_context": "외인/기관 수급 REST/WS 원천을 lifecycle matrix 공통 feature로 붙이는 source-only provenance 축",
-    "microstructure_reaction_context": "초단기 호가/체결 반응을 scalping entry confidence provenance로 붙이는 source-only feature 축",
+    "institutional_flow_context": "sole ADM/LDM consumer와 함께 폐기된 기관수급 aggregate report; exact AI investor/program context는 유지",
+    "microstructure_reaction_context": "초단기 호가/체결 반응의 source-quality·반사실 diagnostic과 holding fail-closed 품질 context",
     "swing_one_share_real_canary_phase0": "제거된 스윙 1주 real canary phase0 legacy stage",
     "swing_scale_in_real_canary_phase0": "제거된 스윙 scale-in real canary phase0 legacy stage",
 }
@@ -166,8 +172,8 @@ _BASELINE_APPLICATION = {
     "swing_strategy_discovery_sim": "source-only: 가상 후보/arm/label/EV 분석만 수행, runtime threshold apply 권한 없음",
     "swing_lifecycle_decision_matrix": "source-only: sim 후보 자동승인 입력만 만들며 real order/approval/env apply 권한 없음",
     "swing_lifecycle_bucket_discovery": "source-only: 다음 PREOPEN swing sim policy 입력으로만 surfaced candidate를 전달",
-    "institutional_flow_context": "source-only: lifecycle matrix feature/provenance 입력만 수행, 단독 BUY/scale-in/runtime apply 권한 없음",
-    "microstructure_reaction_context": "source-only: AI entry input/provenance 보강만 수행, 단독 BUY/runtime apply 권한 없음",
+    "institutional_flow_context": "retired/archive-only: scheduled producer와 current summary consumer 없음; exact AI context만 유지",
+    "microstructure_reaction_context": "diagnostic/source-quality only: delivery receipt와 holding fail-closed 품질 평가만 수행, 단독 BUY/runtime apply 권한 없음",
     "swing_one_share_real_canary_phase0": "legacy archive: PREOPEN env와 broker submit 권한 없음",
     "swing_scale_in_real_canary_phase0": "legacy archive: PREOPEN env와 broker submit 권한 없음",
 }
@@ -648,6 +654,8 @@ _JSON_LOAD_DIAGNOSTICS: list[dict[str, Any]] = []
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -670,7 +678,7 @@ def _load_json(path: Path) -> dict[str, Any]:
             }
         )
         return {}
-    return payload
+    return current_report_view(payload)
 
 
 def _format_score(value: Any) -> str:
@@ -1813,96 +1821,7 @@ def _audit_summary(path: Path) -> dict[str, Any]:
 def _entry_adm_summary(
     ev_report: dict[str, Any], source_path: str | None
 ) -> dict[str, Any]:
-    adm = (
-        ev_report.get("scalp_entry_action_decision_matrix")
-        if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
-        else {}
-    )
-    expected_actions = [
-        "BUY_NOW",
-        "WAIT_REQUOTE",
-        "SKIP_STALE",
-        "BUY_DEFENSIVE",
-        "NO_BUY_AI",
-        "SKIP_SOURCE_QUALITY",
-        "SKIP_PRE_SUBMIT_SAFETY",
-    ]
-    if not adm:
-        return {
-            "available": False,
-            "artifact": source_path,
-            "status": "missing",
-            "runtime_effect": False,
-            "decision_authority": "entry_adm_runtime_bias_operator_override",
-            "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
-            "expected_actions": expected_actions,
-            "warnings": ["scalp_entry_action_decision_matrix_missing"],
-            "ready_for_daily_policy_tuning": False,
-        }
-
-    joined = _as_int(adm.get("joined_sample"))
-    floor = _as_int(adm.get("sample_floor")) or 20
-    missing_actions = (
-        adm.get("missing_actions")
-        if isinstance(adm.get("missing_actions"), list)
-        else []
-    )
-    prompt_applied_count = _as_int(adm.get("prompt_applied_count"))
-    top_actions = (
-        adm.get("top_actions") if isinstance(adm.get("top_actions"), list) else []
-    )
-    unknown_bucket_summary = (
-        adm.get("unknown_bucket_summary")
-        if isinstance(adm.get("unknown_bucket_summary"), dict)
-        else {}
-    )
-    joined_action_ev_pct = None
-    for action in top_actions:
-        if not isinstance(action, dict):
-            continue
-        if _as_int(action.get("joined_sample")) > 0:
-            joined_action_ev_pct = action.get("source_quality_adjusted_ev_pct")
-            break
-    warnings: list[str] = []
-    if not adm.get("available", True):
-        warnings.append("source_quality_blocker")
-    if joined < floor:
-        warnings.append("joined_sample_below_sample_floor")
-    if missing_actions:
-        warnings.append("missing_action_bucket")
-    if prompt_applied_count == 0:
-        warnings.append("prompt_context_not_loaded")
-    if (
-        _as_int(unknown_bucket_summary.get("affected_rows")) > 0
-        and str(unknown_bucket_summary.get("source_quality_gate") or "")
-        == "source_quality_blocker"
-    ):
-        warnings.append("unknown_bucket_source_quality_gap")
-
-    return {
-        "available": bool(adm.get("available", True)),
-        "artifact": source_path or adm.get("artifact"),
-        "status": adm.get("status"),
-        "runtime_effect": False,
-        "decision_authority": "entry_adm_runtime_bias_operator_override",
-        "runtime_bias_scope": "force_wait_force_drop_buy_defensive_bias",
-        "application_mode": "operator_override_runtime_bias",
-        "primary_decision_metric": adm.get("primary_decision_metric")
-        or "source_quality_adjusted_ev_pct",
-        "source_quality_adjusted_ev_pct": adm.get("source_quality_adjusted_ev_pct"),
-        "joined_action_ev_pct": joined_action_ev_pct,
-        "top_actions": top_actions,
-        "joined_sample": joined,
-        "joined_sample_daily": _as_int(adm.get("joined_sample_daily")),
-        "sample_floor": floor,
-        "prompt_applied_count": prompt_applied_count,
-        "unknown_bucket_summary": unknown_bucket_summary,
-        "missing_actions": missing_actions,
-        "expected_actions": expected_actions,
-        "tuning_cycle": "scalp_entry_action_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> code_improvement_workorder -> pattern_lab source bundle -> next runtime env",
-        "warnings": warnings,
-        "ready_for_daily_policy_tuning": not warnings,
-    }
+    return {**retired_status(), "available": False, "windows": {}}
 
 
 def _bucket_list_from_lifecycle_source(
@@ -1940,437 +1859,11 @@ def _bucket_count_from_lifecycle_source(
 def _lifecycle_matrix_summary(
     ev_report: dict[str, Any], source_path: str | None
 ) -> dict[str, Any]:
-    matrix = (
-        ev_report.get("lifecycle_decision_matrix")
-        if isinstance(ev_report.get("lifecycle_decision_matrix"), dict)
-        else {}
-    )
-    source_payload = _load_json(Path(str(source_path))) if source_path else {}
-    if not matrix:
-        return {
-            "available": False,
-            "artifact": source_path,
-            "status": "missing",
-            "runtime_effect": False,
-            "decision_authority": "lifecycle_weighted_adm_runtime_policy",
-            "runtime_bias_scope": "stage_action_proposal_micro_canary",
-            "warnings": ["lifecycle_decision_matrix_missing"],
-            "ready_for_bounded_apply": False,
-        }
-
-    total_rows = _as_int(matrix.get("total_rows"))
-    joined_rows = _as_int(matrix.get("joined_rows"))
-    policy_pass_count = _as_int(matrix.get("policy_pass_count"))
-    promote_ready_count = _as_int(matrix.get("promote_ready_count"))
-    entry_bucket_candidates = (
-        matrix.get("entry_bucket_runtime_approval_candidates")
-        if isinstance(matrix.get("entry_bucket_runtime_approval_candidates"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "entry_bucket_attribution",
-            "runtime_approval_candidates",
-        )
-    )
-    lifecycle_flow_bucket_candidates = (
-        matrix.get("lifecycle_flow_runtime_approval_candidates")
-        if isinstance(matrix.get("lifecycle_flow_runtime_approval_candidates"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "lifecycle_flow_bucket_attribution",
-            "runtime_approval_candidates",
-        )
-    )
-    lifecycle_flow_bucket_workorders = (
-        matrix.get("lifecycle_flow_code_improvement_workorders")
-        if isinstance(matrix.get("lifecycle_flow_code_improvement_workorders"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "lifecycle_flow_bucket_attribution",
-            "code_improvement_workorders",
-        )
-    )
-    entry_bucket_workorders = (
-        matrix.get("entry_bucket_code_improvement_workorders")
-        if isinstance(matrix.get("entry_bucket_code_improvement_workorders"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "entry_bucket_attribution",
-            "code_improvement_workorders",
-        )
-    )
-    scale_in_bucket_candidates = (
-        matrix.get("scale_in_bucket_runtime_approval_candidates")
-        if isinstance(matrix.get("scale_in_bucket_runtime_approval_candidates"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "scale_in_bucket_attribution",
-            "runtime_approval_candidates",
-        )
-    )
-    scale_in_bucket_workorders = (
-        matrix.get("scale_in_bucket_code_improvement_workorders")
-        if isinstance(matrix.get("scale_in_bucket_code_improvement_workorders"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "scale_in_bucket_attribution",
-            "code_improvement_workorders",
-        )
-    )
-    overnight_bucket_candidates = (
-        matrix.get("overnight_bucket_runtime_approval_candidates")
-        if isinstance(matrix.get("overnight_bucket_runtime_approval_candidates"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "overnight_bucket_attribution",
-            "runtime_approval_candidates",
-        )
-    )
-    overnight_bucket_workorders = (
-        matrix.get("overnight_bucket_code_improvement_workorders")
-        if isinstance(matrix.get("overnight_bucket_code_improvement_workorders"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "overnight_bucket_attribution",
-            "code_improvement_workorders",
-        )
-    )
-    submit_bucket_candidates = (
-        matrix.get("submit_bucket_runtime_approval_candidates")
-        if isinstance(matrix.get("submit_bucket_runtime_approval_candidates"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "submit_bucket_attribution",
-            "runtime_approval_candidates",
-        )
-    )
-    submit_bucket_workorders = (
-        matrix.get("submit_bucket_code_improvement_workorders")
-        if isinstance(matrix.get("submit_bucket_code_improvement_workorders"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "submit_bucket_attribution",
-            "code_improvement_workorders",
-        )
-    )
-    holding_bucket_workorders = (
-        matrix.get("holding_bucket_code_improvement_workorders")
-        if isinstance(matrix.get("holding_bucket_code_improvement_workorders"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "holding_bucket_attribution",
-            "code_improvement_workorders",
-        )
-    )
-    exit_bucket_workorders = (
-        matrix.get("exit_bucket_code_improvement_workorders")
-        if isinstance(matrix.get("exit_bucket_code_improvement_workorders"), list)
-        else _bucket_list_from_lifecycle_source(
-            source_payload,
-            "exit_bucket_attribution",
-            "code_improvement_workorders",
-        )
-    )
-    submit_attribution = (
-        source_payload.get("submit_bucket_attribution")
-        if isinstance(source_payload.get("submit_bucket_attribution"), dict)
-        else {}
-    )
-    submit_attribution_summary = (
-        matrix.get("submit_bucket_attribution_summary")
-        if isinstance(matrix.get("submit_bucket_attribution_summary"), dict)
-        else (
-            submit_attribution.get("summary")
-            if isinstance(submit_attribution.get("summary"), dict)
-            else {}
-        )
-    )
-    holding_attribution = (
-        source_payload.get("holding_bucket_attribution")
-        if isinstance(source_payload.get("holding_bucket_attribution"), dict)
-        else {}
-    )
-    holding_attribution_summary = (
-        matrix.get("holding_bucket_attribution_summary")
-        if isinstance(matrix.get("holding_bucket_attribution_summary"), dict)
-        else (
-            holding_attribution.get("summary")
-            if isinstance(holding_attribution.get("summary"), dict)
-            else {}
-        )
-    )
-    exit_attribution = (
-        source_payload.get("exit_bucket_attribution")
-        if isinstance(source_payload.get("exit_bucket_attribution"), dict)
-        else {}
-    )
-    exit_attribution_summary = (
-        matrix.get("exit_bucket_attribution_summary")
-        if isinstance(matrix.get("exit_bucket_attribution_summary"), dict)
-        else (
-            exit_attribution.get("summary")
-            if isinstance(exit_attribution.get("summary"), dict)
-            else {}
-        )
-    )
-    post_submit_contract_gaps = (
-        matrix.get("post_submit_contract_gaps")
-        if isinstance(matrix.get("post_submit_contract_gaps"), list)
-        else (
-            submit_attribution.get("post_submit_contract_gaps")
-            if isinstance(submit_attribution.get("post_submit_contract_gaps"), list)
-            else []
-        )
-    )
-    entry_bucket_runtime_candidate_count = _as_int(
-        matrix.get("entry_bucket_runtime_candidate_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "entry_bucket_attribution",
-        "runtime_candidate_count",
-    )
-    lifecycle_flow_bucket_count = _as_int(
-        matrix.get("lifecycle_flow_bucket_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "lifecycle_flow_bucket_attribution",
-        "bucket_count",
-    )
-    lifecycle_flow_complete_count = _as_int(
-        matrix.get("lifecycle_flow_complete_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "lifecycle_flow_bucket_attribution",
-        "complete_flow_count",
-    )
-    complete_flow_count = _as_int(matrix.get("complete_flow_count"))
-    if complete_flow_count is None:
-        complete_flow_count = lifecycle_flow_complete_count
-    incomplete_flow_count = _as_int(matrix.get("incomplete_flow_count"))
-    if incomplete_flow_count is None:
-        incomplete_flow_count = _bucket_count_from_lifecycle_source(
-            source_payload,
-            "lifecycle_flow_bucket_attribution",
-            "incomplete_flow_count",
-        )
-    lifecycle_flow_runtime_candidate_count = _as_int(
-        matrix.get("lifecycle_flow_runtime_candidate_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "lifecycle_flow_bucket_attribution",
-        "runtime_candidate_count",
-    )
-    lifecycle_flow_workorder_count = _as_int(
-        matrix.get("lifecycle_flow_workorder_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "lifecycle_flow_bucket_attribution",
-        "workorder_count",
-    )
-    entry_bucket_workorder_count = _as_int(
-        matrix.get("entry_bucket_workorder_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "entry_bucket_attribution",
-        "workorder_count",
-    )
-    scale_in_bucket_runtime_candidate_count = _as_int(
-        matrix.get("scale_in_bucket_runtime_candidate_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "scale_in_bucket_attribution",
-        "runtime_candidate_count",
-    )
-    scale_in_bucket_workorder_count = _as_int(
-        matrix.get("scale_in_bucket_workorder_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "scale_in_bucket_attribution",
-        "workorder_count",
-    )
-    overnight_bucket_runtime_candidate_count = _as_int(
-        matrix.get("overnight_bucket_runtime_candidate_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "overnight_bucket_attribution",
-        "runtime_candidate_count",
-    )
-    overnight_bucket_workorder_count = _as_int(
-        matrix.get("overnight_bucket_workorder_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "overnight_bucket_attribution",
-        "workorder_count",
-    )
-    holding_bucket_count = _as_int(
-        matrix.get("holding_bucket_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "holding_bucket_attribution",
-        "bucket_count",
-    )
-    holding_bucket_workorder_count = _as_int(
-        matrix.get("holding_bucket_workorder_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "holding_bucket_attribution",
-        "workorder_count",
-    )
-    exit_bucket_count = _as_int(
-        matrix.get("exit_bucket_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "exit_bucket_attribution",
-        "bucket_count",
-    )
-    exit_bucket_workorder_count = _as_int(
-        matrix.get("exit_bucket_workorder_count")
-    ) or _bucket_count_from_lifecycle_source(
-        source_payload,
-        "exit_bucket_attribution",
-        "workorder_count",
-    )
-    warnings: list[str] = []
-    if not matrix.get("available", True):
-        warnings.append("source_quality_blocker")
-    if total_rows < 20 or joined_rows < 10:
-        warnings.append("joined_sample_below_sample_floor")
-    if policy_pass_count <= 0:
-        warnings.append("policy_pass_arm_missing")
-
-    return {
-        "available": bool(matrix.get("available", True)),
-        "artifact": source_path or matrix.get("artifact"),
-        "status": matrix.get("status"),
-        "matrix_version": matrix.get("matrix_version")
-        or source_payload.get("matrix_version"),
-        "runtime_effect": bool(matrix.get("runtime_effect")),
-        "decision_authority": matrix.get("decision_authority")
-        or "lifecycle_weighted_adm_runtime_policy",
-        "runtime_bias_scope": "stage_action_proposal_micro_canary",
-        "application_mode": "auto_bounded_micro_canary",
-        "primary_decision_metric": matrix.get("primary_decision_metric")
-        or "stage_ev_composite_pct",
-        "total_rows": total_rows,
-        "joined_rows": joined_rows,
-        "sample_floor": 20,
-        "policy_pass_count": policy_pass_count,
-        "promote_ready_count": promote_ready_count,
-        "entry_bucket_actionable_count": _as_int(
-            matrix.get("entry_bucket_actionable_count")
-        ),
-        "lifecycle_flow_bucket_count": lifecycle_flow_bucket_count,
-        "lifecycle_flow_complete_count": lifecycle_flow_complete_count,
-        "complete_flow_count": complete_flow_count,
-        "incomplete_flow_count": incomplete_flow_count,
-        "lifecycle_flow_runtime_candidate_count": lifecycle_flow_runtime_candidate_count,
-        "lifecycle_flow_workorder_count": lifecycle_flow_workorder_count,
-        "identity_missing_count": _as_int(matrix.get("identity_missing_count")),
-        "identity_join_rate": matrix.get("identity_join_rate"),
-        "complete_flow_rate": matrix.get("complete_flow_rate"),
-        "join_contract_blocked": bool(matrix.get("join_contract_blocked")),
-        "bundle_ev_tuning_state": matrix.get("bundle_ev_tuning_state")
-        or "ready_for_bundle_ev_tuning",
-        "top_incomplete_reason": matrix.get("top_incomplete_reason"),
-        "incomplete_flow_reason_counts": matrix.get("incomplete_flow_reason_counts")
-        or {},
-        "lifecycle_flow_runtime_approval_candidates": lifecycle_flow_bucket_candidates,
-        "lifecycle_flow_code_improvement_workorders": lifecycle_flow_bucket_workorders,
-        "entry_bucket_runtime_candidate_count": entry_bucket_runtime_candidate_count,
-        "entry_bucket_workorder_count": entry_bucket_workorder_count,
-        "scale_in_bucket_actionable_count": _as_int(
-            matrix.get("scale_in_bucket_actionable_count")
-        ),
-        "scale_in_bucket_runtime_candidate_count": scale_in_bucket_runtime_candidate_count,
-        "scale_in_bucket_workorder_count": scale_in_bucket_workorder_count,
-        "overnight_bucket_actionable_count": _as_int(
-            matrix.get("overnight_bucket_actionable_count")
-        ),
-        "overnight_bucket_runtime_candidate_count": overnight_bucket_runtime_candidate_count,
-        "overnight_bucket_workorder_count": overnight_bucket_workorder_count,
-        "entry_bucket_runtime_approval_candidates": entry_bucket_candidates,
-        "entry_bucket_code_improvement_workorders": entry_bucket_workorders,
-        "submit_bucket_attribution_summary": submit_attribution_summary,
-        "submit_bucket_runtime_approval_candidates": submit_bucket_candidates,
-        "submit_bucket_code_improvement_workorders": submit_bucket_workorders,
-        "post_submit_contract_gaps": post_submit_contract_gaps,
-        "holding_bucket_attribution_summary": holding_attribution_summary,
-        "holding_bucket_count": holding_bucket_count,
-        "holding_bucket_workorder_count": holding_bucket_workorder_count,
-        "holding_bucket_code_improvement_workorders": holding_bucket_workorders,
-        "exit_bucket_attribution_summary": exit_attribution_summary,
-        "exit_bucket_count": exit_bucket_count,
-        "exit_bucket_workorder_count": exit_bucket_workorder_count,
-        "exit_bucket_code_improvement_workorders": exit_bucket_workorders,
-        "scale_in_bucket_runtime_approval_candidates": scale_in_bucket_candidates,
-        "scale_in_bucket_code_improvement_workorders": scale_in_bucket_workorders,
-        "overnight_bucket_runtime_approval_candidates": overnight_bucket_candidates,
-        "overnight_bucket_code_improvement_workorders": overnight_bucket_workorders,
-        "policy_entries": (
-            matrix.get("policy_entries")
-            if isinstance(matrix.get("policy_entries"), list)
-            else []
-        ),
-        "fixed_threshold_roles": (
-            matrix.get("fixed_threshold_roles")
-            if isinstance(matrix.get("fixed_threshold_roles"), dict)
-            else {}
-        ),
-        "tuning_cycle": "lifecycle_decision_matrix -> threshold_cycle_ev -> runtime_approval_summary -> next preopen bounded env",
-        "warnings": warnings,
-        "ready_for_bounded_apply": not warnings,
-    }
+    return {**retired_status(), "available": False, "windows": {}}
 
 
 def _lifecycle_bucket_discovery_summary(target_date: str) -> dict[str, Any]:
-    path = discovery_report_path(target_date)
-    payload = _load_json(path)
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    candidates = (
-        payload.get("surfaced_candidates")
-        if isinstance(payload.get("surfaced_candidates"), list)
-        else []
-    )
-    return {
-        "available": bool(payload),
-        "artifact": str(path) if path.exists() else None,
-        "status": summary.get("status") or ("missing" if not payload else "unknown"),
-        "runtime_effect": False,
-        "decision_authority": payload.get("decision_authority")
-        or "postclose_lifecycle_bucket_discovery_classifier",
-        "candidate_count": _as_int(summary.get("candidate_count")),
-        "surfaced_candidate_count": _as_int(summary.get("surfaced_candidate_count")),
-        "sim_auto_approved_count": _as_int(summary.get("sim_auto_approved_count")),
-        "direct_sim_auto_approved_count": _as_int(
-            summary.get("direct_sim_auto_approved_count")
-            if "direct_sim_auto_approved_count" in summary
-            else summary.get("sim_auto_approved_count")
-        ),
-        "entry_only_sim_auto_approved_count": _as_int(
-            summary.get("entry_only_sim_auto_approved_count")
-        ),
-        "lifecycle_flow_sim_probe_candidate_count": _as_int(
-            summary.get("lifecycle_flow_sim_probe_candidate_count")
-        ),
-        "sim_policy_approved_total_count": _as_int(
-            summary.get("sim_policy_approved_total_count")
-            if "sim_policy_approved_total_count" in summary
-            else summary.get("sim_auto_approved_count")
-        ),
-        "live_auto_apply_ready_count": _as_int(
-            summary.get("live_auto_apply_ready_count")
-        ),
-        "human_intervention_required": bool(summary.get("human_intervention_required")),
-        "state_counts": (
-            summary.get("state_counts")
-            if isinstance(summary.get("state_counts"), dict)
-            else {}
-        ),
-        "surfaced_candidate_ids": [
-            str(item.get("bucket_id"))
-            for item in candidates
-            if isinstance(item, dict) and item.get("bucket_id")
-        ],
-    }
+    return {**retired_status(), "available": False, "windows": {}}
 
 
 def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
@@ -2382,78 +1875,7 @@ def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
 def _lifecycle_bucket_windows_summary(
     target_date: str, ev_report: dict[str, Any]
 ) -> dict[str, Any]:
-    ev_windows = (
-        ev_report.get("lifecycle_bucket_windows")
-        if isinstance(ev_report.get("lifecycle_bucket_windows"), dict)
-        else {}
-    )
-    windows: dict[str, Any] = {}
-    for suffix in ("rolling5d", "rolling10d", "mtd"):
-        path = _lifecycle_bucket_window_report_path(target_date, suffix)
-        payload = _load_json(path)
-        summary = (
-            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-        )
-        from_ev = (
-            (ev_windows.get("windows") or {}).get(suffix)
-            if isinstance(ev_windows.get("windows"), dict)
-            else {}
-        )
-        windows[suffix] = {
-            "available": bool(payload) or bool(from_ev.get("available")),
-            "artifact": str(path) if path.exists() else from_ev.get("artifact"),
-            "window_role": (
-                "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation"
-            ),
-            "window_policy": payload.get("window_policy")
-            or summary.get("source_window_policy")
-            or from_ev.get("window_policy")
-            or suffix,
-            "status": summary.get("status")
-            or from_ev.get("status")
-            or ("missing" if not payload else "unknown"),
-            "parent_bucket_count": _as_int(
-                summary.get("parent_bucket_count") or from_ev.get("parent_bucket_count")
-            ),
-            "selected_parent_level": summary.get("selected_parent_level")
-            or from_ev.get("selected_parent_level"),
-            "parent_granularity_status": summary.get("parent_granularity_status")
-            or from_ev.get("parent_granularity_status"),
-            "absorbed_child_count": _as_int(
-                summary.get("absorbed_child_count")
-                or from_ev.get("absorbed_child_count")
-            ),
-            "absorbed_sample_count": _as_int(
-                summary.get("absorbed_sample_count")
-                or from_ev.get("absorbed_sample_count")
-            ),
-            "child_conflict_warning_count": _as_int(
-                summary.get("child_conflict_warning_count")
-                or from_ev.get("child_conflict_warning_count")
-            ),
-            "live_auto_apply_ready_count": _as_int(
-                summary.get("live_auto_apply_ready_count")
-                or from_ev.get("live_auto_apply_ready_count")
-            ),
-            "source_contract_status": summary.get("source_contract_status")
-            or from_ev.get("source_contract_status"),
-            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status")
-            or from_ev.get("ai_two_pass_review_status"),
-        }
-    return {
-        "daily": (
-            ev_windows.get("daily") if isinstance(ev_windows.get("daily"), dict) else {}
-        ),
-        "windows": windows,
-        "promotion_window": ev_windows.get("promotion_window") or "mtd",
-        "confirmation_windows": ev_windows.get("confirmation_windows")
-        or ["rolling5d", "rolling10d"],
-        "warnings": (
-            ev_windows.get("warnings")
-            if isinstance(ev_windows.get("warnings"), list)
-            else []
-        ),
-    }
+    return {**retired_status(), "available": False, "windows": {}}
 
 
 def _swing_strategy_discovery_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
@@ -2696,43 +2118,28 @@ def _swing_lifecycle_bucket_discovery_summary(
 
 
 def _institutional_flow_context_summary(ev_report: dict[str, Any]) -> dict[str, Any]:
-    payload = (
-        ev_report.get("institutional_flow_context")
-        if isinstance(ev_report.get("institutional_flow_context"), dict)
-        else {}
-    )
-    available = bool(payload.get("available"))
-    warnings = []
-    if not available:
-        warnings.append("institutional_flow_context_missing")
-    if int(payload.get("token_error_count") or 0) > 0:
-        warnings.append("kiwoom_token_error")
+    del ev_report
     return {
+        **retired_status("institutional_flow_context"),
         "family": "institutional_flow_context",
-        "available": available,
-        "artifact": payload.get("artifact"),
+        "available": False,
+        "artifact": None,
         "description": _FAMILY_DESCRIPTIONS["institutional_flow_context"],
         "baseline_application": _BASELINE_APPLICATION["institutional_flow_context"],
-        "runtime_effect": False,
         "runtime_mutation_allowed": False,
-        "decision_authority": payload.get("decision_authority")
-        or "source_only_lifecycle_feature",
-        "row_count": int(payload.get("row_count") or 0),
-        "ok_count": int(payload.get("ok_count") or 0),
-        "partial_count": int(payload.get("partial_count") or 0),
-        "missing_count": int(payload.get("missing_count") or 0),
-        "token_error_count": int(payload.get("token_error_count") or 0),
-        "join_rate_pct": payload.get("join_rate_pct"),
-        "source_mix": payload.get("source_mix") or {},
-        "top_net_buy": payload.get("top_net_buy") or [],
-        "state_interpretation": "source-only feature. Missing/stale data cannot change lifecycle runtime action.",
-        "warnings": warnings,
+        "consumer_status": "retired_with_scalping_adm_ldm",
+        "replacement_source": "exact_ai_context_investor_and_program_flow",
+        "state_interpretation": "Dedicated aggregate/report path is retired; existing exact AI investor/program context remains the active source path.",
     }
 
 
 def _microstructure_reaction_context_summary(
     ev_report: dict[str, Any],
 ) -> dict[str, Any]:
+    from src.engine.scalping.microstructure_reaction_context import (
+        microstructure_summary_contract,
+    )
+
     payload = (
         ev_report.get("microstructure_reaction_context")
         if isinstance(ev_report.get("microstructure_reaction_context"), dict)
@@ -2754,11 +2161,31 @@ def _microstructure_reaction_context_summary(
         "runtime_effect": False,
         "runtime_mutation_allowed": False,
         "decision_authority": payload.get("decision_authority")
-        or "entry_confidence_modifier_source_only",
+        or "diagnostic_source_only_with_fail_closed_holding_quality_consumer",
         "row_count": _as_int(payload.get("row_count")),
         "ok_count": _as_int(payload.get("ok_count")),
         "missing_or_unusable_count": _as_int(payload.get("missing_or_unusable_count")),
         "real_submitted_count": _as_int(payload.get("real_submitted_count")),
+        "usable_coverage_pct": payload.get("usable_coverage_pct"),
+        "delivery_telemetry_v2_count": _as_int(
+            payload.get("delivery_telemetry_v2_count")
+        ),
+        "delivery_telemetry_legacy_unverifiable_count": _as_int(
+            payload.get("delivery_telemetry_legacy_unverifiable_count")
+        ),
+        "context_computed_count": _as_int(payload.get("context_computed_count")),
+        "context_sent_count": _as_int(payload.get("context_sent_count")),
+        "context_consumed_count": _as_int(payload.get("context_consumed_count")),
+        "context_delivery_state_counts": (
+            payload.get("context_delivery_state_counts")
+            if isinstance(payload.get("context_delivery_state_counts"), dict)
+            else {}
+        ),
+        "context_consumer_counts": (
+            payload.get("context_consumer_counts")
+            if isinstance(payload.get("context_consumer_counts"), dict)
+            else {}
+        ),
         "status_counts": (
             payload.get("status_counts")
             if isinstance(payload.get("status_counts"), dict)
@@ -2796,7 +2223,8 @@ def _microstructure_reaction_context_summary(
             if isinstance(payload.get("forbidden_uses"), list)
             else []
         ),
-        "state_interpretation": "source-only entry confidence context. It cannot create standalone BUY or bypass submit safety.",
+        "state_interpretation": "Derived context is diagnostic; only explicit holding source-quality fail-closed consumption is permitted. It cannot create BUY or bypass submit safety.",
+        **microstructure_summary_contract(payload),
         "warnings": warnings,
     }
 
@@ -3270,11 +2698,6 @@ def build_runtime_approval_summary(
                     "swing_lifecycle_bucket_discovery_missing"
                     if include_swing
                     and not swing_lifecycle_bucket_discovery_summary.get("available")
-                    else ""
-                ),
-                (
-                    "institutional_flow_context_missing"
-                    if not institutional_flow_path
                     else ""
                 ),
                 (

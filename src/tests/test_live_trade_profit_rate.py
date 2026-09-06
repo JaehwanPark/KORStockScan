@@ -166,6 +166,73 @@ def test_sell_lifecycle_outbox_ack_requires_every_durable_field_exact(
         assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is False
 
 
+@pytest.mark.parametrize("companion_ok", [True, False])
+def test_sell_completed_emits_exact_entry_recheck_terminal_attribution(
+    monkeypatch, companion_ok
+):
+    observed_at = datetime(2026, 9, 4, 10, 0, tzinfo=timezone(timedelta(hours=9)))
+    leg = receipts._build_sell_lifecycle_outbox_leg(
+        {
+            "id": 7,
+            "code": "123456",
+            "name": "EXACT",
+            "entry_opportunity_recheck_attempt_id": "eor-test",
+            "entry_opportunity_recheck_armed": True,
+            "entry_opportunity_recheck_submit_observed": True,
+            "entry_opportunity_recheck_direct_submit": True,
+            "entry_opportunity_recheck_broker_order_no": "B1",
+            "entry_opportunity_recheck_fill_observed": True,
+            "entry_opportunity_recheck_fill_order_no": "B1",
+        },
+        code="123456",
+        target_id=7,
+        now=observed_at,
+        stage="sell_completed",
+        event_fields={
+            "profit_rate": 0.03,
+            "realized_pnl_krw": 15.0,
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False,
+            "runtime_effect": True,
+        },
+    )
+    emitted = []
+
+    def _emit(pipeline, name, code, stage, *, record_id=None, fields=None):
+        normalized = {str(key): str(value) for key, value in (fields or {}).items()}
+        emitted.append((stage, normalized))
+        return {
+            "pipeline": pipeline,
+            "stage": stage,
+            "stock_name": name,
+            "stock_code": code,
+            "record_id": record_id,
+            "fields": normalized,
+            "structured_append_succeeded": companion_ok or stage == "sell_completed",
+            "structured_append_status": "raw_appended",
+        }
+
+    monkeypatch.setattr(receipts, "emit_pipeline_event", _emit)
+    monkeypatch.setattr(
+        receipts,
+        "_sell_lifecycle_outbox_event_contract_valid",
+        lambda **_kwargs: True,
+    )
+
+    assert (
+        receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is companion_ok
+    )
+    assert [stage for stage, _fields in emitted] == [
+        "sell_completed",
+        "entry_opportunity_recheck_sell_completed",
+    ]
+    for _stage, fields in emitted:
+        assert fields["entry_opportunity_recheck_attempt_id"] == "eor-test"
+        assert fields["entry_opportunity_recheck_terminal_outcome"] == "sell_completed"
+        assert fields["entry_opportunity_recheck_cost_adjusted_profit_pct"] == "0.03"
+        assert fields["entry_opportunity_recheck_realized_net_pnl_krw"] == "15.0"
+
+
 @pytest.mark.parametrize(
     "receive_source",
     ["websocket_packet_ingress", "handler_dispatch_fallback"],

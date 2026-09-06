@@ -43,6 +43,8 @@ IMPLEMENTATION_PATHS = (
     "src/engine/lifecycle_decision_matrix_runtime.py",
     "src/engine/lifecycle/avg_down_policy_replay.py",
     "src/engine/lifecycle/avg_down_replay.py",
+    "src/engine/lifecycle/retirement.py",
+    "src/engine/lifecycle/greenfield_authority.py",
     "src/engine/trade_profit.py",
     "src/engine/ai_engine_openai.py",
     "src/engine/kiwoom_orders.py",

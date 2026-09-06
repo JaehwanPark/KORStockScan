@@ -31,9 +31,8 @@ def test_main_print_summary_omits_candidates(monkeypatch, capsys, tmp_path):
     assert mod.main(["--date", "2026-07-31", "--print-summary"]) == 0
     output = json.loads(capsys.readouterr().out)
 
-    assert output["candidate_count"] == 324
-    assert output["surfaced_candidate_count"] == 2
-    assert "candidates" not in output
+    assert output["status"] == "retired"
+    assert output["runtime_effect"] is False
 
 
 def _ai_keep_response():
@@ -1822,201 +1821,7 @@ def test_lifecycle_bucket_discovery_classifies_live_sim_and_new_buckets(
         "2026-05-22",
         ai_raw_response=_ai_keep_response(),
     )
-
-    states = {item["bucket_id"]: item for item in report["candidates"]}
-    live = [
-        item
-        for item in states.values()
-        if item["classification_state"] == "live_auto_apply_ready"
-    ]
-    sim = [
-        item
-        for item in states.values()
-        if item["classification_state"] == "sim_auto_approved"
-    ]
-    entry_only_sources = [
-        item
-        for item in report["candidates"]
-        if item.get("source_bucket_kind") == "entry_only_source_candidate"
-    ]
-    assert {item["live_auto_apply_family"] for item in live} == {
-        mod.SCALE_IN_LIVE_AUTO_FAMILY
-    }
-    wait6579 = states[
-        "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
-    ]
-    assert wait6579["classification_state"] == "entry_only_source_candidate"
-    assert wait6579["review_category"] == "source_only_keep_collecting"
-    assert wait6579["review_sub_state"] == "entry_only_source_candidate"
-    assert wait6579["evidence_grade"] == mod.EVIDENCE_GRADE_2_COUNTERFACTUAL
-    assert wait6579["transition_target"] == "entry_dimension_provenance_only"
-    assert wait6579["full_real_conversion_allowed"] is False
-    assert wait6579["live_auto_apply_family"] is None
-    assert wait6579["legacy_contract_known_unknown"] is False
-    assert wait6579["source_dimension_gap"] == "unknown_source_dimensions"
-    assert (wait6579["auto_promotion_contract"] or {})[
-        "deterministic_contract_required"
-    ] is False
-    assert wait6579["bounded_live_canary_allowed"] is False
-    flow_parent = next(
-        item
-        for item in states.values()
-        if item["stage"] == "lifecycle_flow"
-        and item.get("entry_bucket_id") == "entry:combo_entry_spot:score_66_69"
-    )
-    assert flow_parent["classification_state"] == "source_only_keep_collecting"
-    assert flow_parent["live_auto_apply_family"] is None
-    assert flow_parent["metric_scope"] == "lifecycle_bundle_ev"
-    assert flow_parent["policy_bucket_id"].startswith(
-        "lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery"
-    )
-    assert flow_parent["parent_granularity_status"] == "too_broad"
-    assert flow_parent["parent_granularity_floor_passed"] is False
-    assert flow_parent["parent_live_floor_passed"] is False
-    assert flow_parent["parent_joined_sample"] == 22
-    assert flow_parent["absorbed_child_count"] == 1
-    assert flow_parent["absorbed_child_bucket_ids"] == [flow_parent["bucket_id"]]
-    flow_probe = next(
-        item
-        for item in states.values()
-        if item["stage"] == "lifecycle_flow"
-        and item["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
-    )
-    assert flow_probe["classification_state"] == mod.LIFECYCLE_FLOW_SIM_PROBE_STATE
-    assert flow_probe["review_category"] == "sim_auto_approved"
-    assert flow_probe["review_sub_state"] == "lifecycle_flow_sim_probe_candidate"
-    assert flow_probe["source_bucket_kind"] == "lifecycle_flow_sim_probe_policy"
-    assert flow_probe["live_auto_apply_family"] is None
-    assert flow_probe["allowed_runtime_apply"] is False
-    assert flow_probe["runtime_effect"] is False
-    assert flow_probe["broker_order_forbidden"] is True
-    assert (
-        flow_probe["decision_authority"]
-        == "lifecycle_bucket_discovery_lifecycle_flow_sim_probe"
-    )
-    assert flow_probe["complete_flow_count"] == 1
-    assert flow_probe["incomplete_flow_count"] == 0
-    candidates_by_id = {item["bucket_id"]: item for item in report["candidates"]}
-    holding = candidates_by_id[
-        "holding:combo_holding_flow:source_scalp_sim_holding_snapshot_action_hold_profit_profit_pos080_pos150_held_held_180_600s"
-    ]
-    assert holding["classification_state"] == "source_only_keep_collecting"
-    assert holding["bounded_live_canary_allowed"] is False
-    assert holding["sim_lifecycle_handoff_allowed"] is False
-    assert holding["ai_inference_proposal"]["model"] == "gpt-5.4-mini"
-    mixed = states["entry:score_band:score_70_74"]
-    assert mixed["evidence_grade"] == mod.EVIDENCE_GRADE_MIXED_SOURCE
-    assert mixed["classification_state"] == "sim_auto_approved"
-    assert mixed["bounded_live_canary_allowed"] is False
-    scale_blocker = states["scale_in:blocker_reason:pnl_out_of_range_0_32"]
-    assert scale_blocker["recommended_action"] == "keep_or_tighten_blocker_candidate"
-    assert scale_blocker["legacy_raw_bucket_key"] == "pnl_out_of_range(0.32)"
-    assert (
-        scale_blocker["canonical_bucket"] == "scale_in:blocker_reason:pnl_out_of_range"
-    )
-    assert scale_blocker["normalized_metrics"]["pnl_delta_pct"] == 0.32
-    assert (
-        scale_blocker["deterministic_proposal"]["proposal_decision"]
-        == "absorb_as_dimension"
-    )
-    assert (
-        scale_blocker["ai_tier2_comparative_review"]["selected_decision"]
-        == "absorb_as_dimension"
-    )
-    assert report["summary"]["deterministic_proposal_count"] == len(
-        report["candidates"]
-    )
-    assert report["summary"]["absorbed_bucket_count"] >= 1
-    assert "canonical_bucket_count" in report["summary"]
-    assert report["summary"]["parent_live_auto_apply_ready_count"] == 0
-    assert report["summary"]["absorbed_sample_count"] >= 22
-    assert sim
-    assert entry_only_sources
-    assert entry_only_sources[0]["bucket_relation"] == "new_bucket_candidate"
-    assert (
-        entry_only_sources[0]["classification_state"] == "entry_only_source_candidate"
-    )
-    assert entry_only_sources[0]["review_category"] == "source_only_keep_collecting"
-    assert entry_only_sources[0]["review_sub_state"] == "entry_only_source_candidate"
-    assert entry_only_sources[0]["source_bucket_id"]
-    assert "recommended_resolution" in entry_only_sources[0]
-    assert "source_bucket_kind_counts" in report["summary"]
-    assert report["summary"]["review_category_counts"]["sim_auto_approved"] >= len(sim)
-    assert (
-        report["summary"]["review_sub_state_counts"][
-            "lifecycle_flow_sim_probe_candidate"
-        ]
-        == 1
-    )
-    assert report["summary"]["human_intervention_required"] is False
-    assert report["summary"]["lifecycle_flow_sim_probe_candidate_count"] == 1
-    assert report["summary"]["direct_sim_auto_approved_count"] == len(sim)
-    assert report["summary"]["sim_policy_approved_total_count"] == len(sim) + 1
-    assert report["ai_two_pass_review"]["sharded"] is True
-    assert {item["shard_id"] for item in report["ai_two_pass_review"]["shards"]} >= {
-        "live_contract_review",
-        "lifecycle_flow_review",
-        "sim_policy_review",
-        "gap_workorder_review",
-        "taxonomy_discovery_review",
-    }
-    assert report["summary"]["ai_two_pass_review_shard_count"] == 5
-    assert (report_dir / "lifecycle_bucket_discovery_2026-05-22.json").exists()
-    assert (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").exists()
-    catalog = json.loads(
-        (catalog_dir / "lifecycle_bucket_catalog_2026-05-22.json").read_text()
-    )
-    assert (
-        catalog["targeted_sim_collection"]["policy_version"]
-        == "active_parent_seed_targeted_quota_v1"
-    )
-    assert catalog["targeted_sim_collection"]["daily_total_share_pct"] == 35
-    assert catalog["targeted_sim_collection"]["per_seed_daily_limit"] == 20
-    assert catalog["targeted_sim_collection"]["complete_flow_goal_per_bucket"] == 5
-    assert catalog["targeted_sim_collection"]["conflict_child_sample_goal"] == 5
-    assert (
-        catalog["targeted_sim_collection"]["runtime_match_policy"]
-        == "observable_prefix_only"
-    )
-    assert "active_sim_priority_seeds" in catalog
-    auto = json.loads(
-        (sim_dir / "lifecycle_bucket_sim_auto_approval_2026-05-22.json").read_text()
-    )
-    assert auto["approved"] is True
-    assert auto["broker_order_forbidden"] is True
-    assert auto["actual_order_submitted"] is False
-    assert auto["runtime_effect"] is False
-    assert auto["allowed_runtime_apply"] is False
-    assert auto["approved_bucket_count"] == len(auto["approved_bucket_ids"])
-    assert auto["approved_bucket_count"] == len(auto["approved_bucket_rows"])
-    assert auto["approved_unique_source_bucket_count"] <= auto["approved_bucket_count"]
-    assert auto["approved_lifecycle_flow_sim_probe_count"] == 1
-    assert auto["approved_state_counts"][mod.LIFECYCLE_FLOW_SIM_PROBE_STATE] == 1
-    assert flow_probe["bucket_id"] in auto["approved_bucket_ids"]
-    assert (
-        auto["targeted_sim_collection"]["policy_version"]
-        == "active_parent_seed_targeted_quota_v1"
-    )
-    assert auto["targeted_sim_collection"]["daily_total_share_pct"] == 35
-    assert auto["targeted_sim_collection"]["per_seed_daily_limit"] == 20
-    assert auto["targeted_sim_collection"][
-        "stage_counterfactual_variant_plan_version"
-    ] == ("stage_counterfactual_variant_plan_v1")
-    flow_probe_row = next(
-        row
-        for row in auto["approved_bucket_rows"]
-        if row["bucket_id"] == flow_probe["bucket_id"]
-    )
-    assert flow_probe_row["source_bucket_id"] == flow_probe["source_bucket_id"]
-    assert flow_probe_row["complete_flow_count"] == 1
-    assert flow_probe_row["incomplete_flow_count"] == 0
-    assert (
-        auto["approved_evidence_grade_counts"].get(
-            mod.EVIDENCE_GRADE_2_COUNTERFACTUAL, 0
-        )
-        == 0
-    )
-    assert auto["source_quality_status"] == "pass"
+    assert report["status"] == "retired"
 
 
 def test_wait6579_enriched_entry_dimension_remains_source_only() -> None:
@@ -2079,13 +1884,7 @@ def test_lifecycle_bucket_discovery_assigns_live_family_to_avg_down_arm(
         "2026-05-22",
         ai_raw_response=_ai_keep_response(),
     )
-
-    states = {item["bucket_id"]: item for item in report["candidates"]}
-    avg_down = states["scale_in:arm:avg_down"]
-    assert avg_down["classification_state"] == "live_auto_apply_ready"
-    assert avg_down["live_auto_apply_family"] == mod.SCALE_IN_LIVE_AUTO_FAMILY
-    assert avg_down["bucket_type"] == "arm"
-    assert avg_down["bucket_key"] == "AVG_DOWN"
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_blocks_scale_in_arm_without_v2_coverage(
@@ -2122,12 +1921,7 @@ def test_lifecycle_bucket_discovery_blocks_scale_in_arm_without_v2_coverage(
         "2026-05-22",
         ai_raw_response=_ai_keep_response(),
     )
-
-    states = {item["bucket_id"]: item for item in report["candidates"]}
-    avg_down = states["scale_in:arm:avg_down"]
-    assert avg_down["classification_state"] == "source_only_keep_collecting"
-    assert avg_down.get("live_auto_apply_family") is None
-    assert avg_down["grade_reason"] == "scale_in_incremental_v2_coverage_not_ready"
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(
@@ -2256,52 +2050,7 @@ def test_lifecycle_flow_parent_absorbs_thin_children_for_live_policy(
         "2026-05-22",
         ai_raw_response=_ai_keep_response(),
     )
-
-    flow_candidates = [
-        item
-        for item in report["candidates"]
-        if item["stage"] == "lifecycle_flow"
-        and item["bucket_type"] == "combo_lifecycle_flow"
-    ]
-    live = [
-        item
-        for item in flow_candidates
-        if item["classification_state"] == "live_auto_apply_ready"
-    ]
-    absorbed = [
-        item
-        for item in flow_candidates
-        if item.get("recommended_resolution") == "absorbed_into_parent_live_policy"
-    ]
-    assert len(live) == 1
-    assert len(absorbed) >= 1
-    assert live[0]["policy_bucket_id"].startswith(
-        "lifecycle_flow:combo_lifecycle_flow:entry_score_parent=score_mid_recovery"
-    )
-    assert live[0]["parent_granularity_status"] == "target_pass"
-    assert live[0]["parent_granularity_floor_passed"] is True
-    assert live[0]["parent_joined_sample"] == 10
-    assert live[0]["parent_source_quality_adjusted_ev_pct"] == 1.3
-    assert live[0]["parent_live_floor_passed"] is True
-    assert live[0]["child_live_authority_allowed"] is False
-    assert live[0]["absorbed_child_count"] == 2
-    assert set(live[0]["absorbed_child_bucket_ids"]) == {
-        item["bucket_id"]
-        for item in flow_candidates
-        if item.get("policy_bucket_id") == live[0]["policy_bucket_id"]
-    }
-    assert live[0]["absorbed_dimensions"]["entry_detail"] == [
-        "entry:combo_entry_spot:score_66_69",
-        "entry:combo_entry_spot:score_70_74",
-    ]
-    assert absorbed[0]["recommended_resolution"] == "absorbed_into_parent_live_policy"
-    assert report["summary"]["parent_live_auto_apply_ready_count"] == 1
-    assert report["summary"]["parent_granularity_status"] == "target_pass"
-    assert 30 <= report["summary"]["parent_bucket_count"] <= 60
-    assert report["summary"]["absorbed_child_count"] == len(flow_buckets)
-    assert report["summary"]["absorbed_sample_count"] == sum(
-        item["sample"] for item in flow_buckets
-    )
+    assert report["status"] == "retired"
 
 
 def test_score_family_without_separator_rolls_up_to_parent_group():
@@ -2681,23 +2430,8 @@ def test_lifecycle_bucket_discovery_quarantines_contaminated_live_candidates(
         "2026-05-28",
         ai_raw_response=_ai_keep_response(),
     )
-
-    by_id = {item["bucket_id"]: item for item in report["candidates"]}
-    scale_in = next(
-        item
-        for item in by_id.values()
-        if item.get("live_auto_apply_family") == mod.SCALE_IN_LIVE_AUTO_FAMILY
-    )
-    assert scale_in["classification_state"] == "runtime_blocked_contract_gap"
-    assert scale_in["allowed_runtime_apply"] is False
-    assert scale_in["promotion_ev_excluded_reason"] == "contaminated_scale_in_policy"
-    wait6579 = by_id[
-        "entry:combo_entry_spot:score_score_66_69_source_wait6579_ev_cohort_stale_fresh_or_unflagged_liquidity_liquidity_unknown"
-    ]
-    assert wait6579["classification_state"] == "entry_only_source_candidate"
-    assert wait6579["bounded_live_canary_allowed"] is False
-    assert report["summary"]["live_auto_apply_ready_count"] == 0
-    assert "contamination_quarantine_live_auto_blocked:1" in report["warnings"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_disabled(
@@ -2717,28 +2451,7 @@ def test_lifecycle_bucket_discovery_blocks_deterministic_live_when_ai_review_dis
     report = mod.write_lifecycle_bucket_discovery_report(
         "2026-05-22", ai_review_provider="none"
     )
-
-    blocked = [
-        item
-        for item in report["surfaced_candidates"]
-        if item["classification_state"] == "runtime_blocked_contract_gap"
-    ]
-    assert {
-        item["live_auto_apply_family"]
-        for item in blocked
-        if item.get("live_auto_apply_family")
-    } == {
-        mod.SCALE_IN_LIVE_AUTO_FAMILY,
-    }
-    assert all(
-        item.get("ai_tier2_blocked_reason") == "ai_tier2_validation_not_parsed:disabled"
-        for item in blocked
-    )
-    assert report["summary"]["ai_two_pass_review_status"] == "disabled"
-    assert (
-        "ai_two_pass_review_disabled_fail_closed_live_auto_blocked"
-        in report["warnings"]
-    )
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidate(
@@ -2762,22 +2475,7 @@ def test_lifecycle_bucket_discovery_ignores_ambiguous_ai_block_for_live_candidat
             bucket_id="scale_in:arm:pyramid",
         ),
     )
-
-    live = [
-        item
-        for item in report["surfaced_candidates"]
-        if item["classification_state"] == "live_auto_apply_ready"
-    ]
-    ignored = [item for item in live if item.get("ai_review_block_ignored_reason")]
-    assert all(
-        (item.get("auto_promotion_contract") or {}).get("tier2_status") == "parsed"
-        for item in live
-    )
-    assert report["summary"]["live_auto_apply_ready_count"] == 1
-    assert len(ignored) == 1
-    assert (
-        "ai_review_ambiguous_live_candidate_kept_for_post_apply" in report["warnings"]
-    )
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_compares_deterministic_and_ai_taxonomy_proposals(
@@ -2799,27 +2497,7 @@ def test_lifecycle_bucket_discovery_compares_deterministic_and_ai_taxonomy_propo
         "2026-05-22",
         ai_raw_response=_ai_hybrid_taxonomy_response(bucket_id),
     )
-
-    item = next(
-        candidate
-        for candidate in report["candidates"]
-        if candidate["bucket_id"] == bucket_id
-    )
-    assert item["ai_tier2_proposal"]["proposal_status"] == "provided"
-    assert item["ai_tier2_proposal"]["proposal_decision"] == "create_new_dimension"
-    assert item["ai_tier2_comparative_review"]["selected_source"] == "hybrid"
-    assert (
-        item["ai_tier2_comparative_review"]["selected_decision"]
-        == "absorb_as_dimension"
-    )
-    assert item["ai_tier2_taxonomy_decision"] == "absorb_as_dimension"
-    assert item["ai_tier2_confidence"] == "high"
-    assert report["summary"]["ai_tier2_proposal_count"] == 1
-    assert report["summary"]["reviewer_selected_hybrid_count"] == 1
-    assert (
-        report["summary"]["taxonomy_selected_decision_counts"]["absorb_as_dimension"]
-        >= 1
-    )
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparison(
@@ -2842,18 +2520,7 @@ def test_lifecycle_bucket_discovery_fails_closed_when_ai_proposal_lacks_comparis
             "scale_in:blocker_reason:pnl_out_of_range_0_32"
         ),
     )
-
-    assert report["summary"]["ai_two_pass_review_status"] == "parse_rejected"
-    assert (
-        "ai_review_comparative_review_missing:scale_in:blocker_reason:pnl_out_of_range_0_32"
-        in report["warnings"]
-    )
-    blocked = [
-        item
-        for item in report["surfaced_candidates"]
-        if item["classification_state"] == "runtime_blocked_contract_gap"
-    ]
-    assert blocked
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_rejects_real_preapply_primary_ev_claim():
@@ -2887,11 +2554,7 @@ def test_lifecycle_bucket_discovery_rejects_legacy_ai_response_without_dual_taxo
         "2026-05-22",
         ai_raw_response=_legacy_ai_response_without_dual_taxonomy_fields(),
     )
-
-    assert report["summary"]["ai_two_pass_review_status"] == "parse_rejected"
-    assert "ai_review_ai_tier2_proposals_invalid" in report["warnings"]
-    assert "ai_review_comparative_reviews_invalid" in report["warnings"]
-    assert report["summary"]["live_auto_apply_ready_count"] == 0
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_candidate(
@@ -2915,15 +2578,7 @@ def test_lifecycle_bucket_discovery_applies_explicit_contract_ai_block_for_live_
             bucket_id="scale_in:arm:pyramid",
         ),
     )
-
-    blocked = [
-        item
-        for item in report["surfaced_candidates"]
-        if item.get("bucket_id") == "scale_in:arm:pyramid"
-        and item["classification_state"] == "runtime_blocked_contract_gap"
-    ]
-    assert blocked
-    assert report["summary"]["live_auto_apply_ready_count"] == 0
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(
@@ -2969,16 +2624,7 @@ def test_lifecycle_bucket_discovery_surfaces_source_contract_drift(
         "2026-05-22",
         ai_raw_response=_ai_keep_response(),
     )
-
-    assert report["summary"]["source_contract_status"] == "fail"
-    assert report["source_contract_changes"]
-    drift = [
-        item
-        for item in report["surfaced_candidates"]
-        if item["stage"] == "source_contract"
-        and item["classification_state"] == "code_patch_required"
-    ]
-    assert drift
+    assert report["status"] == "retired"
 
 
 def test_previous_report_uses_canonical_daily_not_rolling_variant(
@@ -3050,9 +2696,7 @@ def test_lifecycle_bucket_discovery_does_not_treat_empty_declared_section_as_con
         "2026-05-22",
         ai_raw_response=_ai_keep_response(),
     )
-
-    assert report["summary"]["source_contract_status"] == "pass"
-    assert report["source_contract_changes"] == []
+    assert report["status"] == "retired"
 
 
 def test_lifecycle_bucket_discovery_accepts_legacy_daily_source_split_alias():

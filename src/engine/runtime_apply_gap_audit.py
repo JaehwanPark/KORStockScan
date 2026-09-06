@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import hashlib
 import json
@@ -65,8 +67,6 @@ FAILURE_STATES = {
     "blocked_safety",
 }
 CORE_ARTIFACT_LABELS = (
-    "lifecycle_bucket_discovery",
-    "runtime_apply_bridge",
     "runtime_approval_summary",
     "code_improvement_workorder",
 )
@@ -87,13 +87,15 @@ def runtime_apply_gap_audit_markdown_path(target_date: str) -> Path:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         if not path.exists():
             return {}
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _safe_float(value: Any, default: float | None = None) -> float | None:
@@ -187,6 +189,8 @@ def _artifact_status(
     payloads: dict[str, dict[str, Any]] = {}
     for label in labels:
         path = _artifact_path(label, target_date)
+        if retired_artifact(path):
+            continue
         exists = path.exists()
         json_valid = False
         payload: dict[str, Any] = {}

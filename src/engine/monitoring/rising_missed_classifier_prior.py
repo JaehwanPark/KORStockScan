@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_owner
+
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import gzip
 import json
@@ -75,6 +79,8 @@ def _safe_float(value: Any, default: float | None = None) -> float | None:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         if path.suffix == ".gz":
             with gzip.open(path, "rt", encoding="utf-8") as handle:
@@ -83,7 +89,7 @@ def _load_json(path: Path) -> dict[str, Any]:
             payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -779,7 +785,7 @@ def _build_code_improvement_orders(summary: dict[str, Any]) -> list[dict[str, An
     return [
         {
             "order_id": "order_rising_missed_classifier_prior_bridge",
-            "title": "Attach cumulative ADM/LDM prior lookup to rising-missed classifier reports",
+            "title": "Attach cumulative source-lineage prior lookup to rising-missed classifier reports",
             "target_subsystem": "rising_missed_entry_classifier",
             "route": "instrumentation_order",
             "mapped_family": "rising_missed_classifier_prior_bridge",
@@ -821,10 +827,13 @@ def build_report(
     source_paths: dict[str, Path] | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    paths = source_paths or _default_source_paths(target_date)
+    paths = {
+        label: path
+        for label, path in (source_paths or _default_source_paths(target_date)).items()
+        if not retired_owner(label) and not retired_artifact(path)
+    }
     payloads = {label: _load_json(path) for label, path in paths.items()}
     priors: dict[str, dict[str, Any]] = {}
-    _merge_lifecycle_windows(priors, payloads)
     _merge_scout_metrics(priors, payloads.get("rising_missed_scout_workorder", {}))
     _merge_intraday_feedback(
         priors, payloads.get("rising_missed_intraday_feedback", {})

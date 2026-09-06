@@ -9,6 +9,7 @@ from src.engine.scalping_feature_packet import (
     SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
+    finalize_scalping_feature_delivery_audit_fields,
 )
 
 
@@ -186,11 +187,11 @@ def test_extract_scalping_feature_packet_exposes_stage1_supply_fields():
     assert packet["net_ask_depth"] == -4200
     assert (
         packet["microstructure_reaction_context_version"]
-        == "microstructure_reaction_context_v1"
+        == "microstructure_reaction_context_v2"
     )
-    assert packet["microstructure_reaction_context_status"] == "ok"
-    assert packet["microstructure_reaction_tick_aggressor_pressure_usable"] is True
-    assert packet["microstructure_reaction_tick_aggressor_trusted_count"] > 0
+    assert packet["microstructure_reaction_context_status"] == "source_quality_missing"
+    assert packet["microstructure_reaction_tick_aggressor_pressure_usable"] is False
+    assert packet["microstructure_reaction_tick_aggressor_trusted_count"] == 0
     assert packet["microstructure_reaction_context_hash"]
     assert packet["microstructure_reaction_vi_proximity_risk"] >= 0
     assert packet["micro_vwap_available"] is True
@@ -825,10 +826,53 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["distance_from_day_high_pct"] == packet["distance_from_day_high_pct"]
     assert fields["intraday_range_pct"] == packet["intraday_range_pct"]
     assert fields["volume_ratio_pct"] == packet["volume_ratio_pct"]
-    assert fields["microstructure_reaction_context_sent"] is True
-    assert fields["microstructure_reaction_context_status"] == "ok"
-    assert fields["microstructure_reaction_tick_aggressor_pressure_usable"] is True
-    assert fields["microstructure_reaction_tick_aggressor_trusted_count"] > 0
+    assert fields["microstructure_reaction_context_computed"] is True
+    assert fields["microstructure_reaction_context_sent"] is False
+    assert fields["microstructure_reaction_context_consumed"] is False
+    assert fields["microstructure_reaction_context_delivery_state"] == (
+        "computed_not_sent"
+    )
+    assert fields["microstructure_reaction_context_status"] == "source_quality_missing"
+    assert fields["microstructure_reaction_tick_aggressor_pressure_usable"] is False
+    assert fields["microstructure_reaction_tick_aggressor_trusted_count"] == 0
+
+
+def test_feature_delivery_audit_uses_final_serialized_payload_not_full_packet():
+    packet = extract_scalping_feature_packet(
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+    audit = build_scalping_feature_audit_fields(packet)
+
+    entry = finalize_scalping_feature_delivery_audit_fields(
+        audit,
+        {"features": {"spread_bp": packet["spread_bp"]}},
+    )
+    holding = finalize_scalping_feature_delivery_audit_fields(
+        audit,
+        {
+            "features": {
+                "microstructure_reaction_context_status": packet[
+                    "microstructure_reaction_context_status"
+                ]
+            }
+        },
+        internal_consumer="holding_score_source_quality",
+        transport_meta={"microstructure_provider_delivery_status": "response_received"},
+    )
+
+    assert entry["microstructure_reaction_context_sent"] is False
+    assert entry["microstructure_reaction_context_consumed"] is False
+    assert entry["microstructure_reaction_context_delivery_state"] == (
+        "computed_not_sent"
+    )
+    assert holding["microstructure_reaction_context_sent"] is True
+    assert holding["microstructure_reaction_context_consumed"] is True
+    assert holding["microstructure_reaction_context_consumer"] == (
+        "holding_score_source_quality"
+    )
 
 
 def test_entry_context_summary_features_are_complete_when_quote_and_flow_are_fresh():
@@ -1326,9 +1370,11 @@ def test_openai_market_packet_reuses_precomputed_feature_packet(monkeypatch):
     )
 
     features = json.loads(payload)["features"]
-    assert features["microstructure_reaction_context_status"] == "ok"
-    assert features["microstructure_reaction_tick_aggressor_pressure_usable"] is True
-    assert features["microstructure_reaction_tick_aggressor_trusted_count"] > 0
+    assert (
+        features["microstructure_reaction_context_status"] == "source_quality_missing"
+    )
+    assert features["microstructure_reaction_tick_aggressor_pressure_usable"] is False
+    assert features["microstructure_reaction_tick_aggressor_trusted_count"] == 0
 
 
 def test_openai_market_packet_tolerates_missing_orderbook():
@@ -1365,3 +1411,96 @@ def test_feature_packet_accepts_epoch_seconds_for_frozen_decision_time():
     assert (
         epoch_packet["tick_context_quality"] == datetime_packet["tick_context_quality"]
     )
+
+
+def test_micro_delivery_v3_rejects_substrings_and_preserves_unknown_and_cache():
+    from src.engine.scalping_feature_packet import settle_scalping_feature_delivery
+    from src.tests.test_microstructure_reaction_context import _ws_data, _ticks
+
+    packet = extract_scalping_feature_packet(
+        _ws_data(effective_venue="KRX"), _ticks(), now=datetime(2026, 9, 4, 9, 0, 12)
+    )
+    audit = build_scalping_feature_audit_fields(packet)
+    omitted = finalize_scalping_feature_delivery_audit_fields(
+        audit,
+        {"note": "microstructure_reaction_context_status is intentionally omitted"},
+    )
+    assert omitted["microstructure_reaction_context_payload_included"] is False
+    for payload in (
+        {"note": json.dumps({"microstructure_reaction_context_status": "ok"})},
+        {"microstructure_reaction_context_version": "v2"},
+    ):
+        assert (
+            finalize_scalping_feature_delivery_audit_fields(audit, payload)[
+                "microstructure_reaction_context_payload_included"
+            ]
+            is False
+        )
+    included = finalize_scalping_feature_delivery_audit_fields(
+        audit,
+        {"features": {"microstructure_reaction_context_status": "ok"}},
+        internal_consumer="holding_score_source_quality",
+    )
+    assert included["microstructure_reaction_context_sent"] is False
+    pending = settle_scalping_feature_delivery(
+        {**included, "microstructure_provider_delivery_status": "attempted_unconfirmed"}
+    )
+    assert pending["microstructure_reaction_context_sent"] is None
+    delivered = settle_scalping_feature_delivery(
+        {**included, "microstructure_provider_delivery_status": "response_received"}
+    )
+    assert delivered["microstructure_reaction_context_sent"] is True
+    assert (
+        delivered["microstructure_reaction_context_consumer"]
+        == "holding_score_source_quality"
+    )
+    retry_omitted = settle_scalping_feature_delivery(
+        {**delivered, "microstructure_provider_payload_included": False}
+    )
+    assert retry_omitted["microstructure_reaction_context_sent"] is False
+    cached = settle_scalping_feature_delivery(dict(delivered), cache_hit=True)
+    assert cached["microstructure_reaction_context_reused"] is True
+    assert (
+        cached["microstructure_reaction_parent_context_id"]
+        == audit["microstructure_reaction_context_id"]
+    )
+    assert (
+        cached["microstructure_reaction_evaluation_id"]
+        != audit["microstructure_reaction_evaluation_id"]
+    )
+    assert all(
+        cached["microstructure_reaction_" + key] is False
+        for key in ("context_computed", "context_sent", "context_consumed")
+    )
+
+
+def test_micro_receipt_survives_both_state_logger_projections_and_string_wire():
+    from src.engine.sniper_state_handlers import (
+        _build_ai_ops_log_fields,
+        _build_tick_source_quality_log_fields,
+        _holding_score_preflight_source_quality,
+    )
+    from src.engine.scalping.microstructure_reaction_context import _row_from_event
+    from src.tests.test_microstructure_reaction_context import _ws_data, _ticks
+
+    fields = _holding_score_preflight_source_quality(
+        _ws_data(effective_venue="KRX"),
+        _ticks(),
+        [],
+        now_ts=datetime(2026, 9, 4, 9, 0, 12),
+    )
+    assert fields["microstructure_reaction_context_consumed"] is True
+    assert fields["microstructure_reaction_context_sent"] is False
+    fields["microstructure_reaction_context_sent"] = None
+    for project in (_build_ai_ops_log_fields, _build_tick_source_quality_log_fields):
+        projected = project(fields)
+        assert projected["microstructure_reaction_context_sent"] is None
+        assert projected["microstructure_reaction_quote_stale_threshold_ms"] == 3000
+        wire = {key: str(value) for key, value in projected.items()}
+        row = _row_from_event({"stage": "ai_confirmed", "fields": wire})
+        assert row["microstructure_reaction_context_consumed"] is True
+        assert row["microstructure_reaction_context_sent"] is None
+        assert (
+            row["microstructure_reaction_evaluation_id"]
+            == fields["microstructure_reaction_evaluation_id"]
+        )

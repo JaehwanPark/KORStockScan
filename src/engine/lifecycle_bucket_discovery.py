@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import argparse
+from src.engine.lifecycle.retirement import retired_status
+
 import hashlib
 import json
 import os
 import re
 from collections import Counter
 from dataclasses import replace
-from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +27,6 @@ from src.engine.automation.dual_candidate_review import (
 )
 from src.engine.auto_promotion_contracts import (
     explicit_tier2_block_allowed,
-    pre_final_promotion_contract,
     primary_ev_uplift_passes,
     tier2_fail_closed_reason,
 )
@@ -6498,148 +6497,7 @@ def build_lifecycle_bucket_discovery_report(
     source_suffix: str | None = None,
     output_suffix: str | None = None,
 ) -> dict[str, Any]:
-    target_date = str(target_date).strip()
-    source_key = _artifact_key(target_date, source_suffix)
-    output_key = _artifact_key(target_date, output_suffix or source_suffix)
-    ldm_path = LDM_REPORT_DIR / f"lifecycle_decision_matrix_{source_key}.json"
-    ldm = _load_json(ldm_path)
-    warnings: list[str] = []
-    if not ldm:
-        warnings.append("lifecycle_decision_matrix_missing")
-    candidates: list[dict[str, Any]] = []
-    source_contract = _source_contract_snapshot(ldm) if ldm else {}
-    compare_previous_contract = not (source_suffix or output_suffix)
-    previous = _previous_report(target_date) if compare_previous_contract else {}
-    previous_contract = (
-        previous.get("source_contract")
-        if isinstance(previous.get("source_contract"), dict)
-        else {}
-    )
-    normalized_previous_contract = (
-        _normalize_source_contract_for_compare(previous_contract)
-        if previous_contract
-        else {}
-    )
-    source_contract_changes = _compare_source_contracts(
-        source_contract, previous_contract
-    )
-    if ldm:
-        candidates.extend(
-            _candidates_from_attribution(
-                ldm, "lifecycle_flow", "lifecycle_flow_bucket_attribution"
-            )
-        )
-        candidates.extend(
-            _candidates_from_attribution(ldm, "entry", "entry_bucket_attribution")
-        )
-        candidates.extend(
-            _candidates_from_attribution(ldm, "holding", "holding_bucket_attribution")
-        )
-        candidates.extend(
-            _candidates_from_attribution(ldm, "exit", "exit_bucket_attribution")
-        )
-        candidates.extend(
-            _candidates_from_attribution(ldm, "scale_in", "scale_in_bucket_attribution")
-        )
-        candidates.extend(
-            _candidates_from_attribution(
-                ldm, "overnight", "overnight_bucket_attribution"
-            )
-        )
-        candidates.extend(_policy_stage_candidates(ldm))
-        candidates.extend(_source_drift_candidates(source_contract_changes))
-    source_contract_status = (
-        "fail"
-        if any(str(item.get("severity")) == "fail" for item in source_contract_changes)
-        else "warning" if source_contract_changes else "pass"
-    )
-    if source_contract_status != "pass":
-        warnings.append(f"source_contract_drift_{source_contract_status}")
-    report = {
-        "schema_version": DISCOVERY_SCHEMA_VERSION,
-        "date": output_key,
-        "target_date": target_date,
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "report_type": "lifecycle_bucket_discovery",
-        "runtime_effect": False,
-        "decision_authority": "postclose_lifecycle_bucket_discovery_classifier",
-        "metric_role": "primary_ev",
-        "window_policy": str(
-            ldm.get("window_policy")
-            or "daily_lifecycle_bucket_discovery_with_preopen_auto_apply"
-        ),
-        "sample_floor": "source_bucket_sample_floor",
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "exact_joined_lifecycle_rows_or_source_bucket_quality",
-        "forbidden_uses": list(BASE_FORBIDDEN_USES),
-        "evidence_authority_contract": evidence_authority_contract(),
-        "sources": {
-            "lifecycle_decision_matrix": str(ldm_path) if ldm_path.exists() else None,
-        },
-        "source_contract": source_contract,
-        "source_contract_previous_hash": (
-            _text_hash(normalized_previous_contract)
-            if normalized_previous_contract
-            else None
-        ),
-        "source_contract_hash": (
-            _text_hash(source_contract) if source_contract else None
-        ),
-        "source_contract_changes": source_contract_changes,
-        "pre_final_auto_promotion_contract": pre_final_promotion_contract(),
-        "summary": {
-            "human_intervention_required": False,
-            "status": "pass" if ldm else "fail",
-            "target_date": target_date,
-            "source_artifact_key": source_key,
-            "output_artifact_key": output_key,
-            "source_window_policy": (
-                ldm.get("window_policy") if isinstance(ldm, dict) else None
-            ),
-            "source_contract_status": source_contract_status,
-            "source_contract_change_count": len(source_contract_changes),
-            "warnings": warnings,
-        },
-        "warnings": warnings,
-    }
-    report = _finalize_report(report, candidates, warnings)
-
-    provider = (
-        str(
-            ai_review_provider
-            if ai_review_provider is not None
-            else os.getenv(
-                "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER",
-                AI_REVIEW_DEFAULT_PROVIDER,
-            )
-        )
-        .strip()
-        .lower()
-        or "none"
-    )
-    candidates_after_ai, ai_review = _run_ai_review_shards(
-        report,
-        provider=provider,
-        ai_raw_response=ai_raw_response,
-        warnings=warnings,
-    )
-    report["ai_two_pass_review"] = ai_review
-    candidates_after_ai = _apply_contamination_quarantine(
-        candidates_after_ai,
-        target_date=target_date,
-        warnings=warnings,
-    )
-    report = _finalize_report(report, candidates_after_ai, warnings)
-    report["summary"]["ai_two_pass_review_status"] = ai_review.get("status")
-    report["summary"]["ai_two_pass_review_required"] = True
-    report["summary"]["ai_two_pass_review_shard_count"] = ai_review.get("shard_count")
-    report["summary"]["ai_two_pass_review_parsed_shard_count"] = ai_review.get(
-        "parsed_shard_count"
-    )
-    report["summary"]["ai_two_pass_review_reviewed_candidate_count"] = ai_review.get(
-        "reviewed_candidate_count"
-    )
-    return report
+    return retired_status("lifecycle_bucket_discovery")
 
 
 def _render_markdown(report: dict[str, Any]) -> str:
@@ -6985,89 +6843,12 @@ def write_lifecycle_bucket_discovery_report(
     source_suffix: str | None = None,
     output_suffix: str | None = None,
 ) -> dict[str, Any]:
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    report = build_lifecycle_bucket_discovery_report(
-        target_date,
-        ai_review_provider=ai_review_provider,
-        ai_raw_response=ai_raw_response,
-        source_suffix=source_suffix,
-        output_suffix=output_suffix,
-    )
-    output_key = str(
-        report.get("date") or _artifact_key(target_date, output_suffix or source_suffix)
-    )
-    discovery_report_path(output_key).write_text(
-        json.dumps(report, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    discovery_markdown_path(output_key).write_text(
-        _render_markdown(report), encoding="utf-8"
-    )
-    _write_catalog(report)
-    _write_sim_auto_approval(report)
-    return report
+    return retired_status("lifecycle_bucket_discovery")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Build lifecycle bucket discovery/classifier report."
-    )
-    parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
-    parser.add_argument("--target-date", dest="target_date_alias")
-    parser.add_argument("--source-suffix")
-    parser.add_argument("--output-suffix")
-    parser.add_argument(
-        "--print-summary",
-        action="store_true",
-        help="Print a compact completion summary instead of the full report payload.",
-    )
-    parser.add_argument(
-        "--ai-review-provider",
-        default=os.getenv(
-            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_AI_REVIEW_PROVIDER",
-            AI_REVIEW_DEFAULT_PROVIDER,
-        ),
-        choices=["openai", "none", "off", "false", "0"],
-        help="Provider for AI Tier2 two-pass bucket interpretation/audit.",
-    )
-    args = parser.parse_args(argv)
-    target_date = args.target_date_alias or args.target_date
-    report = write_lifecycle_bucket_discovery_report(
-        target_date,
-        ai_review_provider=args.ai_review_provider,
-        source_suffix=args.source_suffix,
-        output_suffix=args.output_suffix,
-    )
-    output = report
-    if args.print_summary:
-        summary = (
-            report.get("summary") if isinstance(report.get("summary"), dict) else {}
-        )
-        output_key = str(
-            report.get("date")
-            or _artifact_key(target_date, args.output_suffix or args.source_suffix)
-        )
-        output = {
-            "report_type": report.get("report_type"),
-            "date": report.get("date"),
-            "target_date": report.get("target_date"),
-            "status": summary.get("status"),
-            "candidate_count": summary.get("candidate_count"),
-            "surfaced_candidate_count": summary.get("surfaced_candidate_count"),
-            "sim_auto_approved_count": summary.get("sim_auto_approved_count"),
-            "sim_policy_approved_total_count": summary.get(
-                "sim_policy_approved_total_count"
-            ),
-            "live_auto_apply_ready_count": summary.get("live_auto_apply_ready_count"),
-            "warning_count": len(report.get("warnings") or []),
-            "runtime_effect": report.get("runtime_effect"),
-            "artifacts": {
-                "json": str(discovery_report_path(output_key)),
-                "markdown": str(discovery_markdown_path(output_key)),
-            },
-        }
-    print(json.dumps(output, ensure_ascii=False))
-    return 0 if report.get("summary", {}).get("status") == "pass" else 2
+    print(json.dumps(retired_status("lifecycle_bucket_discovery")))
+    return 0
 
 
 if __name__ == "__main__":

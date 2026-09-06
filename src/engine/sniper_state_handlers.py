@@ -1,5 +1,7 @@
 """State machine handlers for the sniper engine."""
 
+from src.engine.lifecycle.retirement import current_report_view
+
 import fcntl
 import gzip
 import hashlib
@@ -154,6 +156,10 @@ from src.engine.scalping.risky_micro_episode import evaluate_risky_micro_episode
 from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
+    finalize_scalping_feature_delivery_audit_fields,
+)
+from src.engine.scalping.microstructure_reaction_context import (
+    microstructure_delivery_fields,
 )
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING as RISING_MISSED_BLOCK_ALREADY_HOLDING,
@@ -309,9 +315,17 @@ from src.engine.scalping.market_data_enrichment import (
     refresh_rest_signed_tape_fields,
 )
 from src.engine.scalping.entry_opportunity_recheck import (
+    DIRECT_SUBMIT_MAX_DELAY_SEC as ENTRY_OPPORTUNITY_RECHECK_DIRECT_SUBMIT_MAX_DELAY_SEC,
     EntryOpportunityRecheckState,
+    attribution_fields as entry_opportunity_recheck_attribution_fields,
+    config_from_env as entry_recheck_config_from_env,
     evaluate_blocked_ai_score_recheck,
+    mint_attempt_id as mint_entry_opportunity_recheck_attempt_id,
 )
+from src.engine.scalping.entry_recheck_policy import (
+    ATTRIBUTION_VERSION as ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_VERSION,
+)
+from src.engine.scalping import entry_recheck_submit_budget
 from src.engine.scalping.entry_ai_gate import (
     canonical_entry_edge_state,
     entry_buy_decision_allowed,
@@ -443,8 +457,127 @@ def _mark_entry_opportunity_recheck_outcome(
         peak_profit=peak_profit,
         status=stock.get("status") or "HOLDING",
         now_ts=now_ts,
+        scope=stock.get("entry_opportunity_recheck_scope") or "",
     )
     return True
+
+
+def _mark_entry_opportunity_recheck_submission(
+    stock: dict | None,
+    code: str,
+    *,
+    broker_order_no: str,
+    requested_qty: int,
+    now_ts: float,
+) -> dict[str, Any]:
+    """Bind the first broker-accepted BUY to the exact armed recheck."""
+
+    if not isinstance(stock, dict) or not stock.get("entry_opportunity_recheck_armed"):
+        return {}
+    attempt_id = str(stock.get("entry_opportunity_recheck_attempt_id") or "").strip()
+    normalized_order_no = str(broker_order_no or "").strip()
+    if not attempt_id or not normalized_order_no:
+        return {}
+    if stock.get("entry_opportunity_recheck_submit_observed"):
+        return {}
+    armed_at = _safe_float(
+        stock.get("entry_opportunity_recheck_armed_at")
+        or stock.get("entry_opportunity_recheck_at"),
+        0.0,
+    )
+    submit_delay_sec = max(0.0, float(now_ts) - armed_at) if armed_at > 0 else None
+    direct_submit = bool(
+        submit_delay_sec is not None
+        and submit_delay_sec <= ENTRY_OPPORTUNITY_RECHECK_DIRECT_SUBMIT_MAX_DELAY_SEC
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "entry_opportunity_recheck_submit_observed": True,
+            "entry_opportunity_recheck_submitted_at": float(now_ts),
+            "entry_opportunity_recheck_submit_delay_sec": (
+                round(submit_delay_sec, 6) if submit_delay_sec is not None else None
+            ),
+            "entry_opportunity_recheck_direct_submit": direct_submit,
+            "entry_opportunity_recheck_broker_order_no": normalized_order_no,
+            "entry_opportunity_recheck_requested_qty": max(
+                0, _safe_int(requested_qty, 0)
+            ),
+        },
+    )
+    from src.engine.scalping.entry_recheck_economics import recovered_fill_fields
+
+    recovered = recovered_fill_fields(stock)
+    if recovered and not stock.get("entry_opportunity_recheck_fill_observed"):
+        _mutate_stock_state(stock, set_fields=recovered)
+    return entry_opportunity_recheck_attribution_fields(stock)
+
+
+def _reserve_entry_recheck_submit_budget(stock: dict, code: str, *, qty: int) -> dict:
+    if not stock.get("entry_opportunity_recheck_armed") or stock.get(
+        "entry_opportunity_recheck_submit_observed"
+    ):
+        return {"allowed": True, "active": False}
+    trade_date = datetime.fromtimestamp(time.time(), _KST).date().isoformat()
+    attempt = str(stock.get("entry_opportunity_recheck_attempt_id") or "")
+    scope = str(stock.get("entry_opportunity_recheck_scope") or "")
+    config = entry_recheck_config_from_env()
+    try:
+        if not config.enabled or scope not in config.allowed_scopes or qty != 1:
+            raise ValueError("recheck_submit_budget_runtime_contract_invalid")
+        result = entry_recheck_submit_budget.reserve(
+            trade_date=trade_date,
+            attempt_id=attempt,
+            code=code,
+            scope=scope,
+            limit=_ENTRY_OPPORTUNITY_RECHECK_STATE.daily_buy_recovery_limit(
+                config, scope
+            ),
+            per_symbol_limit=config.max_recheck_per_symbol,
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        result = {"allowed": False, "reason": str(exc)}
+    return {**result, "active": True, "trade_date": trade_date, "attempt_id": attempt}
+
+
+def _settle_entry_recheck_submit_budget(
+    reservation: dict, *, broker_order_no: str = "", definitive_reject: bool = False
+) -> None:
+    if not reservation.get("active"):
+        return
+    try:
+        entry_recheck_submit_budget.settle(
+            trade_date=reservation["trade_date"],
+            attempt_id=reservation["attempt_id"],
+            broker_order_no=broker_order_no,
+            definitive_reject=definitive_reject,
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        # A pending reservation remains charged on write failure. Broker
+        # acceptance must still reach the normal custody/receipt path.
+        log_error(f"[ENTRY_RECHECK_BUDGET_SETTLE_FAILED] {exc}")
+
+
+def _entry_recheck_post_reservation_guard(reservation, ws_data, latency_gate):
+    """Recheck existing freshness guards after potentially blocking ledger I/O."""
+    if not reservation.get("active"):
+        return True, {}
+    now_ts = time.time()
+    # A pre-I/O cached quote age must not override a now-stale WS timestamp.
+    current_gate = dict(latency_gate or {})
+    fresh_quote, _, _, _ = _build_quote_consistency_fields(
+        ws_data, side="buy", now_ts=now_ts
+    )
+    _merge_quote_consistency_fields(current_gate, fresh_quote)
+    fields = _build_entry_submit_revalidation_fields(
+        ws_data, current_gate, now_ts=now_ts
+    )
+    if _is_passive_probe_stale_submit_block(fields) or _is_standard_stale_submit_block(
+        fields
+    ):
+        _settle_entry_recheck_submit_budget(reservation, definitive_reject=True)
+        return False, fields
+    return True, fields
 
 
 def _defensive_avg_down_used_count(stock: dict | None) -> int:
@@ -1925,6 +2058,7 @@ def _load_scalp_sim_auto_policy_cache() -> dict:
             }
         )
         return _SCALP_SIM_AUTO_POLICY_CACHE
+    payload = current_report_view(payload)
     schema_version = (
         str(payload.get("schema_version") or "") if isinstance(payload, dict) else ""
     )
@@ -12906,6 +13040,11 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             **_rising_missed_tp1_observation_context_log_fields(stock),
             **_scalping_sizing_state_fields(stock),
             **scanner_venue_fields,
+            **entry_opportunity_recheck_attribution_fields(
+                stock,
+                stage=stage,
+                event_fields=fields,
+            ),
             **fields,
             **scout_attribution_fields,
         }
@@ -24803,6 +24942,9 @@ def _holding_score_preflight_source_quality(
         source_quality = _holding_score_source_quality_from_feature_packet(
             feature_packet, audit_fields
         )
+        audit_fields = finalize_scalping_feature_delivery_audit_fields(
+            audit_fields, {}, internal_consumer="holding_score_preflight_source_quality"
+        )
     except Exception as exc:
         return {
             "blocked": False,
@@ -24831,6 +24973,12 @@ def _holding_score_preflight_source_quality(
     )
     return {
         "blocked": blocked,
+        **microstructure_delivery_fields(audit_fields),
+        **{
+            key: value
+            for key, value in feature_packet.items()
+            if key.startswith("microstructure_reaction_")
+        },
         "block_reason": "stale_tick_context" if blocked else "-",
         "data_quality": source_quality.get("data_quality", "unknown"),
         "source_quality_reason": reason,
@@ -24895,6 +25043,11 @@ def _record_holding_score_upstream_preflight_trace(
         "score": 50,
         "confidence": 0,
         "reason": blocker,
+        **{
+            key: value
+            for key, value in gate.items()
+            if key.startswith("microstructure_reaction_")
+        },
         "provider_called": False,
         "ai_parse_ok": False,
         "ai_parse_fail": False,
@@ -50080,7 +50233,9 @@ def _build_ai_ops_log_fields(
         "same_price_buy_absorption_sent",
         "large_sell_print_detected_sent",
         "ask_depth_ratio_sent",
+        "microstructure_reaction_context_computed",
         "microstructure_reaction_context_sent",
+        "microstructure_reaction_context_consumed",
         "tick_source_quality_fields_sent",
     ):
         if field_name in payload:
@@ -50174,6 +50329,9 @@ def _build_ai_ops_log_fields(
         "pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from",
         "microstructure_reaction_context_version",
         "microstructure_reaction_context_status",
+        "microstructure_reaction_delivery_telemetry_version",
+        "microstructure_reaction_context_consumer",
+        "microstructure_reaction_context_delivery_state",
         "microstructure_reaction_entry_reaction_quality",
         "microstructure_reaction_source_quality",
         "microstructure_reaction_context_hash",
@@ -50232,6 +50390,7 @@ def _build_ai_ops_log_fields(
         out["big_bite_bonus_applied"] = bool(big_bite_bonus_applied)
     if ai_cooldown_blocked is not None:
         out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
+    out.update(microstructure_delivery_fields(payload))
     return out
 
 
@@ -50644,6 +50803,7 @@ def _build_tick_source_quality_log_fields(feature_probe):
     _copy_ai_preflight_log_fields(payload, out)
     if tick_source_quality_fields_sent:
         out["tick_source_quality_fields_sent"] = True
+    out.update(microstructure_delivery_fields(payload))
     return out
 
 
@@ -56766,6 +56926,39 @@ def _stage_broker_accepted_entry_order(
         broker_order_no,
         now_ts=now_ts,
     )
+    recheck_submit_fields = _mark_entry_opportunity_recheck_submission(
+        stock,
+        code,
+        broker_order_no=broker_order_no,
+        requested_qty=requested_qty,
+        now_ts=now_ts,
+    )
+    if recheck_submit_fields:
+        _log_entry_pipeline(
+            stock,
+            code,
+            (
+                "entry_opportunity_recheck_direct_submitted"
+                if recheck_submit_fields.get("entry_opportunity_recheck_direct_submit")
+                else "entry_opportunity_recheck_submit_observed"
+            ),
+            **recheck_submit_fields,
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+            metric_role="real_execution_quality_attribution",
+            decision_authority="entry_opportunity_recheck_exact_attempt_attribution",
+            window_policy="same_armed_attempt_to_first_broker_accepted_buy",
+            sample_floor="one_exact_attempt_and_broker_order_number",
+            primary_decision_metric="entry_opportunity_recheck_direct_submit",
+            source_quality_gate=(
+                "immutable_recheck_attempt_id_and_exact_broker_order_number"
+            ),
+            forbidden_uses=(
+                "threshold_mutation|provider_route_change|quantity_or_cap_change|"
+                "broker_guard_bypass|stale_submit_bypass|hard_safety_bypass"
+            ),
+        )
     _stage_buy_order_submission(
         stock=stock,
         code=code,
@@ -64374,6 +64567,16 @@ def _handle_watching_strategy_branch(
                     bounded_exploration_persisted_probe_count = 0
                     bounded_exploration_observed_probe_count = 0
                     bounded_exploration_cap_ledger_ok = True
+                    recheck_budget_count = entry_recheck_submit_budget.observed_count(
+                        now_dt.date().isoformat()
+                    )
+                    _ENTRY_OPPORTUNITY_RECHECK_STATE.reset_if_new_day(
+                        now_dt.date().isoformat()
+                    )
+                    if recheck_budget_count is not None:
+                        _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_buy_recovery_count = (
+                            recheck_budget_count
+                        )
                     if bounded_exploration_probe_only:
                         persisted_probe_count = read_exploration_probe_submit_count(
                             now_dt.date().isoformat()
@@ -64424,6 +64627,13 @@ def _handle_watching_strategy_branch(
                     )
                     entry_opportunity_recheck = evaluate_blocked_ai_score_recheck(
                         code=code,
+                        effective_venue=resolve_entry_candle_venue(
+                            recheck_ws_data or {},
+                            session=resolve_entry_candle_session(now_ts=now_ts),
+                        ),
+                        market_session_bucket=resolve_entry_candle_session(
+                            now_ts=now_ts
+                        ),
                         strategy=strategy,
                         position_tag=pos_tag,
                         ai_score=current_ai_score,
@@ -64487,15 +64697,39 @@ def _handle_watching_strategy_branch(
                             **recheck_refresh_fields,
                         },
                         buy_recovery_cap_observed_count=(
-                            bounded_exploration_observed_probe_count
+                            max(
+                                bounded_exploration_observed_probe_count,
+                                recheck_budget_count or 0,
+                            )
                             if bounded_exploration_probe_only
-                            else None
+                            else recheck_budget_count
                         ),
+                        buy_recovery_cap_source_quality_ok=recheck_budget_count
+                        is not None,
                         state=_ENTRY_OPPORTUNITY_RECHECK_STATE,
                         today=now_dt.date().isoformat(),
                     )
                     should_log_recheck_block = False
                     recheck_log_fields = dict(entry_opportunity_recheck.fields)
+                    recheck_attempt_id = ""
+                    if bool(
+                        recheck_log_fields.get("entry_opportunity_recheck_enabled")
+                    ):
+                        recheck_attempt_id = mint_entry_opportunity_recheck_attempt_id(
+                            record_id=stock.get("id"),
+                            code=code,
+                            observed_at=now_ts,
+                        )
+                        recheck_log_fields.update(
+                            {
+                                "entry_opportunity_recheck_attempt_id": (
+                                    recheck_attempt_id
+                                ),
+                                "entry_opportunity_recheck_attribution_schema": (
+                                    ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_VERSION
+                                ),
+                            }
+                        )
                     # Emit one outcome for every eligible runtime evaluation,
                     # including decisions that remain pending or fail before
                     # the downstream probe arm.  Without this audit row an ON
@@ -64537,10 +64771,15 @@ def _handle_watching_strategy_branch(
                         )
                     elif entry_opportunity_recheck.allowed:
                         _ENTRY_OPPORTUNITY_RECHECK_STATE.record_recheck(code)
-                        _ENTRY_OPPORTUNITY_RECHECK_STATE.record_buy_recovery()
                         recheck_fields = dict(entry_opportunity_recheck.fields)
                         recheck_fields.update(
                             {
+                                "entry_opportunity_recheck_attempt_id": (
+                                    recheck_attempt_id
+                                ),
+                                "entry_opportunity_recheck_attribution_schema": (
+                                    ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_VERSION
+                                ),
                                 "entry_opportunity_recheck_daily_count": (
                                     _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_recheck_count
                                 ),
@@ -64553,7 +64792,17 @@ def _handle_watching_strategy_branch(
                             }
                         )
                         recheck_stock_fields = {
+                            "entry_opportunity_recheck_attribution_schema": (
+                                ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_VERSION
+                            ),
+                            "entry_opportunity_recheck_scope": recheck_fields.get(
+                                "entry_opportunity_recheck_scope"
+                            ),
+                            "entry_opportunity_recheck_attempt_id": (
+                                recheck_attempt_id
+                            ),
                             "entry_opportunity_recheck_armed": True,
+                            "entry_opportunity_recheck_armed_at": now_ts,
                             "entry_opportunity_recheck_source_stage": "blocked_ai_score",
                             "entry_opportunity_recheck_score": float(
                                 current_ai_score or 0.0
@@ -64592,7 +64841,18 @@ def _handle_watching_strategy_branch(
                             stock,
                             set_fields=recheck_stock_fields,
                             pop_fields=[
-                                "entry_opportunity_recheck_pending_recheck_after_epoch"
+                                "entry_opportunity_recheck_pending_recheck_after_epoch",
+                                "entry_opportunity_recheck_submit_observed",
+                                "entry_opportunity_recheck_submitted_at",
+                                "entry_opportunity_recheck_submit_delay_sec",
+                                "entry_opportunity_recheck_direct_submit",
+                                "entry_opportunity_recheck_broker_order_no",
+                                "entry_opportunity_recheck_requested_qty",
+                                "entry_opportunity_recheck_fill_observed",
+                                "entry_opportunity_recheck_filled_at",
+                                "entry_opportunity_recheck_fill_order_no",
+                                "entry_opportunity_recheck_fill_price",
+                                "entry_opportunity_recheck_fill_qty",
                             ],
                         )
                         _log_entry_pipeline(
@@ -71013,6 +71273,37 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 runtime_effect=True,
             )
             break
+        recheck_budget_reservation = _reserve_entry_recheck_submit_budget(
+            stock, code, qty=qty
+        )
+        if not recheck_budget_reservation.get("allowed"):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_opportunity_recheck_blocked",
+                reason=recheck_budget_reservation.get("reason"),
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=False,
+            )
+            break
+        recheck_budget_fresh, recheck_budget_freshness_fields = (
+            _entry_recheck_post_reservation_guard(
+                recheck_budget_reservation, ws_data, latency_gate
+            )
+        )
+        if not recheck_budget_fresh:
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_opportunity_recheck_blocked",
+                reason="recheck_post_reservation_stale_submit",
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=False,
+                **recheck_budget_freshness_fields,
+            )
+            break
         broker_submit_attempt_count += 1
         res = kiwoom_orders.send_buy_order(
             code,
@@ -71067,6 +71358,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             break
         rt_cd = str(res.get("return_code", res.get("rt_cd", "")))
         if rt_cd != "0":
+            if entry_recheck_submit_budget.definitive_no_order_rejection(res):
+                _settle_entry_recheck_submit_budget(
+                    recheck_budget_reservation,
+                    definitive_reject=True,
+                )
             log_info(
                 f"[LATENCY_ENTRY_ORDER_FAIL] {stock.get('name')}({code}) tag={planned_order.get('tag')} msg={res.get('return_msg')}"
             )
@@ -71175,6 +71471,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             )
             break
+        _settle_entry_recheck_submit_budget(
+            recheck_budget_reservation, broker_order_no=ord_no
+        )
         route_recorded_at = time.time()
         entry_execution_cohort = _scalping_execution_cohort(
             route_recorded_at, response_broker_route

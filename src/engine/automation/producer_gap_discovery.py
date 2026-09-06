@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import hashlib
 import json
@@ -274,11 +276,13 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _load_jsonl(path: Path, *, limit: int = 20000) -> list[dict[str, Any]]:
@@ -1478,7 +1482,7 @@ def _detect_sim_first_stage_gaps(
                 sample_count=len(early_rows),
                 source_paths=source_paths,
                 evidence=[
-                    f"operator_seed_cutoff=09:30",
+                    "operator_seed_cutoff=09:30",
                     f"early_timed_sim_rows={len(early_rows)}",
                     f"post_cutoff_timed_sim_rows={len(later_rows)}",
                     "gap=sim time-window exceptions need rolling policy comparison rather than a hard gate",

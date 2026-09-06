@@ -22,8 +22,8 @@ CLEAN_BASELINE_DATE = "2026-06-05"
 CLEAN_BASELINE_TS_KST = "2026-06-05T00:00:00+09:00"
 REPORT_TYPE = "one_share_threshold_opportunity"
 REPORT_SCHEMA_VERSION = 4
-PIPELINE_INDEX_CACHE_SCHEMA_VERSION = 4
-THRESHOLD_GROUP_CONTRACT_VERSION = "one_share_threshold_groups_v3"
+PIPELINE_INDEX_CACHE_SCHEMA_VERSION = 5
+THRESHOLD_GROUP_CONTRACT_VERSION = "one_share_threshold_groups_v4"
 AI_REVIEW_SCHEMA_NAME = "one_share_threshold_opportunity_ai_review_v1"
 AI_REVIEWER_NAME = "one_share_threshold_opportunity_ai_review"
 FORCED_REASON = "rising_missed_one_share_entry"
@@ -357,18 +357,22 @@ def _merge_probe_split_provenance(item: dict[str, Any], row: dict[str, Any]) -> 
         terminal_time = row.get("emitted_at")
         terminal_stock_code = str(row.get("stock_code") or "").strip()[:6]
         if (
-            item.get("terminal_sell_time") not in (None, "", "-")
-            and item.get("terminal_sell_time") != terminal_time
-        ):
-            item["terminal_sell_identity_conflict"] = True
-        if (
             item.get("terminal_sell_stock_code") not in (None, "", "-")
             and item.get("terminal_sell_stock_code") != terminal_stock_code
         ):
             item["terminal_sell_identity_conflict"] = True
         item["terminal_sell_observed"] = True
-        item.setdefault("terminal_sell_time", terminal_time)
-        item.setdefault("terminal_sell_stock_code", terminal_stock_code)
+        prior_terminal_time = item.get("terminal_sell_time")
+        if prior_terminal_time in (None, "", "-") or (
+            _event_time(terminal_time) is not None
+            and (
+                _event_time(prior_terminal_time) is None
+                or _event_time(terminal_time) < _event_time(prior_terminal_time)
+            )
+        ):
+            item["terminal_sell_time"] = terminal_time
+        if terminal_stock_code:
+            item.setdefault("terminal_sell_stock_code", terminal_stock_code)
 
 
 def _has_record_provenance(row: dict[str, Any]) -> bool:
@@ -382,11 +386,22 @@ def _merge_cached_provenance(target: dict[str, Any], source: dict[str, Any]) -> 
     for key, value in source.items():
         if value in (None, "", "-"):
             continue
-        if key in {"terminal_sell_time", "terminal_sell_stock_code"}:
+        if key == "terminal_sell_stock_code":
             prior = target.get(key)
             if prior not in (None, "", "-") and prior != value:
                 target["terminal_sell_identity_conflict"] = True
                 continue
+        elif key == "terminal_sell_time":
+            prior = target.get(key)
+            if prior in (None, "", "-") or (
+                _event_time(value) is not None
+                and (
+                    _event_time(prior) is None
+                    or _event_time(value) < _event_time(prior)
+                )
+            ):
+                target[key] = value
+            continue
         if isinstance(value, bool):
             target[key] = bool(target.get(key)) or value
         else:
@@ -402,7 +417,10 @@ def _event_time(value: Any) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return None
+        # Historical pipeline events were emitted as timezone-naive KST wall
+        # clock values.  Treating them as invalid makes otherwise exact
+        # record/stock/date terminal joins look like identity conflicts.
+        parsed = parsed.replace(tzinfo=KST)
     return parsed.astimezone(timezone.utc)
 
 
@@ -439,8 +457,8 @@ def _merge_forced_feature(
     source_is_primary = bool(source.get("forced_source_is_primary_stage"))
     current_stock_code = str(current.get("stock_code") or "").strip()[:6]
     source_stock_code = str(source.get("stock_code") or "").strip()[:6]
-    current_emitted_at = str(current.get("emitted_at") or "")
-    source_emitted_at = str(source.get("emitted_at") or "")
+    current_entry_date = str(current.get("entry_date") or "")
+    source_entry_date = str(source.get("entry_date") or "")
     identity_conflict = bool(
         (
             current_stock_code
@@ -450,7 +468,9 @@ def _merge_forced_feature(
         or (
             current_is_primary
             and source_is_primary
-            and current_emitted_at != source_emitted_at
+            and current_entry_date
+            and source_entry_date
+            and current_entry_date != source_entry_date
         )
     )
     prior_identity_conflict = bool(current.get("forced_identity_conflict")) or bool(
@@ -942,6 +962,7 @@ def _source_coverage_manifest(
     submitted_unjoined_record_ids: Iterable[str] | None = None,
     identity_conflict_record_ids: Iterable[str] | None = None,
     invalid_source_json_row_count: int = 0,
+    valid_joined_record_count: int = 0,
 ) -> dict[str, Any]:
     pipeline_dates = sorted(
         {_date_from_path(path) for path in pipeline_paths if _date_from_path(path)}
@@ -987,13 +1008,24 @@ def _source_coverage_manifest(
         + len(identity_conflict_ids)
         + max(0, int(invalid_source_json_row_count))
     )
+    valid_joined_record_count = max(0, int(valid_joined_record_count))
+    decision_input_allowed = bool(gap_count == 0 or valid_joined_record_count > 0)
+    coverage_status = (
+        "pass"
+        if gap_count == 0
+        else (
+            "partial_row_exclusion" if decision_input_allowed else "source_coverage_gap"
+        )
+    )
 
     def _id_digest(values: list[str]) -> str:
         encoded = json.dumps(values, ensure_ascii=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     return {
-        "status": "pass" if gap_count == 0 else "source_coverage_gap",
+        "status": coverage_status,
+        "decision_input_allowed": decision_input_allowed,
+        "valid_joined_record_count": valid_joined_record_count,
         "since_date": since_date,
         "until_date": until_date,
         "clean_baseline_ts_kst": CLEAN_BASELINE_TS_KST,
@@ -1039,7 +1071,10 @@ def _source_coverage_manifest(
         "post_sell_gzip_path_count": sum(
             1 for path in post_sell_paths if path.suffix == ".gz"
         ),
-        "fail_closed_on_gap": True,
+        "fail_closed_on_gap": not decision_input_allowed,
+        "fail_closed_scope": (
+            "affected_rows_only" if decision_input_allowed else "whole_report"
+        ),
     }
 
 
@@ -1809,7 +1844,12 @@ def _apply_ai_review(
         and prior_provider_status.get("provider") == provider
         and prior_review_complete
     )
-    if str(coverage.get("status") or "") != "pass":
+    coverage_input_allowed = bool(
+        coverage.get("decision_input_allowed")
+        if "decision_input_allowed" in coverage
+        else str(coverage.get("status") or "") == "pass"
+    )
+    if not coverage_input_allowed:
         status = "blocked_source_coverage"
         payload: dict[str, Any] = {}
         warnings = ["ai_review_skipped_source_coverage_gap"]
@@ -1863,6 +1903,11 @@ def _apply_ai_review(
             provider not in {"", "none", "off", "false", "0"},
         )
         status, payload, warnings = _parse_ai_review(raw)
+    if (
+        str(coverage.get("status") or "") == "partial_row_exclusion"
+        and "source_coverage_partial_rows_excluded" not in warnings
+    ):
+        warnings = [*warnings, "source_coverage_partial_rows_excluded"]
     if status == "parsed" and provider_status.get("status") not in {
         "success",
         "reused",
@@ -2025,6 +2070,7 @@ def build_report(
             int(source_processing.get("invalid_json_row_count") or 0)
             + int(post_sell_identity_diagnostics.get("invalid_json_row_count") or 0)
         ),
+        valid_joined_record_count=len(joined),
     )
     group_evaluations = _threshold_group_evaluations(rows)
     primary_blocker_evaluations = _primary_blocker_evaluations(rows)
@@ -2035,7 +2081,7 @@ def build_report(
     }
     orders = (
         _build_code_orders(opportunities, source_paths)
-        if coverage_manifest.get("status") == "pass"
+        if coverage_manifest.get("decision_input_allowed")
         else []
     )
     threshold_group_counts = Counter(
@@ -2408,6 +2454,9 @@ def build_report(
             "automatic_implementation_candidate_count": 0,
             "source_coverage_status": coverage_manifest.get("status"),
             "source_coverage_gap_count": coverage_manifest.get("gap_count"),
+            "source_coverage_decision_input_allowed": coverage_manifest.get(
+                "decision_input_allowed"
+            ),
         },
         "profit_summary": _profit_summary(joined),
         "threshold_group_evaluations": group_evaluations,
@@ -2474,6 +2523,8 @@ def write_outputs(
         f"- ai_review_status: {(summary.get('ai_review_status') or '-')}",
         f"- source_coverage_status: {summary.get('source_coverage_status')}",
         f"- source_coverage_gap_count: {summary.get('source_coverage_gap_count')}",
+        f"- source_coverage_decision_input_allowed: {summary.get('source_coverage_decision_input_allowed')}",
+        f"- source_coverage_fail_closed_scope: {((report.get('source_coverage_manifest') or {}).get('fail_closed_scope'))}",
         "",
         "## Summary",
         "",

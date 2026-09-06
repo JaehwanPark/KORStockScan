@@ -106,6 +106,7 @@ data/observations/scalp_micro_reversion_forward/.partition_maintenance_locks/*.l
 *.custody.lock
 data/pipeline_events/*.partition.lock
 data/threshold_cycle/*.partition.lock
+data/report/**/.*.lock
 data/cache/micro_reversion_relevant_source_index/
 
 # ==========================================

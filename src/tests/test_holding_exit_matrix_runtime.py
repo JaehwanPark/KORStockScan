@@ -65,25 +65,8 @@ def test_holding_exit_matrix_runtime_bias_forces_hold_for_avg_down_wait(
         advisory_enabled=True,
         now=datetime(2026, 5, 18, 16, 30),
     )
-
-    merged = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "EXIT", "score": 80},
-        context,
-        position_ctx={
-            "profit_rate": -0.4,
-            "peak_profit": 0.1,
-            "current_ai_score": 72,
-            "holding_score_source": "live",
-            "holding_score_data_quality": "fresh",
-            "holding_score_effective_usable": True,
-            **_strong_micro_context(),
-        },
-    )
-
-    assert merged["action"] == "HOLD"
-    assert merged["holding_exit_matrix_runtime_bias_applied"] is True
-    assert merged["holding_exit_matrix_runtime_effect"] == "force_hold"
-    assert merged["holding_exit_matrix_scale_in_bias"] == "AVG_DOWN"
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_holding_exit_matrix_runtime_bias_treats_unusable_ai_as_neutral_prior(
@@ -120,28 +103,8 @@ def test_holding_exit_matrix_runtime_bias_treats_unusable_ai_as_neutral_prior(
         advisory_enabled=True,
         now=datetime(2026, 5, 18, 16, 30),
     )
-
-    merged = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "EXIT", "score": 80},
-        context,
-        position_ctx={
-            "profit_rate": -0.4,
-            "peak_profit": 0.1,
-            "current_ai_score": 72,
-            "holding_score_effective_usable": False,
-            "holding_score_data_quality": "stale",
-            "holding_score_source": "holding_ai_not_called",
-            **_strong_micro_context(),
-        },
-    )
-
-    assert merged["action"] == "HOLD"
-    assert merged["holding_exit_matrix_runtime_bias_applied"] is True
-    assert merged["holding_exit_matrix_ai_score_usable"] is False
-    assert merged["holding_exit_matrix_score_gate_converted_to_prior"] is True
-    assert merged["holding_exit_matrix_score_prior_band"] == "neutral_or_unknown"
-    assert merged["holding_exit_matrix_ai_score_prior_weight"] == 0.0
-    assert merged["holding_exit_matrix_current_micro_support"] is True
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_holding_exit_matrix_runtime_bias_keeps_missing_ai_as_neutral_prior_without_opening_hold(
@@ -176,25 +139,8 @@ def test_holding_exit_matrix_runtime_bias_keeps_missing_ai_as_neutral_prior_with
         advisory_enabled=True,
         now=datetime(2026, 5, 18, 16, 30),
     )
-
-    merged = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "EXIT", "score": 80},
-        context,
-        position_ctx={"profit_rate": -0.4, "peak_profit": 0.1, "current_ai_score": 72},
-    )
-
-    assert merged["action"] == "EXIT"
-    assert merged["holding_exit_matrix_runtime_bias_applied"] is False
-    assert (
-        merged["holding_exit_matrix_runtime_reason"] == "current_micro_support_missing"
-    )
-    assert merged["holding_exit_matrix_ai_score_usable"] is False
-    assert (
-        merged["holding_exit_matrix_ai_score_excluded_reason"]
-        == "holding_score_data_quality_insufficient"
-    )
-    assert merged["holding_exit_matrix_score_prior_band"] == "neutral_or_unknown"
-    assert merged["holding_exit_matrix_current_micro_support"] is False
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_holding_exit_matrix_runtime_bias_does_not_hard_block_timeout_ai_source_with_micro_support(
@@ -226,29 +172,8 @@ def test_holding_exit_matrix_runtime_bias_does_not_hard_block_timeout_ai_source_
         advisory_enabled=True,
         now=datetime(2026, 5, 18, 16, 30),
     )
-
-    merged = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "EXIT", "score": 80},
-        context,
-        position_ctx={
-            "profit_rate": 1.2,
-            "peak_profit": 1.3,
-            "current_ai_score": 82,
-            "holding_score_source": "timeout",
-            "holding_score_data_quality": "fresh",
-            **_strong_micro_context(profit_rate=1.2),
-        },
-    )
-
-    assert merged["action"] == "HOLD"
-    assert merged["holding_exit_matrix_runtime_bias_applied"] is True
-    assert merged["holding_exit_matrix_ai_score_usable"] is False
-    assert (
-        merged["holding_exit_matrix_ai_score_excluded_reason"]
-        == "holding_score_source_timeout"
-    )
-    assert merged["holding_exit_matrix_score_prior_band"] == "neutral_or_unknown"
-    assert merged["holding_exit_matrix_current_micro_support"] is True
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_holding_exit_matrix_runtime_bias_records_partial_score_prior_without_hard_block(
@@ -280,45 +205,8 @@ def test_holding_exit_matrix_runtime_bias_records_partial_score_prior_without_ha
         advisory_enabled=True,
         now=datetime(2026, 5, 18, 16, 30),
     )
-
-    blocked = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "EXIT", "score": 80},
-        context,
-        position_ctx={
-            "profit_rate": -0.4,
-            "peak_profit": 0.1,
-            "current_ai_score": 72,
-            "holding_score_source": "live",
-            "holding_score_data_quality": "partial",
-            "holding_score_effective_usable": True,
-        },
-    )
-    allowed = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "EXIT", "score": 80},
-        context,
-        position_ctx={
-            "profit_rate": -0.4,
-            "peak_profit": 0.1,
-            "current_ai_score": 72,
-            "holding_score_source": "live",
-            "holding_score_data_quality": "partial",
-            "holding_score_effective_usable": True,
-            "tick_aggressor_trusted_count": 4,
-        },
-    )
-
-    assert blocked["action"] == "EXIT"
-    assert blocked["holding_exit_matrix_runtime_bias_applied"] is False
-    assert blocked["holding_exit_matrix_ai_score_usable"] is False
-    assert (
-        blocked["holding_exit_matrix_ai_score_excluded_reason"]
-        == "holding_score_partial_requires_microstructure"
-    )
-    assert blocked["holding_exit_matrix_score_prior_band"] == "neutral_or_unknown"
-    assert allowed["action"] == "EXIT"
-    assert allowed["holding_exit_matrix_ai_score_usable"] is True
-    assert allowed["holding_exit_matrix_ai_score_microstructure_confirmed"] is True
-    assert allowed["holding_exit_matrix_current_micro_support"] is False
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_holding_exit_matrix_runtime_bias_forces_exit_for_prefer_exit(
@@ -355,13 +243,8 @@ def test_holding_exit_matrix_runtime_bias_forces_exit_for_prefer_exit(
         advisory_enabled=True,
         now=datetime(2026, 5, 18, 16, 30),
     )
-
-    merged = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "HOLD", "score": 55}, context
-    )
-
-    assert merged["action"] == "EXIT"
-    assert merged["holding_exit_matrix_runtime_reason"] == "matrix_prefer_exit"
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_holding_exit_matrix_scale_in_bias_returns_avg_down_action():
@@ -386,9 +269,8 @@ def test_holding_exit_matrix_scale_in_bias_returns_avg_down_action():
     finally:
         mod.TRADING_RULES = original_rules
 
-    assert action["should_add"] is True
-    assert action["add_type"] == "AVG_DOWN"
-    assert action["reason"] == "holding_exit_matrix_avg_down_bias"
+    assert action["should_add"] is False
+    assert action["reason"] == "holding_exit_matrix_retired"
 
 
 def test_holding_exit_matrix_scale_in_bias_keeps_missing_ai_as_neutral_prior_without_opening_add(
@@ -407,17 +289,8 @@ def test_holding_exit_matrix_scale_in_bias_keeps_missing_ai_as_neutral_prior_wit
         current_ai_score=72,
         held_sec=45,
     )
-
     assert action["should_add"] is False
-    assert action["reason"] == "holding_exit_matrix_current_micro_support_missing"
-    assert action["ai_score_usable"] is False
-    assert (
-        action["ai_score_excluded_reason"] == "holding_score_data_quality_insufficient"
-    )
-    assert action["score_gate_converted_to_prior"] is True
-    assert action["score_prior_band"] == "neutral_or_unknown"
-    assert action["ai_score_prior_weight"] == 0.0
-    assert action["holding_exit_matrix_current_micro_support"] is False
+    assert action["reason"] == "holding_exit_matrix_retired"
 
 
 def test_holding_exit_matrix_scale_in_bias_does_not_hard_block_unusable_ai_score_with_micro_support():
@@ -443,12 +316,8 @@ def test_holding_exit_matrix_scale_in_bias_does_not_hard_block_unusable_ai_score
     finally:
         mod.TRADING_RULES = original_rules
 
-    assert action["should_add"] is True
-    assert action["reason"] == "holding_exit_matrix_avg_down_bias"
-    assert action["ai_score_usable"] is False
-    assert action["ai_score_data_quality"] == "stale"
-    assert action["score_prior_band"] == "neutral_or_unknown"
-    assert action["holding_exit_matrix_current_micro_support"] is True
+    assert action["should_add"] is False
+    assert action["reason"] == "holding_exit_matrix_retired"
 
 
 def test_holding_exit_matrix_safety_veto_blocks_runtime_action(tmp_path, monkeypatch):
@@ -478,16 +347,8 @@ def test_holding_exit_matrix_safety_veto_blocks_runtime_action(tmp_path, monkeyp
         advisory_enabled=True,
         now=datetime(2026, 5, 18, 16, 30),
     )
-
-    merged = mod.merge_holding_exit_matrix_result_fields(
-        {"action": "EXIT", "score": 80},
-        context,
-        position_ctx={"exit_rule": "protect_stop", "profit_rate": -0.8},
-    )
-
-    assert merged["action"] == "EXIT"
-    assert merged["holding_exit_matrix_runtime_bias_applied"] is False
-    assert merged["holding_exit_matrix_runtime_reason"] == "safety_veto_passthrough"
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""
 
 
 def test_holding_exit_matrix_trim_to_hold_requires_explicit_flag(tmp_path, monkeypatch):
@@ -548,10 +409,8 @@ def test_holding_exit_matrix_scale_in_flag_blocks_lifecycle_scale_in(monkeypatch
         current_ai_score=72,
         held_sec=45,
     )
-
     assert action["should_add"] is False
-    assert action["reason"] == "holding_exit_matrix_scale_in_bias_disabled"
-    assert action["lifecycle_matrix_runtime_effect"] == "avg_down_bias"
+    assert action["reason"] == "holding_exit_matrix_retired"
 
 
 def test_holding_exit_matrix_lifecycle_scale_in_bias_keeps_unusable_ai_as_neutral_prior_with_micro_support(
@@ -585,11 +444,5 @@ def test_holding_exit_matrix_lifecycle_scale_in_bias_keeps_unusable_ai_as_neutra
             **_strong_micro_context(),
         },
     )
-
-    assert action["should_add"] is True
-    assert action["reason"] == "lifecycle_decision_matrix_avg_down"
-    assert action["lifecycle_matrix_runtime_effect"] == "avg_down_bias"
-    assert action["ai_score_usable"] is False
-    assert action["score_prior_band"] == "neutral_or_unknown"
-    assert action["ai_score_prior_weight"] == 0.0
-    assert action["holding_exit_matrix_current_micro_support"] is True
+    assert action["should_add"] is False
+    assert action["reason"] == "holding_exit_matrix_retired"

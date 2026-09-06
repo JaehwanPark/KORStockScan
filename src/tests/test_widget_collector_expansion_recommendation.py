@@ -672,7 +672,7 @@ def test_main_returns_terminal_source_not_ready_exit_code(tmp_path, capsys):
 
 def test_systemd_service_waits_for_postclose_label_contract():
     service = Path(
-        "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
+        "deploy/systemd/korstockscan-machine-microstructure-final-refresh.service"
     ).read_text(encoding="utf-8")
     wrapper = Path("deploy/run_machine_microstructure_final_refresh.sh").read_text(
         encoding="utf-8"

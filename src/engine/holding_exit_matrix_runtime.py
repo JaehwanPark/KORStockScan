@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import RETIREMENT_ID
+
 import json
 import re
 from datetime import date, datetime, timedelta
@@ -552,186 +554,15 @@ def _runtime_bias_from_entries(
     matched_entries: list[dict[str, Any]],
     position_ctx: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    runtime_enabled = bool(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
-    )
-    action = str(action_label or "").upper()
-    biases = {
-        str(entry.get("recommended_bias") or "no_clear_edge")
-        for entry in matched_entries
-    }
-    profit_rate = _safe_float((position_ctx or {}).get("profit_rate"), 0.0)
-    peak_profit = _safe_float((position_ctx or {}).get("peak_profit"), profit_rate)
-    ai_context = _holding_matrix_ai_score_context(position_ctx)
-    current_ai_score = ai_context["current_ai_score"]
-    avg_ai = int(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65
-    )
-    pyr_ai = int(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75
-    )
-    safety_veto = has_holding_exit_matrix_safety_veto(position_ctx)
-    result = {
-        "holding_exit_matrix_runtime_bias_enabled": runtime_enabled,
+    return {
+        "holding_exit_matrix_runtime_bias_enabled": False,
         "holding_exit_matrix_runtime_bias_applied": False,
         "holding_exit_matrix_runtime_effect": "none",
-        "holding_exit_matrix_original_action": action or "-",
+        "holding_exit_matrix_original_action": action_label or "-",
         "holding_exit_matrix_forced_action": "-",
-        "holding_exit_matrix_runtime_reason": "no_runtime_bias",
+        "holding_exit_matrix_runtime_reason": "retired",
         "holding_exit_matrix_scale_in_bias": "-",
-        "holding_exit_matrix_hypothesis_profit_rate": profit_rate,
-        "holding_exit_matrix_hypothesis_peak_profit": peak_profit,
-        "holding_exit_matrix_hypothesis_ai_score": current_ai_score,
-        "holding_exit_matrix_ai_score_usable": ai_context["ai_score_usable"],
-        "holding_exit_matrix_ai_score_source": ai_context["ai_score_source"],
-        "holding_exit_matrix_ai_score_data_quality": ai_context[
-            "ai_score_data_quality"
-        ],
-        "holding_exit_matrix_ai_score_excluded_reason": ai_context[
-            "ai_score_excluded_reason"
-        ],
-        "holding_exit_matrix_ai_score_microstructure_confirmed": ai_context[
-            "ai_score_microstructure_confirmed"
-        ],
-        **_holding_score_prior_fields(
-            current_ai_score=current_ai_score,
-            threshold=avg_ai,
-            usable=ai_context["ai_score_usable"],
-            prefix="holding_exit_matrix_",
-        ),
     }
-    micro_support = _holding_matrix_current_micro_support(position_ctx)
-    result.update(micro_support)
-    if not runtime_enabled:
-        result["holding_exit_matrix_runtime_reason"] = "runtime_bias_disabled"
-        return result
-    if not action:
-        result["holding_exit_matrix_runtime_reason"] = "missing_ai_action"
-        return result
-    if safety_veto:
-        result["holding_exit_matrix_runtime_reason"] = "safety_veto_passthrough"
-        return result
-
-    forced_action = ""
-    effect = "none"
-    reason = ""
-    if (
-        "prefer_exit" in biases
-        and action in {"HOLD", "WAIT", "TRIM"}
-        and bool(
-            getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_HOLD_TO_EXIT_ENABLED", True)
-        )
-    ):
-        forced_action = "EXIT"
-        effect = "force_exit"
-        reason = "matrix_prefer_exit"
-    elif (
-        biases & {"prefer_avg_down_wait", "prefer_pyramid_wait"}
-        and action in _exit_to_hold_candidate_actions()
-        and bool(
-            getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True)
-        )
-        and micro_support["holding_exit_matrix_current_micro_support"]
-    ):
-        forced_action = "HOLD"
-        effect = "force_hold"
-        reason = "matrix_scale_in_or_missed_upside_wait"
-
-    if "prefer_avg_down_wait" in biases:
-        result["holding_exit_matrix_scale_in_bias"] = "AVG_DOWN"
-        result.update(
-            _holding_score_prior_fields(
-                current_ai_score=current_ai_score,
-                threshold=avg_ai,
-                usable=ai_context["ai_score_usable"],
-                prefix="holding_exit_matrix_",
-            )
-        )
-    elif "prefer_pyramid_wait" in biases:
-        result["holding_exit_matrix_scale_in_bias"] = "PYRAMID"
-        result.update(
-            _holding_score_prior_fields(
-                current_ai_score=current_ai_score,
-                threshold=pyr_ai,
-                usable=ai_context["ai_score_usable"],
-                prefix="holding_exit_matrix_",
-            )
-        )
-
-    if not forced_action and position_ctx:
-        drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
-        if (
-            action in _exit_to_hold_candidate_actions()
-            and bool(
-                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True)
-            )
-            and micro_support["holding_exit_matrix_current_micro_support"]
-            and profit_rate
-            >= float(
-                getattr(
-                    TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2
-                )
-                or -1.2
-            )
-            and profit_rate
-            <= float(
-                getattr(
-                    TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT", -0.1
-                )
-                or -0.1
-            )
-        ):
-            forced_action = "HOLD"
-            effect = "force_hold"
-            reason = "hypothesis_avg_down_wait_window"
-            result["holding_exit_matrix_scale_in_bias"] = "AVG_DOWN"
-        elif (
-            action in _exit_to_hold_candidate_actions()
-            and bool(
-                getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_EXIT_TO_HOLD_ENABLED", True)
-            )
-            and micro_support["holding_exit_matrix_current_micro_support"]
-            and profit_rate
-            >= float(
-                getattr(
-                    TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT", 0.8
-                )
-                or 0.8
-            )
-            and drawdown_from_peak
-            <= float(
-                getattr(
-                    TRADING_RULES,
-                    "HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT",
-                    0.35,
-                )
-                or 0.35
-            )
-        ):
-            forced_action = "HOLD"
-            effect = "force_hold"
-            reason = "hypothesis_pyramid_wait_window"
-            result["holding_exit_matrix_scale_in_bias"] = "PYRAMID"
-
-    if not forced_action:
-        result["holding_exit_matrix_runtime_reason"] = (
-            "current_micro_support_missing"
-            if biases & {"prefer_avg_down_wait", "prefer_pyramid_wait"}
-            and action in _exit_to_hold_candidate_actions()
-            else "no_matching_runtime_bias"
-        )
-        return result
-    result.update(
-        {
-            "holding_exit_matrix_runtime_bias_applied": True,
-            "holding_exit_matrix_runtime_effect": effect,
-            "holding_exit_matrix_forced_action": forced_action,
-            "holding_exit_matrix_runtime_reason": reason,
-            "holding_exit_matrix_score_gate_converted_to_prior": True,
-            "holding_exit_matrix_hard_gate_veto": False,
-        }
-    )
-    return result
 
 
 def resolve_holding_exit_matrix_scale_in_bias(
@@ -743,247 +574,10 @@ def resolve_holding_exit_matrix_scale_in_bias(
     held_sec: int,
     safety_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Runtime override hook for ADM-driven avg-down/pyramid proposals."""
-    raw_strategy = str(strategy or "").upper()
-    if raw_strategy not in {"SCALPING", "SCALP"}:
-        return {
-            "should_add": False,
-            "reason": "holding_exit_matrix_scale_in_bias_scalping_only",
-        }
-    if has_holding_exit_matrix_safety_veto(safety_context):
-        return {
-            "should_add": False,
-            "reason": "holding_exit_matrix_scale_in_safety_veto_passthrough",
-        }
-    ai_context = _holding_matrix_ai_score_context(
-        {
-            **(safety_context or {}),
-            "current_ai_score": current_ai_score,
-        }
-    )
-    micro_support = _holding_matrix_current_micro_support(safety_context)
-    scale_in_enabled = bool(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED", False)
-    )
-    lifecycle_decision = resolve_lifecycle_decision(
-        stage="scale_in",
-        original_action="NO_CHANGE",
-        context={
-            **(safety_context or {}),
-            "profit_rate": profit_rate,
-            "peak_profit": peak_profit,
-            "current_ai_score": current_ai_score,
-            "held_sec": held_sec,
-        },
-    )
-    lifecycle_effect = str(
-        lifecycle_decision.get("lifecycle_matrix_runtime_effect") or ""
-    )
-    if not scale_in_enabled:
-        return {
-            "should_add": False,
-            "reason": "holding_exit_matrix_scale_in_bias_disabled",
-            **lifecycle_decision,
-        }
-    if lifecycle_effect in {"avg_down_bias", "pyramid_bias"}:
-        add_type = "AVG_DOWN" if lifecycle_effect == "avg_down_bias" else "PYRAMID"
-        threshold = (
-            getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65)
-            if add_type == "AVG_DOWN"
-            else getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75)
-        )
-        if not micro_support["holding_exit_matrix_current_micro_support"]:
-            return {
-                "should_add": False,
-                "reason": "holding_exit_matrix_current_micro_support_missing",
-                "ai_score_usable": ai_context["ai_score_usable"],
-                "ai_score_source": ai_context["ai_score_source"],
-                "ai_score_data_quality": ai_context["ai_score_data_quality"],
-                "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
-                "ai_score_microstructure_confirmed": ai_context[
-                    "ai_score_microstructure_confirmed"
-                ],
-                **_holding_score_prior_fields(
-                    current_ai_score=current_ai_score,
-                    threshold=threshold,
-                    usable=ai_context["ai_score_usable"],
-                ),
-                **micro_support,
-                **lifecycle_decision,
-            }
-        return {
-            "should_add": True,
-            "add_type": add_type,
-            "reason": f"lifecycle_decision_matrix_{add_type.lower()}",
-            "profit_rate": profit_rate,
-            "peak_profit": peak_profit,
-            "current_ai_score": current_ai_score,
-            "ai_score_usable": ai_context["ai_score_usable"],
-            "ai_score_source": ai_context["ai_score_source"],
-            "ai_score_data_quality": ai_context["ai_score_data_quality"],
-            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
-            "ai_score_microstructure_confirmed": ai_context[
-                "ai_score_microstructure_confirmed"
-            ],
-            **_holding_score_prior_fields(
-                current_ai_score=current_ai_score,
-                threshold=threshold,
-                usable=ai_context["ai_score_usable"],
-            ),
-            **micro_support,
-            "held_sec": held_sec,
-            "holding_exit_matrix_scale_in_bias": add_type,
-            **lifecycle_decision,
-        }
-    avg_min = float(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_PROFIT_PCT", -1.2)
-        or -1.2
-    )
-    avg_max = float(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_PROFIT_PCT", -0.1)
-        or -0.1
-    )
-    avg_ai = int(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_AI_SCORE", 65) or 65
-    )
-    avg_min_held = int(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MIN_HELD_SEC", 10) or 10
-    )
-    avg_max_held = int(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_AVG_DOWN_MAX_HELD_SEC", 240) or 240
-    )
-    avg_window_match = (
-        avg_min <= float(profit_rate or 0.0) <= avg_max
-        and int(held_sec or 0) >= avg_min_held
-    )
-    if (
-        avg_window_match
-        and not micro_support["holding_exit_matrix_current_micro_support"]
-    ):
-        return {
-            "should_add": False,
-            "reason": "holding_exit_matrix_current_micro_support_missing",
-            "ai_score_usable": ai_context["ai_score_usable"],
-            "ai_score_source": ai_context["ai_score_source"],
-            "ai_score_data_quality": ai_context["ai_score_data_quality"],
-            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
-            "ai_score_microstructure_confirmed": ai_context[
-                "ai_score_microstructure_confirmed"
-            ],
-            **_holding_score_prior_fields(
-                current_ai_score=current_ai_score,
-                threshold=avg_ai,
-                usable=ai_context["ai_score_usable"],
-            ),
-            **micro_support,
-        }
-    if avg_window_match:
-        if (
-            int(held_sec or 0) <= avg_max_held
-            and micro_support["holding_exit_matrix_current_micro_support"]
-        ):
-            return {
-                "should_add": True,
-                "add_type": "AVG_DOWN",
-                "reason": "holding_exit_matrix_avg_down_bias",
-                "profit_rate": profit_rate,
-                "peak_profit": peak_profit,
-                "current_ai_score": current_ai_score,
-                "ai_score_usable": ai_context["ai_score_usable"],
-                "ai_score_source": ai_context["ai_score_source"],
-                "ai_score_data_quality": ai_context["ai_score_data_quality"],
-                "ai_score_microstructure_confirmed": ai_context[
-                    "ai_score_microstructure_confirmed"
-                ],
-                "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
-                **_holding_score_prior_fields(
-                    current_ai_score=current_ai_score,
-                    threshold=avg_ai,
-                    usable=ai_context["ai_score_usable"],
-                ),
-                **micro_support,
-                "held_sec": held_sec,
-                "holding_exit_matrix_scale_in_bias": "AVG_DOWN",
-            }
-    pyr_min = float(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_PROFIT_PCT", 0.8) or 0.8
-    )
-    pyr_ai = int(
-        getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_PYRAMID_MIN_AI_SCORE", 75) or 75
-    )
-    pyr_max_dd = float(
-        getattr(
-            TRADING_RULES,
-            "HOLDING_EXIT_MATRIX_PYRAMID_MAX_DRAWDOWN_FROM_PEAK_PCT",
-            0.35,
-        )
-        or 0.35
-    )
-    drawdown_from_peak = float(peak_profit or 0.0) - float(profit_rate or 0.0)
-    pyr_window_match = (
-        float(profit_rate or 0.0) >= pyr_min and drawdown_from_peak <= pyr_max_dd
-    )
-    if (
-        pyr_window_match
-        and not micro_support["holding_exit_matrix_current_micro_support"]
-    ):
-        return {
-            "should_add": False,
-            "reason": "holding_exit_matrix_current_micro_support_missing",
-            "ai_score_usable": ai_context["ai_score_usable"],
-            "ai_score_source": ai_context["ai_score_source"],
-            "ai_score_data_quality": ai_context["ai_score_data_quality"],
-            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
-            "ai_score_microstructure_confirmed": ai_context[
-                "ai_score_microstructure_confirmed"
-            ],
-            **_holding_score_prior_fields(
-                current_ai_score=current_ai_score,
-                threshold=pyr_ai,
-                usable=ai_context["ai_score_usable"],
-            ),
-            **micro_support,
-        }
-    if pyr_window_match and micro_support["holding_exit_matrix_current_micro_support"]:
-        return {
-            "should_add": True,
-            "add_type": "PYRAMID",
-            "reason": "holding_exit_matrix_pyramid_bias",
-            "profit_rate": profit_rate,
-            "peak_profit": peak_profit,
-            "current_ai_score": current_ai_score,
-            "ai_score_usable": ai_context["ai_score_usable"],
-            "ai_score_source": ai_context["ai_score_source"],
-            "ai_score_data_quality": ai_context["ai_score_data_quality"],
-            "ai_score_microstructure_confirmed": ai_context[
-                "ai_score_microstructure_confirmed"
-            ],
-            "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
-            **_holding_score_prior_fields(
-                current_ai_score=current_ai_score,
-                threshold=pyr_ai,
-                usable=ai_context["ai_score_usable"],
-            ),
-            **micro_support,
-            "held_sec": held_sec,
-            "holding_exit_matrix_scale_in_bias": "PYRAMID",
-        }
     return {
         "should_add": False,
-        "reason": "holding_exit_matrix_scale_in_no_match",
-        "ai_score_usable": ai_context["ai_score_usable"],
-        "ai_score_source": ai_context["ai_score_source"],
-        "ai_score_data_quality": ai_context["ai_score_data_quality"],
-        "ai_score_excluded_reason": ai_context["ai_score_excluded_reason"],
-        "ai_score_microstructure_confirmed": ai_context[
-            "ai_score_microstructure_confirmed"
-        ],
-        **_holding_score_prior_fields(
-            current_ai_score=current_ai_score,
-            threshold=avg_ai,
-            usable=ai_context["ai_score_usable"],
-        ),
-        **micro_support,
+        "reason": "holding_exit_matrix_retired",
+        "holding_exit_matrix_scale_in_bias": "-",
     }
 
 
@@ -995,156 +589,43 @@ def build_holding_exit_matrix_runtime_context(
     advisory_enabled: bool,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    profile = str(prompt_profile or "shared").strip().lower()
     current_dt = now or datetime.now()
     price_bucket = _price_bucket(
         (ws_data or {}).get("curr") or (ws_data or {}).get("curr_price")
     )
     volume_bucket = _volume_bucket(_resolve_intraday_volume(ws_data, recent_candles))
     time_bucket = _time_bucket(current_dt)
-    buckets = {
-        "price_bucket": price_bucket,
-        "volume_bucket": volume_bucket,
-        "time_bucket": time_bucket,
-    }
-    if profile not in {"holding", "exit"}:
-        return {
-            "applied": False,
-            "status": "excluded_non_holding_prompt",
-            "cohort": "excluded",
-            "cache_token": f"excluded:non_holding:{price_bucket}:{volume_bucket}:{time_bucket}",
-            "prompt_context": "",
-            "fields": {
-                "holding_exit_matrix_feature_enabled": bool(advisory_enabled),
-                "holding_exit_matrix_applied": False,
-                "holding_exit_matrix_status": "excluded_non_holding_prompt",
-                "holding_exit_matrix_cohort": "excluded",
-                "holding_exit_matrix_version": "-",
-                "holding_exit_matrix_source_date": "-",
-                "holding_exit_matrix_valid_for_date": "-",
-                "holding_exit_matrix_application_mode": "-",
-                "holding_exit_matrix_loaded_from": "-",
-                "holding_exit_matrix_cache_token": f"excluded:non_holding:{price_bucket}:{volume_bucket}:{time_bucket}",
-                "holding_exit_matrix_price_bucket": price_bucket,
-                "holding_exit_matrix_volume_bucket": volume_bucket,
-                "holding_exit_matrix_time_bucket": time_bucket,
-                "holding_exit_matrix_recommended_biases": "-",
-                "holding_exit_matrix_policy_hints": "-",
-                "holding_exit_matrix_runtime_bias_enabled": bool(
-                    getattr(
-                        TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False
-                    )
-                ),
-                "holding_exit_matrix_runtime_bias_applied": False,
-                "holding_exit_matrix_runtime_effect": "none",
-                "holding_exit_matrix_original_action": "-",
-                "holding_exit_matrix_forced_action": "-",
-                "holding_exit_matrix_runtime_reason": "not_evaluated",
-                "holding_exit_matrix_scale_in_bias": "-",
-            },
-            "matched_entries": [],
-        }
-
-    matrix_path = _latest_matrix_path_on_or_before(
-        _session_cutoff_source_date(current_dt)
-    )
-    payload = _read_matrix_payload(matrix_path)
-    if not payload:
-        status = "matrix_missing_or_invalid"
-        cohort = "excluded"
-        cache_token = f"excluded:missing:{price_bucket}:{volume_bucket}:{time_bucket}"
-        return {
-            "applied": False,
-            "status": status,
-            "cohort": cohort,
-            "cache_token": cache_token,
-            "prompt_context": "",
-            "fields": {
-                "holding_exit_matrix_feature_enabled": bool(advisory_enabled),
-                "holding_exit_matrix_applied": False,
-                "holding_exit_matrix_status": status,
-                "holding_exit_matrix_cohort": cohort,
-                "holding_exit_matrix_version": "-",
-                "holding_exit_matrix_source_date": "-",
-                "holding_exit_matrix_valid_for_date": "-",
-                "holding_exit_matrix_application_mode": "-",
-                "holding_exit_matrix_loaded_from": (
-                    str(matrix_path) if matrix_path is not None else "-"
-                ),
-                "holding_exit_matrix_cache_token": cache_token,
-                "holding_exit_matrix_price_bucket": price_bucket,
-                "holding_exit_matrix_volume_bucket": volume_bucket,
-                "holding_exit_matrix_time_bucket": time_bucket,
-                "holding_exit_matrix_recommended_biases": "-",
-                "holding_exit_matrix_policy_hints": "-",
-                "holding_exit_matrix_runtime_bias_enabled": bool(
-                    getattr(
-                        TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False
-                    )
-                ),
-                "holding_exit_matrix_runtime_bias_applied": False,
-                "holding_exit_matrix_runtime_effect": "none",
-                "holding_exit_matrix_original_action": "-",
-                "holding_exit_matrix_forced_action": "-",
-                "holding_exit_matrix_runtime_reason": "not_evaluated",
-                "holding_exit_matrix_scale_in_bias": "-",
-            },
-            "matched_entries": [],
-        }
-
-    matched_entries = _matched_entries(payload, buckets)
-    cohort = "candidate" if advisory_enabled else "baseline"
-    status = (
-        "advisory_prompt_applied" if advisory_enabled else "loaded_feature_disabled"
-    )
-    matrix_version = str(payload.get("matrix_version") or "-")
-    source_date = str(payload.get("source_date") or "-")
-    valid_for_date = str(payload.get("valid_for_date") or "-")
-    application_mode = str(payload.get("application_mode") or "-")
-    cache_token = (
-        f"{cohort}:{matrix_version}:{price_bucket}:{volume_bucket}:{time_bucket}"
-    )
-    fields = {
-        "holding_exit_matrix_feature_enabled": bool(advisory_enabled),
-        "holding_exit_matrix_applied": bool(advisory_enabled),
-        "holding_exit_matrix_status": status,
-        "holding_exit_matrix_cohort": cohort,
-        "holding_exit_matrix_version": matrix_version,
-        "holding_exit_matrix_source_date": source_date,
-        "holding_exit_matrix_valid_for_date": valid_for_date,
-        "holding_exit_matrix_application_mode": application_mode,
-        "holding_exit_matrix_loaded_from": str(matrix_path),
-        "holding_exit_matrix_cache_token": cache_token,
-        "holding_exit_matrix_price_bucket": price_bucket,
-        "holding_exit_matrix_volume_bucket": volume_bucket,
-        "holding_exit_matrix_time_bucket": time_bucket,
-        "holding_exit_matrix_recommended_biases": ",".join(
-            str(entry.get("recommended_bias") or "no_clear_edge")
-            for entry in matched_entries
-        ),
-        "holding_exit_matrix_policy_hints": ",".join(
-            str(entry.get("policy_hint") or "-") for entry in matched_entries
-        ),
-        "holding_exit_matrix_runtime_bias_enabled": bool(
-            getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED", False)
-        ),
-        "holding_exit_matrix_runtime_bias_applied": False,
-        "holding_exit_matrix_runtime_effect": "none",
-        "holding_exit_matrix_original_action": "-",
-        "holding_exit_matrix_forced_action": "-",
-        "holding_exit_matrix_runtime_reason": "not_evaluated",
-        "holding_exit_matrix_scale_in_bias": "-",
-    }
     return {
-        "applied": bool(advisory_enabled),
-        "status": status,
-        "cohort": cohort,
-        "cache_token": cache_token,
-        "prompt_context": (
-            _prompt_context(payload, matched_entries) if advisory_enabled else ""
-        ),
-        "fields": fields,
-        "matched_entries": matched_entries,
+        "applied": False,
+        "status": "retired",
+        "cohort": "excluded",
+        "cache_token": RETIREMENT_ID,
+        "prompt_context": "",
+        "fields": {
+            "holding_exit_matrix_feature_enabled": False,
+            "holding_exit_matrix_applied": False,
+            "holding_exit_matrix_status": "retired",
+            "holding_exit_matrix_cohort": "excluded",
+            "holding_exit_matrix_version": "-",
+            "holding_exit_matrix_source_date": "-",
+            "holding_exit_matrix_valid_for_date": "-",
+            "holding_exit_matrix_application_mode": "-",
+            "holding_exit_matrix_loaded_from": "-",
+            "holding_exit_matrix_cache_token": RETIREMENT_ID,
+            "holding_exit_matrix_price_bucket": price_bucket,
+            "holding_exit_matrix_volume_bucket": volume_bucket,
+            "holding_exit_matrix_time_bucket": time_bucket,
+            "holding_exit_matrix_recommended_biases": "-",
+            "holding_exit_matrix_policy_hints": "-",
+            "holding_exit_matrix_runtime_bias_enabled": False,
+            "holding_exit_matrix_runtime_bias_applied": False,
+            "holding_exit_matrix_runtime_effect": "none",
+            "holding_exit_matrix_original_action": "-",
+            "holding_exit_matrix_forced_action": "-",
+            "holding_exit_matrix_runtime_reason": "not_evaluated",
+            "holding_exit_matrix_scale_in_bias": "-",
+        },
+        "matched_entries": [],
     }
 
 

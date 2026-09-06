@@ -1,10 +1,20 @@
 # 장후작업 상세검토 진행 목록
 
-작성 기준: `2026-09-05 KST`
+작성 기준: `2026-09-06 KST` (기존 review index 유지)
 
 목적: 설치된 장후 자동화의 각 실행 단위를 순서대로 검토하면서 목적·목표·기대효과·운영상태·상세검토 상태·연결 lock을 한 표에서 추적한다. 실행 원칙과 owner는 [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md) §1~§8과 [2026-09-07 체크리스트](../checklists/2026-09-07-stage2-todo-checklist.md)가 우선한다.
 
 ## 1. 이번 갱신 판정
+
+- #15~16, #21, #23, #26~27까지 상세검토·보완 결과를 반영했다. 현재 완료 범위는 저가 2-leg/확장 추천의 source-only 경제성, one-share 기회 진단과 일일 drought controller, Institutional 전용 aggregate 폐기, Microstructure freshness/delivery v3/finite outcome 진단이다. 다음 자연 PID·PREOPEN·장후 성과 확인은 각 checklist OPEN owner가 소유한다.
+- Entry AI gate 누적 backtest는 `on_demand only`이고 20:10 정기 wrapper producer가 아니다. 병합 전 gate에서 이를 반대로 요구하던 stale retirement 회귀를 정정해 일일 controller 유지와 누적 backtest 미호출을 함께 고정했다.
+- 병합 전 누적 변경의 수정·신규 테스트 전체 **2,928 PASS**를 확인했다. 이 수치는 서로 다른 과거 검증 수치의 합계가 아니며, 실제 PID 소비·자연 장후 실행·실현 수익 개선 증거로 사용하지 않는다.
+- #23 R1→R5 구현·재리뷰: **코드 보완 종결, 자연 적용/성과 확인 OPEN**. 새 평가/과거 arm 분리, 잔량 확장 full-position 경제성, 시장·세션별 stop/재심, 기존 총량 내 durable submit 예약, 누적 진단 정기 실행 제외를 구현했다. 최종 통합 회귀 **2,088 PASS**, 관련 파일의 검증 전후 해시 동일, 검토 범위 미해결 finding 0건이다. 실제 env/PID·보고서는 이번에 덮어쓰지 않았으며 새 schema 산출물과 자연 비용 차감 EV는 별도 확인이다. 현재 판정은 [리뷰 §10](2026-09-06-one-share-drought-final-review.md#10-r1r5-구현수정재리뷰), 완료 증거는 `EntryRecheckFeasibilityRepairReview0907`, OPEN owner는 `EntryRecheckNaturalAttribution0907`이다.
+- 9월 6일 ADM/LDM 정리: #22, #29~42, #52~53의 scalping matrix·context·bucket·bridge 실행/승인 경로를 폐기했다. #28은 LDM 전용 단독 실행만 제거하고 #13 AVG_DOWN의 증분 CF·full-policy replay helper는 유지한다. raw candidate/order/fill/terminal lineage, Samsung·Entry AI gate·AVG_DOWN·PYRAMID 및 hard safety는 폐기 대상이 아니다.
+- PREOPEN은 폐기 namespace를 OFF로 고정하고 보관 산출물의 재승격을 차단한다. 상세검토·검증 근거는 [ADM/LDM 정리 리뷰](2026-09-06-adm-ldm-retirement-review.md)를 따른다. bot 재기동이나 기존 다음-session env의 수동 재적용은 하지 않았다.
+- 이번 정리의 최종 통합 회귀는 **3,036 PASS**다. 코드리뷰·수정·재리뷰 반복 후 검토 범위 미해결 finding 0건이며, 9월 7일 실제 PREOPEN/PID/장후 소비는 별도 자연증거 확인이다.
+- #21/#23 후속 재개: ADM/LDM 폐기 완료 상태에서 one-share 진단과 기존 recheck 조건부 정책의 producer→PREOPEN→runtime/receipt 계약을 재검증했다. F1~F6, source-quality 불합격 기간의 복귀 근거 오인, 폐기 필터의 생성기 해시 손실을 보완했고 최종 통합 회귀 **2,345 PASS**다. 9/4 report·sim-only catalog와 9/7 PREOPEN를 재생성·verify PASS했다. recheck는 KRX 정규장/NXT 애프터마켓 ON, 장중 확대 OFF이며 실제 PID·수익개선은 자연증거 대기다. 상세는 [recheck 최종 리뷰 §7](2026-09-06-one-share-drought-final-review.md#7-admldm-폐기-완료-후-재개-검증)을 따른다. 위 ADM/LDM 폐기 검증 수치와 합산하지 않는다.
+- 아래 1~13 종결 및 1,964 PASS 수치는 9월 5일의 이전 검증 기록이다. 이번 정리 변경의 통합 검증 수치와 혼용하지 않는다.
 
 - `Bot stop`부터 `AVG_DOWN recovery calibration`까지 13개 실행 단위의 코드·계약 점검과 허용된 보완을 완료했다.
 - 1~9번은 기존 동작과 격리·재현·source-only 권한 계약을 확인했다. 별도 전략 또는 runtime 변경은 없었다.
@@ -43,7 +53,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | `15:10` | Scalp-sim overnight preclose | 미결 sim position의 당일 가상청산·overnight carry 판정 | postclose sim label 완결 | ON, sim-only | 이번 구간 외; 상세검토 대기 | E2, P16/P17 |
 | `20:05` | EOD KOSPI update | NXT 종료 뒤 일봉 DB·추천 원천 갱신 | 장후 producer의 최신 시장자료 확보 | ON | 상세검토 대기 | 없음 |
-| `20:10` | Main threshold-cycle wrapper | bot stop 뒤 tuning/source-quality/AI/approval/verifier 체인 실행 | 다음 PREOPEN 후보와 결손 workorder 생성 | ON, stop-only | **내부 1~13 구현·점검 종결**; 14~118 순차 검토 대기 | E1, E2, E3/E4/E6, P14~P18 |
+| `20:10` | Main threshold-cycle wrapper | bot stop 뒤 tuning/source-quality/AI/approval/verifier 체인 실행 | 다음 PREOPEN 후보와 결손 workorder 생성 | ON, stop-only | 1~13 이전 종결; #22/#29~42/#52~53 폐기 검토, 나머지는 각 행 기준 | E1, E2, E3/E4/E6, P14~P18 |
 | `20:10` | Widget evaluation systemd | advisory·auto-trade calibration과 다음-session widget policy 생성 | widget 독립 정책의 당일 source-date 일치 | ON | 상세검토 대기 | E7 |
 | `20:10` | Postclose DONE controller | main wrapper terminal 대기·복구·최종 verifier 조정 | 부분 실패 은폐 방지 | ON, bounded wait | 상세검토 대기 | E1, follower E6 |
 | `20:10` | Tuning monitoring | main postclose DONE 뒤 Parquet/DuckDB late-pass 갱신 | 분석 조회속도와 데이터 재사용 개선 | ON, bounded wait | 상세검토 대기 | E5 |
@@ -51,7 +61,7 @@
 | `20:50` | Dashboard DB archive | 검증된 DB/raw 세대 압축 | 디스크·조회비용 억제 | ON | 상세검토 대기 | E9 |
 | `21:05` | AI entry setup paired replay follower | offline exact candidate replay와 Main AI consumer refresh | entry/prompt 비교자료의 terminal 완결 | ON, source-only | 상세검토 대기 | E6 |
 | `21:10` | Swing model retrain/auto-promote | swing 모델 재학습 | swing 모델 갱신 | **OFF** | 현재 불필요 지정 유지 | 없음 |
-| `21:15` | Machine final refresh systemd | expansion→attribution→hysteresis→entry timing→approval→checklist 실행 | machine 단일 owner의 다음-session 후보 종결 | ON | 상세검토 대기 | E7 |
+| `21:15` | Machine microstructure final refresh systemd | expansion→attribution→hysteresis→entry timing→approval→checklist 실행 | machine 단일 owner의 다음-session 후보 종결 | ON | 20:10 중복 사본 제거·단일 owner 확인 완료 | E7 |
 | `21:55~23:50` | Postclose finalization | 모든 predecessor terminal 뒤 cleanup·final detector 실행 | 미완료 원천 보존과 장후 종결 확인 | ON, fail-closed | 상세검토 대기 | E1, E8, E9 |
 
 ## 4. 20:10 main wrapper 상세 목록
@@ -78,38 +88,36 @@
 | 14 | Samsung machine entry tuning | 삼성 독립 머신 진입상태 분석 | 다음 PREOPEN bounded 후보 생성 | 종목 전용 진입 EV 개선 | ON | 상세검토 대기 | E2 |
 | 15 | Low-price two-leg tuning | 저가주 2-leg 실제 결과·적용 정책 감사 | 실제 applied 정책 carry; 부분집합은 진단만 유지 | 허위 개선·근거 없는 정책 변경 차단 | ON | LP-F1/F2 보완; 신규 subset live 승격 제거, 50 loader-ready/3 격리 유지, 실적용·수익개선 별도 | E2 |
 | 16 | Low-price expanded recommendation | 기존 두 필터 경로 비교·후보/profile 연구 | 동일기간 순이익·양수 EV, 날짜 간 HELD, half 진단 | EV 착시와 보유 단절 제거 | ON, content-bound checkpoint/resume | LP-F3~F5 보완; paired 연구·추천은 source-only, 신규 실권한 없음 | E2 |
-| 17 | Machine microstructure attribution 20:10 사본 | 머신 이벤트와 micro 반응 연결 | 21:15 단일 owner 유지 | heavy 중복 실행 방지 | OFF | 상세검토 대기 | 없음 |
-| 18 | Market-weakness hysteresis 20:10 사본 | 약세 상태 전이 보정 | 21:15 attribution 이후 실행 | 약세 오진입 완화 | OFF | 상세검토 대기 | 없음 |
-| 19 | Machine entry timing 20:10 사본 | 즉시·지연 진입 비교 | 21:15 단일 owner 유지 | 진입 timing EV 개선 | OFF | 상세검토 대기 | 없음 |
-| 20 | Machine policy approval 20:10 사본 | 머신 후보 승인 | 21:15 결과만 PREOPEN에 전달 | 이중 승인 방지 | OFF | 상세검토 대기 | 없음 |
+
+20:10의 machine attribution·market-weakness hysteresis·entry timing·policy approval 중복 사본은 2026-09-05에 제거했다. 네 기능의 현재 실행 owner는 위 21:15 `korstockscan-machine-microstructure-final-refresh.timer` 하나이며, 명시적 복구도 전용 wrapper만 사용한다. 따라서 기존 review index 17~20은 재사용하지 않는다.
 
 ### 4.2 진입·분할·LDM·microstructure 단계
 
 | # | 작업 | 목적 | 목표 | 기대효과 | 운영상태 | 상세검토 상태 | 연결 lock |
 | ---: | --- | --- | --- | --- | --- | --- | --- |
-| 21 | One-share threshold opportunity | 차단 후보의 bounded 재검토 | source/AI/quote 조건이 닫힌 기회만 제안 | 주문 가뭄 완화 | ON | 상세검토 대기 | E2, entry operator locks |
-| 22 | Scalp Entry ADM | entry 상태·행동 matrix | score 단독이 아닌 다차원 분류 | 진입 판단 정밀화 | ON | 상세검토 대기 | E2 |
-| 23 | Entry AI gate backtest | AI BUY/WAIT gate 사후검증 | clean baseline 이후 경제성 비교 | 불필요한 AI 차단 식별 | ON | 상세검토 대기 | E2 |
+| 21 | One-share threshold opportunity | 강제 1주 제한의 기회비용 진단 | primary blocker·실제 청산 후 결과를 분리해 기존 family source-only 작업지시 생성 | 불필요한 제한과 계측 결손 식별; 보고서 자체에는 주문 권한 없음 | ON, source-only | **구현·점검 종결**; runtime 전환·수익개선 증거와 분리 | E2; 신규 operator lock 없음 |
+| 22 | Scalp Entry ADM | entry 상태·행동 matrix | score 단독이 아닌 다차원 분류 | 진입 판단 정밀화 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 23 | Entry recheck daily controller + Entry AI gate diagnostic | 기존 recheck의 조건부 drought 대응과 누적 score/action 진단을 분리 | 같은 시장·세션 drought→고정 probe profile→PREOPEN→exact attempt/full-position receipt→fill-quality별 EV; 누적 sweep는 별도 CLI 수동 진단 | 허위 arm/정상 잔량 경제성 누락·scope 혼합 중단·미제출 한도 소진을 제거; 실제 EV·wall-clock 개선은 자연 확인 | **일일 controller ON 유지**, 누적 backtest 정기 실행 제외/on-demand only; 새 v4/v3 산출물·실제 PID 소비 확인 대기 | **R1~R5 구현 회귀 2,088 PASS, 폐기 후 최종 통합 2,345 PASS**. 고정 profile 운영 제어이며 최적 신호 자동 탐색은 아님. 구 9/4 artifact/기존 9/7 env ON을 새 계약 실적용으로 해석하지 않는다. 다음 자연 owner `EntryRecheckNaturalAttribution0907` | E2; 7/3 recheck lock archive-disabled, 이번 변경 없음 |
 | 24 | Scalp-sim overnight | 미결 sim 포지션 종결 | overnight outcome 완결 | sim label 누락 감소 | ON | 상세검토 대기 | E2, P16/P17 |
 | 25 | Overnight OpenAI recovery | 미결 sim 결과 보완 | active-undecided가 있을 때만 bounded 호출 | sim outcome 완결성 | 조건부 | 상세검토 대기 | provider budget lock |
-| 26 | Institutional flow context | 기관수급 context 생성 | lifecycle feature 제공 | regime 구분 개선 | ON | 상세검토 대기 | E2 |
-| 27 | Microstructure reaction context | micro 반응 feature 생성 | entry/holding event와 결과 연결 | prompt 입력 품질 개선 | ON, non-fatal | 상세검토 대기 | E2 |
-| 28 | Scale-in incremental CF | 추가 leg의 증분 효과 분리 | 기존 보유와 추가분 손익 분리 | scale-in 착시 제거 | ON | 상세검토 대기 | E2 |
-| 29 | LDM daily | lifecycle 단계별 귀속 | entry→exit 병목 분류 | 개선 owner 식별 | ON | 상세검토 대기 | E2 |
-| 30 | Scalp-sim scale-in approval | sim scale-in window 판정 | sim-only 확대 여부 결정 | 표본 수집 가속 | ON | 상세검토 대기 | E2, P16/P17 |
-| 31 | Lifecycle AI attribution | AI 결과의 단계 귀속 | prompt 영향 분리 | AI 경제성 분석 | ON | 상세검토 대기 | E2 |
-| 32 | LDM context refresh | AI attribution 반영 | same-date matrix 재계산 | context 누락 방지 | ON | 상세검토 대기 | E2 |
-| 33 | Lifecycle AI context | 다음 AI 입력 context 생성 | feature bundle 완결 | prompt 품질 향상 | ON | 상세검토 대기 | E2 |
-| 34 | LDM parent refinement | 얇은 child를 parent 가설로 통합 | 검증 가능한 분모 확보 | 영구 thin-bucket 감소 | ON | 상세검토 대기 | E2 |
-| 35 | Lifecycle bucket daily | 신규·충돌 bucket 탐색 | daily source-only taxonomy 생성 | 이상 조기탐지 | ON | 상세검토 대기 | E2 |
-| 36 | LDM rolling5d | 단기 lifecycle EV | 최근 변화 확인 | 시장 적응 | ON, trigger-gated | 상세검토 대기 | E2 |
-| 37 | Bucket rolling5d | 단기 parent 집계 | daily noise 완화 | 후보 지속성 확인 | ON, trigger-gated | 상세검토 대기 | E2 |
-| 38 | LDM rolling10d | 중기 lifecycle EV | 일별 변동 완화 | 안정적 방향 확인 | ON, trigger-gated | 상세검토 대기 | E2 |
-| 39 | Bucket rolling10d | 중기 parent 집계 | 표본 안정성 확인 | 과적합 완화 | ON, trigger-gated | 상세검토 대기 | E2 |
-| 40 | LDM MTD | 월간 lifecycle EV | promotion window 생성 | 실전 근거 강화 | ON, trigger-gated | 상세검토 대기 | E2 |
-| 41 | Bucket MTD | 월간 parent 집계 | sim/live candidate 입력 | promotion 안정화 | ON | 상세검토 대기 | E2 |
-| 42 | Runtime apply bridge | 후보와 실제 consumer 연결 | blocker/owner/env mapping 명시 | 보고서만 생성되는 경로 차단 | ON | 상세검토 대기 | E2, operator locks |
-| 43 | Scalp-sim auto-approval | sim catalog 자동 생성 | 다음 PREOPEN sim handoff | sim 연구 자동화 | ON | 상세검토 대기 | E2, P16/P17 |
+| 26 | Institutional flow context | 기관수급 context 생성 | lifecycle feature 제공 | regime 구분 개선 | RETIRED 2026-09-06 | sole consumer인 scalping ADM/LDM 폐기에 따라 scheduled producer와 current EV/runtime 소비 제거. exact AI investor/program context는 유지하고 historical artifact·CLI는 archive/offline only | E2 |
+| 27 | Microstructure reaction context | micro 반응 feature 생성 | entry/holding receipt 및 같은 시점 결과 진단 | 정확한 source-quality·기회 진단과 기존 개선 작업 전달 | ON diagnostic; A~D 구현, 자연 PID 미확인 | [구현 후 재리뷰 §7](./2026-09-06-institutional-microstructure-context-final-review.md#7-ad-구현-후-재리뷰): 공통 freshness/feature v2, delivery v3·cache/logger, finite same-attempt EV/rollup schema2, 독립 후보 제거, unique coverage/workorder 검증. 20건은 진단 기준이고 PREOPEN 승격은 N/A. stale wrapper 회귀는 on-demand 계약으로 정합화했으며 다음 정상 기동/장후 receipt만 checklist OPEN으로 유지 | E2 |
+| 28 | Scale-in incremental CF | 추가 leg의 증분 효과 분리 | 기존 보유와 추가분 손익 분리 | scale-in 착시 제거 | 독립 단계 RETIRED | #13 경제성 replay helper 유지 | 독립 E2 사용 종료 |
+| 29 | LDM daily | lifecycle 단계별 귀속 | entry→exit 병목 분류 | 개선 owner 식별 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 30 | Scalp-sim scale-in approval | sim scale-in window 판정 | sim-only 확대 여부 결정 | 표본 수집 가속 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 31 | Lifecycle AI attribution | AI 결과의 단계 귀속 | prompt 영향 분리 | AI 경제성 분석 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 32 | LDM context refresh | AI attribution 반영 | same-date matrix 재계산 | context 누락 방지 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 33 | Lifecycle AI context | 다음 AI 입력 context 생성 | feature bundle 완결 | prompt 품질 향상 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 34 | LDM parent refinement | 얇은 child를 parent 가설로 통합 | 검증 가능한 분모 확보 | 영구 thin-bucket 감소 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 35 | Lifecycle bucket daily | 신규·충돌 bucket 탐색 | daily source-only taxonomy 생성 | 이상 조기탐지 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 36 | LDM rolling5d | 단기 lifecycle EV | 최근 변화 확인 | 시장 적응 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 37 | Bucket rolling5d | 단기 parent 집계 | daily noise 완화 | 후보 지속성 확인 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 38 | LDM rolling10d | 중기 lifecycle EV | 일별 변동 완화 | 안정적 방향 확인 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 39 | Bucket rolling10d | 중기 parent 집계 | 표본 안정성 확인 | 과적합 완화 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 40 | LDM MTD | 월간 lifecycle EV | promotion window 생성 | 실전 근거 강화 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 41 | Bucket MTD | 월간 parent 집계 | sim/live candidate 입력 | promotion 안정화 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 42 | Runtime apply bridge | 후보와 실제 consumer 연결 | blocker/owner/env mapping 명시 | 보고서만 생성되는 경로 차단 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 43 | Scalp-sim auto-approval | sim catalog 자동 생성 | 다음 PREOPEN sim handoff | sim 연구 자동화 | ON | LDM 정책·가설 제외; rising-missed 독립 source 유지 | E2, P16/P17 |
 | 44 | Latency recommendation | non-entry 원인 분류 | latency/liquidity/AI/overbought 분리 | submit drought 개선 | ON | 상세검토 대기 | E2 |
 | 45 | Market panic breadth | 시장 panic 폭 계산 | 개별종목과 시장 위험 분리 | 과잉 매도 방지 | ON | 상세검토 대기 | E2 |
 | 46 | Panic-sell defense report | panic regime 종결 | recovery 상태 귀속 | exit 안정화 | ON | 상세검토 대기 | E2 |
@@ -118,8 +126,8 @@
 | 49 | Scanner lookup-attention tuning | 조회자원 배분 조정 | 정책 생성 후 verify | API 효율 개선 | ON, DB 필요 | 상세검토 대기 | E2 |
 | 50 | Daily threshold report | 일별·누적 후보 통합 | calibration·AI review 생성 | PREOPEN 근거 통합 | ON | 상세검토 대기 | E2 |
 | 51 | Threshold AI correction | deterministic 후보 2차 검토 | parsed review 확보 | 잘못된 자동후보 차단 | ON, OpenAI | 상세검토 대기 | provider budget lock |
-| 52 | Statistical action weight | 행동별 통계 가중치 | report-only 진단 | ADM 해석 개선 | ON, embedded output | 상세검토 대기 | E2 |
-| 53 | Holding/Exit ADM | holding/exit matrix | exit owner 분리 | 조기·지연청산 개선 | ON, embedded output | 상세검토 대기 | E2 |
+| 52 | Statistical action weight | 행동별 통계 가중치 | report-only 진단 | ADM 해석 개선 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
+| 53 | Holding/Exit ADM | holding/exit matrix | exit owner 분리 | 조기·지연청산 개선 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 54 | Threshold cumulative | clean-baseline 누적 EV | daily 과적합 방지 | 적용근거 안정화 | ON, embedded output | 상세검토 대기 | E2 |
 | 55 | Entry cancel-wait tuning | BUY 취소시간 CF | entry pattern별 대기시간 조정 | 체결률·기회비용 균형 | ON, 독립 family | 상세검토 대기 | E2 |
 
@@ -198,7 +206,20 @@
 
 ## 5. 다음 자연 실행에서 분리해 확인할 것
 
+- ADM/LDM 폐기 후 PREOPEN OFF·실제 PID 무주입·장후 누락 FAIL 없음은 OPEN `AdmLdmRetirementNaturalEvidence0907`이 소유한다. 과거 report/lock 파일은 삭제하지 않았고, operator lock 일괄해제는 하지 않았다.
+
 1. `PYRAMID`: 새 schema의 exact-ready parent episode, KRX 근거, 비용 차감 next-step EV, same-ID AI 검토, 단일 scale-in owner PREOPEN 선택.
 2. `AVG_DOWN`: `avg_down_route_arbitration_observed`와 연속 `avg_down_exit_replay_frame_observed`, 격리 policy replay 결과, A/B/C 독립 terminal, source audit 허용, same-ID AI/PREOPEN/PID 소비.
-3. 두 family 모두 구현 완료를 실현 수익 개선으로 표시하지 않는다. 자연 match 0은 경제성 실패가 아니며, source/adapter gap과 자연 희소성을 구분한다.
-4. bot 재기동, 수동 env 적용, operator lock 변경, 주문·수량·provider·hard-safety 변경은 이 목록 갱신 범위에 포함하지 않는다.
+3. `Low-price`: 실제 applied two-leg carry, paired research의 자연 결과, HELD·partial/full fill 분리와 source-only 권한을 `LowPriceEconomicReplayNaturalEvidence0907`에서 확인한다.
+4. `One-share / Entry recheck`: 고정 KRX/NXT profile의 실제 PID 소비와 exact submit/fill/청산·비용차감 EV를 `EntryRecheckNaturalAttribution0907`에서 확인한다. 누적 backtest는 정기 실행하지 않는다.
+5. `Microstructure`: delivery v3의 computed/payload/confirmed sent/internal consumed/cache identity와 같은 attempt 결과 결합을 `ContextDeliveryNaturalEvidence0907`에서 확인한다. 20건은 진단 해석 기준이며 PREOPEN 승격 조건이 아니다.
+6. 구현 완료를 실현 수익 개선으로 표시하지 않는다. 자연 match 0은 경제성 실패가 아니며, source/adapter gap과 자연 희소성을 구분한다.
+7. bot 재기동, 수동 env 적용, operator lock 변경, 주문·수량·provider·hard-safety 변경은 이 목록 갱신 범위에 포함하지 않는다.
+
+## 6. 다음 상세검토 우선순위
+
+1. #14 `Samsung machine entry tuning`: 목적·기대효과, 기존 전용 timing owner와 PREOPEN 자동 적용, 상승·반등 원천 및 자연 PID 소비를 점검한다.
+2. #24 `Scalp-sim overnight`: sim position 종결·carry label의 source-quality와 실제 후속 소비를 점검한다.
+3. #25 `Overnight OpenAI recovery`: active-undecided 조건, provider budget, fail-closed 결과와 과도한 재호출 가능성을 점검한다.
+
+번호 순서보다 이미 시작된 사용자 지정 항목을 우선 반영했으므로 #14가 아직 `상세검토 대기`다. 다음 검토 시작 시 Plan Rebase와 당일 checklist의 current owner를 다시 확인한다.

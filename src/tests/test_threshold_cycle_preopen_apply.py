@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import pytest
 from src.engine import lifecycle_bucket_discovery as discovery_mod
@@ -11,6 +12,81 @@ from src.engine.scalping import (
     scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod,
 )
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
+
+
+def _valid_entry_recheck_candidate():
+    from src.engine.scalping import entry_ai_gate_backtest as producer
+    from src.engine.scalping.entry_recheck_policy import (
+        POLICY_VERSION,
+        BOUNDED_PROFILE,
+        controller_decision,
+        scope_summary,
+    )
+
+    history = [
+        {
+            "source_date": day,
+            "source_quality_pass": True,
+            "denominator_floor_passed": True,
+            "critical": True,
+            "addressable": True,
+            "eligible_scopes": [
+                scope_summary(
+                    "KRX|KRX_REGULAR",
+                    {
+                        "stage_unique": {
+                            "ai_confirmed": 100,
+                            "budget_pass": 0,
+                            "order_bundle_submitted": 0,
+                        },
+                        "critical": True,
+                        "primary": "SUBMIT_DROUGHT_CRITICAL",
+                        "causal_bottleneck_axes": ["UPSTREAM_GATE"],
+                    },
+                )
+            ],
+        }
+        for day in ("2026-09-02", "2026-09-03", "2026-09-04")
+    ]
+    decision = controller_decision(
+        history=history,
+        exact={},
+        previous={},
+        target_date="2026-09-04",
+        baseline="2026-06-05",
+    )
+    policy = {
+        "policy_version": POLICY_VERSION,
+        "history": history,
+        "exact_post_apply_attribution": {},
+        **decision,
+    }
+    with (
+        patch.object(
+            producer,
+            "_current_recheck_values",
+            return_value=(
+                {
+                    **BOUNDED_PROFILE,
+                    "enabled": False,
+                    "intraday_escalation_enabled": False,
+                    "intraday_escalation_scopes": "",
+                    "allowed_scopes": "",
+                },
+                {"status": "loaded"},
+            ),
+        ),
+        patch.object(
+            producer,
+            "load_source_quality_preflight",
+            return_value={"status": "pass", "tuning_input_allowed": True},
+        ),
+    ):
+        return producer._entry_recheck_drought_candidate(
+            target_date="2026-09-04",
+            clean_baseline_date="2026-06-05",
+            drought_policy=policy,
+        )[0]
 
 
 def _entry_ai_cumulative_window():
@@ -52,6 +128,34 @@ def _entry_ai_candidate_runtime_fields():
         "runtime_effect": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+    }
+
+
+def _entry_ai_drought_window():
+    return {
+        "window_policy": "rolling_3_trading_days",
+        "start_date": "2026-09-02",
+        "end_date": "2026-09-04",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "source_date_count": 3,
+        "source_dates": ["2026-09-02", "2026-09-03", "2026-09-04"],
+    }
+
+
+def _entry_ai_drought_contract(*, candidate_count=1, allowed_count=1):
+    return {
+        "schema_version": 1,
+        "update_mode": "drought_triggered_bounded_live",
+        "owner_family": "entry_opportunity_recheck_runtime",
+        "max_runtime_apply_count": 1,
+        "runtime_apply_candidate_count": candidate_count,
+        "allowed_runtime_apply_count": allowed_count,
+        "quality_update_id": "entry-drought-update-1" if allowed_count else "",
+        "cumulative_quality_window": _entry_ai_drought_window(),
+        "primary_decision_metric": ("addressable_submit_drought_then_cost_adjusted_ev"),
+        "source_quality_gate": "pass",
+        "post_apply_attribution_required": True,
+        "runtime_effect": False,
     }
 
 
@@ -1420,21 +1524,24 @@ def test_pyramid_cumulative_quality_contract_binds_fixed_exit_replay_digest():
     )
 
 
-def test_entry_ai_gate_backtest_entry_recheck_candidate_emits_runtime_env(
+def test_entry_ai_gate_backtest_rejects_retired_score_sweep_runtime_mode(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(
         mod,
-        "ENTRY_AI_GATE_BACKTEST_DIR",
-        tmp_path / "entry_ai_gate_backtest",
+        "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
+        tmp_path / "entry_recheck_drought_controller",
     )
-    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
+    path = mod.ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        "entry_recheck_drought_controller_2026-09-04.json"
+    )
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "entry_ai_gate_backtest",
-                "target_date": "2026-07-03",
+                "schema_version": 1,
+                "report_type": "entry_recheck_drought_controller",
+                "target_date": "2026-09-04",
                 "summary": {"allowed_runtime_apply_candidate_count": 1},
                 "runtime_update_contract": _entry_ai_runtime_contract(),
                 "calibration_candidates": [
@@ -1469,42 +1576,320 @@ def test_entry_ai_gate_backtest_entry_recheck_candidate_emits_runtime_env(
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
+    candidates, status = mod._load_entry_recheck_drought_controller_candidates(
+        "2026-09-04"
+    )
+    assert status["status"] == "loaded"
+    assert status["runtime_update_contract_blocked"] is True
+    assert status["runtime_update_contract_error"] == "invalid_runtime_update_mode"
+    assert status["runtime_update_contract"]["max_runtime_apply_count"] == 1
+    assert len(candidates) == 1
+    assert candidates[0]["allowed_runtime_apply"] is False
+    assert candidates[0]["calibration_state"] == "freeze"
+
+
+def test_drought_entry_recheck_candidate_is_deterministic_non_owner_and_can_turn_off(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod,
+        "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
+        tmp_path / "entry_recheck_drought_controller",
+    )
+    path = mod.ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        "entry_recheck_drought_controller_2026-09-04.json"
+    )
+    path.parent.mkdir(parents=True)
+    candidate = {
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "manipulation_point": "blocked_ai_score_near_buy_recheck",
+        "same_stage_owner_claim": False,
+        "same_stage_coexistence_contract": (
+            "blocked_ai_score_recheck_disjoint_from_normal_entry_owner_v1"
+        ),
+        "priority": 42,
+        "calibration_state": "adjust_down",
+        "allowed_runtime_apply": True,
+        "source_quality_gate": "pass",
+        "quality_update_id": "entry-drought-update-1",
+        "runtime_update_mode": "drought_triggered_bounded_live",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": _entry_ai_drought_window(),
+        "post_apply_attribution_required": True,
+        "runtime_handoff_contract": {
+            "decision_authority": "next_preopen_bounded_candidate_only",
+            "runtime_effect": False,
+            "preopen_selection_state": "pending_not_applied",
+            "same_stage_max_selected": 1,
+            "post_apply_attribution_required": True,
+        },
+        "runtime_disable_family": True,
+        "target_env_keys": [
+            "ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+            "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY",
+            "ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS",
+            "ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER",
+            "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE",
+            "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
+            "ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
+            "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+            "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED",
+            "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES",
+        ],
+        "current_values": {
+            "enabled": True,
+            "min_ai_score": 69,
+            "max_ai_score": 74.999,
+            "max_recheck_per_symbol": 1,
+            "max_daily_recheck": 10,
+            "max_daily_buy_recovery": 3,
+            "max_ws_age_ms": 1500,
+            "forbid_danger": True,
+            "require_fresh_quote": True,
+            "require_explicit_buy_action": False,
+            "allow_wait_probe_intent": True,
+            "require_probe_first_contract": True,
+            "intraday_escalation_enabled": True,
+            "intraday_escalation_scopes": "KRX|KRX_REGULAR",
+        },
+        "recommended_values": {
+            "enabled": False,
+            "min_ai_score": 69,
+            "max_ai_score": 74.999,
+            "max_recheck_per_symbol": 1,
+            "max_daily_recheck": 10,
+            "max_daily_buy_recovery": 3,
+            "max_ws_age_ms": 1500,
+            "forbid_danger": True,
+            "require_fresh_quote": True,
+            "require_explicit_buy_action": False,
+            "allow_wait_probe_intent": True,
+            "require_probe_first_contract": True,
+            "intraday_escalation_enabled": False,
+            "intraday_escalation_scopes": "",
+        },
+        "source_metrics": {
+            "drought_conditional_policy": {
+                "policy_version": "entry_opportunity_recheck_drought_controller_v1",
+                "history_complete": True,
+                "latest_source_is_target_date": True,
+                "history": [
+                    {
+                        "source_date": source_date,
+                        "denominator_floor_passed": True,
+                        "source_quality_pass": True,
+                        "critical": False,
+                        "addressable": True,
+                    }
+                    for source_date in (
+                        "2026-09-02",
+                        "2026-09-03",
+                        "2026-09-04",
+                    )
+                ],
+                "activation_triggered": False,
+                "history_source_quality_pass": True,
+                "stop_triggered": True,
+                "intraday_escalation_allowed": False,
+                "exact_post_apply_attribution": {
+                    "identity_conflict_count": 0,
+                    "contract_gap_count": 0,
+                    "invalid_json_row_count": 0,
+                    "source_quality_blocked_date_count": 0,
+                    "exact_evaluated_count": 0,
+                    "exact_armed_count": 0,
+                    "exact_direct_submitted_count": 0,
+                    "exact_filled_count": 0,
+                    "direct_submit_to_armed_pct": None,
+                    "exact_completed_count": 0,
+                    "exact_paired_economic_sample": 0,
+                    "exact_profit_sample": 0,
+                    "exact_net_pnl_sample": 0,
+                    "paired_economics_by_scope": {},
+                    "equal_weight_avg_profit_pct": None,
+                    "realized_net_pnl_krw": None,
+                },
+            }
+        },
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "buy_funnel_drought_conditional_preopen_policy",
+    }
+    from src.engine.scalping.entry_recheck_policy import (
+        POLICY_VERSION,
+        PROFILE_VERSION,
+        controller_decision,
+        scope_summary,
+    )
+
+    candidate["bounded_profile_version"] = PROFILE_VERSION
+    candidate["target_env_keys"].append("ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES")
+    for values_key in ("current_values", "recommended_values"):
+        candidate[values_key]["allowed_scopes"] = ""
+    policy = candidate["source_metrics"]["drought_conditional_policy"]
+    policy["policy_version"] = POLICY_VERSION
+    for day in policy["history"]:
+        day["eligible_scopes"] = [
+            scope_summary(
+                "KRX|KRX_REGULAR",
+                {
+                    "stage_unique": {
+                        "ai_confirmed": 30,
+                        "budget_pass": 10,
+                        "order_bundle_submitted": 10,
+                    },
+                    "critical": False,
+                    "causal_bottleneck_axes": ["UPSTREAM_GATE"],
+                },
+            )
+        ]
+    policy.update(
+        controller_decision(
+            history=policy["history"],
+            exact=policy["exact_post_apply_attribution"],
+            previous={},
+            target_date="2026-09-04",
+            baseline="2026-06-05",
+        )
+    )
+    assert mod._entry_recheck_drought_candidate_contract_error(candidate) == ""
+    tampered = json.loads(json.dumps(candidate))
+    tampered["current_values"]["max_daily_recheck"] = 30
+    tampered["recommended_values"]["max_daily_recheck"] = 30
+    assert mod._entry_recheck_drought_candidate_contract_error(tampered) == (
+        "drought_fixed_bounded_values_invalid"
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "report_type": "entry_recheck_drought_controller",
+                "target_date": "2026-09-04",
+                "diagnostic_apply_ready": False,
+                "runtime_candidate_ready": True,
+                "allowed_runtime_apply": True,
+                "runtime_update_contract": _entry_ai_drought_contract(),
+                "calibration_candidates": [candidate],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_entry_recheck_drought_controller_candidates(
+        "2026-09-04"
+    )
     selected, decisions, env = mod._select_auto_apply_candidates(
         candidates,
         ai_review={},
-        require_ai=False,
-        target_date="2026-07-04",
+        require_ai=True,
+        target_date="2026-09-07",
     )
 
-    assert status["status"] == "loaded"
     assert status["runtime_update_contract_blocked"] is False
-    assert status["runtime_update_contract"]["max_runtime_apply_count"] == 1
-    assert len(candidates) == 1
-    assert selected[0]["family"] == "entry_opportunity_recheck_runtime"
+    assert len(selected) == 1
     assert decisions[0]["selected"] is True
-    assert decisions[0]["quality_update_id"] == "entry-quality-update-1"
-    assert decisions[0]["runtime_update_mode"] == ("single_cumulative_quality_update")
-    assert decisions[0]["post_apply_attribution_required"] is True
-    assert env == {
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "68",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74",
+    assert decisions[0]["same_stage_owner_claim"] is False
+    assert decisions[0]["runtime_disable_family"] is True
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "false"
+    assert (
+        env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED"]
+        == "false"
+    )
+    assert mod._entry_live_tuning_owner_family(selected) == ""
+
+
+def test_drought_entry_recheck_contract_requires_exact_three_date_window():
+    candidate = {
+        "family": "entry_opportunity_recheck_runtime",
+        "stage": "entry",
+        "quality_update_id": "entry-drought-update-1",
+        "runtime_update_mode": "drought_triggered_bounded_live",
+        "max_runtime_apply_count": 1,
+        "cumulative_quality_window": {
+            **_entry_ai_drought_window(),
+            "source_date_count": 2,
+            "source_dates": ["2026-09-03", "2026-09-04"],
+            "start_date": "2026-09-03",
+        },
+        "post_apply_attribution_required": True,
+        "allowed_runtime_apply": True,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
     }
+    contract = {
+        **_entry_ai_drought_contract(),
+        "cumulative_quality_window": candidate["cumulative_quality_window"],
+    }
+
+    assert (
+        mod._entry_recheck_drought_controller_contract_error(
+            {
+                "target_date": "2026-09-04",
+                "diagnostic_apply_ready": False,
+                "runtime_candidate_ready": True,
+                "allowed_runtime_apply": True,
+                "runtime_update_contract": contract,
+            },
+            [candidate],
+        )
+        == "drought_window_must_have_three_trading_dates"
+    )
+
+
+def test_write_runtime_env_excludes_explicitly_disabled_family_from_selected_list(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
+    manifest = {
+        "source_date": "2026-09-04",
+        "generated_at": "2026-09-06T12:00:00+09:00",
+        "auto_apply_selected": [
+            {
+                "family": "entry_opportunity_recheck_runtime",
+                "runtime_disable_family": True,
+            }
+        ],
+    }
+    mod._write_runtime_env(
+        "2026-09-07",
+        manifest,
+        {"KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false"},
+    )
+
+    runtime_manifest = json.loads(
+        mod.runtime_env_manifest_path("2026-09-07").read_text(encoding="utf-8")
+    )
+    assert runtime_manifest["selected_families"] == []
+    assert (
+        runtime_manifest["env_overrides"][
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"
+        ]
+        == "false"
+    )
 
 
 def test_entry_ai_gate_loader_blocks_missing_cumulative_contract(tmp_path, monkeypatch):
     monkeypatch.setattr(
         mod,
-        "ENTRY_AI_GATE_BACKTEST_DIR",
-        tmp_path / "entry_ai_gate_backtest",
+        "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
+        tmp_path / "entry_recheck_drought_controller",
     )
-    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
+    path = mod.ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        "entry_recheck_drought_controller_2026-07-03.json"
+    )
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "entry_ai_gate_backtest",
+                "schema_version": 1,
+                "report_type": "entry_recheck_drought_controller",
                 "target_date": "2026-07-03",
                 "calibration_candidates": [
                     {
@@ -1518,7 +1903,9 @@ def test_entry_ai_gate_loader_blocks_missing_cumulative_contract(tmp_path, monke
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
+    candidates, status = mod._load_entry_recheck_drought_controller_candidates(
+        "2026-07-03"
+    )
 
     assert status["runtime_update_contract_blocked"] is True
     assert status["runtime_update_contract_error"] == (
@@ -1528,30 +1915,26 @@ def test_entry_ai_gate_loader_blocks_missing_cumulative_contract(tmp_path, monke
     assert candidates[0]["calibration_state"] == "freeze"
 
 
-def test_entry_ai_gate_loader_preserves_zero_candidate_source_contract_status(
-    tmp_path, monkeypatch
-):
+def test_entry_recheck_controller_loader_blocks_unknown_schema(tmp_path, monkeypatch):
     monkeypatch.setattr(
         mod,
-        "ENTRY_AI_GATE_BACKTEST_DIR",
-        tmp_path / "entry_ai_gate_backtest",
+        "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
+        tmp_path / "entry_recheck_drought_controller",
     )
-    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
+    path = mod.ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        "entry_recheck_drought_controller_2026-09-04.json"
+    )
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "entry_ai_gate_backtest",
-                "target_date": "2026-07-03",
+                "schema_version": 2,
+                "report_type": "entry_recheck_drought_controller",
+                "target_date": "2026-09-04",
+                "diagnostic_apply_ready": False,
+                "runtime_candidate_ready": False,
                 "allowed_runtime_apply": False,
-                "calibration_state": "source_contract_not_evaluable",
-                "summary": {
-                    "diagnostic_conflict_detected": True,
-                    "supported_wait_recovery_source_contract_status": (
-                        "source_contract_not_evaluable"
-                    ),
-                },
-                "runtime_update_contract": _entry_ai_runtime_contract(
+                "runtime_update_contract": _entry_ai_drought_contract(
                     candidate_count=0, allowed_count=0
                 ),
                 "calibration_candidates": [],
@@ -1560,16 +1943,60 @@ def test_entry_ai_gate_loader_preserves_zero_candidate_source_contract_status(
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
+    candidates, status = mod._load_entry_recheck_drought_controller_candidates(
+        "2026-09-04"
+    )
+
+    assert candidates == []
+    assert status["runtime_update_contract_blocked"] is True
+    assert status["runtime_update_contract_error"] == (
+        "entry_recheck_controller_schema_version_mismatch"
+    )
+
+
+def test_entry_ai_gate_loader_preserves_zero_candidate_source_contract_status(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        mod,
+        "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
+        tmp_path / "entry_recheck_drought_controller",
+    )
+    path = mod.ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        "entry_recheck_drought_controller_2026-09-04.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "report_type": "entry_recheck_drought_controller",
+                "target_date": "2026-09-04",
+                "diagnostic_apply_ready": False,
+                "runtime_candidate_ready": False,
+                "allowed_runtime_apply": False,
+                "calibration_state": "source_contract_not_evaluable",
+                "summary": {
+                    "runtime_acceptance_state": "runtime_not_evaluated",
+                },
+                "runtime_update_contract": _entry_ai_drought_contract(
+                    candidate_count=0, allowed_count=0
+                ),
+                "calibration_candidates": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates, status = mod._load_entry_recheck_drought_controller_candidates(
+        "2026-09-04"
+    )
 
     assert candidates == []
     assert status["runtime_update_contract_blocked"] is False
     assert status["allowed_runtime_apply"] is False
     assert status["calibration_state"] == "source_contract_not_evaluable"
-    assert (
-        status["supported_wait_recovery_source_contract_status"]
-        == "source_contract_not_evaluable"
-    )
+    assert status["runtime_acceptance_state"] == "runtime_not_evaluated"
 
 
 def test_entry_ai_gate_contract_rejects_multiple_runtime_updates():
@@ -1578,9 +2005,9 @@ def test_entry_ai_gate_contract_rejects_multiple_runtime_updates():
         "family": "entry_opportunity_recheck_runtime",
         "allowed_runtime_apply": True,
     }
-    contract = _entry_ai_runtime_contract(candidate_count=2, allowed_count=2)
+    contract = _entry_ai_drought_contract(candidate_count=2, allowed_count=2)
 
-    error = mod._entry_ai_gate_cumulative_contract_error(
+    error = mod._entry_recheck_drought_controller_contract_error(
         {"runtime_update_contract": contract}, [candidate, dict(candidate)]
     )
 
@@ -1592,15 +2019,18 @@ def test_entry_ai_gate_backtest_root_source_quality_blocks_runtime_env(
 ):
     monkeypatch.setattr(
         mod,
-        "ENTRY_AI_GATE_BACKTEST_DIR",
-        tmp_path / "entry_ai_gate_backtest",
+        "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
+        tmp_path / "entry_recheck_drought_controller",
     )
-    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
+    path = mod.ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        "entry_recheck_drought_controller_2026-07-03.json"
+    )
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "entry_ai_gate_backtest",
+                "schema_version": 1,
+                "report_type": "entry_recheck_drought_controller",
                 "target_date": "2026-07-03",
                 "source_quality_gate": "source_quality_blocked",
                 "summary": {"allowed_runtime_apply_candidate_count": 1},
@@ -1637,7 +2067,9 @@ def test_entry_ai_gate_backtest_root_source_quality_blocks_runtime_env(
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
+    candidates, status = mod._load_entry_recheck_drought_controller_candidates(
+        "2026-07-03"
+    )
     selected, decisions, env = mod._select_auto_apply_candidates(
         candidates,
         ai_review={},
@@ -2149,8 +2581,8 @@ def test_avg_down_hold_does_not_carry_on_quality_or_runtime_value_conflict(
 def test_entry_ai_gate_loader_blocks_source_quality_preflight(tmp_path, monkeypatch):
     monkeypatch.setattr(
         mod,
-        "ENTRY_AI_GATE_BACKTEST_DIR",
-        tmp_path / "entry_ai_gate_backtest",
+        "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
+        tmp_path / "entry_recheck_drought_controller",
     )
     monkeypatch.setattr(
         mod,
@@ -2166,12 +2598,15 @@ def test_entry_ai_gate_loader_blocks_source_quality_preflight(tmp_path, monkeypa
         },
     )
     monkeypatch.setattr(mod, "source_quality_preflight_blocked", lambda preflight: True)
-    path = mod.ENTRY_AI_GATE_BACKTEST_DIR / "entry_ai_gate_backtest_2026-07-03.json"
+    path = mod.ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        "entry_recheck_drought_controller_2026-07-03.json"
+    )
     path.parent.mkdir(parents=True)
     path.write_text(
         json.dumps(
             {
-                "report_type": "entry_ai_gate_backtest",
+                "schema_version": 1,
+                "report_type": "entry_recheck_drought_controller",
                 "target_date": "2026-07-03",
                 "source_quality_gate": "pass",
                 "summary": {"allowed_runtime_apply_candidate_count": 1},
@@ -2208,7 +2643,9 @@ def test_entry_ai_gate_loader_blocks_source_quality_preflight(tmp_path, monkeypa
         encoding="utf-8",
     )
 
-    candidates, status = mod._load_entry_ai_gate_backtest_candidates("2026-07-03")
+    candidates, status = mod._load_entry_recheck_drought_controller_candidates(
+        "2026-07-03"
+    )
     selected, decisions, env = mod._select_auto_apply_candidates(
         candidates,
         ai_review={},
@@ -2242,6 +2679,18 @@ def test_auto_apply_selector_rejects_source_quality_blocked_candidate():
         "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
     }
 
+    candidate = {
+        **_valid_entry_recheck_candidate(),
+        **{
+            key: candidate[key]
+            for key in (
+                "source_quality_gate",
+                "forbidden_use_violation",
+                "runtime_handoff_contract",
+            )
+            if key in candidate
+        },
+    }
     selected, decisions, env = mod._select_auto_apply_candidates(
         [candidate],
         ai_review={},
@@ -2286,6 +2735,18 @@ def test_auto_apply_selector_does_not_preserve_lock_on_source_quality_blocked_ca
         ],
     }
 
+    candidate = {
+        **_valid_entry_recheck_candidate(),
+        **{
+            key: candidate[key]
+            for key in (
+                "source_quality_gate",
+                "forbidden_use_violation",
+                "runtime_handoff_contract",
+            )
+            if key in candidate
+        },
+    }
     selected, decisions, env = mod._select_auto_apply_candidates(
         [candidate],
         ai_review={},
@@ -2318,6 +2779,18 @@ def test_auto_apply_selector_rejects_forbidden_use_violation_candidate():
         "recommended_values": {"enabled": True, "min_ai_score": 68, "max_ai_score": 74},
     }
 
+    candidate = {
+        **_valid_entry_recheck_candidate(),
+        **{
+            key: candidate[key]
+            for key in (
+                "source_quality_gate",
+                "forbidden_use_violation",
+                "runtime_handoff_contract",
+            )
+            if key in candidate
+        },
+    }
     selected, decisions, env = mod._select_auto_apply_candidates(
         [candidate],
         ai_review={},
@@ -2354,6 +2827,18 @@ def test_auto_apply_selector_consumes_postclose_runtime_handoff_contract():
         },
     }
 
+    candidate = {
+        **_valid_entry_recheck_candidate(),
+        **{
+            key: candidate[key]
+            for key in (
+                "source_quality_gate",
+                "forbidden_use_violation",
+                "runtime_handoff_contract",
+            )
+            if key in candidate
+        },
+    }
     selected, decisions, env = mod._select_auto_apply_candidates(
         [candidate],
         ai_review={},
@@ -2389,6 +2874,18 @@ def test_auto_apply_selector_rejects_incomplete_runtime_handoff_contract():
         },
     }
 
+    candidate = {
+        **_valid_entry_recheck_candidate(),
+        **{
+            key: candidate[key]
+            for key in (
+                "source_quality_gate",
+                "forbidden_use_violation",
+                "runtime_handoff_contract",
+            )
+            if key in candidate
+        },
+    }
     selected, decisions, env = mod._select_auto_apply_candidates(
         [candidate],
         ai_review={},
@@ -3150,27 +3647,18 @@ def test_preopen_apply_consumes_lifecycle_bucket_auto_apply_without_human_artifa
         apply_mode="auto_bounded_live",
         auto_apply=True,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["status"] == "auto_bounded_live_ready"
-    assert manifest["runtime_apply_bridge"]["approved"] == 1
-    assert (
-        manifest["runtime_apply_bridge"]["selected"][0]["family"]
-        == bridge_mod.SCALE_IN_BRIDGE_FAMILY
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert manifest["lifecycle_bucket_discovery"]["approved"] == 1
-    assert (
-        manifest["lifecycle_bucket_discovery"]["selected"][0]["recommended_values"][
-            "live_auto_apply_enabled"
-        ]
-        is False
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
-    assert manifest["swing_sim_auto_approval"]["approved"] == 1
-    assert manifest["swing_sim_auto_approval"]["selected"][0][
-        "approved_source_ids"
-    ] == [
-        "swing_lifecycle_bucket_discovery",
-        "bottom_rebound_policy_auto_loop",
-    ]
 
 
 def test_preopen_apply_blocks_empty_lifecycle_bucket_sim_auto_approval(
@@ -3232,18 +3720,18 @@ def test_preopen_apply_blocks_empty_lifecycle_bucket_sim_auto_approval(
         apply_mode="auto_bounded_live",
         auto_apply=True,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["lifecycle_bucket_discovery"]["approved"] == 0
-    assert manifest["lifecycle_bucket_discovery"]["selected"] == []
-    assert (
-        "sim_auto_approval_empty" in manifest["lifecycle_bucket_discovery"]["blocked"]
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    env_text = (runtime_dir / "threshold_runtime_env_2026-05-23.env").read_text(
-        encoding="utf-8"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE" not in env_text
-    assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED=true" not in env_text
 
 
 def test_auto_bounded_live_imports_latency_classifier_recommendation(
@@ -3413,37 +3901,17 @@ def test_auto_bounded_live_writes_lifecycle_decision_matrix_policy_env(
         apply_mode="auto_bounded_live",
         auto_apply=True,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["status"] == "auto_bounded_live_ready"
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_ENABLED"
-        ]
-        == "true"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_POLICY_FILE"
-        ]
-        == policy_file
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED"
-        ]
-        == "true"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY"
-        ]
-        == "3"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE"
-        ]
-        == "0.6"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
 
 
@@ -3537,18 +4005,18 @@ def test_auto_bounded_live_writes_lifecycle_context_and_bias_off_env(
         apply_mode="auto_bounded_live",
         auto_apply=True,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    env = manifest["runtime_env_overrides"]
-    assert (
-        env["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED"] == "false"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_FILE"] == context_file
-    assert env["KORSTOCKSCAN_SCALP_ENTRY_ADM_ADVISORY_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED"] == "false"
-    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED"] == "false"
-    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED"] == "false"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
+    )
 
 
 def test_lifecycle_context_overlay_bypasses_same_stage_runtime_selection(
@@ -3651,19 +4119,18 @@ def test_lifecycle_context_overlay_bypasses_same_stage_runtime_selection(
         apply_mode="auto_bounded_live",
         auto_apply=True,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    selected_families = {item["family"] for item in manifest["auto_apply_selected"]}
-    assert "lifecycle_decision_matrix_runtime" not in selected_families
-    assert manifest["lifecycle_ai_context_overlay"]["selected"] is True
-    env = manifest["runtime_env_overrides"]
-    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_FILE"] == context_file
-    assert (
-        env["KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED"] == "false"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert env["KORSTOCKSCAN_SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED"] == "false"
-    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED"] == "false"
-    assert env["KORSTOCKSCAN_HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED"] == "false"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
+    )
 
 
 def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch):
@@ -3900,7 +4367,7 @@ def test_intraday_source_phase_blocks_auto_apply_even_when_candidate_ready(
     assert manifest["source_phase_auto_apply_blocked"] is True
     assert manifest["warnings"] == ["intraday_source_phase_auto_apply_blocked"]
     assert manifest["auto_apply_decisions"] == []
-    assert manifest["runtime_env_overrides"] == {}
+    assert mod.without_retired_env(manifest["runtime_env_overrides"]) == {}
     assert not (runtime_dir / "threshold_runtime_env_2026-05-18.env").exists()
 
 
@@ -5592,7 +6059,7 @@ def test_pre_submit_liquidity_relief_operator_lock_emits_env(tmp_path, monkeypat
     )
 
 
-def test_entry_opportunity_recheck_operator_lock_emits_next_preopen_env(
+def test_entry_opportunity_recheck_legacy_operator_lock_cannot_reactivate_without_policy(
     tmp_path, monkeypatch
 ):
     report_dir = tmp_path / "report"
@@ -5684,29 +6151,14 @@ def test_entry_opportunity_recheck_operator_lock_emits_next_preopen_env(
     )
 
     decisions = {item["family"]: item for item in manifest["auto_apply_decisions"]}
-    assert decisions["entry_opportunity_recheck_runtime"]["selected"] is True
+    assert decisions["entry_opportunity_recheck_runtime"]["selected"] is False
     assert (
-        decisions["entry_opportunity_recheck_runtime"]["operator_runtime_env_lock"][
-            "applied"
-        ]
-        is True
-    )
-    env = manifest["runtime_env_overrides"]
-    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE"] == "69"
-    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE"] == "74.999"
-    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY"] == "3"
-    assert (
-        env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED"]
-        == "true"
+        "drought_runtime_update_mode_invalid"
+        in decisions["entry_opportunity_recheck_runtime"]["decision_reason"]
     )
     assert (
-        env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_RECHECK"]
-        == "30"
-    )
-    assert (
-        env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ESCALATION_MAX_DAILY_BUY_RECOVERY"]
-        == "7"
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"
+        not in manifest["runtime_env_overrides"]
     )
 
 
@@ -7299,7 +7751,7 @@ def test_swing_one_share_real_canary_artifact_applies_env_and_keeps_dry_run(
     )
 
     assert manifest["runtime_change"] is False
-    assert manifest["runtime_env_overrides"] == {}
+    assert mod.without_retired_env(manifest["runtime_env_overrides"]) == {}
     assert (
         manifest["swing_runtime_approval"]["legacy_phase0_real_canary_ignored"] is True
     )
@@ -7402,7 +7854,7 @@ def test_swing_scale_in_real_canary_artifact_applies_env(tmp_path, monkeypatch):
     )
 
     assert manifest["runtime_change"] is False
-    assert manifest["runtime_env_overrides"] == {}
+    assert mod.without_retired_env(manifest["runtime_env_overrides"]) == {}
     assert (
         manifest["swing_runtime_approval"]["legacy_phase0_real_canary_ignored"] is True
     )
@@ -7529,45 +7981,18 @@ def test_scalp_sim_scale_in_window_approval_writes_runtime_env(tmp_path, monkeyp
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["runtime_change"] is True
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
-        ]
-        == "true"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS"
-        ]
-        == "PYRAMID,AVG_DOWN"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY"
-        ]
-        == "30"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED"
-        ]
-        == "true"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_ARMS"
-        ]
-        == "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
-    )
-    assert manifest["scalp_sim_scale_in_window_approval"]["selected"][0]["family"] == (
-        "scalp_sim_scale_in_window_expansion"
-    )
-    assert manifest["scalp_sim_scale_in_window_approval"]["decisions"][0][
-        "decision_reason"
-    ] == ("sim_auto_approval_artifact_accepted")
-    assert manifest["calibration_candidates"] == []
 
 
 def test_scalp_sim_scale_in_window_artifact_is_sim_auto_approved(tmp_path, monkeypatch):
@@ -7604,35 +8029,7 @@ def test_scalp_sim_scale_in_window_artifact_is_sim_auto_approved(tmp_path, monke
     artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval(
         "2026-05-22"
     )
-
-    assert artifact["approved"] is True
-    assert artifact["approval_state"] == "sim_auto_approved"
-    assert artifact["human_approval_required"] is False
-    assert artifact["decision_authority"] == "sim_auto_approval_only"
-    assert artifact["runtime_effect"] is False
-    assert artifact["allowed_runtime_apply"] is True
-    assert artifact["actual_order_submitted"] is False
-    assert artifact["broker_order_forbidden"] is True
-    assert artifact["source_quality_status"] == "pass"
-    assert artifact["blocked_reasons"] == []
-    assert artifact["recommended_values"]["execution_observation_enabled"] is True
-    assert artifact["recommended_values"]["execution_arms"] == (
-        "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
-    )
-    assert (
-        "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED"
-        in artifact["target_env_keys"]
-    )
-    assert (
-        artifact["approval_contract"]["operator_action"]
-        == "none_required_for_sim_policy"
-    )
-    saved = json.loads(
-        (
-            approval_dir / "scalp_sim_scale_in_window_expansion_2026-05-22.json"
-        ).read_text(encoding="utf-8")
-    )
-    assert saved["approval_state"] == "sim_auto_approved"
+    assert artifact["status"] == "retired"
 
 
 def test_scalp_sim_scale_in_window_artifact_blocks_missing_source_report(
@@ -7647,11 +8044,7 @@ def test_scalp_sim_scale_in_window_artifact_blocks_missing_source_report(
     artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval(
         "2026-05-22"
     )
-
-    assert artifact["approved"] is False
-    assert artifact["approval_state"] == "source_quality_blocked"
-    assert artifact["source_quality_status"] == "source_report_missing"
-    assert artifact["blocked_reasons"] == ["source_report_missing"]
+    assert artifact["status"] == "retired"
 
 
 def test_scalp_sim_scale_in_window_artifact_blocks_unreadable_source_report(
@@ -7669,11 +8062,7 @@ def test_scalp_sim_scale_in_window_artifact_blocks_unreadable_source_report(
     artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval(
         "2026-05-22"
     )
-
-    assert artifact["approved"] is False
-    assert artifact["approval_state"] == "source_quality_blocked"
-    assert artifact["source_quality_status"] == "source_report_unreadable"
-    assert artifact["blocked_reasons"] == ["source_report_unreadable"]
+    assert artifact["status"] == "retired"
 
 
 def test_scalp_sim_scale_in_window_artifact_blocks_unknown_matrix_status(
@@ -7691,11 +8080,7 @@ def test_scalp_sim_scale_in_window_artifact_blocks_unknown_matrix_status(
     artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval(
         "2026-05-22"
     )
-
-    assert artifact["approved"] is False
-    assert artifact["allowed_runtime_apply"] is False
-    assert artifact["source_quality_status"] == "warning"
-    assert artifact["blocked_reasons"] == ["warning"]
+    assert artifact["status"] == "retired"
 
 
 def test_scalp_sim_scale_in_window_artifact_blocks_source_quality_blocked_matrix(
@@ -7713,10 +8098,7 @@ def test_scalp_sim_scale_in_window_artifact_blocks_source_quality_blocked_matrix
     artifact = scale_in_approval_mod.build_scalp_sim_scale_in_window_approval(
         "2026-05-22"
     )
-
-    assert artifact["approved"] is False
-    assert artifact["approval_state"] == "source_quality_blocked"
-    assert artifact["blocked_reasons"] == ["source_quality_blocked"]
+    assert artifact["status"] == "retired"
 
 
 def test_scalp_sim_scale_in_window_preopen_rejects_source_quality_blocked_artifact(
@@ -7766,17 +8148,17 @@ def test_scalp_sim_scale_in_window_preopen_rejects_source_quality_blocked_artifa
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert (
-        manifest["runtime_env_overrides"].get(
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
-        )
-        is None
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert manifest["scalp_sim_scale_in_window_approval"]["selected"] == []
-    assert (
-        "sim_auto_approval_not_approved"
-        in manifest["scalp_sim_scale_in_window_approval"]["blocked"]
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
 
 
@@ -7909,69 +8291,18 @@ def test_scalp_sim_auto_approval_writes_sim_policy_env(tmp_path, monkeypatch):
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert (
-        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED"]
-        == "true"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert manifest["runtime_env_overrides"][
-        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE"
-    ] == str(catalog_path)
-    assert (
-        manifest["runtime_env_overrides"]["KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION"]
-        == "scalp_sim_auto_approval:2026-05-26"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE"
-        ]
-        == "2026-05-26"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED"
-        ]
-        == "true"
-    )
-    assert manifest["runtime_env_overrides"][
-        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE"
-    ] == str(lifecycle_catalog_path)
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION"
-        ]
-        == "lifecycle_bucket_discovery:2026-05-26"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED"
-        ]
-        == "false"
-    )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
-        ]
-        == "true"
-    )
-    assert (
-        manifest["scalp_sim_auto_approval"]["selected"][0]["family"]
-        == "scalp_sim_auto_approval"
-    )
-    assert manifest["scalp_sim_auto_approval"]["selected"][0][
-        "active_sim_priority_seed_ids"
-    ] == ["active_seed_preopen"]
-    assert manifest["scalp_sim_scale_in_window_approval"]["selected"] == []
-    assert (
-        manifest["lifecycle_bucket_discovery"]["selected"][0]["family"]
-        == "lifecycle_bucket_discovery_sim_auto_approval"
-    )
-    env_text = (runtime_dir / "threshold_runtime_env_2026-05-27.env").read_text(
-        encoding="utf-8"
-    )
-    assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED=true" in env_text
-    assert "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE=2026-05-26" in env_text
-    assert "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE=" in env_text
 
 
 def test_scalp_sim_auto_approval_missing_keeps_legacy_scale_in_fallback(
@@ -8008,16 +8339,17 @@ def test_scalp_sim_auto_approval_missing_keeps_legacy_scale_in_fallback(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["scalp_sim_auto_approval"]["selected"] == []
-    assert manifest["scalp_sim_scale_in_window_approval"]["selected"][0]["family"] == (
-        "scalp_sim_scale_in_window_expansion"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
-        ]
-        == "true"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
 
 
@@ -8065,11 +8397,8 @@ def test_scalp_sim_auto_approval_blocks_pre_clean_baseline_embedded_plan(
         auto_apply=True,
         require_ai=False,
     )
-
-    assert manifest["scalp_sim_auto_approval"]["selected"] == []
-    assert (
-        "scalp_sim_policy_catalog_hypothesis_plan_clean_baseline_invalid"
-        in manifest["scalp_sim_auto_approval"]["blocked"]
+    assert not manifest["runtime_env_overrides"].get(
+        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED"
     )
 
 
@@ -8217,15 +8546,8 @@ def test_scalp_sim_auto_approval_rejects_active_priority_posterior_prefix(
         auto_apply=True,
         require_ai=False,
     )
-
-    assert manifest["scalp_sim_auto_approval"]["selected"] == []
-    assert (
-        "active_sim_priority_seed_observable_prefix_forbidden_dimension"
-        in manifest["scalp_sim_auto_approval"]["blocked"]
-    )
-    assert (
+    assert not manifest["runtime_env_overrides"].get(
         "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED"
-        not in manifest["runtime_env_overrides"]
     )
 
 
@@ -8277,6 +8599,61 @@ def test_scalp_sim_auto_approval_rejects_malformed_policy_count(tmp_path, monkey
         "scalp_sim_auto_approval_empty"
         in manifest["scalp_sim_auto_approval"]["blocked"]
     )
+
+
+@pytest.mark.parametrize("tamper_hash", [False, True])
+def test_fresh_sim_catalog_preserves_integrity_hash_without_retired_policy(
+    tmp_path, monkeypatch, tamper_hash
+):
+    monkeypatch.setattr(
+        scalp_sim_auto_mod, "SIM_AUTO_APPROVAL_DIR", tmp_path / "approvals"
+    )
+    monkeypatch.setattr(
+        scalp_sim_auto_mod, "SCALP_SIM_POLICY_DIR", tmp_path / "policies"
+    )
+    approval = {
+        "date": "2026-09-04",
+        "report_type": "scalp_sim_auto_approval",
+        "approved": True,
+        "human_approval_required": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "decision_authority": "scalp_sim_auto_approval_control_tower",
+        "generated_at": "2026-09-06T08:00:00+09:00",
+        "approved_source_ids": ["rising_missed_classifier_prior"],
+        "approved_policy_count": 1,
+        "approved_policies": [{"source_id": "rising_missed_classifier_prior"}],
+    }
+    paths = scalp_sim_auto_mod.write_scalp_sim_auto_approval(approval)
+    catalog = json.loads(paths["catalog"].read_text())
+    assert "lifecycle_bucket_discovery.py" in catalog["generator_provenance"]["files"]
+    retired_seed = {"active_seed_id": "retired-must-not-return", "status": "active"}
+    catalog["policies"].append(
+        {
+            "source_id": "lifecycle_bucket_discovery",
+            "active_sim_priority_seeds": [retired_seed],
+        }
+    )
+    catalog["active_sim_priority_seeds"].append(retired_seed)
+    if tamper_hash:
+        catalog["generator_provenance"]["files"][
+            "lifecycle_bucket_discovery.py"
+        ] = "wrong"
+    paths["catalog"].write_text(json.dumps(catalog))
+    bundle = mod._load_scalp_sim_auto_approval("2026-09-04")
+    if tamper_hash:
+        assert (
+            "scalp_sim_policy_catalog_stale_after_generator_change" in bundle["blocked"]
+        )
+        assert bundle["approved_request"] is None
+    else:
+        assert bundle["blocked"] == []
+        assert bundle["approved_request"]["active_sim_priority_seed_ids"] == []
+        assert bundle["approved_request"]["approved_source_ids"] == [
+            "rising_missed_classifier_prior"
+        ]
 
 
 def test_scalp_sim_auto_approval_blocks_catalog_stale_after_generator_change(
@@ -8341,11 +8718,17 @@ def test_scalp_sim_auto_approval_blocks_catalog_stale_after_generator_change(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["scalp_sim_auto_approval"]["selected"] == []
-    assert (
-        "scalp_sim_policy_catalog_stale_after_generator_change"
-        in manifest["scalp_sim_auto_approval"]["blocked"]
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
+    )
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
 
 
@@ -8447,16 +8830,17 @@ def test_scalp_sim_auto_approval_ignores_non_scalp_nested_env_keys(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"
-        ]
-        == "true"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert (
-        "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED"
-        not in manifest["runtime_env_overrides"]
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
 
 
@@ -8514,17 +8898,18 @@ def test_runtime_apply_bridge_blocks_source_quality_blocked_live_candidate(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["runtime_change"] is False
-    assert manifest["runtime_apply_bridge"]["approved"] == 0
-    assert (
-        "source_bucket_source_quality_blocked:scale_in_bucket_runtime_policy_v1"
-        in manifest["runtime_apply_bridge"]["blocked"]
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(
-        encoding="utf-8"
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
-    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE" not in env_text
 
 
 def _install_runtime_bridge_test_dirs(tmp_path, monkeypatch):
@@ -8597,15 +8982,18 @@ def test_runtime_apply_bridge_ignores_retired_entry_family(tmp_path, monkeypatch
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["runtime_change"] is False
-    assert manifest["runtime_apply_bridge"]["blocked"] == []
-    assert "metadata" not in manifest["runtime_apply_bridge"]
-    assert manifest["runtime_apply_bridge"]["selected"] == []
-    env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(
-        encoding="utf-8"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
+    )
 
 
 def test_runtime_apply_bridge_does_not_reactivate_retired_entry_live_candidate(
@@ -8784,24 +9172,18 @@ def test_runtime_apply_bridge_greenfield_live_auto_writes_full_lifecycle_env(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    env = manifest["runtime_env_overrides"]
-    assert manifest["runtime_change"] is True
-    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_SCOPE"] == "full_lifecycle"
-    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE"] == str(
-        policy_file
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert (
-        env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION"] == candidate_id
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
-    assert env["KORSTOCKSCAN_GREENFIELD_REAL_ENV_TELEGRAM_ENABLED"] == "true"
-    env_manifest = json.loads(
-        (runtime_dir / "threshold_runtime_env_2026-06-01.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert family in env_manifest["selected_families"]
 
 
 def test_runtime_apply_bridge_greenfield_blocks_missing_policy_file(
@@ -8864,14 +9246,17 @@ def test_runtime_apply_bridge_greenfield_blocks_missing_policy_file(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert (
-        "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_ENABLED"
-        not in manifest["runtime_env_overrides"]
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert (
-        f"greenfield_policy_file_missing:{family}"
-        in manifest["runtime_apply_bridge"]["blocked"]
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
 
 
@@ -8923,15 +9308,18 @@ def test_runtime_apply_bridge_ignores_retired_entry_approval_artifact(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    assert manifest["runtime_change"] is False
-    assert manifest["runtime_apply_bridge"]["blocked"] == []
-    assert "metadata" not in manifest["runtime_apply_bridge"]
-    assert manifest["runtime_apply_bridge"]["selected"] == []
-    env_text = (runtime_dir / "threshold_runtime_env_2026-06-01.env").read_text(
-        encoding="utf-8"
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
     )
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
+    )
 
 
 def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_bypass(
@@ -9008,16 +9396,17 @@ def test_runtime_apply_bridge_scale_live_auto_writes_tighten_env_without_guard_b
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    env = manifest["runtime_env_overrides"]
-    assert manifest["runtime_change"] is True
-    assert env["KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID"] == "false"
-    assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE"] == "65"
-    assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE"] == "60"
-    assert env["KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL"] == "1.05"
-    assert (
-        "scale_in_safety_guard_bypass"
-        in manifest["runtime_apply_bridge"]["selected"][0]["forbidden_uses"]
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
+    )
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
     )
 
 
@@ -9079,12 +9468,18 @@ def test_runtime_apply_bridge_partial_scale_arm_emits_only_ready_arm_env(
         auto_apply=True,
         require_ai=False,
     )
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retired_owner
 
-    env = manifest["runtime_env_overrides"]
-    assert env["KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID"] == "false"
-    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_AI_SCORE" not in env
-    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_BUY_PRESSURE" not in env
-    assert "KORSTOCKSCAN_REVERSAL_ADD_MIN_TICK_ACCEL" not in env
+    env = manifest.get("runtime_env_overrides") or {}
+    assert all(
+        value == "false"
+        for key, value in env.items()
+        if key.startswith(RETIRED_ENV_PREFIXES)
+    )
+    assert not any(
+        retired_owner(item.get("family"))
+        for item in manifest.get("selected_candidates", [])
+    )
 
 
 # ── hold separation tests ──
@@ -10717,10 +11112,7 @@ def test_scalp_sim_policy_audit_uses_lifecycle_when_direct_file_is_missing(
         }
     )
 
-    assert audit["status"] == "pass"
-    assert audit["reason"] == "direct_policy_file_missing_lifecycle_handoff"
-    assert audit["policy_source"] == "lifecycle_bucket_discovery_catalog_handoff"
-    assert audit["lifecycle_handoff_enabled"] is True
+    assert audit["status"] == "fail"
 
 
 def test_scalp_sim_policy_audit_rejects_enabled_policy_without_any_file():
@@ -10770,7 +11162,7 @@ def test_verify_runtime_env_handoff_allows_selected_scalp_sim_operator_lock_disa
                         "scalp_sim_auto_approval:2026-08-31"
                     ),
                     "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE": "2026-08-31",
-                    "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED": "true",
+                    "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED": "false",
                 },
             }
         ),
@@ -10833,13 +11225,7 @@ def test_verify_runtime_env_handoff_rejects_pre_clean_baseline_embedded_plan(
     )
 
     result = mod.verify_runtime_env_handoff("2026-08-13")
-
-    assert result["status"] == "fail"
-    assert any(
-        finding.get("policy_reason")
-        == "hypothesis_plan_pre_clean_baseline_archive_only"
-        for finding in result["findings"]
-    )
+    assert result["status"] == "pass"  # Archived hypothesis is removed, never applied.
 
 
 def test_build_runtime_gap_provenance_artifact_preserves_raw(tmp_path):

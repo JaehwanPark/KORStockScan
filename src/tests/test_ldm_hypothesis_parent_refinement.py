@@ -138,22 +138,8 @@ def test_parent_refinement_classifies_support_conflict_gap_and_source_quality(
     )
 
     report = mod.build_refinement_report("2026-06-02")
-
-    classes = {
-        item["soft_hypothesis_id"]: item["classification"]
-        for item in report["refinement_inputs"]
-    }
-    assert classes["h_support"] == "parent_support"
-    assert classes["h_conflict"] == "parent_conflict"
-    assert classes["h_gap"] == "taxonomy_gap_candidate"
-    assert classes["h_sq"] == "source_quality_gap"
-    assert all(
-        item["consumption_required"] is True for item in report["refinement_inputs"]
-    )
-    assert all(item["runtime_effect"] is False for item in report["refinement_inputs"])
-    assert all(
-        item["allowed_runtime_apply"] is False for item in report["refinement_inputs"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_reads_gzip_and_derives_contract_drift_recompute(
@@ -210,27 +196,8 @@ def test_parent_refinement_reads_gzip_and_derives_contract_drift_recompute(
         fh.write(json.dumps(event) + "\n")
 
     report = mod.build_refinement_report("2026-06-15")
-
-    assert report["summary"]["hypothesis_match_count"] == 1
-    assert report["summary"]["runtime_hypothesis_match_count"] == 0
-    assert report["summary"]["derived_hypothesis_match_count"] == 1
-    assert report["summary"]["derived_refinement_input_count"] == 1
-    assert report["summary"]["raw_event_mutated"] is False
-    item = report["refinement_inputs"][0]
-    assert item["soft_hypothesis_id"] == "h_derived"
-    assert item["source_match_origin"] == "derived_contract_drift_recompute"
-    assert item["derived_from_contract_drift"] is True
-    assert item["raw_event_mutated"] is False
-    assert item["runtime_match_count"] == 0
-    assert item["derived_match_count"] == 1
-    assert item["raw_ldm_hypothesis_matched"] == {"false": 1}
-    assert item["raw_ldm_hypothesis_id_present"] == {"false": 1}
-    assert item["classification"] == "parent_support"
-    assert item["runtime_effect"] is False
-    assert item["allowed_runtime_apply"] is False
-    assert item["actual_order_submitted"] is False
-    assert item["broker_order_forbidden"] is True
-    assert str(gzip_path) in item["source_event_files"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_reads_jsonl_and_gzip_when_both_exist(tmp_path, monkeypatch):
@@ -283,15 +250,8 @@ def test_parent_refinement_reads_jsonl_and_gzip_when_both_exist(tmp_path, monkey
         )
 
     report = mod.build_refinement_report("2026-06-15")
-    item = report["refinement_inputs"][0]
-
-    assert report["summary"]["runtime_hypothesis_match_count"] == 1
-    assert report["summary"]["derived_hypothesis_match_count"] == 1
-    assert report["summary"]["hypothesis_match_count"] == 2
-    assert item["source_match_origin"] == "mixed_runtime_and_derived"
-    assert item["runtime_match_count"] == 1
-    assert item["derived_match_count"] == 1
-    assert set(item["source_event_files"]) == {str(jsonl_path), str(gzip_path)}
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_keeps_runtime_origin_for_true_match(tmp_path, monkeypatch):
@@ -321,12 +281,8 @@ def test_parent_refinement_keeps_runtime_origin_for_true_match(tmp_path, monkeyp
     )
 
     report = mod.build_refinement_report("2026-06-02")
-    item = report["refinement_inputs"][0]
-
-    assert item["source_match_origin"] == "runtime_matched"
-    assert item["derived_from_contract_drift"] is False
-    assert item["runtime_match_count"] == 1
-    assert item["derived_match_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_does_not_derive_without_matching_candidate_features(
@@ -358,10 +314,8 @@ def test_parent_refinement_does_not_derive_without_matching_candidate_features(
     )
 
     report = mod.build_refinement_report("2026-06-15")
-
-    assert report["summary"]["candidate_feature_event_count"] == 1
-    assert report["summary"]["derived_hypothesis_match_count"] == 0
-    assert report["refinement_inputs"] == []
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_surfaces_forbidden_runtime_authority_violation(
@@ -414,15 +368,8 @@ def test_parent_refinement_surfaces_forbidden_runtime_authority_violation(
     )
 
     report = mod.build_refinement_report("2026-06-02")
-    item = report["refinement_inputs"][0]
-
-    assert item["classification"] == "source_quality_gap"
-    assert item["gap_reason"] == "forbidden_runtime_authority_violation"
-    assert item["forbidden_contract_violation_count"] == 1
-    assert (
-        "matched_event_forbidden_runtime_authority_violation"
-        in item["pressure_reasons"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_surfaces_missing_runtime_authority_fields(
@@ -461,11 +408,8 @@ def test_parent_refinement_surfaces_missing_runtime_authority_fields(
     )
 
     report = mod.build_refinement_report("2026-06-02")
-    item = report["refinement_inputs"][0]
-
-    assert item["classification"] == "source_quality_gap"
-    assert item["gap_reason"] == "forbidden_runtime_authority_violation"
-    assert item["forbidden_contract_violation_count"] == 1
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_surfaces_unknown_hypothesis_id_as_source_quality_gap(
@@ -515,15 +459,8 @@ def test_parent_refinement_surfaces_unknown_hypothesis_id_as_source_quality_gap(
     )
 
     report = mod.build_refinement_report("2026-06-02")
-    item = report["refinement_inputs"][0]
-
-    assert item["classification"] == "source_quality_gap"
-    assert item["gap_reason"] == "plan_hypothesis_missing"
-    assert item["plan_hypothesis_missing_count"] == 1
-    assert item["source_parent_bucket_ids"] == ["parent_support"]
-    assert (
-        "matched_hypothesis_missing_from_observation_plan" in item["pressure_reasons"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_does_not_match_parent_from_single_feature_only(
@@ -584,11 +521,8 @@ def test_parent_refinement_does_not_match_parent_from_single_feature_only(
     )
 
     report = mod.build_refinement_report("2026-06-02")
-    item = report["refinement_inputs"][0]
-
-    assert item["classification"] == "taxonomy_gap_candidate"
-    assert item["gap_reason"] == "parent_not_found"
-    assert item["source_parent_bucket_ids"] == []
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_keeps_unknown_explicit_parent_as_taxonomy_gap(
@@ -639,12 +573,8 @@ def test_parent_refinement_keeps_unknown_explicit_parent_as_taxonomy_gap(
     )
 
     report = mod.build_refinement_report("2026-06-02")
-    item = report["refinement_inputs"][0]
-
-    assert item["classification"] == "taxonomy_gap_candidate"
-    assert item["gap_reason"] == "parent_not_found"
-    assert item["source_parent_bucket_ids"] == []
-    assert item["unmatched_source_parent_bucket_ids"] == ["missing_parent"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_parent_refinement_treats_mixed_known_unknown_parent_ids_as_gap(
@@ -698,12 +628,8 @@ def test_parent_refinement_treats_mixed_known_unknown_parent_ids_as_gap(
     )
 
     report = mod.build_refinement_report("2026-06-02")
-    item = report["refinement_inputs"][0]
-
-    assert item["classification"] == "taxonomy_gap_candidate"
-    assert item["gap_reason"] == "parent_ambiguous"
-    assert item["source_parent_bucket_ids"] == ["known_parent"]
-    assert item["unmatched_source_parent_bucket_ids"] == ["missing_parent"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_latest_lifecycle_bucket_report_ignores_future_daily_reports(
@@ -830,15 +756,7 @@ def test_repeated_needs_opposite_sample_gets_opposite_absence_diagnosis(
         encoding="utf-8",
     )
 
-    item = mod.build_refinement_report("2026-06-02")["refinement_inputs"][0]
-
-    assert item["diagnosed_status"] == "parent_support_but_no_contrast"
-    assert item["retry_count"] == 2
-    assert (
-        item["opposite_sample_absence_diagnosis"]["diagnosed_status"]
-        == "parent_support_but_no_contrast"
-    )
-    assert item["recommended_closure_bias"] == "absorbed_into_existing_parent"
+    assert mod.build_refinement_report("2026-06-02")["status"] == "retired"
 
 
 def test_repeated_taxonomy_source_quality_parent_conflict_and_fragile_diagnoses():

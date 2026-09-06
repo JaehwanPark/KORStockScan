@@ -1062,7 +1062,7 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(
         "title": "Repeated source quality gap",
         "target_subsystem": "entry_funnel",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "improvement_type": "source_quality_gap",
         "priority": 5,
         "runtime_effect": False,
@@ -1146,7 +1146,7 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_signatur
         "lifecycle_stage": "entry",
         "improvement_type": "source_quality_gap",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "priority": 5,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -1219,7 +1219,7 @@ def test_build_code_improvement_workorder_does_not_escalate_history_implemented_
         "target_subsystem": "entry_funnel",
         "lifecycle_stage": "entry",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "improvement_type": "source_quality_gap",
         "priority": 5,
         "runtime_effect": False,
@@ -1350,7 +1350,7 @@ def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_l
         "lifecycle_stage": "multi_stage",
         "improvement_type": "quiet_gap_rollup_evidence",
         "route": "positive_source_only_review",
-        "mapped_family": "lifecycle_bucket_discovery",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -1386,19 +1386,7 @@ def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_l
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
-
-    order = report["orders"][0]
-    assert order["decision"] == "attach_existing_family"
-    assert order["route"] == "positive_source_only_review"
-    assert (
-        order["longstanding_non_implement_review"]["review_disposition"]
-        == "keep_visible_by_design"
-    )
-    assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 0
-    assert report["summary"]["selected_terminal_non_implement_longstanding_count"] == 1
-    assert report["summary"][
-        "selected_terminal_non_implement_longstanding_order_ids"
-    ] == ["order_lifecycle_quiet_gap_positive_source_only_rollup"]
+    assert report["orders"] == []  # Archived taxonomy cannot request reimplementation.
 
 
 def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_drought_as_structural_blocker(
@@ -1419,7 +1407,7 @@ def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_
         "lifecycle_stage": "entry_submit",
         "improvement_type": "source_only_report_provenance_handoff",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "implementation_status": "implemented",
@@ -1494,7 +1482,7 @@ def test_build_code_improvement_workorder_does_not_reescalate_closed_submit_drou
         "lifecycle_stage": "entry_submit",
         "improvement_type": "source_only_report_provenance_handoff",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "implementation_status": "implemented",
@@ -1561,11 +1549,11 @@ def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_no
         "order_id": "order_not_applicable_terminal",
         "title": "Not applicable terminal bucket",
         "source_report_type": "lifecycle_decision_matrix_exit_bucket_attribution",
-        "target_subsystem": "lifecycle_decision_matrix",
+        "target_subsystem": "entry_funnel",
         "lifecycle_stage": "exit",
         "improvement_type": "exit_bucket_source_quality_child_evidence",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "implementation_status": "terminal_not_applicable_evidence",
@@ -1605,15 +1593,7 @@ def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_no
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-08", max_orders=1)
-
-    order = report["orders"][0]
-    assert order["decision"] == "attach_existing_family"
-    assert order["structural_blocker_escalation"] is None
-    assert (
-        order["longstanding_non_implement_review"]["review_disposition"]
-        == "keep_visible_by_design"
-    )
-    assert report["summary"]["repeat_unresolved_structural_blocker_count"] == 0
+    assert report["orders"] == []  # Archived taxonomy cannot request reimplementation.
 
 
 def test_build_code_improvement_workorder_does_not_double_escalate_summary_contract_gap_when_specific_gap_exists(
@@ -2040,7 +2020,7 @@ def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_ord
         "order_id": "order_sparse_current",
         "target_subsystem": "entry_funnel",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "priority": 5,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -2107,7 +2087,7 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applica
         "lifecycle_stage": "entry",
         "improvement_type": "source_quality_gap",
         "route": "existing_family",
-        "mapped_family": "lifecycle_decision_matrix_runtime",
+        "mapped_family": "holding_flow_ofi_smoothing",
         "priority": 5,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -2198,7 +2178,7 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(
             "source_report_type": "scalping_pattern_lab_automation",
             "target_subsystem": "entry_funnel",
             "route": "existing_family",
-            "mapped_family": "lifecycle_decision_matrix_runtime",
+            "mapped_family": "holding_flow_ofi_smoothing",
             "priority": 3,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
@@ -2682,9 +2662,9 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_h
             "title": "LDM holding bucket source-quality follow-up: source_quality_gap=holding_bucket_001",
             "source_report_type": "lifecycle_decision_matrix_holding_bucket_attribution",
             "lifecycle_stage": "holding",
-            "target_subsystem": "lifecycle_decision_matrix",
+            "target_subsystem": "entry_funnel",
             "route": "instrumentation_order",
-            "mapped_family": "lifecycle_decision_matrix_runtime",
+            "mapped_family": "holding_flow_ofi_smoothing",
             "improvement_type": "holding_bucket_source_quality_child_evidence",
             "priority": 2,
             "runtime_effect": False,
@@ -2715,12 +2695,12 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_h
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-06-10", max_orders=1)
+    from src.engine.lifecycle.retirement import retired_owner
 
-    order = report["orders"][0]
-    assert order["decision"] == "defer_evidence"
-    assert report["summary"]["repeat_unresolved_escalation_count"] == 0
-    assert (
-        report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    assert not any(
+        retired_owner(item.get("mapped_family"))
+        or retired_owner(item.get("source_report_type"))
+        for item in report["orders"]
     )
 
 
@@ -2761,8 +2741,7 @@ def test_lifecycle_bucket_discovery_source_dimension_gap_groups_same_bucket():
         if item["source_report_type"] == "lifecycle_bucket_discovery"
     ]
 
-    assert len(orders) == 1
-    assert orders[0]["improvement_type"] == "source_dimension_gap_resolution"
+    assert orders == []
 
 
 def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_orders(
@@ -2848,17 +2827,13 @@ def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-22", max_orders=1)
+    from src.engine.lifecycle.retirement import retired_owner
 
-    order = next(
-        item
+    assert not any(
+        retired_owner(item.get("mapped_family"))
+        or retired_owner(item.get("source_report_type"))
         for item in report["orders"]
-        if item["source_report_type"] == "lifecycle_bucket_discovery"
     )
-    assert order["decision"] == "implement_now"
-    assert order["runtime_effect"] is False
-    assert order["source_bucket_id"] == bucket_id
-    assert order["order_id"].startswith("order_lifecycle_bucket_discovery_entry_")
-    assert report["summary"]["lifecycle_bucket_discovery_source_order_count"] == 1
 
 
 def test_lifecycle_bucket_discovery_greenfield_source_only_exclusion_is_not_active_workorder():
@@ -2918,14 +2893,7 @@ def test_lifecycle_bucket_discovery_source_dimension_gap_creates_actionable_work
     }
 
     orders = mod._lifecycle_bucket_discovery_followup_orders(report)
-
-    assert len(orders) == 1
-    assert orders[0]["order_id"].startswith(
-        "order_lifecycle_source_dimension_gap_entry_combo_entry_spot_"
-    )
-    assert orders[0]["improvement_type"] == "source_dimension_gap_resolution"
-    assert orders[0]["priority"] == 1
-    assert "source_dimension_gap=unknown_source_dimensions" in orders[0]["evidence"]
+    assert orders == []
 
 
 def test_lifecycle_bucket_discovery_source_dimension_gap_summary_creates_workorder_when_candidate_truncated():
@@ -2950,10 +2918,7 @@ def test_lifecycle_bucket_discovery_source_dimension_gap_summary_creates_workord
     }
 
     orders = mod._lifecycle_bucket_discovery_followup_orders(report)
-
-    assert len(orders) == 1
-    assert orders[0]["source_bucket_id"] == "entry:combo_entry_spot:summary-only"
-    assert orders[0]["improvement_type"] == "source_dimension_gap_resolution"
+    assert orders == []
 
 
 def test_lifecycle_bucket_discovery_rollup_gap_is_not_implement_now():
@@ -2996,25 +2961,7 @@ def test_lifecycle_bucket_discovery_join_gap_enrichment_creates_source_only_work
     }
 
     orders = mod._lifecycle_bucket_discovery_followup_orders(report)
-    order = [
-        item
-        for item in orders
-        if item["order_id"] == "order_lifecycle_source_dimension_join_gap_enrichment"
-    ][0]
-
-    assert order["runtime_effect"] is False
-    assert order["allowed_runtime_apply"] is False
-    assert order["improvement_type"] == "source_dimension_join_gap_enrichment"
-    assert "join_gap_candidate_count=2" in order["evidence"]
-    classified = mod._classify_order(
-        order,
-        finding_by_order_id={},
-        finding_by_title_slug={},
-        auto_family_order_ids=set(),
-        closed_instrumentation_order_families={},
-    )
-    assert classified.decision == "attach_existing_family"
-    assert classified.route == "join_gap_enrichment"
+    assert orders == []
 
 
 def test_lifecycle_bucket_discovery_quiet_gap_rollup_orders_are_attach_existing_family():
@@ -3039,30 +2986,7 @@ def test_lifecycle_bucket_discovery_quiet_gap_rollup_orders_are_attach_existing_
     }
 
     orders = mod._lifecycle_bucket_discovery_followup_orders(report)
-    quiet_orders = [
-        item
-        for item in orders
-        if item["source_report_type"] == "lifecycle_bucket_discovery_quiet_gap_rollup"
-    ]
-
-    assert {item["order_id"] for item in quiet_orders} == {
-        "order_lifecycle_quiet_gap_parent_conflict_rollup",
-        "order_lifecycle_quiet_gap_positive_source_only_rollup",
-        "order_lifecycle_quiet_gap_ai_review_coverage_rollup",
-    }
-    classified = mod._classify_order(
-        quiet_orders[0],
-        finding_by_order_id={},
-        finding_by_title_slug={},
-        auto_family_order_ids=set(),
-        closed_instrumentation_order_families={},
-    )
-    assert classified.decision == "attach_existing_family"
-    assert classified.route in {
-        "parent_conflict_exclusion_review",
-        "positive_source_only_review",
-        "ai_review_coverage_review",
-    }
+    assert orders == []
 
 
 def test_observation_source_quality_unknown_warning_creates_rollup_order():
@@ -3757,26 +3681,8 @@ def test_lifecycle_source_contract_drift_followup_is_existing_source_only_proven
         ],
     }
 
-    order = mod._lifecycle_bucket_discovery_followup_orders(report)[0]
-    classified = mod._classify_order(
-        order,
-        finding_by_order_id={},
-        finding_by_title_slug={},
-        auto_family_order_ids=set(),
-        closed_instrumentation_order_families={},
-    )
-
-    assert (
-        order["implementation_status"]
-        == "implemented_source_quality_contract_available"
-    )
-    assert (
-        order["implementation_provenance"]["decision_authority"]
-        == "source_contract_drift_detection"
-    )
-    assert order["actual_order_submitted"] is False
-    assert order["broker_order_forbidden"] is True
-    assert classified.decision == "attach_existing_family"
+    order = mod._lifecycle_bucket_discovery_followup_orders(report)
+    assert order == []
 
 
 def test_producer_gap_ai_review_followup_pass_is_existing_source_only_provenance():
@@ -4218,12 +4124,13 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
     assert timestamp_order["allowed_runtime_apply"] is False
     assert timestamp_order["actual_order_submitted"] is False
     assert timestamp_order["broker_order_forbidden"] is True
-    candidate_order = order_by_id[
+    assert (
+        "order_microstructure_signed_tape_runtime_candidate_review" not in order_by_id
+    )
+    assert report["summary"]["microstructure_retired_order_ids"] == [
         "order_microstructure_signed_tape_runtime_candidate_review"
     ]
-    assert candidate_order["decision"] == "design_family_candidate"
-    assert candidate_order["allowed_runtime_apply"] is False
-    assert report["summary"]["microstructure_reaction_context_source_order_count"] == 2
+    assert report["summary"]["microstructure_reaction_context_source_order_count"] == 1
     assert report["source"]["microstructure_reaction_context"] == str(
         microstructure_dir / f"microstructure_reaction_context_{target_date}.json"
     )
@@ -5726,38 +5633,13 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder(target_date, max_orders=1)
+    from src.engine.lifecycle.retirement import retired_owner
 
-    order = next(
-        item
+    assert not any(
+        retired_owner(item.get("mapped_family"))
+        or retired_owner(item.get("source_report_type"))
         for item in report["orders"]
-        if item["order_id"] == "order_entry_broker_receipt_contract_gap_review"
     )
-    assert order["decision"] == "implement_now"
-    assert (
-        order["source_report_type"]
-        == "lifecycle_decision_matrix_submit_bucket_attribution"
-    )
-    assert order["runtime_effect"] is False
-    assert order["allowed_runtime_apply"] is False
-    expected_holding_order_id = mod._lifecycle_stage_bucket_order_id(
-        "holding",
-        {
-            "bucket_type": "combo_holding_flow",
-            "bucket_key": "source=sim|action=HOLD|profit=profit_unknown|held=held_unknown",
-        },
-    )
-    holding_order = next(
-        item
-        for item in report["orders"]
-        if item["order_id"] == expected_holding_order_id
-    )
-    assert (
-        holding_order["source_report_type"]
-        == "lifecycle_decision_matrix_holding_bucket_attribution"
-    )
-    assert holding_order["allowed_runtime_apply"] is False
-    assert report["summary"]["lifecycle_submit_bucket_source_order_count"] == 1
-    assert report["summary"]["lifecycle_holding_exit_bucket_source_order_count"] == 1
 
 
 def test_lifecycle_child_bucket_not_applicable_evidence_is_existing_family():
@@ -5867,22 +5749,13 @@ def test_build_code_improvement_workorder_adds_entry_adm_gap_order(
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-18", max_orders=5)
+    from src.engine.lifecycle.retirement import retired_owner
 
-    order = next(
-        item
+    assert not any(
+        retired_owner(item.get("mapped_family"))
+        or retired_owner(item.get("source_report_type"))
         for item in report["orders"]
-        if item["order_id"] == "order_scalp_entry_adm_daily_tuning_coverage"
     )
-    assert order["decision"] == "implement_now"
-    assert order["runtime_effect"] is False
-    assert "joined_sample=2" in order["evidence"]
-    assert "outcome_join_status=no_candidate_key_overlap" in order["evidence"]
-    assert (
-        "zero_join_reason=entry_adm_candidate_keys_do_not_overlap_post_sell_evaluation_keys"
-        in order["evidence"]
-    )
-    assert "outcome_coverage_state=join_contract_gap" in order["evidence"]
-    assert report["source"]["scalp_entry_action_decision_matrix"] == str(adm_path)
 
 
 def test_entry_adm_sample_wait_only_is_rejudged_non_implement():
@@ -6564,15 +6437,13 @@ def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrume
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-20", max_orders=5)
+    from src.engine.lifecycle.retirement import retired_owner
 
-    order = next(
-        item
+    assert not any(
+        retired_owner(item.get("mapped_family"))
+        or retired_owner(item.get("source_report_type"))
         for item in report["orders"]
-        if item["order_id"] == "order_lifecycle_ai_context_attribution_feedback"
     )
-    assert order["decision"] == "attach_existing_family"
-    assert order["implementation_status"] == "implemented"
-    assert order["runtime_effect"] is False
 
 
 def test_build_code_improvement_workorder_attaches_swing_discovery_source_quality_instrumentation(
@@ -7263,7 +7134,7 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
                 "calibration_outcome": {
                     "decisions": [
                         {
-                            "family": "holding_exit_decision_matrix_advisory",
+                            "family": "holding_flow_ofi_smoothing",
                             "calibration_state": "hold_no_edge",
                             "sample_count": 42,
                             "sample_floor": 20,
@@ -7296,17 +7167,7 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
 
     report = mod.build_code_improvement_workorder("2026-05-11", max_orders=5)
 
-    assert report["summary"]["threshold_ev_source_order_count"] == 1
-    order = report["orders"][0]
-    assert order["order_id"] == "order_holding_exit_decision_matrix_edge_counterfactual"
-    assert order["decision"] == "implement_now"
-    assert order["mapped_family"] == "holding_exit_decision_matrix_advisory"
-    assert "counterfactual_gap_count=42" in order["evidence"]
-    markdown = (doc_dir / "code_improvement_workorder_2026-05-11.md").read_text(
-        encoding="utf-8"
-    )
-    assert "hold_no_edge" in markdown
-    assert "counterfactual" in markdown
+    assert report["summary"]["threshold_ev_source_order_count"] == 0
 
 
 def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentation_gap_closed(
@@ -7336,7 +7197,7 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
                 "calibration_outcome": {
                     "decisions": [
                         {
-                            "family": "holding_exit_decision_matrix_advisory",
+                            "family": "holding_flow_ofi_smoothing",
                             "calibration_state": "hold_no_edge",
                             "sample_count": 14,
                             "sample_floor": 1,
@@ -7404,7 +7265,7 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
                 "calibration_outcome": {
                     "decisions": [
                         {
-                            "family": "holding_exit_decision_matrix_advisory",
+                            "family": "holding_flow_ofi_smoothing",
                             "calibration_state": "hold_no_edge",
                             "sample_count": 42,
                             "sample_floor": 20,
@@ -7881,64 +7742,13 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-21", max_orders=5)
+    from src.engine.lifecycle.retirement import retired_owner
 
-    order = next(
-        item
+    assert not any(
+        retired_owner(item.get("mapped_family"))
+        or retired_owner(item.get("source_report_type"))
         for item in report["orders"]
-        if item["order_id"]
-        == "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown"
     )
-    assert order["decision"] == "implement_now"
-    assert order["runtime_effect"] is False
-    assert (
-        order["source_report_type"]
-        == "lifecycle_decision_matrix_entry_bucket_attribution"
-    )
-    assert "bucket_key=liquidity_unknown" in order["evidence"]
-    scale_order = next(
-        item
-        for item in report["orders"]
-        if item["order_id"]
-        == "order_lifecycle_scale_in_bucket_blocker_namespace_price_guard"
-    )
-    assert scale_order["decision"] == "implement_now"
-    assert scale_order["runtime_effect"] is False
-    assert scale_order["allowed_runtime_apply"] is False
-    assert (
-        scale_order["source_report_type"]
-        == "lifecycle_decision_matrix_scale_in_bucket_attribution"
-    )
-    assert "bucket_key=PRICE_GUARD" in scale_order["evidence"]
-    overnight_order = next(
-        item
-        for item in report["orders"]
-        if item["order_id"]
-        == "order_lifecycle_overnight_bucket_overnight_action_sell_today"
-    )
-    assert overnight_order["decision"] == "attach_existing_family"
-    assert (
-        overnight_order["derived_review_category"]
-        == "already_implemented_source_handoff"
-    )
-    assert overnight_order["implementation_candidate"] is False
-    assert overnight_order["runtime_effect"] is False
-    assert overnight_order["allowed_runtime_apply"] is False
-    assert overnight_order["implementation_status"] == "implemented"
-    assert overnight_order["implementation_provenance"]["runtime_effect"] is False
-    assert (
-        overnight_order["implementation_provenance"]["decision_authority"]
-        == "adm_ldm_overnight_bucket_attribution_source_only"
-    )
-    assert (
-        overnight_order["source_report_type"]
-        == "lifecycle_decision_matrix_overnight_bucket_attribution"
-    )
-    assert "bucket_key=SELL_TODAY" in overnight_order["evidence"]
-    assert report["summary"]["already_implemented_source_handoff_count"] == 1
-    assert report["summary"]["lifecycle_entry_bucket_source_order_count"] == 1
-    assert report["summary"]["lifecycle_scale_in_bucket_source_order_count"] == 1
-    assert report["summary"]["lifecycle_overnight_bucket_source_order_count"] == 1
-    assert report["source"]["lifecycle_decision_matrix"] == str(ldm_path)
 
 
 def test_sim_fill_canonical_price_gap_fires_only_for_unpriced_no_canonical():

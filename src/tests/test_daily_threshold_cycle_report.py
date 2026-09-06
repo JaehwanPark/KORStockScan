@@ -570,9 +570,7 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         scalp_trailing["sample"]["strong_ai_boundary_examples"][0]["stock_code"]
         == "042370"
     )
-    action_weight = report["threshold_snapshot"]["statistical_action_weight"]
-    assert action_weight["apply_ready"] is False
-    assert action_weight["recommended"]["data_completeness"]["price_known"] == 3
+    assert "statistical_action_weight" not in report["threshold_snapshot"]
 
     apply_families = {item["family"] for item in report["apply_candidate_list"]}
     assert "pre_submit_price_guard" not in apply_families
@@ -3262,18 +3260,7 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
         ]
         == 67
     )
-    assert (
-        candidates["holding_exit_decision_matrix_advisory"]["calibration_state"]
-        == "hold_no_edge"
-    )
-    assert (
-        candidates["holding_exit_decision_matrix_advisory"]["apply_mode"]
-        == "report_only_calibration"
-    )
-    assert (
-        candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"]
-        == "minimum_edge_missing"
-    )
+    assert "holding_exit_decision_matrix_advisory" not in candidates
 
 
 def test_daily_completed_source_split_is_not_rolling_window():
@@ -4043,22 +4030,7 @@ def test_statistical_action_weight_report_buckets_completed_rows():
         ],
         completed_rows_loader=lambda start_date, end_date: completed_rows,
     )
-
-    family = report["threshold_snapshot"]["statistical_action_weight"]
-    assert family["sample"]["completed_valid"] == 5
-    assert family["sample"]["pyramid_wait"] == 2
-    assert family["sample"]["avg_down_wait"] == 1
-    assert family["sample"]["compact_scale_in_executed"] == 1
-    assert family["sample"]["compact_decision_snapshot"] == 1
-    assert (
-        family["recommended"]["action_summary"]["pyramid_wait"]["avg_profit_rate"]
-        == 0.7
-    )
-    assert family["current"]["score_method"] == "empirical_bayes_lower_confidence_bound"
-    first_price_bucket = family["recommended"]["by_price_bucket"][0]
-    assert "best_confidence_adjusted_score" in first_price_bucket
-    assert "policy_hint" in first_price_bucket
-    assert family["recommended"]["data_completeness"]["volume_known"] == 5
+    assert "statistical_action_weight" not in report["threshold_snapshot"]
 
 
 def test_daily_threshold_cycle_keeps_sim_completed_out_of_family_candidate_input():
@@ -4106,9 +4078,7 @@ def test_daily_threshold_cycle_keeps_sim_completed_out_of_family_candidate_input
     assert report["completed_by_source"]["sim"]["sample"] == 1
     assert report["completed_by_source"]["combined"]["sample"] == 2
 
-    action_weight = report["threshold_snapshot"]["statistical_action_weight"]
-    assert action_weight["sample"]["completed_valid"] == 1
-    assert action_weight["recommended"]["data_completeness"]["price_known"] == 1
+    assert "statistical_action_weight" not in report["threshold_snapshot"]
 
     sizing = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
     assert sizing["sample"]["real_completed_valid"] == 1
@@ -4216,40 +4186,7 @@ def test_statistical_action_weight_reports_eligible_but_not_chosen(
         ],
         completed_rows_loader=lambda start_date, end_date: [],
     )
-
-    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"][
-        "eligible_but_not_chosen"
-    ]
-    assert eligible["status"] == "report_only"
-    assert eligible["sample_snapshots"] == 1
-    assert eligible["sample_candidates"] == 2
-    assert eligible["post_sell_joined_candidates"] == 2
-    chosen_row = next(
-        row
-        for row in eligible["chosen_action_summary"]
-        if row["chosen_action"] == "hold_defer"
-    )
-    assert chosen_row["sample"] == 1
-    exit_row = next(
-        row
-        for row in eligible["action_summary"]
-        if row["candidate_action"] == "exit_only"
-    )
-    assert exit_row["avg_post_decision_mfe_10m_proxy"] == 1.4
-
-    artifact = report_mod.build_statistical_action_weight_artifact(report)
-    markdown = report_mod.render_statistical_action_weight_markdown(artifact)
-    assert "Eligible But Not Chosen" in markdown
-    assert "Chosen Action Proxy" in markdown
-    assert "post_decision_*_proxy" in markdown
-
-    matrix = report_mod.build_holding_exit_decision_matrix(report)
-    proxy_summary = matrix["counterfactual_proxy_summary"]
-    assert proxy_summary["sample_snapshots"] == 1
-    assert proxy_summary["per_action_samples"]["hold_defer"] == 1
-    assert proxy_summary["per_action_samples"]["exit_only"] == 1
-    assert proxy_summary["per_action_samples"]["pyramid_wait"] == 1
-    assert proxy_summary["missing_actions"] == ["avg_down_wait"]
+    assert "statistical_action_weight" not in report["threshold_snapshot"]
 
 
 def test_holding_exit_matrix_uses_implicit_exit_snapshot_proxy_when_exit_not_listed():
@@ -4272,24 +4209,7 @@ def test_holding_exit_matrix_uses_implicit_exit_snapshot_proxy_when_exit_not_lis
         ],
         completed_rows_loader=lambda start_date, end_date: [],
     )
-
-    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"][
-        "eligible_but_not_chosen"
-    ]
-    exit_row = next(
-        row
-        for row in eligible["action_summary"]
-        if row["candidate_action"] == "exit_only"
-    )
-    assert exit_row["sample"] == 1
-    assert exit_row["top_not_chosen_reasons"] == {
-        "implicit_exit_at_snapshot_profit_proxy": 1
-    }
-
-    matrix = report_mod.build_holding_exit_decision_matrix(report)
-    proxy_summary = matrix["counterfactual_proxy_summary"]
-    assert proxy_summary["per_action_samples"]["exit_only"] == 1
-    assert "exit_only" in proxy_summary["actions_present"]
+    assert "statistical_action_weight" not in report["threshold_snapshot"]
 
 
 def test_holding_exit_matrix_does_not_create_implicit_exit_proxy_without_profit_rate():
@@ -4311,17 +4231,7 @@ def test_holding_exit_matrix_does_not_create_implicit_exit_proxy_without_profit_
         ],
         completed_rows_loader=lambda start_date, end_date: [],
     )
-
-    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"][
-        "eligible_but_not_chosen"
-    ]
-    assert all(
-        row["candidate_action"] != "exit_only" for row in eligible["action_summary"]
-    )
-
-    matrix = report_mod.build_holding_exit_decision_matrix(report)
-    proxy_summary = matrix["counterfactual_proxy_summary"]
-    assert proxy_summary["per_action_samples"]["exit_only"] == 0
+    assert "statistical_action_weight" not in report["threshold_snapshot"]
 
 
 def test_ofi_ai_smoothing_requires_mature_counterfactual_ev_for_manifest_candidate():
@@ -6701,15 +6611,8 @@ def test_statistical_action_weight_artifacts_render_markdown(tmp_path, monkeypat
         ],
     )
 
-    json_path, md_path = report_mod.save_statistical_action_weight_artifact(report)
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
-    markdown = md_path.read_text(encoding="utf-8")
-
-    assert payload["family"] == "statistical_action_weight"
-    assert payload["runtime_change"] is False
-    assert "Statistical Action Weight Report" in markdown
-    assert "Price Bucket" in markdown
-    assert "compact_decision_snapshot" in markdown
+    with pytest.raises(RuntimeError, match="retired"):
+        report_mod.save_statistical_action_weight_artifact(report)
 
 
 def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(
@@ -6732,45 +6635,8 @@ def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(
         ],
     )
 
-    json_path, md_path = report_mod.save_holding_exit_decision_matrix(report)
-    payload = json.loads(json_path.read_text(encoding="utf-8"))
-    markdown = md_path.read_text(encoding="utf-8")
-
-    assert payload["matrix_version"] == "holding_exit_decision_matrix_v1_2026-04-30"
-    assert payload["runtime_change"] is False
-    assert payload["hard_veto"]
-    assert payload["entries"]
-    assert payload["summary"]["entry_count"] == len(payload["entries"])
-    assert payload["summary"]["non_no_clear_edge_count"] == 0
-    assert payload["summary"]["no_clear_edge_count"] == len(payload["entries"])
-    assert payload["summary"]["per_action_edge_buckets"] == {
-        "prefer_exit": 0,
-        "prefer_avg_down_wait": 0,
-        "prefer_pyramid_wait": 0,
-    }
-    assert "prompt_hint" in payload["entries"][0]
-    assert payload["instrumentation_status"] == "implemented"
-    assert payload["instrumentation_contract_version"] == 1
-    assert (
-        "counterfactual_proxy_summary.per_action_samples"
-        in payload["provenance_contract"]
-    )
-    assert "counterfactual_coverage" in payload["entries"][0]
-    assert payload["counterfactual_coverage_summary"]["entry_count"] == len(
-        payload["entries"]
-    )
-    assert (
-        "exit_only" in payload["counterfactual_coverage_summary"]["per_action_samples"]
-    )
-    assert (
-        payload["counterfactual_proxy_summary"]["required_actions"][0] == "hold_defer"
-    )
-    assert "Holding/Exit Decision Matrix" in markdown
-    assert "Counterfactual Coverage" in markdown
-    assert "non_no_clear_edge_count" in markdown
-    assert "per_action_edge_buckets" in markdown
-    assert "proxy_per_action_samples" in markdown
-    assert "Prompt Hints" in markdown
+    with pytest.raises(RuntimeError, match="retired"):
+        report_mod.save_holding_exit_decision_matrix(report)
 
 
 def test_cumulative_threshold_cycle_report_splits_windows_and_cohorts():

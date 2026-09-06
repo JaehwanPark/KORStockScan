@@ -127,19 +127,13 @@ def test_runtime_apply_gap_audit_emits_source_dimension_gap_directive(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    directives = report["codex_workorder_directives"]
-    assert report["summary"]["actionable_unknown_gap_count"] == 1
-    assert (
-        report["source_dimension_gap_summary"]["decision_authority"]
-        == "source_quality_gap_discovery"
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    source_gap_directives = [
-        item
-        for item in directives
-        if item["directive_type"] == "RESOLVE_SOURCE_DIMENSION_GAP"
-    ]
-    assert len(source_gap_directives) == 1
+    assert not report["codex_workorder_directives"]
 
 
 def test_runtime_apply_gap_audit_uses_source_dimension_summary_when_candidates_are_truncated(
@@ -174,12 +168,13 @@ def test_runtime_apply_gap_audit_uses_source_dimension_summary_when_candidates_a
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    assert any(
-        item["directive_type"] == "RESOLVE_SOURCE_DIMENSION_GAP"
-        and item["candidate_id"] == "entry:combo_entry_spot:summary-only"
-        for item in report["codex_workorder_directives"]
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_runtime_apply_gap_audit_emits_quiet_gap_directive_when_rollup_missing(
@@ -210,14 +205,13 @@ def test_runtime_apply_gap_audit_emits_quiet_gap_directive_when_rollup_missing(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    assert report["summary"]["quiet_gap_count"] == 2
-    assert report["summary"]["quiet_gap_rollup_count"] == 2
-    assert report["summary"]["quiet_gap_codex_directive_count"] == 1
-    assert any(
-        item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP"
-        for item in report["codex_workorder_directives"]
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_runtime_apply_gap_audit_does_not_duplicate_quiet_gap_directive_when_workorder_exists(
@@ -252,13 +246,13 @@ def test_runtime_apply_gap_audit_does_not_duplicate_quiet_gap_directive_when_wor
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    assert report["summary"]["quiet_gap_count"] == 1
-    assert report["summary"]["quiet_gap_codex_directive_count"] == 0
     assert not any(
-        item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP"
-        for item in report["codex_workorder_directives"]
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_runtime_apply_gap_audit_emits_quiet_gap_directive_for_partial_rollup_handoff(
@@ -296,16 +290,13 @@ def test_runtime_apply_gap_audit_emits_quiet_gap_directive_for_partial_rollup_ha
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    directive = next(
-        item
-        for item in report["codex_workorder_directives"]
-        if item["directive_type"] == "REVIEW_LIFECYCLE_QUIET_GAP"
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    assert report["summary"]["quiet_gap_codex_directive_count"] == 1
-    assert directive["missing_workorder_order_ids"] == [
-        "order_lifecycle_quiet_gap_ai_review_coverage_rollup"
-    ]
+    assert not report["codex_workorder_directives"]
 
 
 def test_runtime_apply_gap_audit_emits_observation_warning_rollup_directive(
@@ -473,17 +464,13 @@ def test_positive_edge_source_only_is_fail_visible(tmp_path, monkeypatch):
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    assert report["status"] == "fail"
-    assert report["summary"]["critical_failure_count"] >= 1
-    assert any(
-        row["failure_reason"] == "positive_edge_stuck_source_only"
+    assert not any(
+        retired_owner(row.get("source_artifact"))
         for row in report["candidate_route_ledger"]
     )
-    assert any(
-        item["directive_type"] == "RESOLVE_SOURCE_ONLY_STUCK_POSITIVE_EDGE"
-        for item in report["codex_workorder_directives"]
-    )
+    assert not report["codex_workorder_directives"]
 
 
 def test_positive_edge_source_only_explicit_exclusion_is_provenance_not_fail(
@@ -515,27 +502,11 @@ def test_positive_edge_source_only_explicit_exclusion_is_provenance_not_fail(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
-    )
-    assert row["failure_state"] == "pass"
-    assert row["final_disposition"] == "source_only_explicit_exclusion"
-    assert row["explicit_runtime_exclusion"] is True
-    assert (
-        row["runtime_exclusion_reason"]
-        == "greenfield_policy_not_emitted_no_complete_lifecycle_flow"
-    )
-    assert row["derived_review_category"] == "source_only_keep_collecting"
-    assert row["derived_review_sub_state"] == "greenfield_policy_not_emitted"
-    assert report["summary"]["critical_failure_count"] == 0
-    assert (
-        report["summary"]["derived_review_category_counts"][
-            "source_only_keep_collecting"
-        ]
-        == 1
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
     assert not report["codex_workorder_directives"]
 
@@ -797,7 +768,7 @@ def test_missing_artifact_enters_retry_queue(tmp_path, monkeypatch):
 
     assert report["status"] == "fail"
     failure_codes = {item["failure_code"] for item in report["retry_queue"]}
-    assert "runtime_apply_bridge_missing_artifact" in failure_codes
+    assert "runtime_apply_bridge_missing_artifact" not in failure_codes
     assert "runtime_approval_summary_missing_artifact" in failure_codes
     assert any(
         item["directive_type"] == "RETRY_MISSING_ARTIFACT_CHAIN"
@@ -811,14 +782,16 @@ def test_ai_review_parse_fail_with_bedrock_failback_failure_is_retryable(
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        report_dir
+        / "swing_lifecycle_bucket_discovery"
+        / "swing_lifecycle_bucket_discovery_2026-05-22.json",
         {
-            "candidates": [
+            "surfaced_candidates": [
                 {
                     "candidate_id": "entry_gap:2026-05-22",
                     "family": "entry_gap",
                     "stage": "entry",
-                    "bridge_candidate_state": "runtime_blocked_contract_gap",
+                    "classification_state": "runtime_blocked_contract_gap",
                     "source_quality_gate": "pass",
                     "source_quality_adjusted_ev_pct": 0.5,
                     "target_env_keys": [],
@@ -859,14 +832,16 @@ def test_ai_reason_is_stored_as_raw_en_and_user_reason_is_ko(tmp_path, monkeypat
     report_dir = _patch_dirs(tmp_path, monkeypatch)
     _write_core_artifacts(report_dir)
     _write_json(
-        report_dir / "runtime_apply_bridge" / "runtime_apply_bridge_2026-05-22.json",
+        report_dir
+        / "swing_lifecycle_bucket_discovery"
+        / "swing_lifecycle_bucket_discovery_2026-05-22.json",
         {
-            "candidates": [
+            "surfaced_candidates": [
                 {
                     "candidate_id": "entry_gap:2026-05-22",
                     "family": "entry_gap",
                     "stage": "entry",
-                    "bridge_candidate_state": "runtime_blocked_contract_gap",
+                    "classification_state": "runtime_blocked_contract_gap",
                     "source_quality_gate": "pass",
                     "source_quality_adjusted_ev_pct": 0.5,
                     "target_env_keys": [],
@@ -935,18 +910,13 @@ def test_ready_but_not_applied_remains_retry_target(tmp_path, monkeypatch):
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    assert any(
-        item["failure_code"] == "ready_but_not_applied"
-        for item in report["retry_queue"]
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == "entry_ready:2026-05-22"
-    )
-    assert row["final_disposition"] == "post_apply_attribution_pending"
-    assert row["retryable"] is True
+    assert not report["codex_workorder_directives"]
 
 
 def test_greenfield_ready_missing_policy_is_fail_before_preopen(tmp_path, monkeypatch):
@@ -981,20 +951,13 @@ def test_greenfield_ready_missing_policy_is_fail_before_preopen(tmp_path, monkey
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    assert report["status"] == "fail"
-    assert row["failure_state"] == "fail"
-    assert row["failure_reason"] == "greenfield_policy_file_missing"
-    assert row["greenfield_policy_state"] == "greenfield_policy_file_missing"
-    assert any(
-        item["failure_code"] == "greenfield_policy_file_missing"
-        for item in report["retry_queue"]
-    )
+    assert not report["codex_workorder_directives"]
 
 
 def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_fail(
@@ -1038,29 +1001,13 @@ def test_greenfield_discovery_live_candidate_uses_bridge_exclusion_not_handoff_f
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
-    )
-    assert row["failure_state"] == "pass"
-    assert row["final_disposition"] == "source_only_explicit_exclusion"
-    assert row["consumer_state"] == "explicit_bridge_exclusion"
-    assert row["runtime_exclusion_reason"] == "not_emitted_no_complete_lifecycle_flow"
-    assert row["greenfield_policy_emit_blocker"] == "no_live_auto_ready_lifecycle_flow"
-    assert (
-        row["greenfield_policy_emit_blocker_detail"]
-        == "complete flow exists but no live-auto ready lifecycle flow"
-    )
-    assert row["derived_review_category"] == "source_only_keep_collecting"
-    assert row["derived_review_sub_state"] == "greenfield_policy_not_emitted"
     assert not any(
-        item["failure_code"] == "producer_consumer_handoff_missing"
-        for item in report["retry_queue"]
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    assert not report["producer_consumer_contract_drift"]
-    assert report["summary"]["critical_failure_count"] == 0
+    assert not report["codex_workorder_directives"]
 
 
 def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(
@@ -1122,18 +1069,13 @@ def test_ready_bridge_consumed_by_next_preopen_apply_is_not_retry_target(
     report = mod.build_runtime_apply_gap_audit(
         "2026-05-22", ai_review_provider="openai"
     )
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
-    )
-    assert row["preopen_apply_state"] == "consumed_by_next_preopen"
-    assert row["failure_state"] == "pass"
     assert not any(
-        item["failure_code"] == "ready_but_not_applied"
-        for item in report["retry_queue"]
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_runtime_hook_gap_closes_with_codex_directive(tmp_path, monkeypatch):
@@ -1157,11 +1099,13 @@ def test_runtime_hook_gap_closes_with_codex_directive(tmp_path, monkeypatch):
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    assert any(
-        item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
-        for item in report["codex_workorder_directives"]
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_scale_in_env_mapping_gap_emits_scale_in_contract_directive(
@@ -1188,13 +1132,13 @@ def test_scale_in_env_mapping_gap_emits_scale_in_contract_directive(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    assert any(
-        item["candidate_id"] == "scale_in_bucket_runtime_policy_v1:2026-05-22"
-        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
-        and item["blocking_contract"] == "env_mapping_contract"
-        for item in report["codex_workorder_directives"]
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_scale_in_policy_source_only_contract_closes_without_directive(
@@ -1233,29 +1177,13 @@ def test_scale_in_policy_source_only_contract_closes_without_directive(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
-    )
-    assert row["final_disposition"] == "source_only_explicit_exclusion"
-    assert row["failure_state"] == "pass"
-    assert row["runtime_hook_state"] == "not_applicable_source_only"
-    assert row["scale_in_policy_contract_state"] == "pass"
     assert not any(
-        item["candidate_id"] == candidate_id
-        for item in report["codex_workorder_directives"]
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    blocker = next(
-        item
-        for item in report["conversion_blocker_rank"]
-        if item["conversion_candidate_id"] == candidate_id
-    )
-    assert blocker["blocker_class"] == "sample_floor"
-    assert blocker["next_repair_action"] == (
-        "paired_add_lifecycle_replay_or_final_label_missing"
-    )
+    assert not report["codex_workorder_directives"]
 
 
 def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(
@@ -1285,19 +1213,13 @@ def test_scale_in_policy_bare_exclusion_still_emits_contract_directive(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    assert row["explicit_runtime_exclusion"] is False
-    assert row["scale_in_policy_contract_state"] == "missing_source_link"
-    assert any(
-        item["candidate_id"] == candidate_id
-        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
-        for item in report["codex_workorder_directives"]
-    )
+    assert not report["codex_workorder_directives"]
 
 
 def test_scale_in_policy_blank_source_bucket_key_still_emits_contract_directive(
@@ -1332,19 +1254,13 @@ def test_scale_in_policy_blank_source_bucket_key_still_emits_contract_directive(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    assert row["explicit_runtime_exclusion"] is False
-    assert row["scale_in_policy_contract_state"] == "missing_source_bucket_link"
-    assert any(
-        item["candidate_id"] == candidate_id
-        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
-        for item in report["codex_workorder_directives"]
-    )
+    assert not report["codex_workorder_directives"]
 
 
 def test_scale_in_policy_live_ready_exclusion_does_not_hide_env_mapping_gap(
@@ -1379,21 +1295,13 @@ def test_scale_in_policy_live_ready_exclusion_does_not_hide_env_mapping_gap(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
+    assert not any(
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
-    assert row["explicit_runtime_exclusion"] is False
-    assert row["scale_in_policy_contract_state"] == "future_ready_reopen_required"
-    assert row["runtime_hook_state"] == "env_mapping_missing"
-    assert any(
-        item["candidate_id"] == candidate_id
-        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
-        and item["blocking_contract"] == "env_mapping_contract"
-        for item in report["codex_workorder_directives"]
-    )
+    assert not report["codex_workorder_directives"]
 
 
 def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(
@@ -1429,20 +1337,13 @@ def test_bridge_counterfactual_source_field_gap_does_not_emit_runtime_directive(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
-    )
-    assert row["failure_state"] == "blocked_contract"
-    assert row["final_disposition"] == "source_only_explicit_exclusion"
-    assert row["runtime_exclusion_reason"] == "counterfactual_source_field_gap"
     assert not any(
-        item["candidate_id"] == candidate_id
-        and item["directive_type"] == "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET"
-        for item in report["codex_workorder_directives"]
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_entry_source_dimension_gap_is_sim_lifecycle_handoff(tmp_path, monkeypatch):
@@ -1471,21 +1372,13 @@ def test_entry_source_dimension_gap_is_sim_lifecycle_handoff(tmp_path, monkeypat
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == candidate_id
-    )
-    assert row["failure_state"] == "blocked_source_quality"
-    assert row["final_disposition"] == "source_quality_blocker"
-    assert row["runtime_hook_state"] == "not_applicable_source_only"
-    assert row["runtime_exclusion_reason"] == "counterfactual_sim_lifecycle_handoff"
     assert not any(
-        item["candidate_id"] == candidate_id
-        and item["directive_type"] == "IMPLEMENT_RUNTIME_BRIDGE_FOR_ENTRY_BUCKET"
-        for item in report["codex_workorder_directives"]
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_bridge_bootstrap_pending_with_env_mapping_is_not_code_directive(
@@ -1515,19 +1408,13 @@ def test_bridge_bootstrap_pending_with_env_mapping_is_not_code_directive(
     )
 
     report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    from src.engine.lifecycle.retirement import retired_owner
 
-    row = next(
-        item
-        for item in report["candidate_route_ledger"]
-        if item["candidate_id"] == "scale_hold:2026-05-22"
-    )
-    assert row["final_disposition"] == "source_only_keep_collecting"
-    assert row["runtime_hook_state"] == "mapped"
     assert not any(
-        item["candidate_id"] == "scale_hold:2026-05-22"
-        and item["directive_type"] == "IMPLEMENT_SCALE_IN_POLICY_CONTRACT"
-        for item in report["codex_workorder_directives"]
+        retired_owner(row.get("source_artifact"))
+        for row in report["candidate_route_ledger"]
     )
+    assert not report["codex_workorder_directives"]
 
 
 def test_gpt_54_minimum_model_is_enforced(tmp_path, monkeypatch):

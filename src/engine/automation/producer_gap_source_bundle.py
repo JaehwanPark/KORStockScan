@@ -6,6 +6,8 @@ orders, thresholds, provider changes, bot restarts, or cap changes.
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import json
 from collections import Counter
@@ -142,13 +144,15 @@ def _source_paths(target_date: str) -> dict[str, Path]:
 
 
 def _load_source(path: Path) -> Any:
+    if retired_artifact(path):
+        return None
     actual_path = existing_or_gzip_path(path)
     if not actual_path.exists():
         return None
     if path.suffix == ".jsonl":
         return list(iter_jsonl(path))
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return current_report_view(json.loads(path.read_text(encoding="utf-8")))
     except Exception:
         return None
 

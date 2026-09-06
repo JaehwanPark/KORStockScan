@@ -1,6 +1,284 @@
 import json
+from datetime import datetime, timedelta
 
 from src.engine.scalping import microstructure_reaction_context as mod
+
+
+def _v3_observation(identity="a", **extra):
+    return {
+        "stock_code": "005930",
+        "record_id": "123",
+        "stage": "ai_confirmed",
+        "event_time": "2026-09-04T09:00:00",
+        "microstructure_reaction_context_version": mod.CONTEXT_VERSION,
+        "microstructure_reaction_context_id": identity,
+        "microstructure_reaction_evaluation_id": identity,
+        "microstructure_reaction_delivery_telemetry_version": "v3",
+        "microstructure_reaction_context_computed": True,
+        "microstructure_reaction_context_status": "ok",
+        "microstructure_reaction_reference_time": "2026-09-04T09:00:00",
+        "microstructure_reaction_reference_price": 10000,
+        "microstructure_reaction_venue": "KRX",
+        **extra,
+    }
+
+
+def test_v3_coverage_deduplicates_and_ignores_scanner_volume(tmp_path):
+    rows = [_v3_observation() for _ in range(3)]
+    baseline = mod._delivery_observation_summary(rows)
+    more = mod._delivery_observation_summary(
+        rows + [{"stage": "scanner", "v_pw_now": 100} for _ in range(1000)]
+    )
+    assert baseline["context_computed_count"] == more["context_computed_count"] == 1
+    assert baseline["usable_coverage_pct"] == more["usable_coverage_pct"] == 100
+    assert more["provider_delivery_coverage_pct"] is None
+    assert (
+        mod._microstructure_code_improvement_orders(more, tmp_path / "report.json")
+        == []
+    )
+    bad = [
+        _v3_observation(
+            microstructure_reaction_source_quality="missing_quote_time",
+            microstructure_reaction_context_status="source_quality_missing",
+        )
+        for _ in range(3)
+    ]
+    summary = mod._delivery_observation_summary(bad)
+    orders = mod._microstructure_code_improvement_orders(
+        summary, tmp_path / "report.json"
+    )
+    assert len(orders) == 1 and orders[0]["unique_affected_count"] == 1
+    assert orders[0]["runtime_effect"] is False
+    assert (
+        mod._microstructure_code_improvement_orders(
+            {"row_count": 1, "rest_signed_trade_ticks_row_count": 1},
+            tmp_path / "report.json",
+        )
+        == []
+    )
+
+
+def test_v3_cache_is_not_a_new_computation_requirement():
+    summary = mod._delivery_observation_summary(
+        [
+            _v3_observation(),
+            _v3_observation(
+                "cache",
+                ai_trace_endpoint_name="analyze_target",
+                microstructure_reaction_context_computed=False,
+                microstructure_reaction_context_reused=True,
+            ),
+        ]
+    )
+    assert summary["context_applicable_count"] == 1
+    assert summary["context_computed_count"] == 1
+    assert summary["computed_coverage_pct"] == 100
+    assert summary["context_reused_count"] == 1
+    assert summary["diagnostic_contract_violation_counts"] == {}
+
+
+def test_v3_missing_required_payload_remains_in_delivery_denominator():
+    summary = mod._delivery_observation_summary(
+        [
+            _v3_observation(
+                ai_trace_endpoint_name="holding_score",
+                microstructure_reaction_context_consumed=True,
+                microstructure_reaction_context_consumer="holding_source_quality",
+                microstructure_reaction_context_payload_included=False,
+                microstructure_reaction_provider_delivery_status="response_received",
+                microstructure_reaction_context_sent=False,
+            ),
+            _v3_observation(
+                "sent",
+                microstructure_reaction_context_payload_included=True,
+                microstructure_reaction_provider_delivery_status="response_received",
+                microstructure_reaction_context_sent=True,
+            ),
+        ]
+    )
+    assert summary["context_payload_included_count"] == 1
+    assert summary["provider_delivery_required_count"] == 2
+    assert summary["context_sent_count"] == 1
+    assert summary["provider_delivery_coverage_pct"] == 50
+    assert summary["diagnostic_contract_violation_counts"] == {
+        "required_holding_payload_missing": 1
+    }
+
+
+def test_finite_outcome_floor_and_version_separation(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        mod,
+        "_source_quality_preflight",
+        lambda _: {
+            "signature": {},
+            "status": "pass",
+            "tuning_input_allowed": True,
+            "blocked_reason": None,
+        },
+    )
+    outcomes = [
+        {
+            "opportunity_id": str(i),
+            "feature_version": mod.CONTEXT_VERSION,
+            "outcome_join_status": "time_exact",
+            "outcome_source_quality_pass": True,
+            "cost_adjusted_counterfactual_return_pct": value,
+        }
+        for i, value in enumerate(
+            [0.2] + [None] * 16 + [float("nan"), float("inf"), float("-inf")]
+        )
+    ]
+    outcomes += [
+        {
+            **outcomes[0],
+            "opportunity_id": "old",
+            "feature_version": "microstructure_reaction_context_v1",
+            "cost_adjusted_counterfactual_return_pct": 99,
+        }
+    ]
+    rollup = mod._daily_opportunity_rollup(
+        "2026-09-04", {"opportunities": outcomes}, tmp_path / "events"
+    )
+    assert rollup["outcome_source_quality_pass_count"] == 20
+    assert rollup["source_quality_adjusted_ev_evaluable_count"] == 1
+    assert rollup["source_quality_adjusted_return_sum_pct"] == 0.2
+    assert rollup["historical_diagnostic_opportunity_count"] == 1
+    rollup["tuning_input_allowed"] = True
+    monkeypatch.setattr(mod, "_available_pipeline_dates", lambda _: ["2026-09-04"])
+    monkeypatch.setattr(mod, "_load_daily_opportunity_rollup", lambda _: rollup)
+    cumulative = mod._clean_baseline_cumulative_opportunity_exploration("2026-09-04")
+    assert cumulative["diagnostic_sample_floor_met"] is False
+    assert cumulative["source_quality_adjusted_ev_pct"] == 0.2
+    assert cumulative["candidate_review_required"] is False
+
+
+def test_two_same_cycle_micro_anchors_join_their_own_outcomes(monkeypatch, tmp_path):
+    from src.engine.sniper_missed_entry_counterfactual import (
+        EntryEvent,
+        _build_microstructure_attempt_outcomes,
+    )
+
+    start = datetime(2026, 9, 4, 9)
+    rows = [
+        _v3_observation("a"),
+        _v3_observation(
+            "b",
+            microstructure_reaction_reference_time="2026-09-04T09:01:00",
+            microstructure_reaction_reference_price=10100,
+        ),
+    ]
+    events = [
+        EntryEvent(
+            row["event_time"],
+            "2026-09-04",
+            "Samsung",
+            "005930",
+            "ai_confirmed",
+            "123",
+            row,
+        )
+        for row in rows
+    ]
+    points = {
+        ("005930", "KRX"): [
+            (start + timedelta(minutes=i), 10000 + i * 10) for i in range(1, 22)
+        ],
+        ("005930", "NXT"): [(start + timedelta(minutes=20), 20000)],
+    }
+    report = _build_microstructure_attempt_outcomes(
+        events, points, now=start + timedelta(hours=1)
+    )
+    assert len(report["rows"]) == 2
+    assert (
+        report["rows"][0]["cost_adjusted_counterfactual_return_pct"]
+        != report["rows"][1]["cost_adjusted_counterfactual_return_pct"]
+    )
+    monkeypatch.setattr(
+        mod,
+        "_load_watch_cycle_outcomes",
+        lambda _: (report["rows"], tmp_path / "outcome.json", "loaded"),
+    )
+    opportunities = mod._unique_entry_opportunities(rows + rows)
+    assert len(opportunities) == 2
+    mod._attach_time_exact_outcomes(opportunities, "2026-09-04")
+    assert all(row["outcome_join_status"] == "time_exact" for row in opportunities)
+    assert all(row["outcome_reference_delta_ms"] == 0 for row in opportunities)
+    pending = _build_microstructure_attempt_outcomes(
+        events, points, now=start + timedelta(minutes=10)
+    )
+    assert all(
+        row["outcome_status"] == "pending_outcome"
+        and row["cost_adjusted_counterfactual_return_pct"] is None
+        for row in pending["rows"]
+    )
+
+
+def test_diagnostic_handoff_reports_missing_workorder_without_live_gate():
+    from src.engine.verify_threshold_cycle_postclose_chain import (
+        _microstructure_diagnostic_handoff_status,
+    )
+
+    source = {"schema_version": 5, "code_improvement_orders": [{"order_id": "order_a"}]}
+    summary = {"code_improvement_order_ids": ["order_a"], "runtime_effect": False}
+    report = {"microstructure_reaction_context": summary}
+    daily = {"calibration_source_bundle": {"source_metrics": report}}
+    missing = _microstructure_diagnostic_handoff_status(
+        source, report, report, {}, daily
+    )
+    assert missing["status"] == "automation_handoff_gap"
+    assert missing["issues"] == ["workorder_missing:order_a"]
+    assert missing["runtime_effect"] is False
+    closed = _microstructure_diagnostic_handoff_status(
+        source, report, report, {"orders": [{"order_id": "order_a"}]}, daily
+    )
+    assert closed["status"] == "pass"
+
+
+def test_v3_wire_report_preserves_identity_and_emits_one_real_defect(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "reports")
+    monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", tmp_path)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", tmp_path / "snapshots")
+    monkeypatch.setattr(mod, "SOURCE_QUALITY_AUDIT_DIR", tmp_path / "quality")
+    monkeypatch.setattr(mod, "_available_pipeline_dates", lambda _: [])
+    fields = _v3_observation(
+        microstructure_reaction_context_status="source_quality_missing",
+        microstructure_reaction_source_quality="missing_quote_time",
+    )
+    events = [
+        {
+            "stage": stage,
+            "record_id": 123,
+            "stock_code": "005930",
+            "emitted_at": "2026-09-04T09:00:00",
+            "fields": {key: str(value) for key, value in fields.items()},
+        }
+        for stage in ("ai_confirmed", "blocked_ai_score", "watching_analyze_target")
+    ]
+    (tmp_path / "pipeline_events_2026-09-04.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n"
+    )
+    report = mod.build_microstructure_reaction_context_report("2026-09-04")
+    assert report["summary"]["context_computed_count"] == 1
+    assert report["summary"]["delivery_telemetry_legacy_unverifiable_count"] == 0
+    assert report["rows"][0]["microstructure_reaction_evaluation_id"] == "a"
+    assert len(report["code_improvement_orders"]) == 1
+    assert report["code_improvement_orders"][0]["unique_affected_count"] == 1
+
+
+def test_verifier_catches_producer_not_emitting_required_diagnostic_order():
+    from src.engine.verify_threshold_cycle_postclose_chain import (
+        _microstructure_diagnostic_handoff_status,
+    )
+
+    source = {
+        "schema_version": 5,
+        "summary": {"diagnostic_contract_violation_counts": {"missing_quote_time": 1}},
+    }
+    result = _microstructure_diagnostic_handoff_status(source, {}, {}, {}, {})
+    assert result["status"] == "automation_handoff_gap"
+    assert "producer_workorder_missing:missing_quote_time" in result["issues"]
 
 
 def test_microstructure_reaction_context_report_preserves_contract_and_keys(
@@ -210,17 +488,21 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
 
     assert report["report_type"] == "microstructure_reaction_context"
     assert report["runtime_effect"] is False
-    assert report["decision_authority"] == "entry_confidence_modifier_source_only"
-    assert report["metric_role"] == "feature_context"
+    assert report["decision_authority"] == (
+        "diagnostic_source_only_with_fail_closed_holding_quality_consumer"
+    )
+    assert report["metric_role"] == "source_quality_and_counterfactual_diagnostic"
     assert report["primary_decision_metric"] == "source_quality_adjusted_ev_pct"
     assert "standalone_buy" in report["forbidden_uses"]
     assert "broker_guard_bypass" in report["forbidden_uses"]
     assert report["summary"]["row_count"] == 2
     assert report["summary"]["ok_count"] == 1
     assert report["summary"]["real_submitted_count"] == 1
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 5
     assert report["source_row_count"] == 2
     assert report["stored_row_count"] == 2
+    assert report["summary"]["delivery_telemetry_v2_count"] == 0
+    assert report["summary"]["delivery_telemetry_legacy_unverifiable_count"] == 2
     assert "rest_signed_trade_ticks" not in report["rows"][0]
     funnel = report["summary"]["opportunity_exploration_funnel"]
     assert funnel["favorable_reaction_usable_count"] == 1
@@ -362,46 +644,14 @@ def test_microstructure_reaction_context_report_preserves_contract_and_keys(
         ]
         == 50.0
     )
-    assert report["summary"]["code_improvement_order_count"] == 2
-    assert [
-        item["order_id"] for item in report["summary"]["top_code_improvement_orders"]
-    ] == [
-        "order_microstructure_signed_tape_runtime_candidate_review",
-        "order_microstructure_ka10003_split_vs_15_observation_review",
-    ]
-    order_by_id = {
-        order["order_id"]: order for order in report["code_improvement_orders"]
-    }
-    signed_tape_order = order_by_id[
-        "order_microstructure_signed_tape_runtime_candidate_review"
-    ]
-    assert signed_tape_order["route"] == "auto_family_candidate"
-    assert "mapped_family" not in signed_tape_order
-    assert (
-        signed_tape_order["candidate_family"]
-        == "microstructure_signed_tape_runtime_candidate"
-    )
-    assert signed_tape_order["runtime_effect"] is False
-    assert signed_tape_order["allowed_runtime_apply"] is False
-    assert signed_tape_order["actual_order_submitted"] is False
-    assert signed_tape_order["broker_order_forbidden"] is True
-    assert (
-        signed_tape_order["implementation_provenance"][
-            "requires_separate_runtime_apply_candidate"
-        ]
-        is True
-    )
-    ka10003_order = order_by_id[
-        "order_microstructure_ka10003_split_vs_15_observation_review"
-    ]
-    assert ka10003_order["route"] == "instrumentation_order"
-    assert ka10003_order["runtime_effect"] is False
-    assert ka10003_order["allowed_runtime_apply"] is False
+    assert report["summary"]["code_improvement_order_count"] == 0
+    assert report["summary"]["top_code_improvement_orders"] == []
+    assert report["code_improvement_orders"] == []
     markdown = (report_dir / "microstructure_reaction_context_2026-05-31.md").read_text(
         encoding="utf-8"
     )
     assert "code_improvement_order_count" in markdown
-    assert "order_microstructure_signed_tape_runtime_candidate_review" in markdown
+    assert "order_microstructure_signed_tape_runtime_candidate_review" not in markdown
     assert (report_dir / "microstructure_reaction_context_2026-05-31.json").exists()
     assert (report_dir / "microstructure_reaction_context_2026-05-31.md").exists()
 
@@ -424,6 +674,7 @@ def test_opportunity_funnel_deduplicates_entry_attempts_and_time_matches_outcome
 
     def favorable_event(stage, emitted_at, *, record_id="entry-1", extra=None):
         fields = {
+            "effective_venue": "KRX",
             "source_event_stage": stage,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
@@ -500,6 +751,7 @@ def test_opportunity_funnel_deduplicates_entry_attempts_and_time_matches_outcome
                         {
                             "stock_code": "123456",
                             "runtime_record_id": "prior-entry",
+                            "effective_venue": "KRX",
                             "reference_time": f"{prior_date}T09:30:00+09:00",
                             "primary_source_quality_state": "pass",
                             "opportunity_label": "gross_target_first",
@@ -577,21 +829,66 @@ def test_opportunity_funnel_deduplicates_entry_attempts_and_time_matches_outcome
     assert cumulative["included_date_count"] == 2
     assert cumulative["missing_or_stale_rollup_dates"] == []
     assert cumulative["unique_entry_opportunity_count"] == 3
-    assert cumulative["outcome_source_quality_pass_count"] == 2
+    # Legacy raw observations remain diagnostics, never current-version EV.
+    assert cumulative["outcome_source_quality_pass_count"] == 0
     assert cumulative["outcome_time_exact_join_coverage_pct"] == 66.667
-    assert cumulative["outcome_source_quality_pass_coverage_pct"] == 66.667
-    assert cumulative["source_quality_adjusted_ev_pct"] == 1.5
+    assert cumulative["outcome_source_quality_pass_coverage_pct"] == 0
+    assert cumulative["source_quality_adjusted_ev_pct"] is None
     assert cumulative["sample_floor_met"] is False
-    assert cumulative["runtime_reflection_status"] == "sample_floor_not_met"
-    assert cumulative["runtime_reflection_blockers"] == [
-        "exact_attempt_time_outcome_coverage_incomplete",
+    assert cumulative["analysis_status"] == "sample_floor_not_met"
+    assert cumulative["runtime_reflection_status"] == "not_applicable_diagnostic"
+    assert cumulative["diagnostic_limitations"] == [
         "source_quality_pass_outcome_sample_below_20",
+    ]
+    assert cumulative["source_quality_exclusion_warnings"] == [
+        "exact_attempt_time_outcome_coverage_incomplete",
     ]
     assert cumulative["runtime_apply_required"] is False
     assert (
         report_dir
         / f"microstructure_reaction_context_{target_date}_clean_baseline_cumulative.json"
     ).exists()
+
+
+def test_cumulative_excludes_missing_rollup_date_without_blocking_valid_window(
+    monkeypatch,
+):
+    valid_date = "2026-07-20"
+    missing_date = "2026-07-21"
+    valid_rollup = {
+        "date": valid_date,
+        "tuning_input_allowed": True,
+        "outcome_source_quality_pass_count": 20,
+        "source_quality_adjusted_ev_evaluable_count": 20,
+        "source_quality_adjusted_return_sum_pct": 10.0,
+        "primary_horizon_evaluable_count": 20,
+        "primary_mfe_sum_pct": 20.0,
+        "primary_mae_sum_pct": -4.0,
+        "unique_entry_opportunity_count": 20,
+        "unique_entry_unsubmitted_opportunity_count": 20,
+        "first_blocker_attributed_count": 20,
+        "outcome_time_exact_join_count": 20,
+        "outcome_source_status": "loaded",
+    }
+    monkeypatch.setattr(
+        mod, "_available_pipeline_dates", lambda target_date: [valid_date, missing_date]
+    )
+    monkeypatch.setattr(
+        mod,
+        "_load_daily_opportunity_rollup",
+        lambda source_date: valid_rollup if source_date == valid_date else {},
+    )
+
+    cumulative = mod._clean_baseline_cumulative_opportunity_exploration(missing_date)
+
+    assert cumulative["loaded_rollup_date_coverage_pct"] == 50.0
+    assert cumulative["missing_or_stale_rollup_dates"] == [missing_date]
+    assert cumulative["analysis_status"] == "positive_diagnostic_evidence"
+    assert cumulative["runtime_reflection_status"] == "not_applicable_diagnostic"
+    assert cumulative["runtime_reflection_blockers"] == []
+    assert cumulative["source_quality_exclusion_warnings"] == [
+        "daily_rollup_missing_or_stale_dates_excluded"
+    ]
 
 
 def test_microstructure_report_emits_full_gap_source_quality_orders(

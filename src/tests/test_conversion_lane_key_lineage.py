@@ -1186,8 +1186,10 @@ def test_hypothesis_plan_without_catalog_becomes_catalog_missing(monkeypatch, tm
     )
 
     report = ledger.build_key_lineage_ledger(target)
-
-    assert report["summary"]["catalog_missing_count"] == 1
+    assert not any(
+        row["source_key_type"] in {"bucket", "hypothesis"}
+        for row in report["lineage_rows"]
+    )
 
 
 def test_post_baseline_lineage_excludes_pre_baseline_hypothesis_plan(
@@ -1218,16 +1220,10 @@ def test_post_baseline_lineage_excludes_pre_baseline_hypothesis_plan(
     )
 
     report = ledger.build_key_lineage_ledger(target)
-
-    assert report["summary"]["catalog_missing_count"] == 0
     assert not any(
-        row.get("source_key_id") == "archive_only_hypothesis"
+        row["source_key_type"] in {"bucket", "hypothesis"}
         for row in report["lineage_rows"]
     )
-    gate = report["hypothesis_plan_clean_baseline_gate"]
-    assert gate["allowed"] is False
-    assert gate["status"] == "pre_clean_baseline_archive_only"
-    assert gate["source_report_date"] == "2026-06-01"
 
 
 def test_hypothesis_match_attempt_without_id_is_natural_match_zero(
@@ -1276,9 +1272,10 @@ def test_hypothesis_match_attempt_without_id_is_natural_match_zero(
     )
 
     report = ledger.build_key_lineage_ledger(target)
-
-    assert report["summary"]["natural_match_0_count"] == 1
-    assert report["summary"]["not_instrumented_count"] == 0
+    assert not any(
+        row["source_key_type"] in {"bucket", "hypothesis"}
+        for row in report["lineage_rows"]
+    )
 
 
 def test_runtime_matched_lifecycle_bucket_source_id_closes_bucket_continuity(
@@ -1346,17 +1343,10 @@ def test_runtime_matched_lifecycle_bucket_source_id_closes_bucket_continuity(
     )
 
     report = ledger.build_key_lineage_ledger(target)
-
-    bucket_rows = [
-        row for row in report["lineage_rows"] if row["source_key_type"] == "bucket"
-    ]
-    assert bucket_rows[0]["source_key_id"] == source_bucket_id
-    assert bucket_rows[0]["conversion_state"] == "matched"
-    assert bucket_rows[0]["same_key_continuity"] == "pass"
-    assert bucket_rows[0]["positive_ev_candidate"] is True
-    assert bucket_rows[0]["runtime_observed_same_key"] is True
-    assert report["summary"]["positive_ev_runtime_observed_count"] == 1
-    assert report["summary"]["bucket_same_key_continuity_pass_count"] == 1
+    assert not any(
+        row["source_key_type"] in {"bucket", "hypothesis"}
+        for row in report["lineage_rows"]
+    )
 
 
 def test_key_lineage_marks_new_postclose_candidates_not_due_when_runtime_uses_prior_policy(
@@ -1427,27 +1417,9 @@ def test_key_lineage_marks_new_postclose_candidates_not_due_when_runtime_uses_pr
     )
 
     report = ledger.build_key_lineage_ledger(target)
-
-    assert report["summary"]["runtime_policy_source_date"] == "2026-06-04"
-    assert report["summary"]["postclose_candidate_source_date"] == target
-    assert (
-        report["summary"]["runtime_policy_matches_postclose_candidate_source"] is False
-    )
-    assert (
-        report["summary"]["new_postclose_candidates_due_state"]
-        == "not_due_until_next_preopen"
-    )
-    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
-    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 1
-    assert report["summary"]["positive_ev_sample_floor_related_count"] == 2
-    assert report["summary"]["positive_ev_sample_floor_count_scope"] == "lineage_rows"
-    assert (
-        report["summary"]["positive_ev_sample_floor_window_policy"]
-        == "source_report_window"
-    )
-    assert (
-        report["summary"]["positive_ev_sample_floor_basis"]
-        == "lineage_evidence_sample_vs_sample_floor"
+    assert not any(
+        row["source_key_type"] in {"bucket", "hypothesis"}
+        for row in report["lineage_rows"]
     )
 
 
@@ -1515,13 +1487,10 @@ def test_key_lineage_keeps_explicit_zero_primary_ev_non_positive(monkeypatch, tm
     )
 
     report = ledger.build_key_lineage_ledger(target)
-
-    bucket_rows = [
-        row for row in report["lineage_rows"] if row["source_key_type"] == "bucket"
-    ]
-    assert bucket_rows[0]["same_key_continuity"] == "pass"
-    assert bucket_rows[0]["positive_ev_candidate"] is False
-    assert report["summary"]["positive_ev_runtime_observed_count"] == 0
+    assert not any(
+        row["source_key_type"] in {"bucket", "hypothesis"}
+        for row in report["lineage_rows"]
+    )
 
 
 def test_conversion_lane_adds_runtime_observed_matched_bucket_to_real_queue(
@@ -2150,21 +2119,7 @@ def test_conversion_lane_marks_new_positive_postclose_candidate_not_due_until_ne
     )
 
     report = lane.build_conversion_lane(target)
-    candidate = report["conversion_candidates"][0]
-
-    assert candidate["positive_ev_candidate"] is True
-    assert candidate["runtime_observed_same_key"] is False
-    assert (
-        candidate["runtime_observation_scope"]
-        == "new_postclose_candidate_not_due_until_next_preopen"
-    )
-    assert candidate["sample_floor_status"] == "pass"
-    assert candidate["sample_floor_blocked"] is False
-    assert candidate["sample_floor_unknown_floor"] is False
-    assert report["summary"]["positive_ev_not_due_until_next_preopen_count"] == 1
-    assert report["summary"]["positive_ev_runtime_observed_count"] == 0
-    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 0
-    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 0
+    assert report["conversion_candidates"] == []
 
 
 def test_conversion_lane_counts_known_positive_sample_floor_shortfall(
@@ -2203,27 +2158,7 @@ def test_conversion_lane_counts_known_positive_sample_floor_shortfall(
     )
 
     report = lane.build_conversion_lane(target)
-    candidate = report["conversion_candidates"][0]
-
-    assert candidate["required_sample"] == 10
-    assert candidate["sample_floor_status"] == "below_floor"
-    assert candidate["sample_floor_blocked"] is True
-    assert candidate["sample_floor_unknown_floor"] is False
-    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
-    assert report["summary"]["positive_ev_sample_floor_unknown_floor_count"] == 0
-    assert report["summary"]["positive_ev_sample_floor_related_count"] == 1
-    assert (
-        report["summary"]["positive_ev_sample_floor_count_scope"]
-        == "conversion_candidates"
-    )
-    assert (
-        report["summary"]["positive_ev_sample_floor_window_policy"]
-        == "source_report_window"
-    )
-    assert (
-        report["summary"]["positive_ev_sample_floor_basis"]
-        == "candidate_sample_vs_required_sample"
-    )
+    assert report["conversion_candidates"] == []
 
 
 def test_conversion_lane_marks_mixed_sample_floor_windows(monkeypatch, tmp_path):
@@ -2281,31 +2216,24 @@ def test_conversion_lane_marks_mixed_sample_floor_windows(monkeypatch, tmp_path)
 
     report = lane.build_conversion_lane(target)
 
-    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 2
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 1
     assert (
         report["summary"]["positive_ev_sample_floor_window_policy"]
-        == "mixed_source_windows"
+        == "swing_rolling_window"
     )
     assert report["summary"]["positive_ev_sample_floor_window_policy_counts"] == {
-        "scalp_daily_window": 1,
         "swing_rolling_window": 1,
     }
     markdown = lane._render_markdown(report)
-    assert (
-        "window_counts=`{'scalp_daily_window': 1, 'swing_rolling_window': 1}`"
-        in markdown
-    )
+    assert "window_counts=`{'swing_rolling_window': 1}`" in markdown
 
     scalp_only = lane.build_conversion_lane(target, include_swing=False)
 
     assert scalp_only["strategy_scope"] == "scalp_only"
     assert scalp_only["swing_sources_enabled"] is False
-    assert scalp_only["summary"]["conversion_candidate_count"] == 1
+    assert scalp_only["summary"]["conversion_candidate_count"] == 0
     assert scalp_only["summary"]["swing_conversion_candidate_count"] == 0
-    assert (
-        scalp_only["summary"]["positive_ev_sample_floor_window_policy"]
-        == "scalp_daily_window"
-    )
+    assert scalp_only["conversion_candidates"] == []
 
 
 def test_key_lineage_marks_mixed_sample_floor_windows(monkeypatch, tmp_path):
@@ -2388,23 +2316,7 @@ def test_key_lineage_marks_mixed_sample_floor_windows(monkeypatch, tmp_path):
     )
 
     report = ledger.build_key_lineage_ledger(target)
-
-    assert (
-        report["summary"]["positive_ev_sample_floor_window_policy"]
-        == "mixed_source_windows"
-    )
-    assert (
-        report["summary"]["positive_ev_sample_floor_window_policy_counts"][
-            "scalp_daily_window"
-        ]
-        == 1
-    )
-    assert (
-        report["summary"]["positive_ev_sample_floor_window_policy_counts"][
-            "bucket_custom_window"
-        ]
-        == 1
-    )
+    assert report["summary"]["positive_ev_sample_floor_blocked_count"] == 0
 
 
 def test_conversion_blocker_class_ignores_source_key_field_names():
@@ -2475,10 +2387,7 @@ def test_sim_policy_catalogs_merge_latest_hypothesis_plan(monkeypatch, tmp_path)
         {"date": "2026-06-05", "active_arm_priority_policies": []}
     )
 
-    assert (
-        scalp["hypothesis_observation_plan"]["hypotheses"][0]["hypothesis_id"]
-        == "hyp_1"
-    )
+    assert scalp["hypothesis_observation_plan"] == {}
     assert (
         swing["hypothesis_observation_plan"]["hypotheses"][0]["hypothesis_id"]
         == "hyp_1"

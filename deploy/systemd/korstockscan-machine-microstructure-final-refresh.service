@@ -1,5 +1,5 @@
 [Unit]
-Description=KORStockScan Widget Collector Expansion Recommendation
+Description=KORStockScan Machine Microstructure Final Refresh
 After=korstockscan-samsung-widget-evaluation.service
 StartLimitIntervalSec=1800
 StartLimitBurst=6

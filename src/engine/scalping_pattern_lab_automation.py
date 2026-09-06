@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import (
+    retired_artifact,
+    retired_status,
+    current_report_view,
+)
+
 import argparse
 import json
 import re
@@ -39,11 +45,13 @@ FORBIDDEN_USES = [
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -78,43 +86,7 @@ def automation_report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
-    path = (
-        SCALP_ENTRY_ADM_DIR / f"scalp_entry_action_decision_matrix_{target_date}.json"
-    )
-    payload = _load_json(path)
-    if not payload:
-        return {"available": False, "status": "missing", "runtime_effect": False}, None
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    return (
-        {
-            "available": True,
-            "status": payload.get("status"),
-            "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority"),
-            "application_mode": payload.get("application_mode"),
-            "total_candidates": _safe_int(summary.get("total_candidates"), 0),
-            "joined_sample": _safe_int(
-                summary.get("joined_sample_cumulative", summary.get("joined_sample")),
-                0,
-            ),
-            "joined_sample_daily": _safe_int(
-                summary.get("joined_sample_daily", summary.get("joined_sample")), 0
-            ),
-            "joined_sample_window_policy": (
-                (summary.get("joined_sample_evidence") or {}).get("window_policy")
-                if isinstance(summary.get("joined_sample_evidence"), dict)
-                else None
-            ),
-            "sample_floor": _safe_int(summary.get("sample_floor"), 0),
-            "missing_actions": (
-                summary.get("missing_actions")
-                if isinstance(summary.get("missing_actions"), list)
-                else []
-            ),
-            "prompt_applied_count": _safe_int(summary.get("prompt_applied_count"), 0),
-        },
-        str(path),
-    )
+    return {**retired_status(), "available": False}, None
 
 
 def _entry_adm_source_quality_contract(summary: dict[str, Any]) -> dict[str, Any]:

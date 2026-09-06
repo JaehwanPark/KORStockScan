@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import argparse
+from src.engine.lifecycle.retirement import retired_status
+
 import gzip
 import json
 import math
@@ -202,7 +203,9 @@ ENTRY_REPLAY_BOOL_FIELDS = (
     "same_price_buy_absorption_sent",
     "large_sell_print_detected_sent",
     "ask_depth_ratio_sent",
+    "microstructure_reaction_context_computed",
     "microstructure_reaction_context_sent",
+    "microstructure_reaction_context_consumed",
     "tick_source_quality_fields_sent",
 )
 
@@ -227,6 +230,9 @@ ENTRY_REPLAY_TEXT_FIELDS = (
     "minute_candle_source_time_basis",
     "microstructure_reaction_context_version",
     "microstructure_reaction_context_status",
+    "microstructure_reaction_delivery_telemetry_version",
+    "microstructure_reaction_context_consumer",
+    "microstructure_reaction_context_delivery_state",
     "microstructure_reaction_entry_reaction_quality",
     "microstructure_reaction_source_quality",
 )
@@ -2430,270 +2436,7 @@ def _unknown_bucket_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_scalp_entry_action_decision_matrix_report(target_date: str) -> dict[str, Any]:
-    target_date = str(target_date).strip()
-    evaluations, eval_summary = _load_sim_evaluations(target_date)
-    all_source_rows = [_base_row(event) for event in _iter_relevant_events(target_date)]
-    followup_rows = [
-        row
-        for row in all_source_rows
-        if str(row.get("stage") or "") == "entry_ai_price_canary_skip_followup"
-    ]
-    raw_rows = [
-        row
-        for row in all_source_rows
-        if str(row.get("stage") or "") != "entry_ai_price_canary_skip_followup"
-    ]
-    _backfill_sim_lineage(raw_rows)
-    deduped_rows = _dedupe_rows(raw_rows)
-    _backfill_score_context(deduped_rows, source_rows=raw_rows)
-    skip_followup_summary = _attach_entry_price_skip_followups(
-        deduped_rows, followup_rows
-    )
-    rows = [_apply_outcome(row, evaluations) for row in deduped_rows]
-    skip_followup_cumulative = _entry_price_skip_followup_cumulative_summary(
-        target_date, rows
-    )
-
-    prior_summary = _load_prior_adm_bucket_summary(target_date)
-    _backfill_adm_lookup_status(rows, prior_summary)
-    _classify_adm_lookup_not_applicable(rows)
-
-    action_counts = Counter(str(row.get("chosen_action")) for row in rows)
-    raw_action_counts = Counter(
-        str(row.get("raw_chosen_action") or "-") for row in rows
-    )
-    action_normalization_counts = Counter(
-        str(row.get("action_normalization_reason") or "-")
-        for row in rows
-        if row.get("action_normalized")
-    )
-    zero_sample_actions = [
-        action for action in ACTION_ORDER if action_counts.get(action, 0) == 0
-    ]
-    missing_actions: list[str] = []
-    joined_sample = sum(1 for row in rows if row.get("outcome_joined"))
-    prompt_applied = sum(1 for row in rows if row.get("entry_adm_prompt_applied"))
-    runtime_bias_applied = sum(
-        1 for row in rows if row.get("entry_adm_runtime_bias_applied")
-    )
-    adm_bucket_lookup_status_counts = Counter(
-        str(row.get("entry_adm_bucket_lookup_status") or "-") for row in rows
-    )
-    new_or_unseen_tokens = [
-        row
-        for row in rows
-        if str(row.get("entry_adm_bucket_lookup_status") or "")
-        == "new_or_unseen_token_vs_prior_adm"
-    ]
-    prior_bucket_sample_missing_rows = [
-        row
-        for row in rows
-        if str(row.get("entry_adm_bucket_lookup_status") or "")
-        == "prior_bucket_present_but_runtime_sample_missing"
-    ]
-    advisory_only_lookup_rows = [
-        row
-        for row in rows
-        if str(row.get("entry_adm_bucket_lookup_status") or "")
-        == "advisory_only_stage_without_prior_lookup"
-    ]
-    new_or_unseen_top_tokens = Counter(
-        str(
-            row.get("entry_adm_bucket_token_recomputed")
-            or row.get("entry_adm_bucket_token")
-            or "-"
-        )
-        for row in new_or_unseen_tokens
-    ).most_common(20)
-    new_or_unseen_top_stages = Counter(
-        str(row.get("stage") or "-") for row in new_or_unseen_tokens
-    ).most_common(10)
-    prior_missing_top_tokens = Counter(
-        str(
-            row.get("entry_adm_bucket_token_recomputed")
-            or row.get("entry_adm_bucket_token")
-            or "-"
-        )
-        for row in prior_bucket_sample_missing_rows
-    ).most_common(20)
-    prior_missing_top_stages = Counter(
-        str(row.get("stage") or "-") for row in prior_bucket_sample_missing_rows
-    ).most_common(10)
-    adm_lookup_closure = _adm_lookup_closure_summary(rows)
-    raw_token_preserved_count = sum(1 for row in rows if row.get("raw_token_preserved"))
-    adm_token_backfill_applied_count = sum(
-        1 for row in rows if row.get("adm_token_backfill_applied")
-    )
-    runtime_effect_counts = Counter(
-        str(row.get("entry_adm_runtime_effect") or "-") for row in rows
-    )
-    forced_action_counts = Counter(
-        str(row.get("entry_adm_forced_action") or "-") for row in rows
-    )
-    unknown_summary = _unknown_bucket_summary(rows)
-    numeric_consistency_rows = [
-        row for row in rows if _is_numeric_consistency_excluded_row(row)
-    ]
-    aggregate_rows = [row for row in rows if _is_entry_adm_aggregate_row(row)]
-    aggregate_joined_sample = sum(
-        1 for row in aggregate_rows if row.get("outcome_joined")
-    )
-    joined_sample_cumulative = _joined_sample_cumulative_summary(
-        target_date, aggregate_rows
-    )
-    outcome_join_diagnostic = _outcome_join_diagnostic(
-        rows=rows,
-        aggregate_rows=aggregate_rows,
-        evaluations=evaluations,
-        eval_summary=eval_summary,
-    )
-    warnings = []
-    if not bool(joined_sample_cumulative.get("sample_floor_met")):
-        warnings.append("joined_sample_below_sample_floor")
-    if outcome_join_diagnostic.get(
-        "coverage_state"
-    ) == "source_outcome_underproduction" and not bool(
-        joined_sample_cumulative.get("sample_floor_met")
-    ):
-        warnings.append("sim_post_sell_outcome_source_below_sample_floor")
-    if outcome_join_diagnostic.get("coverage_state") == "join_contract_gap":
-        warnings.append("sim_post_sell_outcome_join_contract_gap")
-    action_summary = _action_summary(aggregate_rows)
-    action_summary_actions = {
-        str(item.get("action") or "")
-        for item in action_summary
-        if isinstance(item, dict)
-    }
-    missing_action_summary_rows = [
-        action for action in ACTION_ORDER if action not in action_summary_actions
-    ]
-    if missing_action_summary_rows:
-        warnings.append("missing_action_bucket_summary_row")
-    if any(row.get("risk_context_bucket") == "source_quality_blocker" for row in rows):
-        warnings.append("source_quality_gap")
-    if (
-        _safe_int(unknown_summary.get("affected_rows"), 0) > 0
-        and unknown_summary.get("source_quality_gate") == "source_quality_blocker"
-    ):
-        warnings.append("unknown_bucket_source_quality_gap")
-    if prior_bucket_sample_missing_rows:
-        warnings.append("prior_bucket_present_but_runtime_sample_missing")
-    if rows and prompt_applied == 0:
-        warnings.append("prompt_context_not_loaded")
-    if numeric_consistency_rows:
-        warnings.append("ai_numeric_consistency_rows_excluded_from_aggregates")
-    status = "pass" if not warnings else "warning"
-    report = {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "date": target_date,
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "report_type": "scalp_entry_action_decision_matrix",
-        "status": status,
-        "runtime_effect": False,
-        "decision_authority": "entry_advisory_prompt_context_only",
-        "application_mode": "operator_override_advisory_prompt",
-        "metric_role": "action_decision_matrix",
-        "window_policy": (
-            "same_day_intraday_diagnostics_plus_clean_baseline_cumulative_"
-            "postclose_outcome_join_floor"
-        ),
-        "sample_floor": SAMPLE_FLOOR,
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "entry pipeline event + post-sell sim evaluation join when available",
-        "forbidden_uses": [
-            "threshold mutation",
-            "order guard mutation",
-            "provider change",
-            "bot restart",
-            "broker order submit",
-        ],
-        "matrix_version": f"{MATRIX_VERSION_PREFIX}_{target_date}",
-        "bucket_schema_version": ENTRY_ADM_BUCKET_SCHEMA_VERSION,
-        "actions": list(ACTION_ORDER),
-        "bucket_dimensions": list(ENTRY_ADM_BUCKET_DIMENSIONS),
-        "summary": {
-            "total_candidates": len(rows),
-            "joined_sample": aggregate_joined_sample,
-            "joined_sample_daily": aggregate_joined_sample,
-            "joined_sample_cumulative": _safe_int(
-                joined_sample_cumulative.get("sample_count"), 0
-            ),
-            "joined_sample_floor_met": bool(
-                joined_sample_cumulative.get("sample_floor_met")
-            ),
-            "joined_sample_evidence": joined_sample_cumulative,
-            "joined_sample_all_rows": joined_sample,
-            "sample_floor": SAMPLE_FLOOR,
-            "prompt_applied_count": prompt_applied,
-            "runtime_bias_applied_count": runtime_bias_applied,
-            "raw_token_preserved_count": raw_token_preserved_count,
-            "adm_token_backfill_applied_count": adm_token_backfill_applied_count,
-            "raw_token_preserved": raw_token_preserved_count > 0,
-            "adm_token_backfill_applied": adm_token_backfill_applied_count > 0,
-            "runtime_effect_counts": dict(runtime_effect_counts),
-            "forced_action_counts": dict(forced_action_counts),
-            "action_counts": dict(action_counts),
-            "raw_action_counts": dict(raw_action_counts),
-            "action_normalized_count": sum(action_normalization_counts.values()),
-            "action_normalization_counts": dict(action_normalization_counts),
-            "aggregate_total_candidates": len(aggregate_rows),
-            "aggregate_joined_sample": aggregate_joined_sample,
-            "numeric_consistency_excluded_count": len(numeric_consistency_rows),
-            "missing_actions": missing_actions,
-            "zero_sample_actions": zero_sample_actions,
-            "missing_action_summary_rows": missing_action_summary_rows,
-            "adm_bucket_lookup_status_counts": dict(adm_bucket_lookup_status_counts),
-            "new_or_unseen_token_count": len(new_or_unseen_tokens),
-            "advisory_only_stage_without_prior_lookup_count": len(
-                advisory_only_lookup_rows
-            ),
-            "prior_bucket_sample_missing_count": len(prior_bucket_sample_missing_rows),
-            "new_or_unseen_top_tokens": [
-                [token, count] for token, count in new_or_unseen_top_tokens
-            ],
-            "new_or_unseen_top_stages": [
-                [stage, count] for stage, count in new_or_unseen_top_stages
-            ],
-            "adm_bucket_lookup_closure": adm_lookup_closure,
-            "adm_bucket_lookup_closure_status": adm_lookup_closure.get(
-                "closure_status"
-            ),
-            "adm_bucket_lookup_followup_required": bool(
-                adm_lookup_closure.get("followup_required")
-            ),
-            "prior_missing_top_tokens": [
-                [token, count] for token, count in prior_missing_top_tokens
-            ],
-            "prior_missing_top_stages": [
-                [stage, count] for stage, count in prior_missing_top_stages
-            ],
-            "outcome_join_diagnostic": outcome_join_diagnostic,
-            "entry_price_skip_followup": skip_followup_summary,
-            "entry_price_skip_followup_cumulative": skip_followup_cumulative,
-            "unknown_bucket_summary": unknown_summary,
-            "status": status,
-            "warnings": warnings,
-            "post_sell_evaluation": eval_summary,
-        },
-        "action_summary": action_summary,
-        "bucket_summary": _bucket_summary(aggregate_rows),
-        "rows": rows,
-        "examples": rows[:50],
-        "sources": {
-            "events": [str(path) for path in _event_paths(target_date)],
-            "sim_post_sell_evaluations": eval_summary.get("artifact"),
-        },
-        "warnings": warnings,
-    }
-    ADM_REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = report_paths(target_date)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(
-        render_scalp_entry_action_decision_matrix_markdown(report), encoding="utf-8"
-    )
-    return report
+    return retired_status("scalp_entry_action_decision_matrix")
 
 
 def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -> str:
@@ -2775,34 +2518,7 @@ def render_scalp_entry_action_decision_matrix_markdown(report: dict[str, Any]) -
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Build scalp entry action decision matrix report."
-    )
-    parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
-    parser.add_argument(
-        "--print-summary",
-        action="store_true",
-        help="Print a compact completion summary instead of the full report payload.",
-    )
-    args = parser.parse_args(argv)
-    report = build_scalp_entry_action_decision_matrix_report(args.target_date)
-    output = report
-    if args.print_summary:
-        summary = (
-            report.get("summary") if isinstance(report.get("summary"), dict) else {}
-        )
-        json_path, md_path = report_paths(args.target_date)
-        output = {
-            "report_type": report.get("report_type"),
-            "date": report.get("date"),
-            "status": report.get("status"),
-            "total_candidates": summary.get("total_candidates"),
-            "joined_sample": summary.get("joined_sample"),
-            "warning_count": len(report.get("warnings") or []),
-            "runtime_effect": report.get("runtime_effect"),
-            "artifacts": {"json": str(json_path), "markdown": str(md_path)},
-        }
-    print(json.dumps(output, ensure_ascii=False))
+    print(json.dumps(retired_status("scalp_entry_action_decision_matrix")))
     return 0
 
 

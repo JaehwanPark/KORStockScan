@@ -1,14 +1,19 @@
 {
   "lock_id": "entry_opportunity_recheck_operator_override_2026-07-03",
-  "enabled": true,
+  "enabled": false,
   "family": "entry_opportunity_recheck_runtime",
   "stage": "entry",
   "manipulation_point": "blocked_ai_score_near_buy_recheck",
   "scope": "real_scalping_scanner_canonical_edge_wait_recovery_one_share_probe_score69_74_fresh_quote_only",
-  "runtime_effect": true,
+  "runtime_effect": false,
   "active_from_date": "2026-07-03",
   "priority": 908,
-  "explicit_close_required": true,
+  "explicit_close_required": false,
+  "closed_at": "2026-09-06T00:52:21+09:00",
+  "closed_reason": "entry_live_auto_apply_ready:replaced_by_daily_buy_funnel_drought_conditional_preopen_policy",
+  "replacement_owner": "entry_ai_gate_backtest -> threshold_cycle_preopen_apply",
+  "replacement_policy_version": "entry_opportunity_recheck_drought_controller_v1",
+  "last_runtime_target_date": "2026-09-04",
   "env_overrides": {
     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "69",
@@ -56,5 +61,5 @@
     "tuning_override",
     "safety_revert_required"
   ],
-  "notes": "Operator runtime override for the bounded one-share opportunity entry hook. Rechecks only blocked AI-score 69-74.999 SCALPING SCANNER candidates with canonical EDGE/WAIT/recovery_required probe intent, fresh quote, strong micro confirmation, active one-share probe-first, and post-probe resolver contracts. When daily caps are exhausted, intraday escalation may raise 10/3 to at most 30/7 only after at least two armed recoveries are non-negative with peak >=0.3% and no recovery mark is worse than -0.6%. It does not change BUY score threshold, provider, order price, requested quantity, broker, stale quote, cooldown, or hard safety guards."
+  "notes": "Closed archive record. The bounded one-share opportunity entry hook is now re-evaluated every postclose from the exact three most recent KRX trading-day BUY Funnel drought contracts and applied only by the next PREOPEN auto_bounded_live controller. The replacement preserves the 69-74.999 score band, fresh quote, canonical EDGE/WAIT/recovery intent, one-share probe-first, daily caps, broker/order/quantity/cooldown and hard-safety guards. Intraday escalation remains disabled until at least ten exact attempt-linked completed trades have strictly positive after-cost EV and realized net PnL."
 }

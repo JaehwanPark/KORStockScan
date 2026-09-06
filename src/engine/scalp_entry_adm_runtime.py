@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import RETIREMENT_ID
+
 import json
 import re
 from datetime import date, datetime, timedelta
@@ -362,153 +364,14 @@ def _entry_adm_runtime_bias(
     action_label: str,
     context: dict[str, Any],
 ) -> dict[str, Any]:
-    bucket = (
-        context.get("matched_bucket")
-        if isinstance(context.get("matched_bucket"), dict)
-        else {}
-    )
-    fields = context.get("fields") if isinstance(context.get("fields"), dict) else {}
-    original_action = str(action_label or "").upper()
-    runtime_enabled = bool(
-        getattr(TRADING_RULES, "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED", False)
-    )
-    hypothesis_enabled = bool(
-        getattr(TRADING_RULES, "SCALP_ENTRY_ADM_HYPOTHESIS_FALLBACK_ENABLED", False)
-    )
-    hypothesis_force_enabled = bool(
-        getattr(TRADING_RULES, "SCALP_ENTRY_ADM_HYPOTHESIS_FORCE_ENABLED", False)
-    )
-    sample = _safe_int(bucket.get("sample_count"), 0)
-    joined = _safe_int(bucket.get("joined_sample"), 0)
-    sq_ev = _safe_float(bucket.get("source_quality_adjusted_ev_pct"), 0.0)
-    dominant = str(bucket.get("dominant_action") or "").upper()
-    min_sample = max(
-        0, int(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_MIN_BUCKET_SAMPLE", 1) or 0)
-    )
-    min_joined = max(
-        0, int(getattr(TRADING_RULES, "SCALP_ENTRY_ADM_MIN_JOINED_SAMPLE", 0) or 0)
-    )
-    result = {
-        "entry_adm_runtime_bias_enabled": runtime_enabled,
+    return {
+        "entry_adm_runtime_bias_enabled": False,
         "entry_adm_runtime_bias_applied": False,
         "entry_adm_runtime_effect": "none",
-        "entry_adm_original_action": original_action or "-",
+        "entry_adm_original_action": action_label or "-",
         "entry_adm_forced_action": "-",
-        "entry_adm_runtime_reason": "no_runtime_bias",
-        "entry_adm_bucket_sample_count": sample,
-        "entry_adm_bucket_joined_sample": joined,
-        "entry_adm_bucket_source_quality_adjusted_ev_pct": sq_ev,
-        "entry_adm_hypothesis_fallback_enabled": hypothesis_enabled,
-        "entry_adm_hypothesis_force_enabled": hypothesis_force_enabled,
+        "entry_adm_runtime_reason": "retired",
     }
-    if not runtime_enabled:
-        result["entry_adm_runtime_reason"] = "runtime_bias_disabled"
-        return result
-    if not original_action:
-        result["entry_adm_runtime_reason"] = "missing_ai_action"
-        return result
-    if not bool(context.get("applied")):
-        result["entry_adm_runtime_reason"] = (
-            f"context_{context.get('status') or 'not_applied'}"
-        )
-        return result
-    if original_action not in {"BUY", "BUY_NOW"}:
-        result["entry_adm_runtime_reason"] = "non_buy_action_passthrough"
-        return result
-
-    enough_sample = bool(bucket) and sample >= min_sample and joined >= min_joined
-    forced_action = ""
-    effect = "none"
-    reason = ""
-    if enough_sample:
-        if dominant in {"WAIT_REQUOTE", "SKIP_STALE"}:
-            forced_action = "WAIT"
-            effect = "force_wait"
-            reason = f"bucket_dominant_{dominant.lower()}"
-        elif dominant in {"NO_BUY_AI", "SKIP_SOURCE_QUALITY", "SKIP_PRE_SUBMIT_SAFETY"}:
-            forced_action = "DROP"
-            effect = "force_drop"
-            reason = f"bucket_dominant_{dominant.lower()}"
-        elif (
-            bool(
-                getattr(
-                    TRADING_RULES, "SCALP_ENTRY_ADM_NEGATIVE_EV_BLOCK_ENABLED", True
-                )
-            )
-            and dominant in {"BUY_NOW", "BUY_DEFENSIVE"}
-            and sq_ev
-            < float(
-                getattr(
-                    TRADING_RULES,
-                    "SCALP_ENTRY_ADM_NEGATIVE_EV_FORCE_WAIT_THRESHOLD_PCT",
-                    0.0,
-                )
-                or 0.0
-            )
-        ):
-            forced_action = "WAIT"
-            effect = "force_wait"
-            reason = "bucket_negative_source_quality_adjusted_ev"
-        elif dominant == "BUY_DEFENSIVE":
-            forced_action = "BUY"
-            effect = "buy_defensive_bias"
-            reason = "bucket_dominant_buy_defensive"
-
-    if not forced_action and hypothesis_enabled:
-        risk_bucket = str(fields.get("entry_adm_risk_context_bucket") or "").lower()
-        stale_bucket = str(fields.get("entry_adm_stale_bucket") or "").lower()
-        liquidity_bucket = str(fields.get("entry_adm_liquidity_bucket") or "").lower()
-        overbought_bucket = str(fields.get("entry_adm_overbought_bucket") or "").lower()
-        hypothesis_action = ""
-        hypothesis_effect = "none"
-        hypothesis_reason = ""
-        if risk_bucket == "source_quality_blocker":
-            hypothesis_action = "DROP"
-            hypothesis_effect = "force_drop"
-            hypothesis_reason = "hypothesis_source_quality_blocker"
-        elif stale_bucket == "stale_high":
-            hypothesis_action = "WAIT"
-            hypothesis_effect = "force_wait"
-            hypothesis_reason = "hypothesis_stale_quote_wait_requote"
-        elif liquidity_bucket == "liquidity_low":
-            hypothesis_action = "WAIT"
-            hypothesis_effect = "force_wait"
-            hypothesis_reason = "hypothesis_low_liquidity_wait"
-        elif risk_bucket == "weak_strength_momentum" and overbought_bucket in {
-            "overbought_watch",
-            "overbought_chase_risk",
-        }:
-            hypothesis_action = "WAIT"
-            hypothesis_effect = "force_wait"
-            hypothesis_reason = "hypothesis_weak_momentum_chase_risk"
-        if hypothesis_action:
-            if hypothesis_force_enabled:
-                forced_action = hypothesis_action
-                effect = hypothesis_effect
-                reason = hypothesis_reason
-            else:
-                result["entry_adm_runtime_reason"] = (
-                    f"{hypothesis_reason}_provenance_only"
-                )
-                return result
-
-    if not forced_action:
-        result["entry_adm_runtime_reason"] = (
-            "bucket_sample_below_floor"
-            if bucket and not enough_sample
-            else "no_matching_runtime_bias"
-        )
-        return result
-    result.update(
-        {
-            "entry_adm_runtime_bias_applied": effect
-            in {"force_wait", "force_drop", "buy_defensive_bias"},
-            "entry_adm_runtime_effect": effect,
-            "entry_adm_forced_action": forced_action,
-            "entry_adm_runtime_reason": reason,
-        }
-    )
-    return result
 
 
 def build_scalp_entry_adm_runtime_context(
@@ -519,7 +382,6 @@ def build_scalp_entry_adm_runtime_context(
     now: datetime | None = None,
     ai_score: Any = None,
 ) -> dict[str, Any]:
-    profile = str(prompt_profile or "shared").strip().lower()
     current_dt = now or datetime.now()
     ws = ws_data if isinstance(ws_data, dict) else {}
     score_source = (
@@ -546,80 +408,18 @@ def build_scalp_entry_adm_runtime_context(
         "time_bucket": _time_bucket(current_dt),
     }
     token = _bucket_token(buckets)
-    if profile not in {"watching", "entry", "scalping_entry"}:
-        return {
-            "applied": False,
-            "status": "excluded_non_entry_prompt",
-            "cache_token": f"entry_adm:excluded:non_entry:{token}",
-            "prompt_context": "",
-            "fields": _fields(
-                False,
-                "excluded_non_entry_prompt",
-                "",
-                "",
-                "",
-                token,
-                buckets,
-                "-",
-                lookup_status="-",
-            ),
-            "matched_bucket": {},
-        }
-
-    matrix_path = _latest_matrix_path_on_or_before(
-        _session_cutoff_source_date(current_dt)
-    )
-    payload = _read_payload(matrix_path)
-    if not payload:
-        status = "matrix_missing_or_invalid"
-        return {
-            "applied": False,
-            "status": status,
-            "cache_token": f"entry_adm:missing:{token}",
-            "prompt_context": "",
-            "fields": _fields(
-                bool(advisory_enabled),
-                status,
-                "",
-                "",
-                str(matrix_path) if matrix_path else "",
-                token,
-                buckets,
-                "-",
-                lookup_status="bucket_lookup_not_performed",
-            ),
-            "matched_bucket": {},
-        }
-
-    bucket = _matched_bucket(payload, token)
-    lookup_status = _bucket_lookup_status(payload, bucket)
-    status = (
-        "advisory_prompt_applied" if advisory_enabled else "loaded_feature_disabled"
-    )
-    matrix_version = str(payload.get("matrix_version") or "-")
-    source_date = str(payload.get("date") or "-")
-    cache_token = f"entry_adm:{matrix_version}:{token}"
     fields = _fields(
-        bool(advisory_enabled),
-        status,
-        matrix_version,
-        source_date,
-        str(matrix_path),
-        token,
-        buckets,
-        str(bucket.get("dominant_action") or "-"),
-        lookup_status=lookup_status,
-        matched_bucket=bucket,
+        False, "retired", "", "", "", token, buckets, "-", lookup_status="retired"
     )
+    fields["entry_adm_application_mode"] = "archive_only"
+    fields["entry_adm_runtime_bias_enabled"] = False
     return {
-        "applied": bool(advisory_enabled),
-        "status": status,
-        "cache_token": cache_token,
-        "prompt_context": (
-            _prompt_context(payload, token, bucket) if advisory_enabled else ""
-        ),
+        "applied": False,
+        "status": "retired",
+        "cache_token": RETIREMENT_ID,
+        "prompt_context": "",
         "fields": fields,
-        "matched_bucket": bucket,
+        "matched_bucket": {},
     }
 
 

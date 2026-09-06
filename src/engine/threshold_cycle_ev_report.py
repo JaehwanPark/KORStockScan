@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import (
+    retired_artifact,
+    retired_status,
+    current_report_view,
+)
+
 import argparse
 import json
 from datetime import date, datetime
@@ -20,22 +26,11 @@ from src.engine.automation.source_quality_hard_gate import (
 )
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.approval_contracts import annotate_approval_request
-from src.engine.institutional_flow_context import (
-    report_paths as institutional_flow_report_paths,
-)
-from src.engine.lifecycle_ai_context import (
-    attribution_report_paths as lifecycle_ai_context_attribution_paths,
-)
-from src.engine.lifecycle_ai_context import (
-    context_report_paths as lifecycle_ai_context_report_paths,
-)
 from src.engine.lifecycle_bucket_discovery import (
     discovery_report_path as lifecycle_bucket_discovery_report_path,
 )
-from src.engine.lifecycle_decision_matrix import (
-    report_paths as lifecycle_matrix_report_paths,
-)
 from src.engine.scalping.microstructure_reaction_context import (
+    microstructure_summary_contract,
     report_paths as microstructure_reaction_report_paths,
 )
 from src.engine.scalping.entry_split_order_plan import (
@@ -43,9 +38,6 @@ from src.engine.scalping.entry_split_order_plan import (
     runtime_apply_authority_contract_status,
 )
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
-from src.engine.scalp_entry_action_decision_matrix import (
-    report_paths as scalp_entry_adm_report_paths,
-)
 from src.engine.swing_lifecycle_bucket_discovery import (
     report_paths as swing_lifecycle_bucket_discovery_paths,
 )
@@ -144,6 +136,8 @@ def _warning_contract(
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     actual_path = existing_or_gzip_path(path)
     try:
         with open_text_auto(actual_path) as handle:
@@ -168,7 +162,7 @@ def _load_json(path: Path) -> dict[str, Any]:
             }
         )
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -1065,407 +1059,13 @@ def _code_improvement_workorder_summary(
 def _scalp_entry_adm_summary(
     target_date: str,
 ) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path, _ = scalp_entry_adm_report_paths(target_date)
-    payload = _load_json(json_path)
-    if not payload:
-        return (
-            {
-                "available": False,
-                "artifact": None,
-                "status": "missing",
-                "total_candidates": 0,
-                "joined_sample": 0,
-                "joined_sample_daily": 0,
-                "sample_floor": 20,
-                "missing_actions": [],
-                "zero_sample_actions": [],
-                "prompt_applied_count": 0,
-                "runtime_bias_applied_count": 0,
-                "runtime_effect_counts": {},
-                "forced_action_counts": {},
-                "raw_action_counts": {},
-                "action_normalized_count": 0,
-                "action_normalization_counts": {},
-                "top_actions": [],
-                "runtime_effect": False,
-                "decision_authority": "entry_advisory_prompt_context_only",
-            },
-            None,
-            ["scalp_entry_action_decision_matrix_missing"],
-        )
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    action_summary = (
-        payload.get("action_summary")
-        if isinstance(payload.get("action_summary"), list)
-        else []
-    )
-    unknown_bucket_summary = (
-        summary.get("unknown_bucket_summary")
-        if isinstance(summary.get("unknown_bucket_summary"), dict)
-        else {}
-    )
-    outcome_join_diagnostic = (
-        summary.get("outcome_join_diagnostic")
-        if isinstance(summary.get("outcome_join_diagnostic"), dict)
-        else {}
-    )
-    warnings = [
-        f"scalp_entry_adm:{item}"
-        for item in (payload.get("warnings") or [])
-        if str(item)
-    ]
-    return (
-        {
-            "available": True,
-            "artifact": str(json_path),
-            "status": payload.get("status"),
-            "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority"),
-            "application_mode": payload.get("application_mode"),
-            "primary_decision_metric": payload.get("primary_decision_metric"),
-            "total_candidates": _safe_int(summary.get("total_candidates"), 0),
-            "joined_sample": _safe_int(
-                summary.get("joined_sample_cumulative", summary.get("joined_sample")),
-                0,
-            ),
-            "joined_sample_daily": _safe_int(
-                summary.get("joined_sample_daily", summary.get("joined_sample")), 0
-            ),
-            "joined_sample_evidence": (
-                summary.get("joined_sample_evidence")
-                if isinstance(summary.get("joined_sample_evidence"), dict)
-                else {}
-            ),
-            "sample_floor": _safe_int(summary.get("sample_floor"), 20),
-            "missing_actions": (
-                summary.get("missing_actions")
-                if isinstance(summary.get("missing_actions"), list)
-                else []
-            ),
-            "zero_sample_actions": (
-                summary.get("zero_sample_actions")
-                if isinstance(summary.get("zero_sample_actions"), list)
-                else []
-            ),
-            "prompt_applied_count": _safe_int(summary.get("prompt_applied_count"), 0),
-            "runtime_bias_applied_count": _safe_int(
-                summary.get("runtime_bias_applied_count"), 0
-            ),
-            "runtime_effect_counts": (
-                summary.get("runtime_effect_counts")
-                if isinstance(summary.get("runtime_effect_counts"), dict)
-                else {}
-            ),
-            "forced_action_counts": (
-                summary.get("forced_action_counts")
-                if isinstance(summary.get("forced_action_counts"), dict)
-                else {}
-            ),
-            "raw_action_counts": (
-                summary.get("raw_action_counts")
-                if isinstance(summary.get("raw_action_counts"), dict)
-                else {}
-            ),
-            "action_normalized_count": _safe_int(
-                summary.get("action_normalized_count"), 0
-            ),
-            "action_normalization_counts": (
-                summary.get("action_normalization_counts")
-                if isinstance(summary.get("action_normalization_counts"), dict)
-                else {}
-            ),
-            "unknown_bucket_summary": unknown_bucket_summary,
-            "outcome_join_diagnostic": outcome_join_diagnostic,
-            "top_actions": [
-                {
-                    "action": item.get("action"),
-                    "sample_count": item.get("sample_count"),
-                    "joined_sample": item.get("joined_sample"),
-                    "source_quality_adjusted_ev_pct": item.get(
-                        "source_quality_adjusted_ev_pct"
-                    ),
-                }
-                for item in action_summary
-                if isinstance(item, dict) and _safe_int(item.get("sample_count"), 0) > 0
-            ][:5],
-        },
-        str(json_path),
-        warnings,
-    )
+    return {**retired_status(), "available": False}, None, []
 
 
 def _lifecycle_decision_matrix_summary(
     target_date: str,
 ) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path, _ = lifecycle_matrix_report_paths(target_date)
-    payload = _load_json(json_path)
-    if not payload:
-        return (
-            {
-                "available": False,
-                "artifact": None,
-                "status": "missing",
-                "total_rows": 0,
-                "joined_rows": 0,
-                "policy_pass_count": 0,
-                "promote_ready_count": 0,
-                "fixed_threshold_roles": {},
-                "runtime_effect": False,
-            },
-            None,
-            ["lifecycle_decision_matrix_missing"],
-        )
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    contract = (
-        payload.get("fixed_threshold_contract")
-        if isinstance(payload.get("fixed_threshold_contract"), dict)
-        else {}
-    )
-    entry_bucket = (
-        payload.get("entry_bucket_attribution")
-        if isinstance(payload.get("entry_bucket_attribution"), dict)
-        else {}
-    )
-    submit_bucket = (
-        payload.get("submit_bucket_attribution")
-        if isinstance(payload.get("submit_bucket_attribution"), dict)
-        else {}
-    )
-    holding_bucket = (
-        payload.get("holding_bucket_attribution")
-        if isinstance(payload.get("holding_bucket_attribution"), dict)
-        else {}
-    )
-    exit_bucket = (
-        payload.get("exit_bucket_attribution")
-        if isinstance(payload.get("exit_bucket_attribution"), dict)
-        else {}
-    )
-    lifecycle_flow_bucket = (
-        payload.get("lifecycle_flow_bucket_attribution")
-        if isinstance(payload.get("lifecycle_flow_bucket_attribution"), dict)
-        else {}
-    )
-    scale_in_bucket = (
-        payload.get("scale_in_bucket_attribution")
-        if isinstance(payload.get("scale_in_bucket_attribution"), dict)
-        else {}
-    )
-    entry_summary = (
-        entry_bucket.get("summary")
-        if isinstance(entry_bucket.get("summary"), dict)
-        else {}
-    )
-    submit_summary = (
-        submit_bucket.get("summary")
-        if isinstance(submit_bucket.get("summary"), dict)
-        else {}
-    )
-    holding_summary = (
-        holding_bucket.get("summary")
-        if isinstance(holding_bucket.get("summary"), dict)
-        else {}
-    )
-    exit_summary = (
-        exit_bucket.get("summary")
-        if isinstance(exit_bucket.get("summary"), dict)
-        else {}
-    )
-    lifecycle_flow_summary = (
-        lifecycle_flow_bucket.get("summary")
-        if isinstance(lifecycle_flow_bucket.get("summary"), dict)
-        else {}
-    )
-    scale_in_summary = (
-        scale_in_bucket.get("summary")
-        if isinstance(scale_in_bucket.get("summary"), dict)
-        else {}
-    )
-    warnings = [
-        f"lifecycle_decision_matrix:{item}"
-        for item in (payload.get("warnings") or [])
-        if str(item)
-    ]
-    return (
-        {
-            "available": True,
-            "artifact": str(json_path),
-            "status": summary.get("status"),
-            "matrix_version": payload.get("matrix_version"),
-            "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority"),
-            "primary_decision_metric": payload.get("primary_decision_metric"),
-            "total_rows": _safe_int(summary.get("total_rows"), 0),
-            "joined_rows": _safe_int(summary.get("joined_rows"), 0),
-            "policy_pass_count": _safe_int(summary.get("policy_pass_count"), 0),
-            "promote_ready_count": _safe_int(summary.get("promote_ready_count"), 0),
-            "lifecycle_flow_bucket_count": _safe_int(
-                summary.get("lifecycle_flow_bucket_count"),
-                _safe_int(lifecycle_flow_summary.get("bucket_count"), 0),
-            ),
-            "lifecycle_flow_complete_count": _safe_int(
-                summary.get("lifecycle_flow_complete_count"),
-                _safe_int(lifecycle_flow_summary.get("complete_flow_count"), 0),
-            ),
-            "complete_flow_count": _safe_int(
-                summary.get("complete_flow_count"),
-                _safe_int(lifecycle_flow_summary.get("complete_flow_count"), 0),
-            ),
-            "incomplete_flow_count": _safe_int(
-                summary.get("incomplete_flow_count"),
-                _safe_int(lifecycle_flow_summary.get("incomplete_flow_count"), 0),
-            ),
-            "lifecycle_flow_runtime_candidate_count": _safe_int(
-                summary.get("lifecycle_flow_runtime_candidate_count"),
-                _safe_int(lifecycle_flow_summary.get("runtime_candidate_count"), 0),
-            ),
-            "lifecycle_flow_workorder_count": _safe_int(
-                summary.get("lifecycle_flow_workorder_count"),
-                _safe_int(lifecycle_flow_summary.get("workorder_count"), 0),
-            ),
-            "lifecycle_flow_runtime_approval_candidates": (
-                lifecycle_flow_bucket.get("runtime_approval_candidates")
-                if isinstance(
-                    lifecycle_flow_bucket.get("runtime_approval_candidates"), list
-                )
-                else []
-            ),
-            "lifecycle_flow_code_improvement_workorders": (
-                lifecycle_flow_bucket.get("code_improvement_workorders")
-                if isinstance(
-                    lifecycle_flow_bucket.get("code_improvement_workorders"), list
-                )
-                else []
-            ),
-            "submit_bucket_attribution_summary": submit_summary,
-            "entry_bucket_attribution_summary": entry_summary,
-            "entry_bucket_runtime_approval_candidates": (
-                entry_bucket.get("runtime_approval_candidates")
-                if isinstance(entry_bucket.get("runtime_approval_candidates"), list)
-                else []
-            ),
-            "entry_bucket_code_improvement_workorders": (
-                entry_bucket.get("code_improvement_workorders")
-                if isinstance(entry_bucket.get("code_improvement_workorders"), list)
-                else []
-            ),
-            "entry_bucket_runtime_candidate_count": _safe_int(
-                summary.get("entry_bucket_runtime_candidate_count"),
-                _safe_int(entry_summary.get("runtime_candidate_count"), 0),
-            ),
-            "entry_bucket_workorder_count": _safe_int(
-                summary.get("entry_bucket_workorder_count"),
-                _safe_int(entry_summary.get("workorder_count"), 0),
-            ),
-            "submit_bucket_runtime_approval_candidates": (
-                submit_bucket.get("runtime_approval_candidates")
-                if isinstance(submit_bucket.get("runtime_approval_candidates"), list)
-                else []
-            ),
-            "submit_bucket_code_improvement_workorders": (
-                submit_bucket.get("code_improvement_workorders")
-                if isinstance(submit_bucket.get("code_improvement_workorders"), list)
-                else []
-            ),
-            "post_submit_contract_gaps": (
-                submit_bucket.get("post_submit_contract_gaps")
-                if isinstance(submit_bucket.get("post_submit_contract_gaps"), list)
-                else []
-            ),
-            "submit_bucket_workorder_count": _safe_int(
-                summary.get("submit_bucket_workorder_count"), 0
-            ),
-            "submit_bucket_contract_gap_count": _safe_int(
-                summary.get("submit_bucket_contract_gap_count"), 0
-            ),
-            "holding_bucket_attribution_summary": holding_summary,
-            "holding_bucket_code_improvement_workorders": (
-                holding_bucket.get("code_improvement_workorders")
-                if isinstance(holding_bucket.get("code_improvement_workorders"), list)
-                else []
-            ),
-            "holding_bucket_count": _safe_int(
-                summary.get("holding_bucket_count"),
-                _safe_int(holding_summary.get("bucket_count"), 0),
-            ),
-            "holding_bucket_workorder_count": _safe_int(
-                summary.get("holding_bucket_workorder_count"),
-                _safe_int(holding_summary.get("workorder_count"), 0),
-            ),
-            "exit_bucket_attribution_summary": exit_summary,
-            "exit_bucket_code_improvement_workorders": (
-                exit_bucket.get("code_improvement_workorders")
-                if isinstance(exit_bucket.get("code_improvement_workorders"), list)
-                else []
-            ),
-            "exit_bucket_count": _safe_int(
-                summary.get("exit_bucket_count"),
-                _safe_int(exit_summary.get("bucket_count"), 0),
-            ),
-            "exit_bucket_workorder_count": _safe_int(
-                summary.get("exit_bucket_workorder_count"),
-                _safe_int(exit_summary.get("workorder_count"), 0),
-            ),
-            "scale_in_bucket_attribution_summary": scale_in_summary,
-            "scale_in_bucket_runtime_approval_candidates": (
-                scale_in_bucket.get("runtime_approval_candidates")
-                if isinstance(scale_in_bucket.get("runtime_approval_candidates"), list)
-                else []
-            ),
-            "scale_in_bucket_code_improvement_workorders": (
-                scale_in_bucket.get("code_improvement_workorders")
-                if isinstance(scale_in_bucket.get("code_improvement_workorders"), list)
-                else []
-            ),
-            "scale_in_bucket_runtime_candidate_count": _safe_int(
-                summary.get("scale_in_bucket_runtime_candidate_count"),
-                _safe_int(scale_in_summary.get("runtime_candidate_count"), 0),
-            ),
-            "scale_in_bucket_workorder_count": _safe_int(
-                summary.get("scale_in_bucket_workorder_count"),
-                _safe_int(scale_in_summary.get("workorder_count"), 0),
-            ),
-            "identity_missing_count": _safe_int(
-                summary.get("identity_missing_count"), 0
-            ),
-            "identity_join_rate": summary.get("identity_join_rate"),
-            "complete_flow_rate": summary.get("complete_flow_rate"),
-            "join_contract_blocked": bool(
-                summary.get("join_contract_blocked")
-                or lifecycle_flow_summary.get("join_contract_blocked")
-            ),
-            "bundle_ev_tuning_state": (
-                summary.get("bundle_ev_tuning_state")
-                or lifecycle_flow_summary.get("bundle_ev_tuning_state")
-                or "ready_for_bundle_ev_tuning"
-            ),
-            "top_incomplete_reason": summary.get("top_incomplete_reason")
-            or lifecycle_flow_summary.get("top_incomplete_reason"),
-            "incomplete_flow_reason_counts": summary.get(
-                "incomplete_flow_reason_counts"
-            )
-            or {},
-            "policy_entries": [
-                {
-                    "stage": item.get("stage"),
-                    "sample": item.get("sample"),
-                    "joined_sample": item.get("joined_sample"),
-                    "stage_ev_composite_pct": item.get("stage_ev_composite_pct"),
-                    "confidence": item.get("confidence"),
-                    "selected_action": item.get("selected_action"),
-                    "source_quality_gate": item.get("source_quality_gate"),
-                    "promote_ready": item.get("promote_ready"),
-                }
-                for item in (payload.get("policy_entries") or [])[:5]
-                if isinstance(item, dict)
-            ],
-            "fixed_threshold_roles": (
-                contract.get("roles") if isinstance(contract.get("roles"), dict) else {}
-            ),
-        },
-        str(json_path),
-        warnings,
-    )
+    return {**retired_status(), "available": False}, None, []
 
 
 def _buy_funnel_sentinel_summary(
@@ -1522,139 +1122,13 @@ def _buy_funnel_sentinel_summary(
 def _lifecycle_ai_context_summary(
     target_date: str,
 ) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path, _ = lifecycle_ai_context_report_paths(target_date)
-    payload = _load_json(json_path)
-    if not payload:
-        return (
-            {
-                "available": False,
-                "artifact": None,
-                "context_version": "-",
-                "prompt_stage_count": 0,
-                "runtime_effect": False,
-                "decision_authority": "ai_advisory_prompt_context_only",
-            },
-            None,
-            ["lifecycle_ai_context_missing"],
-        )
-    stages = (
-        payload.get("stage_contexts")
-        if isinstance(payload.get("stage_contexts"), list)
-        else []
-    )
-    warnings = [
-        f"lifecycle_ai_context:{item}"
-        for item in (payload.get("warnings") or [])
-        if str(item)
-    ]
-    return (
-        {
-            "available": True,
-            "artifact": str(json_path),
-            "context_version": payload.get("context_version"),
-            "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority"),
-            "provider_status": (
-                payload.get("provider_status")
-                if isinstance(payload.get("provider_status"), dict)
-                else {}
-            ),
-            "prompt_stage_count": sum(
-                1
-                for item in stages
-                if isinstance(item, dict) and item.get("prompt_injection_allowed")
-            ),
-            "stage_contexts": [
-                {
-                    "stage": item.get("stage"),
-                    "prompt_injection_allowed": item.get("prompt_injection_allowed"),
-                    "policy_key": item.get("policy_key"),
-                    "alignment_hint": item.get("alignment_hint"),
-                    "context_contribution_score": item.get(
-                        "context_contribution_score"
-                    ),
-                    "attribution_quality_status": item.get(
-                        "attribution_quality_status"
-                    ),
-                }
-                for item in stages[:5]
-                if isinstance(item, dict)
-            ],
-        },
-        str(json_path),
-        warnings,
-    )
+    return {**retired_status(), "available": False}, None, []
 
 
 def _lifecycle_ai_context_attribution_summary(
     target_date: str,
 ) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path, _ = lifecycle_ai_context_attribution_paths(target_date)
-    payload = _load_json(json_path)
-    if not payload:
-        return (
-            {
-                "available": False,
-                "artifact": None,
-                "context_eligible_count": 0,
-                "context_applied_count": 0,
-                "runtime_effect": False,
-                "decision_authority": "postclose_context_attribution_only",
-            },
-            None,
-            ["lifecycle_ai_context_attribution_missing"],
-        )
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [
-        f"lifecycle_ai_context_attribution:{item}"
-        for item in (payload.get("warnings") or [])
-        if str(item)
-    ]
-    stage_map = (
-        payload.get("stage_attribution")
-        if isinstance(payload.get("stage_attribution"), dict)
-        else {}
-    )
-    return (
-        {
-            "available": True,
-            "artifact": str(json_path),
-            "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority"),
-            "implementation_status": payload.get("implementation_status"),
-            "implementation_checks": payload.get("implementation_checks") or [],
-            "implementation_provenance": payload.get("implementation_provenance") or {},
-            "context_eligible_count": _safe_int(
-                summary.get("context_eligible_count"), 0
-            ),
-            "context_applied_count": _safe_int(summary.get("context_applied_count"), 0),
-            "context_skipped_count": _safe_int(summary.get("context_skipped_count"), 0),
-            "replay_budget": _safe_int(summary.get("replay_budget"), 0),
-            "stage_quality_counts": summary.get("stage_quality_counts") or {},
-            "stage_attribution": {
-                stage: {
-                    "context_contribution_score": item.get(
-                        "context_contribution_score"
-                    ),
-                    "bounded_auxiliary_weight": item.get("bounded_auxiliary_weight"),
-                    "attribution_quality_status": item.get(
-                        "attribution_quality_status"
-                    ),
-                    "source_quality_adjusted_ev_pct": item.get(
-                        "source_quality_adjusted_ev_pct"
-                    ),
-                    "ai_action_alignment_rate": item.get("ai_action_alignment_rate"),
-                    "no_context_replay_observed": item.get(
-                        "no_context_replay_observed"
-                    ),
-                }
-                for stage, item in stage_map.items()
-                if isinstance(item, dict)
-            },
-        },
-        str(json_path),
-        warnings,
-    )
+    return {**retired_status(), "available": False}, None, []
 
 
 def _swing_strategy_discovery_summary(
@@ -2035,63 +1509,17 @@ def _swing_lifecycle_bucket_discovery_summary(
 def _institutional_flow_context_summary(
     target_date: str,
 ) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path, _ = institutional_flow_report_paths(target_date)
-    payload = _load_json(json_path)
-    if not payload:
-        return (
-            {
-                "available": False,
-                "artifact": None,
-                "status": "missing",
-                "row_count": 0,
-                "join_rate_pct": 0.0,
-                "status_counts": {},
-                "source_mix": {},
-                "top_net_buy": [],
-                "runtime_effect": False,
-                "decision_authority": "source_only_lifecycle_feature",
-            },
-            None,
-            ["institutional_flow_context_missing"],
-        )
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [
-        f"institutional_flow_context:{item}"
-        for item in (payload.get("warnings") or [])
-        if str(item)
-    ]
+    del target_date
     return (
         {
-            "available": True,
-            "artifact": str(json_path),
-            "status": "warning" if payload.get("warnings") else "pass",
-            "row_count": _safe_int(summary.get("row_count"), 0),
-            "ok_count": _safe_int(summary.get("ok_count"), 0),
-            "partial_count": _safe_int(summary.get("partial_count"), 0),
-            "missing_count": _safe_int(summary.get("missing_count"), 0),
-            "token_error_count": _safe_int(summary.get("token_error_count"), 0),
-            "join_rate_pct": round(_safe_float(summary.get("join_rate_pct"), 0.0), 2),
-            "status_counts": (
-                summary.get("status_counts")
-                if isinstance(summary.get("status_counts"), dict)
-                else {}
-            ),
-            "source_mix": (
-                summary.get("source_mix")
-                if isinstance(summary.get("source_mix"), dict)
-                else {}
-            ),
-            "top_net_buy": (
-                summary.get("top_net_buy")
-                if isinstance(summary.get("top_net_buy"), list)
-                else []
-            ),
-            "runtime_effect": bool(payload.get("runtime_effect")),
-            "decision_authority": payload.get("decision_authority")
-            or "source_only_lifecycle_feature",
+            **retired_status("institutional_flow_context"),
+            "available": False,
+            "artifact": None,
+            "consumer_status": "retired_with_scalping_adm_ldm",
+            "replacement_source": "exact_ai_context_investor_and_program_flow",
         },
-        str(json_path),
-        warnings,
+        None,
+        [],
     )
 
 
@@ -2116,7 +1544,7 @@ def _microstructure_reaction_context_summary(
                 "opportunity_exploration_funnel": {},
                 "clean_baseline_cumulative_opportunity_exploration": {},
                 "runtime_effect": False,
-                "decision_authority": "entry_confidence_modifier_source_only",
+                "decision_authority": "diagnostic_source_only_with_fail_closed_holding_quality_consumer",
                 "forbidden_uses": [
                     "standalone_buy",
                     "broker_guard_bypass",
@@ -2146,6 +1574,30 @@ def _microstructure_reaction_context_summary(
                 summary.get("missing_or_unusable_count"), 0
             ),
             "real_submitted_count": _safe_int(summary.get("real_submitted_count"), 0),
+            "usable_coverage_pct": summary.get("usable_coverage_pct"),
+            "delivery_telemetry_v2_count": _safe_int(
+                summary.get("delivery_telemetry_v2_count"), 0
+            ),
+            "delivery_telemetry_legacy_unverifiable_count": _safe_int(
+                summary.get("delivery_telemetry_legacy_unverifiable_count"), 0
+            ),
+            "context_computed_count": _safe_int(
+                summary.get("context_computed_count"), 0
+            ),
+            "context_sent_count": _safe_int(summary.get("context_sent_count"), 0),
+            "context_consumed_count": _safe_int(
+                summary.get("context_consumed_count"), 0
+            ),
+            "context_delivery_state_counts": (
+                summary.get("context_delivery_state_counts")
+                if isinstance(summary.get("context_delivery_state_counts"), dict)
+                else {}
+            ),
+            "context_consumer_counts": (
+                summary.get("context_consumer_counts")
+                if isinstance(summary.get("context_consumer_counts"), dict)
+                else {}
+            ),
             "status_counts": (
                 summary.get("status_counts")
                 if isinstance(summary.get("status_counts"), dict)
@@ -2247,8 +1699,12 @@ def _microstructure_reaction_context_summary(
             "max_vi_proximity_risk": _safe_int(summary.get("max_vi_proximity_risk"), 0),
             "runtime_effect": bool(payload.get("runtime_effect")),
             "decision_authority": payload.get("decision_authority")
-            or "entry_confidence_modifier_source_only",
-            "metric_role": payload.get("metric_role") or "feature_context",
+            or "diagnostic_source_only_with_fail_closed_holding_quality_consumer",
+            "metric_role": payload.get("metric_role")
+            or "source_quality_and_counterfactual_diagnostic",
+            "runtime_consumer_effect": payload.get("runtime_consumer_effect")
+            or "holding_score_source_quality_fail_closed_only",
+            **microstructure_summary_contract(summary),
             "primary_decision_metric": payload.get("primary_decision_metric")
             or "source_quality_adjusted_ev_pct",
             "forbidden_uses": (
@@ -2942,190 +2398,7 @@ def _active_positive_seed_summary(
 def _lifecycle_bucket_discovery_summary(
     target_date: str,
 ) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path = lifecycle_bucket_discovery_report_path(target_date)
-    payload = _load_json(json_path)
-    if not payload:
-        return (
-            {
-                "available": False,
-                "artifact": None,
-                "status": "missing",
-                "candidate_count": 0,
-                "surfaced_candidate_count": 0,
-                "sim_auto_approved_count": 0,
-                "live_auto_apply_ready_count": 0,
-                "new_bucket_candidate_count": 0,
-                "human_intervention_required": False,
-                "window_role": "new_pattern_detection",
-                "window_policy": "daily_only",
-            },
-            None,
-            ["lifecycle_bucket_discovery_missing"],
-        )
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    warnings = [
-        f"lifecycle_bucket_discovery:{item}"
-        for item in (payload.get("warnings") or [])
-        if str(item)
-    ]
-    positive_parent_summary = _positive_lifecycle_parent_summary(payload)
-    positive_sim_auto_summary = _positive_sim_auto_summary(payload)
-    active_seed_summary = _active_positive_seed_summary(payload)
-    return (
-        {
-            "available": True,
-            "artifact": str(json_path),
-            "status": summary.get("status"),
-            "window_role": "new_pattern_detection",
-            "window_policy": payload.get("window_policy")
-            or summary.get("source_window_policy")
-            or "daily_only",
-            "candidate_count": _safe_int(summary.get("candidate_count"), 0),
-            "surfaced_candidate_count": _safe_int(
-                summary.get("surfaced_candidate_count"), 0
-            ),
-            "sim_auto_approved_count": _safe_int(
-                summary.get("sim_auto_approved_count"), 0
-            ),
-            "entry_only_sim_auto_approved_count": _safe_int(
-                summary.get("entry_only_sim_auto_approved_count"), 0
-            ),
-            "sim_auto_positive_ev_count": _safe_int(
-                summary.get("sim_auto_positive_ev_count"),
-                positive_sim_auto_summary["positive_sim_auto_approved_count"],
-            ),
-            "sim_auto_nonpositive_ev_count": _safe_int(
-                summary.get("sim_auto_nonpositive_ev_count"),
-                positive_sim_auto_summary["nonpositive_sim_auto_approved_count"],
-            ),
-            "entry_only_sim_auto_positive_ev_count": _safe_int(
-                summary.get("entry_only_sim_auto_positive_ev_count"),
-                positive_sim_auto_summary[
-                    "entry_only_positive_sim_auto_approved_count"
-                ],
-            ),
-            "entry_only_sim_auto_nonpositive_ev_count": _safe_int(
-                summary.get("entry_only_sim_auto_nonpositive_ev_count"),
-                positive_sim_auto_summary[
-                    "entry_only_nonpositive_sim_auto_approved_count"
-                ],
-            ),
-            "lifecycle_flow_sim_probe_candidate_count": _safe_int(
-                summary.get("lifecycle_flow_sim_probe_candidate_count"),
-                0,
-            ),
-            "live_auto_apply_ready_count": _safe_int(
-                summary.get("live_auto_apply_ready_count"), 0
-            ),
-            "new_bucket_candidate_count": _safe_int(
-                summary.get("new_bucket_candidate_count"), 0
-            ),
-            "code_patch_required_count": _safe_int(
-                summary.get("code_patch_required_count"), 0
-            ),
-            "automation_handoff_gap_count": _safe_int(
-                summary.get("automation_handoff_gap_count"), 0
-            ),
-            "parent_bucket_count": _safe_int(summary.get("parent_bucket_count"), 0),
-            "selected_parent_level": summary.get("selected_parent_level"),
-            "parent_granularity_status": summary.get("parent_granularity_status"),
-            "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
-            "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
-            "child_conflict_warning_count": _safe_int(
-                summary.get("child_conflict_warning_count"), 0
-            ),
-            "positive_parent_count": _safe_int(
-                summary.get("positive_parent_count"),
-                positive_parent_summary["positive_parent_count"],
-            ),
-            "positive_parent_sample_ready_count": _safe_int(
-                summary.get("positive_parent_sample_ready_count"),
-                positive_parent_summary["positive_parent_sample_ready_count"],
-            ),
-            "positive_parent_conflict_count": _safe_int(
-                summary.get("positive_parent_conflict_count"),
-                positive_parent_summary["positive_parent_conflict_count"],
-            ),
-            "top_positive_parent_buckets": positive_parent_summary[
-                "top_positive_parent_buckets"
-            ],
-            "top_sample_ready_positive_parent_buckets": positive_parent_summary[
-                "top_sample_ready_positive_parent_buckets"
-            ],
-            "top_positive_sim_auto_approved": (
-                summary.get("sim_auto_positive_ev_top")
-                if isinstance(summary.get("sim_auto_positive_ev_top"), list)
-                else positive_sim_auto_summary["top_positive_sim_auto_approved"]
-            ),
-            "top_nonpositive_sim_auto_approved": (
-                summary.get("sim_auto_nonpositive_ev_top")
-                if isinstance(summary.get("sim_auto_nonpositive_ev_top"), list)
-                else positive_sim_auto_summary["top_nonpositive_sim_auto_approved"]
-            ),
-            "active_sim_priority_positive_seed_count": _safe_int(
-                summary.get("active_sim_priority_positive_seed_count"),
-                active_seed_summary["active_positive_seed_count"],
-            ),
-            "active_sim_priority_nonpositive_seed_count": _safe_int(
-                summary.get("active_sim_priority_nonpositive_seed_count"),
-                active_seed_summary["active_nonpositive_seed_count"],
-            ),
-            "top_active_positive_seeds": active_seed_summary[
-                "top_active_positive_seeds"
-            ],
-            "source_contract_status": summary.get("source_contract_status"),
-            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
-            "deterministic_proposal_count": _safe_int(
-                summary.get("deterministic_proposal_count"), 0
-            ),
-            "ai_tier2_proposal_count": _safe_int(
-                summary.get("ai_tier2_proposal_count"), 0
-            ),
-            "comparative_review_count": _safe_int(
-                summary.get("comparative_review_count"), 0
-            ),
-            "selected_decision_counts": (
-                summary.get("selected_decision_counts")
-                if isinstance(summary.get("selected_decision_counts"), dict)
-                else {}
-            ),
-            "selected_source_counts": (
-                summary.get("selected_source_counts")
-                if isinstance(summary.get("selected_source_counts"), dict)
-                else {}
-            ),
-            "human_intervention_required": bool(
-                summary.get("human_intervention_required")
-            ),
-            "state_counts": (
-                summary.get("state_counts")
-                if isinstance(summary.get("state_counts"), dict)
-                else {}
-            ),
-            "stage_counts": (
-                summary.get("stage_counts")
-                if isinstance(summary.get("stage_counts"), dict)
-                else {}
-            ),
-            "top_surfaced": [
-                {
-                    "bucket_id": item.get("bucket_id"),
-                    "stage": item.get("stage"),
-                    "classification_state": item.get("classification_state"),
-                    "live_auto_apply_family": item.get("live_auto_apply_family"),
-                    "recommended_action": item.get("recommended_action"),
-                    "joined_sample": item.get("joined_sample"),
-                    "source_quality_adjusted_ev_pct": item.get(
-                        "source_quality_adjusted_ev_pct"
-                    ),
-                }
-                for item in (payload.get("surfaced_candidates") or [])[:8]
-                if isinstance(item, dict)
-            ],
-        },
-        str(json_path),
-        warnings,
-    )
+    return {**retired_status(), "available": False}, None, []
 
 
 def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
@@ -3137,68 +2410,7 @@ def _lifecycle_bucket_window_report_path(target_date: str, suffix: str) -> Path:
 def _lifecycle_bucket_windows_summary(
     target_date: str,
 ) -> tuple[dict[str, Any], list[str]]:
-    windows = ("rolling5d", "rolling10d", "mtd")
-    daily, _, daily_warnings = _lifecycle_bucket_discovery_summary(target_date)
-    warnings = list(daily_warnings)
-    result: dict[str, Any] = {
-        "daily": daily,
-        "windows": {},
-        "promotion_window": "mtd",
-        "confirmation_windows": ["rolling5d", "rolling10d"],
-        "warnings": [],
-    }
-    for suffix in windows:
-        path = _lifecycle_bucket_window_report_path(target_date, suffix)
-        payload = _load_json(path)
-        summary = (
-            payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-        )
-        positive_parent_summary = _positive_lifecycle_parent_summary(payload)
-        item = {
-            "available": bool(payload),
-            "artifact": str(path) if path.exists() else None,
-            "window_role": (
-                "promotion_confirmation" if suffix == "mtd" else "rolling_confirmation"
-            ),
-            "window_policy": payload.get("window_policy")
-            or summary.get("source_window_policy")
-            or suffix,
-            "status": summary.get("status")
-            or ("missing" if not payload else "unknown"),
-            "parent_bucket_count": _safe_int(summary.get("parent_bucket_count"), 0),
-            "selected_parent_level": summary.get("selected_parent_level"),
-            "parent_granularity_status": summary.get("parent_granularity_status"),
-            "absorbed_child_count": _safe_int(summary.get("absorbed_child_count"), 0),
-            "absorbed_sample_count": _safe_int(summary.get("absorbed_sample_count"), 0),
-            "child_conflict_warning_count": _safe_int(
-                summary.get("child_conflict_warning_count"), 0
-            ),
-            "positive_parent_count": _safe_int(
-                summary.get("positive_parent_count"),
-                positive_parent_summary["positive_parent_count"],
-            ),
-            "positive_parent_sample_ready_count": _safe_int(
-                summary.get("positive_parent_sample_ready_count"),
-                positive_parent_summary["positive_parent_sample_ready_count"],
-            ),
-            "positive_parent_conflict_count": _safe_int(
-                summary.get("positive_parent_conflict_count"),
-                positive_parent_summary["positive_parent_conflict_count"],
-            ),
-            "top_sample_ready_positive_parent_buckets": positive_parent_summary[
-                "top_sample_ready_positive_parent_buckets"
-            ],
-            "live_auto_apply_ready_count": _safe_int(
-                summary.get("live_auto_apply_ready_count"), 0
-            ),
-            "source_contract_status": summary.get("source_contract_status"),
-            "ai_two_pass_review_status": summary.get("ai_two_pass_review_status"),
-        }
-        if not payload:
-            warnings.append(f"lifecycle_bucket_windows:{suffix}_missing")
-        result["windows"][suffix] = item
-    result["warnings"] = warnings
-    return result, warnings
+    return {**retired_status(), "windows": {}}, []
 
 
 def build_threshold_cycle_ev_report(
