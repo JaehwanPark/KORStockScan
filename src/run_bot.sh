@@ -270,6 +270,19 @@ verify_threshold_runtime_env_handoff() {
     echo "✅ threshold runtime env handoff 검증 통과: target_date=$target_date"
 }
 
+apply_retired_runtime_policy_env() {
+    local retirement_commands
+    if ! retirement_commands="$(
+        PYTHONPATH=.. ../.venv/bin/python \
+            -m src.engine.lifecycle.retirement --shell-commands
+    )"; then
+        echo "❌ retired runtime OFF env 생성 실패"
+        return 1
+    fi
+    eval "$retirement_commands"
+    echo "📌 retired runtime namespace OFF 재적용 완료"
+}
+
 apply_authoritative_ai_context_promotion() {
     local target_date="$1"
     local promotion_exports
@@ -468,16 +481,6 @@ while true; do
     disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"
     record_enabled_dated_runtime_provenance "$RUNTIME_TARGET_DATE"
     apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE" || exit 1
-    verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1
-    # Reassert retirement after every sourced layer.  bot_main also performs
-    # the same fail-safe before engine imports for child-only restarts under an
-    # older long-lived supervisor.
-    unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED
-    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED
-    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE
-    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC
-    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC
-    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS
     # Load custody identity after every general runtime/operator layer so none
     # can silently replace the account/registry bound by the apply receipt.
     OWNER_CUSTODY_RUNTIME_ENV="../data/runtime/symbol_owner_policy/owner_custody.env"
@@ -488,6 +491,16 @@ while true; do
         . "$OWNER_CUSTODY_RUNTIME_ENV"
         set +a
     fi
+    apply_retired_runtime_policy_env || exit 1
+    verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1
+    # Reassert removed one-off namespaces after verification. bot_main also
+    # normalizes every retired prefix before importing trading modules.
+    unset KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED
+    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED
+    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE
+    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC
+    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC
+    unset KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS
     export_runtime_source_provenance
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)

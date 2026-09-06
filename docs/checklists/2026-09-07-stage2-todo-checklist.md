@@ -18,6 +18,17 @@
 
 ## 수동 보강 체크리스트
 
+- [x] `[RuntimeStartupRetirementEnvRepair0907] 폐기 runtime env PID 불일치·PREOPEN 상태시각 보완 및 재리뷰` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 08:00~08:35`, `Track: RuntimeStability`)
+  - Source: [launcher](/home/ubuntu/KORStockScan/src/run_bot.sh), [runtime flags](/home/ubuntu/KORStockScan/src/utils/runtime_flags.py), [retirement contract](/home/ubuntu/KORStockScan/src/engine/lifecycle/retirement.py), [PREOPEN wrapper](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_preopen.sh).
+  - 결함·보완: 07:55 PID에서 폐기된 `KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED`가 threshold env `false` 뒤 persistent override `true`로 복원돼 strict PID verify와 Samsung preflight가 실패했다. 모든 runtime/operator/context/custody overlay 뒤 폐기 prefix를 제거하고 canonical OFF env를 다시 적용하며, `bot_main`도 trading import 전에 동일 정규화 후 re-exec하도록 이중 방어했다. PREOPEN status 재실행이 과거 `started_at`을 보존하던 결함도 매 실행 시작시각으로 초기화한다.
+  - 검증: 현재 PID 복제 환경에 새 정규화만 적용한 비거래 임시 process의 exact-date verifier가 `status=pass`, `pid_passed=true`, mismatch/missing 0이다. retirement/wrapper/PID/Samsung preflight·handoff 회귀와 정적·구문 검증을 review→fix→re-review로 닫고 미해결 finding 0일 때만 구현 완료로 유지한다.
+  - 권한 경계: 실행 중 PID, 주문, threshold/provider/수량/cap/broker/hard-safety를 변경하지 않았고 bot 재기동도 수행하지 않았다. 실제 PID 교체와 Samsung authority 재발행은 아래 별도 acceptance가 소유한다.
+
+- [ ] `[RuntimeStartupRetirementEnvAcceptance0908] 보완 launcher의 exact-date PID handoff·Samsung/episode 자연 기동 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 07:30~09:10`, `Track: RuntimeStability`)
+  - 확인: 사용자 승인 또는 표준 예약 기동으로 생긴 신규 main PID에서 source commit/dirty, threshold runtime env, dated override, owner custody identity를 대사하고 `verify --pid`의 `status=pass`, `pid_passed=true`, mismatch/missing 0을 확인한다. Samsung preflight가 같은 PID를 결속해 authority를 게시하고 저가주 profile preflight가 50 active/3 excluded 정책 hash로 자연 종결되는지 확인한다.
+  - Entry recheck: 9/4 원천을 현재 controller v4로 재생성한 뒤 다음 PREOPEN이 `drought_policy_version_invalid` 없이 경제성·source-quality 계약에 따라 선택 또는 명시 차단하는지 확인한다. `entry_split_order_plan=hold_sample`은 강제 적용하지 않는다.
+  - 권한 경계: acceptance를 위한 주문·표본 생성, guard 우회, cap/수량/threshold/provider 변경은 금지한다. bot 재기동은 별도 사용자 승인 없이는 실행하지 않는다.
+
 - [x] `[ScaleInSplitFinalReviewRepair0907] AVG_DOWN 분할 실제 청산 결합·유효시간·control/R6·적용 조건 수리` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:40`, `Track: ScalpingLogic`)
   - Source: [Scale-in split 보완 §6](../audit-reports/2026-09-06-scale-in-split-order-plan-final-review.md#6-f1f7-구현-및-반복-리뷰), [상세검토 목록 #47](../audit-reports/2026-09-05-postclose-work-inventory.md).
   - 완료(2026-09-06): F1~F7 구현·수정·재리뷰 완료. BUY/SELL stage별 exact join, runtime 공유 10/20초 TTL, fixed unsplit control, policy-version R6, 결측/악화 분리, 실제 paired>=3·source dates>=2 공통 계약, 시장가 runtime 제외·3-leg diagnostic-only, false/nested lineage 정규화를 보완했다. 현재 report/policy v3와 `ttl_paired_fixed_control_v3`가 권한 계약이며 v1/v2는 승격 근거가 아니다.

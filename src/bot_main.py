@@ -29,16 +29,15 @@ from datetime import datetime
 # environment.  Strip retired trading authority before importing modules that
 # may snapshot env-backed runtime flags.
 from src.utils.runtime_flags import (
-    clear_startup_retired_runtime_env,
     is_trading_paused,
+    normalize_startup_retired_runtime_env,
 )
 
-_RETIRED_RUNTIME_ENV_CLEARED_AT_STARTUP = clear_startup_retired_runtime_env()
-if __name__ == "__main__" and _RETIRED_RUNTIME_ENV_CLEARED_AT_STARTUP:
-    # Python can remove a value from os.environ for module consumers while the
-    # original exec environment remains visible in /proc/<pid>/environ.  Re-exec
-    # once with the sanitized mapping so runtime provenance and effective
-    # authority agree even under an older long-lived run_bot supervisor.
+_RETIRED_RUNTIME_ENV_NORMALIZED_AT_STARTUP = normalize_startup_retired_runtime_env()
+if __name__ == "__main__" and _RETIRED_RUNTIME_ENV_NORMALIZED_AT_STARTUP:
+    # Python can normalize os.environ for module consumers while the original
+    # exec environment remains visible in /proc/<pid>/environ. Re-exec once so
+    # runtime provenance and effective authority agree under an older supervisor.
     os.execve(
         sys.executable,
         [sys.executable, *sys.argv],

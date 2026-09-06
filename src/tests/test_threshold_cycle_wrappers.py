@@ -2901,6 +2901,14 @@ def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     assert script.index(
         'apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE"'
     ) < script.index('verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE"')
+    assert "apply_retired_runtime_policy_env" in script
+    assert "src.engine.lifecycle.retirement --shell-commands" in script
+    assert script.index('. "$OWNER_CUSTODY_RUNTIME_ENV"') < script.index(
+        "apply_retired_runtime_policy_env || exit 1"
+    )
+    assert script.index("apply_retired_runtime_policy_env || exit 1") < script.index(
+        'verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE"'
+    )
     assert "disable_expired_dated_runtime_overrides" in script
     assert "reset_runtime_policy_env_before_handoff" in script
     assert script.index("reset_runtime_policy_env_before_handoff") < script.index(
@@ -3505,6 +3513,18 @@ def test_preopen_wrapper_failure_closes_status_and_writes_fail_marker(tmp_path):
         "raise SystemExit(1)\n",
         encoding="utf-8",
     )
+    status_dir = project / "data/report/threshold_cycle_preopen_status"
+    status_dir.mkdir(parents=True)
+    old_started_at = "2026-08-31T07:35:00+09:00"
+    (status_dir / f"threshold_cycle_preopen_{date}.status.json").write_text(
+        json.dumps(
+            {
+                "started_at": old_started_at,
+                "finished_at": "2026-08-31T07:35:05+09:00",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     result = subprocess.run(
         ["bash", "deploy/run_threshold_cycle_preopen.sh", date],
@@ -3530,6 +3550,7 @@ def test_preopen_wrapper_failure_closes_status_and_writes_fail_marker(tmp_path):
     assert status["status"] == "failed"
     assert status["reason"] == "command_failed"
     assert status["exit_code"] == 1
+    assert status["started_at"] != old_started_at
     assert status["finished_at"] == status["updated_at"]
 
 

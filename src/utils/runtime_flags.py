@@ -4,8 +4,6 @@ import os
 from pathlib import Path
 from typing import MutableMapping
 
-from src.utils.constants import PROJECT_ROOT
-
 STARTUP_RETIRED_RUNTIME_ENV_KEYS = frozenset(
     {
         # The previous-limit-up entry/observation family was fully retired on
@@ -26,22 +24,46 @@ STARTUP_RETIRED_RUNTIME_ENV_KEYS = frozenset(
 )
 
 
-def clear_startup_retired_runtime_env(
+def normalize_startup_retired_runtime_env(
     environ: MutableMapping[str, str] | None = None,
 ) -> tuple[str, ...]:
-    """Remove retired inherited runtime authority before engine imports."""
+    """Remove retired authority and assert explicit OFF values before imports."""
 
     target = os.environ if environ is None else environ
-    removed: list[str] = []
+    changed: list[str] = []
     for key in sorted(STARTUP_RETIRED_RUNTIME_ENV_KEYS):
         if key in target:
             target.pop(key, None)
-            removed.append(key)
-    return tuple(removed)
+            changed.append(key)
+
+    # Import lazily so bot_main can sanitize the inherited environment before
+    # constants or trading modules snapshot environment-backed runtime flags.
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES, retirement_env
+
+    explicit_off = retirement_env()
+    for key in sorted(tuple(target)):
+        if key.startswith(RETIRED_ENV_PREFIXES) and key not in explicit_off:
+            target.pop(key, None)
+            changed.append(key)
+    for key, value in sorted(explicit_off.items()):
+        if target.get(key) != value:
+            target[key] = value
+            changed.append(key)
+    return tuple(changed)
+
+
+def clear_startup_retired_runtime_env(
+    environ: MutableMapping[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Backward-compatible alias for full retired-runtime normalization."""
+
+    return normalize_startup_retired_runtime_env(environ)
 
 
 def get_pause_flag_path() -> Path:
     """Return the absolute project-root path for the persistent pause flag."""
+    from src.utils.constants import PROJECT_ROOT
+
     return PROJECT_ROOT / "pause.flag"
 
 

@@ -23,7 +23,7 @@ def test_bot_main_import_does_not_install_runtime_side_effects():
     assert callable(module.install_dual_logger)
 
 
-def test_bot_main_import_clears_retired_inherited_runtime_authority(monkeypatch):
+def test_bot_main_import_normalizes_retired_inherited_runtime_authority(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED", "true"
@@ -42,6 +42,12 @@ def test_bot_main_import_clears_retired_inherited_runtime_authority(monkeypatch)
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS",
         "10",
     )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED", "true"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE", "stale.json"
+    )
     sys.modules.pop("src.bot_main", None)
 
     module = importlib.import_module("src.bot_main")
@@ -59,24 +65,25 @@ def test_bot_main_import_clears_retired_inherited_runtime_authority(monkeypatch)
         not in os.environ
     )
     assert (
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC"
-        not in os.environ
+        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC" not in os.environ
     )
     assert (
         "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS"
         not in os.environ
     )
-    assert module._RETIRED_RUNTIME_ENV_CLEARED_AT_STARTUP == (
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ACTIVE_DATE",
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_ENABLED",
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_MIN_WAIT_SEC",
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_SPREAD_WORSEN_BPS",
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_RECHECK_TTL_SEC",
-        "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED",
+    assert (
+        os.environ["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"]
+        == "false"
     )
+    assert (
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE" not in os.environ
+    )
+    changed = set(module._RETIRED_RUNTIME_ENV_NORMALIZED_AT_STARTUP)
+    assert "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED" in changed
+    assert "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED" in changed
     source = inspect.getsource(module)
     assert (
-        'if __name__ == "__main__" and _RETIRED_RUNTIME_ENV_CLEARED_AT_STARTUP'
+        'if __name__ == "__main__" and _RETIRED_RUNTIME_ENV_NORMALIZED_AT_STARTUP'
         in source
     )
     assert "os.execve(" in source
@@ -104,6 +111,10 @@ def test_bot_main_script_reexecs_with_sanitized_runtime_env(monkeypatch):
     assert captured["executable"] == sys.executable
     assert captured["argv"][0] == sys.executable
     assert "KORSTOCKSCAN_UPPER_LIMIT_WATCH_ENABLED" not in captured["environ"]
+    assert (
+        captured["environ"]["KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED"]
+        == "false"
+    )
 
 
 def test_morning_recommendation_broadcast_scheduler_is_removed():

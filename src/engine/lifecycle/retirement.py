@@ -6,8 +6,11 @@ Archived matrix and dedicated institutional aggregate artifacts are never curren
 policy, prompt input, or a reason to regenerate the retired chain.
 """
 
+import argparse
+import os
+import shlex
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 RETIREMENT_ID = "scalping_adm_ldm_retirement_20260906"
 SCALP_OVERNIGHT_RETIREMENT_ID = "scalping_overnight_retirement_20260906"
@@ -173,8 +176,33 @@ def retirement_env() -> dict[str, str]:
     }
 
 
+def retirement_shell_commands(environ: Mapping[str, str] | None = None) -> str:
+    """Render shell commands that remove retired namespaces and assert OFF flags."""
+
+    source = os.environ if environ is None else environ
+    retired_keys = sorted(
+        key for key in source if str(key).startswith(RETIRED_ENV_PREFIXES)
+    )
+    commands = [f"unset -- {shlex.quote(key)}" for key in retired_keys]
+    commands.extend(
+        f"export {key}={shlex.quote(value)}"
+        for key, value in sorted(retirement_env().items())
+    )
+    return "\n".join(commands)
+
+
 def without_retired_env(values: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in values.items() if not k.startswith(RETIRED_ENV_PREFIXES)}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--shell-commands", action="store_true")
+    args = parser.parse_args(argv)
+    if not args.shell_commands:
+        parser.error("--shell-commands is required")
+    print(retirement_shell_commands())
+    return 0
 
 
 def retired_owner(value: Any) -> bool:
@@ -264,3 +292,7 @@ def current_report_view(payload: Any) -> Any:
             result.pop("hypothesis_observation_plan", None)
         return result
     return payload
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

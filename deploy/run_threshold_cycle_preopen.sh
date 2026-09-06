@@ -77,7 +77,11 @@ payload.update(
         ) or [],
     }
 )
-payload.setdefault("started_at", payload["updated_at"])
+if status == "running":
+    payload["started_at"] = payload["updated_at"]
+    payload.pop("finished_at", None)
+else:
+    payload.setdefault("started_at", payload["updated_at"])
 if finished == "1":
     payload["finished_at"] = payload["updated_at"]
 path.parent.mkdir(parents=True, exist_ok=True)

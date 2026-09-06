@@ -1,6 +1,7 @@
 """Current retirement contract replaces obsolete matrix promotion scenarios."""
 
 import importlib
+import shlex
 from dataclasses import fields
 from pathlib import Path
 
@@ -108,6 +109,66 @@ def test_constants_ignore_inherited_enable_flags(monkeypatch):
             "KORSTOCKSCAN_" + field.name
         ).startswith(policy.RETIRED_ENV_PREFIXES):
             assert getattr(rules, field.name) is False, field.name
+
+
+def test_retirement_shell_commands_clear_namespace_and_assert_explicit_off():
+    inherited = {
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE": "stale.json",
+        "KORSTOCKSCAN_UNRELATED_ENABLED": "true",
+    }
+
+    commands = policy.retirement_shell_commands(inherited).splitlines()
+
+    assert (
+        "unset -- KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED" in commands
+    )
+    assert (
+        "unset -- KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE"
+        in commands
+    )
+    assert (
+        "export KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=false"
+        in commands
+    )
+    assert not any("KORSTOCKSCAN_UNRELATED_ENABLED" in item for item in commands)
+
+
+def test_retirement_shell_commands_quote_inherited_names():
+    hostile_key = (
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_BAD;"
+        "touch /tmp/should-not-run"
+    )
+
+    commands = policy.retirement_shell_commands({hostile_key: "true"}).splitlines()
+
+    assert f"unset -- {shlex.quote(hostile_key)}" in commands
+
+
+def test_startup_runtime_normalization_matches_retirement_contract():
+    from src.utils.runtime_flags import (
+        STARTUP_RETIRED_RUNTIME_ENV_KEYS,
+        normalize_startup_retired_runtime_env,
+    )
+
+    legacy_key = next(iter(STARTUP_RETIRED_RUNTIME_ENV_KEYS))
+    inherited = {
+        legacy_key: "true",
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE": "stale.json",
+        "KORSTOCKSCAN_UNRELATED_ENABLED": "true",
+    }
+
+    changed = normalize_startup_retired_runtime_env(inherited)
+
+    assert legacy_key not in inherited
+    assert (
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE" not in inherited
+    )
+    assert inherited["KORSTOCKSCAN_UNRELATED_ENABLED"] == "true"
+    for key, value in policy.retirement_env().items():
+        assert inherited[key] == value
+    assert "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED" in changed
 
 
 def test_live_adapters_are_noops_even_with_advisory_true(monkeypatch):
