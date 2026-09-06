@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from src.engine import scalp_entry_action_decision_matrix as adm_mod
+from src.engine.scalping.entry_observation_source import load_entry_observations
 from src.engine.scalping.ai_decision_trace import (
     CONTEXT_CANDIDATE_SCHEMA,
     record_ai_decision_trace,
@@ -237,26 +237,7 @@ def _api_keys() -> list[str]:
 
 
 def _read_adm_report(target_date: str, *, build_adm: bool) -> dict[str, Any]:
-    if build_adm:
-        return adm_mod.build_scalp_entry_action_decision_matrix_report(target_date)
-    json_path, _md_path = adm_mod.report_paths(target_date)
-    if not json_path.exists():
-        return {
-            "status": "missing_adm_report",
-            "date": target_date,
-            "rows": [],
-            "artifact": str(json_path),
-        }
-    try:
-        return json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "status": "invalid_adm_report",
-            "date": target_date,
-            "rows": [],
-            "artifact": str(json_path),
-            "error": str(exc),
-        }
+    return load_entry_observations(target_date)
 
 
 def _pipeline_events_path(target_date: str) -> Path:
@@ -2929,10 +2910,9 @@ def build_probe_report(
             "broker_guard_bypass/live_auto_promotion"
         ),
         "source": {
-            "adm_status": adm_report.get("status"),
-            "adm_artifact": adm_report.get("artifact")
-            or str(adm_mod.report_paths(target_date)[0]),
-            "build_adm": bool(build_adm),
+            "entry_observation_source": True,
+            "observation_status": adm_report.get("status"),
+            "build_adm": False,
             "pipeline_events_status": pipeline_report.get("status"),
             "pipeline_events_artifact": pipeline_report.get("artifact"),
             "pipeline_events_parse_error_count": pipeline_report.get(

@@ -32,6 +32,13 @@ from src.engine.scalping.entry_candidate_lifecycle_state import (
     CONTEXT_KEY as ENTRY_CANDIDATE_LIFECYCLE_CONTEXT_KEY,
     observe_candidate_transition_safe,
 )
+from src.engine.scalping.entry_opportunity_recheck import (
+    ATTRIBUTION_KEYS as ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
+    attribution_fields as entry_opportunity_recheck_attribution_fields,
+)
+from src.engine.scalping.entry_recheck_economics import (
+    record_buy_receipt as record_recheck_buy_receipt,
+)
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.main_lifecycle_journal import (
     BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC,
@@ -226,6 +233,7 @@ _SELL_PARTIAL_LIFECYCLE_IDENTITY_STOCK_KEYS = (
     "market_session_bucket",
     "last_watching_ai_decision_trace_id",
     "last_watching_ai_attempt_decision_trace_id",
+    *ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
 )
 
 _MAIN_LIFECYCLE_GENERATED_PIPELINE_FIELDS = frozenset(
@@ -701,6 +709,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     *_BROKER_EXECUTION_PROVENANCE_KEYS,
+    *ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
     "buy_execution_notified",
     "buy_price",
     "buy_qty",
@@ -748,6 +757,7 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     *_BROKER_EXECUTION_PROVENANCE_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
+    *ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
     "actual_order_submitted",
     "broker_order_forbidden",
     "buy_price",
@@ -946,6 +956,7 @@ _SELL_REVIVE_RESET_KEYS = (
     *_NXT_TP1_PARTIAL_RESET_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
+    *ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
     "odno",
     "order_time",
     "order_price",
@@ -1081,6 +1092,7 @@ _SELL_COMPLETE_RESET_KEYS = (
     *_NXT_TP1_PARTIAL_RESET_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
+    *ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
     "smoothing_source_only_path_journals",
     "pending_sell_msg",
     "sell_odno",
@@ -1310,6 +1322,13 @@ def _log_holding_pipeline_impl(
         if field_name != "attempt_id" or lifecycle_stage_mapped:
             fields.pop(field_name, None)
     if isinstance(candidate_stock, dict):
+        fields.update(
+            entry_opportunity_recheck_attribution_fields(
+                candidate_stock,
+                stage=stage,
+                event_fields=fields,
+            )
+        )
         trusted_observed_at = observed_at
         if isinstance(trusted_observed_at, datetime):
             if trusted_observed_at.tzinfo is None:
@@ -2779,6 +2798,8 @@ def _standard_sell_final_lifecycle_outbox_leg(
         "last_sell_fill_price": round(final_leg_price, 4),
         "sell_qty": completed_qty,
         "cumulative_sell_qty": completed_qty,
+        "entry_opportunity_recheck_sell_notional_krw": cumulative_amount,
+        "entry_opportunity_recheck_cost_rate": get_trade_cost_rate(),
         "remaining_sell_qty": 0,
         "main_lifecycle_exit_qty": final_leg_qty,
         "main_lifecycle_exit_price": round(final_leg_price, 4),
@@ -2794,6 +2815,11 @@ def _standard_sell_final_lifecycle_outbox_leg(
             receipt_snapshot.get("sell_execution_receipt_unit_fill_consistent")
         ),
         "position_weighted_sell_price": round(weighted_sell_price, 4),
+        "entry_opportunity_recheck_cost_adjusted_profit_pct": (
+            profit_rate
+            if receipt_snapshot.get("entry_opportunity_recheck_attempt_id")
+            else None
+        ),
         "profit_rate": f"{profit_rate:+.2f}",
         "exit_rule": receipt_snapshot.get("last_exit_rule") or "-",
         "exit_decision_source": (
@@ -2972,7 +2998,7 @@ def _emit_standard_sell_partial_lifecycle_outbox_leg(
         observe_candidate_lifecycle=False,
         **dict(leg["event_fields"]),
     )
-    return bool(
+    emitted = bool(
         isinstance(event_payload, dict)
         and event_payload.get("structured_append_succeeded") is True
         and event_payload.get("structured_append_status")
@@ -2982,6 +3008,72 @@ def _emit_standard_sell_partial_lifecycle_outbox_leg(
             event_payload=event_payload,
         )
     )
+    candidate_stock = leg.get("candidate_stock")
+    if (
+        emitted
+        and leg.get("stage") == "sell_completed"
+        and isinstance(candidate_stock, dict)
+        and candidate_stock.get("entry_opportunity_recheck_attempt_id")
+    ):
+        terminal_fields = dict(leg["event_fields"])
+        recheck_terminal_payload = _log_holding_pipeline(
+            leg.get("name") or "-",
+            str(leg["code"]),
+            int(leg["target_id"]),
+            "entry_opportunity_recheck_sell_completed",
+            candidate_stock=dict(candidate_stock),
+            observed_at=observed_at,
+            observe_candidate_lifecycle=False,
+            profit_rate=terminal_fields.get("profit_rate"),
+            entry_opportunity_recheck_cost_adjusted_profit_pct=terminal_fields.get(
+                "entry_opportunity_recheck_cost_adjusted_profit_pct",
+                terminal_fields.get("profit_rate"),
+            ),
+            sell_execution_receipt_economics_complete=terminal_fields.get(
+                "sell_execution_receipt_economics_complete"
+            ),
+            cumulative_sell_qty=terminal_fields.get("cumulative_sell_qty"),
+            sell_execution_receipt_quantity_contract_complete=terminal_fields.get(
+                "sell_execution_receipt_quantity_contract_complete"
+            ),
+            sell_execution_receipt_unit_fill_consistent=terminal_fields.get(
+                "sell_execution_receipt_unit_fill_consistent"
+            ),
+            entry_opportunity_recheck_sell_notional_krw=terminal_fields.get(
+                "entry_opportunity_recheck_sell_notional_krw"
+            ),
+            entry_opportunity_recheck_cost_rate=terminal_fields.get(
+                "entry_opportunity_recheck_cost_rate"
+            ),
+            realized_pnl_krw=terminal_fields.get("realized_pnl_krw"),
+            main_lifecycle_realized_net_pnl_krw=terminal_fields.get(
+                "main_lifecycle_realized_net_pnl_krw"
+            ),
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+            metric_role="primary_ev",
+            decision_authority="entry_opportunity_recheck_exact_attempt_attribution",
+            window_policy="exact_attempt_submit_fill_to_broker_sell_completed",
+            sample_floor="10_valid_exact_cost_adjusted_profit_and_net_pnl_pairs",
+            primary_decision_metric=(
+                "entry_opportunity_recheck_cost_adjusted_profit_pct"
+            ),
+            source_quality_gate=(
+                "immutable_attempt_id_and_broker_buy_fill_and_sell_completed_receipt"
+            ),
+            forbidden_uses=(
+                "intraday_threshold_mutation|provider_route_change|quantity_or_cap_change|"
+                "broker_guard_bypass|hard_safety_bypass"
+            ),
+        )
+        # Keep the durable outbox leg pending if its exact-attempt companion
+        # failed. Replays are idempotent by attempt ID and terminal economics.
+        emitted = bool(
+            isinstance(recheck_terminal_payload, dict)
+            and recheck_terminal_payload.get("structured_append_succeeded") is True
+        )
+    return emitted
 
 
 def _sell_lifecycle_outbox_event_contract_valid(
@@ -10486,6 +10578,7 @@ def _handle_add_buy_execution(
         return
     if add_receipt.get("status") == "duplicate":
         return
+    record_recheck_buy_receipt(target_stock, add_receipt, kind="add")
     order_no = str(add_receipt.get("order_no") or order_no or "").strip()
     effective_qty = int(add_receipt["incremental_qty"])
     if effective_qty <= 0:
@@ -10868,6 +10961,7 @@ def _handle_entry_buy_execution(
         return
     if entry_receipt.get("status") == "duplicate":
         return
+    record_recheck_buy_receipt(target_stock, entry_receipt, kind="entry")
     order_no = str(entry_receipt.get("order_no") or order_no or "").strip()
     effective_exec_qty = int(entry_receipt["incremental_qty"])
     if effective_exec_qty <= 0:
@@ -10945,6 +11039,27 @@ def _handle_entry_buy_execution(
     target_stock["last_entry_receipt_economics_complete"] = bool(
         entry_receipt.get("economics_complete")
     )
+    recheck_fill_observed = bool(
+        target_stock.get("entry_opportunity_recheck_attempt_id")
+        and target_stock.get("entry_opportunity_recheck_direct_submit")
+        and str(
+            target_stock.get("entry_opportunity_recheck_broker_order_no") or ""
+        ).strip()
+        == str(order_no or "").strip()
+        and not target_stock.get("entry_opportunity_recheck_fill_observed")
+    )
+    if recheck_fill_observed:
+        target_stock.update(
+            {
+                "entry_opportunity_recheck_fill_observed": True,
+                "entry_opportunity_recheck_filled_at": now.timestamp(),
+                "entry_opportunity_recheck_fill_order_no": order_no or "-",
+                "entry_opportunity_recheck_fill_price": round(
+                    float(exec_price or 0.0), 4
+                ),
+                "entry_opportunity_recheck_fill_qty": int(effective_exec_qty or 0),
+            }
+        )
     if entry_receipt.get("terminal_entry_order_receipt") is True:
         _cancel_replacement_buys_after_late_parent_fill(
             target_stock,
@@ -11471,6 +11586,34 @@ def _handle_entry_buy_execution(
         **_broker_execution_provenance_fields(target_stock),
         **_probe_venue_provenance_fields(target_stock),
     )
+    if recheck_fill_observed:
+        _log_holding_pipeline(
+            target_stock.get("name"),
+            code,
+            target_id,
+            "entry_opportunity_recheck_filled",
+            candidate_stock=target_stock,
+            observed_at=now,
+            order_no=order_no or "-",
+            execution_no=execution_no or "-",
+            fill_price=round(float(exec_price or 0.0), 4),
+            fill_qty=int(effective_exec_qty or 0),
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            runtime_effect=True,
+            metric_role="real_execution_quality_attribution",
+            decision_authority="entry_opportunity_recheck_exact_attempt_attribution",
+            window_policy="same_recheck_attempt_broker_buy_fill",
+            sample_floor="one_exact_attempt_and_broker_execution_receipt",
+            primary_decision_metric="entry_opportunity_recheck_fill_observed",
+            source_quality_gate=(
+                "immutable_recheck_attempt_id_and_exact_broker_execution_receipt"
+            ),
+            forbidden_uses=(
+                "threshold_mutation|provider_route_change|quantity_or_cap_change|"
+                "broker_guard_bypass|hard_safety_bypass"
+            ),
+        )
     if strategy == "SCALPING" and is_default_position_tag(strategy, pos_tag):
         if preset_sync_status == "DISABLED_TRAILING_UNIFIED":
             sync_stage = "preset_exit_sync_disabled_trailing_unified"

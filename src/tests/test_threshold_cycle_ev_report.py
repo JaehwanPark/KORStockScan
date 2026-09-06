@@ -236,22 +236,9 @@ def test_scalp_entry_adm_summary_preserves_unknown_bucket_summary(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        mod,
-        "scalp_entry_adm_report_paths",
-        lambda target_date: (
-            adm_path,
-            adm_dir / f"scalp_entry_action_decision_matrix_{target_date}.md",
-        ),
-    )
 
     summary, path, warnings = mod._scalp_entry_adm_summary("2026-05-22")
-
-    assert path == str(adm_path)
-    assert summary["unknown_bucket_summary"]["affected_rows"] == 4
-    assert summary["outcome_join_diagnostic"]["status"] == "no_candidate_key_overlap"
-    assert summary["outcome_join_diagnostic"]["runtime_effect"] is False
-    assert "scalp_entry_adm:unknown_bucket_source_quality_gap" in warnings
+    assert summary["status"] == "retired"
 
 
 @pytest.fixture(autouse=True)
@@ -266,66 +253,6 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
         mod,
         "LATENCY_CLASSIFIER_RECOMMENDATION_DIR",
         tmp_path / "missing_latency_classifier_recommendation",
-    )
-    monkeypatch.setattr(
-        mod,
-        "scalp_entry_adm_report_paths",
-        lambda target_date: (
-            tmp_path
-            / "missing_entry_adm"
-            / f"scalp_entry_action_decision_matrix_{target_date}.json",
-            tmp_path
-            / "missing_entry_adm"
-            / f"scalp_entry_action_decision_matrix_{target_date}.md",
-        ),
-    )
-    monkeypatch.setattr(
-        mod,
-        "lifecycle_matrix_report_paths",
-        lambda target_date: (
-            tmp_path
-            / "missing_lifecycle_matrix"
-            / f"lifecycle_decision_matrix_{target_date}.json",
-            tmp_path
-            / "missing_lifecycle_matrix"
-            / f"lifecycle_decision_matrix_{target_date}.md",
-        ),
-    )
-    monkeypatch.setattr(
-        mod,
-        "lifecycle_ai_context_report_paths",
-        lambda target_date: (
-            tmp_path
-            / "missing_lifecycle_ai_context"
-            / f"lifecycle_ai_context_{target_date}.json",
-            tmp_path
-            / "missing_lifecycle_ai_context"
-            / f"lifecycle_ai_context_{target_date}.md",
-        ),
-    )
-    monkeypatch.setattr(
-        mod,
-        "lifecycle_ai_context_attribution_paths",
-        lambda target_date: (
-            tmp_path
-            / "missing_lifecycle_ai_context_attribution"
-            / f"lifecycle_ai_context_attribution_{target_date}.json",
-            tmp_path
-            / "missing_lifecycle_ai_context_attribution"
-            / f"lifecycle_ai_context_attribution_{target_date}.md",
-        ),
-    )
-    monkeypatch.setattr(
-        mod,
-        "institutional_flow_report_paths",
-        lambda target_date: (
-            tmp_path
-            / "missing_institutional_flow_context"
-            / f"institutional_flow_context_{target_date}.json",
-            tmp_path
-            / "missing_institutional_flow_context"
-            / f"institutional_flow_context_{target_date}.md",
-        ),
     )
     monkeypatch.setattr(
         mod,
@@ -379,12 +306,7 @@ def test_lifecycle_bucket_windows_summary_separates_daily_and_promotion(
         )
 
     summary, warnings = mod._lifecycle_bucket_windows_summary("2026-05-29")
-
-    assert warnings == []
-    assert summary["daily"]["window_role"] == "new_pattern_detection"
-    assert summary["windows"]["mtd"]["window_role"] == "promotion_confirmation"
-    assert summary["windows"]["mtd"]["parent_bucket_count"] == 36
-    assert summary["windows"]["rolling5d"]["window_role"] == "rolling_confirmation"
+    assert summary["status"] == "retired"
 
 
 def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeypatch):
@@ -818,50 +740,9 @@ def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        mod,
-        "lifecycle_matrix_report_paths",
-        lambda target_date: (
-            matrix_dir / f"lifecycle_decision_matrix_{target_date}.json",
-            matrix_dir / f"lifecycle_decision_matrix_{target_date}.md",
-        ),
-    )
 
     summary, path, warnings = mod._lifecycle_decision_matrix_summary("2026-05-20")
-
-    assert path == str(matrix_path)
-    assert warnings == []
-    assert summary["complete_flow_count"] == 0
-    assert summary["incomplete_flow_count"] == 3
-    assert summary["join_contract_blocked"] is True
-    assert summary["bundle_ev_tuning_state"] == "blocked_join_gap"
-    assert summary["top_incomplete_reason"] == "identity_namespace_mismatch"
-    assert summary["submit_bucket_contract_gap_count"] == 1
-    assert summary["submit_bucket_code_improvement_workorders"] == [
-        {"workorder_id": "submit_order"}
-    ]
-    assert summary["post_submit_contract_gaps"] == [
-        {"gap_type": "broker_receipt_contract_gap"}
-    ]
-    assert summary["entry_bucket_runtime_candidate_count"] == 2
-    assert summary["entry_bucket_workorder_count"] == 1
-    assert summary["entry_bucket_runtime_approval_candidates"] == [
-        {"candidate_id": "entry_bucket_5"},
-        {"candidate_id": "entry_bucket_6"},
-    ]
-    assert summary["entry_bucket_code_improvement_workorders"] == [
-        {"workorder_id": "entry_order"}
-    ]
-    assert summary["scale_in_bucket_runtime_candidate_count"] == 3
-    assert summary["scale_in_bucket_workorder_count"] == 1
-    assert summary["scale_in_bucket_runtime_approval_candidates"] == [
-        {"candidate_id": "scale_in_bucket_5"},
-        {"candidate_id": "scale_in_bucket_7"},
-        {"candidate_id": "scale_in_bucket_9"},
-    ]
-    assert summary["scale_in_bucket_code_improvement_workorders"] == [
-        {"workorder_id": "scale_in_order"}
-    ]
+    assert summary["status"] == "retired"
 
 
 def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases(
@@ -965,20 +846,9 @@ def test_threshold_cycle_ev_lifecycle_bucket_summary_extracts_positive_sim_cases
 
     summary, artifact, warnings = mod._lifecycle_bucket_discovery_summary("2026-06-26")
 
-    assert artifact == str(path)
+    assert summary["status"] == "retired"
+    assert artifact is None
     assert warnings == []
-    assert summary["positive_parent_count"] == 1
-    assert summary["positive_parent_sample_ready_count"] == 1
-    assert summary["positive_parent_conflict_count"] == 1
-    assert (
-        summary["top_sample_ready_positive_parent_buckets"][0]["parent_bucket_id"]
-        == "parent_positive"
-    )
-    assert summary["top_active_positive_seeds"][0]["active_seed_id"] == "seed_positive"
-    assert summary["sim_auto_positive_ev_count"] == 1
-    assert summary["sim_auto_nonpositive_ev_count"] == 1
-    assert summary["top_positive_sim_auto_approved"][0]["bucket_id"] == "entry:positive"
-    assert summary["top_nonpositive_sim_auto_approved"][0]["bucket_id"] == "entry:avoid"
 
 
 def test_audit_summary_resolves_source_only_candidate_warning(tmp_path):
@@ -1773,7 +1643,7 @@ def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibrat
                 "runtime_change": False,
                 "calibration_candidates": [
                     {
-                        "family": "holding_exit_decision_matrix_advisory",
+                        "family": "holding_flow_ofi_smoothing",
                         "calibration_state": "hold_no_edge",
                         "sample_count": 14,
                         "source_sample_count": 14,
@@ -1788,7 +1658,7 @@ def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibrat
                 "post_apply_attribution": {
                     "calibration_decisions": [
                         {
-                            "family": "holding_exit_decision_matrix_advisory",
+                            "family": "holding_flow_ofi_smoothing",
                             "calibration_state": "hold_no_edge",
                             "sample_count": 0,
                             "sample_floor": 1,
@@ -1810,14 +1680,14 @@ def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibrat
     decision = next(
         item
         for item in report["calibration_outcome"]["decisions"]
-        if item["family"] == "holding_exit_decision_matrix_advisory"
+        if item["family"] == "holding_flow_ofi_smoothing"
     )
     assert decision["sample_count"] == 14
     assert decision["source_sample_count"] == 14
     assert decision["sample_floor_status"] == "minimum_edge_missing"
     assert decision["source_metrics"]["counterfactual_gap_count"] == 14
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-12.md").read_text(encoding="utf-8")
-    assert "holding_exit_decision_matrix_advisory" in markdown
+    assert "holding_flow_ofi_smoothing" in markdown
     assert "sample=`14/1`" in markdown
 
 

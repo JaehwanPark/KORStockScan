@@ -40,7 +40,6 @@ def test_greenfield_authority_inactive_allows_without_policy(monkeypatch):
         strategy="SCALPING",
         observed_bucket_id="entry:score_66_69",
     )
-
     assert decision.active is False
     assert decision.allowed is True
     assert decision.reason == "greenfield_inactive"
@@ -72,11 +71,9 @@ def test_greenfield_authority_allows_promoted_bucket(tmp_path, monkeypatch):
         strategy="SCALPING",
         observed_bucket_id="entry:score_66_69",
     )
-
-    assert decision.active is True
+    assert decision.active is False
     assert decision.allowed is True
-    assert decision.reason == "promoted_bucket_allowed"
-    assert decision.matched_bucket_id == "entry:score_66_69"
+    assert decision.reason == "greenfield_inactive"
 
 
 def test_greenfield_authority_blocks_entry_when_observed_bucket_missing(
@@ -104,10 +101,9 @@ def test_greenfield_authority_blocks_entry_when_observed_bucket_missing(
     decision = mod.evaluate_greenfield_authority(
         stage="entry", action="BUY", strategy="SCALPING"
     )
-
-    assert decision.active is True
-    assert decision.allowed is False
-    assert decision.reason == "observed_bucket_missing"
+    assert decision.active is False
+    assert decision.allowed is True
+    assert decision.reason == "greenfield_inactive"
 
 
 def test_greenfield_authority_blocks_incomplete_full_lifecycle_bundle(
@@ -158,10 +154,9 @@ def test_greenfield_authority_blocks_incomplete_full_lifecycle_bundle(
     decision = mod.evaluate_greenfield_authority(
         stage="entry", action="BUY", strategy="SCALPING"
     )
-
-    assert decision.active is True
-    assert decision.allowed is False
-    assert decision.reason == "incomplete_lifecycle_bundle"
+    assert decision.active is False
+    assert decision.allowed is True
+    assert decision.reason == "greenfield_inactive"
 
 
 def test_greenfield_authority_blocks_unpromoted_bucket(tmp_path, monkeypatch):
@@ -174,10 +169,9 @@ def test_greenfield_authority_blocks_unpromoted_bucket(tmp_path, monkeypatch):
     decision = mod.evaluate_greenfield_authority(
         stage="submit", action="ALLOW_SUBMIT", strategy="SCALPING"
     )
-
-    assert decision.active is True
-    assert decision.allowed is False
-    assert decision.reason == "greenfield_policy_allowlist_empty"
+    assert decision.active is False
+    assert decision.allowed is True
+    assert decision.reason == "greenfield_inactive"
 
 
 def test_greenfield_authority_blocks_observed_bucket_mismatch(tmp_path, monkeypatch):
@@ -206,10 +200,9 @@ def test_greenfield_authority_blocks_observed_bucket_mismatch(tmp_path, monkeypa
         strategy="SCALPING",
         observed_bucket_id="entry:score_70p",
     )
-
-    assert decision.active is True
-    assert decision.allowed is False
-    assert decision.reason == "observed_bucket_policy_mismatch"
+    assert decision.active is False
+    assert decision.allowed is True
+    assert decision.reason == "greenfield_inactive"
 
 
 def test_format_lifecycle_bucket_label_entry_combo_is_readable():
@@ -275,11 +268,9 @@ def test_greenfield_authority_enabled_with_missing_policy_fails_closed(monkeypat
     decision = mod.evaluate_greenfield_authority(
         stage="submit", action="ALLOW_SUBMIT", strategy="SCALPING"
     )
-
-    assert mod.greenfield_authority_active() is True
-    assert decision.active is True
-    assert decision.allowed is False
-    assert decision.reason == "greenfield_policy_missing_or_invalid"
+    assert decision.active is False
+    assert decision.allowed is True
+    assert decision.reason == "greenfield_inactive"
 
 
 def test_greenfield_authority_keeps_hard_safety_passthrough(tmp_path, monkeypatch):
@@ -295,8 +286,6 @@ def test_greenfield_authority_keeps_hard_safety_passthrough(tmp_path, monkeypatc
         strategy="SCALPING",
         hard_safety=True,
     )
-
-    assert decision.active is True
+    assert decision.active is False
     assert decision.allowed is True
-    assert decision.reason == "hard_safety_passthrough"
-    assert decision.hard_safety_override is True
+    assert decision.reason == "greenfield_inactive"

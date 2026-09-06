@@ -425,11 +425,11 @@ def test_postclose_large_reports_use_compact_stdout_and_verified_refresh():
 
     assert (
         'src.engine.scalp_entry_action_decision_matrix --date "$TARGET_DATE" --print-summary'
-        in script
+        not in script
     )
     assert (
         'src.engine.lifecycle_bucket_discovery --date "$TARGET_DATE" --print-summary'
-        in script
+        not in script
     )
     assert (
         'src.engine.latency_classifier_recommendation "${latency_args[@]}" --print-summary'
@@ -610,72 +610,58 @@ def test_low_price_preflight_does_not_retry_terminal_cost_quarantine():
     assert "exit 4" in script
 
 
-def test_postclose_wrapper_defers_machine_microstructure_to_final_refresh_owner():
+def test_postclose_wrapper_excludes_machine_microstructure_duplicate_path():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
-    assert (
-        'RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION:-false}"'
-        in script
+    duplicate_tokens = (
+        "THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION",
+        "THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL",
+        "-m src.engine.monitoring.machine_microstructure_attribution",
+        "-m src.engine.automation.market_weakness_hysteresis_tuning",
+        "-m src.engine.automation.machine_entry_timing_tuning",
+        "-m src.engine.automation.machine_microstructure_policy_approval",
+        "machine_microstructure_attribution=$RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION",
     )
-    tuning_idx = script.index("-m src.engine.monitoring.low_price_two_leg_tuning")
-    expansion_idx = script.index(
-        "-m src.engine.monitoring.low_price_two_leg_expanded_candidate_research"
-    )
-    attribution_idx = script.index(
-        "-m src.engine.monitoring.machine_microstructure_attribution"
-    )
-    weakness_hysteresis_idx = script.index(
-        "-m src.engine.automation.market_weakness_hysteresis_tuning"
-    )
-    entry_timing_idx = script.index(
-        "-m src.engine.automation.machine_entry_timing_tuning"
-    )
-    assert (
-        tuning_idx
-        < expansion_idx
-        < attribution_idx
-        < weakness_hysteresis_idx
-        < entry_timing_idx
-    )
-    assert 'wait_for_postclose_resources "machine_microstructure_attribution"' in script
-    assert "machine_microstructure_attribution_${TARGET_DATE}.json" in script
-    assert (
-        'RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL="${THRESHOLD_CYCLE_RUN_MACHINE_MICROSTRUCTURE_POLICY_APPROVAL:-false}"'
-        in script
-    )
-    approval_idx = script.index(
-        "-m src.engine.automation.machine_microstructure_policy_approval"
-    )
-    assert entry_timing_idx < approval_idx
-    assert "--phase postclose" in script
-    assert (
-        "machine_microstructure_policy_approval_postclose_${TARGET_DATE}.json" in script
-    )
-    assert "[STATUS] machine_microstructure_policy_approval" in script
-    assert "runtime_effect=false" in script
-    assert (
-        "machine_microstructure_attribution=$RUN_MACHINE_MICROSTRUCTURE_ATTRIBUTION"
-        in script
-    )
+    for token in duplicate_tokens:
+        assert token not in script
 
-    widget_expansion_service = Path(
-        "deploy/systemd/korstockscan-widget-expansion-recommendation.service"
+    final_refresh_service = Path(
+        "deploy/systemd/korstockscan-machine-microstructure-final-refresh.service"
     ).read_text(encoding="utf-8")
-    assert widget_expansion_service.count("ExecStart=") == 1
+    assert final_refresh_service.count("ExecStart=") == 1
     assert (
         "ExecStart=/home/ubuntu/KORStockScan/deploy/"
-        "run_machine_microstructure_final_refresh.sh" in widget_expansion_service
+        "run_machine_microstructure_final_refresh.sh" in final_refresh_service
     )
     assert "KORSTOCKSCAN_WIDGET_EXPANSION_TELEGRAM_ENABLED=true" in (
-        widget_expansion_service
+        final_refresh_service
     )
-    assert "TimeoutStartSec=3600" in widget_expansion_service
-    assert "RestartPreventExitStatus=42" in widget_expansion_service
+    assert "TimeoutStartSec=3600" in final_refresh_service
+    assert "RestartPreventExitStatus=42" in final_refresh_service
 
-    widget_expansion_timer = Path(
-        "deploy/systemd/korstockscan-widget-expansion-recommendation.timer"
+    final_refresh_timer = Path(
+        "deploy/systemd/korstockscan-machine-microstructure-final-refresh.timer"
     ).read_text(encoding="utf-8")
-    assert "OnCalendar=Mon..Fri *-*-* 21:15:00 Asia/Seoul" in widget_expansion_timer
+    assert "OnCalendar=Mon..Fri *-*-* 21:15:00 Asia/Seoul" in final_refresh_timer
+    assert (
+        "Unit=korstockscan-machine-microstructure-final-refresh.service"
+        in final_refresh_timer
+    )
+
+    installer = Path(
+        "deploy/install_machine_microstructure_final_refresh_systemd.sh"
+    ).read_text(encoding="utf-8")
+    assert 'if [[ ! -e "$NEW_STAMP" ]]' in installer
+    assert 'touch -r "$OLD_STAMP" "$NEW_STAMP"' in installer
+    assert 'systemctl enable "$NEW_TIMER"' in installer
+    assert "systemctl enable --now" not in installer
+    assert installer.index('systemctl stop "$OLD_TIMER"') < installer.index(
+        'systemctl start "$NEW_TIMER"'
+    )
+    assert 'systemctl is-enabled --quiet "$NEW_TIMER"' in installer
+    assert 'systemctl is-active --quiet "$NEW_TIMER"' in installer
+    assert "NextElapseUSecRealtime" in installer
+    assert 'cmp -s "$UNIT_SOURCE_DIR/$NEW_BASE.service"' in installer
 
 
 def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
@@ -763,6 +749,7 @@ def _run_machine_microstructure_final_refresh(
     builder_rc=0,
     target_date_rc=0,
     completed_target_date="2026-08-14",
+    target_date_arg=None,
 ):
     fake_python = tmp_path / "fake-python"
     call_log = tmp_path / "calls.log"
@@ -812,8 +799,11 @@ def _run_machine_microstructure_final_refresh(
         "FAKE_TARGET_DATE_RC": str(target_date_rc),
     }
 
+    command = ["deploy/run_machine_microstructure_final_refresh.sh"]
+    if target_date_arg is not None:
+        command.append(target_date_arg)
     result = subprocess.run(
-        ["deploy/run_machine_microstructure_final_refresh.sh"],
+        command,
         check=False,
         env=env,
         capture_output=True,
@@ -865,6 +855,42 @@ def test_machine_microstructure_final_refresh_fails_before_children_when_date_re
     assert result.returncode == 6
     assert calls == []
     assert "target_date=unresolved target_date_rc=6" in result.stderr
+
+
+def test_machine_microstructure_final_refresh_accepts_explicit_recovery_date(tmp_path):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        completed_target_date="2026-09-04",
+        target_date_arg="2026-09-04",
+    )
+
+    assert result.returncode == 0
+    assert len(calls) == 6
+    assert all("--target-date 2026-09-04" in call for call in calls[:5])
+    assert "--completed-machine-source-date 2026-09-04" in calls[5]
+
+
+def test_machine_microstructure_final_refresh_rejects_invalid_explicit_date(tmp_path):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        target_date_arg="2026-02-30",
+    )
+
+    assert result.returncode == 2
+    assert calls == []
+    assert "reason=invalid_explicit_target_date" in result.stderr
+
+
+def test_machine_microstructure_final_refresh_rejects_stale_recovery_date(tmp_path):
+    result, calls = _run_machine_microstructure_final_refresh(
+        tmp_path,
+        completed_target_date="2026-09-04",
+        target_date_arg="2026-09-03",
+    )
+
+    assert result.returncode == 2
+    assert calls == []
+    assert "reason=explicit_target_date_not_current_completed" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1458,29 +1484,20 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     one_share_threshold_idx = script.index(
         "-m src.engine.monitoring.one_share_threshold_opportunity"
     )
-    entry_adm_idx = script.index("src.engine.scalp_entry_action_decision_matrix")
-    entry_ai_gate_idx = script.index("src.engine.scalping.entry_ai_gate_backtest")
+    entry_recheck_controller_idx = script.index(
+        "src.engine.scalping.entry_recheck_drought_controller"
+    )
+    assert "src.engine.scalping.entry_ai_gate_backtest" not in script
     microstructure_idx = script.index(
         "src.engine.scalping.microstructure_reaction_context"
     )
     observation_preflight_idx = script.index("observation_source_quality_preflight")
-    scale_in_cf_idx = script.index(
-        "src.engine.lifecycle.scale_in_incremental_counterfactual"
-    )
-    lifecycle_matrix_idx = script.index("src.engine.lifecycle_decision_matrix")
-    context_attribution_idx = script.index(
-        'src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode attribution'
-    )
-    context_idx = script.index(
-        'src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode context'
-    )
     assert (
         scalping_pyramid_feedback_idx
         < observation_preflight_idx
         < scalping_pyramid_calibration_idx
         < scalping_avg_down_recovery_idx
     )
-    assert observation_preflight_idx < scale_in_cf_idx < lifecycle_matrix_idx
     assert (
         rising_missed_feedback_idx
         < rising_missed_scout_idx
@@ -1488,10 +1505,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < scalping_pyramid_calibration_idx
         < scalping_avg_down_recovery_idx
         < one_share_threshold_idx
-        < entry_adm_idx
     )
-    discovery_idx = script.index("src.engine.lifecycle_bucket_discovery")
-    bridge_idx = script.index("src.engine.runtime_apply_bridge")
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
     observation_audit_idx = script.index(
         "src.engine.observation_source_quality_audit", verbosity_idx
@@ -1573,14 +1587,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < observation_preflight_idx
         < scalping_pyramid_calibration_idx
         < scalping_avg_down_recovery_idx
-        < entry_adm_idx
-        < entry_ai_gate_idx
+        < entry_recheck_controller_idx
         < microstructure_idx
-        < lifecycle_matrix_idx
-        < context_attribution_idx
-        < context_idx
-        < discovery_idx
-        < bridge_idx
         < verbosity_idx
         < observation_audit_idx
         < action_outcome_calibration_idx
@@ -1674,33 +1682,21 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         'RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-false}"'
         in script
     )
+    assert "RUN_SCALP_ENTRY_ADM=false"
     assert (
-        'RUN_SCALP_ENTRY_ADM="${THRESHOLD_CYCLE_RUN_SCALP_ENTRY_ADM:-true}"' in script
-    )
-    assert (
-        'RUN_ENTRY_AI_GATE_BACKTEST="${THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-true}"'
+        'RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER="${THRESHOLD_CYCLE_RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER:-true}"'
         in script
     )
+    assert 'ENTRY_AI_GATE_BACKTEST_SCHEDULE="on_demand"' in script
+    assert "THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-weekly" not in script
     assert (
         'RUN_MICROSTRUCTURE_REACTION_CONTEXT="${THRESHOLD_CYCLE_RUN_MICROSTRUCTURE_REACTION_CONTEXT:-true}"'
         in script
     )
-    assert (
-        'RUN_LIFECYCLE_DECISION_MATRIX="${THRESHOLD_CYCLE_RUN_LIFECYCLE_DECISION_MATRIX:-true}"'
-        in script
-    )
-    assert (
-        'RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-true}"'
-        in script
-    )
-    assert (
-        'RUN_LIFECYCLE_BUCKET_DISCOVERY="${THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_DISCOVERY:-$RUN_LIFECYCLE_DECISION_MATRIX}"'
-        in script
-    )
-    assert (
-        'RUN_RUNTIME_APPLY_BRIDGE="${THRESHOLD_CYCLE_RUN_RUNTIME_APPLY_BRIDGE:-$RUN_LIFECYCLE_BUCKET_DISCOVERY}"'
-        in script
-    )
+    assert "RUN_LIFECYCLE_DECISION_MATRIX=false" in script
+    assert "RUN_LIFECYCLE_AI_CONTEXT=false" in script
+    assert "RUN_LIFECYCLE_BUCKET_DISCOVERY=false" in script
+    assert "RUN_RUNTIME_APPLY_BRIDGE=false" in script
     assert (
         'RUN_TUNING_PERFORMANCE_CONTROL_TOWER="${THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER:-true}"'
         in script
@@ -1713,6 +1709,10 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert "entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST" in script
+    assert (
+        "entry_recheck_drought_controller=$RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER"
+        in script
+    )
     assert "ai_score_optimization_backtest" not in script
     assert (
         "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL"
@@ -2182,10 +2182,14 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert action_outcome_calibration_idx >= 0
     assert (
         '"$PROJECT_DIR/data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/entry_ai_gate_backtest/entry_ai_gate_backtest_${TARGET_DATE}.json"'
+        not in script
+    )
+    assert (
+        '"$PROJECT_DIR/data/report/entry_recheck_drought_controller/entry_recheck_drought_controller_${TARGET_DATE}.json"'
         in script
     )
     assert (
@@ -2218,11 +2222,11 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     )
     assert (
         '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/lifecycle_bucket_discovery/lifecycle_bucket_discovery_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/swing_lifecycle_decision_matrix/swing_lifecycle_decision_matrix_${TARGET_DATE}.json"'
@@ -2234,7 +2238,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     )
     assert (
         '"$PROJECT_DIR/data/report/runtime_apply_bridge/runtime_apply_bridge_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"'
@@ -2307,6 +2311,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT" in script
     assert "scalp_entry_adm=$RUN_SCALP_ENTRY_ADM" in script
     assert "entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST" in script
+    assert "entry_ai_gate_backtest_schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE" in script
     assert "tight_stop_entry_companion_report" not in script
     assert "scalp_sim_ai_deferred_review" not in script
     assert "THRESHOLD_CYCLE_RUN_QUOTE_CONSISTENCY_REPORT" not in script

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import argparse
+from src.engine.lifecycle.retirement import retired_status
+
 import gzip
 import hashlib
 import json
@@ -10,7 +11,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -890,144 +891,7 @@ def _pressure_item(
 
 
 def build_refinement_report(target_date: str) -> dict[str, Any]:
-    target_date = str(target_date).strip()
-    plan = _load_observation_plan(target_date)
-    hypotheses = {
-        str(item.get("soft_hypothesis_id") or ""): item
-        for item in (plan.get("hypotheses") or [])
-        if isinstance(item, dict) and str(item.get("soft_hypothesis_id") or "").strip()
-    }
-    lifecycle_report = _latest_lifecycle_bucket_report(target_date)
-    parent_by_id, parent_rows = _parent_lookup(lifecycle_report)
-    aggregates: dict[str, HypothesisAggregate] = {}
-    runtime_match_count = 0
-    derived_match_count = 0
-    candidate_feature_event_count = 0
-    source_event_files: Counter[str] = Counter()
-    for payload, fields, source_path in _iter_pipeline_event_records(target_date) or []:
-        source_event_files[str(source_path)] += 1
-        candidate_features = _parse_json_mapping(
-            fields.get("ldm_hypothesis_candidate_features")
-        )
-        if candidate_features:
-            candidate_feature_event_count += 1
-        raw_runtime_matched = _truthy(fields.get("ldm_hypothesis_matched"))
-        source_origin = "runtime_matched"
-        if raw_runtime_matched:
-            hypothesis_id = str(fields.get("ldm_hypothesis_id") or "").strip()
-            if not hypothesis_id:
-                continue
-            runtime_match_count += 1
-        else:
-            if not candidate_features:
-                continue
-            hypothesis_id = _derived_hypothesis_id_for_features(
-                candidate_features, hypotheses
-            )
-            if not hypothesis_id:
-                continue
-            source_origin = "derived_contract_drift_recompute"
-            derived_match_count += 1
-
-        aggregate = aggregates.setdefault(
-            hypothesis_id,
-            HypothesisAggregate(
-                hypothesis_id=hypothesis_id,
-                plan_hypothesis=hypotheses.get(hypothesis_id, {}),
-            ),
-        )
-        if hypothesis_id not in hypotheses:
-            aggregate.plan_hypothesis_missing_count += 1
-            aggregate.source_quality_blocked_count += 1
-        _add_match_to_aggregate(
-            aggregate=aggregate,
-            payload=payload,
-            fields=fields,
-            source_path=source_path,
-            candidate_features=candidate_features,
-            source_origin=source_origin,
-        )
-
-    refinement_inputs: list[dict[str, Any]] = []
-    for aggregate in aggregates.values():
-        requirements = aggregate.plan_hypothesis.get("observable_requirements")
-        requirement_features = _requirements_to_features(
-            requirements if isinstance(requirements, list) else []
-        )
-        features = {**requirement_features, **aggregate.candidate_features}
-        explicit_parent_ids = sorted(set(aggregate.source_parent_bucket_ids))
-        parent_ids = explicit_parent_ids or _matching_parent_ids(features, parent_rows)
-        known_parent_ids = [
-            parent_id for parent_id in parent_ids if parent_id in parent_by_id
-        ]
-        refinement_inputs.append(
-            _pressure_item(
-                target_date=target_date,
-                aggregate=aggregate,
-                parent_ids=known_parent_ids,
-                parent_by_id=parent_by_id,
-                explicit_parent_ids=explicit_parent_ids,
-            )
-        )
-
-    class_counts = Counter(
-        str(item.get("classification") or "unknown") for item in refinement_inputs
-    )
-    report = {
-        "schema_version": SCHEMA_VERSION,
-        "report_type": REPORT_TYPE,
-        "date": target_date,
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "decision_authority": DECISION_AUTHORITY,
-        "consumer": CONSUMER,
-        "consumption_required": bool(refinement_inputs),
-        "must_not_be_silent": bool(refinement_inputs),
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "forbidden_uses": list(FORBIDDEN_USES),
-        "source_artifacts": {
-            "pipeline_events": str(_pipeline_event_path(target_date)),
-            "pipeline_event_files": sorted(source_event_files),
-            "observation_plan": str(latest_observation_plan_path(target_date)),
-            "previous_lifecycle_bucket_discovery": (
-                str(
-                    LIFECYCLE_BUCKET_DIR
-                    / f"lifecycle_bucket_discovery_{lifecycle_report.get('date')}.json"
-                )
-                if lifecycle_report.get("date")
-                else ""
-            ),
-        },
-        "summary": {
-            "hypothesis_match_count": sum(
-                item.match_count for item in aggregates.values()
-            ),
-            "runtime_hypothesis_match_count": runtime_match_count,
-            "derived_hypothesis_match_count": derived_match_count,
-            "candidate_feature_event_count": candidate_feature_event_count,
-            "matched_hypothesis_count": len(aggregates),
-            "refinement_input_count": len(refinement_inputs),
-            "derived_refinement_input_count": sum(
-                1
-                for item in refinement_inputs
-                if item.get("derived_from_contract_drift")
-            ),
-            "source_event_files": sorted(source_event_files),
-            "raw_event_mutated": False,
-            "classification_counts": dict(sorted(class_counts.items())),
-            "plan_hypothesis_count": len(hypotheses),
-        },
-        "refinement_inputs": sorted(
-            refinement_inputs,
-            key=lambda item: (
-                -_safe_int(item.get("match_count")),
-                str(item.get("soft_hypothesis_id") or ""),
-            ),
-        ),
-    }
-    return report
+    return retired_status("ldm_hypothesis_parent_refinement")
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -1065,27 +929,11 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def write_report(target_date: str) -> dict[str, Any]:
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    report = build_refinement_report(target_date)
-    json_path, md_path = report_paths(target_date)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(render_markdown(report), encoding="utf-8")
-    return report
+    return retired_status("ldm_hypothesis_parent_refinement")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Build LDM hypothesis parent refinement pressure report."
-    )
-    parser.add_argument("--date", default=date.today().isoformat())
-    parser.add_argument("--write", action="store_true")
-    args = parser.parse_args(argv)
-    report = (
-        write_report(args.date) if args.write else build_refinement_report(args.date)
-    )
-    print(json.dumps(report, ensure_ascii=False))
+    print(json.dumps(retired_status("ldm_hypothesis_parent_refinement")))
     return 0
 
 

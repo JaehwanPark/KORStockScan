@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import (
+    retired_artifact,
+    retired_status,
+    current_report_view,
+)
+
 import argparse
 import hashlib
 import json
@@ -133,11 +139,13 @@ class ClassifiedOrder:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _file_fingerprint(path: Path, label: str) -> dict[str, Any]:
@@ -2140,7 +2148,6 @@ def _entry_submit_drought_implementation_marker(
     )
     if not {
         "code_improvement_workorder",
-        "lifecycle_decision_matrix.submit_bucket_attribution",
         "threshold_cycle_ev_report",
         "runtime_approval_summary",
         "postclose_verifier",
@@ -2184,19 +2191,9 @@ def _entry_submit_drought_implementation_marker(
         quote_freshness.get("latency_pass_recovered_count"), 0
     )
     current_primary = str(classification.get("primary") or "").strip()
-    ldm_submit_summary = (
-        ((lifecycle_report or {}).get("submit_bucket_attribution") or {}).get("summary")
-        if isinstance(
-            ((lifecycle_report or {}).get("submit_bucket_attribution") or {}).get(
-                "summary"
-            ),
-            dict,
-        )
-        else {}
-    )
-    ldm_quote_freshness_present = bool(
-        ldm_submit_summary.get("quote_freshness_attribution_present")
-    )
+    # Sentinel owns exact quote-refresh attribution; retired LDM is not a
+    # second mandatory copy of the same operational evidence.
+    ldm_quote_freshness_present = bool(quote_freshness)
     quote_freshness_inconsistent = (
         (refresh_attempted_count <= 0 and latency_pass_recovered_count > 0)
         or (refresh_attempted_count <= 0 and refresh_applied_count > 0)
@@ -3459,54 +3456,7 @@ def _sort_classified(items: list[ClassifiedOrder]) -> list[ClassifiedOrder]:
 
 
 def _holding_exit_counterfactual_contract_status(target_date: str) -> dict[str, Any]:
-    report = _load_json(
-        HOLDING_EXIT_DECISION_MATRIX_DIR
-        / f"holding_exit_decision_matrix_{target_date}.json"
-    )
-    if not report:
-        return {
-            "implemented": False,
-            "reason": "missing_holding_exit_decision_matrix_report",
-        }
-    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    proxy = (
-        report.get("counterfactual_proxy_summary")
-        if isinstance(report.get("counterfactual_proxy_summary"), dict)
-        else {}
-    )
-    required_actions = {
-        "hold_defer",
-        "exit_only",
-        "avg_down_wait",
-        "pyramid_wait",
-    }
-    per_action_samples = (
-        proxy.get("per_action_samples")
-        if isinstance(proxy.get("per_action_samples"), dict)
-        else {}
-    )
-    actions_present = {str(value) for value in proxy.get("actions_present") or []}
-    has_required_actions = required_actions.issubset(actions_present) and all(
-        _safe_int(per_action_samples.get(action), 0) > 0 for action in required_actions
-    )
-    implemented = (
-        str(report.get("instrumentation_status") or "") == "implemented"
-        and report.get("runtime_change") is False
-        and "non_no_clear_edge_count" in summary
-        and bool(summary.get("per_action_edge_buckets"))
-        and bool(proxy.get("ready"))
-        and has_required_actions
-    )
-    return {
-        "implemented": implemented,
-        "reason": (
-            "implemented_contract_available" if implemented else "contract_incomplete"
-        ),
-        "report_path": str(
-            HOLDING_EXIT_DECISION_MATRIX_DIR
-            / f"holding_exit_decision_matrix_{target_date}.json"
-        ),
-    }
+    return retired_status("holding_exit_decision_matrix")
 
 
 def _swing_ai_structured_output_eval_contract_status(
@@ -3710,192 +3660,13 @@ def _threshold_ev_followup_orders(
 
 
 def _entry_adm_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
-    adm = (
-        ev_report.get("scalp_entry_action_decision_matrix")
-        if isinstance(ev_report.get("scalp_entry_action_decision_matrix"), dict)
-        else {}
-    )
-    if not adm:
-        return []
-    joined = _safe_int(adm.get("joined_sample_cumulative", adm.get("joined_sample")), 0)
-    floor = _safe_int(adm.get("sample_floor"), 20)
-    missing_actions = (
-        adm.get("missing_actions")
-        if isinstance(adm.get("missing_actions"), list)
-        else []
-    )
-    prompt_applied_count = _safe_int(adm.get("prompt_applied_count"), 0)
-    issues: list[str] = []
-    if joined < floor:
-        issues.append("joined_sample_below_sample_floor")
-    if missing_actions:
-        issues.append("missing_action_bucket")
-    if prompt_applied_count <= 0:
-        issues.append("prompt_context_not_loaded")
-    if str(adm.get("status") or "").lower() == "missing":
-        issues.append("source_quality_gap")
-    if not issues:
-        return []
-    sources = (
-        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
-    )
-    evidence = [
-        f"status={adm.get('status')}",
-        f"joined_sample={joined}",
-        f"sample_floor={floor}",
-        f"prompt_applied_count={prompt_applied_count}",
-    ]
-    outcome_join_diagnostic = (
-        adm.get("outcome_join_diagnostic")
-        if isinstance(adm.get("outcome_join_diagnostic"), dict)
-        else {}
-    )
-    if outcome_join_diagnostic:
-        evidence.extend(
-            [
-                f"outcome_join_status={outcome_join_diagnostic.get('status')}",
-                f"zero_join_reason={outcome_join_diagnostic.get('zero_join_reason')}",
-                "candidate_post_sell_key_overlap_count="
-                f"{outcome_join_diagnostic.get('candidate_post_sell_key_overlap_count')}",
-                f"post_sell_evaluation_rows={outcome_join_diagnostic.get('post_sell_evaluation_rows')}",
-                f"post_sell_evaluation_join_keys={outcome_join_diagnostic.get('post_sell_evaluation_join_keys')}",
-                f"outcome_coverage_state={outcome_join_diagnostic.get('coverage_state')}",
-                f"outcome_coverage_reason={outcome_join_diagnostic.get('coverage_reason')}",
-                f"matched_post_sell_evaluation_rows={outcome_join_diagnostic.get('matched_post_sell_evaluation_rows')}",
-                f"sim_outcome_eligible_rows={outcome_join_diagnostic.get('sim_outcome_eligible_rows')}",
-            ]
-        )
-    if missing_actions:
-        evidence.append(
-            "missing_actions=" + ",".join(str(value) for value in missing_actions)
-        )
-    source_path = sources.get("scalp_entry_action_decision_matrix") or adm.get(
-        "artifact"
-    )
-    return [
-        {
-            "order_id": "order_scalp_entry_adm_daily_tuning_coverage",
-            "title": "scalp entry ADM daily tuning coverage",
-            "source_report_type": "threshold_cycle_ev",
-            "lifecycle_stage": "entry",
-            "target_subsystem": "entry_funnel",
-            "route": "instrumentation_order",
-            "mapped_family": "scalp_entry_action_decision_matrix_advisory",
-            "threshold_family": "scalp_entry_action_decision_matrix_advisory",
-            "improvement_type": "instrumentation_report_provenance",
-            "confidence": "consensus",
-            "priority": 3,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "expected_ev_effect": "Keep BUY_NOW/WAIT_REQUOTE/SKIP_STALE/BUY_DEFENSIVE/NO_BUY_AI/SKIP_SOURCE_QUALITY/SKIP_PRE_SUBMIT_SAFETY action buckets joined to post-sell outcomes and runtime forced_action provenance for daily entry policy tuning.",
-            "evidence": evidence,
-            "source_paths": [str(source_path)] if source_path else [],
-            "next_postclose_metric": "scalp_entry_action_decision_matrix should meet sample_floor, include all action buckets, show prompt_applied_count, and expose entry_adm_runtime_effect/forced_action evidence when runtime bias env is enabled.",
-            "files_likely_touched": [
-                "src/engine/scalp_entry_action_decision_matrix.py",
-                "src/engine/sniper_state_handlers.py",
-                "src/engine/scalp_entry_adm_runtime.py",
-                "src/engine/threshold_cycle_ev_report.py",
-            ],
-            "acceptance_tests": [
-                "PYTHONPATH=. .venv/bin/pytest src/tests/test_scalp_entry_action_decision_matrix.py src/tests/test_build_code_improvement_workorder.py",
-                "runtime_effect remains false and broker submit safety guards remain owner",
-            ],
-            "adm_issue_types": issues,
-        }
-    ]
+    return []
 
 
 def _lifecycle_ai_context_followup_orders(
     ev_report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    attribution = (
-        ev_report.get("lifecycle_ai_context_attribution")
-        if isinstance(ev_report.get("lifecycle_ai_context_attribution"), dict)
-        else {}
-    )
-    context = (
-        ev_report.get("lifecycle_ai_context")
-        if isinstance(ev_report.get("lifecycle_ai_context"), dict)
-        else {}
-    )
-    if not attribution and not context:
-        return []
-    applied = _safe_int(attribution.get("context_applied_count"), 0)
-    prompt_stage_count = _safe_int(context.get("prompt_stage_count"), 0)
-    issues: list[str] = []
-    if not context.get("available"):
-        issues.append("context_artifact_missing")
-    if prompt_stage_count <= 0:
-        issues.append("prompt_stage_context_missing")
-    if applied <= 0:
-        issues.append("runtime_context_provenance_missing")
-    if not issues:
-        return []
-    sources = (
-        ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
-    )
-    implementation_status = (
-        "implemented"
-        if attribution.get("implementation_status") == "implemented"
-        and context.get("available")
-        and prompt_stage_count > 0
-        else None
-    )
-    return [
-        {
-            "order_id": "order_lifecycle_ai_context_attribution_feedback",
-            "title": "lifecycle AI context attribution feedback coverage",
-            "source_report_type": "threshold_cycle_ev",
-            "lifecycle_stage": "lifecycle",
-            "target_subsystem": "lifecycle_decision_matrix",
-            "route": "instrumentation_order",
-            "mapped_family": "lifecycle_ai_context",
-            "threshold_family": None,
-            "improvement_type": "instrumentation_report_provenance",
-            "confidence": "consensus",
-            "priority": 4,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "implementation_status": implementation_status,
-            "implementation_checks": attribution.get("implementation_checks") or [],
-            "implementation_provenance": attribution.get("implementation_provenance")
-            or {},
-            "expected_ev_effect": (
-                "Keep lifecycle AI context contribution visible as bounded auxiliary ADM/LDM feedback "
-                "without creating real order gates or standalone threshold families."
-            ),
-            "evidence": [
-                f"context_available={context.get('available')}",
-                f"prompt_stage_count={prompt_stage_count}",
-                f"context_applied_count={applied}",
-                f"replay_budget={attribution.get('replay_budget')}",
-            ],
-            "source_paths": [
-                str(path)
-                for path in (
-                    sources.get("lifecycle_ai_context"),
-                    sources.get("lifecycle_ai_context_attribution"),
-                )
-                if path
-            ],
-            "next_postclose_metric": (
-                "lifecycle_ai_context_attribution should show context_applied_count, stage attribution, "
-                "and bounded auxiliary weights that LDM policy entries can consume."
-            ),
-            "files_likely_touched": [
-                "src/engine/lifecycle_ai_context.py",
-                "src/engine/lifecycle_decision_matrix.py",
-                "src/engine/ai_engine_openai.py",
-                "src/engine/threshold_cycle_ev_report.py",
-            ],
-            "acceptance_tests": [
-                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_lifecycle_ai_context.py src/tests/test_threshold_cycle_ev_report.py",
-                "runtime_effect remains false and context is not used as real order gate",
-            ],
-            "adm_issue_types": issues,
-        }
-    ]
+    return []
 
 
 def lifecycle_entry_bucket_order_id(item: dict[str, Any]) -> str:
@@ -3914,104 +3685,7 @@ def _lifecycle_entry_bucket_order_id(item: dict[str, Any]) -> str:
 def _lifecycle_entry_bucket_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    attribution = (
-        report.get("entry_bucket_attribution")
-        if isinstance(report.get("entry_bucket_attribution"), dict)
-        else {}
-    )
-    workorders = attribution.get("code_improvement_workorders")
-    if not isinstance(workorders, list) or not workorders:
-        return []
-    contract = {
-        "metric_role": attribution.get("metric_role"),
-        "decision_authority": attribution.get("decision_authority"),
-        "window_policy": attribution.get("window_policy"),
-        "sample_floor": attribution.get("sample_floor"),
-        "primary_decision_metric": attribution.get("primary_decision_metric"),
-        "source_quality_gate": attribution.get("source_quality_gate"),
-        "forbidden_uses": attribution.get("forbidden_uses") or [],
-    }
-    implementation_status, implementation_provenance = (
-        _implementation_marker_from_attribution(attribution)
-    )
-    orders: list[dict[str, Any]] = []
-    for item in workorders:
-        if not isinstance(item, dict):
-            continue
-        bucket_type = str(item.get("bucket_type") or "").strip()
-        bucket_key = str(item.get("bucket_key") or "").strip()
-        if not bucket_type or not bucket_key:
-            continue
-        reason = str(item.get("reason") or "").strip()
-        route = "instrumentation_order"
-        if "unknown" not in bucket_key and "missing" not in bucket_key:
-            route = "existing_family"
-        orders.append(
-            {
-                "order_id": lifecycle_entry_bucket_order_id(item),
-                "title": f"LDM entry bucket attribution follow-up: {bucket_type}={bucket_key}",
-                "source_report_type": "lifecycle_decision_matrix_entry_bucket_attribution",
-                "lifecycle_stage": "entry",
-                "target_subsystem": (
-                    "runtime_instrumentation"
-                    if route == "instrumentation_order"
-                    else "lifecycle_decision_matrix"
-                ),
-                "route": route,
-                "mapped_family": "lifecycle_decision_matrix_runtime",
-                "threshold_family": "lifecycle_decision_matrix_runtime",
-                "improvement_type": "entry_bucket_source_quality_attribution",
-                "confidence": "daily_ldm_source",
-                "priority": 2 if route == "instrumentation_order" else 5,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(
-                    item, implementation_status
-                ),
-                "implementation_provenance": _implementation_provenance_for_bucket(
-                    item,
-                    implementation_provenance,
-                ),
-                "expected_ev_effect": (
-                    "Keep entry bucket EV attribution, source-quality gaps, and threshold-cycle approval "
-                    "candidates connected without mutating intraday thresholds or broker submission."
-                ),
-                "evidence": [
-                    f"workorder_id={item.get('workorder_id')}",
-                    f"bucket_type={bucket_type}",
-                    f"bucket_key={bucket_key}",
-                    f"reason={reason}",
-                    f"recommended_route={item.get('recommended_route')}",
-                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
-                    f"decision_authority={contract.get('decision_authority')}",
-                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "If the bucket is unknown/missing, add observation tags or provenance. If it has edge, "
-                    "preserve it as source evidence for LDM/threshold-cycle rolling confirmation."
-                ),
-                "next_postclose_metric": (
-                    "lifecycle_decision_matrix.entry_bucket_attribution should reduce unknown buckets, keep "
-                    "runtime_approval_candidates visible in threshold EV/runtime summary, and regenerate this "
-                    "workorder when source-quality confirmation is still needed."
-                ),
-                "files_likely_touched": [
-                    "src/engine/lifecycle_decision_matrix.py",
-                    "src/engine/scalp_entry_action_decision_matrix.py",
-                    "src/engine/daily_threshold_cycle_report.py",
-                    "src/engine/runtime_approval_summary.py",
-                    "docs/report-based-automation-traceability.md",
-                ],
-                "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
-                    "postclose verifier fails if LDM entry bucket candidates/workorders are not propagated",
-                ],
-                "metric_contract": contract,
-            }
-        )
-    return orders
+    return []
 
 
 def _lifecycle_submit_bucket_order_id(item: dict[str, Any]) -> str:
@@ -4028,92 +3702,7 @@ def _lifecycle_submit_bucket_order_id(item: dict[str, Any]) -> str:
 def _lifecycle_submit_bucket_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    attribution = (
-        report.get("submit_bucket_attribution")
-        if isinstance(report.get("submit_bucket_attribution"), dict)
-        else {}
-    )
-    workorders = attribution.get("code_improvement_workorders")
-    if not isinstance(workorders, list) or not workorders:
-        return []
-    contract = {
-        "metric_role": attribution.get("metric_role"),
-        "decision_authority": attribution.get("decision_authority"),
-        "window_policy": attribution.get("window_policy"),
-        "sample_floor": attribution.get("sample_floor"),
-        "primary_decision_metric": attribution.get("primary_decision_metric"),
-        "source_quality_gate": attribution.get("source_quality_gate"),
-        "forbidden_uses": attribution.get("forbidden_uses") or [],
-    }
-    implementation_status, implementation_provenance = (
-        _implementation_marker_from_attribution(attribution)
-    )
-    orders: list[dict[str, Any]] = []
-    for item in workorders:
-        if not isinstance(item, dict):
-            continue
-        bucket_type = str(item.get("bucket_type") or "").strip()
-        bucket_key = str(item.get("bucket_key") or "").strip()
-        if not bucket_type or not bucket_key:
-            continue
-        orders.append(
-            {
-                "order_id": _lifecycle_submit_bucket_order_id(item),
-                "title": f"LDM submit bucket contract follow-up: {bucket_type}={bucket_key}",
-                "source_report_type": "lifecycle_decision_matrix_submit_bucket_attribution",
-                "lifecycle_stage": "submit",
-                "target_subsystem": "runtime_instrumentation",
-                "route": "instrumentation_order",
-                "mapped_family": "lifecycle_decision_matrix_runtime",
-                "threshold_family": "lifecycle_decision_matrix_runtime",
-                "improvement_type": "submit_bucket_contract_gap",
-                "confidence": "daily_ldm_source",
-                "priority": 1,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(
-                    item, implementation_status
-                ),
-                "implementation_provenance": _implementation_provenance_for_bucket(
-                    item,
-                    implementation_provenance,
-                ),
-                "expected_ev_effect": (
-                    "Make submit revalidation, broker receipt, fill quality, and post-submit messaging "
-                    "contracts observable before any threshold or broker behavior tuning."
-                ),
-                "evidence": [
-                    f"workorder_id={item.get('workorder_id')}",
-                    f"bucket_type={bucket_type}",
-                    f"bucket_key={bucket_key}",
-                    f"reason={item.get('reason')}",
-                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
-                    f"decision_authority={contract.get('decision_authority')}",
-                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "Close post-entry submit observability gaps as source-only instrumentation/workorder handoff. "
-                    "Do not change broker submit guards, provider routing, Telegram semantics, or thresholds here."
-                ),
-                "next_postclose_metric": (
-                    "lifecycle_decision_matrix.submit_bucket_attribution must remain visible in EV/runtime "
-                    "summary, and postclose verifier must fail if dropped."
-                ),
-                "files_likely_touched": [
-                    "src/engine/lifecycle_decision_matrix.py",
-                    "src/engine/threshold_cycle_ev_report.py",
-                    "src/engine/runtime_approval_summary.py",
-                    "src/engine/verify_threshold_cycle_postclose_chain.py",
-                ],
-                "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
-                ],
-                "metric_contract": contract,
-            }
-        )
-    return orders
+    return []
 
 
 ENTRY_POST_SUBMIT_WEAK_CONTRACT_ORDERS = (
@@ -4225,86 +3814,7 @@ def _lifecycle_scale_in_bucket_order_id(item: dict[str, Any]) -> str:
 def _lifecycle_scale_in_bucket_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    attribution = (
-        report.get("scale_in_bucket_attribution")
-        if isinstance(report.get("scale_in_bucket_attribution"), dict)
-        else {}
-    )
-    workorders = attribution.get("code_improvement_workorders")
-    if not isinstance(workorders, list) or not workorders:
-        return []
-    contract = {
-        "metric_role": attribution.get("metric_role"),
-        "decision_authority": attribution.get("decision_authority"),
-        "window_policy": attribution.get("window_policy"),
-        "sample_floor": attribution.get("sample_floor"),
-        "primary_decision_metric": attribution.get("primary_decision_metric"),
-        "source_quality_gate": attribution.get("source_quality_gate"),
-        "forbidden_uses": attribution.get("forbidden_uses") or [],
-    }
-    orders: list[dict[str, Any]] = []
-    for item in workorders:
-        if not isinstance(item, dict):
-            continue
-        bucket_type = str(item.get("bucket_type") or "").strip()
-        bucket_key = str(item.get("bucket_key") or "").strip()
-        if not bucket_type or not bucket_key:
-            continue
-        orders.append(
-            {
-                "order_id": _lifecycle_scale_in_bucket_order_id(item),
-                "title": f"LDM scale-in bucket attribution follow-up: {bucket_type}={bucket_key}",
-                "source_report_type": "lifecycle_decision_matrix_scale_in_bucket_attribution",
-                "lifecycle_stage": "scale_in",
-                "target_subsystem": "lifecycle_decision_matrix",
-                "route": "source_quality_or_bounded_tunable_candidate",
-                "mapped_family": "lifecycle_decision_matrix_runtime",
-                "threshold_family": "lifecycle_decision_matrix_runtime",
-                "improvement_type": "scale_in_bucket_source_quality_attribution",
-                "confidence": "daily_ldm_source",
-                "priority": 4,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "implementation_status": item.get("implementation_status"),
-                "implementation_provenance": item.get("implementation_provenance"),
-                "expected_ev_effect": (
-                    "Separate AVG_DOWN/PYRAMID attribution and keep scale-in threshold/cap candidates "
-                    "as source-only evidence until rolling confirmation and approval artifact."
-                ),
-                "evidence": [
-                    f"workorder_id={item.get('workorder_id')}",
-                    f"bucket_type={bucket_type}",
-                    f"bucket_key={bucket_key}",
-                    f"reason={item.get('reason')}",
-                    f"recommended_route={item.get('recommended_route')}",
-                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
-                    f"decision_authority={contract.get('decision_authority')}",
-                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "Preserve scale-in arm/blocker attribution and route any PYRAMID/AVG_DOWN threshold "
-                    "changes through source-only LDM/threshold-cycle handoff."
-                ),
-                "next_postclose_metric": (
-                    "lifecycle_decision_matrix.scale_in_bucket_attribution candidates/workorders must remain "
-                    "visible in threshold EV/runtime summary, and postclose verifier must fail if dropped."
-                ),
-                "files_likely_touched": [
-                    "src/engine/sniper_state_handlers.py",
-                    "src/engine/lifecycle_decision_matrix.py",
-                    "src/engine/daily_threshold_cycle_report.py",
-                    "src/engine/runtime_approval_summary.py",
-                ],
-                "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
-                    "postclose verifier fails if LDM scale-in bucket candidates/workorders are not propagated",
-                ],
-                "metric_contract": contract,
-            }
-        )
-    return orders
+    return []
 
 
 def _lifecycle_overnight_bucket_order_id(item: dict[str, Any]) -> str:
@@ -4334,168 +3844,13 @@ def _lifecycle_stage_bucket_order_id(stage: str, item: dict[str, Any]) -> str:
 def _lifecycle_flow_bucket_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    attribution = (
-        report.get("lifecycle_flow_bucket_attribution")
-        if isinstance(report.get("lifecycle_flow_bucket_attribution"), dict)
-        else {}
-    )
-    workorders = attribution.get("code_improvement_workorders")
-    if not isinstance(workorders, list) or not workorders:
-        return []
-    contract = {
-        "metric_role": attribution.get("metric_role"),
-        "decision_authority": attribution.get("decision_authority"),
-        "window_policy": attribution.get("window_policy"),
-        "sample_floor": attribution.get("sample_floor"),
-        "primary_decision_metric": attribution.get("primary_decision_metric"),
-        "source_quality_gate": attribution.get("source_quality_gate"),
-        "forbidden_uses": attribution.get("forbidden_uses") or [],
-    }
-    implementation_status, implementation_provenance = (
-        _implementation_marker_from_attribution(attribution)
-    )
-    orders: list[dict[str, Any]] = []
-    for item in workorders:
-        if not isinstance(item, dict):
-            continue
-        flow_bucket_id = str(item.get("lifecycle_flow_bucket_id") or "").strip()
-        if not flow_bucket_id:
-            continue
-        orders.append(
-            {
-                "order_id": _lifecycle_flow_bucket_order_id(item),
-                "title": f"LDM lifecycle flow bucket follow-up: {flow_bucket_id}",
-                "source_report_type": "lifecycle_decision_matrix_lifecycle_flow_bucket_attribution",
-                "lifecycle_stage": "lifecycle_flow",
-                "target_subsystem": "lifecycle_decision_matrix",
-                "route": "instrumentation_order",
-                "mapped_family": "lifecycle_decision_matrix_runtime",
-                "threshold_family": "lifecycle_decision_matrix_runtime",
-                "improvement_type": item.get("improvement_type")
-                or "join_gap_resolution",
-                "confidence": "daily_ldm_source",
-                "priority": 1,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(
-                    item, implementation_status
-                ),
-                "implementation_provenance": _implementation_provenance_for_bucket(
-                    item, implementation_provenance
-                ),
-                "expected_ev_effect": (
-                    "Prevent entry-only EV from being interpreted as full lifecycle EV by keeping incomplete "
-                    "parent flow bundles visible as source-quality evidence."
-                ),
-                "evidence": [
-                    f"workorder_id={item.get('workorder_id')}",
-                    f"lifecycle_flow_bucket_id={flow_bucket_id}",
-                    f"reason={item.get('reason')}",
-                    f"join_gap_reasons={item.get('join_gap_reasons') or []}",
-                    f"required_producer_consumer_candidates={item.get('required_producer_consumer_candidates') or []}",
-                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
-                    f"decision_authority={contract.get('decision_authority')}",
-                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "Close parent lifecycle-flow attribution gaps without changing runtime thresholds, broker "
-                    "submit behavior, provider routing, or Greenfield real-env authority."
-                ),
-                "next_postclose_metric": (
-                    "lifecycle_flow bucket counts, complete-flow counts, runtime candidates, and workorders "
-                    "must be visible in threshold EV, runtime summary, control tower, and verifier."
-                ),
-                "files_likely_touched": [
-                    "src/engine/lifecycle_decision_matrix.py",
-                    "src/engine/lifecycle_bucket_discovery.py",
-                    "src/engine/runtime_approval_summary.py",
-                    "src/engine/runtime_apply_bridge.py",
-                    "src/engine/verify_threshold_cycle_postclose_chain.py",
-                ],
-                "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_lifecycle_bucket_discovery.py src/tests/test_runtime_apply_bridge.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
-                    "postclose verifier fails if lifecycle-flow parent bucket output is dropped",
-                ],
-                "metric_contract": contract,
-            }
-        )
-    return orders
+    return []
 
 
 def _lifecycle_holding_exit_bucket_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    orders: list[dict[str, Any]] = []
-    for stage, attribution_key in (
-        ("holding", "holding_bucket_attribution"),
-        ("exit", "exit_bucket_attribution"),
-    ):
-        attribution = (
-            report.get(attribution_key)
-            if isinstance(report.get(attribution_key), dict)
-            else {}
-        )
-        workorders = attribution.get("code_improvement_workorders")
-        if not isinstance(workorders, list) or not workorders:
-            continue
-        implementation_status, implementation_provenance = (
-            _implementation_marker_from_attribution(attribution)
-        )
-        for item in workorders:
-            if (
-                not isinstance(item, dict)
-                or not item.get("bucket_type")
-                or not item.get("bucket_key")
-            ):
-                continue
-            orders.append(
-                {
-                    "order_id": _lifecycle_stage_bucket_order_id(stage, item),
-                    "title": f"LDM {stage} bucket source-quality follow-up: {item.get('bucket_type')}={item.get('bucket_key')}",
-                    "source_report_type": f"lifecycle_decision_matrix_{stage}_bucket_attribution",
-                    "lifecycle_stage": stage,
-                    "target_subsystem": "lifecycle_decision_matrix",
-                    "route": "instrumentation_order",
-                    "mapped_family": "lifecycle_decision_matrix_runtime",
-                    "threshold_family": "lifecycle_decision_matrix_runtime",
-                    "improvement_type": f"{stage}_bucket_source_quality_child_evidence",
-                    "confidence": "daily_ldm_source",
-                    "priority": 2,
-                    "runtime_effect": False,
-                    "allowed_runtime_apply": False,
-                    "implementation_status": _implementation_status_for_bucket(
-                        item, implementation_status
-                    ),
-                    "implementation_provenance": _implementation_provenance_for_bucket(
-                        item, implementation_provenance
-                    ),
-                    "expected_ev_effect": (
-                        f"Keep {stage} stage buckets visible as child evidence while parent lifecycle flow owns "
-                        "promotion EV."
-                    ),
-                    "evidence": [
-                        f"workorder_id={item.get('workorder_id')}",
-                        f"bucket_type={item.get('bucket_type')}",
-                        f"bucket_key={item.get('bucket_key')}",
-                        f"reason={item.get('reason')}",
-                        f"recommended_route={item.get('recommended_route')}",
-                        "runtime_effect=false",
-                        "allowed_runtime_apply=false",
-                        "stage_only_live_promotion_forbidden=true",
-                    ],
-                    "intent": (
-                        f"Close {stage} bucket source-quality or lifecycle-flow child-evidence gaps without "
-                        "changing runtime thresholds, broker behavior, provider routing, or bot state."
-                    ),
-                    "next_postclose_metric": (
-                        f"{stage}_bucket_attribution bucket/workorder counts, identity join rate, and complete "
-                        "lifecycle flow count remain visible in downstream reports."
-                    ),
-                }
-            )
-    return orders
+    return []
 
 
 def _lifecycle_bucket_discovery_report_path(target_date: str) -> Path:
@@ -4589,504 +3944,13 @@ def _is_explicit_source_only_lifecycle_flow_exclusion(
 def _lifecycle_bucket_discovery_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    candidates = (
-        report.get("surfaced_candidates")
-        if isinstance(report.get("surfaced_candidates"), list)
-        else []
-    )
-    orders: list[dict[str, Any]] = []
-    seen_bucket_keys: set[tuple[str, str]] = set()
-    actionable_resolutions = {
-        "emit_or_backfill_source_field",
-        "resolve_unknown_source_dimensions",
-    }
-    for item in [*candidates, *_source_dimension_summary_items(report)]:
-        if not isinstance(item, dict):
-            continue
-        state = str(item.get("classification_state") or "")
-        source_dimension_gap = str(item.get("source_dimension_gap") or "")
-        recommended_resolution = str(item.get("recommended_resolution") or "")
-        source_dimension_gap_required = (
-            source_dimension_gap == "unknown_source_dimensions"
-            and recommended_resolution in actionable_resolutions
-        )
-        if (
-            state
-            not in {
-                "new_bucket_candidate",
-                "runtime_blocked_contract_gap",
-                "code_patch_required",
-                "code_review_failed",
-            }
-            and not source_dimension_gap_required
-        ):
-            continue
-        if _is_explicit_source_only_lifecycle_flow_exclusion(report, item):
-            continue
-        stage = str(item.get("stage") or "unknown")
-        bucket_id = str(item.get("bucket_id") or "")
-        source_bucket_id = str(item.get("source_bucket_id") or bucket_id)
-        if source_dimension_gap_required:
-            missing_dimension_keys = tuple(
-                str(key) for key in (item.get("missing_dimension_keys") or [])
-            )
-            bucket_key = (
-                stage,
-                bucket_id,
-                recommended_resolution,
-                ",".join(missing_dimension_keys),
-            )
-        else:
-            bucket_key = (stage, source_bucket_id)
-        if bucket_key in seen_bucket_keys:
-            continue
-        seen_bucket_keys.add(bucket_key)
-        order_id = (
-            _lifecycle_source_dimension_gap_order_id(item)
-            if source_dimension_gap_required
-            else _lifecycle_bucket_discovery_order_id(item)
-        )
-        improvement_type = (
-            "source_dimension_gap_resolution"
-            if source_dimension_gap_required
-            else "bucket_classifier_hook_or_taxonomy_gap"
-        )
-        is_source_contract_drift = (
-            stage == "source_contract"
-            and str(item.get("parent_bucket_id") or "")
-            == "source_contract:schema_drift"
-            and item.get("runtime_effect") is False
-            and item.get("allowed_runtime_apply") is False
-            and item.get("actual_order_submitted") is False
-            and item.get("broker_order_forbidden") is True
-            and item.get("full_real_conversion_allowed") is False
-            and item.get("bounded_live_canary_allowed") is False
-            and str(item.get("transition_target") or "")
-            == "source_only_keep_collecting"
-        )
-        implementation_status = (
-            "implemented_source_quality_contract_available"
-            if is_source_contract_drift
-            else None
-        )
-        implementation_provenance = (
-            {
-                "implementation_type": "lifecycle_source_contract_drift_source_only_provenance",
-                "source_contract_status": (
-                    ((report.get("summary") or {}).get("source_contract_status"))
-                    if isinstance(report.get("summary"), dict)
-                    else None
-                ),
-                "source_contract_change_count": (
-                    ((report.get("summary") or {}).get("source_contract_change_count"))
-                    if isinstance(report.get("summary"), dict)
-                    else None
-                ),
-                "evidence_grade": item.get("evidence_grade"),
-                "transition_target": item.get("transition_target"),
-                "source_bucket_kind": item.get("source_bucket_kind"),
-                "ai_tier2_taxonomy_decision": item.get("ai_tier2_taxonomy_decision")
-                or (
-                    item.get("ai_tier2_comparative_review", {}).get("selected_decision")
-                    if isinstance(item.get("ai_tier2_comparative_review"), dict)
-                    else None
-                ),
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "decision_authority": "source_contract_drift_detection",
-                "root_cause_closure_status_hint": "root_cause_closed",
-            }
-            if is_source_contract_drift
-            else None
-        )
-        orders.append(
-            {
-                "order_id": order_id,
-                "source_bucket_id": source_bucket_id,
-                "canonical_bucket": item.get("canonical_bucket"),
-                "legacy_raw_bucket_key": item.get("legacy_raw_bucket_key"),
-                "bucket_alias_version": item.get("bucket_alias_version"),
-                "dimension_set_version": item.get("dimension_set_version"),
-                "ai_tier2_comparative_review": (
-                    item.get("ai_tier2_comparative_review")
-                    if isinstance(item.get("ai_tier2_comparative_review"), dict)
-                    else {}
-                ),
-                "title": f"Lifecycle bucket discovery follow-up: {bucket_id}",
-                "source_report_type": "lifecycle_bucket_discovery",
-                "lifecycle_stage": stage,
-                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
-                "route": "auto_patch_required",
-                "mapped_family": item.get("live_auto_apply_family")
-                or "lifecycle_bucket_discovery",
-                "threshold_family": item.get("live_auto_apply_family")
-                or "lifecycle_bucket_discovery",
-                "improvement_type": improvement_type,
-                "confidence": "postclose_discovery_source",
-                "priority": (
-                    1
-                    if state in {"code_patch_required", "runtime_blocked_contract_gap"}
-                    or source_dimension_gap_required
-                    else 3
-                ),
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "implementation_status": implementation_status,
-                "implementation_provenance": implementation_provenance,
-                "expected_ev_effect": (
-                    "Close lifecycle bucket discovery hook/taxonomy gaps so future postclose discovery can "
-                    "auto-classify and auto-apply without operator memory."
-                ),
-                "evidence": [
-                    f"bucket_id={bucket_id}",
-                    f"source_bucket_id={source_bucket_id}",
-                    f"canonical_bucket={item.get('canonical_bucket')}",
-                    f"legacy_raw_bucket_key={item.get('legacy_raw_bucket_key')}",
-                    f"bucket_alias_version={item.get('bucket_alias_version')}",
-                    f"dimension_set_version={item.get('dimension_set_version')}",
-                    f"bucket_absorption_reason={item.get('bucket_absorption_reason')}",
-                    f"ai_tier2_taxonomy_decision={item.get('ai_tier2_taxonomy_decision') or ((item.get('ai_tier2_comparative_review') or {}).get('selected_decision') if isinstance(item.get('ai_tier2_comparative_review'), dict) else None)}",
-                    f"ai_tier2_selected_source={item.get('ai_tier2_selected_source') or ((item.get('ai_tier2_comparative_review') or {}).get('selected_source') if isinstance(item.get('ai_tier2_comparative_review'), dict) else None)}",
-                    f"source_bucket_kind={item.get('source_bucket_kind')}",
-                    f"stage={stage}",
-                    f"classification_state={state}",
-                    f"bucket_relation={item.get('bucket_relation')}",
-                    f"recommended_action={item.get('recommended_action')}",
-                    f"recommended_resolution={item.get('recommended_resolution')}",
-                    f"source_dimension_gap={item.get('source_dimension_gap') or ''}",
-                    f"missing_dimension_keys={item.get('missing_dimension_keys') or []}",
-                    f"missing_lifecycle_flow_stage_keys={item.get('missing_lifecycle_flow_stage_keys') or []}",
-                    f"unknown_reason_counts={item.get('unknown_reason_counts') or {}}",
-                    f"source_quality_adjusted_ev_pct={item.get('source_quality_adjusted_ev_pct')}",
-                    "runtime_effect=false_until_patch_review_passes",
-                    "allowed_runtime_apply=false_until_contract_hook_tests_pass",
-                ],
-                "intent": (
-                    "Add missing bucket taxonomy/provenance/post-apply attribution, then rerun discovery, "
-                    "self review, and targeted tests before any runtime env selection."
-                ),
-                "next_postclose_metric": (
-                    "lifecycle_bucket_discovery should classify this bucket as sim_auto_approved or "
-                    "live_auto_apply_ready, or keep it source-only with an explicit blocker."
-                ),
-                "files_likely_touched": [
-                    "src/engine/lifecycle_bucket_discovery.py",
-                    "src/engine/threshold_cycle_preopen_apply.py",
-                    "src/engine/verify_threshold_cycle_postclose_chain.py",
-                ],
-                "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_bucket_discovery.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
-                    "postclose verifier reports automation_handoff_gap if surfaced discovery candidates are dropped",
-                ],
-                "metric_contract": {
-                    "metric_role": report.get("metric_role"),
-                    "decision_authority": report.get("decision_authority"),
-                    "window_policy": report.get("window_policy"),
-                    "sample_floor": report.get("sample_floor"),
-                    "primary_decision_metric": report.get("primary_decision_metric"),
-                    "source_quality_gate": report.get("source_quality_gate"),
-                    "forbidden_uses": report.get("forbidden_uses") or [],
-                },
-            }
-        )
-    source_dimension_summary = (
-        report.get("source_dimension_gap_summary")
-        if isinstance(report.get("source_dimension_gap_summary"), dict)
-        else {}
-    )
-    rollup_count = _safe_int(source_dimension_summary.get("rollup_only_gap_count"))
-    unknown_gap_count = _safe_int(
-        (source_dimension_summary.get("source_dimension_gap_counts") or {}).get(
-            "unknown_source_dimensions"
-        )
-        if isinstance(source_dimension_summary.get("source_dimension_gap_counts"), dict)
-        else 0
-    )
-    if rollup_count > 0 and unknown_gap_count > 1:
-        orders.append(
-            {
-                "order_id": "order_lifecycle_source_dimension_gap_rollup",
-                "source_report_type": "lifecycle_bucket_discovery_source_dimension_rollup",
-                "lifecycle_stage": "multi_stage",
-                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
-                "route": "source_dimension_rollup",
-                "mapped_family": "lifecycle_bucket_discovery",
-                "threshold_family": "lifecycle_bucket_discovery",
-                "improvement_type": "source_dimension_gap_rollup_evidence",
-                "confidence": "postclose_discovery_source",
-                "priority": 3,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "expected_ev_effect": (
-                    "Keep repeated source-dimension gaps visible without treating not-applicable or absorbed "
-                    "dimensions as immediate code defects."
-                ),
-                "evidence": [
-                    f"rollup_only_gap_count={rollup_count}",
-                    f"unknown_source_dimensions={unknown_gap_count}",
-                    f"recommended_resolution_counts={source_dimension_summary.get('recommended_resolution_counts') or {}}",
-                    f"missing_dimension_key_counts={source_dimension_summary.get('missing_dimension_key_counts') or {}}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "Surface repeated source-dimension gaps in the postclose workorder chain so the operator "
-                    "does not have to manually inspect raw bucket candidates."
-                ),
-                "next_postclose_metric": "source_dimension_gap_summary rollup/actionable counts remain visible.",
-            }
-        )
-    join_gap_enrichment = (
-        source_dimension_summary.get("join_gap_enrichment")
-        if isinstance(source_dimension_summary.get("join_gap_enrichment"), dict)
-        else {}
-    )
-    join_gap_count = _safe_int(join_gap_enrichment.get("candidate_count"))
-    if join_gap_count > 0:
-        orders.append(
-            {
-                "order_id": "order_lifecycle_source_dimension_join_gap_enrichment",
-                "source_report_type": "lifecycle_bucket_discovery_source_dimension_rollup",
-                "lifecycle_stage": "multi_stage",
-                "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
-                "route": "join_gap_enrichment",
-                "mapped_family": "lifecycle_bucket_discovery",
-                "threshold_family": "lifecycle_bucket_discovery",
-                "improvement_type": "source_dimension_join_gap_enrichment",
-                "confidence": "postclose_discovery_source",
-                "priority": 3,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "expected_ev_effect": (
-                    "Keep LDM bucket label/join gaps visible as source-quality provenance before any bucket "
-                    "decision or runtime apply interpretation."
-                ),
-                "evidence": [
-                    f"join_gap_candidate_count={join_gap_count}",
-                    f"join_gap_stage_counts={join_gap_enrichment.get('stage_counts') or {}}",
-                    f"join_gap_bucket_type_counts={join_gap_enrichment.get('bucket_type_counts') or {}}",
-                    f"join_gap_recommended_resolution_counts={join_gap_enrichment.get('recommended_resolution_counts') or {}}",
-                    f"join_gap_missing_dimension_key_counts={join_gap_enrichment.get('missing_dimension_key_counts') or {}}",
-                    f"recommended_next_action={join_gap_enrichment.get('recommended_next_action') or ''}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "Make LDM label/join enrichment targets explicit in the workorder chain without changing "
-                    "runtime thresholds, broker submit behavior, provider routing, or bot state."
-                ),
-                "next_postclose_metric": "source_dimension_gap_summary.join_gap_enrichment candidate_count is tracked until explicitly closed.",
-            }
-        )
-    quiet_summary = _quiet_gap_summary(report)
-    quiet_type_counts = (
-        quiet_summary.get("quiet_gap_type_counts")
-        if isinstance(quiet_summary.get("quiet_gap_type_counts"), dict)
-        else {}
-    )
-    quiet_orders: list[tuple[str, str, str, int]] = [
-        (
-            "order_lifecycle_quiet_gap_parent_conflict_rollup",
-            "Lifecycle quiet gap parent conflict/exclusion review",
-            "parent_conflict_exclusion_review",
-            _safe_int(quiet_type_counts.get("parent_conflict_child"))
-            + _safe_int(quiet_type_counts.get("exclusion_dimension_candidate")),
-        ),
-        (
-            "order_lifecycle_quiet_gap_positive_source_only_rollup",
-            "Lifecycle quiet gap positive source-only review",
-            "positive_source_only_review",
-            _safe_int(quiet_type_counts.get("positive_source_only_keep_collecting"))
-            + _safe_int(quiet_type_counts.get("absorbed_into_parent_policy")),
-        ),
-        (
-            "order_lifecycle_quiet_gap_ai_review_coverage_rollup",
-            "Lifecycle quiet gap AI review coverage review",
-            "ai_review_coverage_review",
-            _safe_int(quiet_type_counts.get("ai_review_parsed_low_coverage")),
-        ),
-    ]
-    parent_conflict_resolution = (
-        report.get("parent_conflict_resolution")
-        if isinstance(report.get("parent_conflict_resolution"), list)
-        else []
-    )
-    for order_id, title, route, count in quiet_orders:
-        if count <= 0:
-            continue
-        is_conflict_order = route == "parent_conflict_exclusion_review"
-        order = {
-            "order_id": order_id,
-            "title": title,
-            "source_report_type": "lifecycle_bucket_discovery_quiet_gap_rollup",
-            "lifecycle_stage": "multi_stage",
-            "target_subsystem": "lifecycle_bucket_discovery_taxonomy_provenance",
-            "route": route,
-            "mapped_family": "lifecycle_bucket_discovery",
-            "threshold_family": "lifecycle_bucket_discovery",
-            "improvement_type": "quiet_gap_rollup_evidence",
-            "confidence": "postclose_discovery_source",
-            "priority": 3,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "expected_ev_effect": (
-                "Keep quiet source-quality gaps visible without treating every rollup as an immediate "
-                "code patch requirement."
-            ),
-            "evidence": [
-                f"quiet_gap_count={quiet_summary.get('quiet_gap_count')}",
-                f"rollup_required_count={quiet_summary.get('rollup_required_count')}",
-                f"sim_live_connected_quiet_gap_count={quiet_summary.get('sim_live_connected_quiet_gap_count')}",
-                f"quiet_gap_type_counts={quiet_type_counts}",
-                f"ai_review_coverage={quiet_summary.get('ai_review_coverage') or {}}",
-                "runtime_effect=false",
-                "allowed_runtime_apply=false",
-            ],
-            "intent": (
-                "Surface parent conflict/exclusion children, positive source-only keep-collecting rows, "
-                "absorbed parent-policy evidence, and low AI coverage in the postclose workorder chain."
-            ),
-            "next_postclose_metric": "quiet_gap_summary rollup counts remain visible until explicitly resolved.",
-        }
-        if is_conflict_order:
-            conflict_resolved = len(parent_conflict_resolution) > 0
-            order["implementation_candidate"] = conflict_resolved
-            order["explicit_redecision_required"] = not conflict_resolved
-            if conflict_resolved:
-                resolution_states = Counter(
-                    str(p.get("conflict_resolution_state") or "")
-                    for p in parent_conflict_resolution
-                )
-                sim_eligible = sum(
-                    1
-                    for p in parent_conflict_resolution
-                    if p.get("sim_policy_eligible_after_resolution")
-                )
-                order["evidence"].extend(
-                    [
-                        f"parent_conflict_resolution_count={len(parent_conflict_resolution)}",
-                        f"resolution_states={dict(resolution_states)}",
-                        f"sim_eligible_after_resolution={sim_eligible}",
-                    ]
-                )
-                order["conflict_resolution_acceptance_test"] = "pass"
-                order["implementation_id"] = "parent_conflict_resolution_produced"
-                order["implementation_status"] = "implemented"
-                order["implementation_checks"] = [
-                    {
-                        "name": "parent_conflict_resolution_present",
-                        "status": "pass",
-                        "resolution_count": len(parent_conflict_resolution),
-                        "sim_eligible_after_resolution": sim_eligible,
-                    }
-                ]
-            else:
-                order["evidence"].append(
-                    "parent_conflict_resolution_missing: child_conflict_warning > 0 but no resolution items produced"
-                )
-                order["conflict_resolution_acceptance_test"] = "fail"
-                order["warnings"] = [
-                    "parent_conflict_resolution_missing",
-                ]
-        orders.append(order)
-    return orders
+    return []
 
 
 def _lifecycle_overnight_bucket_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    attribution = (
-        report.get("overnight_bucket_attribution")
-        if isinstance(report.get("overnight_bucket_attribution"), dict)
-        else {}
-    )
-    workorders = attribution.get("code_improvement_workorders")
-    if not isinstance(workorders, list) or not workorders:
-        return []
-    contract = {
-        "metric_role": attribution.get("metric_role"),
-        "decision_authority": attribution.get("decision_authority"),
-        "window_policy": attribution.get("window_policy"),
-        "sample_floor": attribution.get("sample_floor"),
-        "primary_decision_metric": attribution.get("primary_decision_metric"),
-        "source_quality_gate": attribution.get("source_quality_gate"),
-        "forbidden_uses": attribution.get("forbidden_uses") or [],
-    }
-    implementation_status, implementation_provenance = (
-        _implementation_marker_from_attribution(attribution)
-    )
-    orders: list[dict[str, Any]] = []
-    for item in workorders:
-        if not isinstance(item, dict):
-            continue
-        bucket_type = str(item.get("bucket_type") or "").strip()
-        bucket_key = str(item.get("bucket_key") or "").strip()
-        if not bucket_type or not bucket_key:
-            continue
-        orders.append(
-            {
-                "order_id": _lifecycle_overnight_bucket_order_id(item),
-                "title": f"LDM overnight bucket attribution follow-up: {bucket_type}={bucket_key}",
-                "source_report_type": "lifecycle_decision_matrix_overnight_bucket_attribution",
-                "lifecycle_stage": "overnight",
-                "target_subsystem": "lifecycle_decision_matrix",
-                "route": "source_quality_or_bounded_tunable_candidate",
-                "mapped_family": "scalp_sim_overnight_ai_carry",
-                "threshold_family": "scalp_sim_overnight_ai_carry",
-                "improvement_type": "overnight_bucket_source_quality_attribution",
-                "confidence": "daily_ldm_source",
-                "priority": 4,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "implementation_status": _implementation_status_for_bucket(
-                    item, implementation_status
-                ),
-                "implementation_provenance": _implementation_provenance_for_bucket(
-                    item,
-                    implementation_provenance,
-                ),
-                "expected_ev_effect": (
-                    "Keep SELL_TODAY/HOLD_OVERNIGHT bucket attribution and next-day carry labels connected "
-                    "as source-only evidence for threshold-cycle rolling confirmation."
-                ),
-                "evidence": [
-                    f"workorder_id={item.get('workorder_id')}",
-                    f"bucket_type={bucket_type}",
-                    f"bucket_key={bucket_key}",
-                    f"reason={item.get('reason')}",
-                    f"recommended_route={item.get('recommended_route')}",
-                    f"metric_role={item.get('metric_role') or contract.get('metric_role')}",
-                    f"decision_authority={contract.get('decision_authority')}",
-                    f"primary_decision_metric={contract.get('primary_decision_metric')}",
-                    "runtime_effect=false",
-                    "allowed_runtime_apply=false",
-                ],
-                "intent": (
-                    "Preserve overnight action/status/confidence/source-quality attribution without turning "
-                    "the sim-only decision into a hard gate or real sell/order route."
-                ),
-                "next_postclose_metric": (
-                    "lifecycle_decision_matrix.overnight_bucket_attribution candidates/workorders must remain "
-                    "visible in threshold EV/runtime summary, and postclose verifier must fail if dropped."
-                ),
-                "files_likely_touched": [
-                    "src/engine/scalp_sim_overnight.py",
-                    "src/engine/lifecycle_decision_matrix.py",
-                    "src/engine/daily_threshold_cycle_report.py",
-                    "src/engine/runtime_approval_summary.py",
-                ],
-                "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_lifecycle_decision_matrix.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py",
-                    "postclose verifier fails if LDM overnight bucket candidates/workorders are not propagated",
-                ],
-                "metric_contract": contract,
-            }
-        )
-    return orders
+    return []
 
 
 def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
@@ -8040,6 +6904,10 @@ def build_code_improvement_workorder(
             microstructure_reaction_context.get("code_improvement_orders") or []
         )
         if isinstance(item, dict)
+        and item.get("order_id")
+        != "order_microstructure_signed_tape_runtime_candidate_review"
+        and item.get("candidate_family")
+        != "microstructure_signed_tape_runtime_candidate"
     ]
     buy_funnel_sentinel_orders = _buy_funnel_sentinel_followup_orders(
         buy_funnel_sentinel,
@@ -8729,6 +7597,20 @@ def build_code_improvement_workorder(
             "microstructure_reaction_context_source_order_count": len(
                 microstructure_reaction_orders
             ),
+            "microstructure_retired_order_disposition": "archive_superseded_no_runtime_family",
+            "microstructure_retired_order_ids": [
+                item.get("order_id")
+                for item in (
+                    microstructure_reaction_context.get("code_improvement_orders") or []
+                )
+                if isinstance(item, dict)
+                and (
+                    item.get("order_id")
+                    == "order_microstructure_signed_tape_runtime_candidate_review"
+                    or item.get("candidate_family")
+                    == "microstructure_signed_tape_runtime_candidate"
+                )
+            ],
             "producer_gap_discovery_high_priority_selected": bool(
                 {
                     str(order.get("order_id"))

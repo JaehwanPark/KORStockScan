@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import json
 from datetime import datetime
@@ -41,11 +43,13 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _path_text(path: Path) -> str:

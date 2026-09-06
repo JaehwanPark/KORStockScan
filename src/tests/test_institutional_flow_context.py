@@ -35,7 +35,7 @@ def test_normalize_institutional_flow_context_builds_source_only_features():
     assert context["institutional_flow_regime"] == "DUAL_ACCUMULATION"
     assert context["institutional_flow_status"] == "OK"
     assert context["runtime_effect"] is False
-    assert context["decision_authority"] == "source_only_lifecycle_feature"
+    assert context["decision_authority"] == "archive_offline_source_only"
 
 
 def test_resolver_uses_kiwoom_helpers_and_handles_token_error(monkeypatch):
@@ -85,7 +85,7 @@ def test_build_report_writes_artifact(tmp_path, monkeypatch):
             "institutional_flow_source": "ka10059+ka10061",
             "institutional_flow_status": "OK",
             "runtime_effect": False,
-            "decision_authority": "source_only_lifecycle_feature",
+            "decision_authority": "archive_offline_source_only",
         },
     )
 
@@ -96,13 +96,17 @@ def test_build_report_writes_artifact(tmp_path, monkeypatch):
     assert report["summary"]["row_count"] == 2
     assert report["summary"]["ok_count"] == 2
     assert report["runtime_effect"] is False
+    assert report["scheduled_producer"] is False
+    assert report["consumer_status"] == "retired_with_scalping_adm_ldm"
+    assert report["summary"]["source_success_rate_pct"] == 100.0
+    assert report["summary"]["join_rate_semantics"].startswith("deprecated_alias")
     assert (tmp_path / "institutional_flow_context_2026-05-20.json").exists()
     payload = json.loads(
         (tmp_path / "institutional_flow_context_2026-05-20.json").read_text(
             encoding="utf-8"
         )
     )
-    assert payload["rows"][0]["decision_authority"] == "source_only_lifecycle_feature"
+    assert payload["rows"][0]["decision_authority"] == "archive_offline_source_only"
 
 
 def test_load_pipeline_event_codes_reads_gzip_sibling(tmp_path, monkeypatch):

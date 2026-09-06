@@ -151,13 +151,12 @@ omitted. The JSON report is written under
 starts a collector without a later explicit operator instruction.
 If the exact payload or outcome-label artifact is missing or violates its
 report-only authority contract, the job fails without sending a misleading
-"no candidate" message. The systemd service retries that source-not-ready
-failure every five minutes, bounded to six attempts in 30 minutes.
+"no candidate" message. Source-not-ready exit 42 is terminal for that scheduled
+run and is not restarted; other failures retain the five-minute bounded retry.
 
 ```bash
-sudo cp deploy/systemd/korstockscan-widget-expansion-recommendation.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now korstockscan-widget-expansion-recommendation.timer
+sudo deploy/install_machine_microstructure_final_refresh_systemd.sh
+systemctl status korstockscan-machine-microstructure-final-refresh.timer --no-pager
 ```
 
 ```bash

@@ -8,6 +8,8 @@ consume it.
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import current_report_view
+
 import json
 import os
 from pathlib import Path
@@ -211,6 +213,7 @@ def load_selection_prior_catalog(
         }
         _CATALOG_CACHE[cache_key] = loaded
         return loaded
+    payload = current_report_view(payload)
     if not _catalog_contract_ok(payload):
         loaded = {
             "status": "policy_invalid_contract",

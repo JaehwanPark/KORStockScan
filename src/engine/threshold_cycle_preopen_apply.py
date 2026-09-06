@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import (
+    RETIRED_ENV_PREFIXES,
+    retired_artifact,
+    current_report_view,
+    retired_status,
+)
+
+from src.engine.lifecycle.retirement import (
+    RETIRED_FAMILIES,
+    retirement_env,
+    without_retired_env,
+)
+
 import argparse
 import hashlib
 import json
@@ -59,11 +72,6 @@ from src.engine.automation.source_quality_clean_baseline import (
 from src.engine.automation.ai_multi_timeframe_context_promotion import (
     authoritative_runtime_env as authoritative_ai_context_runtime_env,
 )
-from src.engine.lifecycle_bucket_discovery import (
-    bucket_catalog_path,
-    discovery_report_path,
-    sim_auto_approval_path,
-)
 from src.engine.swing.sim_auto_approval_control_tower import (
     swing_sim_auto_approval_path,
     swing_sim_policy_catalog_path,
@@ -90,8 +98,10 @@ SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
 SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_avg_down_recovery_calibration"
 )
-ENTRY_AI_GATE_BACKTEST_DIR = DATA_DIR / "report" / "entry_ai_gate_backtest"
-ENTRY_AI_GATE_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
+ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR = (
+    DATA_DIR / "report" / "entry_recheck_drought_controller"
+)
+ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE = "drought_triggered_bounded_live"
 CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 AVG_DOWN_RECOVERY_FAMILY = "scalping_avg_down_recovery_quality_gate"
 AVG_DOWN_EVIDENCE_CONTRACT_VERSION = "avg_down_paired_economics_v2"
@@ -225,6 +235,7 @@ HOLD_CARRY_FORWARD_BLOCK_REASON_KEYS: dict[str, frozenset[str]] = {
     "same_stage_owner_conflict": frozenset({"same_stage_owner_conflict"}),
 }
 RETIRED_RUNTIME_FAMILY_REASONS = {
+    **{family: "retired_runtime_family:adm_ldm" for family in RETIRED_FAMILIES},
     "aggressive_entry_price_override_runtime": (
         "retired_runtime_family:entry_price_gap_profile_and_quote_consistency_own_entry_price"
     ),
@@ -318,6 +329,9 @@ TARGET_ENV_VALUE_KEYS = {
     "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "require_explicit_buy_action",
     "ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "allow_wait_probe_intent",
     "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "require_probe_first_contract",
+    "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED": "intraday_escalation_enabled",
+    "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES": "intraday_escalation_scopes",
+    "ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES": "allowed_scopes",
     "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC": "min_hold_sec",
     "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT": "min_loss_pct",
     "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT": "max_peak_profit_pct",
@@ -611,12 +625,16 @@ DETERMINISTIC_POLICY_HANDOFF_FAMILIES = frozenset(
 )
 
 
-def _load_json(path: Path) -> dict[str, Any]:
+def _load_json(path: Path, *, sanitize: bool = True) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    return current_report_view(payload) if sanitize else payload
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -804,10 +822,10 @@ def _cumulative_quality_update_contract_error(
     actual_allowed_count = sum(
         1 for item in candidates if bool(item.get("allowed_runtime_apply"))
     )
-    if max_apply_count != 1:
-        return "invalid_max_runtime_apply_count"
     if len(candidates) > 1 or actual_allowed_count > 1:
         return "multiple_runtime_update_candidates"
+    if max_apply_count != 1:
+        return "invalid_max_runtime_apply_count"
     if declared_candidate_count != len(candidates):
         return "runtime_update_candidate_count_mismatch"
     if declared_allowed_count != actual_allowed_count:
@@ -1263,6 +1281,9 @@ def _candidate_apply_contract_blockers(
     avg_down_contract_error = _avg_down_candidate_contract_error(candidate)
     if avg_down_contract_error:
         blockers.append(avg_down_contract_error)
+    drought_contract_error = _entry_recheck_drought_candidate_contract_error(candidate)
+    if drought_contract_error:
+        blockers.append(drought_contract_error)
     if _candidate_source_quality_contract_blocked(candidate):
         blockers.append("source_quality_blocked")
     if (
@@ -1792,8 +1813,10 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
     }
 
 
-def _entry_ai_gate_backtest_path(source_date: str) -> Path:
-    return ENTRY_AI_GATE_BACKTEST_DIR / f"entry_ai_gate_backtest_{source_date}.json"
+def _entry_recheck_drought_controller_path(source_date: str) -> Path:
+    return ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
+        f"entry_recheck_drought_controller_{source_date}.json"
+    )
 
 
 def _entry_ai_gate_payload_source_quality_blocked(
@@ -1826,7 +1849,162 @@ def _entry_ai_gate_payload_source_quality_blocked(
     return "source_quality_blocked" in status_text or "hard_block" in status_text
 
 
-def _entry_ai_gate_cumulative_contract_error(
+_ENTRY_RECHECK_DROUGHT_VALUE_KEYS = {
+    "allowed_scopes",
+    "enabled",
+    "min_ai_score",
+    "max_ai_score",
+    "max_recheck_per_symbol",
+    "max_daily_recheck",
+    "max_daily_buy_recovery",
+    "max_ws_age_ms",
+    "forbid_danger",
+    "require_fresh_quote",
+    "require_explicit_buy_action",
+    "allow_wait_probe_intent",
+    "require_probe_first_contract",
+    "intraday_escalation_enabled",
+    "intraday_escalation_scopes",
+}
+
+
+def _entry_recheck_drought_candidate_contract_error(candidate: dict[str, Any]) -> str:
+    if str(candidate.get("family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
+        return ""
+    from src.engine.scalping.entry_recheck_policy import (
+        BOUNDED_PROFILE,
+        POLICY_VERSION,
+        PROFILE_VERSION,
+        controller_decision,
+        scope_summary,
+    )
+
+    if (
+        candidate.get("runtime_update_mode")
+        != ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE
+    ):
+        return "drought_runtime_update_mode_invalid"
+    if (
+        candidate.get("decision_authority")
+        != "buy_funnel_drought_conditional_preopen_policy"
+    ):
+        return "drought_decision_authority_invalid"
+    if candidate.get("same_stage_owner_claim") is not False:
+        return "drought_candidate_must_not_claim_entry_stage"
+    if (
+        candidate.get("manipulation_point") != "blocked_ai_score_near_buy_recheck"
+        or candidate.get("same_stage_coexistence_contract")
+        != "blocked_ai_score_recheck_disjoint_from_normal_entry_owner_v1"
+    ):
+        return "drought_candidate_coexistence_contract_invalid"
+    current, recommended = (
+        candidate.get("current_values") or {},
+        candidate.get("recommended_values") or {},
+    )
+    if (
+        not isinstance(current, dict)
+        or not isinstance(recommended, dict)
+        or set(current) != _ENTRY_RECHECK_DROUGHT_VALUE_KEYS
+        or set(recommended) != _ENTRY_RECHECK_DROUGHT_VALUE_KEYS
+    ):
+        return "drought_runtime_value_contract_incomplete"
+    if {
+        TARGET_ENV_VALUE_KEYS.get(str(k), "")
+        for k in candidate.get("target_env_keys") or []
+    } != _ENTRY_RECHECK_DROUGHT_VALUE_KEYS:
+        return "drought_target_env_contract_incomplete"
+    if candidate.get("bounded_profile_version") != PROFILE_VERSION:
+        return "drought_bounded_profile_version_invalid"
+    for key, value in BOUNDED_PROFILE.items():
+        actual = recommended.get(key)
+        if isinstance(value, bool):
+            if actual is not value:
+                return "drought_bounded_wait_probe_safety_contract_invalid"
+        elif isinstance(actual, bool) or _bridge_candidate_float(actual) != value:
+            return "drought_fixed_bounded_values_invalid"
+    if not isinstance(candidate.get("source_metrics"), dict):
+        return "drought_policy_contract_invalid"
+    policy = candidate["source_metrics"].get("drought_conditional_policy") or {}
+    window = candidate.get("cumulative_quality_window") or {}
+    if not isinstance(policy, dict) or not isinstance(window, dict):
+        return "drought_policy_contract_invalid"
+    if policy.get("policy_version") != POLICY_VERSION:
+        return "drought_policy_version_invalid"
+    history = policy.get("history")
+    if (
+        not isinstance(history, list)
+        or len(history) != 3
+        or not all(isinstance(d, dict) for d in history)
+    ):
+        return "drought_policy_history_contract_invalid"
+    # Recompute denominator/causal checks inside each scope, never trust flags.
+    normalized = []
+    for day in history:
+        rows = day.get("eligible_scopes")
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            return "drought_scope_contract_invalid"
+        if not all(isinstance(row.get("scope"), str) for row in rows):
+            return "drought_scope_contract_invalid"
+        rebuilt = [
+            scope_summary(
+                row.get("scope", ""),
+                {
+                    **row,
+                    "primary": (
+                        "SUBMIT_DROUGHT_CRITICAL" if row.get("critical") else "NORMAL"
+                    ),
+                },
+            )
+            for row in rows
+        ]
+        if rebuilt != rows or len({r["scope"] for r in rebuilt}) != len(rebuilt):
+            return "drought_scope_decision_mismatch"
+        if (
+            bool(day.get("denominator_floor_passed")) != bool(rebuilt)
+            or bool(day.get("critical")) != any(r["critical"] for r in rebuilt)
+            or bool(day.get("addressable")) != any(r["addressable"] for r in rebuilt)
+        ):
+            return "drought_day_decision_mismatch"
+        normalized.append(day)
+    try:
+        if not isinstance(policy.get("exact_post_apply_attribution"), dict):
+            return "drought_policy_contract_invalid"
+        expected = controller_decision(
+            history=normalized,
+            exact=policy.get("exact_post_apply_attribution") or {},
+            previous=policy.get("previous_controller_state") or {},
+            target_date=window.get("end_date", ""),
+            baseline=window.get("clean_tuning_baseline_date", ""),
+            current_enabled=current.get("enabled") is True,
+        )
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return "drought_policy_contract_invalid"
+    if not expected["history_complete"] or expected[
+        "expected_source_dates"
+    ] != window.get("source_dates"):
+        return "drought_policy_history_contract_invalid"
+    for key, value in expected.items():
+        if policy.get(key) != value:
+            return f"drought_decision_mismatch:{key}"
+    if recommended.get("enabled") is not expected["desired_enabled"]:
+        return "drought_enabled_decision_mismatch"
+    if (
+        recommended.get("intraday_escalation_enabled")
+        is not expected["intraday_escalation_allowed"]
+    ):
+        return "drought_escalation_runtime_mismatch"
+    if recommended.get("intraday_escalation_scopes") != ",".join(
+        expected["intraday_escalation_scopes"]
+    ):
+        return "drought_escalation_scope_runtime_mismatch"
+    if recommended.get("allowed_scopes") != ",".join(expected["allowed_scopes"]):
+        return "drought_runtime_scope_mismatch"
+    if candidate.get("runtime_disable_family") is not (not expected["desired_enabled"]):
+        return "drought_runtime_disable_flag_mismatch"
+    return ""
+
+
+def _entry_recheck_drought_controller_contract_error(
     payload: dict[str, Any], candidates: list[dict[str, Any]]
 ) -> str:
     contract = (
@@ -1836,7 +2014,8 @@ def _entry_ai_gate_cumulative_contract_error(
     )
     if not contract:
         return "missing_runtime_update_contract"
-    if str(contract.get("update_mode") or "") != ENTRY_AI_GATE_RUNTIME_UPDATE_MODE:
+    update_mode = str(contract.get("update_mode") or "")
+    if update_mode != ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE:
         return "invalid_runtime_update_mode"
     if str(contract.get("owner_family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
         return "invalid_runtime_update_owner_family"
@@ -1857,6 +2036,12 @@ def _entry_ai_gate_cumulative_contract_error(
     )
     if len(candidates) > 1 or actual_allowed_count > 1:
         return "multiple_runtime_update_candidates"
+    if payload.get("diagnostic_apply_ready") is not False:
+        return "controller_diagnostic_apply_semantics_invalid"
+    if payload.get("runtime_candidate_ready") is not (actual_allowed_count == 1):
+        return "controller_runtime_candidate_ready_mismatch"
+    if payload.get("allowed_runtime_apply") is not (actual_allowed_count == 1):
+        return "controller_allowed_runtime_apply_mismatch"
     if declared_candidate_count != len(candidates):
         return "runtime_update_candidate_count_mismatch"
     if declared_allowed_count != actual_allowed_count:
@@ -1866,7 +2051,8 @@ def _entry_ai_gate_cumulative_contract_error(
         if isinstance(contract.get("cumulative_quality_window"), dict)
         else {}
     )
-    if str(quality_window.get("window_policy") or "") != ("clean_baseline_cumulative"):
+    expected_window_policy = "rolling_3_trading_days"
+    if str(quality_window.get("window_policy") or "") != expected_window_policy:
         return "invalid_cumulative_window_policy"
     window_start = str(quality_window.get("start_date") or "")
     window_end = str(quality_window.get("end_date") or "")
@@ -1886,23 +2072,34 @@ def _entry_ai_gate_cumulative_contract_error(
         return "cumulative_source_date_count_invalid"
     if source_date_count != len(source_dates):
         return "cumulative_source_date_count_mismatch"
-    if any(
-        not isinstance(day, str) or day < window_start or day > window_end
-        for day in source_dates
+    if (
+        any(not isinstance(day, str) for day in source_dates)
+        or len(set(source_dates)) != len(source_dates)
+        or source_dates != sorted(source_dates)
+        or any(
+            not isinstance(day, str) or day < window_start or day > window_end
+            for day in source_dates
+        )
     ):
         return "cumulative_source_date_out_of_window"
+    if (
+        update_mode == ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE
+        and source_date_count != 3
+    ):
+        return "drought_window_must_have_three_trading_dates"
     if candidates and source_date_count <= 0:
         return "candidate_without_cumulative_source_dates"
     if not bool(contract.get("post_apply_attribution_required")):
         return "runtime_update_post_apply_attribution_missing"
     for item in candidates:
+        drought_contract_error = _entry_recheck_drought_candidate_contract_error(item)
+        if drought_contract_error:
+            return drought_contract_error
         if str(item.get("family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
             return "candidate_owner_family_mismatch"
         if str(item.get("stage") or "") != "entry":
             return "candidate_stage_mismatch"
-        if str(item.get("runtime_update_mode") or "") != (
-            ENTRY_AI_GATE_RUNTIME_UPDATE_MODE
-        ):
+        if str(item.get("runtime_update_mode") or "") != update_mode:
             return "candidate_runtime_update_mode_mismatch"
         try:
             candidate_max_apply_count = int(item.get("max_runtime_apply_count") or 0)
@@ -1929,12 +2126,12 @@ def _entry_ai_gate_cumulative_contract_error(
     return ""
 
 
-def _load_entry_ai_gate_backtest_candidates(
+def _load_entry_recheck_drought_controller_candidates(
     source_date: str | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     if not source_date:
         return [], {"status": "missing_source_date", "path": None}
-    path = _entry_ai_gate_backtest_path(source_date)
+    path = _entry_recheck_drought_controller_path(source_date)
     if not path.exists():
         return [], {"status": "missing_report", "path": str(path)}
     payload = _load_json(path)
@@ -1942,9 +2139,15 @@ def _load_entry_ai_gate_backtest_candidates(
     if not isinstance(candidates, list):
         candidates = []
     normalized = [item for item in candidates if isinstance(item, dict)]
-    cumulative_contract_error = _entry_ai_gate_cumulative_contract_error(
+    cumulative_contract_error = _entry_recheck_drought_controller_contract_error(
         payload, normalized
     )
+    if payload.get("schema_version") != 1:
+        cumulative_contract_error = "entry_recheck_controller_schema_version_mismatch"
+    elif payload.get("report_type") != "entry_recheck_drought_controller":
+        cumulative_contract_error = "entry_recheck_controller_report_type_mismatch"
+    elif payload.get("target_date") != source_date:
+        cumulative_contract_error = "entry_recheck_controller_target_date_mismatch"
     if cumulative_contract_error:
         normalized = [
             {
@@ -1964,9 +2167,9 @@ def _load_entry_ai_gate_backtest_candidates(
             preflight_status.get("reason") or "source_quality_blocked"
         )
         block_reason = (
-            "entry_ai_gate_backtest_root_source_quality_blocked"
+            "entry_recheck_drought_controller_root_source_quality_blocked"
             if source_quality_blocked
-            else f"entry_ai_gate_backtest_source_quality_preflight_blocked:{preflight_reason}"
+            else f"entry_recheck_drought_controller_source_quality_preflight_blocked:{preflight_reason}"
         )
         normalized = [
             {
@@ -1999,10 +2202,9 @@ def _load_entry_ai_gate_backtest_candidates(
         "allowed_runtime_apply_candidate_count": sum(
             1 for item in normalized if bool(item.get("allowed_runtime_apply"))
         ),
-        "diagnostic_conflict_detected": summary.get("diagnostic_conflict_detected"),
-        "supported_wait_recovery_source_contract_status": summary.get(
-            "supported_wait_recovery_source_contract_status"
-        ),
+        "runtime_acceptance_state": summary.get("runtime_acceptance_state"),
+        "top_evaluation_reason": summary.get("top_evaluation_reason"),
+        "intraday_escalation_scopes": summary.get("intraday_escalation_scopes") or [],
         "runtime_update_contract": payload.get("runtime_update_contract") or {},
         "runtime_update_contract_blocked": bool(cumulative_contract_error),
         "runtime_update_contract_error": cumulative_contract_error or None,
@@ -2405,6 +2607,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     force_emit = policy_or_family in {
         "latency_classifier_runtime_profile",
         "lifecycle_decision_matrix_runtime",
+        ENTRY_OPPORTUNITY_RECHECK_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
         *DETERMINISTIC_POLICY_HANDOFF_FAMILIES,
         "lifecycle_bucket_discovery_sim_auto_approval",
@@ -2693,112 +2896,18 @@ def _select_swing_approved_candidates(
 
 
 def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[str, Any]:
-    if not source_date:
-        return {
-            "artifact": None,
-            "approved_request": None,
-            "blocked": ["missing_source_date"],
-        }
-    path = scalp_sim_scale_in_window_artifact_path(source_date)
-    payload = _load_json(path)
-    blocked: list[str] = []
-    if not payload:
-        blocked.append("approval_artifact_missing")
-    elif (
-        str(payload.get("policy_id") or payload.get("family") or "")
-        != "scalp_sim_scale_in_window_expansion"
-    ):
-        blocked.append("approval_policy_mismatch")
-    elif not bool(payload.get("approved")):
-        blocked.append("sim_auto_approval_not_approved")
-    elif payload.get("approval_state") != "sim_auto_approved":
-        blocked.append("sim_auto_approval_state_invalid")
-    elif bool(payload.get("human_approval_required")):
-        blocked.append("human_approval_required_not_allowed_for_sim_auto")
-    elif bool(payload.get("actual_order_submitted")):
-        blocked.append("actual_order_submitted_not_allowed")
-    elif payload.get("runtime_effect") is not False:
-        blocked.append("runtime_effect_not_allowed")
-    elif payload.get("broker_order_forbidden") is not True:
-        blocked.append("broker_order_forbidden_contract_missing")
-    elif payload.get("source_quality_status") not in {None, "pass"}:
-        blocked.append("source_quality_blocked")
-    request = None
-    if payload and not blocked:
-        recommended = (
-            payload.get("recommended_values")
-            if isinstance(payload.get("recommended_values"), dict)
-            else {}
-        )
-        recommended = dict(recommended)
-        if "execution_observation_enabled" not in recommended:
-            recommended["execution_observation_enabled"] = True
-        if not recommended.get("execution_arms"):
-            recommended["execution_arms"] = "PASSIVE_BASELINE,MARKETABLE_OBSERVATION"
-        target_env_keys = list(payload.get("target_env_keys") or [])
-        for key in (
-            "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED",
-            "SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
-        ):
-            if key not in target_env_keys:
-                target_env_keys.append(key)
-        request = {
-            "family": "scalp_sim_scale_in_window_expansion",
-            "policy_id": "scalp_sim_scale_in_window_expansion",
-            "stage": "scale_in",
-            "calibration_state": "sim_auto_approved",
-            "allowed_runtime_apply": True,
-            "safety_revert_required": False,
-            "target_env_keys": target_env_keys,
-            "recommended_values": recommended,
-            "current_values": {
-                "enabled": False,
-                "allowed_arms": "",
-                "min_profit_pct": None,
-                "max_profit_pct": None,
-                "max_orders_per_position": None,
-                "max_orders_per_day": None,
-            },
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "decision_authority": "sim_auto_approval_only",
-        }
     return {
-        "artifact": str(path) if path.exists() else None,
-        "approved_request": request,
-        "blocked": blocked,
-        "artifact_payload": payload,
+        **retired_status("scalp_sim_scale_in_window_approval"),
+        "artifact": None,
+        "approved_request": None,
+        "blocked": [],
     }
 
 
 def _select_scalp_sim_scale_in_window_approval(
     bundle: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    request = (
-        bundle.get("approved_request")
-        if isinstance(bundle.get("approved_request"), dict)
-        else None
-    )
-    if not request:
-        return [], [], {}
-    overrides = _env_overrides_for_candidate(request)
-    reject_reason = ""
-    if not overrides:
-        reject_reason = "no_runtime_env_override"
-    decision = {
-        "family": request.get("family"),
-        "stage": request.get("stage"),
-        "selected": not bool(reject_reason),
-        "decision_reason": reject_reason or "sim_auto_approval_artifact_accepted",
-        "env_overrides": overrides if not reject_reason else {},
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-    return (
-        ([request], [decision], overrides)
-        if not reject_reason
-        else ([], [decision], {})
-    )
+    return [], [], {}
 
 
 def _artifact_matches_bridge_candidate(
@@ -2962,190 +3071,22 @@ def _select_runtime_apply_bridge_approval(
     *,
     include_families: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    selected: list[dict[str, Any]] = []
-    decisions: list[dict[str, Any]] = []
-    env_overrides: dict[str, str] = {}
-    selected_by_stage: dict[str, str] = {}
-    for item in sorted(
-        bundle.get("approved_requests") or [],
-        key=lambda row: int(row.get("priority") or 999),
-    ):
-        if not isinstance(item, dict):
-            continue
-        family = str(item.get("family") or "")
-        stage = str(item.get("stage") or "unknown")
-        overrides = _env_overrides_for_candidate(item)
-        reject_reason = ""
-        if family in RETIRED_RUNTIME_FAMILY_REASONS:
-            reject_reason = RETIRED_RUNTIME_FAMILY_REASONS[family]
-        elif include_families is not None and family not in include_families:
-            reject_reason = "operator_family_filter_excluded"
-        elif bool(item.get("actual_order_submitted")):
-            reject_reason = "actual_order_submission_not_allowed"
-        elif not bool(item.get("allowed_runtime_apply")):
-            reject_reason = "runtime_apply_not_allowed"
-        elif stage in selected_by_stage:
-            reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage]}"
-        elif not overrides:
-            reject_reason = "no_runtime_env_override"
-        decision = {
-            "approval_id": item.get("approval_id"),
-            "family": family,
-            "stage": stage,
-            "bridge_candidate_id": item.get("bridge_candidate_id"),
-            "runtime_apply_bridge_family": item.get("runtime_apply_bridge_family"),
-            "source_bucket_keys": item.get("source_bucket_keys") or [],
-            "actual_runtime_effect": item.get("actual_runtime_effect"),
-            "lifecycle_bucket_discovery_bucket_id": item.get(
-                "lifecycle_bucket_discovery_bucket_id"
-            ),
-            "lifecycle_bucket_discovery_ai_review_status": item.get(
-                "lifecycle_bucket_discovery_ai_review_status"
-            ),
-            "lifecycle_bucket_discovery_ai_followup_required": item.get(
-                "lifecycle_bucket_discovery_ai_followup_required"
-            ),
-            "lifecycle_bucket_discovery_ai_block_ignored_reason": item.get(
-                "lifecycle_bucket_discovery_ai_block_ignored_reason"
-            ),
-            "post_apply_verification_required": bool(
-                item.get("lifecycle_bucket_discovery_ai_followup_required")
-            ),
-            "selected": not bool(reject_reason),
-            "decision_reason": reject_reason
-            or (
-                "lifecycle_bucket_discovery_live_auto_apply"
-                if str(item.get("approval_state") or "") == "auto_live"
-                else "user_approval_artifact_accepted_bridge_ready"
-            ),
-            "env_overrides": overrides if not reject_reason else {},
-            "actual_order_submitted": False,
-        }
-        decisions.append(decision)
-        if reject_reason:
-            continue
-        selected_by_stage[stage] = family
-        selected.append(item)
-        env_overrides.update(overrides)
-    return selected, decisions, env_overrides
+    return [], [], {}
 
 
 def _load_lifecycle_bucket_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
-    if not source_date:
-        return {
-            "artifact": None,
-            "approved_request": None,
-            "blocked": ["missing_source_date"],
-        }
-    artifact_path = sim_auto_approval_path(source_date)
-    discovery_path = discovery_report_path(source_date)
-    catalog_path = bucket_catalog_path(source_date)
-    payload = _load_json(artifact_path)
-    blocked: list[str] = []
-    if not payload:
-        blocked.append("sim_auto_approval_missing")
-    elif not bool(payload.get("approved")):
-        blocked.append("sim_auto_approval_not_approved")
-    elif bool(payload.get("actual_order_submitted")):
-        blocked.append("actual_order_submitted_not_allowed")
-    elif payload.get("runtime_effect") is not False:
-        blocked.append("runtime_effect_not_allowed")
-    elif payload.get("allowed_runtime_apply") is not False:
-        blocked.append("artifact_allowed_runtime_apply_must_be_false")
-    elif payload.get("broker_order_forbidden") is not True:
-        blocked.append("broker_order_forbidden_contract_missing")
-    elif not payload.get("approved_bucket_ids"):
-        blocked.append("sim_auto_approval_empty")
-    if not catalog_path.exists():
-        blocked.append("bucket_catalog_missing")
-    approved_request = None
-    if not blocked:
-        approved_request = {
-            "family": "lifecycle_bucket_discovery_sim_auto_approval",
-            "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
-            "stage": "sim_lifecycle",
-            "priority": 89,
-            "approval_id": f"lifecycle_bucket_discovery_sim_auto_approval:{source_date}",
-            "approval_state": "auto_sim",
-            "allowed_runtime_apply": True,
-            "safety_revert_required": False,
-            "calibration_state": "sim_auto_approved",
-            "approved_bucket_ids": payload.get("approved_bucket_ids") or [],
-            "approved_bucket_count": payload.get("approved_bucket_count"),
-            "target_env_keys": [
-                "LIFECYCLE_BUCKET_DISCOVERY_ENABLED",
-                "LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE",
-                "LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION",
-                "LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED",
-            ],
-            "recommended_values": {
-                "enabled": True,
-                "policy_file": str(catalog_path),
-                "policy_version": f"lifecycle_bucket_discovery:{source_date}",
-                "live_auto_apply_enabled": False,
-            },
-            "current_values": {
-                "enabled": False,
-                "policy_file": "",
-                "policy_version": "",
-                "live_auto_apply_enabled": False,
-            },
-            "actual_order_submitted": False,
-            "decision_authority": "postclose_lifecycle_bucket_discovery_sim_auto",
-        }
     return {
-        "artifact": str(artifact_path) if artifact_path.exists() else None,
-        "discovery_report": str(discovery_path) if discovery_path.exists() else None,
-        "catalog": str(catalog_path) if catalog_path.exists() else None,
-        "approved_request": approved_request,
-        "blocked": blocked,
+        **retired_status("lifecycle_bucket_discovery"),
+        "artifact": None,
+        "approved_request": None,
+        "blocked": [],
     }
 
 
 def _select_lifecycle_bucket_sim_auto_approval(
     bundle: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    item = bundle.get("approved_request")
-    decisions: list[dict[str, Any]] = []
-    selected: list[dict[str, Any]] = []
-    env_overrides: dict[str, str] = {}
-    if not isinstance(item, dict):
-        decisions.append(
-            {
-                "family": "lifecycle_bucket_discovery_sim_auto_approval",
-                "selected": False,
-                "decision_reason": ",".join(
-                    str(reason) for reason in bundle.get("blocked") or []
-                )
-                or "sim_auto_approval_missing",
-                "env_overrides": {},
-                "actual_order_submitted": False,
-            }
-        )
-        return selected, decisions, env_overrides
-    overrides = _env_overrides_for_candidate(item)
-    reject_reason = ""
-    if not bool(item.get("allowed_runtime_apply")):
-        reject_reason = "runtime_apply_not_allowed"
-    elif bool(item.get("actual_order_submitted")):
-        reject_reason = "actual_order_submitted_not_allowed"
-    elif not overrides:
-        reject_reason = "no_runtime_env_override"
-    decision = {
-        "approval_id": item.get("approval_id"),
-        "family": item.get("family"),
-        "stage": item.get("stage"),
-        "selected": not bool(reject_reason),
-        "decision_reason": reject_reason or "lifecycle_bucket_discovery_sim_auto_apply",
-        "env_overrides": overrides if not reject_reason else {},
-        "actual_order_submitted": False,
-    }
-    decisions.append(decision)
-    if reject_reason:
-        return selected, decisions, env_overrides
-    selected.append(item)
-    env_overrides.update(overrides)
-    return selected, decisions, env_overrides
+    return [], [], {}
 
 
 def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
@@ -3159,7 +3100,8 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
     artifact_path = scalp_sim_auto_approval_path(source_date)
     catalog_path = scalp_sim_policy_catalog_path(source_date)
     payload = _load_json(artifact_path)
-    catalog_payload = _load_json(catalog_path)
+    raw_catalog_payload = _load_json(catalog_path, sanitize=False)
+    catalog_payload = current_report_view(raw_catalog_payload)
     policies = (
         payload.get("approved_policies")
         if isinstance(payload.get("approved_policies"), list)
@@ -3216,10 +3158,13 @@ def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
             )
         generated_at = _parse_dt(catalog_payload.get("generated_at"))
         generator_provenance = (
-            catalog_payload.get("generator_provenance")
-            if isinstance(catalog_payload.get("generator_provenance"), dict)
+            raw_catalog_payload.get("generator_provenance")
+            if isinstance(raw_catalog_payload.get("generator_provenance"), dict)
             else {}
         )
+        # File hashes are integrity metadata, not archived policy authority.
+        # Retirement filtering must still apply to policies and seeds above,
+        # but removing a retired module's hash would make fresh catalogs stale.
         catalog_generator_hashes = (
             generator_provenance.get("files")
             if isinstance(generator_provenance.get("files"), dict)
@@ -3578,6 +3523,14 @@ def _ai_guard_allows_candidate(
     candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool
 ) -> tuple[bool, str]:
     family = str(candidate.get("family") or "")
+    if (
+        family == ENTRY_OPPORTUNITY_RECHECK_FAMILY
+        and str(candidate.get("runtime_update_mode") or "")
+        == ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE
+        and str(candidate.get("decision_authority") or "")
+        == "buy_funnel_drought_conditional_preopen_policy"
+    ):
+        return (True, "deterministic_drought_conditional_preopen_policy")
     if family in DETERMINISTIC_POLICY_HANDOFF_FAMILIES:
         return (True, "deterministic_policy_handoff")
     if family == "latency_classifier_runtime_profile":
@@ -3850,6 +3803,10 @@ def _select_auto_apply_candidates(
             str(candidate.get("runtime_update_mode") or "")
             == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
         )
+        claims_stage_owner = not (
+            family == ENTRY_OPPORTUNITY_RECHECK_FAMILY
+            and candidate.get("same_stage_owner_claim") is False
+        )
         reject_reason = ""
         hold_carry_forward = False
         hold_carry_forward_blockers: list[str] = []
@@ -3917,7 +3874,8 @@ def _select_auto_apply_candidates(
                 f"{selected_cumulative_quality_by_stage[stage]}"
             )
         elif (
-            stage in selected_by_stage
+            claims_stage_owner
+            and stage in selected_by_stage
             and not _operator_lock_stage_coexist(
                 family=family,
                 stage=stage,
@@ -3938,6 +3896,7 @@ def _select_auto_apply_candidates(
         lock_stage_conflict_reason = ""
         if (
             lock
+            and claims_stage_owner
             and stage in selected_by_stage
             and not _operator_lock_stage_coexist(
                 family=family,
@@ -4008,6 +3967,8 @@ def _select_auto_apply_candidates(
             "preopen_selection_state": (
                 "selected_for_runtime_env" if not reject_reason else "not_selected"
             ),
+            "runtime_disable_family": bool(candidate.get("runtime_disable_family")),
+            "same_stage_owner_claim": claims_stage_owner,
         }
         previous_family_env = _previous_runtime_env_overrides_for_family(
             previous_runtime_manifest, family
@@ -4080,7 +4041,8 @@ def _select_auto_apply_candidates(
             continue
         if cumulative_quality_update:
             selected_cumulative_quality_by_stage[stage] = family
-        selected_by_stage[stage] = candidate
+        if claims_stage_owner:
+            selected_by_stage[stage] = candidate
         decisions.append(decision)
 
     selected_decisions = [
@@ -4096,6 +4058,8 @@ def _entry_price_live_owner_family(*selected_groups: list[dict[str, Any]]) -> st
     for group in selected_groups:
         for item in group or []:
             if not isinstance(item, dict):
+                continue
+            if item.get("same_stage_owner_claim") is False:
                 continue
             family = str(item.get("family") or "")
             if family in {
@@ -4117,6 +4081,8 @@ def _entry_live_tuning_owner_family(*selected_groups: list[dict[str, Any]]) -> s
     for group in selected_groups:
         for item in group or []:
             if not isinstance(item, dict):
+                continue
+            if item.get("same_stage_owner_claim") is False:
                 continue
             family = str(item.get("family") or "")
             if family in {
@@ -4682,87 +4648,14 @@ def _lifecycle_ai_context_overlay_env(
     *,
     include_families: set[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
-    if (
-        include_families is not None
-        and "lifecycle_decision_matrix_runtime" not in include_families
-    ):
-        return (
-            {
-                "selected": False,
-                "decision_reason": "operator_family_filter_excluded",
-                "env_overrides": {},
-            },
-            {},
-        )
-    candidate = next(
-        (
-            item
-            for item in calibration_candidates
-            if isinstance(item, dict)
-            and str(item.get("family") or "") == "lifecycle_decision_matrix_runtime"
-        ),
-        None,
+    return (
+        {
+            **retired_status("lifecycle_ai_context"),
+            "selected": False,
+            "env_overrides": {},
+        },
+        {},
     )
-    if not candidate:
-        return (
-            {
-                "selected": False,
-                "decision_reason": "lifecycle_decision_matrix_runtime_candidate_missing",
-                "env_overrides": {},
-            },
-            {},
-        )
-    recommended = (
-        candidate.get("recommended_values")
-        if isinstance(candidate.get("recommended_values"), dict)
-        else {}
-    )
-    context_file = str(recommended.get("lifecycle_ai_context_file") or "")
-    if not bool(recommended.get("lifecycle_ai_context_enabled")) or not context_file:
-        return (
-            {
-                "selected": False,
-                "decision_reason": "lifecycle_ai_context_artifact_missing_or_disabled",
-                "env_overrides": {},
-            },
-            {},
-        )
-
-    overlay_values = {
-        "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED": False,
-        "LIFECYCLE_AI_CONTEXT_ENABLED": True,
-        "LIFECYCLE_AI_CONTEXT_FILE": context_file,
-        "LIFECYCLE_AI_CONTEXT_VERSION": str(
-            recommended.get("lifecycle_ai_context_version") or ""
-        ),
-        "SCALP_ENTRY_ADM_ADVISORY_ENABLED": bool(
-            recommended.get("entry_adm_advisory_enabled", True)
-        ),
-        "SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED": False,
-        "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED": bool(
-            recommended.get("holding_exit_matrix_advisory_enabled", True)
-        ),
-        "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED": False,
-        "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED": False,
-    }
-    env_overrides = {
-        _runtime_env_name(key): _format_env_value(value)
-        for key, value in overlay_values.items()
-        if key in TARGET_ENV_VALUE_KEYS
-    }
-    decision = {
-        "family": "lifecycle_ai_context",
-        "source_family": "lifecycle_decision_matrix_runtime",
-        "family_type": "context_only_env_overlay",
-        "selected": True,
-        "decision_reason": "context_only_advisory_prompt_overlay_bias_off",
-        "runtime_effect": False,
-        "decision_authority": "ai_advisory_prompt_context_only",
-        "live_selectable": False,
-        "standalone_threshold_family": False,
-        "env_overrides": env_overrides,
-    }
-    return decision, env_overrides
 
 
 SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
@@ -4843,6 +4736,7 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES",
     ],
     "weak_context_late_entry_guard_runtime": [
         "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED",
@@ -5915,7 +5809,9 @@ def verify_runtime_env_handoff(
     pid: int | None = None,
 ) -> dict[str, Any]:
     manifest_path = runtime_env_manifest_path(target_date)
-    manifest = _load_json(manifest_path) if manifest_path.exists() else {}
+    manifest = (
+        _load_json(manifest_path, sanitize=False) if manifest_path.exists() else {}
+    )
     raw_selected_families = [
         str(item)
         for item in (manifest.get("selected_families") or [])
@@ -6034,6 +5930,25 @@ def verify_runtime_env_handoff(
             }
         )
     effective_env_overrides.update(authoritative_context_env)
+    for key, value in raw_env_overrides.items():
+        if (
+            key.startswith(RETIRED_ENV_PREFIXES)
+            and key.endswith("_ENABLED")
+            and _runtime_env_enabled(value)
+        ):
+            findings.append(
+                {
+                    "family": "adm_ldm_retired",
+                    "severity": "retired_runtime_override_present",
+                    "missing_env_keys": [],
+                    "env_key": key,
+                    "detail": "retired policy enabled in runtime manifest; regenerate PREOPEN artifact",
+                }
+            )
+    effective_env_overrides = {
+        **without_retired_env(effective_env_overrides),
+        **retirement_env(),
+    }
     scalp_sim_policy_file = str(
         effective_env_overrides.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
     ).strip()
@@ -6308,8 +6223,26 @@ def verify_runtime_env_handoff(
     entry_recheck_probe_contract_key = (
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT"
     )
+    entry_recheck_escalation_enabled_key = (
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED"
+    )
+    entry_recheck_escalation_scopes_key = (
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES"
+    )
     if _runtime_env_enabled(effective_env_overrides.get(entry_recheck_enabled_key)):
         recheck_contract_failures: list[str] = []
+        from src.engine.scalping.entry_recheck_policy import SCOPES as recheck_scopes
+
+        scope_key = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES"
+        selected_scopes = [
+            scope.strip()
+            for scope in str(effective_env_overrides.get(scope_key) or "").split(",")
+            if scope.strip()
+        ]
+        if not selected_scopes or any(
+            scope not in recheck_scopes for scope in selected_scopes
+        ):
+            recheck_contract_failures.append(scope_key)
         if not _runtime_env_enabled(
             effective_env_overrides.get(entry_recheck_wait_probe_key)
         ):
@@ -6337,6 +6270,22 @@ def verify_runtime_env_handoff(
             effective_env_overrides.get(post_probe_resolver_enabled_key)
         ):
             recheck_contract_failures.append(post_probe_resolver_enabled_key)
+        escalation_scopes = [
+            scope.strip()
+            for scope in str(
+                effective_env_overrides.get(entry_recheck_escalation_scopes_key) or ""
+            ).split(",")
+            if scope.strip()
+        ]
+        escalation_enabled = _runtime_env_enabled(
+            effective_env_overrides.get(entry_recheck_escalation_enabled_key)
+        )
+        if (
+            any(scope not in recheck_scopes for scope in escalation_scopes)
+            or not set(escalation_scopes).issubset(selected_scopes)
+            or escalation_enabled != bool(escalation_scopes)
+        ):
+            recheck_contract_failures.append(entry_recheck_escalation_scopes_key)
         if recheck_contract_failures:
             findings.append(
                 {
@@ -6389,6 +6338,20 @@ def verify_runtime_env_handoff(
     )
     if pid is not None:
         pid_env = _read_pid_environ(pid)
+        for key, value in pid_env.items():
+            if (
+                key.startswith(RETIRED_ENV_PREFIXES)
+                and key.endswith("_ENABLED")
+                and _runtime_env_enabled(value)
+            ):
+                pid_mismatches.append(
+                    {
+                        "env_key": key,
+                        "expected": "false",
+                        "actual": value,
+                        "family": "adm_ldm_retired",
+                    }
+                )
         candidate_read_error = getattr(pid_env, "read_error", None)
         if isinstance(candidate_read_error, dict):
             pid_env_read_error = dict(candidate_read_error)
@@ -6742,6 +6705,7 @@ def _write_gap_provenance(target_date: str) -> None:
 def _write_runtime_env(
     target_date: str, manifest: dict[str, Any], env_overrides: dict[str, str]
 ) -> None:
+    env_overrides = {**without_retired_env(env_overrides), **retirement_env()}
     RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
     env_overrides = {
         key: value
@@ -6785,6 +6749,8 @@ def _write_runtime_env(
     for item in selected_items:
         family = str((item or {}).get("family") or "").strip()
         if not family:
+            continue
+        if bool((item or {}).get("runtime_disable_family")):
             continue
         if family in REMOVED_CALIBRATION_FAMILIES:
             if family not in removed_selected_families:
@@ -7283,13 +7249,13 @@ def build_preopen_apply_manifest(
                 *calibration_candidates,
                 *scalping_avg_down_recovery_candidates,
             ]
-        entry_ai_gate_candidates, entry_ai_gate_backtest = (
-            _load_entry_ai_gate_backtest_candidates(report_source_date)
+        entry_recheck_candidates, entry_recheck_drought_controller = (
+            _load_entry_recheck_drought_controller_candidates(report_source_date)
         )
-        if entry_ai_gate_candidates:
+        if entry_recheck_candidates:
             calibration_candidates = [
                 *calibration_candidates,
-                *entry_ai_gate_candidates,
+                *entry_recheck_candidates,
             ]
         calibration_candidates = _dedupe_calibration_candidates(calibration_candidates)
         calibration_candidates = _scrub_removed_contracts(calibration_candidates) or []
@@ -7594,7 +7560,9 @@ def build_preopen_apply_manifest(
                 env_overrides[SCALE_IN_LIVE_TUNING_MARKER_ENV] = "true"
             if holding_exit_live_owner_family:
                 env_overrides[HOLDING_EXIT_LIVE_TUNING_MARKER_ENV] = "true"
-        runtime_change_env_overrides = dict(env_overrides)
+        env_overrides = {**without_retired_env(env_overrides), **retirement_env()}
+        # A permanent OFF guard is not a newly approved tuning candidate.
+        runtime_change_env_overrides = without_retired_env(env_overrides)
         if not limit_down_watch_decision.get("selected"):
             runtime_change_env_overrides = {
                 key: value
@@ -7677,7 +7645,7 @@ def build_preopen_apply_manifest(
             "latency_classifier_recommendation": latency_recommendation,
             "scalping_pyramid_quality_calibration": scalping_pyramid_quality_calibration,
             "scalping_avg_down_recovery_calibration": scalping_avg_down_recovery_calibration,
-            "entry_ai_gate_backtest": entry_ai_gate_backtest,
+            "entry_recheck_drought_controller": entry_recheck_drought_controller,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "entry_cancel_wait_runtime": entry_cancel_wait_decision,

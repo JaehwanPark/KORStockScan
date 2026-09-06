@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import hashlib
 import json
@@ -10,9 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from src.engine import lifecycle_bucket_discovery
-from src.engine.automation.source_quality_clean_baseline import (
-    embedded_source_date_gate,
-)
 from src.engine.lifecycle_bucket_discovery import (
     bucket_catalog_path,
     sim_auto_approval_path,
@@ -63,11 +62,13 @@ def _date_text(value: str | date | datetime | None) -> str:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _file_sha256(path: Path) -> str:
@@ -107,30 +108,7 @@ def rising_missed_classifier_prior_path(target_date: str) -> Path:
 def _latest_hypothesis_observation_plan(
     target_date: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    exact = (
-        LDM_HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
-    )
-    candidates: list[tuple[str, Path]] = []
-    if exact.exists():
-        candidates.append((target_date, exact))
-    if LDM_HYPOTHESIS_PLAN_DIR.exists():
-        for path in LDM_HYPOTHESIS_PLAN_DIR.glob(
-            "ldm_hypothesis_observation_plan_*.json"
-        ):
-            plan_date = path.stem.removeprefix("ldm_hypothesis_observation_plan_")
-            if plan_date <= target_date and path != exact:
-                candidates.append((plan_date, path))
-    if not candidates:
-        return {}, embedded_source_date_gate({})
-    latest_rejection: dict[str, Any] = {}
-    for _plan_date, path in sorted(candidates, reverse=True):
-        payload = _load_json(path)
-        gate = {**embedded_source_date_gate(payload), "source_artifact": str(path)}
-        if gate["allowed"]:
-            return payload, gate
-        if not latest_rejection:
-            latest_rejection = gate
-    return {}, latest_rejection
+    return {}, {"status": "retired", "tuning_input_allowed": False}
 
 
 def _lifecycle_contract_ok(payload: dict[str, Any]) -> bool:
@@ -374,100 +352,11 @@ def _rising_missed_prior_policy_item(
 def _lifecycle_policy_item(
     payload: dict[str, Any], catalog_path: Path
 ) -> dict[str, Any] | None:
-    if not _lifecycle_contract_ok(payload):
-        return None
-    if not catalog_path.exists():
-        return None
-    bucket_ids = [
-        str(item)
-        for item in (payload.get("approved_bucket_ids") or [])
-        if str(item or "").strip()
-    ]
-    bucket_rows = [
-        item
-        for item in (payload.get("approved_bucket_rows") or [])
-        if isinstance(item, dict) and str(item.get("bucket_id") or "").strip()
-    ]
-    active_seeds = [
-        item
-        for item in (payload.get("active_sim_priority_seeds") or [])
-        if isinstance(item, dict) and str(item.get("active_seed_id") or "").strip()
-    ]
-    active_status_seeds = [
-        item for item in active_seeds if str(item.get("status") or "") == "active"
-    ]
-    if not bool(payload.get("approved")) or not (
-        bucket_rows or bucket_ids or active_status_seeds
-    ):
-        return None
-    unique_source_bucket_ids = {
-        str(item.get("source_bucket_id") or item.get("bucket_id") or "")
-        for item in bucket_rows
-        if str(item.get("source_bucket_id") or item.get("bucket_id") or "").strip()
-    }
-    return {
-        "source_id": "lifecycle_bucket_discovery",
-        "policy_kind": "lifecycle_bucket_sim_policy",
-        "policy_id": "lifecycle_bucket_discovery_sim_auto_approval",
-        "policy_file": str(catalog_path),
-        "approved_bucket_ids": bucket_ids,
-        "approved_bucket_rows": bucket_rows,
-        "active_sim_priority_seeds": active_seeds,
-        "active_sim_priority_seed_count": len(active_seeds),
-        "active_sim_priority_active_seed_count": len(active_status_seeds),
-        "active_sim_priority_seed_status_counts": payload.get(
-            "active_sim_priority_seed_status_counts"
-        )
-        or {},
-        "approved_bucket_count": len(bucket_rows) if bucket_rows else len(bucket_ids),
-        "approved_unique_source_bucket_count": (
-            len(unique_source_bucket_ids)
-            if bucket_rows
-            else payload.get("approved_unique_source_bucket_count")
-        ),
-        "approved_evidence_grade_counts": payload.get("approved_evidence_grade_counts")
-        or {},
-        "classification_state": "sim_auto_approved",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "forbidden_uses": FORBIDDEN_USES,
-    }
+    return None
 
 
 def _scale_in_policy_item(payload: dict[str, Any]) -> dict[str, Any] | None:
-    if not _scale_in_contract_ok(payload):
-        return None
-    if (
-        not bool(payload.get("approved"))
-        or payload.get("approval_state") != "sim_auto_approved"
-    ):
-        return None
-    return {
-        "source_id": "scalp_sim_scale_in_window_approval",
-        "policy_kind": "scalp_sim_scale_in_window_policy",
-        "policy_id": "scalp_sim_scale_in_window_expansion",
-        "stage": "scale_in",
-        "target_env_keys": payload.get("target_env_keys") or [],
-        "recommended_values": (
-            payload.get("recommended_values")
-            if isinstance(payload.get("recommended_values"), dict)
-            else {}
-        ),
-        "source_summary": (
-            payload.get("source_summary")
-            if isinstance(payload.get("source_summary"), dict)
-            else {}
-        ),
-        "classification_state": "sim_auto_approved",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "real_order_forbidden": True,
-        "forbidden_uses": FORBIDDEN_USES,
-    }
+    return None
 
 
 def _runtime_bridge_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -511,21 +400,9 @@ def build_scalp_sim_auto_approval(
         "rising_missed_classifier_prior": rising_missed_classifier_prior_path(date_key),
     }
     paths = {**default_paths, **(source_paths or {})}
-    lifecycle_payload = (
-        lifecycle_sim_approval
-        if isinstance(lifecycle_sim_approval, dict)
-        else _load_json(paths["lifecycle_sim_auto_approval"])
-    )
-    scale_payload = (
-        scale_in_approval
-        if isinstance(scale_in_approval, dict)
-        else _load_json(paths["scalp_sim_scale_in_window_approval"])
-    )
-    bridge_payload = (
-        runtime_apply_bridge
-        if isinstance(runtime_apply_bridge, dict)
-        else _load_json(paths["runtime_apply_bridge"])
-    )
+    lifecycle_payload = {}  # Retired even when supplied explicitly.
+    scale_payload = {}  # LDM-derived window approval is retired.
+    bridge_payload = {}
     rising_missed_prior_payload = (
         rising_missed_prior
         if isinstance(rising_missed_prior, dict)
@@ -575,7 +452,8 @@ def build_scalp_sim_auto_approval(
         },
         "lifecycle_bucket_catalog": {
             "path": str(catalog_path),
-            "present": catalog_path.exists(),
+            "present": False,
+            "status": "retired",
         },
         "scalp_sim_scale_in_window_approval": {
             "path": str(paths["scalp_sim_scale_in_window_approval"]),
@@ -678,7 +556,7 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
     active_seeds: list[dict[str, Any]] = []
     active_seed_status_overrides: list[dict[str, Any]] = []
     rising_missed_prior_lanes: list[dict[str, Any]] = []
-    for policy in approval.get("approved_policies") or []:
+    for policy in current_report_view(approval.get("approved_policies") or []):
         if not isinstance(policy, dict):
             continue
         active_seeds.extend(
@@ -735,7 +613,7 @@ def build_policy_catalog(approval: dict[str, Any]) -> dict[str, Any]:
         "broker_order_forbidden": True,
         "allowed_runtime_apply": False,
         "approved_source_ids": approval.get("approved_source_ids") or [],
-        "policies": approval.get("approved_policies") or [],
+        "policies": current_report_view(approval.get("approved_policies") or []),
         "active_sim_priority_seeds": adjusted_seeds,
         "rising_missed_prior_observation_lanes": rising_missed_prior_lanes,
         "rising_missed_prior_active_seed_status_overrides": active_seed_status_overrides,

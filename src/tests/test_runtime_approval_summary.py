@@ -60,11 +60,7 @@ def test_lifecycle_bucket_summary_preserves_direct_flow_and_total_counts(
     monkeypatch.setattr(mod, "discovery_report_path", lambda _date: report_path)
 
     summary = mod._lifecycle_bucket_discovery_summary("2026-08-20")
-
-    assert summary["sim_auto_approved_count"] == 0
-    assert summary["direct_sim_auto_approved_count"] == 0
-    assert summary["lifecycle_flow_sim_probe_candidate_count"] == 3
-    assert summary["sim_policy_approved_total_count"] == 3
+    assert summary["status"] == "retired"
 
 
 def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypatch):
@@ -794,29 +790,8 @@ def test_runtime_approval_summary_surfaces_entry_adm_runtime_bias_summary(
     report = mod.build_runtime_approval_summary("2026-05-18")
 
     adm_summary = report["scalp_entry_action_decision_matrix"]
-    assert (
-        adm_summary["runtime_bias_scope"] == "force_wait_force_drop_buy_defensive_bias"
-    )
-    assert adm_summary["joined_action_ev_pct"] == -2.22
-    assert adm_summary["ready_for_daily_policy_tuning"] is False
-    assert "joined_sample_below_sample_floor" in adm_summary["warnings"]
-    assert "missing_action_bucket" in adm_summary["warnings"]
-    assert "prompt_context_not_loaded" in adm_summary["warnings"]
-    assert "unknown_bucket_source_quality_gap" in adm_summary["warnings"]
-    assert adm_summary["unknown_bucket_summary"]["affected_rows"] == 3
-    assert report["summary"]["scalp_entry_adm_ready_for_daily_policy_tuning"] is False
-    adm_row = next(
-        row
-        for row in report["scalping"]
-        if row["family"] == "scalp_entry_action_decision_matrix_advisory"
-    )
-    assert adm_row["gate_review_class"] == "entry_adm_runtime_bias_operator_override"
-    assert adm_row["runtime_bias_scope"] == "force_wait_force_drop_buy_defensive_bias"
-    markdown = (out_dir / "runtime_approval_summary_2026-05-18.md").read_text(
-        encoding="utf-8"
-    )
-    assert "## Scalp Entry ADM" in markdown
-    assert "BUY_DEFENSIVE" in markdown
+    assert adm_summary["status"] == "retired"
+    assert adm_summary["runtime_effect"] is False
 
 
 def test_runtime_approval_summary_does_not_promote_classified_unknown_rows_to_gap(
@@ -871,9 +846,8 @@ def test_runtime_approval_summary_does_not_promote_classified_unknown_rows_to_ga
     report = mod.build_runtime_approval_summary("2026-08-24")
 
     adm_summary = report["scalp_entry_action_decision_matrix"]
-    assert "unknown_bucket_source_quality_gap" not in adm_summary["warnings"]
-    assert adm_summary["joined_sample"] == 25
-    assert adm_summary["joined_sample_daily"] == 4
+    assert adm_summary["status"] == "retired"
+    assert adm_summary["runtime_effect"] is False
 
 
 def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(
@@ -943,9 +917,8 @@ def test_runtime_approval_summary_dedupes_lifecycle_matrix_decision_row(
         for row in report["scalping"]
         if row["family"] == "lifecycle_decision_matrix_runtime"
     ]
-    assert len(lifecycle_rows) == 1
-    assert lifecycle_rows[0]["sample"]["count"] == 7155
-    assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
+    assert lifecycle_rows == []
+    assert report["summary"]["scalping_selected_auto_bounded_live"] == 0
 
 
 def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(
@@ -1056,32 +1029,8 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(
 
     report = mod.build_runtime_approval_summary("2026-05-21")
     matrix = report["lifecycle_decision_matrix"]
-
-    assert matrix["matrix_version"] == "ldm-test"
-    assert matrix["entry_bucket_runtime_candidate_count"] == 1
-    assert matrix["entry_bucket_runtime_approval_candidates"] == [
-        {"candidate_id": "entry_bucket_1"}
-    ]
-    assert matrix["submit_bucket_attribution_summary"]["contract_gap_count"] == 1
-    assert matrix["submit_bucket_code_improvement_workorders"] == [
-        {"workorder_id": "submit_order"}
-    ]
-    assert matrix["post_submit_contract_gaps"] == [
-        {"gap_type": "broker_receipt_contract_gap"}
-    ]
-    assert matrix["scale_in_bucket_runtime_candidate_count"] == 1
-    assert matrix["scale_in_bucket_runtime_approval_candidates"] == [
-        {"candidate_id": "scale_in_bucket_1"}
-    ]
-    assert matrix["overnight_bucket_runtime_candidate_count"] == 1
-    assert matrix["overnight_bucket_runtime_approval_candidates"] == [
-        {"candidate_id": "overnight_bucket_1"}
-    ]
-    assert matrix["complete_flow_count"] == 0
-    assert matrix["incomplete_flow_count"] == 4
-    assert matrix["join_contract_blocked"] is True
-    assert matrix["bundle_ev_tuning_state"] == "blocked_join_gap"
-    assert matrix["top_incomplete_reason"] == "identity_namespace_mismatch"
+    assert matrix["status"] == "retired"
+    assert matrix["runtime_effect"] is False
 
 
 def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(

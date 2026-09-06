@@ -3,15 +3,51 @@
 from __future__ import annotations
 
 import os
+from hashlib import sha256
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, Mapping
+from uuid import uuid4
 
 from src.engine.scalping.entry_ai_gate import evaluate_ai_score_prior
+from src.engine.scalping.entry_recheck_economics import LEDGER_KEY, terminal_economics
+from src.engine.scalping.entry_recheck_policy import (
+    ATTRIBUTION_VERSION,
+    SCOPES,
+    finite_number,
+    runtime_scope,
+)
 
 RUNTIME_FAMILY = "entry_opportunity_recheck_runtime"
-POLICY_VERSION = "entry_opportunity_recheck_runtime_v2"
+POLICY_VERSION = "entry_opportunity_recheck_runtime_v4"
 DECISION_AUTHORITY = RUNTIME_FAMILY
+DIRECT_SUBMIT_MAX_DELAY_SEC = 120.0
+ATTRIBUTION_KEYS = (
+    "entry_opportunity_recheck_attempt_id",
+    "entry_opportunity_recheck_armed",
+    "entry_opportunity_recheck_armed_at",
+    "entry_opportunity_recheck_source_stage",
+    "entry_opportunity_recheck_score",
+    "entry_opportunity_recheck_reason",
+    "entry_opportunity_recheck_ai_action",
+    "entry_opportunity_recheck_probe_only",
+    "entry_opportunity_recheck_probe_intent",
+    "entry_opportunity_recheck_submit_observed",
+    "entry_opportunity_recheck_submitted_at",
+    "entry_opportunity_recheck_submit_delay_sec",
+    "entry_opportunity_recheck_direct_submit",
+    "entry_opportunity_recheck_broker_order_no",
+    "entry_opportunity_recheck_requested_qty",
+    "entry_opportunity_recheck_fill_observed",
+    "entry_opportunity_recheck_filled_at",
+    "entry_opportunity_recheck_fill_order_no",
+    "entry_opportunity_recheck_fill_price",
+    "entry_opportunity_recheck_fill_qty",
+    "entry_opportunity_recheck_scope",
+    "entry_opportunity_recheck_attribution_schema",
+    "entry_opportunity_recheck_exploration_probe_only",
+    LEDGER_KEY,
+)
 FORBIDDEN_USES = (
     "threshold_mutation,provider_route_change,order_price_change,"
     "order_quantity_or_position_cap_change,broker_guard_bypass,stale_submit_bypass,"
@@ -38,10 +74,105 @@ HARD_BLOCK_REASON_TOKENS = frozenset(
 )
 
 
+def mint_attempt_id(
+    *, record_id: Any, code: Any, observed_at: Any, nonce: str | None = None
+) -> str:
+    """Mint one opaque identity for an evaluated recheck attempt.
+
+    The ID is intentionally independent from the ordinary lifecycle attempt ID.
+    A recommendation record can be evaluated more than once, so record ID and
+    symbol alone are not sufficient attribution keys.
+    """
+
+    payload = "|".join(
+        (
+            str(record_id or "missing-record"),
+            str(code or "")[:6],
+            f"{_safe_float(observed_at, 0.0):.6f}",
+            str(nonce or uuid4().hex),
+        )
+    )
+    return f"eor-{sha256(payload.encode('utf-8')).hexdigest()[:24]}"
+
+
+def attribution_fields(
+    stock: Mapping[str, Any] | None,
+    *,
+    stage: str = "",
+    event_fields: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Copy immutable recheck lineage and terminal economics to an event."""
+
+    if not isinstance(stock, Mapping):
+        return {}
+    fields = event_fields if isinstance(event_fields, Mapping) else {}
+    # Evaluation is a new attempt, not a snapshot of the previous order's
+    # custody. Never copy old arm/submit/fill state into that event, even if
+    # the new decision is rejected. Existing stock custody remains untouched.
+    if stage == "entry_opportunity_recheck_evaluated":
+        return {}
+    attempt_id = str(stock.get("entry_opportunity_recheck_attempt_id") or "").strip()
+    if not attempt_id:
+        return {}
+    event_attempt = str(
+        fields.get("entry_opportunity_recheck_attempt_id") or ""
+    ).strip()
+    if event_attempt and event_attempt != attempt_id:
+        return {}
+    result = {
+        key: stock.get(key)
+        for key in ATTRIBUTION_KEYS
+        if key != LEDGER_KEY and stock.get(key) not in (None, "", "-")
+    }
+    result.update(
+        {
+            "entry_opportunity_recheck_attempt_id": attempt_id,
+            "entry_opportunity_recheck_attribution_schema": (
+                stock.get("entry_opportunity_recheck_attribution_schema")
+                or "entry_opportunity_recheck_exact_attempt_v1"
+            ),
+            "entry_opportunity_recheck_runtime_family": RUNTIME_FAMILY,
+        }
+    )
+    if stage in {"sell_completed", "entry_opportunity_recheck_sell_completed"}:
+        if (
+            LEDGER_KEY in stock
+            or stock.get("entry_opportunity_recheck_attribution_schema")
+            == ATTRIBUTION_VERSION
+        ):
+            result.update(terminal_economics(stock, fields))
+            result["entry_opportunity_recheck_terminal_outcome"] = "sell_completed"
+            return result
+        profit_rate = fields.get(
+            "entry_opportunity_recheck_cost_adjusted_profit_pct",
+            fields.get("profit_rate"),
+        )
+        realized_pnl = fields.get("realized_pnl_krw")
+        if realized_pnl in (None, "", "-"):
+            realized_pnl = fields.get("main_lifecycle_realized_net_pnl_krw")
+        result.update(
+            {
+                "entry_opportunity_recheck_terminal_outcome": "sell_completed",
+                "entry_opportunity_recheck_cost_adjusted_profit_pct": profit_rate,
+                "entry_opportunity_recheck_realized_net_pnl_krw": realized_pnl,
+                "entry_opportunity_recheck_economics_complete": (
+                    _truthy(fields.get("sell_execution_receipt_economics_complete"))
+                    and finite_number(fields.get("cumulative_sell_qty")) == 1
+                ),
+                "entry_opportunity_recheck_economics_source": (
+                    "broker_sell_completed_receipt"
+                ),
+            }
+        )
+    return result
+
+
 @dataclass(frozen=True)
 class EntryOpportunityRecheckConfig:
     enabled: bool = False
-    min_ai_score: float = 70.0
+    allowed_scopes: frozenset[str] = frozenset()
+    intraday_escalation_scopes: frozenset[str] = frozenset()
+    min_ai_score: float = 69.0
     max_ai_score: float = 74.999
     max_recheck_per_symbol: int = 1
     max_daily_recheck: int = 10
@@ -74,9 +205,11 @@ class EntryOpportunityRecheckState:
     daily_buy_recovery_count: int = 0
     daily_exploration_probe_submit_count: int = 0
     symbol_recheck_counts: dict[str, int] = field(default_factory=dict)
-    effective_max_daily_recheck: int = 0
-    effective_max_daily_buy_recovery: int = 0
-    escalation_level: int = 0
+    effective_max_daily_recheck_by_scope: dict[str, int] = field(default_factory=dict)
+    effective_max_daily_buy_recovery_by_scope: dict[str, int] = field(
+        default_factory=dict
+    )
+    escalation_levels_by_scope: dict[str, int] = field(default_factory=dict)
     recovery_marks: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def reset_if_new_day(self, today: str | None = None) -> None:
@@ -88,20 +221,42 @@ class EntryOpportunityRecheckState:
         self.daily_buy_recovery_count = 0
         self.daily_exploration_probe_submit_count = 0
         self.symbol_recheck_counts.clear()
-        self.effective_max_daily_recheck = 0
-        self.effective_max_daily_buy_recovery = 0
-        self.escalation_level = 0
+        self.effective_max_daily_recheck_by_scope.clear()
+        self.effective_max_daily_buy_recovery_by_scope.clear()
+        self.escalation_levels_by_scope.clear()
         self.recovery_marks.clear()
 
     def symbol_count(self, code: Any) -> int:
         return int(self.symbol_recheck_counts.get(str(code or ""), 0) or 0)
 
-    def daily_recheck_limit(self, config: EntryOpportunityRecheckConfig) -> int:
-        return int(self.effective_max_daily_recheck or config.max_daily_recheck)
+    @staticmethod
+    def _scope_can_escalate(
+        config: EntryOpportunityRecheckConfig, scope: str | None
+    ) -> bool:
+        return bool(
+            scope
+            and scope in config.allowed_scopes
+            and scope in config.intraday_escalation_scopes
+        )
 
-    def daily_buy_recovery_limit(self, config: EntryOpportunityRecheckConfig) -> int:
+    def daily_recheck_limit(
+        self, config: EntryOpportunityRecheckConfig, scope: str | None = None
+    ) -> int:
+        if not self._scope_can_escalate(config, scope):
+            return int(config.max_daily_recheck)
         return int(
-            self.effective_max_daily_buy_recovery or config.max_daily_buy_recovery
+            self.effective_max_daily_recheck_by_scope.get(scope or "", 0)
+            or config.max_daily_recheck
+        )
+
+    def daily_buy_recovery_limit(
+        self, config: EntryOpportunityRecheckConfig, scope: str | None = None
+    ) -> int:
+        if not self._scope_can_escalate(config, scope):
+            return int(config.max_daily_buy_recovery)
+        return int(
+            self.effective_max_daily_buy_recovery_by_scope.get(scope or "", 0)
+            or config.max_daily_buy_recovery
         )
 
     def record_recheck(self, code: Any) -> None:
@@ -129,16 +284,20 @@ class EntryOpportunityRecheckState:
         peak_profit: Any,
         status: Any = "open",
         now_ts: Any = None,
+        scope: Any = "",
     ) -> None:
-        key = str(code or "").strip()
-        if not key:
+        code_key = str(code or "").strip()
+        canonical_scope = str(scope or "").strip()
+        if not code_key:
             return
+        key = f"{canonical_scope}:{code_key}" if canonical_scope else code_key
         profit = _safe_float(profit_rate, 0.0)
         previous = self.recovery_marks.get(key) or {}
         previous_peak = _safe_float(previous.get("peak_profit"), profit)
         peak = max(previous_peak, _safe_float(peak_profit, profit))
         self.recovery_marks[key] = {
-            "code": key,
+            "code": code_key,
+            "scope": canonical_scope,
             "profit_rate": round(profit, 4),
             "peak_profit": round(peak, 4),
             "status": str(status or "open"),
@@ -146,9 +305,16 @@ class EntryOpportunityRecheckState:
         }
 
     def escalation_snapshot(
-        self, config: EntryOpportunityRecheckConfig
+        self,
+        config: EntryOpportunityRecheckConfig,
+        *,
+        scope: str | None = None,
     ) -> dict[str, Any]:
-        marks = list(self.recovery_marks.values())
+        marks = [
+            mark
+            for mark in self.recovery_marks.values()
+            if scope is None or str(mark.get("scope") or "") == scope
+        ]
         profits = [_safe_float(mark.get("profit_rate"), 0.0) for mark in marks]
         avg_profit = sum(profits) / len(profits) if profits else 0.0
         worst_profit = min(profits) if profits else None
@@ -177,18 +343,26 @@ class EntryOpportunityRecheckState:
         self,
         config: EntryOpportunityRecheckConfig,
         *,
+        scope: str | None = None,
         attempt_reason: str = "not_evaluated",
     ) -> dict[str, Any]:
+        scope_approved = self._scope_can_escalate(config, scope)
         fields = {
             "entry_opportunity_recheck_intraday_escalation_enabled": (
                 bool(config.intraday_escalation_enabled)
             ),
-            "entry_opportunity_recheck_escalation_level": int(self.escalation_level),
+            "entry_opportunity_recheck_escalation_level": int(
+                self.escalation_levels_by_scope.get(scope or "", 0)
+            ),
+            "entry_opportunity_recheck_intraday_escalation_scopes": ",".join(
+                sorted(config.intraday_escalation_scopes)
+            ),
+            "entry_opportunity_recheck_scope_escalation_approved": scope_approved,
             "entry_opportunity_recheck_effective_max_daily_recheck": self.daily_recheck_limit(
-                config
+                config, scope
             ),
             "entry_opportunity_recheck_effective_max_daily_buy_recovery": (
-                self.daily_buy_recovery_limit(config)
+                self.daily_buy_recovery_limit(config, scope)
             ),
             "entry_opportunity_recheck_escalation_step_recheck": int(
                 config.escalation_step_recheck
@@ -216,17 +390,21 @@ class EntryOpportunityRecheckState:
             ),
             "entry_opportunity_recheck_escalation_attempt_reason": attempt_reason,
         }
-        fields.update(self.escalation_snapshot(config))
+        fields.update(self.escalation_snapshot(config, scope=scope))
         return fields
 
-    def maybe_escalate_intraday(self, config: EntryOpportunityRecheckConfig) -> str:
+    def maybe_escalate_intraday(
+        self, config: EntryOpportunityRecheckConfig, *, scope: str
+    ) -> str:
         if not config.intraday_escalation_enabled:
             return "disabled"
+        if not self._scope_can_escalate(config, scope):
+            return "scope_not_approved"
         if config.max_daily_recheck <= 0 or config.max_daily_buy_recovery <= 0:
             return "base_cap_disabled"
 
-        current_recheck_limit = self.daily_recheck_limit(config)
-        current_recovery_limit = self.daily_buy_recovery_limit(config)
+        current_recheck_limit = self.daily_recheck_limit(config, scope)
+        current_recovery_limit = self.daily_buy_recovery_limit(config, scope)
         recheck_exhausted = (
             current_recheck_limit <= 0
             or self.daily_recheck_count >= current_recheck_limit
@@ -251,7 +429,7 @@ class EntryOpportunityRecheckState:
         ):
             return "max_cap_reached"
 
-        snapshot = self.escalation_snapshot(config)
+        snapshot = self.escalation_snapshot(config, scope=scope)
         if (
             int(snapshot["entry_opportunity_recheck_successful_recovery_count"])
             < config.escalation_min_successful_recoveries
@@ -272,17 +450,19 @@ class EntryOpportunityRecheckState:
         ):
             return "avg_profit_floor_not_met"
 
-        self.effective_max_daily_recheck = min(
+        self.effective_max_daily_recheck_by_scope[scope] = min(
             max_recheck,
             max(current_recheck_limit, int(config.max_daily_recheck))
             + max(0, int(config.escalation_step_recheck)),
         )
-        self.effective_max_daily_buy_recovery = min(
+        self.effective_max_daily_buy_recovery_by_scope[scope] = min(
             max_recovery,
             max(current_recovery_limit, int(config.max_daily_buy_recovery))
             + max(0, int(config.escalation_step_buy_recovery)),
         )
-        self.escalation_level += 1
+        self.escalation_levels_by_scope[scope] = (
+            self.escalation_levels_by_scope.get(scope, 0) + 1
+        )
         return "escalated"
 
 
@@ -348,6 +528,16 @@ def config_from_env() -> EntryOpportunityRecheckConfig:
         max_recheck_per_symbol=max(0, _env_int(f"{prefix}MAX_RECHECK_PER_SYMBOL", 1)),
         max_daily_recheck=max(0, _env_int(f"{prefix}MAX_DAILY_RECHECK", 10)),
         max_daily_buy_recovery=max(0, _env_int(f"{prefix}MAX_DAILY_BUY_RECOVERY", 3)),
+        allowed_scopes=frozenset(
+            scope.strip()
+            for scope in os.getenv(f"{prefix}ALLOWED_SCOPES", "").split(",")
+            if scope.strip() in SCOPES
+        ),
+        intraday_escalation_scopes=frozenset(
+            scope.strip()
+            for scope in os.getenv(f"{prefix}INTRADAY_ESCALATION_SCOPES", "").split(",")
+            if scope.strip() in SCOPES
+        ),
         max_ws_age_ms=max(0, _env_int(f"{prefix}MAX_WS_AGE_MS", 1500)),
         forbid_danger=_env_bool(f"{prefix}FORBID_DANGER", True),
         require_fresh_quote=_env_bool(f"{prefix}REQUIRE_FRESH_QUOTE", True),
@@ -471,6 +661,9 @@ def _base_fields(config: EntryOpportunityRecheckConfig) -> dict[str, Any]:
         "entry_opportunity_recheck_intraday_escalation_enabled": bool(
             config.intraday_escalation_enabled
         ),
+        "entry_opportunity_recheck_intraday_escalation_scopes": ",".join(
+            sorted(config.intraday_escalation_scopes)
+        ),
     }
 
 
@@ -524,6 +717,8 @@ def evaluate_blocked_ai_score_recheck(
     ai_action: Any,
     ws_age_ms: Any,
     latency_state: Any,
+    effective_venue: Any = "UNKNOWN",
+    market_session_bucket: Any = "UNKNOWN",
     source_stage: Any = "blocked_ai_score",
     source_reason: Any = "entry_policy_no_buy_score_prior",
     ai_contract_status: Any = None,
@@ -534,6 +729,7 @@ def evaluate_blocked_ai_score_recheck(
     microstructure_confirmed: Any = False,
     microstructure_fields: Mapping[str, Any] | None = None,
     buy_recovery_cap_observed_count: int | None = None,
+    buy_recovery_cap_source_quality_ok: bool = True,
     state: EntryOpportunityRecheckState | None = None,
     config: EntryOpportunityRecheckConfig | None = None,
     today: str | None = None,
@@ -570,6 +766,9 @@ def evaluate_blocked_ai_score_recheck(
     )
     score_in_prior_band = bool(config.min_ai_score <= score <= config.max_ai_score)
     base = {
+        "entry_opportunity_recheck_scope": runtime_scope(
+            effective_venue, market_session_bucket
+        ),
         "entry_opportunity_recheck_source_stage": str(source_stage or ""),
         "entry_opportunity_recheck_source_reason": str(source_reason or ""),
         "entry_opportunity_recheck_ai_score": round(score, 3),
@@ -596,9 +795,9 @@ def evaluate_blocked_ai_score_recheck(
             effective_buy_recovery_cap_count
         ),
         "entry_opportunity_recheck_buy_recovery_cap_basis": (
-            "armed_rechecks"
+            "in_memory_recovery_count"
             if buy_recovery_cap_observed_count is None
-            else "caller_verified_submissions"
+            else "caller_verified_reservations_and_submissions"
         ),
         "entry_opportunity_recheck_symbol_count": int(state.symbol_count(code)),
         "entry_opportunity_recheck_ai_contract_status": contract_status or "unreported",
@@ -611,7 +810,8 @@ def evaluate_blocked_ai_score_recheck(
         "entry_opportunity_recheck_microstructure_confirmed": micro_confirmed,
     }
     base.update(dict(microstructure_fields or {}))
-    base.update(state.escalation_fields(config))
+    current_scope = str(base["entry_opportunity_recheck_scope"])
+    base.update(state.escalation_fields(config, scope=current_scope))
 
     if not config.enabled:
         return _decision(
@@ -622,10 +822,28 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
+    if not buy_recovery_cap_source_quality_ok:
+        return _decision(
+            allowed=False,
+            reason="recheck_submit_budget_ledger_invalid",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
     if str(strategy or "").strip().upper() != "SCALPING":
         return _decision(
             allowed=False,
             reason="non_scalping",
+            stage="entry_opportunity_recheck_blocked",
+            action="block",
+            config=config,
+            fields=base,
+        )
+    if base["entry_opportunity_recheck_scope"] not in config.allowed_scopes:
+        return _decision(
+            allowed=False,
+            reason="scope_not_selected_by_drought_policy",
             stage="entry_opportunity_recheck_blocked",
             action="block",
             config=config,
@@ -758,12 +976,18 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
-    escalation_attempt_reason = state.maybe_escalate_intraday(config)
-    base.update(
-        state.escalation_fields(config, attempt_reason=escalation_attempt_reason)
+    escalation_attempt_reason = state.maybe_escalate_intraday(
+        config, scope=current_scope
     )
-    daily_recheck_limit = state.daily_recheck_limit(config)
-    daily_buy_recovery_limit = state.daily_buy_recovery_limit(config)
+    base.update(
+        state.escalation_fields(
+            config,
+            scope=current_scope,
+            attempt_reason=escalation_attempt_reason,
+        )
+    )
+    daily_recheck_limit = state.daily_recheck_limit(config, current_scope)
+    daily_buy_recovery_limit = state.daily_buy_recovery_limit(config, current_scope)
 
     if daily_recheck_limit <= 0 or state.daily_recheck_count >= daily_recheck_limit:
         return _decision(

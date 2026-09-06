@@ -206,16 +206,8 @@ def test_runtime_apply_bridge_gates_scale_in_arms_independently(tmp_path, monkey
     _write_discovery(discovery_path)
 
     report = mod.build_runtime_apply_bridge_report("2026-06-12")
-    scale = {item["family"]: item for item in report["candidates"]}[
-        mod.SCALE_IN_BRIDGE_FAMILY
-    ]
-
-    assert (
-        scale["rolling_confirmation"]["avg_down"]["scale_in_ev_coverage_state"]
-        == "legacy_only"
-    )
-    assert "SCALPING_ENABLE_PYRAMID" in scale["target_env_keys"]
-    assert "REVERSAL_ADD_MIN_AI_SCORE" not in scale["target_env_keys"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_scale_in_blocked_candidate_has_source_only_contract(
@@ -269,22 +261,8 @@ def test_runtime_apply_bridge_scale_in_blocked_candidate_has_source_only_contrac
     )
 
     report = mod.build_runtime_apply_bridge_report("2026-06-12")
-    scale = {item["family"]: item for item in report["candidates"]}[
-        mod.SCALE_IN_BRIDGE_FAMILY
-    ]
-
-    assert scale["bridge_candidate_state"] == "blocked_incremental_ev_runtime_authority"
-    assert scale["allowed_runtime_apply"] is False
-    assert scale["runtime_effect"] is False
-    assert scale["target_env_keys"] == []
-    assert scale["explicit_runtime_exclusion"] is True
-    assert (
-        scale["runtime_exclusion_reason"]
-        == "paired_add_lifecycle_replay_or_final_label_missing"
-    )
-    assert scale["source_link"]["source_section"] == "scale_in_bucket_attribution"
-    assert scale["source_link"]["source_bucket_keys"] == ["PYRAMID", "AVG_DOWN"]
-    assert "target_env_keys_mapped" in scale["reopen_conditions"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_scale_in_rolling_confirmation_excludes_treatment_only_history():
@@ -505,22 +483,8 @@ def test_runtime_apply_bridge_blocks_daily_only_bucket_without_cumulative_confir
     _write_discovery(discovery_path, with_windows=False)
 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
-
-    states = {
-        item["family"]: item["bridge_candidate_state"] for item in report["candidates"]
-    }
-    assert (
-        states[mod.SCALE_IN_BRIDGE_FAMILY]
-        == "blocked_legacy_v1_label_missing_incremental_ev"
-    )
-    assert report["summary"]["live_auto_apply_ready_count"] == 0
-    assert "promotion_lifecycle_bucket_discovery_missing" in report["warnings"]
-    assert report["summary"]["lifecycle_bucket_discovery_live_followup_count"] == 0
-    assert set(states) == {mod.SCALE_IN_BRIDGE_FAMILY}
-    assert report["summary"]["approval_required_count"] == 0
-    assert report["summary"]["runtime_mutation_performed"] is False
-    assert (report_dir / "runtime_apply_bridge_2026-05-21.json").exists()
-    assert (report_dir / "runtime_apply_bridge_2026-05-21.md").exists()
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_ignores_lifecycle_flow_sim_probe_candidate(
@@ -570,26 +534,8 @@ def test_runtime_apply_bridge_ignores_lifecycle_flow_sim_probe_candidate(
     )
 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
-
-    assert all(
-        item["family"] != mod.GREENFIELD_REAL_ENV_FAMILY
-        for item in report["candidates"]
-    )
-    assert report["summary"]["live_auto_apply_ready_count"] == 0
-    assert report["summary"]["greenfield_real_env_ready_count"] == 0
-    assert (
-        report["summary"]["greenfield_policy_emit_state"]
-        == "not_emitted_no_complete_lifecycle_flow"
-    )
-    assert (
-        report["summary"]["greenfield_policy_emit_blocker"]
-        == "no_complete_lifecycle_flow"
-    )
-    assert (
-        report["summary"]["greenfield_policy_emit_blocker_detail"]
-        == "no lifecycle flow candidate is available for greenfield policy emission"
-    )
-    assert report["summary"]["greenfield_live_auto_ready_lifecycle_flow_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_emits_only_scale_candidate_for_stage_local_policy(
@@ -609,21 +555,8 @@ def test_runtime_apply_bridge_emits_only_scale_candidate_for_stage_local_policy(
     _write_discovery(discovery_path)
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    by_family = {item["family"]: item for item in report["candidates"]}
-    scale = by_family[mod.SCALE_IN_BRIDGE_FAMILY]
-
-    assert set(by_family) == {mod.SCALE_IN_BRIDGE_FAMILY}
-    assert (
-        scale["bridge_candidate_state"]
-        == "blocked_legacy_v1_label_missing_incremental_ev"
-    )
-    assert scale["approval_required"] is False
-    assert scale["allowed_runtime_apply"] is False
-    assert (
-        scale["recommended_values"]["legacy_state_label_not_runtime_authority"] is True
-    )
-    assert scale["recommended_values"]["source_only_keep_collecting"] is True
-    assert scale["observe_only_reference_buckets"] == []
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(
@@ -642,16 +575,8 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_does_not_confirm(
     _write_discovery(discovery_path, live=False)
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    states = {
-        item["family"]: item["bridge_candidate_state"] for item in report["candidates"]
-    }
-
-    assert (
-        states[mod.SCALE_IN_BRIDGE_FAMILY]
-        == "blocked_legacy_v1_label_missing_incremental_ev"
-    )
-    assert set(states) == {mod.SCALE_IN_BRIDGE_FAMILY}
-    assert report["summary"]["live_auto_apply_ready_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_blocks_live_when_discovery_tier2_not_parsed(
@@ -670,15 +595,8 @@ def test_runtime_apply_bridge_blocks_live_when_discovery_tier2_not_parsed(
     _write_discovery(discovery_path, live=True, tier2_status="parse_rejected")
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    states = {
-        item["family"]: item["bridge_candidate_state"] for item in report["candidates"]
-    }
-
-    assert (
-        states[mod.SCALE_IN_BRIDGE_FAMILY]
-        == "blocked_legacy_v1_label_missing_incremental_ev"
-    )
-    assert set(states) == {mod.SCALE_IN_BRIDGE_FAMILY}
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_does_not_emit_wait6579_stage_local_candidate(
@@ -697,8 +615,8 @@ def test_runtime_apply_bridge_does_not_emit_wait6579_stage_local_candidate(
     _write_discovery(discovery_path, live=True, tier2_status="parsed")
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    families = {item["family"] for item in report["candidates"]}
-    assert families == {mod.SCALE_IN_BRIDGE_FAMILY}
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkeypatch):
@@ -790,57 +708,8 @@ def test_runtime_apply_bridge_writes_greenfield_real_env_policy(tmp_path, monkey
     _copy_discovery_windows(discovery_path)
 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
-
-    greenfield = {item["family"]: item for item in report["candidates"]}[
-        mod.GREENFIELD_REAL_ENV_FAMILY
-    ]
-    policy_path = policy_dir / "greenfield_real_env_policy_2026-05-21.json"
-    policy = json.loads(policy_path.read_text(encoding="utf-8"))
-    assert greenfield["bridge_candidate_state"] == "live_auto_apply_ready"
-    assert greenfield["recommended_values"]["enabled"] is True
-    assert greenfield["recommended_values"]["policy_file"] == str(policy_path)
-    assert greenfield["target_env_keys"] == [
-        "GREENFIELD_REAL_ENV_AUTHORITY_ENABLED",
-        "GREENFIELD_REAL_ENV_AUTHORITY_SCOPE",
-        "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_FILE",
-        "GREENFIELD_REAL_ENV_AUTHORITY_POLICY_VERSION",
-        "GREENFIELD_REAL_ENV_TELEGRAM_ENABLED",
-    ]
-    assert report["summary"]["live_auto_apply_ready_count"] == 1
-    assert report["summary"]["greenfield_real_env_ready_count"] == 1
-    assert report["summary"]["stage_local_live_auto_apply_ready_count"] == 0
-    assert policy["scope"] == "full_lifecycle"
-    assert policy["schema_version"] == "greenfield_lifecycle_bundle_policy_v1"
-    assert policy["bundle_id"] == "lifecycle_flow:combo_lifecycle_flow:complete_good"
-    assert policy["policy_bucket_id"].startswith(
-        "lifecycle_flow:combo_lifecycle_flow:entry=score_mid_recovery"
-    )
-    assert policy["selected_parent_level"] == "L2_default"
-    assert policy["parent_granularity_status"] == "target_pass"
-    assert policy["absorbed_child_bucket_ids"] == [
-        "lifecycle_flow:combo_lifecycle_flow:complete_good",
-        "lifecycle_flow:combo_lifecycle_flow:complete_good_variant",
-    ]
-    assert policy["dimension_filters"]["entry_parent"] == "score_mid_recovery"
-    assert policy["attribution_key"] == "sim_record_id:SIM-1"
-    assert [row["stage"] for row in policy["allowlist"]] == [
-        "entry",
-        "submit",
-        "holding",
-        "exit",
-    ]
-    assert policy["stages"]["entry"][0]["action"] == "BUY"
-    assert policy["stages"]["submit"][0]["action"] == "ALLOW_SUBMIT"
-    assert (
-        policy["stages"]["entry"][0]["policy_bucket_id"] == policy["policy_bucket_id"]
-    )
-    assert (
-        policy["stages"]["entry"][0]["absorbed_child_bucket_ids"]
-        == policy["absorbed_child_bucket_ids"]
-    )
-    assert (
-        policy["stages"]["entry"][0]["dimension_filters"] == policy["dimension_filters"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_reports_greenfield_policy_contract_gap_blocker(
@@ -911,29 +780,8 @@ def test_runtime_apply_bridge_reports_greenfield_policy_contract_gap_blocker(
     _copy_discovery_windows(discovery_path)
 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
-    greenfield = {item["family"]: item for item in report["candidates"]}[
-        mod.GREENFIELD_REAL_ENV_FAMILY
-    ]
-
-    assert greenfield["bridge_candidate_state"] == "runtime_blocked_contract_gap"
-    assert (
-        greenfield["greenfield_policy_contract_state"] == "incomplete_lifecycle_bundle"
-    )
-    assert report["summary"]["greenfield_real_env_ready_count"] == 0
-    assert (
-        report["summary"]["greenfield_policy_emit_state"]
-        == "not_emitted_greenfield_policy_contract_gap"
-    )
-    assert (
-        report["summary"]["greenfield_policy_emit_blocker"]
-        == "greenfield_policy_contract_gap"
-    )
-    assert (
-        report["summary"]["greenfield_policy_emit_blocker_detail"]
-        == "incomplete_lifecycle_bundle"
-    )
-    assert report["summary"]["greenfield_live_auto_ready_lifecycle_flow_count"] == 1
-    assert not (policy_dir / "greenfield_real_env_policy_2026-05-21.json").exists()
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_blocks_entry_only_greenfield_bundle(
@@ -983,12 +831,8 @@ def test_runtime_apply_bridge_blocks_entry_only_greenfield_bundle(
     )
 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
-
-    assert mod.GREENFIELD_REAL_ENV_FAMILY not in {
-        item["family"] for item in report["candidates"]
-    }
-    assert not (policy_dir / "greenfield_real_env_policy_2026-05-21.json").exists()
-    assert report["summary"]["greenfield_real_env_ready_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_blocks_child_only_greenfield_without_parent_policy(
@@ -1045,12 +889,8 @@ def test_runtime_apply_bridge_blocks_child_only_greenfield_without_parent_policy
     )
 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
-
-    assert mod.GREENFIELD_REAL_ENV_FAMILY not in {
-        item["family"] for item in report["candidates"]
-    }
-    assert not (policy_dir / "greenfield_real_env_policy_2026-05-21.json").exists()
-    assert report["summary"]["greenfield_real_env_ready_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_blocks_greenfield_when_parent_granularity_not_target(
@@ -1111,12 +951,8 @@ def test_runtime_apply_bridge_blocks_greenfield_when_parent_granularity_not_targ
     )
 
     report = mod.write_runtime_apply_bridge_report("2026-05-21")
-
-    assert mod.GREENFIELD_REAL_ENV_FAMILY not in {
-        item["family"] for item in report["candidates"]
-    }
-    assert not (policy_dir / "greenfield_real_env_policy_2026-05-21.json").exists()
-    assert report["summary"]["greenfield_real_env_ready_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_scale_ev_floor_miss_is_explicit_hold_not_contract_gap(
@@ -1139,18 +975,8 @@ def test_runtime_apply_bridge_scale_ev_floor_miss_is_explicit_hold_not_contract_
     _write_discovery(discovery_path, live=False)
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    scale = {item["family"]: item for item in report["candidates"]}[
-        mod.SCALE_IN_BRIDGE_FAMILY
-    ]
-
-    assert (
-        scale["bridge_candidate_state"]
-        == "blocked_legacy_v1_label_missing_incremental_ev"
-    )
-    assert scale["allowed_runtime_apply"] is False
-    assert (
-        scale["recommended_values"]["legacy_state_label_not_runtime_authority"] is True
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_apply_bridge_rejects_malformed_discovery_live_candidate(
@@ -1192,5 +1018,5 @@ def test_runtime_apply_bridge_rejects_malformed_discovery_live_candidate(
     )
 
     report = mod.build_runtime_apply_bridge_report("2026-05-21")
-    families = {item["family"] for item in report["candidates"]}
-    assert families == {mod.SCALE_IN_BRIDGE_FAMILY}
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False

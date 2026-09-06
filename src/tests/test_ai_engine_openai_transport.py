@@ -1254,7 +1254,10 @@ def test_openai_primary_failure_uses_nova_lite_v2_fallback(monkeypatch):
         engine,
         "_call_openai_responses_http",
         lambda request: (_ for _ in ()).throw(
-            OpenAIResponsesHTTPError("OpenAI primary timed out")
+            OpenAIResponsesHTTPError(
+                "OpenAI primary timed out",
+                timing_meta={"microstructure_provider_payload_included": False},
+            )
         ),
     )
     monkeypatch.setattr(bedrock_nova_provider, "runtime_provider", lambda: Provider())
@@ -1265,7 +1268,7 @@ def test_openai_primary_failure_uses_nova_lite_v2_fallback(monkeypatch):
     result = GPTSniperEngine._call_openai_safe(
         engine,
         "PROMPT",
-        "payload",
+        {"microstructure_reaction_context_status": "ok"},
         require_json=True,
         context_name="holding-flow-primary-failure",
         model_override="gpt-5.4-mini",
@@ -1284,6 +1287,8 @@ def test_openai_primary_failure_uses_nova_lite_v2_fallback(monkeypatch):
     assert meta["bedrock_fallback_used"] is True
     assert meta["bedrock_fallback_family"] == "lite_v2"
     assert meta["bedrock_failback_used"] is False
+    assert meta["microstructure_provider_delivery_status"] == "response_received"
+    assert meta["microstructure_provider_payload_included"] is True
     assert audit_rows[0]["event_type"] == "openai_primary_bedrock_fallback"
     assert audit_rows[0]["primary_provider"] == "openai"
     assert audit_rows[0]["bedrock_fallback_used"] is True
@@ -1656,6 +1661,7 @@ def test_entry_price_qwen_parse_failure_falls_back_to_nova_lite_v2(monkeypatch):
     assert meta["bedrock_primary_family"] == "qwen3_32b"
     assert meta["bedrock_failback_family"] == "lite_v2"
     assert meta["bedrock_model_family"] == "lite_v2"
+    assert meta["microstructure_provider_delivery_status"] == "response_received"
     assert openai_called["value"] is False
     assert any(
         row["bedrock_primary_error_type"] == "BedrockNovaProviderError"
@@ -6735,15 +6741,13 @@ def test_openai_http_wall_deadline_cancels_queued_duplicate_provider_call():
     with pytest.raises(OpenAIResponsesHTTPError) as first_error:
         engine._call_openai_responses_http(_request("req-wall-deadline-running"))
     assert (
-        first_error.value.timing_meta["openai_http_provider_future_cancelled"]
-        is False
+        first_error.value.timing_meta["openai_http_provider_future_cancelled"] is False
     )
 
     with pytest.raises(OpenAIResponsesHTTPError) as queued_error:
         engine._call_openai_responses_http(_request("req-wall-deadline-queued"))
     assert (
-        queued_error.value.timing_meta["openai_http_provider_future_cancelled"]
-        is True
+        queued_error.value.timing_meta["openai_http_provider_future_cancelled"] is True
     )
 
     engine._http_deadline_executor.shutdown(wait=True)
@@ -6965,6 +6969,7 @@ def test_openai_ws_http_fallback_timeout_fails_closed_for_entry(monkeypatch):
     assert result["openai_transport_fail_closed"] is True
     assert meta["openai_ws_http_fallback"] is True
     assert meta["openai_ws_http_fallback_fail_closed"] is True
+    assert meta["microstructure_provider_delivery_status"] == "attempted_unconfirmed"
     assert meta["openai_ws_http_fallback_error_type"] == "OpenAIResponsesHTTPError"
     assert meta["openai_http_provider_ms"] == 1400
     assert meta["openai_http_provider_total_ms"] == 1400
@@ -7196,6 +7201,7 @@ def test_openai_ws_hot_path_does_not_take_http_api_lock(monkeypatch):
     assert meta["openai_transport_mode"] == "responses_ws"
     assert meta["openai_ws_used"] is True
     assert meta["openai_ws_roundtrip_ms"] == 120
+    assert meta["microstructure_provider_delivery_status"] == "response_received"
 
 
 def test_openai_ws_entry_price_endpoint_uses_ws_transport(monkeypatch):
@@ -7307,9 +7313,10 @@ def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(monkeypat
     )
 
     assert len(calls) == 2
-    assert calls[1]["metadata"][
-        "entry_setup_live_policy_selected_prompt_version"
-    ] == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    assert (
+        calls[1]["metadata"]["entry_setup_live_policy_selected_prompt_version"]
+        == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
     assert "V2.15 bounded-recovery addendum" in calls[1]["instructions"]
 
 

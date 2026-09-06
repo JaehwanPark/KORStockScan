@@ -1519,6 +1519,35 @@ def test_entry_opportunity_recheck_outcome_mark_skips_unarmed_position(monkeypat
     assert state.recovery_marks == {}
 
 
+def test_entry_opportunity_recheck_submission_binds_only_first_broker_order():
+    stock = {
+        "entry_opportunity_recheck_armed": True,
+        "entry_opportunity_recheck_attempt_id": "eor-test",
+        "entry_opportunity_recheck_armed_at": 100.0,
+    }
+
+    first = state_handlers._mark_entry_opportunity_recheck_submission(
+        stock,
+        "001260",
+        broker_order_no="B1",
+        requested_qty=1,
+        now_ts=107.0,
+    )
+    second = state_handlers._mark_entry_opportunity_recheck_submission(
+        stock,
+        "001260",
+        broker_order_no="B2",
+        requested_qty=1,
+        now_ts=108.0,
+    )
+
+    assert first["entry_opportunity_recheck_attempt_id"] == "eor-test"
+    assert first["entry_opportunity_recheck_direct_submit"] is True
+    assert first["entry_opportunity_recheck_broker_order_no"] == "B1"
+    assert second == {}
+    assert stock["entry_opportunity_recheck_broker_order_no"] == "B1"
+
+
 def test_holding_sell_exchange_resolution_uses_krx_in_regular_session(monkeypatch):
     class DummyDB:
         def get_latest_is_nxt(self, code):

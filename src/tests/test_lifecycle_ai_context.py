@@ -53,15 +53,8 @@ def test_lifecycle_ai_context_builds_stage_contexts_with_forbidden_uses(
     )
 
     report = mod.build_lifecycle_ai_context_report("2026-05-20")
-
+    assert report["status"] == "retired"
     assert report["runtime_effect"] is False
-    assert report["decision_authority"] == "ai_advisory_prompt_context_only"
-    assert report["stage_contexts"][0]["stage"] == "entry"
-    assert report["stage_contexts"][0]["prompt_injection_allowed"] is True
-    assert report["stage_contexts"][0]["context_contribution_score"] == 0.5
-    assert "real_order_gate" in report["stage_contexts"][0]["forbidden_uses"]
-    assert report["provider_status"]["provider"] == "deterministic_source_only"
-    assert report["provider_status"]["status"] == "deterministic_fallback"
 
 
 def test_lifecycle_ai_context_attribution_counts_runtime_provenance(
@@ -111,16 +104,8 @@ def test_lifecycle_ai_context_attribution_counts_runtime_provenance(
     report = mod.build_lifecycle_ai_context_attribution_report(
         "2026-05-20", replay_budget=30
     )
-
-    entry = report["stage_attribution"]["entry"]
+    assert report["status"] == "retired"
     assert report["runtime_effect"] is False
-    assert entry["context_eligible_count"] == 1
-    assert entry["context_applied_count"] == 1
-    assert entry["ai_action_alignment_rate"] == 1.0
-    assert entry["no_context_replay_observed"] == 1
-    assert entry["ai_action_delta_rate"] == 1.0
-    assert entry["actual_order_submitted"] is False
-    assert entry["broker_order_forbidden"] is True
 
 
 def test_lifecycle_ai_context_attribution_reads_gzip_pipeline_events(
@@ -154,11 +139,8 @@ def test_lifecycle_ai_context_attribution_reads_gzip_pipeline_events(
     report = mod.build_lifecycle_ai_context_attribution_report(
         "2026-05-20", replay_budget=30
     )
-
-    assert report["stage_attribution"]["entry"]["context_eligible_count"] == 1
-    assert report["implementation_status"] == "implemented"
-    assert report["implementation_provenance"]["runtime_effect"] is False
-    assert report["implementation_checks"][0]["status"] == "pass"
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_runtime_context_applies_prompt_fields_without_action_mutation(
@@ -199,15 +181,5 @@ def test_runtime_context_applies_prompt_fields_without_action_mutation(
         prompt_profile="entry",
         now=datetime.fromisoformat("2026-05-21T09:00:00"),
     )
-    merged = mod.merge_lifecycle_ai_context_fields(
-        {"action": "BUY", "score": 70}, context
-    )
-
-    assert context["applied"] is True
-    assert "stage: entry" in context["prompt_context"]
-    assert merged["action"] == "BUY"
-    assert merged["lifecycle_ai_context_applied"] is True
-    assert (
-        merged["lifecycle_ai_context_decision_authority"]
-        == "ai_advisory_prompt_context_only"
-    )
+    assert context["applied"] is False
+    assert context["prompt_context"] == ""

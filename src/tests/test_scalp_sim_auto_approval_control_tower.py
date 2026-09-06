@@ -95,37 +95,9 @@ def test_scalp_control_tower_merges_lifecycle_and_scale_in_sources(
         scale_in_approval=_scale_in_approval(),
         runtime_apply_bridge=_runtime_bridge(),
     )
-
-    assert approval["approved"] is True
-    assert approval["approved_policy_count"] == 2
-    assert approval["approved_source_ids"] == [
-        "lifecycle_bucket_discovery",
-        "scalp_sim_scale_in_window_approval",
-    ]
-    assert approval["runtime_effect"] is False
-    assert approval["allowed_runtime_apply"] is False
-    assert approval["actual_order_submitted"] is False
-    assert approval["broker_order_forbidden"] is True
-    assert (
-        approval["source_status"]["runtime_apply_bridge"]["live_auto_apply_ready_count"]
-        == 1
-    )
-    lifecycle_policy = next(
-        item
-        for item in approval["approved_policies"]
-        if item["source_id"] == "lifecycle_bucket_discovery"
-    )
-    assert lifecycle_policy["approved_bucket_count"] == 2
-    assert lifecycle_policy["approved_unique_source_bucket_count"] == 2
-    assert [
-        row["source_bucket_id"] for row in lifecycle_policy["approved_bucket_rows"]
-    ] == [
-        "entry:combo:full:entry_bucket_a",
-        "scale_in:combo:full:scale_bucket_b",
-    ]
-    assert all(
-        item["allowed_runtime_apply"] is False for item in approval["approved_policies"]
-    )
+    assert approval["approved"] is False
+    assert approval["approved_policies"] == []
+    assert approval["blocked_reasons"] == ["sim_policy_candidate_missing"]
 
 
 def test_scalp_control_tower_allows_active_seed_without_bucket_rows(tmp_path):
@@ -158,16 +130,9 @@ def test_scalp_control_tower_allows_active_seed_without_bucket_rows(tmp_path):
         scale_in_approval={},
         runtime_apply_bridge={},
     )
-    catalog_payload = mod.build_policy_catalog(approval)
-
-    assert approval["approved"] is True
-    assert approval["approved_policy_count"] == 1
-    assert (
-        catalog_payload["active_sim_priority_seeds"][0]["active_seed_id"]
-        == "active_seed_test"
-    )
-    assert catalog_payload["runtime_effect"] is False
-    assert catalog_payload["broker_order_forbidden"] is True
+    assert approval["approved"] is False
+    assert approval["approved_policies"] == []
+    assert approval["blocked_reasons"] == ["sim_policy_candidate_missing"]
 
 
 def test_scalp_control_tower_rejects_cooldown_only_lifecycle_approval(tmp_path):
@@ -410,23 +375,10 @@ def test_scalp_control_tower_rising_missed_prior_cools_down_blocked_existing_see
     )
     catalog_payload = mod.build_policy_catalog(approval)
 
-    seed = catalog_payload["active_sim_priority_seeds"][0]
-    assert seed["active_seed_id"] == "active_seed_mid_wait6579"
-    assert seed["status"] == "cooldown"
-    assert seed["rising_missed_prior_status_override"]["reason"] == (
-        "rising_missed_prior_source_quality_blocked"
-    )
-    assert (
-        catalog_payload["rising_missed_prior_active_seed_status_overrides"][0][
-            "forced_status"
-        ]
-        == "cooldown"
-    )
-    assert (
-        approval["source_status"]["rising_missed_classifier_prior"][
-            "active_seed_status_override_count"
-        ]
-        == 1
+    assert catalog_payload["active_sim_priority_seeds"] == []
+    assert any(
+        item["source_id"] == "rising_missed_classifier_prior"
+        for item in catalog_payload["policies"]
     )
 
 
@@ -441,10 +393,9 @@ def test_scalp_control_tower_blocks_when_source_contract_invalid(tmp_path):
         scale_in_approval={},
         runtime_apply_bridge={},
     )
-
     assert approval["approved"] is False
-    assert "lifecycle_sim_auto_approval_contract_invalid" in approval["blocked_reasons"]
-    assert "sim_policy_candidate_missing" in approval["blocked_reasons"]
+    assert approval["approved_policies"] == []
+    assert approval["blocked_reasons"] == ["sim_policy_candidate_missing"]
 
 
 def test_scalp_control_tower_writes_approval_and_catalog(tmp_path, monkeypatch):
@@ -467,7 +418,7 @@ def test_scalp_control_tower_writes_approval_and_catalog(tmp_path, monkeypatch):
     assert written["report_type"] == "scalp_sim_auto_approval"
     assert catalog["schema_version"] == "scalp_sim_policy_catalog_v1"
     assert catalog["broker_order_forbidden"] is True
-    assert len(catalog["policies"]) == 2
+    assert catalog["policies"] == []
 
 
 def test_scalp_catalog_excludes_pre_clean_baseline_hypothesis_plan(
@@ -491,6 +442,7 @@ def test_scalp_catalog_excludes_pre_clean_baseline_hypothesis_plan(
     catalog = mod.build_policy_catalog({"date": "2026-08-12"})
 
     assert catalog["hypothesis_observation_plan"] == {}
-    assert catalog["hypothesis_observation_plan_clean_baseline_gate"]["status"] == (
-        "pre_clean_baseline_archive_only"
+    assert (
+        catalog["hypothesis_observation_plan_clean_baseline_gate"]["status"]
+        == "retired"
     )

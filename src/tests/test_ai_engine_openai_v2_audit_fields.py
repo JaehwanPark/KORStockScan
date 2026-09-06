@@ -29,6 +29,41 @@ def _build_engine():
     return engine
 
 
+def test_micro_cache_hit_never_recounts_prior_computation_or_delivery(monkeypatch):
+    import src.engine.ai_engine_openai as module
+
+    monkeypatch.setattr(module, "record_ai_decision_trace", lambda *args, **kwargs: {})
+    payload = {
+        "microstructure_reaction_delivery_telemetry_version": "v3",
+        "microstructure_reaction_context_id": "context-1",
+        "microstructure_reaction_evaluation_id": "context-1",
+        "microstructure_reaction_context_computed": True,
+        "microstructure_reaction_context_payload_included": True,
+        "microstructure_reaction_context_sent": True,
+        "microstructure_reaction_context_consumed": True,
+        "microstructure_provider_delivery_status": "response_received",
+        "ai_decision_trace_id": "trace-1",
+    }
+    cached = _build_engine()._annotate_analysis_result(
+        payload,
+        prompt_type="scalping_holding_score",
+        prompt_version="v2",
+        response_ms=0,
+        parse_ok=True,
+        parse_fail=False,
+        fallback_score_50=False,
+        cache_hit=True,
+        cache_mode="hit",
+        result_source="cache",
+    )
+    assert cached["microstructure_reaction_context_computed"] is False
+    assert cached["microstructure_reaction_context_sent"] is False
+    assert cached["microstructure_reaction_context_consumed"] is False
+    assert cached["microstructure_reaction_context_reused"] is True
+    assert cached["ai_decision_parent_trace_id"] == "trace-1"
+    assert cached["microstructure_reaction_parent_context_id"] == "context-1"
+
+
 def _sample_ws_data():
     return {
         "curr": 10100,
@@ -210,6 +245,13 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
     assert result["same_price_buy_absorption_sent"] is True
     assert result["large_sell_print_detected_sent"] is True
     assert result["ask_depth_ratio_sent"] is True
+    assert result["microstructure_reaction_context_computed"] is True
+    assert result["microstructure_reaction_context_sent"] is False
+    assert result["microstructure_reaction_context_consumed"] is False
+    assert result["microstructure_reaction_context_consumer"] == "none"
+    assert result["microstructure_reaction_context_delivery_state"] == (
+        "computed_not_sent"
+    )
     assert result["tick_source_quality_fields_sent"] is True
     assert result["tick_sample_count"] == 10
     assert result["tick_accel_source"] == "computed_10ticks"

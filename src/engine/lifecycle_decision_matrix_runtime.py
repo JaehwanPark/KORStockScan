@@ -426,218 +426,24 @@ def resolve_lifecycle_decision(
     context: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    current_dt = now or datetime.now()
-    stage_name = str(stage or "").strip().lower()
-    original = str(original_action or "").upper()
-    ctx = dict(context or {})
-    enabled = bool(getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_ENABLED", False))
-    runtime_effect_enabled = bool(
-        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_RUNTIME_EFFECT_ENABLED", True)
-    )
-    min_confidence = float(
-        getattr(TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_MIN_STAGE_CONFIDENCE", 0.0)
-        or 0.0
-    )
-    result = {
-        "lifecycle_matrix_enabled": enabled,
-        "lifecycle_matrix_runtime_effect_enabled": runtime_effect_enabled,
-        "lifecycle_matrix_stage": stage_name or "-",
+    return {
+        "lifecycle_matrix_enabled": False,
+        "lifecycle_matrix_runtime_effect_enabled": False,
+        "lifecycle_matrix_stage": str(stage or "-"),
         "lifecycle_matrix_policy_version": "-",
         "lifecycle_matrix_policy_file": "-",
         "lifecycle_matrix_policy_key": "-",
         "lifecycle_matrix_confidence": 0.0,
         "lifecycle_matrix_selected_action": "NO_CHANGE",
-        "lifecycle_matrix_original_action": original or "-",
+        "lifecycle_matrix_original_action": str(original_action or "-"),
         "lifecycle_matrix_runtime_effect": "none",
-        "lifecycle_matrix_runtime_reason": "disabled",
+        "lifecycle_matrix_runtime_reason": "retired",
         "lifecycle_matrix_fixed_threshold_role": "baseline_prior",
         "lifecycle_matrix_safety_passthrough": False,
         "lifecycle_matrix_promote_counter": 0,
-        "risk_regime_context": (
-            ctx.get("risk_regime_context")
-            if isinstance(ctx.get("risk_regime_context"), dict)
-            else {}
-        ),
+        "lifecycle_matrix_policy_key_gap_classification": "policy_key_not_applicable_matrix_disabled",
+        "risk_regime_context": (context or {}).get("risk_regime_context") or {},
     }
-    if not result["risk_regime_context"]:
-        result["risk_regime_context"] = resolve_panic_risk_regime_context(
-            now=current_dt
-        )
-    if not enabled:
-        result["lifecycle_matrix_policy_key_gap_classification"] = (
-            "policy_key_not_applicable_matrix_disabled"
-        )
-        return result
-    matrix_path = _latest_matrix_path_on_or_before(
-        _session_cutoff_source_date(current_dt)
-    )
-    payload = _read_payload(matrix_path)
-    if not payload:
-        result["lifecycle_matrix_runtime_reason"] = "policy_missing"
-        result["lifecycle_matrix_policy_key_gap_classification"] = (
-            "policy_key_not_applicable_matrix_missing"
-        )
-        return result
-    result["lifecycle_matrix_policy_version"] = str(
-        payload.get("matrix_version") or "-"
-    )
-    result["lifecycle_matrix_policy_file"] = str(matrix_path or "-")
-    if _has_hard_safety_veto(ctx):
-        result.update(
-            {
-                "lifecycle_matrix_runtime_reason": "hard_safety_passthrough",
-                "lifecycle_matrix_fixed_threshold_role": "hard_safety",
-                "lifecycle_matrix_safety_passthrough": True,
-            }
-        )
-        result["lifecycle_matrix_policy_key_gap_classification"] = (
-            "policy_key_not_applicable_hard_safety_passthrough"
-        )
-        return result
-    policy = _policy_for_stage(payload, stage_name)
-    if not policy:
-        result["lifecycle_matrix_runtime_reason"] = "stage_policy_missing"
-        result["lifecycle_matrix_policy_key_gap_classification"] = (
-            "policy_key_not_applicable_matrix_missing"
-        )
-        return result
-    confidence = _safe_float(policy.get("confidence"), 0.0)
-    selected_action = str(policy.get("selected_action") or "NO_CHANGE").upper()
-    result.update(
-        {
-            "lifecycle_matrix_policy_key": str(policy.get("policy_key") or "-"),
-            "lifecycle_matrix_confidence": confidence,
-            "lifecycle_matrix_selected_action": selected_action,
-            "lifecycle_matrix_fixed_threshold_role": (
-                "bounded_tunable"
-                if str(policy.get("source_quality_gate") or "") == "pass"
-                else "baseline_prior"
-            ),
-        }
-    )
-    if confidence < min_confidence:
-        result["lifecycle_matrix_runtime_reason"] = (
-            "confidence_below_min_stage_confidence"
-        )
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
-        return result
-    if selected_action == "NO_CHANGE":
-        result["lifecycle_matrix_runtime_reason"] = "policy_no_change"
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
-        return result
-    if not runtime_effect_enabled:
-        result["lifecycle_matrix_runtime_reason"] = (
-            "runtime_effect_disabled_context_only"
-        )
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
-        return result
-    if stage_name == "entry":
-        if selected_action == "BUY_DEFENSIVE" and original not in {
-            "BUY",
-            "BUY_NOW",
-            "BUY_DEFENSIVE",
-        }:
-            if not bool(
-                getattr(
-                    TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_PROMOTE_ENABLED", False
-                )
-            ):
-                result["lifecycle_matrix_runtime_reason"] = "promote_disabled"
-                result["lifecycle_matrix_policy_key_gap_classification"] = (
-                    "policy_key_provided"
-                )
-                return result
-            if not bool(policy.get("promote_ready")):
-                result["lifecycle_matrix_runtime_reason"] = "promote_not_ready"
-                result["lifecycle_matrix_policy_key_gap_classification"] = (
-                    "policy_key_provided"
-                )
-                return result
-            key = _counter_key(current_dt)
-            current_count = int(_PROMOTE_COUNTER.get(key, 0))
-            cap = int(
-                getattr(
-                    TRADING_RULES, "LIFECYCLE_DECISION_MATRIX_MAX_PROMOTES_PER_DAY", 3
-                )
-                or 3
-            )
-            if current_count >= cap:
-                result["lifecycle_matrix_runtime_reason"] = "promote_cap_exhausted"
-                result["lifecycle_matrix_promote_counter"] = current_count
-                result["lifecycle_matrix_policy_key_gap_classification"] = (
-                    "policy_key_provided"
-                )
-                return result
-            _PROMOTE_COUNTER[key] = current_count + 1
-            result.update(
-                {
-                    "lifecycle_matrix_runtime_effect": "promote_buy_defensive",
-                    "lifecycle_matrix_runtime_reason": "bounded_promote_buy_defensive",
-                    "lifecycle_matrix_promote_counter": _PROMOTE_COUNTER[key],
-                }
-            )
-            result["lifecycle_matrix_policy_key_gap_classification"] = (
-                "policy_key_provided"
-            )
-            return result
-        if original in {"BUY", "BUY_NOW", "BUY_DEFENSIVE"} and selected_action in {
-            "WAIT_REQUOTE",
-            "DROP",
-        }:
-            result.update(
-                {
-                    "lifecycle_matrix_runtime_effect": (
-                        "demote_wait"
-                        if selected_action == "WAIT_REQUOTE"
-                        else "demote_drop"
-                    ),
-                    "lifecycle_matrix_runtime_reason": "bounded_entry_demote",
-                }
-            )
-            result["lifecycle_matrix_policy_key_gap_classification"] = (
-                "policy_key_provided"
-            )
-            return result
-    if stage_name in {"holding", "exit"} and selected_action in {"HOLD", "EXIT"}:
-        if selected_action != original:
-            result.update(
-                {
-                    "lifecycle_matrix_runtime_effect": (
-                        "force_hold" if selected_action == "HOLD" else "force_exit"
-                    ),
-                    "lifecycle_matrix_runtime_reason": "bounded_holding_exit_bias",
-                }
-            )
-            result["lifecycle_matrix_policy_key_gap_classification"] = (
-                "policy_key_provided"
-            )
-            return result
-    if stage_name == "submit" and selected_action == "ALLOW_SUBMIT":
-        result.update(
-            {
-                "lifecycle_matrix_runtime_effect": "allow_submit_observe",
-                "lifecycle_matrix_runtime_reason": "bounded_submit_allow",
-            }
-        )
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
-        return result
-    if stage_name == "scale_in" and selected_action in {
-        "AVG_DOWN_BIAS",
-        "PYRAMID_BIAS",
-    }:
-        result.update(
-            {
-                "lifecycle_matrix_runtime_effect": selected_action.lower(),
-                "lifecycle_matrix_runtime_reason": "bounded_scale_in_bias",
-            }
-        )
-        result["lifecycle_matrix_policy_key_gap_classification"] = "policy_key_provided"
-        return result
-    result["lifecycle_matrix_runtime_reason"] = "policy_action_not_applicable"
-    result["lifecycle_matrix_policy_key_gap_classification"] = _classify_policy_key_gap(
-        result, ctx
-    )
-    return result
 
 
 def _classify_policy_key_gap(result: dict[str, Any], ctx: dict[str, Any]) -> str:
@@ -677,23 +483,10 @@ def apply_lifecycle_decision_to_payload(
     payload: dict[str, Any], decision: dict[str, Any]
 ) -> dict[str, Any]:
     result = dict(payload or {})
-    selected = str(decision.get("lifecycle_matrix_selected_action") or "").upper()
-    effect = str(decision.get("lifecycle_matrix_runtime_effect") or "")
-    if effect == "promote_buy_defensive":
-        result["action"] = "BUY"
-        result["action_v2"] = "BUY"
-        result["lifecycle_matrix_buy_variant"] = "BUY_DEFENSIVE"
-    elif effect == "demote_wait":
-        result["action"] = "WAIT"
-        if "action_v2" in result:
-            result["action_v2"] = "WAIT"
-    elif effect == "demote_drop":
-        result["action"] = "DROP"
-        if "action_v2" in result:
-            result["action_v2"] = "DROP"
-    elif effect in {"force_hold", "force_exit"} and selected in {"HOLD", "EXIT"}:
-        result["action"] = selected
-        if "action_v2" in result:
-            result["action_v2"] = selected
-    result.update(decision)
+    result.update(
+        resolve_lifecycle_decision(
+            stage=str((decision or {}).get("lifecycle_matrix_stage") or ""),
+            original_action=str(result.get("action_v2") or result.get("action") or ""),
+        )
+    )
     return result

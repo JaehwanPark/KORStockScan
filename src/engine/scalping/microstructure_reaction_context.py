@@ -5,6 +5,8 @@ import ast
 import gzip
 import hashlib
 import json
+import math
+from uuid import uuid4
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -13,13 +15,99 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 
-CONTEXT_VERSION = "microstructure_reaction_context_v1"
+CONTEXT_VERSION = "microstructure_reaction_context_v2"
 REPORT_DIR = DATA_DIR / "report" / "microstructure_reaction_context"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 CLEAN_BASELINE_POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
 SOURCE_QUALITY_AUDIT_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
+DEFAULT_QUOTE_STALE_MS = 3000
+
+DELIVERY_KEYS = tuple(
+    "microstructure_reaction_" + name
+    for name in (
+        "context_id",
+        "parent_context_id",
+        "evaluation_id",
+        "reference_time",
+        "reference_price",
+        "venue",
+        "context_computed",
+        "context_reused",
+        "delivery_telemetry_version",
+        "context_payload_included",
+        "provider_delivery_status",
+        "context_sent",
+        "context_consumed",
+        "context_consumer",
+        "context_delivery_state",
+        "quote_stale_threshold_ms",
+        "quote_threshold_setting_status",
+    )
+)
+
+
+def normalize_quote_stale_threshold(value: Any) -> tuple[int, str]:
+    """Canonical setting normalization, without granting freshness to invalid input."""
+    if value is None or value == "":
+        return DEFAULT_QUOTE_STALE_MS, "default"
+    if isinstance(value, bool):
+        return DEFAULT_QUOTE_STALE_MS, "invalid"
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return DEFAULT_QUOTE_STALE_MS, "invalid"
+    if not math.isfinite(number):
+        return DEFAULT_QUOTE_STALE_MS, "invalid"
+    if number == 0:
+        return DEFAULT_QUOTE_STALE_MS, "default"
+    return max(1, int(number)), "invalid_clamped" if number < 0 else "explicit"
+
+
+def microstructure_delivery_fields(payload: dict) -> dict:
+    """Lossless receipt projection, including unknown (null) delivery."""
+    return {key: payload[key] for key in DELIVERY_KEYS if key in payload}
+
+
+def microstructure_summary_contract(summary: dict) -> dict:
+    cumulative = dict(
+        summary.get("clean_baseline_cumulative_opportunity_exploration") or {}
+    )
+    cumulative.update(
+        {
+            "runtime_application": "not_applicable_diagnostic",
+            "runtime_reflection_status": "not_applicable_diagnostic",
+            "candidate_review_required": False,
+            "required_runtime_reflection_actions": [],
+        }
+    )
+    return {
+        **{
+            key: summary.get(key)
+            for key in (
+                "delivery_telemetry_v3_unique_count",
+                "delivery_applicability_unknown_row_count",
+                "context_applicable_count",
+                "context_reused_count",
+                "context_payload_included_count",
+                "provider_delivery_required_count",
+                "context_delivery_unconfirmed_count",
+                "computed_coverage_pct",
+                "provider_delivery_coverage_pct",
+                "internal_consumption_required_count",
+                "internal_consumption_coverage_pct",
+                "diagnostic_contract_violation_counts",
+                "code_improvement_order_ids",
+            )
+        },
+        "clean_baseline_cumulative_opportunity_exploration": cumulative,
+        "runtime_application": "not_applicable_diagnostic",
+        "applied_effect": "not_evaluated",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
 
 _ENTRY_OPPORTUNITY_STAGES = {
     "ai_confirmed",
@@ -48,6 +136,13 @@ CONTEXT_KEYS = (
     "microstructure_reaction_vi_proximity_risk",
     "microstructure_reaction_entry_reaction_quality",
     "microstructure_reaction_source_quality",
+    "microstructure_reaction_quote_stale_threshold_ms",
+    "microstructure_reaction_context_computed",
+    "microstructure_reaction_delivery_telemetry_version",
+    "microstructure_reaction_context_sent",
+    "microstructure_reaction_context_consumed",
+    "microstructure_reaction_context_consumer",
+    "microstructure_reaction_context_delivery_state",
     "microstructure_reaction_context_hash",
     "tick_trade_value_source_counts",
     "tick_trade_value_1313_count",
@@ -115,7 +210,7 @@ CONTEXT_KEYS = (
     "quote_age_at_submit_ms",
     "ws_age_ms",
     "market_data_freshness_state",
-)
+) + DELIVERY_KEYS
 
 GENERIC_FRESHNESS_CONTEXT_KEYS = {
     "quote_stale",
@@ -153,8 +248,11 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if value in (None, "", "-"):
             return default
-        return float(value)
-    except (TypeError, ValueError):
+        if isinstance(value, bool):
+            return default
+        result = float(value)
+        return result if math.isfinite(result) else default
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -163,7 +261,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
         if value in (None, "", "-"):
             return default
         return int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -467,7 +565,7 @@ def _age_ms_from_hhmmss(value: Any, *, now: datetime | None = None) -> int | Non
         age_sec += 86400
     elif age_sec > 43200:
         age_sec -= 86400
-    return max(0, int(age_sec * 1000))
+    return int(age_sec * 1000)
 
 
 def _safe_epoch_ms(value: Any) -> int | None:
@@ -475,7 +573,7 @@ def _safe_epoch_ms(value: Any) -> int | None:
         return None
     try:
         numeric = float(value)
-        if numeric <= 0:
+        if not math.isfinite(numeric) or numeric <= 0:
             return None
         if numeric > 1_000_000_000_000:
             return int(numeric)
@@ -513,15 +611,17 @@ def _quote_age_ms(
     now_ms = int((now or datetime.now()).timestamp() * 1000)
     for key in quote_ts_keys:
         raw = ws_data.get(key)
-        if key in {"quote_age_ms", "ws_age_ms"}:
-            age_value = _safe_float(raw, -1.0)
-            if age_value >= 0:
-                return int(age_value), key
+        if raw in (None, "", "-"):
             continue
+        if key in {"quote_age_ms", "ws_age_ms"}:
+            age_value = _safe_float(raw, float("nan"))
+            if isinstance(raw, bool) or not math.isfinite(age_value):
+                return None, "invalid_" + key
+            return age_value, key
         epoch_ms = _safe_epoch_ms(raw)
         if epoch_ms is None:
             continue
-        return max(0, now_ms - epoch_ms), key
+        return now_ms - epoch_ms, key
     return None, "missing"
 
 
@@ -783,12 +883,18 @@ def _context_hash(payload: dict[str, Any]) -> str:
         key: payload.get(key)
         for key in CONTEXT_KEYS
         if key != "microstructure_reaction_context_hash"
+        and (key not in DELIVERY_KEYS or key.endswith("quote_stale_threshold_ms"))
     }
     raw = json.dumps(compact, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def neutral_microstructure_reaction_context(status: str, reason: str) -> dict[str, Any]:
+def neutral_microstructure_reaction_context(
+    status: str,
+    reason: str,
+    *,
+    quote_stale_threshold_ms: int = DEFAULT_QUOTE_STALE_MS,
+) -> dict[str, Any]:
     payload = {
         "microstructure_reaction_context_version": CONTEXT_VERSION,
         "microstructure_reaction_context_status": status,
@@ -801,12 +907,16 @@ def neutral_microstructure_reaction_context(status: str, reason: str) -> dict[st
         "microstructure_reaction_vi_proximity_risk": 0,
         "microstructure_reaction_entry_reaction_quality": "neutral_unusable",
         "microstructure_reaction_source_quality": reason,
+        "microstructure_reaction_quote_stale_threshold_ms": max(
+            1, int(quote_stale_threshold_ms)
+        ),
     }
     payload["microstructure_reaction_context_hash"] = _context_hash(payload)
+    payload["microstructure_reaction_context_id"] = uuid4().hex
     return payload
 
 
-def build_microstructure_reaction_context(
+def _calculate_microstructure_reaction_context(
     ws_data: dict[str, Any] | None,
     recent_ticks: list[dict[str, Any]] | None,
     recent_candles: list[dict[str, Any]] | None = None,
@@ -834,21 +944,55 @@ def build_microstructure_reaction_context(
     )
     asks = snapshot.get("asks") if isinstance(snapshot.get("asks"), list) else []
     bids = snapshot.get("bids") if isinstance(snapshot.get("bids"), list) else []
+    quote_stale_threshold_ms, setting_status = normalize_quote_stale_threshold(
+        snapshot.get("ai_quote_stale_max_ms", ws_data.get("ai_quote_stale_max_ms"))
+    )
+    if setting_status == "invalid":
+        payload = neutral_microstructure_reaction_context(
+            "source_quality_partial",
+            "invalid_quote_threshold_setting",
+            quote_stale_threshold_ms=quote_stale_threshold_ms,
+        )
+        payload["microstructure_reaction_quote_threshold_setting_status"] = (
+            setting_status
+        )
+        return payload
     if not asks or not bids:
         return neutral_microstructure_reaction_context(
-            "source_quality_missing", "missing_orderbook"
+            "source_quality_missing",
+            "missing_orderbook",
+            quote_stale_threshold_ms=quote_stale_threshold_ms,
         )
     if int(snapshot.get("tick_sample_count") or 0) < 5:
         return neutral_microstructure_reaction_context(
-            "insufficient_window", "tick_sample_lt5"
+            "insufficient_window",
+            "tick_sample_lt5",
+            quote_stale_threshold_ms=quote_stale_threshold_ms,
         )
 
     tick_age_ms = snapshot.get("tick_age_ms")
     quote_age_ms = snapshot.get("quote_age_ms")
+    for name, age in (("tick", tick_age_ms), ("quote", quote_age_ms)):
+        if (
+            age is None
+            or isinstance(age, bool)
+            or not isinstance(age, (float, int))
+            or not math.isfinite(age)
+            or age < 0
+        ):
+            return neutral_microstructure_reaction_context(
+                "source_quality_missing" if age is None else "source_quality_partial",
+                f"missing_{name}_time" if age is None else f"invalid_{name}_age",
+                quote_stale_threshold_ms=quote_stale_threshold_ms,
+            )
     if (tick_age_ms is not None and tick_age_ms > 5000) or (
-        quote_age_ms is not None and quote_age_ms > 1200
+        quote_age_ms is not None and quote_age_ms > quote_stale_threshold_ms
     ):
-        return neutral_microstructure_reaction_context("stale", "stale_tick_or_quote")
+        return neutral_microstructure_reaction_context(
+            "stale",
+            "stale_tick_or_quote",
+            quote_stale_threshold_ms=quote_stale_threshold_ms,
+        )
     curr_price = _safe_float(snapshot.get("curr_price"), 0.0)
     best_ask = _safe_float(snapshot.get("best_ask"), curr_price)
     best_bid = _safe_float(snapshot.get("best_bid"), curr_price)
@@ -867,6 +1011,7 @@ def build_microstructure_reaction_context(
         payload = neutral_microstructure_reaction_context(
             "source_quality_partial",
             "tick_aggressor_pressure_unusable",
+            quote_stale_threshold_ms=quote_stale_threshold_ms,
         )
         payload["microstructure_reaction_tick_aggressor_trusted_count"] = (
             pressure_trusted_count
@@ -948,8 +1093,63 @@ def build_microstructure_reaction_context(
         "microstructure_reaction_vi_proximity_risk": vi_proximity_risk,
         "microstructure_reaction_entry_reaction_quality": quality,
         "microstructure_reaction_source_quality": "fresh_short_window",
+        "microstructure_reaction_quote_stale_threshold_ms": (quote_stale_threshold_ms),
     }
     payload["microstructure_reaction_context_hash"] = _context_hash(payload)
+    payload["microstructure_reaction_context_id"] = uuid4().hex
+    payload["microstructure_reaction_quote_threshold_setting_status"] = setting_status
+    return payload
+
+
+def build_microstructure_reaction_context(
+    ws_data, recent_ticks, recent_candles=None, *, now=None, precomputed=None
+):
+    if isinstance(now, (float, int)):
+        now = datetime.fromtimestamp(now)
+    elif not isinstance(now, datetime):
+        now = None
+    payload = _calculate_microstructure_reaction_context(
+        ws_data, recent_ticks, recent_candles, now=now, precomputed=precomputed
+    )
+    source = ws_data if isinstance(ws_data, dict) else {}
+    explicit_venues = {
+        str(source.get(key) or "").upper()
+        for key in (
+            "effective_venue",
+            "market_data_venue",
+            "venue",
+            "quote_source_market",
+        )
+    } & {"KRX", "NXT"}
+    if isinstance(source.get("last_realtime_type_effective_venue"), dict):
+        from src.engine.scalping.ai_market_snapshot import realtime_type_provenance
+
+        explicit_venues.update(
+            str(row.get("effective_venue"))
+            for row in realtime_type_provenance(
+                source, now_ts=(now or datetime.now()).timestamp()
+            ).values()
+            if row.get("quality") == "fresh"
+            and row.get("effective_venue") in {"KRX", "NXT"}
+        )
+    _, setting = normalize_quote_stale_threshold(
+        (precomputed or {}).get(
+            "ai_quote_stale_max_ms", source.get("ai_quote_stale_max_ms")
+        )
+    )
+    payload.update(
+        {
+            "microstructure_reaction_reference_time": (
+                now or datetime.now()
+            ).isoformat(),
+            "microstructure_reaction_reference_price": source.get("curr")
+            or source.get("curr_price"),
+            "microstructure_reaction_venue": (
+                next(iter(explicit_venues)) if len(explicit_venues) == 1 else None
+            ),
+            "microstructure_reaction_quote_threshold_setting_status": setting,
+        }
+    )
     return payload
 
 
@@ -1007,6 +1207,11 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
         "sim_parent_record_id": fields.get("sim_parent_record_id"),
         "source_event_stage": fields.get("source_event_stage") or event.get("stage"),
         "stage": event.get("stage"),
+        "ai_prompt_type": fields.get("ai_prompt_type"),
+        "ai_trace_endpoint_name": fields.get("ai_trace_endpoint_name"),
+        "effective_venue": fields.get("effective_venue")
+        or fields.get("ai_trace_effective_venue"),
+        "venue": fields.get("venue"),
         "actual_order_submitted": _safe_bool(
             fields.get("actual_order_submitted"), False
         ),
@@ -1089,6 +1294,20 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
             not in (None, "")
             else observation.get("split_vs_15_mismatch_count")
         )
+    for suffix in (
+        "context_computed",
+        "context_sent",
+        "context_consumed",
+        "context_reused",
+        "context_payload_included",
+    ):
+        key = "microstructure_reaction_" + suffix
+        if key in row:
+            row[key] = _safe_bool(row[key], None)
+    for suffix in ("context_id", "evaluation_id", "parent_context_id", "venue"):
+        key = "microstructure_reaction_" + suffix
+        if str(row.get(key) or "").lower() in {"", "none", "null", "-", "unknown"}:
+            row[key] = None
     return row
 
 
@@ -1188,8 +1407,10 @@ def _microstructure_code_improvement_orders(
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
-            "decision_authority": "entry_confidence_modifier_source_only",
+            "decision_authority": "diagnostic_source_only",
             "metric_role": "source_quality_gate",
+            "window_policy": "current_contract_version_unique_evaluations",
+            "sample_floor": "one_contract_violation_no_ev_floor",
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": "microstructure source contract and forbidden-use counters",
             "forbidden_uses": list(WORKORDER_FORBIDDEN_USES),
@@ -1201,8 +1422,7 @@ def _microstructure_code_improvement_orders(
                 "broker_order_forbidden=true",
             ],
             "expected_ev_effect": (
-                "Close market-data provenance gaps before any later bounded runtime family can consume "
-                "microstructure evidence."
+                "Correct existing AI input diagnostics without creating a runtime family."
             ),
             "files_likely_touched": [
                 "src/engine/scalping/microstructure_reaction_context.py",
@@ -1222,13 +1442,10 @@ def _microstructure_code_improvement_orders(
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
-                "requires_separate_runtime_apply_candidate": True,
+                "requires_separate_runtime_apply_candidate": False,
             },
         }
-        if route == "auto_family_candidate":
-            order["candidate_family"] = "microstructure_signed_tape_runtime_candidate"
-        else:
-            order["mapped_family"] = "microstructure_reaction_context"
+        order["mapped_family"] = "microstructure_reaction_context"
         return order
 
     if (
@@ -1329,48 +1546,34 @@ def _microstructure_code_improvement_orders(
             )
         )
 
-    if (
-        _safe_int(summary.get("row_count"), 0) > 0
-        and _safe_int(summary.get("rest_signed_trade_ticks_row_count"), 0) > 0
+    for cause, count in sorted(
+        (summary.get("diagnostic_contract_violation_counts") or {}).items()
     ):
-        orders.append(
-            base_order(
-                "order_microstructure_signed_tape_runtime_candidate_review",
-                "signed tape runtime candidate review from source-quality observation",
-                route="auto_family_candidate",
-                improvement_type="runtime_candidate_design_review",
-                evidence=[
-                    f"rest_signed_trade_ticks_row_count={summary.get('rest_signed_trade_ticks_row_count')}",
-                    f"market_data_signed_tape_state_counts={summary.get('market_data_signed_tape_state_counts') or {}}",
-                    "candidate review only; no runtime apply until separate PREOPEN guard and family contract",
-                ],
-            )
+        if _safe_int(count) <= 0:
+            continue
+        order = base_order(
+            f"order_microstructure_v3_{cause}",
+            f"Microstructure diagnostic contract: {cause}",
+            route="instrumentation_order",
+            improvement_type="source_quality_contract_gap",
+            evidence=[
+                f"cause={cause}",
+                f"unique_affected_count={count}",
+                f"feature_version={CONTEXT_VERSION}",
+            ],
         )
-
-    if (
-        _safe_int(
-            summary.get(
-                "ka10003_buy_dominance_observation_split_vs_15_evaluable_count"
-            ),
-            0,
+        order.update(
+            {
+                "cause": cause,
+                "unique_affected_count": count,
+                "source_signature": summary.get("source_event_signature"),
+                "representative_receipt": (
+                    summary.get("diagnostic_contract_examples") or {}
+                ).get(cause),
+                "closure_condition": "contract_regression_pass_and_next_natural_receipt_valid",
+            }
         )
-        > 0
-    ):
-        orders.append(
-            base_order(
-                "order_microstructure_ka10003_split_vs_15_observation_review",
-                "ka10003 split-vs-15 observation review",
-                route="instrumentation_order",
-                improvement_type="source_quality_observation_review",
-                evidence=[
-                    "ka10003_buy_dominance_observation_split_vs_15_evaluable_count="
-                    f"{summary.get('ka10003_buy_dominance_observation_split_vs_15_evaluable_count')}",
-                    "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct="
-                    f"{summary.get('ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct')}",
-                    "ka10003 remains observation-only and must not fill trusted pressure fields",
-                ],
-            )
-        )
+        orders.append(order)
 
     return orders
 
@@ -1385,32 +1588,279 @@ def _latest_rows_by_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(latest.values())
 
 
+def _delivery_observation_summary(rows):
+    """Count logical evaluations, not scanner traffic or repeated log stages."""
+    groups = {}
+    unknown = 0
+    defects = {}
+    examples = {}
+
+    def defect(cause, identity, row):
+        defects.setdefault(cause, set()).add(identity)
+        examples.setdefault(cause, microstructure_delivery_fields(row))
+
+    for index, row in enumerate(rows):
+        if row.get("microstructure_reaction_delivery_telemetry_version") != "v3":
+            unknown += 1
+            continue
+        identity = row.get("microstructure_reaction_evaluation_id")
+        if not identity:
+            unknown += 1
+            defect("missing_evaluation_identity", f"row:{index}", row)
+            continue
+        groups.setdefault(identity, []).append(row)
+        reason = str(row.get("microstructure_reaction_source_quality") or "")
+        if reason.startswith(
+            (
+                "missing_tick_time",
+                "missing_quote_time",
+                "invalid_tick_age",
+                "invalid_quote_age",
+                "invalid_quote_threshold",
+            )
+        ):
+            defect(reason, identity, row)
+        if row.get("microstructure_reaction_context_sent") is True and (
+            row.get("microstructure_reaction_context_payload_included") is not True
+            or row.get("microstructure_reaction_provider_delivery_status")
+            != "response_received"
+        ):
+            defect("contradictory_delivery_receipt", identity, row)
+        if "provider_model" in str(
+            row.get("microstructure_reaction_context_consumer") or ""
+        ):
+            defect("provider_consumption_inferred", identity, row)
+        if (
+            row.get("microstructure_reaction_context_status") == "ok"
+            and _is_entry_opportunity_row(row)
+            and not row.get("microstructure_reaction_venue")
+        ):
+            defect("evaluation_venue_missing_or_conflicting", identity, row)
+        if row.get(
+            "microstructure_reaction_context_status"
+        ) == "ok" and _is_entry_opportunity_row(row):
+            if (
+                not row.get("record_id")
+                or _safe_epoch_ms(row.get("microstructure_reaction_reference_time"))
+                is None
+                or _safe_float(row.get("microstructure_reaction_reference_price")) <= 0
+            ):
+                defect("evaluation_anchor_contract_missing", identity, row)
+    computed = usable = included = sent = consumed = reused = unconfirmed = (
+        applicable
+    ) = 0
+    internal_required = internal_confirmed = provider_required = 0
+    state_counts = Counter()
+    consumer_counts = Counter()
+    for identity, copies in groups.items():
+
+        def has(key):
+            return any(
+                row.get("microstructure_reaction_" + key) is True for row in copies
+            )
+
+        is_reuse = has("context_reused")
+        did_compute = has("context_computed") and not is_reuse
+        payload_included = has("context_payload_included") and not is_reuse
+        delivery_confirmed = not is_reuse and any(
+            row.get("microstructure_reaction_context_sent") is True
+            and row.get("microstructure_reaction_context_payload_included") is True
+            and row.get("microstructure_reaction_provider_delivery_status")
+            == "response_received"
+            for row in copies
+        )
+        transport_attempted = any(
+            row.get("microstructure_reaction_provider_delivery_status")
+            in {"attempted_unconfirmed", "response_received"}
+            for row in copies
+        )
+        state_counts[
+            (
+                "cache_reused"
+                if has("context_reused")
+                else (
+                    "response_received"
+                    if has("context_sent")
+                    else (
+                        "attempted_unconfirmed"
+                        if any(
+                            row.get("microstructure_reaction_provider_delivery_status")
+                            == "attempted_unconfirmed"
+                            for row in copies
+                        )
+                        else "not_attempted"
+                    )
+                )
+            )
+        ] += 1
+        consumers = sorted(
+            {
+                str(row.get("microstructure_reaction_context_consumer"))
+                for row in copies
+                if row.get("microstructure_reaction_context_consumed") is True
+            }
+        )
+        consumer_counts["+".join(consumers) if consumers else "none"] += 1
+        for field in (
+            "context_id",
+            "reference_time",
+            "reference_price",
+            "venue",
+            "context_hash",
+        ):
+            if (
+                len(
+                    {
+                        str(row.get("microstructure_reaction_" + field))
+                        for row in copies
+                        if row.get("microstructure_reaction_" + field)
+                        not in (None, "", "-")
+                    }
+                )
+                > 1
+            ):
+                defect("evaluation_identity_conflict", identity, copies[-1])
+        holding_required = any(
+            row.get("ai_trace_endpoint_name") == "holding_score"
+            or row.get("ai_prompt_type") == "scalping_holding_score"
+            or "holding_score_preflight"
+            in str(row.get("microstructure_reaction_context_consumer") or "")
+            for row in copies
+        ) and not has("context_reused")
+        internal_required += int(holding_required)
+        internal_confirmed += int(holding_required and has("context_consumed"))
+        if holding_required and not has("context_consumed"):
+            defect(
+                "required_internal_consumption_receipt_missing", identity, copies[-1]
+            )
+        if holding_required and not payload_included and transport_attempted:
+            defect("required_holding_payload_missing", identity, copies[-1])
+        applicable += int(
+            not is_reuse
+            and (
+                did_compute
+                or any(
+                    row.get("ai_trace_endpoint_name")
+                    in {"analyze_target", "holding_score"}
+                    or _is_entry_opportunity_row(row)
+                    for row in copies
+                )
+            )
+        )
+        computed += int(did_compute)
+        usable += int(
+            did_compute
+            and any(row.get("microstructure_reaction_context_status") for row in copies)
+            and all(
+                row.get("microstructure_reaction_context_status") == "ok"
+                for row in copies
+                if row.get("microstructure_reaction_context_status")
+            )
+        )
+        included += int(payload_included)
+        provider_required += int(
+            payload_included or (holding_required and transport_attempted)
+        )
+        sent += int(delivery_confirmed)
+        consumed += int(has("context_consumed"))
+        reused += int(has("context_reused"))
+        unconfirmed += int(
+            has("context_payload_included")
+            and not has("context_sent")
+            and any(
+                row.get("microstructure_reaction_provider_delivery_status")
+                == "attempted_unconfirmed"
+                for row in copies
+            )
+        )
+        if not did_compute and not has("context_reused"):
+            defect("required_computation_missing", identity, copies[-1])
+        if (
+            has("context_payload_included")
+            and not has("context_sent")
+            and any(
+                row.get("microstructure_reaction_provider_delivery_status")
+                == "response_received"
+                for row in copies
+            )
+        ):
+            defect("response_delivery_receipt_missing", identity, copies[-1])
+    return {
+        "delivery_telemetry_v3_unique_count": len(groups),
+        "delivery_applicability_unknown_row_count": unknown,
+        "context_applicable_count": applicable,
+        "context_computed_count": computed,
+        "context_usable_count": usable,
+        "context_payload_included_count": included,
+        "provider_delivery_required_count": provider_required,
+        "context_sent_count": sent,
+        "context_consumed_count": consumed,
+        "internal_consumption_required_count": internal_required,
+        "internal_consumption_coverage_pct": (
+            _rate_pct(internal_confirmed, internal_required)
+            if internal_required
+            else None
+        ),
+        "context_reused_count": reused,
+        "context_delivery_state_counts": dict(state_counts),
+        "context_consumer_counts": dict(consumer_counts),
+        "context_delivery_unconfirmed_count": unconfirmed,
+        "computed_coverage_pct": (
+            _rate_pct(computed, applicable) if applicable else None
+        ),
+        "usable_coverage_pct": _rate_pct(usable, computed) if computed else None,
+        "provider_delivery_coverage_pct": (
+            _rate_pct(sent, provider_required) if provider_required else None
+        ),
+        "diagnostic_contract_violation_counts": {
+            cause: len(ids) for cause, ids in defects.items()
+        },
+        "diagnostic_contract_examples": examples,
+        "runtime_application": "not_applicable_diagnostic",
+        "applied_effect": "not_evaluated",
+    }
+
+
 _DIAGNOSTIC_ROW_KEYS = (
-    "stock_code",
-    "stock_name",
-    "event_time",
-    "record_id",
-    "sim_record_id",
-    "sim_parent_record_id",
-    "source_event_stage",
-    "stage",
-    "actual_order_submitted",
-    "broker_order_forbidden",
-    "microstructure_reaction_context_status",
-    "microstructure_reaction_entry_reaction_quality",
-    "microstructure_reaction_source_quality",
-    "microstructure_reaction_ask_sweep_score",
-    "microstructure_reaction_post_sweep_hold_score",
-    "microstructure_reaction_bid_replenishment_score",
-    "microstructure_reaction_wall_replenishment_risk_score",
-    "microstructure_reaction_vi_proximity_risk",
-    "microstructure_reaction_tick_aggressor_pressure_usable",
-    "microstructure_reaction_tick_aggressor_trusted_count",
-    "market_data_freshness_state",
-    "quote_age_ms",
-    "ws_age_ms",
-    "v_pw_source",
-    "v_pw_runtime_support_usable",
+    (
+        "stock_code",
+        "stock_name",
+        "event_time",
+        "record_id",
+        "sim_record_id",
+        "sim_parent_record_id",
+        "source_event_stage",
+        "stage",
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "microstructure_reaction_context_status",
+        "microstructure_reaction_quote_stale_threshold_ms",
+        "microstructure_reaction_delivery_telemetry_version",
+        "microstructure_reaction_context_computed",
+        "microstructure_reaction_context_sent",
+        "microstructure_reaction_context_consumed",
+        "microstructure_reaction_context_consumer",
+        "microstructure_reaction_context_delivery_state",
+        "microstructure_reaction_entry_reaction_quality",
+        "microstructure_reaction_source_quality",
+        "microstructure_reaction_ask_sweep_score",
+        "microstructure_reaction_post_sweep_hold_score",
+        "microstructure_reaction_bid_replenishment_score",
+        "microstructure_reaction_wall_replenishment_risk_score",
+        "microstructure_reaction_vi_proximity_risk",
+        "microstructure_reaction_tick_aggressor_pressure_usable",
+        "microstructure_reaction_tick_aggressor_trusted_count",
+        "market_data_freshness_state",
+        "quote_age_ms",
+        "ws_age_ms",
+        "v_pw_source",
+        "v_pw_runtime_support_usable",
+    )
+    + DELIVERY_KEYS
+    + (
+        "microstructure_reaction_context_version",
+        "microstructure_reaction_context_hash",
+    )
 )
 
 
@@ -1497,25 +1947,57 @@ def _unique_entry_opportunities(
     latest_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
     for row in ordered_rows:
         identity = _opportunity_identity(row)
-        event_ms = _safe_epoch_ms(row.get("event_time"))
+        current = row.get("microstructure_reaction_context_version") == CONTEXT_VERSION
+        context_id = str(row.get("microstructure_reaction_context_id") or "")
+        venue = str(
+            row.get("microstructure_reaction_venue")
+            or row.get("effective_venue")
+            or row.get("venue")
+            or ""
+        )
+        event_ms = _safe_epoch_ms(
+            row.get("microstructure_reaction_reference_time")
+            if current
+            else row.get("event_time")
+        )
+        if current and (
+            not context_id
+            or not venue
+            or row.get("microstructure_reaction_context_reused") is True
+        ):
+            continue
         if not identity[0] or event_ms is None:
             continue
-        previous = latest_by_identity.get(identity)
+        cluster_key = (*identity, venue, context_id if current else "legacy")
+        previous = latest_by_identity.get(cluster_key)
         if (
             previous is None
             or event_ms - int(previous["cluster_end_ms"]) > _OPPORTUNITY_CLUSTER_GAP_MS
         ):
             opportunity = {
                 "opportunity_id": (
-                    f"{identity[0]}:{identity[1] or 'record_missing'}:{event_ms}"
+                    context_id
+                    if current
+                    else f"{identity[0]}:{identity[1] or 'record_missing'}:{venue}:{event_ms}"
                 ),
+                "microstructure_reaction_context_id": context_id or None,
+                "feature_version": row.get("microstructure_reaction_context_version")
+                or "legacy_unknown",
+                "feature_cohort": (
+                    "feature_diagnostic" if current else "historical_diagnostic"
+                ),
+                "effective_venue": venue,
                 "stock_code": identity[0],
                 "stock_name": row.get("stock_name"),
                 "record_id": identity[1] or None,
                 "opportunity_identity_quality": (
                     "pass" if identity[1] else "record_missing"
                 ),
-                "observation_time": row.get("event_time"),
+                "observation_time": (
+                    row.get("microstructure_reaction_reference_time")
+                    if current
+                    else row.get("event_time")
+                ),
                 "anchor_ms": event_ms,
                 "cluster_end_ms": event_ms,
                 "observation_event_count": 0,
@@ -1523,7 +2005,7 @@ def _unique_entry_opportunities(
                 "actual_order_submitted": False,
             }
             opportunities.append(opportunity)
-            latest_by_identity[identity] = opportunity
+            latest_by_identity[cluster_key] = opportunity
         else:
             opportunity = previous
         opportunity["cluster_end_ms"] = max(
@@ -1599,6 +2081,10 @@ def _blocking_event(event: dict[str, Any]) -> dict[str, Any] | None:
         "first_blocker": stage,
         "first_blocker_reason": reason,
         "first_blocker_class": blocker_class,
+        "first_blocker_venue": fields.get("effective_venue")
+        or fields.get("microstructure_reaction_venue")
+        or fields.get("venue")
+        or fields.get("ai_trace_effective_venue"),
         "first_blocker_time": event.get("emitted_at")
         or fields.get("event_time")
         or fields.get("event_ts"),
@@ -1632,6 +2118,12 @@ def _attach_first_blockers(
         if blocker is None:
             continue
         for opportunity in pending_by_identity[identity]:
+            if opportunity.get(
+                "feature_version"
+            ) == CONTEXT_VERSION and opportunity.get("effective_venue") != blocker.get(
+                "first_blocker_venue"
+            ):
+                continue
             if not (
                 int(opportunity["anchor_ms"])
                 <= event_ms
@@ -1661,11 +2153,23 @@ def _load_watch_cycle_outcomes(
             payload = json.load(handle)
     except (OSError, ValueError, TypeError):
         return [], path, "unreadable"
+    if not isinstance(payload, dict):
+        return [], path, "contract_invalid"
     ledger = payload.get("watch_cycle_participation_ledger")
     if not isinstance(ledger, dict) or not isinstance(ledger.get("rows"), list):
         return [], path, "contract_invalid"
+    attempt_section = (
+        payload.get("microstructure_attempt_outcomes")
+        or ledger.get("microstructure_attempt_outcomes")
+        or {"rows": []}
+    )
+    if not isinstance(attempt_section, dict) or not isinstance(
+        attempt_section.get("rows"), list
+    ):
+        return [], path, "contract_invalid"
     return (
-        [row for row in ledger["rows"] if isinstance(row, dict)],
+        [row for row in attempt_section["rows"] if isinstance(row, dict)]
+        + [row for row in ledger["rows"] if isinstance(row, dict)],
         path,
         "loaded",
     )
@@ -1693,7 +2197,20 @@ def _attach_time_exact_outcomes(
             str(opportunity.get("record_id") or ""),
         )
         candidates: list[tuple[int, dict[str, Any]]] = []
+        context_id = opportunity.get("microstructure_reaction_context_id")
+        venue = opportunity.get("effective_venue")
         for outcome in by_identity.get(identity, []):
+            if not context_id and outcome.get("microstructure_reaction_context_id"):
+                continue
+            if context_id and outcome.get("feature_version") != CONTEXT_VERSION:
+                continue
+            if (
+                context_id
+                and outcome.get("microstructure_reaction_context_id") != context_id
+            ):
+                continue
+            if not venue or outcome.get("effective_venue") != venue:
+                continue
             reference_ms = _safe_epoch_ms(outcome.get("reference_time"))
             if reference_ms is None:
                 continue
@@ -1701,17 +2218,45 @@ def _attach_time_exact_outcomes(
                 (abs(reference_ms - int(opportunity["anchor_ms"])), outcome)
             )
         if not candidates:
-            opportunity["outcome_join_status"] = "no_matching_watch_cycle"
+            opportunity["outcome_join_status"] = (
+                "unrecoverable_historical_gap"
+                if source_status == "loaded"
+                else "outcome_source_missing"
+            )
             continue
         delta_ms, outcome = min(candidates, key=lambda item: item[0])
         opportunity["outcome_reference_delta_ms"] = delta_ms
         if delta_ms > _OUTCOME_REFERENCE_TOLERANCE_MS:
             opportunity["outcome_join_status"] = "reference_time_mismatch"
             continue
+        if (
+            len(
+                [
+                    item
+                    for item in candidates
+                    if item[0] <= _OUTCOME_REFERENCE_TOLERANCE_MS
+                ]
+            )
+            != 1
+        ):
+            opportunity["outcome_join_status"] = "ambiguous_outcome"
+            continue
+        if context_id and delta_ms != 0:
+            opportunity["outcome_join_status"] = "identity_time_conflict"
+            continue
         source_quality = str(outcome.get("primary_source_quality_state") or "missing")
         opportunity.update(
             {
-                "outcome_join_status": "time_exact",
+                "outcome_join_status": (
+                    outcome.get("outcome_status")
+                    if outcome.get("outcome_status")
+                    in {
+                        "pending_outcome",
+                        "unrecoverable_historical_gap",
+                        "source_contract_conflict",
+                    }
+                    else "time_exact"
+                ),
                 "outcome_source_quality": source_quality,
                 "outcome_source_quality_pass": source_quality == "pass",
                 "effective_venue": outcome.get("effective_venue"),
@@ -2013,6 +2558,7 @@ def _daily_opportunity_rollup(
     funnel: dict[str, Any],
     event_path: Path,
 ) -> dict[str, Any]:
+    source_quality_preflight = _source_quality_preflight(target_date)
     opportunities = (
         funnel.get("opportunities")
         if isinstance(funnel.get("opportunities"), list)
@@ -2021,28 +2567,55 @@ def _daily_opportunity_rollup(
     pass_opportunities = [
         item
         for item in opportunities
-        if isinstance(item, dict) and item.get("outcome_source_quality_pass") is True
+        if isinstance(item, dict)
+        and item.get("outcome_source_quality_pass") is True
+        and item.get("outcome_join_status") == "time_exact"
+        and item.get("feature_version") == CONTEXT_VERSION
+        and item.get("actual_order_submitted") is not True
+        and source_quality_preflight["tuning_input_allowed"] is True
     ]
     cost_adjusted_returns = [
         _safe_float(item.get("cost_adjusted_counterfactual_return_pct"), float("nan"))
         for item in pass_opportunities
     ]
-    cost_adjusted_returns = [value for value in cost_adjusted_returns if value == value]
+    cost_adjusted_returns = [
+        value for value in cost_adjusted_returns if math.isfinite(value)
+    ]
     primary_metrics: list[dict[str, Any]] = []
     for item in pass_opportunities:
         horizons = item.get("forward_horizon_metrics")
         if not isinstance(horizons, dict):
             continue
         primary = horizons.get(str(item.get("primary_horizon_min") or 20))
-        if isinstance(primary, dict):
+        if isinstance(primary, dict) and all(
+            math.isfinite(_safe_float(primary.get(key), float("nan")))
+            for key in ("mfe_pct", "mae_pct")
+        ):
             primary_metrics.append(primary)
     label_counts = Counter(
         str(item.get("opportunity_label") or "missing") for item in pass_opportunities
     )
     outcome_path = _missed_entry_counterfactual_path(target_date)
-    source_quality_preflight = _source_quality_preflight(target_date)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "calculation_contract": {
+            "feature_version": CONTEXT_VERSION,
+            "quality_version": 2,
+            "metric_version": "finite_exact_diagnostic_v2",
+            "rollup_version": 2,
+        },
+        "feature_version_counts": dict(
+            Counter(
+                str(item.get("feature_version") or "legacy_unknown")
+                for item in opportunities
+            )
+        ),
+        "historical_diagnostic_opportunity_count": sum(
+            1
+            for item in opportunities
+            if item.get("feature_version") != CONTEXT_VERSION
+        ),
+        "applied_effect": "not_evaluated",
         "date": target_date,
         "metric_role": "counterfactual_opportunity_attribution",
         "decision_authority": "source_only_no_runtime_mutation",
@@ -2114,6 +2687,19 @@ def _load_daily_opportunity_rollup(target_date: str) -> dict[str, Any]:
     except (OSError, ValueError, TypeError):
         return {}
     if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema_version") != 2 or payload.get("calculation_contract") != {
+        "feature_version": CONTEXT_VERSION,
+        "quality_version": 2,
+        "metric_version": "finite_exact_diagnostic_v2",
+        "rollup_version": 2,
+    }:
+        return {}
+    if _safe_int(
+        payload.get("source_quality_adjusted_ev_evaluable_count")
+    ) > 0 and not math.isfinite(
+        _safe_float(payload.get("source_quality_adjusted_return_sum_pct"), float("nan"))
+    ):
         return {}
     event_signature = payload.get("source_event_signature")
     outcome_signature = payload.get("outcome_source_signature")
@@ -2230,28 +2816,39 @@ def _clean_baseline_cumulative_opportunity_exploration(
         _safe_int(row.get("outcome_time_exact_join_count"), 0) for row in decision_rows
     )
     source_quality_adjusted_ev_pct = round(ev_sum / ev_count, 6) if ev_count else None
-    sample_floor_met = pass_count >= 20
-    source_complete = bool(available_dates) and not missing_rollup_dates
-    if not source_complete:
-        runtime_reflection_status = "source_quality_incomplete"
+    recent_rows = decision_rows[-20:]
+    recent_finite_count = sum(
+        _safe_int(row.get("source_quality_adjusted_ev_evaluable_count"))
+        for row in recent_rows
+    )
+    recent_rate = recent_finite_count / len(recent_rows) if recent_rows else 0
+    sample_floor_met = ev_count >= 20
+    source_window_usable = bool(decision_rows)
+    if not source_window_usable:
+        runtime_reflection_status = "source_quality_no_usable_window"
     elif not sample_floor_met:
         runtime_reflection_status = "sample_floor_not_met"
     elif source_quality_adjusted_ev_pct is None or source_quality_adjusted_ev_pct <= 0:
         runtime_reflection_status = "non_positive_ev_keep_observe"
     else:
-        runtime_reflection_status = "bounded_candidate_review_only"
+        runtime_reflection_status = "positive_diagnostic_evidence"
     runtime_reflection_blockers: list[str] = []
-    if missing_rollup_dates:
-        runtime_reflection_blockers.append("daily_rollup_missing_or_stale")
+    if not source_window_usable:
+        runtime_reflection_blockers.append("no_source_quality_pass_daily_rollup")
     outcome_source_status_counts = Counter(
         str(row.get("outcome_source_status") or "missing") for row in decision_rows
     )
+    source_quality_exclusion_warnings: list[str] = []
+    if missing_rollup_dates:
+        source_quality_exclusion_warnings.append(
+            "daily_rollup_missing_or_stale_dates_excluded"
+        )
     if outcome_source_status_counts.get("loaded", 0) < len(decision_rows):
-        runtime_reflection_blockers.append(
+        source_quality_exclusion_warnings.append(
             "historical_outcome_contract_coverage_incomplete"
         )
     if exact_join_count < unsubmitted_count:
-        runtime_reflection_blockers.append(
+        source_quality_exclusion_warnings.append(
             "exact_attempt_time_outcome_coverage_incomplete"
         )
     if not sample_floor_met:
@@ -2269,22 +2866,47 @@ def _clean_baseline_cumulative_opportunity_exploration(
         "sample_floor": "source_quality_pass_unique_opportunities_ge_20",
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": (
-            "all available source dates have fresh rollup and exact attempt-time outcome "
-            "join rows contribute to EV"
+            "exclude missing/stale daily rollups and source-quality-blocked dates; "
+            "only exact attempt-time source-quality-pass outcome rows contribute to EV"
         ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "runtime_apply_required": False,
         "input_read_mode": "compact_daily_rollups_only",
-        "runtime_reflection_status": runtime_reflection_status,
-        "runtime_reflection_blockers": runtime_reflection_blockers,
-        "required_runtime_reflection_actions": [
-            "produce attempt-time outcome rows for no_matching_watch_cycle and reference_time_mismatch opportunities",
-            "regenerate clean-baseline daily rollups and cumulative attribution after outcome coverage repair",
-            "review one bounded PREOPEN candidate only after sample floor, positive EV, conflict, rollback, and post-apply attribution gates pass",
-        ],
-        "candidate_review_required": runtime_reflection_status
-        == "bounded_candidate_review_only",
+        "analysis_status": runtime_reflection_status,
+        "diagnostic_sample_forecast": {
+            "window": "last_20_compatible_observed_dates",
+            "finite_outcomes_per_observed_date": (
+                round(recent_rate, 3) if recent_rows else None
+            ),
+            "additional_observed_dates_estimate": (
+                math.ceil(max(0, 20 - ev_count) / recent_rate)
+                if recent_rate > 0
+                else None
+            ),
+            "status": (
+                "diagnostic_floor_met"
+                if ev_count >= 20
+                else (
+                    "indicative_not_guaranteed"
+                    if recent_rate > 0
+                    else "unknown_no_arrivals"
+                )
+            ),
+            "runtime_gate": False,
+        },
+        "historical_diagnostic_opportunity_count": sum(
+            _safe_int(row.get("historical_diagnostic_opportunity_count"))
+            for row in rows
+        ),
+        "runtime_application": "not_applicable_diagnostic",
+        "applied_effect": "not_evaluated",
+        "runtime_reflection_status": "not_applicable_diagnostic",
+        "runtime_reflection_blockers": [],
+        "diagnostic_limitations": runtime_reflection_blockers,
+        "source_quality_exclusion_warnings": source_quality_exclusion_warnings,
+        "required_runtime_reflection_actions": [],
+        "candidate_review_required": False,
         "forbidden_uses": [
             "direct_threshold_mutation",
             "direct_runtime_apply",
@@ -2298,6 +2920,7 @@ def _clean_baseline_cumulative_opportunity_exploration(
         "window_end_date": target_date,
         "available_source_date_count": len(available_dates),
         "loaded_rollup_date_count": len(rows),
+        "loaded_rollup_date_coverage_pct": _rate_pct(len(rows), len(available_dates)),
         "included_date_count": len(decision_rows),
         "included_dates": [str(row.get("date") or "") for row in decision_rows],
         "missing_or_stale_rollup_dates": missing_rollup_dates,
@@ -2366,6 +2989,7 @@ def _clean_baseline_cumulative_opportunity_exploration(
         ),
         "primary_horizon_evaluable_count": horizon_count,
         "sample_floor_met": sample_floor_met,
+        "diagnostic_sample_floor_met": sample_floor_met,
         "daily_rows": rows,
     }
 
@@ -2542,6 +3166,13 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
     clean_baseline_cumulative = _clean_baseline_cumulative_opportunity_exploration(
         target_date
     )
+    delivery_v2_rows = [
+        row
+        for row in rows
+        if row.get("microstructure_reaction_delivery_telemetry_version") == "v2"
+    ]
+    delivery_summary = _delivery_observation_summary(rows)
+    usable_coverage_pct = delivery_summary["usable_coverage_pct"]
     cumulative_base = REPORT_DIR / (
         f"microstructure_reaction_context_{target_date}_clean_baseline_cumulative"
     )
@@ -2549,7 +3180,35 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         "available": bool(rows),
         "row_count": len(rows),
         "ok_count": status_counts.get("ok", 0),
+        "usable_coverage_pct": usable_coverage_pct,
         "missing_or_unusable_count": len(rows) - status_counts.get("ok", 0),
+        "delivery_telemetry_v2_count": len(delivery_v2_rows),
+        "delivery_telemetry_legacy_unverifiable_count": sum(
+            1
+            for row in rows
+            if row.get("microstructure_reaction_delivery_telemetry_version") != "v3"
+        ),
+        "context_computed_count": sum(
+            1
+            for row in delivery_v2_rows
+            if _safe_bool(row.get("microstructure_reaction_context_computed"), False)
+        ),
+        "context_sent_count": sum(
+            1
+            for row in delivery_v2_rows
+            if _safe_bool(row.get("microstructure_reaction_context_sent"), False)
+        ),
+        "context_consumed_count": sum(
+            1
+            for row in delivery_v2_rows
+            if _safe_bool(row.get("microstructure_reaction_context_consumed"), False)
+        ),
+        "context_delivery_state_counts": _field_counter(
+            delivery_v2_rows, "microstructure_reaction_context_delivery_state"
+        ),
+        "context_consumer_counts": _field_counter(
+            delivery_v2_rows, "microstructure_reaction_context_consumer"
+        ),
         "status_counts": dict(sorted(status_counts.items())),
         "entry_reaction_quality_counts": dict(sorted(quality_counts.items())),
         "source_quality_counts": dict(sorted(source_quality_counts.items())),
@@ -2787,10 +3446,15 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
         ),
     }
     json_path, md_path = report_paths(target_date)
+    summary.update(delivery_summary)
+    summary["source_event_signature"] = _source_signature(path)
     code_improvement_orders = _microstructure_code_improvement_orders(
         summary, json_path
     )
     summary["code_improvement_order_count"] = len(code_improvement_orders)
+    summary["code_improvement_order_ids"] = [
+        order["order_id"] for order in code_improvement_orders
+    ]
     summary["top_code_improvement_orders"] = [
         {
             "order_id": order.get("order_id"),
@@ -2802,18 +3466,19 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
     ]
     diagnostic_rows = _compact_diagnostic_rows(rows)
     report = {
-        "schema_version": 3,
+        "schema_version": 5,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "microstructure_reaction_context",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
-        "decision_authority": "entry_confidence_modifier_source_only",
-        "metric_role": "feature_context",
+        "decision_authority": "diagnostic_source_only_with_fail_closed_holding_quality_consumer",
+        "metric_role": "source_quality_and_counterfactual_diagnostic",
+        "runtime_consumer_effect": "holding_score_source_quality_fail_closed_only",
         "window_policy": "same_day_short_window_runtime_events_plus_postclose_source_summary",
-        "sample_floor": "none_for_v1_source_only",
+        "sample_floor": "finite_exact_outcomes_20_diagnostic_only_no_runtime_gate",
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "context_status ok and connection keys present",
+        "source_quality_gate": "feature v2 fresh exact same-venue finite outcomes; delivery v3 observed separately",
         "forbidden_uses": FORBIDDEN_USES,
         "sources": {
             "pipeline_events": str(path) if path.exists() else None,
@@ -2836,6 +3501,18 @@ def build_microstructure_reaction_context_report(target_date: str) -> dict[str, 
             for message in [
                 "pipeline_events_missing" if not path.exists() else "",
                 "microstructure_reaction_context_missing" if not rows else "",
+                *[
+                    f"diagnostic_contract:{cause}"
+                    for cause in delivery_summary[
+                        "diagnostic_contract_violation_counts"
+                    ]
+                ],
+                *[
+                    f"clean_baseline:{item}"
+                    for item in clean_baseline_cumulative.get(
+                        "source_quality_exclusion_warnings", []
+                    )
+                ],
             ]
             if message
         ],
@@ -2883,6 +3560,14 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
         f"- available: `{summary.get('available')}`",
         f"- row_count: `{summary.get('row_count')}`",
         f"- ok/missing_or_unusable: `{summary.get('ok_count')}` / `{summary.get('missing_or_unusable_count')}`",
+        f"- usable_coverage_pct: `{summary.get('usable_coverage_pct')}` (diagnostic warning floor `{summary.get('usable_coverage_warning_floor_pct')}`)",
+        "- delivery computed/sent/consumed (v2 only): "
+        f"`{summary.get('context_computed_count')}` / "
+        f"`{summary.get('context_sent_count')}` / "
+        f"`{summary.get('context_consumed_count')}`",
+        f"- delivery v2/legacy-unverifiable: `{summary.get('delivery_telemetry_v2_count')}` / `{summary.get('delivery_telemetry_legacy_unverifiable_count')}`",
+        f"- delivery_state_counts: `{summary.get('context_delivery_state_counts') or {}}`",
+        f"- consumer_counts: `{summary.get('context_consumer_counts') or {}}`",
         f"- real_submitted_count: `{summary.get('real_submitted_count')}`",
         f"- status_counts: `{summary.get('status_counts') or {}}`",
         f"- entry_reaction_quality_counts: `{summary.get('entry_reaction_quality_counts') or {}}`",
@@ -2906,6 +3591,7 @@ def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> s
         f"`{cumulative.get('outcome_source_quality_pass_count')}` / "
         f"`{cumulative.get('source_quality_adjusted_ev_pct')}`",
         f"- cumulative_runtime_reflection_status: `{cumulative.get('runtime_reflection_status')}`",
+        f"- cumulative_source_quality_exclusion_warnings: `{cumulative.get('source_quality_exclusion_warnings') or []}`",
         f"- v_pw_source_counts: `{summary.get('v_pw_source_counts') or {}}`",
         f"- v_pw_rest_fallback_rate_pct: `{summary.get('v_pw_rest_fallback_rate_pct')}`",
         f"- v_pw_runtime_support_unusable_count: `{summary.get('v_pw_runtime_support_unusable_count')}`",

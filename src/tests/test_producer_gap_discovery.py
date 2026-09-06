@@ -330,9 +330,7 @@ def test_producer_gap_discovery_detects_seven_patterns_and_ai_orders(
     pattern_types = {item["pattern_type"] for item in report["producer_gap_candidates"]}
     assert {
         "stop_recovery_counterfactual_missing",
-        "missed_fill_recovery_counterfactual_missing",
         "swing_sim_probe_label_gap_missing",
-        "scale_in_counterfactual_gap_missing",
         "time_window_policy_exception_missing",
         "volatile_runner_exit_counterfactual_missing",
         "limit_up_plateau_breakdown_exit_missing",

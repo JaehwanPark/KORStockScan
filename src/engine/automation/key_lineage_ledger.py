@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import ast
 import gzip
@@ -13,11 +15,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.automation.source_quality_clean_baseline import (
-    clean_baseline_policy,
-    embedded_source_date_gate,
-    is_date_allowed,
-)
 from src.utils.constants import DATA_DIR
 
 REPORT_TYPE = "key_lineage_ledger"
@@ -86,13 +83,15 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     try:
         if not path.exists():
             return {}
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _stable_id(prefix: str, payload: Any) -> str:
@@ -289,59 +288,11 @@ def _catalog_path_from_apply(
 def _latest_hypothesis_plan(
     target_date: str,
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    """Return the latest decision-eligible hypothesis plan and its provenance gate.
-
-    Historical plans remain discoverable as archive evidence, but a post-baseline
-    lineage report must not turn a rejected pre-baseline plan into current
-    ``catalog_missing`` blockers after the policy catalog has correctly excluded it.
-    """
-
-    exact = HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json"
-    candidates: list[tuple[str, Path]] = []
-    if exact.exists():
-        candidates.append((target_date, exact))
-    if HYPOTHESIS_PLAN_DIR.exists():
-        for path in HYPOTHESIS_PLAN_DIR.glob("ldm_hypothesis_observation_plan_*.json"):
-            plan_date = path.stem.removeprefix("ldm_hypothesis_observation_plan_")
-            if plan_date <= target_date and path != exact:
-                candidates.append((plan_date, path))
-    if not candidates:
-        return exact, {}, embedded_source_date_gate({})
-
-    policy = clean_baseline_policy()
-    enforce_clean_baseline = is_date_allowed(target_date, policy)
-    latest_rejection: tuple[Path, dict[str, Any]] | None = None
-    for _plan_date, path in sorted(candidates, reverse=True):
-        payload = _load_json(path)
-        if not enforce_clean_baseline:
-            return (
-                path,
-                payload,
-                {
-                    "allowed": True,
-                    "status": "legacy_target_before_clean_baseline",
-                    "source_date_field": "source_report_date",
-                    "source_report_date": payload.get("source_report_date"),
-                    "clean_tuning_baseline_date": policy.get(
-                        "clean_tuning_baseline_date"
-                    ),
-                    "source_artifact": str(path),
-                    "runtime_effect": False,
-                },
-            )
-        gate = {
-            **embedded_source_date_gate(payload, policy=policy),
-            "source_artifact": str(path),
-        }
-        if gate["allowed"]:
-            return path, payload, gate
-        if latest_rejection is None:
-            latest_rejection = (path, gate)
-
-    if latest_rejection is not None:
-        rejected_path, rejected_gate = latest_rejection
-        return rejected_path, {}, rejected_gate
-    return exact, {}, embedded_source_date_gate({}, policy=policy)
+    return (
+        HYPOTHESIS_PLAN_DIR / f"ldm_hypothesis_observation_plan_{target_date}.json",
+        {},
+        {"status": "retired", "tuning_input_allowed": False},
+    )
 
 
 def _collect_values(payload: Any, keys: set[str]) -> set[str]:

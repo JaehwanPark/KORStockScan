@@ -1341,9 +1341,7 @@ class TradingConfig:
     AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = (
         2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
     )
-    SCALP_ENTRY_ADM_ADVISORY_ENABLED: bool = (
-        True  # 운영 override: 스캘핑 entry ADM prompt advisory 기본 ON
-    )
+    SCALP_ENTRY_ADM_ADVISORY_ENABLED: bool = False  # ADM advisory retired on 2026-09-06
     SCALP_ENTRY_ADM_RUNTIME_BIAS_ENABLED: bool = (
         False  # context-only 기본값: 명시적 운영 override에서만 entry AI action 보정
     )
@@ -1374,7 +1372,7 @@ class TradingConfig:
     LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION: str = ""
     LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED: bool = False
     HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = (
-        True  # 운영 override: holding/exit matrix prompt advisory 기본 ON
+        False  # ADM advisory retired on 2026-09-06
     )
     HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED: bool = (
         False  # context-only 기본값: 명시적 운영 override에서만 HOLD/EXIT action 보정
@@ -6798,6 +6796,18 @@ def _build_trading_rules() -> TradingConfig:
                 else config.ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED
             ),
         )
+    # Retired policy namespaces cannot be restored by a supervisor or old env file.
+    from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES
+
+    retired_prefixes = tuple(
+        p.removeprefix("KORSTOCKSCAN_") for p in RETIRED_ENV_PREFIXES
+    )
+    disabled = {
+        key: False
+        for key in config.__dataclass_fields__
+        if key.startswith(retired_prefixes) and key.endswith("_ENABLED")
+    }
+    config = replace(config, **disabled)
     return config
 
 

@@ -94,7 +94,7 @@ def test_producer_gap_source_bundle_covers_entry_selection_and_missed_fill(
     )
     assert (
         sections["missed_fill_recovery_counterfactual"]["source_quality_status"]
-        == "implemented"
+        == "implemented_but_hold_sample"
     )
     assert sections["sim_entry_selection_bucket_producer"]["runtime_effect"] is False
     assert (

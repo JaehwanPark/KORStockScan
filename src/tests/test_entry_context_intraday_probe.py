@@ -1,6 +1,14 @@
 import json
 
+import pytest
+
 from src.engine.scalping import entry_context_intraday_probe as mod
+from src.engine.scalping.entry_observation_source import observations
+
+
+@pytest.fixture(autouse=True)
+def isolated_observations(monkeypatch):
+    monkeypatch.setattr(mod, "load_entry_observations", lambda day: {"rows": []})
 
 
 def _base_row(**overrides):
@@ -296,9 +304,12 @@ def test_probe_report_reads_existing_adm_and_summarizes_context(tmp_path, monkey
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        mod.adm_mod,
+        observations,
         "report_paths",
         lambda target_date: (report_path, tmp_path / "adm.md"),
+    )
+    monkeypatch.setattr(
+        mod, "load_entry_observations", lambda day: json.loads(report_path.read_text())
     )
     monkeypatch.setattr(mod, "PIPELINE_EVENTS_DIR", pipeline_dir)
 
@@ -327,27 +338,17 @@ def test_probe_report_reads_existing_adm_and_summarizes_context(tmp_path, monkey
 
 def test_probe_report_can_build_adm_before_sampling(monkeypatch):
     monkeypatch.setattr(
-        mod.adm_mod,
-        "build_scalp_entry_action_decision_matrix_report",
-        lambda target_date: {
-            "status": "ok",
-            "artifact": f"/tmp/scalp_entry_action_decision_matrix_{target_date}.json",
-            "rows": [_base_row()],
-        },
+        mod, "load_entry_observations", lambda day: {"rows": [_base_row()]}
     )
     monkeypatch.setattr(
-        mod.adm_mod,
-        "report_paths",
-        lambda target_date: (
-            mod.Path(f"/tmp/scalp_entry_action_decision_matrix_{target_date}.json"),
-            mod.Path(f"/tmp/scalp_entry_action_decision_matrix_{target_date}.md"),
-        ),
+        observations,
+        "build_scalp_entry_action_decision_matrix_report",
+        lambda day: pytest.fail("retired ADM builder called"),
     )
-
     report = mod.build_probe_report("2026-07-13", build_adm=True)
-
     assert report["status"] == "ok"
-    assert report["source"]["build_adm"] is True
+    assert report["source"]["build_adm"] is False
+    assert report["source"]["entry_observation_source"] is True
     assert report["coverage"]["row_count"] == 1
 
 

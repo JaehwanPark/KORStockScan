@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+
 import argparse
 import fcntl
 import hashlib
@@ -119,13 +121,15 @@ class GeneratedTask:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    if retired_artifact(path):
+        return {}
     if not path.exists():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _canonical_sha256(value: Any) -> str:
@@ -1256,9 +1260,9 @@ def _build_tasks(
                     "[machine_microstructure_policy_approval.py]"
                     "(/home/ubuntu/KORStockScan/src/engine/automation/"
                     "machine_microstructure_policy_approval.py), "
-                    "[widget expansion service]"
+                    "[machine final refresh service]"
                     "(/home/ubuntu/KORStockScan/deploy/systemd/"
-                    "korstockscan-widget-expansion-recommendation.service)"
+                    "korstockscan-machine-microstructure-final-refresh.service)"
                 ),
                 lines=(
                     "판정 기준: 21:15 final refresh의 exact-date POSTCLOSE approval report가 "

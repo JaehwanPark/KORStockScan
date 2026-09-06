@@ -1,5 +1,6 @@
 import gzip
 import json
+from datetime import timedelta, timezone
 
 from src.engine.monitoring import one_share_threshold_opportunity as mod
 
@@ -43,6 +44,17 @@ def test_residual_not_submitted_source_prefers_explicit_terminal_outcome():
             }
         )
         == ""
+    )
+
+
+def test_event_time_treats_historical_naive_pipeline_timestamp_as_kst():
+    parsed = mod._event_time("2026-06-30T08:03:00.175954")
+
+    assert parsed is not None
+    assert parsed.tzinfo == timezone.utc
+    assert parsed.isoformat() == "2026-06-29T23:03:00.175954+00:00"
+    assert mod._event_time("2026-06-30T08:04:00.175954") - parsed == timedelta(
+        minutes=1
     )
 
 
@@ -1928,9 +1940,7 @@ def test_post_sell_missing_stock_code_is_quarantined(tmp_path):
     assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
 
 
-def test_relevant_malformed_source_rows_block_candidate_and_ai_review(
-    tmp_path, monkeypatch
-):
+def test_malformed_source_rows_are_excluded_without_blocking_valid_rows(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
     post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
     valid_pipeline_rows = [
@@ -1973,24 +1983,22 @@ def test_relevant_malformed_source_rows_block_candidate_and_ai_review(
         encoding="utf-8",
     )
 
-    def unexpected_call(*args, **kwargs):
-        raise AssertionError("malformed source coverage must block the AI provider")
-
-    monkeypatch.setattr(mod, "_call_ai_review", unexpected_call)
     report = mod.build_report(
         "2026-07-01",
         since_date="2026-07-01",
         pipeline_paths=[pipeline_path],
         post_sell_paths=[post_sell_path],
-        ai_provider="openai",
+        ai_provider="none",
     )
 
     assert report["source_processing"]["invalid_json_row_count"] == 1
     assert report["post_sell_identity_diagnostics"]["invalid_json_row_count"] == 1
     assert report["source_coverage_manifest"]["invalid_source_json_row_count"] == 2
-    assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
-    assert report["code_improvement_orders"] == []
-    assert report["ai_review"]["status"] == "blocked_source_coverage"
+    assert report["source_coverage_manifest"]["status"] == "partial_row_exclusion"
+    assert report["source_coverage_manifest"]["decision_input_allowed"] is True
+    assert report["source_coverage_manifest"]["valid_joined_record_count"] == 3
+    assert len(report["code_improvement_orders"]) == 1
+    assert "source_coverage_partial_rows_excluded" in report["ai_review"]["warnings"]
 
 
 def test_propagated_forced_event_stock_conflict_is_quarantined(tmp_path):
@@ -2051,7 +2059,7 @@ def test_propagated_forced_event_stock_conflict_is_quarantined(tmp_path):
     assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"
 
 
-def test_conflicting_terminal_sell_identity_is_quarantined(tmp_path):
+def test_repeated_terminal_sell_receipts_keep_earliest_identity(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
     post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
     pipeline_path.write_text(
@@ -2097,9 +2105,92 @@ def test_conflicting_terminal_sell_identity_is_quarantined(tmp_path):
         post_sell_paths=[post_sell_path],
     )
 
-    assert report["summary"]["post_sell_joined_count"] == 0
-    assert report["summary"]["source_identity_conflict_record_count"] == 1
-    assert (
-        report["source_identity_conflict_examples"][0]["source_identity_status"]
-        == "terminal_sell_identity_conflict"
+    assert report["summary"]["post_sell_joined_count"] == 1
+    assert report["summary"]["source_identity_conflict_record_count"] == 0
+    assert report["source_coverage_manifest"]["status"] == "pass"
+    assert report["joined_examples"][0]["terminal_sell_time"] == (
+        "2026-07-01T09:10:00+09:00"
     )
+
+
+def test_repeated_primary_forced_events_same_stock_are_not_identity_conflict(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    post_sell_path = tmp_path / "post_sell_candidates_2026-07-01.jsonl"
+    pipeline_path.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                    emitted_at="2026-07-01T09:00:00+09:00",
+                ),
+                _event(
+                    1,
+                    "rising_missed_one_share_entry",
+                    {"rising_missed_one_share_entry_forced": True},
+                    emitted_at="2026-07-01T09:00:01+09:00",
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    post_sell_path.write_text(
+        json.dumps(
+            {
+                "recommendation_id": 1,
+                "stock_code": "000001",
+                "profit_rate": 0.5,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-01",
+        since_date="2026-07-01",
+        pipeline_paths=[pipeline_path],
+        post_sell_paths=[post_sell_path],
+    )
+
+    assert report["summary"]["post_sell_joined_count"] == 1
+    assert report["summary"]["source_identity_conflict_record_count"] == 0
+    assert report["joined_examples"][0]["forced_event_count"] == 2
+
+
+def test_primary_record_id_reused_on_different_entry_dates_is_quarantined(tmp_path):
+    first = tmp_path / "pipeline_events_2026-07-01.jsonl"
+    second = tmp_path / "pipeline_events_2026-07-02.jsonl"
+    first.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+                emitted_at="2026-07-01T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+    second.write_text(
+        json.dumps(
+            _event(
+                1,
+                "rising_missed_one_share_entry",
+                {"rising_missed_one_share_entry_forced": True},
+                emitted_at="2026-07-02T09:00:00+09:00",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-07-02",
+        since_date="2026-07-01",
+        pipeline_paths=[first, second],
+        post_sell_paths=[],
+    )
+
+    assert report["summary"]["source_identity_conflict_record_count"] == 1
+    assert report["source_coverage_manifest"]["status"] == "source_coverage_gap"

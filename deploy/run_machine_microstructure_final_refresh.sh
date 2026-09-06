@@ -8,15 +8,36 @@ PYTHON_BIN="${KORSTOCKSCAN_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 cd "$PROJECT_DIR" || exit 1
 export PYTHONPATH="${PYTHONPATH:-$PROJECT_DIR}"
 
-completed_target_date_rc=0
-completed_target_date="$("$PYTHON_BIN" -c 'from src.engine.monitoring.machine_microstructure_attribution import resolve_completed_machine_target_date; print(resolve_completed_machine_target_date().isoformat())')" || completed_target_date_rc=$?
-if ((completed_target_date_rc != 0)) || [[ ! "$completed_target_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-  printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s target_date_rc=%s\n' \
-    "${completed_target_date:-unresolved}" "$completed_target_date_rc" >&2
-  if ((completed_target_date_rc != 0)); then
-    exit "$completed_target_date_rc"
-  fi
+if (($# > 1)); then
+  printf 'usage: %s [YYYY-MM-DD]\n' "$0" >&2
   exit 2
+fi
+
+completed_target_date_rc=0
+resolved_target_date="$("$PYTHON_BIN" -c 'from src.engine.monitoring.machine_microstructure_attribution import resolve_completed_machine_target_date; print(resolve_completed_machine_target_date().isoformat())')" || completed_target_date_rc=$?
+if ((completed_target_date_rc == 0)) && [[ ! "$resolved_target_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+  completed_target_date_rc=2
+fi
+if ((completed_target_date_rc != 0)); then
+  printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s target_date_rc=%s reason=completed_target_date_resolution_failed\n' \
+    "${resolved_target_date:-unresolved}" "$completed_target_date_rc" >&2
+  exit "$completed_target_date_rc"
+fi
+completed_target_date="$resolved_target_date"
+if (($# == 1)); then
+  requested_target_date="$1"
+  normalized_target_date="$(date -d "$requested_target_date 00:00:00" +%F 2>/dev/null)" || completed_target_date_rc=2
+  if ((completed_target_date_rc != 0)) || [[ "$normalized_target_date" != "$requested_target_date" ]]; then
+    printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s target_date_rc=2 reason=invalid_explicit_target_date\n' \
+      "$requested_target_date" >&2
+    exit 2
+  fi
+  if [[ "$requested_target_date" != "$resolved_target_date" ]]; then
+    printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s target_date_rc=2 reason=explicit_target_date_not_current_completed resolved_target_date=%s\n' \
+      "$requested_target_date" "$resolved_target_date" >&2
+    exit 2
+  fi
+  completed_target_date="$requested_target_date"
 fi
 
 expansion_rc=0

@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import (
+    retired_artifact,
+    RETIRED_REPORTS,
+    current_report_view,
+)
+
 import argparse
 import copy
 import gzip
@@ -1569,6 +1575,8 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
 
 
 def _read_json_dict(path: Path) -> dict:
+    if retired_artifact(path):
+        return {}
     if not path.exists() and Path(f"{path}.gz").exists():
         path = Path(f"{path}.gz")
     try:
@@ -1579,7 +1587,7 @@ def _read_json_dict(path: Path) -> dict:
             payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    return current_report_view(payload) if isinstance(payload, dict) else {}
 
 
 def _payload_rows(payload: dict) -> list[dict]:
@@ -2143,6 +2151,8 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             f"{candidate['id']} status={candidate['status']} path={candidate['path']}"
         )
     for name, path in source_paths.items():
+        if name in RETIRED_REPORTS:
+            continue
         actual_path = _existing_or_gzip_path(path)
         payload = _read_json_dict(path)
         exists = actual_path.exists()
@@ -2316,6 +2326,10 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(microstructure_reaction_context.get("summary"), dict)
         else {}
     )
+    from src.engine.scalping.microstructure_reaction_context import (
+        microstructure_summary_contract,
+    )
+
     soft_stop = (
         holding_exit_observation.get("soft_stop_rebound")
         if isinstance(holding_exit_observation, dict)
@@ -3468,6 +3482,51 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 microstructure_reaction_summary.get("real_submitted_count"), 0
             )
             or 0,
+            "usable_coverage_pct": _safe_float(
+                microstructure_reaction_summary.get("usable_coverage_pct"), None
+            ),
+            "delivery_telemetry_v2_count": _safe_int(
+                microstructure_reaction_summary.get("delivery_telemetry_v2_count"),
+                0,
+            )
+            or 0,
+            "delivery_telemetry_legacy_unverifiable_count": _safe_int(
+                microstructure_reaction_summary.get(
+                    "delivery_telemetry_legacy_unverifiable_count"
+                ),
+                0,
+            )
+            or 0,
+            "context_computed_count": _safe_int(
+                microstructure_reaction_summary.get("context_computed_count"), 0
+            )
+            or 0,
+            "context_sent_count": _safe_int(
+                microstructure_reaction_summary.get("context_sent_count"), 0
+            )
+            or 0,
+            "context_consumed_count": _safe_int(
+                microstructure_reaction_summary.get("context_consumed_count"), 0
+            )
+            or 0,
+            "context_delivery_state_counts": (
+                microstructure_reaction_summary.get("context_delivery_state_counts")
+                if isinstance(
+                    microstructure_reaction_summary.get(
+                        "context_delivery_state_counts"
+                    ),
+                    dict,
+                )
+                else {}
+            ),
+            "context_consumer_counts": (
+                microstructure_reaction_summary.get("context_consumer_counts")
+                if isinstance(
+                    microstructure_reaction_summary.get("context_consumer_counts"),
+                    dict,
+                )
+                else {}
+            ),
             "status_counts": (
                 microstructure_reaction_summary.get("status_counts")
                 if isinstance(
@@ -3642,8 +3701,13 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or 0,
             "decision_authority": str(
                 microstructure_reaction_context.get("decision_authority")
-                or "entry_confidence_modifier_source_only"
+                or "diagnostic_source_only_with_fail_closed_holding_quality_consumer"
             ),
+            "runtime_consumer_effect": str(
+                microstructure_reaction_context.get("runtime_consumer_effect")
+                or "holding_score_source_quality_fail_closed_only"
+            ),
+            **microstructure_summary_contract(microstructure_reaction_summary),
             "runtime_effect": bool(
                 microstructure_reaction_context.get("runtime_effect", False)
             ),
@@ -11452,21 +11516,12 @@ def _build_family_reports(
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
         _build_position_sizing_dynamic_formula_family(events, completed_rows),
-        _build_statistical_action_weight_family(
-            events, completed_rows, target_date=target_date
-        ),
-        _build_lifecycle_decision_matrix_runtime_family(target_date),
     ]
 
 
 def _build_report_source_families(report_source_context: dict | None) -> list[dict]:
     metrics = (report_source_context or {}).get("source_metrics")
     metrics = metrics if isinstance(metrics, dict) else {}
-    decision_support = (
-        metrics.get("decision_support")
-        if isinstance(metrics.get("decision_support"), dict)
-        else {}
-    )
     market_regime = (
         metrics.get("market_regime_continuous")
         if isinstance(metrics.get("market_regime_continuous"), dict)
@@ -11486,79 +11541,7 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
         _safe_int(market_source_quality.get("valid_market_regime_days"), 0) or 0,
         _safe_int(market_rolling_10d.get("valid_market_regime_days"), 0) or 0,
     )
-    matrix_entries = _safe_int(decision_support.get("matrix_entries"), 0) or 0
-    non_clear_edge = _safe_int(decision_support.get("matrix_non_clear_edge"), 0) or 0
-    candidate_weight_source = (
-        _safe_int(decision_support.get("saw_candidate_weight_source"), 0) or 0
-    )
-    sample_ready = non_clear_edge > 0 and candidate_weight_source > 0
     return [
-        {
-            "family": "holding_exit_decision_matrix_advisory",
-            "stage": "decision_support",
-            "sample": {
-                "matrix_entries": matrix_entries,
-                "matrix_non_clear_edge": non_clear_edge,
-                "matrix_no_clear_edge": _safe_int(
-                    decision_support.get("matrix_no_clear_edge"), 0
-                )
-                or 0,
-                "saw_candidate_weight_source": candidate_weight_source,
-                "saw_defensive_only_high_loss_rate": _safe_int(
-                    decision_support.get("saw_defensive_only_high_loss_rate"), 0
-                )
-                or 0,
-                "saw_insufficient_sample": _safe_int(
-                    decision_support.get("saw_insufficient_sample"), 0
-                )
-                or 0,
-                "counterfactual_entry_count": _safe_int(
-                    decision_support.get("counterfactual_entry_count"), 0
-                )
-                or 0,
-                "counterfactual_ready_count": _safe_int(
-                    decision_support.get("counterfactual_ready_count"), 0
-                )
-                or 0,
-                "counterfactual_gap_count": _safe_int(
-                    decision_support.get("counterfactual_gap_count"), 0
-                )
-                or 0,
-                "counterfactual_per_action_samples": (
-                    decision_support.get("counterfactual_per_action_samples")
-                    if isinstance(
-                        decision_support.get("counterfactual_per_action_samples"), dict
-                    )
-                    else {}
-                ),
-            },
-            "apply_ready": sample_ready,
-            "current": {
-                "enabled": False,
-                "mode": "advisory_flag_off",
-                "matrix_version": decision_support.get("matrix_version"),
-            },
-            "recommended": {
-                "enabled": sample_ready,
-                "mode": (
-                    "advisory_canary_live_readiness"
-                    if sample_ready
-                    else "readiness_only"
-                ),
-                "matrix_version": decision_support.get("matrix_version"),
-                "candidate_bucket_count": non_clear_edge,
-            },
-            "apply_mode": (
-                "efficient_tradeoff_canary_candidate"
-                if sample_ready
-                else "report_only_readiness"
-            ),
-            "notes": [
-                "ADM은 shadow가 아니라 advisory canary/live-readiness 축으로만 본다.",
-                "recommended_bias가 전부 no_clear_edge이면 최소 edge 부재라 live AI 응답은 바꾸지 않는다.",
-                "SAW candidate_weight_source bucket만 matrix bias 후보로 연결한다.",
-            ],
-        },
         {
             "family": "market_regime_continuous_score",
             "stage": "risk_context",
@@ -17040,16 +17023,9 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
 
 
 def save_statistical_action_weight_artifact(report: dict) -> tuple[Path, Path]:
-    artifact = build_statistical_action_weight_artifact(report)
-    json_path, md_path = statistical_action_report_paths(str(artifact.get("date")))
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8"
+    raise RuntimeError(
+        "ADM/LDM report producer retired; raw lifecycle lineage remains active"
     )
-    md_path.write_text(
-        render_statistical_action_weight_markdown(artifact), encoding="utf-8"
-    )
-    return json_path, md_path
 
 
 def _recommended_bias_for_bucket(row: dict) -> str:
@@ -17262,18 +17238,9 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
 
 
 def save_holding_exit_decision_matrix(report: dict) -> tuple[Path, Path]:
-    matrix = build_holding_exit_decision_matrix(report)
-    json_path, md_path = holding_exit_decision_matrix_paths(
-        str(matrix.get("source_date"))
+    raise RuntimeError(
+        "ADM/LDM report producer retired; raw lifecycle lineage remains active"
     )
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(
-        render_holding_exit_decision_matrix_markdown(matrix), encoding="utf-8"
-    )
-    return json_path, md_path
 
 
 def _threshold_snapshot_from_families(
@@ -18448,8 +18415,6 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     save_threshold_cycle_report(report)
-    save_statistical_action_weight_artifact(report)
-    save_holding_exit_decision_matrix(report)
     save_cumulative_threshold_cycle_report(cumulative_report)
     if args.print_stdout:
         print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -213,22 +213,12 @@ def _read_policy(path: str) -> dict[str, Any]:
 
 
 def greenfield_authority_active() -> bool:
-    if not _bool_env(ENABLED_ENV, False):
-        return False
-    return (
-        str(os.getenv(SCOPE_ENV, FULL_LIFECYCLE_SCOPE) or "").strip()
-        == FULL_LIFECYCLE_SCOPE
-    )
+    """Retired LDM gate cannot be restored by inherited environment values."""
+    return False
 
 
 def greenfield_stage_telegram_enabled() -> bool:
-    policy = _read_policy(os.getenv(POLICY_FILE_ENV, ""))
-    return (
-        greenfield_authority_active()
-        and bool(policy)
-        and not validate_greenfield_policy_contract(policy)
-        and _bool_env(TELEGRAM_ENV, False)
-    )
+    return False
 
 
 def _normalize_stage(stage: Any) -> str:
@@ -338,137 +328,12 @@ def evaluate_greenfield_authority(
     hard_safety: bool = False,
     observed_bucket_id: str | None = None,
 ) -> GreenfieldDecision:
-    stage_name = _normalize_stage(stage)
-    action_name = _normalize_action(action)
-    policy_file = str(os.getenv(POLICY_FILE_ENV, "") or "")
-    policy_version = str(os.getenv(POLICY_VERSION_ENV, "") or "")
-    if not _bool_env(ENABLED_ENV, False):
-        return GreenfieldDecision(
-            False, True, stage_name, action_name, "greenfield_inactive"
-        )
-    if (
-        str(os.getenv(SCOPE_ENV, FULL_LIFECYCLE_SCOPE) or "").strip()
-        != FULL_LIFECYCLE_SCOPE
-    ):
-        return GreenfieldDecision(
-            False, True, stage_name, action_name, "greenfield_scope_not_full_lifecycle"
-        )
-    if hard_safety:
-        return GreenfieldDecision(
-            True,
-            True,
-            stage_name,
-            action_name,
-            "hard_safety_passthrough",
-            policy_version or "-",
-            policy_file or "-",
-            hard_safety_override=True,
-        )
-    policy = _read_policy(policy_file)
-    if not policy:
-        return GreenfieldDecision(
-            True,
-            False,
-            stage_name,
-            action_name,
-            "greenfield_policy_missing_or_invalid",
-            policy_version or "-",
-            policy_file or "-",
-        )
-    policy_version = policy_version or str(
-        policy.get("policy_version") or policy.get("version") or "-"
-    )
-    contract_issue = validate_greenfield_policy_contract(
-        policy,
-        expected_version=policy_version if policy_version != "-" else None,
-    )
-    if contract_issue:
-        return GreenfieldDecision(
-            True,
-            False,
-            stage_name,
-            action_name,
-            contract_issue,
-            policy_version,
-            policy_file,
-            observed_bucket_id=str(observed_bucket_id or "-"),
-        )
-    eligible_rows: list[dict[str, Any]] = []
-    for row in _stage_rows(policy, stage_name):
-        if not _strategy_matches(row.get("strategy_scope"), strategy):
-            continue
-        if not _action_matches(row.get("action"), action_name):
-            continue
-        if str(row.get("source_quality_gate") or "pass") != "pass":
-            continue
-        if str(row.get("ai_tier2_status") or "parsed") != "parsed":
-            continue
-        eligible_rows.append(row)
-    observed = str(observed_bucket_id or "").strip()
-    if observed:
-        for row in eligible_rows:
-            if str(row.get("bucket_id") or "-") != observed:
-                continue
-            return GreenfieldDecision(
-                True,
-                True,
-                stage_name,
-                action_name,
-                "promoted_bucket_allowed",
-                policy_version,
-                policy_file,
-                str(row.get("bucket_id") or "-"),
-                str(row.get("family") or "-"),
-                observed_bucket_id=observed,
-            )
-        if eligible_rows:
-            row = eligible_rows[0]
-            return GreenfieldDecision(
-                True,
-                False,
-                stage_name,
-                action_name,
-                "observed_bucket_policy_mismatch",
-                policy_version,
-                policy_file,
-                str(row.get("bucket_id") or "-"),
-                str(row.get("family") or "-"),
-                observed_bucket_id=observed,
-            )
-    elif stage_name == "entry" and eligible_rows:
-        row = eligible_rows[0]
-        return GreenfieldDecision(
-            True,
-            False,
-            stage_name,
-            action_name,
-            "observed_bucket_missing",
-            policy_version,
-            policy_file,
-            str(row.get("bucket_id") or "-"),
-            str(row.get("family") or "-"),
-            observed_bucket_id="-",
-        )
-    for row in eligible_rows:
-        return GreenfieldDecision(
-            True,
-            True,
-            stage_name,
-            action_name,
-            "promoted_bucket_allowed",
-            policy_version,
-            policy_file,
-            str(row.get("bucket_id") or "-"),
-            str(row.get("family") or "-"),
-            observed_bucket_id=str(observed_bucket_id or "-"),
-        )
+    # Existing strategy and broker guards retain authority; the retired LDM
+    # allowlist neither vetoes an entry nor grants an order permission.
     return GreenfieldDecision(
-        True,
         False,
-        stage_name,
-        action_name,
-        "unpromoted_bucket_blocked",
-        policy_version,
-        policy_file,
-        observed_bucket_id=str(observed_bucket_id or "-"),
+        True,
+        _normalize_stage(stage),
+        _normalize_action(action),
+        "greenfield_inactive",
     )

@@ -20,6 +20,12 @@ def _write_catalog(
                 "allowed_runtime_apply": False,
                 "decision_authority": "scalp_sim_auto_policy_source_only",
                 "active_sim_priority_seeds": seeds or [],
+                "policies": [
+                    {
+                        "source_id": "rising_missed_classifier_prior",
+                        "active_sim_priority_seeds": seeds or [],
+                    }
+                ],
                 "rising_missed_prior_observation_lanes": lanes or [],
                 "rising_missed_prior_active_seed_status_overrides": overrides or [],
             }

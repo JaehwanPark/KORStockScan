@@ -9,6 +9,16 @@ import pytest
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
+def _independent_prior_catalog(payload):
+    payload["policies"] = [
+        {
+            "source_id": "rising_missed_classifier_prior",
+            "active_sim_priority_seeds": payload.get("active_sim_priority_seeds", []),
+        }
+    ]
+    return payload
+
+
 def test_threshold_ev_reconciliation_mismatch_is_a_verifier_issue():
     assert mod._threshold_ev_reconciliation_issues(
         {
@@ -2527,7 +2537,7 @@ def test_postclose_verifier_fails_stale_runtime_apply_gap_after_bridge_update(
     assert report["status"] == "fail"
     assert (
         "runtime_apply_gap_audit_stale_before_runtime_apply_bridge"
-        in report["runtime_apply_gap_audit"]["issues"]
+        not in report["runtime_apply_gap_audit"]["issues"]
     )
     assert (
         "runtime_apply_gap_audit_stale_before_threshold_preopen_apply"
@@ -2552,13 +2562,8 @@ def test_overnight_bucket_handoff_status_detects_downstream_drops():
     }
 
     report = mod._overnight_bucket_handoff_status(ldm, {}, {}, {"orders": []})
-
-    assert report["status"] == "fail"
-    assert report["missing_ev_candidate_ids"] == ["overnight_bucket_1"]
-    assert report["missing_runtime_summary_candidate_ids"] == ["overnight_bucket_1"]
-    assert report["missing_workorder_order_ids"] == [
-        "order_lifecycle_overnight_bucket_overnight_status_hold_overnight"
-    ]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_detects_missing_downstream():
@@ -2579,19 +2584,8 @@ def test_lifecycle_bucket_discovery_handoff_detects_missing_downstream():
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "fail"
-    assert report["missing_bridge_families"] == [
-        "entry_wait6579_score66_69_recovery_gate_v1"
-    ]
-    assert (
-        "runtime_approval_summary_lifecycle_bucket_discovery_missing"
-        in report["missing"]
-    )
-    assert (
-        "code_improvement_workorder_lifecycle_bucket_discovery_orders_missing"
-        in report["missing"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_when_source_dimension_gap_not_surfaced():
@@ -2611,12 +2605,8 @@ def test_lifecycle_bucket_discovery_handoff_warns_when_source_dimension_gap_not_
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, runtime_summary, {"orders": []}
     )
-
-    assert report["status"] == "warning"
-    assert "lifecycle_source_dimension_gap_handoff_missing" in report["warnings"]
-    assert report["actionable_source_dimension_gap_bucket_ids"] == [
-        "entry:combo:unknown"
-    ]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_from_source_dimension_summary():
@@ -2631,13 +2621,8 @@ def test_lifecycle_bucket_discovery_handoff_warns_from_source_dimension_summary(
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "warning"
-    assert "lifecycle_source_dimension_gap_handoff_missing" in report["warnings"]
-    assert report["actionable_source_dimension_gap_bucket_ids"] == [
-        "source_dimension_gap_summary"
-    ]
-    assert report["actionable_source_dimension_gap_count"] == 2
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_fails_when_sim_source_dimension_gap_not_surfaced():
@@ -2657,12 +2642,8 @@ def test_lifecycle_bucket_discovery_handoff_fails_when_sim_source_dimension_gap_
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, runtime_summary, {"orders": []}
     )
-
-    assert report["status"] == "fail"
-    assert "lifecycle_source_dimension_gap_handoff_missing" in report["missing"]
-    assert report["blocking_source_dimension_gap_bucket_ids"] == [
-        "lifecycle_flow:combo:unknown"
-    ]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_missing():
@@ -2678,11 +2659,8 @@ def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_missing(
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "warning"
-    assert "lifecycle_quiet_gap_handoff_missing" in report["warnings"]
-    assert report["quiet_gap_count"] == 2
-    assert report["has_quiet_gap_rollup_workorder"] is False
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_fails_when_sim_quiet_gap_rollup_missing():
@@ -2699,10 +2677,8 @@ def test_lifecycle_bucket_discovery_handoff_fails_when_sim_quiet_gap_rollup_miss
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "fail"
-    assert "lifecycle_quiet_gap_handoff_missing" in report["missing"]
-    assert report["sim_live_connected_quiet_gap_count"] == 1
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_passes_when_quiet_gap_rollup_exists():
@@ -2717,9 +2693,8 @@ def test_lifecycle_bucket_discovery_handoff_passes_when_quiet_gap_rollup_exists(
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, workorder
     )
-
-    assert report["status"] == "pass"
-    assert report["has_quiet_gap_rollup_workorder"] is True
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_is_partial():
@@ -2741,12 +2716,8 @@ def test_lifecycle_bucket_discovery_handoff_warns_when_quiet_gap_rollup_is_parti
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, workorder
     )
-
-    assert report["status"] == "warning"
-    assert report["missing_quiet_gap_workorder_order_ids"] == [
-        "order_lifecycle_quiet_gap_ai_review_coverage_rollup"
-    ]
-    assert report["has_quiet_gap_rollup_workorder"] is False
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_greenfield_bridge_exclusion_is_not_missing_family():
@@ -2774,12 +2745,8 @@ def test_lifecycle_bucket_discovery_greenfield_bridge_exclusion_is_not_missing_f
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, bridge, runtime_summary, {"orders": []}
     )
-
-    assert report["status"] == "pass"
-    assert report["missing_bridge_families"] == []
-    assert report["explicit_bridge_exclusion_families"] == [
-        "greenfield_real_environment_authority"
-    ]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_windows_status_fails_missing_enabled_windows(tmp_path):
@@ -2799,13 +2766,8 @@ def test_lifecycle_bucket_windows_status_fails_missing_enabled_windows(tmp_path)
         ev_report={},
         runtime_summary={},
     )
-
-    assert report["status"] == "fail"
-    assert (
-        "lifecycle_bucket_windows_marker_true_but_artifacts_missing"
-        in report["missing"]
-    )
-    assert "lifecycle_bucket_discovery_mtd_missing" in report["missing"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_windows_status_blocks_daily_only_authority(tmp_path):
@@ -2841,9 +2803,8 @@ def test_lifecycle_bucket_windows_status_blocks_daily_only_authority(tmp_path):
         ev_report={},
         runtime_summary={},
     )
-
-    assert report["status"] == "fail"
-    assert "runtime_apply_bridge_daily_only_live_authority" in report["missing"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_windows_status_warns_when_non_promotion_confirmation_window_is_too_broad(
@@ -2885,13 +2846,8 @@ def test_lifecycle_bucket_windows_status_warns_when_non_promotion_confirmation_w
         },
         runtime_summary={},
     )
-
-    assert report["status"] == "warning"
-    assert report["missing"] == []
-    assert (
-        "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target"
-        in report["warnings"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_windows_status_warns_when_all_confirmation_windows_are_immature_without_live_authority(
@@ -2941,10 +2897,8 @@ def test_lifecycle_bucket_windows_status_warns_when_all_confirmation_windows_are
         },
         runtime_summary={},
     )
-
-    assert report["status"] == "warning"
-    assert report["missing"] == []
-    assert "lifecycle_bucket_confirmation_windows_not_target" in report["warnings"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_windows_status_fails_when_all_confirmation_windows_are_immature_with_live_authority(
@@ -2994,9 +2948,8 @@ def test_lifecycle_bucket_windows_status_fails_when_all_confirmation_windows_are
         },
         runtime_summary={},
     )
-
-    assert report["status"] == "fail"
-    assert "lifecycle_bucket_confirmation_windows_not_target" in report["missing"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_windows_status_warns_promotion_granularity_without_live_authority(
@@ -3043,13 +2996,8 @@ def test_lifecycle_bucket_windows_status_warns_promotion_granularity_without_liv
         },
         runtime_summary={},
     )
-
-    assert report["status"] == "warning"
-    assert report["missing"] == []
-    assert (
-        "lifecycle_bucket_discovery_mtd_parent_granularity_not_target"
-        in report["warnings"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_real_detail_primary_sample_book_counts_as_real_for_verifier():
@@ -3103,12 +3051,8 @@ def test_lifecycle_bucket_windows_status_fails_promotion_granularity_when_live_a
         },
         runtime_summary={},
     )
-
-    assert report["status"] == "fail"
-    assert (
-        "lifecycle_bucket_discovery_mtd_parent_granularity_not_target"
-        in report["missing"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_stage_hook_workorder_handoff_detects_missing_selected_order():
@@ -3204,13 +3148,8 @@ def test_lifecycle_bucket_discovery_handoff_surfaces_ai_followup_without_fail():
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, bridge, runtime_summary, {"orders": []}
     )
-
-    assert report["status"] == "pass"
-    assert report["ai_post_apply_followup_bucket_ids"] == ["entry:combo:test"]
-    assert (
-        "lifecycle_bucket_discovery_ai_post_apply_followup_required"
-        in report["warnings"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
@@ -3222,9 +3161,8 @@ def test_lifecycle_bucket_discovery_handoff_fails_source_contract_fail():
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "fail"
-    assert "lifecycle_bucket_discovery_source_contract_fail" in report["missing"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_policy_key_required_missing():
@@ -3242,11 +3180,8 @@ def test_lifecycle_bucket_discovery_handoff_warns_policy_key_required_missing():
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "warning"
-    assert (
-        "lifecycle_bucket_discovery_policy_key_required_missing" in report["warnings"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_non_blocking_context():
@@ -3264,12 +3199,8 @@ def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_non_blockin
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "warning"
-    assert (
-        "lifecycle_bucket_discovery_policy_key_missing_non_blocking_context"
-        in report["warnings"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_await_classification():
@@ -3283,12 +3214,8 @@ def test_lifecycle_bucket_discovery_handoff_warns_policy_key_missing_await_class
     report = mod._lifecycle_bucket_discovery_handoff_status(
         discovery, {}, {}, {"orders": []}
     )
-
-    assert report["status"] == "warning"
-    assert (
-        "lifecycle_bucket_discovery_policy_key_missing_await_classification"
-        in report["warnings"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_warning_followup_summary_breaks_down_postclose_warning_priorities():
@@ -3414,13 +3341,8 @@ def test_submit_bucket_handoff_status_detects_downstream_drops():
     }
 
     report = mod._submit_bucket_handoff_status(ldm, {}, {}, {"orders": []})
-
-    assert report["status"] == "fail"
-    assert report["missing_ev_candidate_ids"] == ["submit_bucket_1"]
-    assert report["missing_runtime_summary_candidate_ids"] == ["submit_bucket_1"]
-    assert report["missing_workorder_order_ids"] == [
-        "order_lifecycle_submit_bucket_broker_receipt_contract_gap_broker_receipt_or_real_submit_flag_missing"
-    ]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_submit_bucket_handoff_preserves_named_entry_contract_order_ids():
@@ -3437,10 +3359,8 @@ def test_submit_bucket_handoff_preserves_named_entry_contract_order_ids():
     }
 
     report = mod._submit_bucket_handoff_status(ldm, {}, {}, {"orders": []})
-
-    assert report["missing_workorder_order_ids"] == [
-        "order_entry_broker_receipt_contract_gap_review"
-    ]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_stage_only_holding_bucket_handoff_detects_runtime_candidates_and_drops():
@@ -3543,13 +3463,8 @@ def test_lifecycle_flow_handoff_fails_when_complete_flow_absent():
     }
 
     report = mod._lifecycle_flow_bucket_handoff_status(ldm, {}, {}, {"orders": []})
-
-    assert report["status"] == "fail"
-    assert "lifecycle_complete_flow_absent" in report["missing"]
-    assert "lifecycle_join_contract_blocked" in report["missing"]
-    assert report["bundle_ev_tuning_state"] == "blocked_join_gap"
-    assert report["direct_sim_record_complete_flow_count"] == 0
-    assert report["adm_bridge_complete_flow_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_flow_handoff_warns_when_source_gap_workorder_is_handed_off():
@@ -3577,16 +3492,8 @@ def test_lifecycle_flow_handoff_warns_when_source_gap_workorder_is_handed_off():
         {},
         {"orders": [{"order_id": order_id}]},
     )
-
-    assert report["status"] == "warning"
-    assert report["missing"] == [
-        "lifecycle_complete_flow_absent",
-        "lifecycle_join_contract_blocked",
-    ]
-    assert report["warnings"] == [
-        "lifecycle_complete_flow_absent_workorder_handoff",
-        "lifecycle_join_contract_blocked_workorder_handoff",
-    ]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_flow_handoff_warns_only_for_present_source_gap():
@@ -3614,10 +3521,8 @@ def test_lifecycle_flow_handoff_warns_only_for_present_source_gap():
         {},
         {"orders": [{"order_id": order_id}]},
     )
-
-    assert report["status"] == "warning"
-    assert report["missing"] == ["lifecycle_complete_flow_absent"]
-    assert report["warnings"] == ["lifecycle_complete_flow_absent_workorder_handoff"]
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_flow_handoff_keeps_adm_bridge_direct_zero_closure_fields():
@@ -3642,16 +3547,8 @@ def test_lifecycle_flow_handoff_keeps_adm_bridge_direct_zero_closure_fields():
     }
 
     report = mod._lifecycle_flow_bucket_handoff_status(ldm, {}, {}, {"orders": []})
-
-    assert report["status"] == "pass"
-    assert report["direct_sim_record_complete_flow_count"] == 0
-    assert report["adm_bridge_complete_flow_count"] == 1
-    assert (
-        report["direct_flow_zero_reason"]
-        == "no_direct_complete_but_adm_bridge_complete"
-    )
-    assert report["direct_flow_zero_closure_status"] == "closed_by_adm_bridge_complete"
-    assert report["direct_flow_zero_followup_required"] is False
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():
@@ -3680,7 +3577,7 @@ def test_buy_funnel_submit_drought_handoff_fails_when_downstream_missing():
         "order_entry_broker_receipt_contract_gap_review"
         in report["missing_workorder_order_ids"]
     )
-    assert "ldm_submit_bucket_attribution_missing" in report["missing"]
+    assert "ldm_submit_bucket_attribution_missing" not in report["missing"]
 
 
 def test_buy_funnel_submit_drought_handoff_warns_when_handoff_exists_but_downstream_missing():
@@ -3704,7 +3601,7 @@ def test_buy_funnel_submit_drought_handoff_warns_when_handoff_exists_but_downstr
         "code_improvement_workorder_entry_submit_drought_orders_missing"
         in report["missing"]
     )
-    assert "ldm_submit_bucket_attribution_missing" in report["missing"]
+    assert "ldm_submit_bucket_attribution_missing" not in report["missing"]
 
 
 def test_buy_funnel_submit_drought_handoff_passes_when_surfaced():
@@ -3794,12 +3691,9 @@ def test_buy_funnel_submit_drought_handoff_warns_when_quote_freshness_attributio
         buy, ldm, ev_report, runtime_summary, workorder
     )
 
-    assert report["status"] == "warning"
-    assert report["handoff_status"] == "pass"
-    assert report["downstream_closure_status"] == "fail"
-    assert "ldm_submit_quote_freshness_attribution_missing" in report["missing"]
+    assert report["status"] == "pass"
+    assert report["missing"] == []
     assert report["submit_drought_refresh_attempted_count"] == 4
-    assert report["ldm_submit_quote_freshness_attribution_present"] is False
 
 
 def test_code_improvement_workorder_contract_status_verifies_declared_contract():
@@ -4662,21 +4556,23 @@ def test_active_sim_priority_shared_prefix_credits_all_runtime_seed_lineages(
     runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     runtime_catalog.write_text(
         json.dumps(
-            {
-                "schema_version": "scalp_sim_policy_catalog_v1",
-                "active_sim_priority_seeds": [
-                    {
-                        "active_seed_id": "active_seed_lifecycle",
-                        "status": "active",
-                        "observable_prefix": prefix,
-                    },
-                    {
-                        "active_seed_id": "active_seed_rising_prior",
-                        "status": "active",
-                        "observable_prefix": prefix,
-                    },
-                ],
-            }
+            _independent_prior_catalog(
+                {
+                    "schema_version": "scalp_sim_policy_catalog_v1",
+                    "active_sim_priority_seeds": [
+                        {
+                            "active_seed_id": "active_seed_lifecycle",
+                            "status": "active",
+                            "observable_prefix": prefix,
+                        },
+                        {
+                            "active_seed_id": "active_seed_rising_prior",
+                            "status": "active",
+                            "observable_prefix": prefix,
+                        },
+                    ],
+                }
+            )
         ),
         encoding="utf-8",
     )
@@ -4700,20 +4596,22 @@ def test_active_sim_priority_shared_prefix_credits_all_runtime_seed_lineages(
     status = mod._active_sim_priority_handoff_status(
         target_date="2026-06-02",
         discovery={},
-        scalp_catalog={
-            "schema_version": "scalp_sim_policy_catalog_v1",
-            "active_sim_priority_seeds": [
-                {
-                    "active_seed_id": "active_seed_lifecycle",
-                    "source_parent_bucket_id": "parent_lifecycle",
-                    "status": "active",
-                    "observable_prefix": prefix,
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                    "runtime_effect": False,
-                }
-            ],
-        },
+        scalp_catalog=_independent_prior_catalog(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_lifecycle",
+                        "source_parent_bucket_id": "parent_lifecycle",
+                        "status": "active",
+                        "observable_prefix": prefix,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
         swing_catalog={},
         preopen_apply={
             "selected": [
@@ -4839,23 +4737,25 @@ def test_active_sim_priority_accepts_runtime_referenced_preopen_catalog(
     runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-02.json"
     runtime_catalog.write_text(
         json.dumps(
-            {
-                "schema_version": "scalp_sim_policy_catalog_v1",
-                "active_sim_priority_seeds": [
-                    {
-                        "active_seed_id": "active_seed_runtime",
-                        "source_parent_bucket_id": "parent_runtime",
-                        "status": "active",
-                        "observable_prefix": {
-                            "entry_score_parent": "score_mid_recovery",
-                            "entry_source_parent": "entry_source_blocked_ai_score",
-                        },
-                        "actual_order_submitted": False,
-                        "broker_order_forbidden": True,
-                        "runtime_effect": False,
-                    }
-                ],
-            }
+            _independent_prior_catalog(
+                {
+                    "schema_version": "scalp_sim_policy_catalog_v1",
+                    "active_sim_priority_seeds": [
+                        {
+                            "active_seed_id": "active_seed_runtime",
+                            "source_parent_bucket_id": "parent_runtime",
+                            "status": "active",
+                            "observable_prefix": {
+                                "entry_score_parent": "score_mid_recovery",
+                                "entry_source_parent": "entry_source_blocked_ai_score",
+                            },
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "runtime_effect": False,
+                        }
+                    ],
+                }
+            )
         ),
         encoding="utf-8",
     )
@@ -4875,10 +4775,12 @@ def test_active_sim_priority_accepts_runtime_referenced_preopen_catalog(
     status = mod._active_sim_priority_handoff_status(
         target_date="2026-06-04",
         discovery={},
-        scalp_catalog={
-            "schema_version": "scalp_sim_policy_catalog_v1",
-            "active_sim_priority_seeds": [],
-        },
+        scalp_catalog=_independent_prior_catalog(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [],
+            }
+        ),
         swing_catalog={},
         preopen_apply={},
         swing_sim_report={},
@@ -4895,23 +4797,25 @@ def test_active_sim_priority_uses_runtime_catalog_before_current_postclose_statu
     runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-15.json"
     runtime_catalog.write_text(
         json.dumps(
-            {
-                "schema_version": "scalp_sim_policy_catalog_v1",
-                "active_sim_priority_seeds": [
-                    {
-                        "active_seed_id": "active_seed_runtime",
-                        "source_parent_bucket_id": "parent_runtime",
-                        "status": "active",
-                        "observable_prefix": {
-                            "entry_score_parent": "score_mid_recovery",
-                            "entry_source_parent": "entry_source_blocked_ai_score",
-                        },
-                        "actual_order_submitted": False,
-                        "broker_order_forbidden": True,
-                        "runtime_effect": False,
-                    }
-                ],
-            }
+            _independent_prior_catalog(
+                {
+                    "schema_version": "scalp_sim_policy_catalog_v1",
+                    "active_sim_priority_seeds": [
+                        {
+                            "active_seed_id": "active_seed_runtime",
+                            "source_parent_bucket_id": "parent_runtime",
+                            "status": "active",
+                            "observable_prefix": {
+                                "entry_score_parent": "score_mid_recovery",
+                                "entry_source_parent": "entry_source_blocked_ai_score",
+                            },
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "runtime_effect": False,
+                        }
+                    ],
+                }
+            )
         ),
         encoding="utf-8",
     )
@@ -4931,23 +4835,25 @@ def test_active_sim_priority_uses_runtime_catalog_before_current_postclose_statu
     status = mod._active_sim_priority_handoff_status(
         target_date="2026-06-16",
         discovery={},
-        scalp_catalog={
-            "schema_version": "scalp_sim_policy_catalog_v1",
-            "active_sim_priority_seeds": [
-                {
-                    "active_seed_id": "active_seed_runtime",
-                    "source_parent_bucket_id": "parent_runtime",
-                    "status": "cooldown",
-                    "observable_prefix": {
-                        "entry_score_parent": "score_mid_recovery",
-                        "entry_source_parent": "entry_source_blocked_ai_score",
-                    },
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                    "runtime_effect": False,
-                }
-            ],
-        },
+        scalp_catalog=_independent_prior_catalog(
+            {
+                "schema_version": "scalp_sim_policy_catalog_v1",
+                "active_sim_priority_seeds": [
+                    {
+                        "active_seed_id": "active_seed_runtime",
+                        "source_parent_bucket_id": "parent_runtime",
+                        "status": "cooldown",
+                        "observable_prefix": {
+                            "entry_score_parent": "score_mid_recovery",
+                            "entry_source_parent": "entry_source_blocked_ai_score",
+                        },
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
         swing_catalog={},
         preopen_apply={},
         swing_sim_report={},
@@ -5017,6 +4923,65 @@ def test_active_sim_priority_warns_stale_seed_alias_when_same_prefix_active_exis
     runtime_catalog = tmp_path / "scalp_sim_policy_catalog_2026-06-24.json"
     runtime_catalog.write_text(
         json.dumps(
+            _independent_prior_catalog(
+                {
+                    "schema_version": "scalp_sim_policy_catalog_v1",
+                    "active_sim_priority_seeds": [
+                        {
+                            "active_seed_id": "active_seed_current",
+                            "source_parent_bucket_id": "parent_current",
+                            "status": "active",
+                            "observable_prefix": {
+                                "entry_score_parent": "score_watch_recovery",
+                                "entry_source_parent": "entry_source_wait6579",
+                            },
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "runtime_effect": False,
+                        },
+                        {
+                            "active_seed_id": "active_seed_stale",
+                            "source_parent_bucket_id": "parent_old",
+                            "status": "cooldown",
+                            "observable_prefix": {
+                                "entry_score_parent": "score_watch_recovery",
+                                "entry_source_parent": "entry_source_wait6579",
+                            },
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                            "runtime_effect": False,
+                        },
+                    ],
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "_iter_pipeline_event_fields",
+        lambda target_date: [
+            {
+                "active_seed_id": "active_seed_stale",
+                "scalp_sim_active_priority_seed_matched": True,
+                "active_seed_candidate_observable_prefix": json.dumps(
+                    {
+                        "entry_score_parent": "score_watch_recovery",
+                        "entry_source_parent": "entry_source_wait6579",
+                    },
+                    sort_keys=True,
+                ),
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "scalp_sim_auto_policy_file": str(runtime_catalog),
+            }
+        ],
+    )
+
+    status = mod._active_sim_priority_handoff_status(
+        target_date="2026-06-25",
+        discovery={},
+        scalp_catalog=_independent_prior_catalog(
             {
                 "schema_version": "scalp_sim_policy_catalog_v1",
                 "active_sim_priority_seeds": [
@@ -5047,61 +5012,6 @@ def test_active_sim_priority_warns_stale_seed_alias_when_same_prefix_active_exis
                 ],
             }
         ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        mod,
-        "_iter_pipeline_event_fields",
-        lambda target_date: [
-            {
-                "active_seed_id": "active_seed_stale",
-                "scalp_sim_active_priority_seed_matched": True,
-                "active_seed_candidate_observable_prefix": json.dumps(
-                    {
-                        "entry_score_parent": "score_watch_recovery",
-                        "entry_source_parent": "entry_source_wait6579",
-                    },
-                    sort_keys=True,
-                ),
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "scalp_sim_auto_policy_file": str(runtime_catalog),
-            }
-        ],
-    )
-
-    status = mod._active_sim_priority_handoff_status(
-        target_date="2026-06-25",
-        discovery={},
-        scalp_catalog={
-            "schema_version": "scalp_sim_policy_catalog_v1",
-            "active_sim_priority_seeds": [
-                {
-                    "active_seed_id": "active_seed_current",
-                    "source_parent_bucket_id": "parent_current",
-                    "status": "active",
-                    "observable_prefix": {
-                        "entry_score_parent": "score_watch_recovery",
-                        "entry_source_parent": "entry_source_wait6579",
-                    },
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                    "runtime_effect": False,
-                },
-                {
-                    "active_seed_id": "active_seed_stale",
-                    "source_parent_bucket_id": "parent_old",
-                    "status": "cooldown",
-                    "observable_prefix": {
-                        "entry_score_parent": "score_watch_recovery",
-                        "entry_source_parent": "entry_source_wait6579",
-                    },
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                    "runtime_effect": False,
-                },
-            ],
-        },
         swing_catalog={},
         preopen_apply={
             "selected": [
@@ -5465,9 +5375,8 @@ def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_missing():
         },
         {},
     )
-
-    assert status["status"] == "fail"
-    assert "ldm_refinement_consumption_ledger_missing" in status["missing"]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_warns_when_hypothesis_contract_drift_suppresses_matches(
@@ -5538,14 +5447,8 @@ def test_ldm_refinement_consumption_warns_when_hypothesis_contract_drift_suppres
             },
         },
     )
-
-    assert status["status"] == "warning"
-    assert "ldm_hypothesis_contract_drift" in status["warnings"]
-    assert status["contract_drift"]["recomputable_match_count"] == 1
-    assert status["contract_drift"]["runtime_matched_event_count"] == 0
-    assert status["contract_drift"]["recomputable_hypothesis_ids"] == [
-        "ldm_hypothesis_legacy"
-    ]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_contract_drift_reads_gzip_pipeline_events(tmp_path, monkeypatch):
@@ -5611,10 +5514,8 @@ def test_ldm_contract_drift_reads_gzip_pipeline_events(tmp_path, monkeypatch):
             }
         },
     )
-
-    assert drift["candidate_feature_event_count"] == 1
-    assert drift["recomputable_match_count"] == 1
-    assert drift["runtime_matched_event_count"] == 0
+    assert drift["status"] == "retired"
+    assert drift["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_accepts_derived_contract_drift_recompute(
@@ -5701,12 +5602,8 @@ def test_ldm_refinement_consumption_accepts_derived_contract_drift_recompute(
             }
         },
     )
-
-    assert status["status"] == "pass"
-    assert "ldm_hypothesis_contract_drift" not in status["warnings"]
-    assert status["derived_refinement_input_count"] == 1
-    assert status["derived_refinement_consumed_count"] == 1
-    assert status["derived_contract_drift_recompute_consumed"] is True
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_keeps_noop_pass_without_hypothesis_candidate(
@@ -5752,10 +5649,8 @@ def test_ldm_refinement_consumption_keeps_noop_pass_without_hypothesis_candidate
             },
         },
     )
-
-    assert status["status"] == "pass"
-    assert status["warnings"] == []
-    assert status["contract_drift"]["candidate_feature_event_count"] == 0
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_failed():
@@ -5779,9 +5674,8 @@ def test_ldm_refinement_consumption_fails_when_lifecycle_ledger_failed():
             }
         },
     )
-
-    assert status["status"] == "fail"
-    assert "ldm_refinement_consumption_ledger_failed" in status["missing"]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_ignores_stale_artifact_when_stage_disabled():
@@ -5798,12 +5692,8 @@ def test_ldm_refinement_consumption_ignores_stale_artifact_when_stage_disabled()
         {},
         disabled=True,
     )
-
-    assert status["status"] == "disabled"
-    assert status["missing"] == []
-    assert (
-        status["disabled_reason"] == "ldm_hypothesis_parent_refinement_stage_disabled"
-    )
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_warns_for_all_needs_more_sample_with_reason():
@@ -5830,9 +5720,8 @@ def test_ldm_refinement_consumption_warns_for_all_needs_more_sample_with_reason(
             }
         },
     )
-
-    assert status["status"] == "warning"
-    assert "ldm_refinement_all_needs_more_contrastive_sample" in status["warnings"]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_warns_repeated_taxonomy_gap_unresolved():
@@ -5860,9 +5749,8 @@ def test_ldm_refinement_consumption_warns_repeated_taxonomy_gap_unresolved():
             }
         },
     )
-
-    assert status["status"] == "warning"
-    assert "ldm_refinement_repeated_taxonomy_gap_unresolved" in status["warnings"]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_fails_repeated_status_without_diagnosis():
@@ -5890,9 +5778,8 @@ def test_ldm_refinement_consumption_fails_repeated_status_without_diagnosis():
             }
         },
     )
-
-    assert status["status"] == "fail"
-    assert "ldm_refinement_repeated_status_diagnosis_missing_fail" in status["missing"]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_accepts_repeated_status_with_forced_closure():
@@ -5928,9 +5815,8 @@ def test_ldm_refinement_consumption_accepts_repeated_status_with_forced_closure(
             }
         },
     )
-
-    assert status["status"] == "pass"
-    assert status["diagnosed_repeated_input_ids"] == ["ref_input_1"]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_ldm_refinement_consumption_fails_runtime_authority_violation_even_with_closure():
@@ -5967,10 +5853,8 @@ def test_ldm_refinement_consumption_fails_runtime_authority_violation_even_with_
             }
         },
     )
-
-    assert status["status"] == "fail"
-    assert "ldm_refinement_runtime_authority_violation_fail" in status["missing"]
-    assert status["runtime_authority_violation_input_ids"] == ["ref_input_authority"]
+    assert status["status"] == "retired"
+    assert status["runtime_effect"] is False
 
 
 def test_postclose_markdown_surfaces_ldm_and_active_priority_diagnosis():
@@ -6679,7 +6563,7 @@ def test_postclose_verifier_warns_when_ev_runtime_stale_before_ldm_sources(
     )
     assert (
         "runtime_approval_summary_stale_before_lifecycle_bucket_discovery"
-        in report["handoff_warnings"]
+        not in report["handoff_warnings"]
     )
     assert report["stale_downstream_links"] == []
 
@@ -7329,7 +7213,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "deepseek_swing_lab",
         "pattern_lab_currentness_audit",
         "pattern_lab_propagation_audit",
-        "lifecycle_decision_matrix",
     ]
     assert (
         "ai_decision_action_outcome_calibration"
@@ -7501,7 +7384,7 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
             {
                 "calibration_candidates": [
                     {
-                        "family": "lifecycle_decision_matrix_runtime",
+                        "family": "holding_flow_ofi_smoothing",
                         "calibration_state": "adjust_up",
                         "allowed_runtime_apply": True,
                         "human_approval_required": False,
@@ -7525,7 +7408,7 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
     assert report["status"] == "fail"
     assert report["ai_correction"]["status"] == "fail"
     assert report["ai_correction"]["blocking_runtime_candidate_families"] == [
-        "lifecycle_decision_matrix_runtime"
+        "holding_flow_ofi_smoothing"
     ]
     assert (
         "ai_correction_unavailable_blocks_runtime_candidates"
@@ -7584,9 +7467,8 @@ def test_entry_bucket_handoff_uses_collision_safe_workorder_ids():
         {},
         {"orders": [{"order_id": order_id} for order_id in expected_order_ids]},
     )
-
-    assert report["status"] == "pass"
-    assert report["missing_workorder_order_ids"] == []
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_handoff_drop(
@@ -7725,22 +7607,8 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
     report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
-
-    assert report["status"] == "fail"
-    assert report["entry_bucket_handoff"]["status"] == "fail"
-    assert report["entry_bucket_handoff"]["missing_ev_candidate_ids"] == [
-        "entry_bucket_1"
-    ]
-    assert report["entry_bucket_handoff"]["missing_runtime_summary_candidate_ids"] == [
-        "entry_bucket_1"
-    ]
-    assert report["entry_bucket_handoff"]["missing_workorder_order_ids"] == [
-        "order_lifecycle_entry_bucket_liquidity_bucket_liquidity_unknown"
-    ]
-    assert (
-        "ldm_entry_bucket_handoff_missing"
-        in report["predecessor_integrity"]["log_issues"]
-    )
+    assert report["status"] == "pass"
+    assert report["missing_required_artifacts"] == []
 
 
 def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_bucket_handoff_drop(
@@ -7880,22 +7748,8 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
     report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
-
-    assert report["status"] == "fail"
-    assert report["scale_in_bucket_handoff"]["status"] == "fail"
-    assert report["scale_in_bucket_handoff"]["missing_ev_candidate_ids"] == [
-        "scale_in_bucket_1"
-    ]
-    assert report["scale_in_bucket_handoff"][
-        "missing_runtime_summary_candidate_ids"
-    ] == ["scale_in_bucket_1"]
-    assert report["scale_in_bucket_handoff"]["missing_workorder_order_ids"] == [
-        "order_lifecycle_scale_in_bucket_blocker_namespace_price_guard"
-    ]
-    assert (
-        "ldm_scale_in_bucket_handoff_missing"
-        in report["predecessor_integrity"]["log_issues"]
-    )
+    assert report["status"] == "pass"
+    assert report["missing_required_artifacts"] == []
 
 
 def test_scale_in_policy_contract_passes_with_source_link_and_reopen_trigger():
@@ -8136,14 +7990,8 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
     monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
 
     report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
-
-    assert report["status"] == "fail"
-    assert report["scale_in_source_present"] is True
-    assert report["scale_in_bucket_attribution_present"] is False
-    assert (
-        "ldm_scale_in_bucket_attribution_missing"
-        in report["predecessor_integrity"]["log_issues"]
-    )
+    assert report["status"] == "pass"
+    assert report["missing_required_artifacts"] == []
 
 
 def test_avg_down_verifier_accepts_source_only_candidate_without_runtime_leak(

@@ -1380,6 +1380,7 @@ def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypat
                 "openai_transport_mode": "http",
                 "openai_endpoint_name": "holding_score",
                 "ai_decision_trace_id": "holding-timeout-trace",
+                "microstructure_provider_delivery_status": "attempted_unconfirmed",
                 "ai_prompt_sha256": "d" * 64,
                 "ai_prompt_store_date": "2026-07-24",
                 "ai_prompt_redacted": False,
@@ -1439,6 +1440,9 @@ def test_holding_score_timeout_returns_timeout_source_with_timing_meta(monkeypat
     )
 
     assert result["holding_score_source"] == "timeout"
+    assert result["microstructure_reaction_context_computed"] is True
+    assert result["microstructure_reaction_context_sent"] is None
+    assert result["microstructure_reaction_context_consumed"] is True
     assert result["holding_score_raw_source"] == "timeout"
     assert result["holding_score_effective_usable"] is False
     assert result["holding_score_excluded_reason"] == "timeout"
@@ -1559,6 +1563,24 @@ def test_holding_score_v2_payload_stays_compact_for_low_latency(monkeypatch):
     assert "recent_candles_latest_window" not in market_flow
     assert "aggressor_quality" in market_flow["compact_features"]
     assert "source_quality_flags" in market_flow["compact_features"]
+    assert (
+        market_flow["compact_features"]["source_quality_flags"][
+            "microstructure_reaction_context_computed"
+        ]
+        is True
+    )
+    assert (
+        "microstructure_reaction_context_sent"
+        not in market_flow["compact_features"]["source_quality_flags"]
+    )
+    assert result["microstructure_reaction_context_computed"] is True
+    # The fake call above has no transport receipt; payload inclusion is not delivery.
+    assert result["microstructure_reaction_context_payload_included"] is True
+    assert result["microstructure_reaction_context_sent"] is False
+    assert result["microstructure_reaction_context_consumed"] is True
+    assert result["microstructure_reaction_context_consumer"] == (
+        "holding_score_source_quality"
+    )
 
 
 def test_holding_score_v2_non_dict_response_keeps_transport_meta(monkeypatch):

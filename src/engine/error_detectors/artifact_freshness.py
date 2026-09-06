@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import csv
 import glob
 import json
@@ -428,34 +429,6 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
         "window_start": (20, 10),
         "window_end": (21, 40),
-    },
-    {
-        "id": "scalp_entry_action_decision_matrix_report",
-        "path_template": "data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_{date}.json",
-        "max_staleness_sec": 3600,
-        "critical": False,
-        "trading_day_only": True,
-        "window_start": (20, 10),
-        "window_end": (21, 40),
-        "suppress_missing_while_cron_in_progress": {
-            "id": "threshold_cycle_postclose",
-            "log": "logs/threshold_cycle_postclose_cron.log",
-        },
-        "allow_missing_after_window_while_cron_in_progress": True,
-    },
-    {
-        "id": "lifecycle_decision_matrix_report",
-        "path_template": "data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_{date}.json",
-        "max_staleness_sec": 3600,
-        "critical": False,
-        "trading_day_only": True,
-        "window_start": (20, 10),
-        "window_end": (21, 40),
-        "suppress_missing_while_cron_in_progress": {
-            "id": "threshold_cycle_postclose",
-            "log": "logs/threshold_cycle_postclose_cron.log",
-        },
-        "allow_missing_after_window_while_cron_in_progress": True,
     },
     {
         "id": "swing_pattern_lab_automation_report",

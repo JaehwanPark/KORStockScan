@@ -1657,22 +1657,8 @@ def test_lifecycle_matrix_builder_separates_runtime_features_and_labels(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-18")
-
-    assert report["summary"]["total_rows"] == 25
-    assert report["summary"]["joined_rows"] == 25
-    assert "ai_score" in report["runtime_feature_keys"]
-    assert "mfe_10m_pct" not in report["runtime_feature_keys"]
-    assert "mfe_10m_pct" in report["label_keys"]
-    assert report["examples"][0]["runtime_features"]["ai_score"] >= 67
-    assert "mfe_10m_pct" not in report["examples"][0]["runtime_features"]
-    assert "mfe_10m_pct" in report["examples"][0]["labels"]
-    assert report["fixed_threshold_contract"]["roles"]["baseline_prior"]
-    assert any(
-        item["stage"] == "entry" and item["source_quality_gate"] == "pass"
-        for item in report["policy_entries"]
-    )
-    assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.json").exists()
-    assert (matrix_dir / "lifecycle_decision_matrix_2026-05-18.md").exists()
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_excludes_pre_clean_baseline_source_dates(
@@ -1704,13 +1690,7 @@ def test_lifecycle_matrix_excludes_pre_clean_baseline_source_dates(
         start_date="2026-06-02",
         end_date="2026-06-04",
     )
-
-    assert report["summary"]["source_dates"] == ["2026-06-04"]
-    assert report["summary"]["clean_baseline_excluded_source_dates"] == [
-        "2026-06-02",
-        "2026-06-03",
-    ]
-    assert "clean_tuning_baseline_excluded_source_dates" in report["warnings"]
+    assert report["status"] == "retired"
     assert report["runtime_effect"] is False
 
 
@@ -1759,14 +1739,8 @@ def test_lifecycle_matrix_prefers_entry_adm_rows_and_has_no_policy_cap(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
-
-    assert report["sources"]["entry"]["source_field"] == "rows"
-    assert report["sources"]["entry"]["source_rows"] == 2101
-    assert report["summary"]["source_rows_total"] == 2101
-    assert report["summary"]["retained_rows"] == 2101
-    assert report["summary"]["dropped_rows_by_source"] == {}
-    assert report["policy_entries"][0]["stage"] == "entry"
-    assert report["policy_entries"][0]["sample"] == 2101
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(
@@ -1905,91 +1879,8 @@ def test_lifecycle_matrix_ingests_scalp_sim_submit_and_holding_rows(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
-
-    submit_entry = next(
-        item for item in report["policy_entries"] if item["stage"] == "submit"
-    )
-    holding_entry = next(
-        item for item in report["policy_entries"] if item["stage"] == "holding"
-    )
-    assert submit_entry["sample"] == 1
-    assert submit_entry["joined_sample"] == 1
-    assert holding_entry["sample"] == 1
-    assert holding_entry["joined_sample"] == 1
-    assert report["sources"]["scalp_sim_submit"]["rows"] == 1
-    assert report["sources"]["scalp_sim_submit"]["joined_rows"] == 1
-    assert report["sources"]["scalp_sim_holding"]["rows"] == 1
-    assert report["sources"]["scalp_sim_holding"]["joined_rows"] == 1
-    submit_row = next(
-        row
-        for row in report["examples"]
-        if row["source"] == "scalp_sim_entry_submit_pipeline_events"
-    )
-    assert submit_row["source_stage"] == "scalp_sim_buy_order_assumed_filled"
-    assert submit_row["runtime_features"]["actual_order_submitted"] is False
-    assert submit_row["runtime_features"]["broker_order_forbidden"] is True
-    assert (
-        submit_row["runtime_features"]["decision_authority"] == "sim_observation_only"
-    )
-    assert submit_row["runtime_features"]["bucket_directed_sim_probe"] is True
-    assert submit_row["runtime_features"]["lifecycle_bucket_match_status"] == "matched"
-    assert report["summary"]["bucket_directed_sim_probe"]["matched_row_count"] >= 2
-    assert (
-        report["summary"]["bucket_directed_sim_probe"][
-            "matched_unique_source_bucket_count"
-        ]
-        == 1
-    )
-    post_sell_row = next(
-        row
-        for row in report["examples"]
-        if row["source"] == "sim_post_sell_evaluations"
-    )
-    assert post_sell_row["runtime_features"]["high_ai_hard_stop_conflict"] is True
-    assert (
-        post_sell_row["runtime_features"]["hard_stop_conflict_dimension"]
-        == "high_ai_hard_stop_conflict"
-    )
-    assert post_sell_row["runtime_features"]["ai_model"] == "bedrock-nova-lite-v2"
-    assert (
-        post_sell_row["labels"]["hard_stop_conflict_dimension"]
-        == "high_ai_hard_stop_conflict"
-    )
-    assert "hard_stop_conflict_dimension" not in mod._entry_bucket_features(
-        post_sell_row
-    )
-    flow_attr = report["lifecycle_flow_bucket_attribution"]
-    assert flow_attr["metric_scope"] == "lifecycle_bundle_ev"
-    assert flow_attr["summary"]["complete_flow_count"] == 1
-    assert flow_attr["summary"]["direct_sim_record_complete_flow_count"] == 1
-    assert flow_attr["summary"]["adm_bridge_complete_flow_count"] == 0
-    flow = flow_attr["flows"][0]
-    assert flow["identity_quality"] == "exact_sim_record_id"
-    assert flow["identity_closure_type"] == "direct_sim_record"
-    assert flow["direct_sim_record_closed"] is True
-    assert flow["reconstructed_flow_closed"] is False
-    assert flow["source_sim_record_ids"] == ["SIM-1"]
-    assert flow["source_candidate_ids"] == ["ADM-1"]
-    assert flow["source_entry_adm_candidate_ids"] == ["ADM-1"]
-    assert flow["source_quality_gate"] == "pass"
-    assert flow["ai_inference_proposal"]["model"] == "gpt-5.4-mini"
-    assert flow["entry_bucket_id"].startswith("entry:combo_entry_spot:")
-    assert flow["submit_bucket_id"].startswith("submit:combo_submit_quality:")
-    assert flow["holding_bucket_id"].startswith("holding:combo_holding_flow:")
-    assert flow["exit_bucket_id"].startswith("exit:combo_exit_result:")
-    assert report["summary"]["identity_join_rate"] == 1.0
-    assert report["summary"]["complete_flow_rate"] == 1.0
-    holding_attr = report["holding_bucket_attribution"]
-    exit_attr = report["exit_bucket_attribution"]
-    assert holding_attr["summary"]["bucket_count"] > 0
-    assert exit_attr["summary"]["bucket_count"] > 0
-    assert holding_attr["runtime_approval_candidates"] == []
-    assert exit_attr["runtime_approval_candidates"] == []
-    assert (
-        holding_attr["buckets"][0]["ai_inference_proposal"]["reasoning_effort"]
-        == "medium"
-    )
-    assert exit_attr["buckets"][0]["allowed_runtime_apply"] is False
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_flow_bucket_fallback_identity_is_not_live_quality():
@@ -2401,21 +2292,8 @@ def test_lifecycle_matrix_ingests_scalp_sim_scale_in_rows(tmp_path, monkeypatch)
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-19")
-
-    scale_rows = [row for row in report["examples"] if row.get("stage") == "scale_in"]
-    assert len(scale_rows) == 1
-    assert scale_rows[0]["source"] == "scalp_sim_scale_in_pipeline_events"
-    assert scale_rows[0]["runtime_features"]["add_type"] == "PYRAMID"
-    assert scale_rows[0]["runtime_features"]["actual_order_submitted"] == "False"
-    assert "mfe_10m_pct" not in scale_rows[0]["runtime_features"]
-    assert scale_rows[0]["labels"]["profit_rate"] == 0.7
-    assert scale_rows[0]["labels"]["mfe_10m_pct"] == 1.2
-    assert scale_rows[0]["labels"]["mae_10m_pct"] == -0.4
-    assert report["sources"]["scalp_sim_scale_in"]["filled_events"] == 1
-    assert any(
-        item["stage"] == "scale_in" and item["sample"] == 1
-        for item in report["policy_entries"]
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_joins_institutional_flow_features(tmp_path, monkeypatch):
@@ -2490,13 +2368,8 @@ def test_lifecycle_matrix_joins_institutional_flow_features(tmp_path, monkeypatc
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
-
-    features = report["examples"][0]["runtime_features"]
-    assert features["foreign_net_roll5"] == 100
-    assert features["inst_net_roll5"] == 200
-    assert features["institutional_flow_status"] == "OK"
-    assert report["sources"]["institutional_flow_context"]["joined_rows"] == 1
-    assert report["sources"]["institutional_flow_context"]["date_scoped_join"] is True
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_institutional_flow_features_do_not_leak_across_source_dates():
@@ -2592,26 +2465,8 @@ def test_lifecycle_matrix_keeps_panic_sell_lifecycle_source_contract(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-20")
-
-    rows = [
-        row
-        for row in report["examples"]
-        if row["source"] == "scalp_sim_panic_pipeline_events"
-    ]
-    assert len(rows) == 1
-    panic_noop = next(
-        row for row in rows if row["source_stage"] == "scalp_sim_panic_context_warning"
-    )
-    assert mod._exit_bucket_features(panic_noop) == {
-        "exit_source_stage": "scalp_sim_panic_context_warning",
-        "exit_rule": "scalp_sim_panic_context_warning_not_applicable",
-        "exit_outcome": "outcome_not_applicable_context_noop",
-        "profit_band": "profit_not_applicable_context_noop",
-    }
-    exit_workorders = report["exit_bucket_attribution"]["code_improvement_workorders"]
-    assert all(
-        "context_noop" not in str(item.get("bucket_key")) for item in exit_workorders
-    )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(
@@ -2688,29 +2543,8 @@ def test_lifecycle_matrix_emits_entry_bucket_attribution_workorders(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
-
-    attribution = report["entry_bucket_attribution"]
-    assert (
-        attribution["decision_authority"]
-        == "adm_ldm_entry_bucket_attribution_source_only"
-    )
-    assert attribution["summary"]["runtime_candidate_count"] >= 1
-    assert attribution["summary"]["workorder_count"] >= 1
-    stale_bucket = next(
-        item
-        for item in attribution["buckets"]
-        if item["bucket_type"] == "stale_bucket"
-        and item["bucket_key"] == "stale_context_or_quote"
-    )
-    assert stale_bucket["recommended_route"] == "candidate_tighten_or_exclude"
-    assert stale_bucket["source_quality_adjusted_ev_pct"] < 0
-    assert any(
-        item["bucket_type"] == "overbought_bucket"
-        and item["bucket_key"] == "pullback_observed"
-        and item["recommended_route"] == "candidate_recovery_or_relax"
-        for item in attribution["buckets"]
-    )
-    assert report["summary"]["entry_bucket_runtime_candidate_count"] >= 1
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(
@@ -2765,22 +2599,8 @@ def test_lifecycle_matrix_emits_scale_in_bucket_attribution_workorders(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
-
-    attribution = report["scale_in_bucket_attribution"]
-    assert (
-        attribution["decision_authority"]
-        == "adm_ldm_scale_in_bucket_attribution_source_only"
-    )
-    assert attribution["summary"]["arm_counts"]["PYRAMID"] == 11
-    assert attribution["summary"]["runtime_candidate_count"] == 0
-    assert attribution["summary"]["workorder_count"] == 0
-    arm_bucket = next(
-        item for item in attribution["buckets"] if item["bucket_type"] == "arm"
-    )
-    assert arm_bucket["bucket_key"] == "PYRAMID"
-    assert arm_bucket["scale_in_ev_coverage_state"] == "legacy_only"
-    assert arm_bucket["recommended_route"] == "hold_sample"
-    assert report["summary"]["scale_in_bucket_runtime_candidate_count"] == 0
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(
@@ -2837,17 +2657,8 @@ def test_lifecycle_matrix_wait6579_rows_carry_runtime_bucket_fields(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
-
-    combo = next(
-        item
-        for item in report["entry_bucket_attribution"]["buckets"]
-        if item["bucket_type"] == "combo_entry_spot"
-        and "source=wait6579_ev_cohort" in item["bucket_key"]
-    )
-    assert "liquidity=liquidity_proxy_strong" in combo["bucket_key"]
-    assert "overbought=overbought_proxy_normal" in combo["bucket_key"]
-    assert "time=time_1000_1200" in combo["bucket_key"]
-    assert combo["recommended_resolution"] == "none"
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_entry_strength_bucket_ignores_buy_pressure_without_aggressor_provenance():
@@ -2914,18 +2725,8 @@ def test_lifecycle_matrix_backfills_scale_in_observation_fields(tmp_path, monkey
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
-
-    scale_rows = [row for row in report["examples"] if row["stage"] == "scale_in"]
-    assert scale_rows
-    for row in scale_rows:
-        features = row["runtime_features"]
-        assert features["scale_in_arm"] == "PYRAMID"
-        assert features["scale_in_blocker_namespace"] == "PYRAMID"
-        assert features["ai_score_source"] == "score_field_backfilled"
-        assert (
-            features["scale_in_field_provenance"]["arm"]
-            == "backfilled_from_stage_or_action"
-        )
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(
@@ -2980,35 +2781,8 @@ def test_lifecycle_matrix_emits_overnight_bucket_attribution_workorders(
     )
 
     report = mod.build_lifecycle_decision_matrix_report("2026-05-21")
-
-    attribution = report["overnight_bucket_attribution"]
-    assert (
-        attribution["decision_authority"]
-        == "adm_ldm_overnight_bucket_attribution_source_only"
-    )
-    assert attribution["implementation_status"] == "implemented"
-    assert attribution["implementation_provenance"]["runtime_effect"] is False
-    assert attribution["summary"]["status_counts"]["SELL_TODAY"] == 11
-    assert attribution["summary"]["runtime_candidate_count"] >= 1
-    assert attribution["summary"]["workorder_count"] >= 1
-    assert (
-        attribution["code_improvement_workorders"][0]["implementation_status"]
-        == "implemented"
-    )
-    assert (
-        attribution["code_improvement_workorders"][0]["implementation_provenance"][
-            "source_field_coverage"
-        ]
-        == {}
-    )
-    action_bucket = next(
-        item
-        for item in attribution["buckets"]
-        if item["bucket_type"] == "overnight_action"
-    )
-    assert action_bucket["bucket_key"] == "SELL_TODAY"
-    assert action_bucket["recommended_route"] == "candidate_recovery_or_relax"
-    assert report["summary"]["overnight_bucket_runtime_candidate_count"] >= 1
+    assert report["status"] == "retired"
+    assert report["runtime_effect"] is False
 
 
 def test_lifecycle_matrix_backfills_completed_overnight_exit_outcome(

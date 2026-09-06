@@ -9,6 +9,7 @@ from src.engine.scalping import entry_ai_gate_backtest as mod
 
 @pytest.fixture(autouse=True)
 def _source_quality_preflight_pass(monkeypatch):
+    monkeypatch.setattr(mod, "load_entry_observations", lambda day: {"rows": []})
     monkeypatch.setattr(
         mod,
         "load_source_quality_preflight",
@@ -20,6 +21,16 @@ def _source_quality_preflight_pass(monkeypatch):
             "clean_baseline_enforced": True,
         },
     )
+
+
+def _use_observation_fixture(monkeypatch, directory):
+    def load(day):
+        load.calls.append(day)
+        path = directory / f"entry_observations_{day}.json"
+        return json.loads(path.read_text()) if path.exists() else {"rows": []}
+
+    load.calls = []
+    monkeypatch.setattr(mod, "load_entry_observations", load)
 
 
 def _write_json(path, payload):
@@ -150,11 +161,13 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
     out_dir = tmp_path / "out"
-    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    _use_observation_fixture(monkeypatch, adm_dir)
     monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
     monkeypatch.setattr(mod, "REPORT_DIR", out_dir)
     runtime_env_dir = tmp_path / "runtime_env"
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_env_dir)
+    monkeypatch.setattr(mod, "BUY_FUNNEL_SENTINEL_DIR", tmp_path / "buy_funnel")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
     monkeypatch.setattr(
         mod,
         "clean_baseline_policy",
@@ -174,7 +187,7 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
 
     _write_json(
-        adm_dir / "scalp_entry_action_decision_matrix_2026-06-03.json",
+        adm_dir / "entry_observations_2026-06-03.json",
         {"rows": [_realized_row(66, profit=99.0)]},
     )
     _write_json(
@@ -217,7 +230,7 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
         ]
     )
     _write_json(
-        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        adm_dir / "entry_observations_2026-06-05.json",
         {"rows": realized_rows},
     )
     _write_json(
@@ -244,9 +257,18 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
     assert report["summary"]["best_policy"] == "supported_wait_recovery"
     assert report["summary"]["best_threshold"] <= 66
     assert report["summary"]["sample_floor_passed"] is True
-    assert report["allowed_runtime_apply"] is True
-    assert report["summary"]["best_apply_policy"] == "supported_wait_recovery"
-    assert report["summary"]["best_apply_threshold"] <= 66
+    assert len(mod.load_entry_observations.calls) == len(
+        set(mod.load_entry_observations.calls)
+    )
+    # The heavy cumulative sweep is diagnostic-only. Runtime authority is
+    # produced separately by entry_recheck_drought_controller.
+    assert report["allowed_runtime_apply"] is False
+    assert report["summary"]["best_apply_policy"] is None
+    assert report["summary"]["best_apply_threshold"] is None
+    assert report["summary"]["best_economic_filter_diagnostic_policy"] == (
+        "supported_wait_recovery"
+    )
+    assert report["summary"]["best_economic_filter_diagnostic_threshold"] <= 66
     assert report["best_candidate"]["realized"]["sample"] == mod.REALIZED_SAMPLE_FLOOR
     assert (
         report["best_candidate"]["counterfactual"]["sample"]
@@ -255,29 +277,24 @@ def test_entry_ai_gate_backtest_excludes_pre_baseline_and_separates_metrics(
     assert (
         report["best_candidate"]["counterfactual"]["missed_upside_close_10m_pct"] == 1.5
     )
-    assert report["best_apply_candidate"]["policy"] == "supported_wait_recovery"
-    assert report["summary"]["bounded_calibration_candidate_count"] == 1
-    runtime_update = report["runtime_update_contract"]
-    assert runtime_update["update_mode"] == "single_cumulative_quality_update"
-    assert runtime_update["max_runtime_apply_count"] == 1
-    assert runtime_update["runtime_apply_candidate_count"] == 1
-    assert runtime_update["allowed_runtime_apply_count"] == 1
-    assert runtime_update["cumulative_quality_window"]["start_date"] == ("2026-06-04")
-    calibration = report["calibration_candidates"][0]
-    assert calibration["family"] == "entry_opportunity_recheck_runtime"
-    assert calibration["allowed_runtime_apply"] is True
-    assert calibration["recommended_values"]["min_ai_score"] <= 66
-    assert calibration["recommended_values"]["allow_wait_probe_intent"] is True
-    assert calibration["recommended_values"]["require_explicit_buy_action"] is False
-    assert calibration["current_values"]["enabled"] is False
-    assert calibration["runtime_update_mode"] == ("single_cumulative_quality_update")
-    assert calibration["max_runtime_apply_count"] == 1
-    assert calibration["quality_update_id"] == runtime_update["quality_update_id"]
-    assert calibration["post_apply_attribution_required"] is True
-    assert "broad_buy_score_threshold_relaxation" in calibration["forbidden_uses"]
+    assert report["best_apply_candidate"] == {}
+    assert report["best_economic_filter_diagnostic_candidate"]["policy"] == (
+        "supported_wait_recovery"
+    )
+    assert (
+        report["best_economic_filter_diagnostic_candidate"]["allowed_runtime_apply"]
+        is False
+    )
+    assert report["summary"]["bounded_calibration_candidate_count"] == 0
+    assert report["runtime_candidate_ready"] is False
+    assert report["diagnostic_apply_ready"] is True
+    assert report["calibration_candidates"] == []
+    assert "runtime_update_contract" not in report
+    assert report["diagnostic_contract"]["decision_authority"] == (
+        "diagnostic_only_no_preopen_consumer"
+    )
     markdown = mod.render_markdown(report)
-    assert "runtime_update_mode: `single_cumulative_quality_update`" in markdown
-    assert "runtime_apply_candidate_count: `1`" in markdown
+    assert "decision_authority: `diagnostic_only_no_preopen_consumer`" in markdown
 
     diagnostic = next(
         item
@@ -572,24 +589,7 @@ def test_entry_ai_gate_backtest_blocks_non_positive_primary_ev_apply_candidate()
     assert result["apply_block_reason"] == "non_positive_primary_ev"
 
 
-def test_entry_ai_gate_backtest_blocks_non_positive_counterfactual_opportunity(
-    tmp_path, monkeypatch
-):
-    runtime_dir = tmp_path / "runtime_env"
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    _write_json(
-        runtime_dir / "threshold_runtime_env_2026-06-05.json",
-        {
-            "env_overrides": {
-                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false",
-                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "70",
-                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "74.999",
-                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "true",
-                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "false",
-                "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
-            }
-        },
-    )
+def test_entry_ai_gate_backtest_blocks_non_positive_counterfactual_opportunity():
     realized_rows = [
         {
             **_realized_row(66, action="WAIT", profit=0.5),
@@ -621,20 +621,6 @@ def test_entry_ai_gate_backtest_blocks_non_positive_counterfactual_opportunity(
     assert result["allowed_runtime_apply"] is False
     assert result["apply_block_reason"] == ("non_positive_counterfactual_opportunity")
 
-    candidate = mod._entry_recheck_calibration_candidates(
-        result,
-        target_date="2026-06-05",
-        cumulative_quality_window={
-            "start_date": "2026-06-05",
-            "end_date": "2026-06-05",
-        },
-    )
-    assert candidate[0]["allowed_runtime_apply"] is False
-    assert candidate[0]["counterfactual_opportunity_positive"] is False
-    assert candidate[0]["apply_block_reason"] == (
-        "non_positive_counterfactual_opportunity"
-    )
-
 
 def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(
     tmp_path, monkeypatch
@@ -642,7 +628,7 @@ def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
     post_sell_dir = tmp_path / "post_sell"
-    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    _use_observation_fixture(monkeypatch, adm_dir)
     monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
     monkeypatch.setattr(mod, "POST_SELL_DIR", post_sell_dir)
     monkeypatch.setattr(
@@ -657,7 +643,7 @@ def test_entry_ai_gate_backtest_realized_join_uses_real_post_sell_once(
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
 
     _write_json(
-        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        adm_dir / "entry_observations_2026-06-05.json",
         {
             "rows": [
                 {
@@ -726,12 +712,12 @@ def test_entry_ai_gate_backtest_joins_counterfactual_to_entry_snapshot(
 ):
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
-    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    _use_observation_fixture(monkeypatch, adm_dir)
     monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     _write_json(
-        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        adm_dir / "entry_observations_2026-06-05.json",
         {
             "rows": [
                 {
@@ -797,9 +783,9 @@ def test_entry_ai_gate_backtest_joins_counterfactual_to_entry_snapshot(
         == 1
     )
     assert report["source_consumption"]["effective_source_dates"] == ["2026-06-05"]
-    assert report["runtime_update_contract"]["cumulative_quality_window"][
-        "source_dates"
-    ] == ["2026-06-05"]
+    assert report["metric_contract"]["effective_window"]["source_dates"] == [
+        "2026-06-05"
+    ]
 
 
 def test_entry_ai_gate_backtest_excludes_invalid_json_source_date(
@@ -807,12 +793,12 @@ def test_entry_ai_gate_backtest_excludes_invalid_json_source_date(
 ):
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
-    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    _use_observation_fixture(monkeypatch, adm_dir)
     monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
     _write_json(
-        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        adm_dir / "entry_observations_2026-06-05.json",
         {"rows": [_realized_row(66, action="WAIT", profit=1.0)]},
     )
     corrupt = missed_dir / "missed_entry_counterfactual_2026-06-05.json"
@@ -826,7 +812,7 @@ def test_entry_ai_gate_backtest_excludes_invalid_json_source_date(
         for item in report["missing_artifacts"]
         if item["artifact"] == "missed_entry_counterfactual"
     )
-    window = report["runtime_update_contract"]["cumulative_quality_window"]
+    window = report["metric_contract"]["effective_window"]
     assert missing["status"] == "invalid_json"
     assert missing["error"].startswith("JSONDecodeError:")
     assert report["source_consumption"]["effective_source_dates"] == []
@@ -842,7 +828,7 @@ def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
 ):
     adm_dir = tmp_path / "adm"
     missed_dir = tmp_path / "missed"
-    monkeypatch.setattr(mod, "SCALP_ENTRY_ADM_DIR", adm_dir)
+    _use_observation_fixture(monkeypatch, adm_dir)
     monkeypatch.setattr(mod, "MISSED_ENTRY_DIRS", [missed_dir])
     monkeypatch.setattr(mod, "filter_allowed_dates", lambda dates, policy: (dates, []))
     monkeypatch.setattr(mod, "is_krx_trading_day", lambda day: True)
@@ -860,7 +846,7 @@ def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
         },
     )
     _write_json(
-        adm_dir / "scalp_entry_action_decision_matrix_2026-06-05.json",
+        adm_dir / "entry_observations_2026-06-05.json",
         {
             "rows": [
                 _realized_row(66, profit=1.0) for _ in range(mod.REALIZED_SAMPLE_FLOOR)
@@ -881,6 +867,7 @@ def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
 
     assert report["status"] == "source_quality_blocked"
     assert report["allowed_runtime_apply"] is False
+    assert report["diagnostic_apply_ready"] is False
     assert report["calibration_state"] == "source_quality_blocked"
     assert report["source_quality_gate"] == "blocked_contract_gap"
     assert report["summary"]["allowed_runtime_apply"] is False
@@ -892,5 +879,267 @@ def test_entry_ai_gate_backtest_source_quality_preflight_blocks_apply(
         == "2026-06-05"
     )
     assert report["calibration_candidates"] == []
-    assert report["runtime_update_contract"]["runtime_apply_candidate_count"] == 0
-    assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 0
+    assert report["runtime_candidate_ready"] is False
+    assert "runtime_update_contract" not in report
+
+
+def test_drought_policy_activates_and_escalates_only_on_exact_positive_economics(
+    monkeypatch,
+):
+    history = [
+        {
+            "source_date": source_date,
+            "denominator_floor_passed": True,
+            "source_quality_pass": True,
+            "critical": True,
+            "addressable": True,
+        }
+        for source_date in ("2026-09-02", "2026-09-03", "2026-09-04")
+    ]
+    for day in history:
+        day["eligible_scopes"] = [
+            mod.scope_summary(
+                "KRX|KRX_REGULAR",
+                {
+                    "stage_unique": {
+                        "ai_confirmed": 100,
+                        "budget_pass": 10,
+                        "order_bundle_submitted": 0,
+                    },
+                    "critical": True,
+                    "primary": "SUBMIT_DROUGHT_CRITICAL",
+                    "causal_bottleneck_axes": ["UPSTREAM_GATE"],
+                },
+            )
+        ]
+    monkeypatch.setattr(
+        mod,
+        "_recent_trading_dates",
+        lambda *args, **kwargs: [
+            "2026-09-02",
+            "2026-09-03",
+            "2026-09-04",
+        ],
+    )
+    monkeypatch.setattr(
+        mod, "_buy_funnel_drought_history", lambda *args, **kwargs: history
+    )
+    monkeypatch.setattr(
+        mod,
+        "_entry_recheck_exact_attribution",
+        lambda **kwargs: {
+            "identity_conflict_count": 0,
+            "contract_gap_count": 0,
+            "invalid_json_row_count": 0,
+            "exact_evaluated_count": 20,
+            "exact_armed_count": 20,
+            "exact_direct_submitted_count": 10,
+            "exact_filled_count": 10,
+            "direct_submit_to_armed_pct": 50.0,
+            "funnel_by_scope": {
+                "KRX|KRX_REGULAR": {
+                    "exact_evaluated_count": 20,
+                    "exact_armed_count": 20,
+                    "exact_direct_submitted_count": 10,
+                    "exact_filled_count": 10,
+                    "exact_completed_count": 10,
+                    "exact_paired_economic_sample": 10,
+                }
+            },
+            "paired_economics_by_scope_and_cohort": {
+                "KRX|KRX_REGULAR": {
+                    "probe_only": {
+                        "paired_sample": 10,
+                        "equal_weight_avg_profit_pct": 0.02,
+                        "realized_net_pnl_krw": 100,
+                        "decision_eligible": True,
+                    },
+                }
+            },
+            "exact_completed_count": 10,
+            "exact_paired_economic_sample": 10,
+            "exact_profit_sample": 10,
+            "exact_net_pnl_sample": 10,
+            "paired_economics_by_scope": {
+                "KRX|KRX_REGULAR": {
+                    "paired_sample": 10,
+                    "equal_weight_avg_profit_pct": 0.02,
+                    "realized_net_pnl_krw": 100,
+                }
+            },
+            "equal_weight_avg_profit_pct": 0.02,
+            "realized_net_pnl_krw": 100.0,
+        },
+    )
+
+    policy = mod._drought_conditional_policy(
+        target_date="2026-09-04", clean_baseline_date="2026-06-05"
+    )
+
+    assert policy["activation_triggered"] is True
+    assert policy["stop_triggered"] is False
+    assert policy["intraday_escalation_allowed"] is True
+
+
+def test_drought_policy_disables_on_low_exact_conversion(monkeypatch):
+    history = [
+        {
+            "source_date": source_date,
+            "denominator_floor_passed": True,
+            "source_quality_pass": True,
+            "critical": True,
+            "addressable": True,
+        }
+        for source_date in ("2026-09-02", "2026-09-03", "2026-09-04")
+    ]
+    monkeypatch.setattr(
+        mod,
+        "_recent_trading_dates",
+        lambda *args, **kwargs: [
+            "2026-09-02",
+            "2026-09-03",
+            "2026-09-04",
+        ],
+    )
+    monkeypatch.setattr(
+        mod, "_buy_funnel_drought_history", lambda *args, **kwargs: history
+    )
+    monkeypatch.setattr(
+        mod,
+        "_entry_recheck_exact_attribution",
+        lambda **kwargs: {
+            "identity_conflict_count": 0,
+            "contract_gap_count": 0,
+            "invalid_json_row_count": 0,
+            "exact_evaluated_count": 20,
+            "exact_armed_count": 20,
+            "exact_direct_submitted_count": 1,
+            "exact_filled_count": 0,
+            "direct_submit_to_armed_pct": 5.0,
+            "funnel_by_scope": {
+                "KRX|KRX_REGULAR": {
+                    "exact_evaluated_count": 20,
+                    "exact_armed_count": 20,
+                    "exact_direct_submitted_count": 1,
+                    "exact_filled_count": 0,
+                    "exact_completed_count": 0,
+                    "exact_paired_economic_sample": 0,
+                }
+            },
+            "exact_completed_count": 0,
+            "exact_paired_economic_sample": 0,
+            "exact_profit_sample": 0,
+            "exact_net_pnl_sample": 0,
+            "paired_economics_by_scope": {},
+            "equal_weight_avg_profit_pct": None,
+            "realized_net_pnl_krw": None,
+        },
+    )
+
+    policy = mod._drought_conditional_policy(
+        target_date="2026-09-04", clean_baseline_date="2026-06-05"
+    )
+
+    assert policy["stop_triggered"] is True
+    assert "exact_direct_submit_conversion_below_floor" in policy["stop_reasons"]
+    assert policy["intraday_escalation_allowed"] is False
+
+
+def test_exact_attribution_accepts_general_lifecycle_events(tmp_path, monkeypatch):
+    threshold_dir = tmp_path / "threshold_cycle"
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", threshold_dir)
+    path = (
+        threshold_dir
+        / "date=2026-09-04"
+        / "family=entry_opportunity_recheck_runtime"
+        / "part-000001.jsonl"
+    )
+    base = {
+        "record_id": "r1",
+        "stock_code": "000001",
+    }
+    _write_jsonl(
+        path,
+        [
+            {
+                **base,
+                "stage": "entry_opportunity_recheck_evaluated",
+                "fields": {
+                    "entry_opportunity_recheck_attempt_id": "eor-test",
+                    "entry_opportunity_recheck_reason": (
+                        "edge_wait_recovery_probe_intent_fresh_strong_micro"
+                    ),
+                },
+            },
+            {
+                **base,
+                "stage": "entry_opportunity_recheck_probe_armed",
+                "fields": {
+                    "entry_opportunity_recheck_attempt_id": "eor-test",
+                    "entry_opportunity_recheck_armed": True,
+                },
+            },
+            {
+                **base,
+                "stage": "order_bundle_submitted",
+                "fields": {
+                    "entry_opportunity_recheck_attempt_id": "eor-test",
+                    "entry_opportunity_recheck_submit_observed": True,
+                    "entry_opportunity_recheck_direct_submit": True,
+                    "entry_opportunity_recheck_broker_order_no": "B1",
+                    "entry_opportunity_recheck_requested_qty": 1,
+                },
+            },
+            {
+                **base,
+                "stage": "position_rebased_after_fill",
+                "fields": {
+                    "entry_opportunity_recheck_attempt_id": "eor-test",
+                    "entry_opportunity_recheck_fill_observed": True,
+                    "entry_opportunity_recheck_fill_order_no": "B1",
+                },
+            },
+            {
+                **base,
+                "stage": "sell_completed",
+                "fields": {
+                    "entry_opportunity_recheck_attempt_id": "eor-test",
+                    "entry_opportunity_recheck_terminal_outcome": "sell_completed",
+                    "entry_opportunity_recheck_cost_adjusted_profit_pct": 0.03,
+                    "entry_opportunity_recheck_realized_net_pnl_krw": 15.0,
+                },
+            },
+        ],
+    )
+
+    # All authoritative attempt rows use the current exact-attribution schema.
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    for row in rows:
+        row["fields"][
+            "entry_opportunity_recheck_attribution_schema"
+        ] = mod.ATTRIBUTION_VERSION
+        row["fields"]["entry_opportunity_recheck_armed_at"] = (
+            mod.datetime.fromisoformat("2026-09-04T09:00:00+09:00").timestamp()
+        )
+        row["fields"]["entry_opportunity_recheck_scope"] = "KRX|KRX_REGULAR"
+        row["fields"]["entry_opportunity_recheck_economics_complete"] = True
+        row["fields"].update(
+            {
+                "entry_opportunity_recheck_economics_schema": "entry_recheck_position_economics_v1",
+                "entry_opportunity_recheck_economics_cohort": "probe_only",
+                "entry_opportunity_recheck_economics_decision_eligible": True,
+            }
+        )
+    _write_jsonl(path, rows)
+
+    result = mod._entry_recheck_exact_attribution(
+        start_date="2026-09-04", end_date="2026-09-04"
+    )
+
+    assert result["exact_evaluated_count"] == 1
+    assert result["exact_armed_count"] == 1
+    assert result["exact_direct_submitted_count"] == 1
+    assert result["exact_filled_count"] == 1
+    assert result["exact_completed_count"] == 1
+    assert result["equal_weight_avg_profit_pct"] == 0.03
+    assert result["realized_net_pnl_krw"] == 15.0

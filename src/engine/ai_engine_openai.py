@@ -51,6 +51,9 @@ from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     calculate_scalping_micro_indicator_values,
     extract_scalping_feature_packet,
+    finalize_scalping_feature_delivery_audit_fields,
+    settle_scalping_feature_delivery,
+    microstructure_payload_included,
 )
 from src.engine.scalping.microstructure_reaction_context import (
     infer_tick_aggressor_side,
@@ -1879,6 +1882,7 @@ class GPTSniperEngine:
             transport_meta = self._consume_last_transport_meta()
             if transport_meta:
                 payload.update(transport_meta)
+        settle_scalping_feature_delivery(payload, cache_hit=cache_hit)
         payload.update(
             record_ai_decision_trace(
                 payload,
@@ -2097,8 +2101,7 @@ class GPTSniperEngine:
         if (
             policy.get("enabled") is not True
             or policy.get("status") != "active_bounded_krx_canary"
-            or policy.get("selected_prompt_version")
-            != selected_prompt_version
+            or policy.get("selected_prompt_version") != selected_prompt_version
         ):
             contract_errors.append(f"entry_setup_{version_token}_live_policy_invalid")
         composed = compose_entry_decision(
@@ -2258,9 +2261,7 @@ class GPTSniperEngine:
                 ),
                 "entry_probe_intent": False,
                 "entry_probe_intent_status": "semantic_rejected",
-                "entry_probe_intent_prompt_version": (
-                    selected_prompt_version
-                ),
+                "entry_probe_intent_prompt_version": (selected_prompt_version),
                 "entry_probe_intent_submit_guard_required": True,
                 "entry_probe_intent_actual_order_submitted": False,
                 "entry_probe_first_required": True,
@@ -2382,9 +2383,7 @@ class GPTSniperEngine:
                     else "not_eligible"
                 )
             ),
-            "entry_probe_intent_prompt_version": (
-                selected_prompt_version
-            ),
+            "entry_probe_intent_prompt_version": (selected_prompt_version),
             "entry_probe_intent_eligibility_path": (
                 f"{version_token}_krx_bounded:{setup_family.lower()}:{verdict.lower()}"
             ),
@@ -3451,6 +3450,7 @@ class GPTSniperEngine:
                 or key_text == "ai_decision_trace_id"
                 or key_text == "provider_response_id"
                 or key_text == "provider"
+                or key_text.startswith("microstructure_provider_")
                 or key_text.startswith("semantic_")
                 or key_text == "expected_semantic_validator_version"
             ):
@@ -4287,6 +4287,7 @@ class GPTSniperEngine:
         for attempt in range(len(self.api_keys)):
             attempts_made = attempt + 1
             provider_started_at = time.perf_counter()
+            response_received = False
             try:
                 response = self._create_openai_response_with_deadline(
                     request,
@@ -4294,6 +4295,7 @@ class GPTSniperEngine:
                         use_schema_registry=use_schema_registry
                     ),
                 )
+                response_received = True
                 provider_ms = max(
                     0, int((time.perf_counter() - provider_started_at) * 1000)
                 )
@@ -4308,6 +4310,9 @@ class GPTSniperEngine:
                     0, int((time.perf_counter() - request.submitted_at_perf) * 1000)
                 )
                 usage_meta = _extract_openai_usage_meta(response)
+                usage_meta["microstructure_provider_payload_included"] = (
+                    microstructure_payload_included(request.user_input)
+                )
                 usage_meta["openai_response_sha256"] = hashlib.sha256(
                     raw_text.encode("utf-8")
                 ).hexdigest()
@@ -4408,6 +4413,16 @@ class GPTSniperEngine:
                         min(0.8, max(0.0, request.remaining_timeout_sec() - 0.05))
                     )
                     continue
+                if response_received:
+                    raise OpenAIResponsesHTTPError(
+                        f"OpenAI Responses HTTP response parse failed: {e}",
+                        timing_meta={
+                            "microstructure_provider_delivery_status": "response_received",
+                            "microstructure_provider_payload_included": microstructure_payload_included(
+                                request.user_input
+                            ),
+                        },
+                    ) from e
                 raise RuntimeError(f"OpenAI Responses HTTP 응답/파싱 실패: {e}") from e
         if last_error_timeout_like:
             fatal_msg = (
@@ -4432,9 +4447,7 @@ class GPTSniperEngine:
                 "openai_http_timeout_budget_exhausted": bool(last_error_timeout_like),
                 "openai_http_sdk_max_retries": OPENAI_SDK_MAX_RETRIES,
                 "openai_http_wall_deadline_enforced": True,
-                "openai_http_wall_deadline_exceeded": bool(
-                    last_wall_deadline_exceeded
-                ),
+                "openai_http_wall_deadline_exceeded": bool(last_wall_deadline_exceeded),
                 "openai_http_provider_future_cancelled": bool(
                     last_provider_future_cancelled
                 ),
@@ -4637,6 +4650,9 @@ class GPTSniperEngine:
             request, transport_mode_override=transport_mode_override
         ):
             try:
+                transport_meta["microstructure_provider_delivery_status"] = (
+                    "attempted_unconfirmed"
+                )
                 result = self._call_openai_responses_ws(request)
                 transport_meta.update(
                     {
@@ -4701,6 +4717,9 @@ class GPTSniperEngine:
                         int((time.perf_counter() - http_lock_wait_started) * 1000),
                     )
                     try:
+                        transport_meta["microstructure_provider_delivery_status"] = (
+                            "attempted_unconfirmed"
+                        )
                         result = self._call_openai_responses_http(fallback_request)
                     except Exception as fallback_error:
                         if getattr(fallback_error, "timing_meta", None):
@@ -4744,6 +4763,9 @@ class GPTSniperEngine:
                         0,
                         int((time.perf_counter() - http_lock_wait_started) * 1000),
                     )
+                    transport_meta["microstructure_provider_delivery_status"] = (
+                        "attempted_unconfirmed"
+                    )
                     result = self._call_openai_responses_http(request)
             except Exception as primary_error:
                 if getattr(primary_error, "timing_meta", None):
@@ -4765,6 +4787,10 @@ class GPTSniperEngine:
                     "openai_ws_queue_wait_ms": 0,
                     "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
                 }
+            )
+        if not transport_meta.get("openai_ws_http_fallback_fail_closed"):
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "response_received"
             )
         if getattr(result, "timing_meta", None):
             transport_meta.update(result.timing_meta)
@@ -4940,11 +4966,20 @@ class GPTSniperEngine:
                     "openai_primary_error_type": type(primary_error).__name__,
                 }
             )
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "attempted_unconfirmed"
+            )
+            transport_meta["microstructure_provider_payload_included"] = (
+                microstructure_payload_included(request.user_input)
+            )
             result = runtime_provider().converse(
                 prompt=request.prompt or "",
                 user_input=request.user_input,
                 profile=profile,
                 deadline_perf=total_deadline_perf,
+            )
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "response_received"
             )
             if (
                 not result.parse_ok
@@ -4968,6 +5003,9 @@ class GPTSniperEngine:
                 provider_audit_row(
                     request_meta=request_meta, result=result, payload=result.payload
                 )
+            )
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "response_received"
             )
             transport_meta.update(result.transport_meta())
             transport_meta.update(
@@ -5076,10 +5114,19 @@ class GPTSniperEngine:
                 request.endpoint_name
             ):
                 return None
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "attempted_unconfirmed"
+            )
+            transport_meta["microstructure_provider_payload_included"] = (
+                microstructure_payload_included(request.user_input)
+            )
             result = runtime_provider().converse(
                 prompt=request.prompt or "",
                 user_input=request.user_input,
                 profile=profile,
+            )
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "response_received"
             )
             request_meta = self._build_bedrock_provider_request_meta(
                 request=request,
@@ -5108,6 +5155,7 @@ class GPTSniperEngine:
             transport_meta.update(result.transport_meta())
             transport_meta.update(
                 {
+                    "microstructure_provider_delivery_status": "response_received",
                     "openai_transport_mode": "bedrock_primary",
                     "openai_ws_used": False,
                     "openai_ws_http_fallback": False,
@@ -5203,10 +5251,19 @@ class GPTSniperEngine:
 
         try:
             provider = runtime_provider()
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "attempted_unconfirmed"
+            )
+            transport_meta["microstructure_provider_payload_included"] = (
+                microstructure_payload_included(request.user_input)
+            )
             result = provider.converse(
                 prompt=request.prompt or "",
                 user_input=request.user_input,
                 profile=primary_profile,
+            )
+            transport_meta["microstructure_provider_delivery_status"] = (
+                "response_received"
             )
             if (
                 not result.parse_ok
@@ -5245,6 +5302,7 @@ class GPTSniperEngine:
                     "bedrock_failback_used": False,
                     "bedrock_model_family": primary_profile.family,
                     "bedrock_primary_family": primary_profile.family,
+                    "microstructure_provider_delivery_status": "response_received",
                     "openai_response_schema_application": (
                         "local_expected_only_not_sent_to_bedrock"
                     ),
@@ -5287,10 +5345,19 @@ class GPTSniperEngine:
                 raise
             try:
                 provider = runtime_provider()
+                transport_meta["microstructure_provider_delivery_status"] = (
+                    "attempted_unconfirmed"
+                )
+                transport_meta["microstructure_provider_payload_included"] = (
+                    microstructure_payload_included(request.user_input)
+                )
                 failback_result = provider.converse(
                     prompt=request.prompt or "",
                     user_input=request.user_input,
                     profile=failback_profile,
+                )
+                transport_meta["microstructure_provider_delivery_status"] = (
+                    "response_received"
                 )
                 failback_meta = dict(request_meta)
                 failback_meta.update(
@@ -5560,8 +5627,8 @@ class GPTSniperEngine:
             "tick_source_quality_fields_sent": bool(
                 audit.get("tick_source_quality_fields_sent", False)
             ),
-            "microstructure_reaction_context_sent": bool(
-                audit.get("microstructure_reaction_context_sent", False)
+            "microstructure_reaction_context_computed": bool(
+                audit.get("microstructure_reaction_context_computed", False)
             ),
             "tick_context_stale": audit.get(
                 "tick_context_stale",
@@ -8674,6 +8741,10 @@ class GPTSniperEngine:
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     feature_packet
                 )
+                feature_audit_fields = finalize_scalping_feature_delivery_audit_fields(
+                    feature_audit_fields,
+                    formatted_data,
+                )
                 input_contract_fields = self._resolve_ai_input_contract_fields(
                     formatted_data,
                     default_schema=(
@@ -8732,6 +8803,7 @@ class GPTSniperEngine:
                     ),
                 )
                 input_contract_fields.update(parent_lineage_fields)
+                input_contract_fields.update(feature_audit_fields)
                 if isinstance(candle_context, dict) and candle_context:
                     input_contract_fields.update(
                         entry_candle_context_log_fields(candle_context)
@@ -10039,6 +10111,12 @@ class GPTSniperEngine:
             source_quality = self._derive_holding_score_source_quality(
                 feature_packet, feature_audit_fields
             )
+            feature_audit_fields = finalize_scalping_feature_delivery_audit_fields(
+                feature_audit_fields,
+                {},
+                internal_consumer="holding_score_source_quality",
+            )
+            input_contract_fields.update(feature_audit_fields)
             user_input = self._build_scalping_holding_score_v2_context(
                 stock_name,
                 stock_code,
@@ -10050,12 +10128,22 @@ class GPTSniperEngine:
                 feature_audit_fields=feature_audit_fields,
                 holding_context=holding_context,
             )
+            feature_audit_fields = finalize_scalping_feature_delivery_audit_fields(
+                feature_audit_fields,
+                user_input,
+                internal_consumer=(
+                    "holding_score_source_quality"
+                    if "microstructure_reaction_context_version" in feature_packet
+                    else None
+                ),
+            )
             input_contract_fields = self._resolve_ai_input_contract_fields(
                 user_input,
                 default_schema="holding_score_v2",
                 default_mode="structured_json",
             )
             input_contract_fields.update(trace_context_fields)
+            input_contract_fields.update(feature_audit_fields)
             result = self._call_openai_safe(
                 SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
                 user_input,

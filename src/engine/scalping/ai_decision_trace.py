@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.engine.scalping.microstructure_reaction_context import (
+    microstructure_delivery_fields,
+)
 from src.utils.jsonl_io import jsonl_artifact_generation_lock
 from src.utils.logger import log_error
 
@@ -1584,6 +1587,7 @@ def record_ai_decision_trace(
             or "-"
         ).strip()
         trace_row = {
+            **microstructure_delivery_fields(merged),
             "schema": TRACE_SCHEMA,
             "decision_trace_id": trace_id,
             "request_id": _optional(merged, "openai_request_id", "ai_decision_trace_id")

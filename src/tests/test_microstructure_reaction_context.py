@@ -1,4 +1,5 @@
 from datetime import datetime
+import pytest
 
 from src.engine.scalping.microstructure_reaction_context import (
     build_microstructure_reaction_context,
@@ -74,6 +75,85 @@ def _ticks():
             "aggressor_source": "trusted_declared_side",
         },
     ]
+
+
+@pytest.mark.parametrize(
+    "setting,threshold",
+    [
+        (None, 3000),
+        ("", 3000),
+        (0, 3000),
+        (1200, 1200),
+        (-5, 1),
+        (True, 3000),
+        ("bad", 3000),
+        (float("nan"), 3000),
+        (float("inf"), 3000),
+    ],
+)
+def test_reaction_and_canonical_threshold_share_normalizer(setting, threshold):
+    from src.engine.scalping_feature_packet import extract_scalping_feature_packet
+
+    packet = extract_scalping_feature_packet(
+        _ws_data(ai_quote_stale_max_ms=setting),
+        _ticks(),
+        now=datetime(2026, 9, 4, 9, 0, 12),
+    )
+    assert packet["quote_stale_threshold_ms"] == threshold
+    assert packet["microstructure_reaction_quote_stale_threshold_ms"] == threshold
+    if threshold == 3000 and setting in (None, "", 0):
+        assert packet["microstructure_reaction_context_status"] == "ok"
+    elif isinstance(setting, bool) or str(setting) in {"bad", "nan", "inf"}:
+        assert (
+            packet["microstructure_reaction_context_status"] == "source_quality_partial"
+        )
+
+
+@pytest.mark.parametrize("age", [None, "", -1, True, float("nan"), float("inf")])
+def test_invalid_quote_age_cannot_be_favorable(age):
+    context = build_microstructure_reaction_context(
+        _ws_data(quote_age_ms=age), _ticks(), now=datetime(2026, 9, 4, 9, 0, 12)
+    )
+    assert context["microstructure_reaction_context_status"] != "ok"
+    assert (
+        context["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
+    )
+
+
+@pytest.mark.parametrize("tick_time", [None, "", "09:00:13", "invalid"])
+def test_missing_or_future_tick_time_is_not_favorable(tick_time):
+    ticks = [{**tick, "time": tick_time} for tick in _ticks()]
+    context = build_microstructure_reaction_context(
+        _ws_data(), ticks, now=datetime(2026, 9, 4, 9, 0, 12)
+    )
+    assert (
+        context["microstructure_reaction_entry_reaction_quality"] == "neutral_unusable"
+    )
+
+
+@pytest.mark.parametrize("age,status", [(2999, "ok"), (3000, "ok"), (3001, "stale")])
+def test_quote_boundary_uses_strict_greater_than(age, status):
+    assert (
+        build_microstructure_reaction_context(
+            _ws_data(quote_age_ms=age), _ticks(), now=datetime(2026, 9, 4, 9, 0, 12)
+        )["microstructure_reaction_context_status"]
+        == status
+    )
+
+
+def test_delivery_metadata_does_not_change_feature_hash():
+    from src.engine.scalping.microstructure_reaction_context import _context_hash
+
+    context = build_microstructure_reaction_context(
+        _ws_data(), _ticks(), now=datetime(2026, 9, 4, 9, 0, 12)
+    )
+    assert _context_hash(context) == _context_hash(
+        {
+            **context,
+            "microstructure_reaction_context_sent": True,
+            "microstructure_reaction_context_reused": True,
+        }
+    )
 
 
 def test_ask_sweep_and_price_hold_surface_favorable_reaction():
@@ -173,8 +253,13 @@ def test_bid_replenishment_score_reflects_bid_depth_after_sell_prints():
 
 
 def test_stale_and_insufficient_windows_return_neutral_context():
-    stale = build_microstructure_reaction_context(
+    canonical_fresh = build_microstructure_reaction_context(
         _ws_data(quote_age_ms=1600),
+        _ticks(),
+        now=datetime.strptime("09:00:12", "%H:%M:%S"),
+    )
+    stale = build_microstructure_reaction_context(
+        _ws_data(quote_age_ms=1600, ai_quote_stale_max_ms=1200),
         _ticks(),
         now=datetime.strptime("09:00:12", "%H:%M:%S"),
     )
@@ -184,7 +269,10 @@ def test_stale_and_insufficient_windows_return_neutral_context():
         now=datetime.strptime("09:00:12", "%H:%M:%S"),
     )
 
+    assert canonical_fresh["microstructure_reaction_context_status"] == "ok"
+    assert canonical_fresh["microstructure_reaction_quote_stale_threshold_ms"] == 3000
     assert stale["microstructure_reaction_context_status"] == "stale"
+    assert stale["microstructure_reaction_quote_stale_threshold_ms"] == 1200
     assert stale["microstructure_reaction_ask_sweep_score"] == 50
     assert (
         insufficient["microstructure_reaction_context_status"] == "insufficient_window"
@@ -229,6 +317,9 @@ def test_precomputed_snapshot_preserves_context_result():
         precomputed=snapshot,
     )
 
+    assert reused.pop("microstructure_reaction_context_id") != direct.pop(
+        "microstructure_reaction_context_id"
+    )
     assert reused == direct
 
 

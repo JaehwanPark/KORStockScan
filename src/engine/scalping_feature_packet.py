@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime
 from statistics import mean
 
 from src.engine.scalping.microstructure_reaction_context import (
+    DEFAULT_QUOTE_STALE_MS as SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
+    microstructure_delivery_fields,
+    normalize_quote_stale_threshold,
     build_microstructure_reaction_context,
     precompute_microstructure_reaction_inputs,
 )
 
 SCALP_FEATURE_PACKET_VERSION = "scalp_feature_packet_v1"
-SCALP_FEATURE_PACKET_QUOTE_STALE_MS = 3000
 SCALP_FEATURE_PACKET_MINUTE_CANDLE_STALE_MS = 180_000
 SCALP_FEATURE_PACKET_MINUTE_CANDLE_FUTURE_SKEW_SEC = 2
+
+_MICROSTRUCTURE_REACTION_PROVIDER_KEYS = frozenset(
+    {
+        "microstructure_reaction_context_status",
+        "microstructure_reaction_ask_sweep_score",
+        "microstructure_reaction_post_sweep_hold_score",
+        "microstructure_reaction_bid_replenishment_score",
+        "microstructure_reaction_wall_replenishment_risk_score",
+        "microstructure_reaction_vi_proximity_risk",
+        "microstructure_reaction_entry_reaction_quality",
+        "microstructure_reaction_source_quality",
+    }
+)
 
 
 def _safe_number(value, default=0.0):
@@ -596,15 +612,8 @@ def extract_scalping_feature_packet(
 
     quote_age_ms = snapshot.get("quote_age_ms")
     quote_age_source = snapshot.get("quote_age_source", "missing")
-    quote_stale_threshold_ms = max(
-        1,
-        int(
-            _safe_number(
-                snapshot.get("ai_quote_stale_max_ms"),
-                SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
-            )
-            or SCALP_FEATURE_PACKET_QUOTE_STALE_MS
-        ),
+    quote_stale_threshold_ms, _ = normalize_quote_stale_threshold(
+        snapshot.get("ai_quote_stale_max_ms")
     )
     tick_stale = tick_latest_age_ms is not None and tick_latest_age_ms > 5000
     quote_stale = quote_age_ms is not None and quote_age_ms > quote_stale_threshold_ms
@@ -826,9 +835,7 @@ def extract_scalping_feature_packet(
         "distance_from_day_high_pct_observation_state": (
             distance_from_day_high_pct_observation_state
         ),
-        "intraday_range_pct_observation_state": (
-            intraday_range_pct_observation_state
-        ),
+        "intraday_range_pct_observation_state": (intraday_range_pct_observation_state),
         "volume_ratio_pct": volume_ratio_pct,
         "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
         "micro_vwap_available": micro_vwap_available,
@@ -879,7 +886,9 @@ def _select_recent_ticks_for_feature_packet(ws_data, recent_ticks, *, now=None):
 
 def build_scalping_feature_audit_fields(packet):
     payload = packet or {}
+    microstructure_computed = "microstructure_reaction_context_version" in payload
     return {
+        **microstructure_delivery_fields(payload),
         "scalp_feature_packet_version": str(
             payload.get("packet_version", SCALP_FEATURE_PACKET_VERSION)
         ),
@@ -887,8 +896,22 @@ def build_scalping_feature_audit_fields(packet):
         "same_price_buy_absorption_sent": "same_price_buy_absorption" in payload,
         "large_sell_print_detected_sent": "large_sell_print_detected" in payload,
         "ask_depth_ratio_sent": "ask_depth_ratio" in payload,
-        "microstructure_reaction_context_sent": "microstructure_reaction_context_version"
-        in payload,
+        # This function sees the computed packet, not the final serialized
+        # provider request. Delivery is finalized only after formatting.
+        "microstructure_reaction_context_computed": microstructure_computed,
+        "microstructure_reaction_delivery_telemetry_version": "v3",
+        "microstructure_reaction_context_reused": False,
+        "microstructure_reaction_evaluation_id": payload.get(
+            "microstructure_reaction_context_id"
+        ),
+        "microstructure_reaction_context_payload_included": False,
+        "microstructure_reaction_provider_delivery_status": "not_attempted",
+        "microstructure_reaction_context_sent": False,
+        "microstructure_reaction_context_consumed": False,
+        "microstructure_reaction_context_consumer": "none",
+        "microstructure_reaction_context_delivery_state": (
+            "computed_not_sent" if microstructure_computed else "not_computed"
+        ),
         "tick_source_quality_fields_sent": all(
             field in payload
             for field in (
@@ -1055,6 +1078,12 @@ def build_scalping_feature_audit_fields(packet):
         "microstructure_reaction_context_status": payload.get(
             "microstructure_reaction_context_status", "-"
         ),
+        "microstructure_reaction_quote_stale_threshold_ms": payload.get(
+            "microstructure_reaction_quote_stale_threshold_ms",
+            payload.get(
+                "quote_stale_threshold_ms", SCALP_FEATURE_PACKET_QUOTE_STALE_MS
+            ),
+        ),
         "microstructure_reaction_tick_aggressor_pressure_usable": payload.get(
             "microstructure_reaction_tick_aggressor_pressure_usable", False
         ),
@@ -1092,3 +1121,138 @@ def build_scalping_feature_audit_fields(packet):
             "microstructure_reaction_context_hash", "-"
         ),
     }
+
+
+def _provider_payload_keys(value, *, parse_serialized=True):
+    if isinstance(value, str) and parse_serialized:
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return set()
+    if isinstance(value, dict):
+        keys = {
+            str(key) for key, child in value.items() if child not in (None, "", "-")
+        }
+        for child in value.values():
+            keys.update(_provider_payload_keys(child, parse_serialized=False))
+        return keys
+    if isinstance(value, (list, tuple)):
+        keys = set()
+        for child in value:
+            keys.update(_provider_payload_keys(child, parse_serialized=False))
+        return keys
+    return set()
+
+
+def finalize_scalping_feature_delivery_audit_fields(
+    audit_fields,
+    provider_payload,
+    *,
+    internal_consumer=None,
+    transport_meta=None,
+):
+    """Record compute, serialized delivery, and explicit consumption separately."""
+    audit = dict(audit_fields) if isinstance(audit_fields, dict) else {}
+    computed = bool(audit.get("microstructure_reaction_context_computed"))
+    included = bool(computed and microstructure_payload_included(provider_payload))
+    consumers = []
+    if internal_consumer and computed:
+        consumers.append(str(internal_consumer))
+    consumed = bool(consumers)
+    status = (transport_meta or {}).get(
+        "microstructure_provider_delivery_status", "not_attempted"
+    )
+    sent = (
+        (
+            True
+            if status == "response_received"
+            else None if status == "attempted_unconfirmed" else False
+        )
+        if included
+        else False
+    )
+    if not computed:
+        delivery_state = "not_computed"
+    elif sent and internal_consumer:
+        delivery_state = "internal_consumed_provider_delivered"
+    elif sent:
+        delivery_state = "sent_to_provider"
+    elif internal_consumer:
+        delivery_state = "internal_consumed_not_sent"
+    else:
+        delivery_state = "computed_not_sent"
+    audit.update(
+        {
+            "microstructure_reaction_context_computed": computed,
+            "microstructure_reaction_context_payload_included": included,
+            "microstructure_reaction_provider_delivery_status": status,
+            "microstructure_reaction_context_sent": sent,
+            "microstructure_reaction_context_consumed": consumed,
+            "microstructure_reaction_context_consumer": (
+                "+".join(consumers) if consumers else "none"
+            ),
+            "microstructure_reaction_context_delivery_state": delivery_state,
+        }
+    )
+    return audit
+
+
+def settle_scalping_feature_delivery(audit, *, cache_hit=False):
+    """Settle only from transport evidence; cache results are not fresh calls."""
+    if audit.get("microstructure_reaction_delivery_telemetry_version") != "v3":
+        return audit
+    if cache_hit:
+        from uuid import uuid4
+
+        audit.update(
+            {
+                "microstructure_reaction_parent_context_id": audit.get(
+                    "microstructure_reaction_context_id"
+                ),
+                "microstructure_reaction_evaluation_id": uuid4().hex,
+                "microstructure_reaction_context_computed": False,
+                "microstructure_reaction_context_reused": True,
+                "microstructure_reaction_context_payload_included": False,
+                "microstructure_reaction_context_consumed": False,
+                "microstructure_reaction_context_consumer": "none",
+                "microstructure_reaction_provider_delivery_status": "not_attempted",
+                "microstructure_reaction_context_sent": False,
+                "microstructure_reaction_context_delivery_state": "cache_reused",
+                "microstructure_provider_delivery_status": "not_attempted",
+                "microstructure_provider_payload_included": False,
+            }
+        )
+        return audit
+    status = audit.get("microstructure_provider_delivery_status", "not_attempted")
+    included = audit.get("microstructure_reaction_context_payload_included") is True
+    if "microstructure_provider_payload_included" in audit:
+        included = (
+            included and audit["microstructure_provider_payload_included"] is True
+        )
+        audit["microstructure_reaction_context_payload_included"] = included
+    audit["microstructure_reaction_provider_delivery_status"] = status
+    audit["microstructure_reaction_context_sent"] = (
+        (
+            True
+            if status == "response_received"
+            else None if status == "attempted_unconfirmed" else False
+        )
+        if included
+        else False
+    )
+    audit["microstructure_reaction_context_delivery_state"] = (
+        status
+        if included
+        else (
+            "internal_consumed_not_sent"
+            if audit.get("microstructure_reaction_context_consumed")
+            else "computed_not_sent"
+        )
+    )
+    return audit
+
+
+def microstructure_payload_included(payload):
+    return bool(
+        _MICROSTRUCTURE_REACTION_PROVIDER_KEYS & _provider_payload_keys(payload)
+    )

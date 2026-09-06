@@ -7,6 +7,8 @@ loss of a subscription/quote is an explicit gap, not a fabricated price path.
 
 from __future__ import annotations
 
+from src.engine.lifecycle.retirement import RETIRED_ENV_PREFIXES
+
 import os
 import gzip
 import base64
@@ -82,6 +84,7 @@ def policy_environment() -> dict:
         key: value
         for key, value in os.environ.items()
         if key.startswith("KORSTOCKSCAN_")
+        and not key.startswith(RETIRED_ENV_PREFIXES)
         and not key.endswith("_TOKEN")
         and not any(
             part in key for part in ("SECRET", "PASSWORD", "CREDENTIAL", "API_KEY")
@@ -158,26 +161,16 @@ def policy_snapshot(handlers, now_ts: float) -> dict:
     }
     for key, value in {**rules, **environment}.items():
         if (
+            key if key.startswith("KORSTOCKSCAN_") else "KORSTOCKSCAN_" + key
+        ).startswith(RETIRED_ENV_PREFIXES):
+            continue
+        if (
             isinstance(value, str)
             and value
             and (key.endswith("_POLICY_FILE") or key.endswith("_EXCLUDED_CODES_FILE"))
         ):
             paths.add(Path(value))
-    # Freeze the same selectors the live matrix adapters use, including absence.
-    from src.engine import holding_exit_matrix_runtime as adm
-    from src.engine import lifecycle_decision_matrix_runtime as ldm
-
-    now = datetime.fromtimestamp(now_ts, tz=_KST).replace(tzinfo=None)
-    selectors = {}
-    for module in (adm, ldm):
-        selected = module._latest_matrix_path_on_or_before(
-            module._session_cutoff_source_date(now)
-        )
-        if selected is not None:
-            paths.add(selected)
-        selectors[module.__name__] = (
-            str(selected.absolute()) if selected is not None else None
-        )
+    selectors = {}  # Retired matrices no longer participate in live selection.
     snapshot = {
         "schema": SNAPSHOT_SCHEMA,
         "rules": _json_value(rules),

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Machine Microstructure Final Refresh After Outcome Labels
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 21:15:00 Asia/Seoul
+Persistent=true
+Unit=korstockscan-machine-microstructure-final-refresh.service
+
+[Install]
+WantedBy=timers.target

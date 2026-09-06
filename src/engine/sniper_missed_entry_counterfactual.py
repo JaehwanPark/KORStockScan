@@ -60,10 +60,18 @@ _BUY_AVOIDED_CLOSE_PCT = -0.3
 _BUY_TP_PCT = 0.5
 _BUY_SL_PCT = -0.5
 _RISING_MISSED_STAGE = "rising_missed_one_share_entry"
-_EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v1"
+_EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v2"
 _EVENT_FIELD_KEYS = frozenset(
     {
         "action",
+        "microstructure_reaction_context_id",
+        "microstructure_reaction_context_version",
+        "microstructure_reaction_context_status",
+        "microstructure_reaction_entry_reaction_quality",
+        "microstructure_reaction_reference_time",
+        "microstructure_reaction_reference_price",
+        "microstructure_reaction_venue",
+        "microstructure_reaction_context_reused",
         "ai_reason_numeric_inconsistency",
         "ai_score",
         "chosen_action",
@@ -1337,6 +1345,130 @@ def _metric_source_quality_state(metrics: dict, horizon_min: int) -> str:
     return "pass"
 
 
+def _build_microstructure_attempt_outcomes(
+    events, price_points_by_stock_venue, *, now=None
+):
+    """Reuse the loaded same-venue tape at each original micro evaluation anchor."""
+    import math
+    from bisect import bisect_right
+    from src.engine.scalping.microstructure_reaction_context import (
+        CONTEXT_VERSION,
+        _ENTRY_OPPORTUNITY_STAGES,
+    )
+
+    anchors = {}
+    conflicts = set()
+    for event in events:
+        fields = event.fields
+        if (
+            event.stage not in _ENTRY_OPPORTUNITY_STAGES
+            or fields.get("microstructure_reaction_context_version") != CONTEXT_VERSION
+        ):
+            continue
+        context_id = fields.get("microstructure_reaction_context_id")
+        if (
+            str(context_id or "").strip().lower()
+            in {"", "none", "null", "unknown", "-"}
+            or fields.get("microstructure_reaction_context_status") != "ok"
+            or str(fields.get("microstructure_reaction_context_reused")).lower()
+            == "true"
+        ):
+            continue
+        anchor = _parse_event_dt(fields.get("microstructure_reaction_reference_time"))
+        price = _safe_float(
+            fields.get("microstructure_reaction_reference_price"), float("nan")
+        )
+        venue = str(fields.get("microstructure_reaction_venue") or "").upper()
+        if (
+            anchor is None
+            or not math.isfinite(price)
+            or price <= 0
+            or venue not in _EXPLICIT_TRADABLE_VENUES
+        ):
+            continue
+        explicit_venue = _event_explicit_venue(event)
+        signature = (event.code, event.record_id, anchor, price, venue)
+        if (
+            context_id in anchors
+            and anchors[context_id] != signature
+            or explicit_venue
+            and explicit_venue != venue
+        ):
+            conflicts.add(context_id)
+        anchors[context_id] = signature
+    rows = []
+    now = now or datetime.now()
+    for context_id, (code, record_id, anchor, price, venue) in anchors.items():
+        points = price_points_by_stock_venue.get((code, venue), [])
+        start = bisect_right(points, (anchor, float("inf")))
+        end = bisect_right(points, (anchor + timedelta(minutes=20), float("inf")))
+        selected = sorted(
+            set(
+                (dt, px) for dt, px in points[start:end] if math.isfinite(px) and px > 0
+            )
+        )
+        price_conflict = len({dt for dt, _ in selected}) != len(selected)
+        metric = _observed_price_horizon_metrics(
+            anchor_dt=anchor, anchor_price=price, price_points=selected, horizon_min=20
+        )
+        status = (
+            "complete"
+            if metric.get("source_quality_state") == "pass"
+            else "unrecoverable_historical_gap"
+        )
+        if anchor + timedelta(minutes=20) > now:
+            status = "pending_outcome"
+        if context_id in conflicts or price_conflict:
+            status = "source_contract_conflict"
+        quality = "pass" if status == "complete" else status
+        rows.append(
+            {
+                "microstructure_reaction_context_id": context_id,
+                "feature_version": CONTEXT_VERSION,
+                "stock_code": code,
+                "runtime_record_id": record_id,
+                "reference_time": anchor.isoformat(),
+                "reference_price": price,
+                "reference_price_source": "original_microstructure_evaluation",
+                "effective_venue": venue,
+                "primary_horizon_min": 20,
+                "outcome_status": status,
+                "primary_source_quality_state": quality,
+                "forward_horizon_metrics": {"20": metric},
+                "estimated_round_trip_cost_pct": _WATCH_CYCLE_ESTIMATED_ROUND_TRIP_COST_PCT,
+                "cost_adjusted_counterfactual_return_pct": (
+                    round(
+                        metric["close_ret_pct"]
+                        - _WATCH_CYCLE_ESTIMATED_ROUND_TRIP_COST_PCT,
+                        6,
+                    )
+                    if quality == "pass"
+                    else None
+                ),
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "rows": rows,
+        "metric_role": "counterfactual_opportunity_attribution",
+        "decision_authority": "source_only_no_runtime_mutation",
+        "window_policy": "original_attempt_same_venue_20m_future_price_diagnostic",
+        "sample_floor": "finite_exact_outcomes_20_for_diagnostic_interpretation_only",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "original_identity_time_venue_finite_mature_horizon",
+        "forbidden_uses": [
+            "actual_exit_pnl",
+            "runtime_apply",
+            "broker_submit",
+            "provider_change",
+        ],
+    }
+
+
 def _build_watch_cycle_participation_ledger(
     target_date: str,
     events: list[EntryEvent],
@@ -2056,6 +2188,9 @@ def _build_watch_cycle_participation_ledger(
         )
     return {
         "schema_version": 2,
+        "microstructure_attempt_outcomes": _build_microstructure_attempt_outcomes(
+            events, price_points_by_stock_venue
+        ),
         "contract": {
             "metric_role": "counterfactual_opportunity_attribution",
             "decision_authority": "watch_cycle_source_only_no_runtime_apply",
@@ -2805,6 +2940,9 @@ def build_missed_entry_counterfactual_report(
             entry_events,
             [],
         )
+        microstructure_attempt_outcomes = watch_cycle_ledger.pop(
+            "microstructure_attempt_outcomes", {}
+        )
         return {
             "date": safe_date,
             "summary": missed_entry_counterfactual_summary_to_dict(summary),
@@ -2872,6 +3010,7 @@ def build_missed_entry_counterfactual_report(
                 "rows": [],
             },
             "watch_cycle_participation_ledger": watch_cycle_ledger,
+            "microstructure_attempt_outcomes": microstructure_attempt_outcomes,
             "insight": {
                 "headline": "AI BUY 후 미진입 counterfactual 표본이 없습니다.",
                 "comment": "장중 BUY 후 주문전 차단 사례가 쌓이면 missed winner / avoided loser를 함께 해석할 수 있습니다.",
@@ -3035,6 +3174,9 @@ def build_missed_entry_counterfactual_report(
         safe_date,
         entry_events,
         all_buy_evaluations,
+    )
+    microstructure_attempt_outcomes = watch_cycle_ledger.pop(
+        "microstructure_attempt_outcomes", {}
     )
 
     summary.evaluated_candidates = len(evaluations)
@@ -3508,6 +3650,7 @@ def build_missed_entry_counterfactual_report(
             ],
         },
         "watch_cycle_participation_ledger": watch_cycle_ledger,
+        "microstructure_attempt_outcomes": microstructure_attempt_outcomes,
         "insight": {
             "headline": headline,
             "comment": (
