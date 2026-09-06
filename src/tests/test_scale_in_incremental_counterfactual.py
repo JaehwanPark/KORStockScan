@@ -87,6 +87,19 @@ def test_clean_baseline_timestamp_excludes_earlier_same_day_event():
     )
 
 
+def test_clean_baseline_exclusion_keeps_retired_offline_authority(monkeypatch):
+    monkeypatch.setattr(mod, "is_date_allowed", lambda target_date, policy: False)
+
+    report = mod.build_report("2026-06-04")
+
+    assert report["error"] == "date_excluded_by_clean_baseline_policy"
+    assert report["operating_status"] == "retired_independent_producer"
+    assert report["scheduled_producer"] is False
+    assert report["current_automation_consumer"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert report["broker_order_forbidden"] is True
+
+
 def test_sim_counterfactual_authority_rejects_real_or_incomplete_contract():
     assert mod._has_sim_counterfactual_authority(
         _event(
@@ -207,6 +220,15 @@ def test_build_report_distinguishes_no_natural_scale_in_sample(monkeypatch):
     assert report["error"] is None
     assert report["window_policy"] == "daily_only"
     assert report["runtime_authority_ready"] is False
+    assert report["operating_status"] == "retired_independent_producer"
+    assert report["report_scope"] == "offline_archive_analysis_only"
+    assert report["scheduled_producer"] is False
+    assert report["manual_generation_allowed"] is True
+    assert report["current_automation_consumer"] is False
+    assert report["allowed_runtime_apply"] is False
+    assert report["actual_order_submitted"] is False
+    assert report["broker_order_forbidden"] is True
+    assert report["runtime_effect"] is False
     assert report["primary_decision_metric"] == "incremental_notional_ev_pct"
     assert report["summary"]["candidate_activity_count"] == 0
     assert report["summary"]["no_sample_reason"] == "no_scale_in_candidate_activity"
@@ -469,6 +491,11 @@ def test_backfill_uses_available_clean_sources_and_preserves_daily_states(
         == 0
     )
     assert report["artifact_suffix"] == "2026-06-10_to_2026-06-14"
+    assert report["operating_status"] == "retired_independent_producer"
+    assert report["report_scope"] == "offline_archive_analysis_only"
+    assert report["scheduled_producer"] is False
+    assert report["current_automation_consumer"] is False
+    assert report["allowed_runtime_apply"] is False
 
 
 def test_window_output_path_does_not_overwrite_daily_report(monkeypatch, tmp_path):

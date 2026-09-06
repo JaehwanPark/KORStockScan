@@ -27,6 +27,21 @@ def test_retired_namespaces_cannot_be_current_sources(name):
     ]
 
 
+def test_latency_recommendation_retirement_preserves_runtime_safety_telemetry():
+    report_name = "latency_classifier_recommendation"
+    runtime_telemetry_family = "latency_classifier_runtime_profile"
+
+    assert policy.retired_owner(report_name)
+    assert policy.retired_artifact(
+        Path("data/report") / report_name / f"{report_name}_2026-09-04.json"
+    )
+    assert runtime_telemetry_family in policy.RETIRED_CALIBRATION_FAMILIES
+    assert not policy.retired_owner(runtime_telemetry_family)
+    status = policy.retired_status(report_name)
+    assert status["retirement_id"] == policy.LATENCY_RECOMMENDATION_RETIREMENT_ID
+    assert status["allowed_runtime_apply"] is False
+
+
 @pytest.mark.parametrize(
     "module,function",
     [
@@ -198,6 +213,45 @@ def test_wrapper_has_no_retired_producer_commands():
     assert "-m src.engine.monitoring.samsung_machine_entry_tuning" in script
     assert "RUN_INSTITUTIONAL_FLOW_CONTEXT=false" in script
     assert "THRESHOLD_CYCLE_RUN_INSTITUTIONAL_FLOW_CONTEXT" not in script
+    assert "-m src.engine.lifecycle.scale_in_incremental_counterfactual" not in script
+    assert (
+        '"$PROJECT_DIR/src/engine/lifecycle/scale_in_incremental_counterfactual.py"'
+        in script
+    )
+    avg_down_block = script.split(
+        'if [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION"', 1
+    )[1].split('if [ "$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY"', 1)[0]
+    assert "scale_in_incremental_counterfactual.py" in avg_down_block
+
+
+def test_scale_in_counterfactual_report_is_archive_but_avg_down_math_survives():
+    from src.engine.lifecycle.scale_in_incremental_counterfactual import (
+        compute_fixed_exit_incremental_economics,
+    )
+
+    report_path = Path(
+        "data/report/scale_in_incremental_counterfactual/"
+        "scale_in_incremental_counterfactual_2026-09-04.json"
+    )
+    assert policy.retired_artifact(report_path)
+    assert (
+        policy.current_report_view(
+            {
+                "report_type": "scale_in_incremental_counterfactual",
+                "runtime_effect": False,
+            }
+        )
+        == {}
+    )
+    economics = compute_fixed_exit_incremental_economics(
+        pre_add_qty=10,
+        pre_add_price=100,
+        proposed_qty=1,
+        proposed_price=100,
+        exit_price=110,
+    )
+    assert economics["incremental_pnl_krw"] == 10
+    assert economics["runtime_authority_ready"] is False
 
 
 def test_current_summaries_expose_institutional_retirement_without_artifact_read():

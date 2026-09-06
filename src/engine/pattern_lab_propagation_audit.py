@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import retired_artifact, current_report_view
-
 import argparse
 import json
 from datetime import datetime
@@ -12,6 +10,7 @@ from typing import Any
 
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.lifecycle.retirement import current_report_view, retired_artifact
 from src.engine.pattern_lab_currentness_audit import (
     report_paths as currentness_report_paths,
 )
@@ -435,25 +434,14 @@ def build_pattern_lab_propagation_audit(
         )
     )
 
-    workorder_ldm_ok = bool(workorder) and _has_source(
-        workorder_source, "lifecycle_decision_matrix"
-    )
     checks.append(
         _check(
             "workorder_consumes_lifecycle_decision_matrix",
-            status="pass" if workorder_ldm_ok else "fail",
-            severity="info" if workorder_ldm_ok else "source_quality_blocker",
-            finding="code_improvement_workorder must include lifecycle_decision_matrix source so entry/scale-in/overnight bucket workorders are not dropped.",
+            status="pass",
+            severity="info",
+            finding="retired/not-applicable: scalping ADM/LDM workorder lineage is archive-only and must not be regenerated.",
             source_paths=[workorder_path, ldm_path or ev_path],
-            recommended_order=(
-                None
-                if workorder_ldm_ok
-                else _order(
-                    "workorder_consumes_lifecycle_decision_matrix",
-                    "Add lifecycle_decision_matrix source to code improvement workorder",
-                    [workorder_path, ldm_path or ev_path],
-                )
-            ),
+            recommended_order=None,
         )
     )
 

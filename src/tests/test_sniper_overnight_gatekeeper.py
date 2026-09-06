@@ -1,11 +1,12 @@
 import ast
 import inspect
+from datetime import time as datetime_time
 from types import SimpleNamespace
 
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from src.database.models import RecommendationHistory
-from src.engine import kiwoom_sniper_v2
+from src.engine import kiwoom_sniper_v2, sniper_state_handlers
 from src.engine.sniper_overnight_gatekeeper import (
     _apply_overnight_flow_override,
     _clean_telegram_text,
@@ -43,6 +44,93 @@ def test_overnight_gatekeeper_default_disabled(monkeypatch):
     assert _overnight_gatekeeper_enabled() is False
 
 
+def test_overnight_gatekeeper_ignores_runtime_true_override(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.sniper_overnight_gatekeeper.TRADING_RULES",
+        SimpleNamespace(SCALPING_OVERNIGHT_GATEKEEPER_ENABLED=True),
+    )
+
+    assert _overnight_gatekeeper_enabled() is False
+    assert run_scalping_overnight_gatekeeper(ai_engine=object()) is False
+
+
+def test_same_session_terminal_exit_uses_last_executable_venue_window(monkeypatch):
+    stock = {
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_qty": 3,
+    }
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_holding_sell_nxt_enabled_status",
+        lambda *_args: (False, "test.krx_only"),
+    )
+    krx = sniper_state_handlers._scalping_same_session_terminal_exit_fields(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        now_t=datetime_time(15, 15),
+    )
+    assert krx["should_exit"] is True
+    assert krx["terminal_venue"] == "KRX"
+
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_holding_sell_nxt_enabled_status",
+        lambda *_args: (True, "test.nxt"),
+    )
+    before_nxt_close = sniper_state_handlers._scalping_same_session_terminal_exit_fields(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        now_t=datetime_time(15, 15),
+    )
+    nxt_close = sniper_state_handlers._scalping_same_session_terminal_exit_fields(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        now_t=datetime_time(19, 45),
+    )
+    assert before_nxt_close["should_exit"] is False
+    assert nxt_close["should_exit"] is True
+    assert nxt_close["terminal_venue"] == "NXT"
+
+
+def test_shutdown_reconciliation_reports_real_and_sim_scalping_positions():
+    rows = sniper_state_handlers.unresolved_scalping_terminal_positions(
+        [
+            {
+                "id": 1,
+                "code": "005930",
+                "strategy": "SCALPING",
+                "status": "HOLDING",
+                "buy_qty": 3,
+            },
+            {
+                "id": 2,
+                "code": "000660",
+                "strategy": "SCALPING",
+                "status": "SELL_ORDERED",
+                "buy_qty": 2,
+                "simulation_book": "scalp_ai_buy_all",
+            },
+            {
+                "id": 4,
+                "code": "051910",
+                "strategy": "SCALPING",
+                "status": "BUY_ORDERED",
+                "buy_qty": 0,
+            },
+            {"id": 3, "code": "035420", "strategy": "KOSPI_ML", "status": "HOLDING"},
+        ]
+    )
+
+    assert [row["code"] for row in rows] == ["005930", "000660", "051910"]
+    assert rows[0]["simulation"] is False
+    assert rows[1]["simulation"] is True
+    assert rows[2]["status"] == "BUY_ORDERED"
+
+
 def test_limit_down_live_source_forbids_overnight_hold():
     assert _limit_down_live_overnight_forbidden(
         {"source_signature": "PRICE_JUMP_START,LIMIT_DOWN_LIVE_UNLOCK"}
@@ -61,7 +149,7 @@ def test_run_scalping_overnight_gatekeeper_returns_false_when_disabled(monkeypat
     assert run_scalping_overnight_gatekeeper(ai_engine=object()) is False
 
 
-def test_run_sniper_eod_holding_fallback_is_guarded_by_runtime_enable_flag():
+def test_run_sniper_eod_holding_fallback_is_permanently_disabled():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     tree = ast.parse(source)
 
@@ -79,16 +167,15 @@ def test_run_sniper_eod_holding_fallback_is_guarded_by_runtime_enable_flag():
             break
 
     assert fallback_assign is not None, "eod_ai_holding_fallback assignment not found"
-    assert isinstance(
-        fallback_assign.value, ast.BoolOp
-    ), "fallback must stay a boolean gate"
+    assert isinstance(fallback_assign.value, ast.Constant)
+    assert fallback_assign.value.value is False
 
-    name_ids = {
-        node.id
-        for node in ast.walk(fallback_assign.value)
-        if isinstance(node, ast.Name)
-    }
-    assert "overnight_gatekeeper_enabled" in name_ids
+
+def test_main_runtime_has_no_overnight_module_binding_or_gatekeeper_call():
+    source = inspect.getsource(kiwoom_sniper_v2)
+
+    assert "bind_overnight_dependencies" not in source
+    assert "run_scalping_overnight_gatekeeper" not in source
 
 
 def test_snapshot_record_survives_detached_instance():

@@ -53,7 +53,7 @@ postclose 자동 handoff:
 시간 규칙:
 - `<HH:MM:SS>`부터 `<HH:MM:SS>` KST까지 10분 간격으로 확인한다.
 - 매수 가능 창 밖에서는 새 BUY 병목 판정을 확장하지 않고 pause/monitor_only로 둔다.
-- 기준 매수 창은 `KORSTOCKSCAN_SCALPING_BUY_WINDOWS=08:03:00-08:40:00,09:03:00-15:20:00,16:00:00-19:45:00`이다.
+- no-overnight 당일 종결 기준 매수 창은 `KORSTOCKSCAN_SCALPING_BUY_WINDOWS=08:03:00-08:40:00,09:03:00-15:10:00,16:00:00-19:40:00`이다. KRX 15:10·NXT 19:40 이후 신규 BUY는 더 넓은 env나 일반 time-block 비활성화로 우회할 수 없으며, 각각 15:15·19:45 terminal SELL 시작 전 5분의 주문·체결 reconciliation 구간을 둔다.
 - 목표 종료 시각 이후에는 goal을 종료하고 final stabilization만 남긴다.
 
 blocker 분류:

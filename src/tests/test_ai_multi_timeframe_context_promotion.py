@@ -178,6 +178,7 @@ def test_evaluate_promotion_is_binary_full_market(tmp_path):
     assert report["scope"]["endpoints"] == list(promotion.EXPECTED_ENDPOINTS)
     assert report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] == "exact_v2"
     assert report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED"] == "true"
+    assert "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED" not in report["env_overrides"]
     assert (
         report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE"]
         == "2026-07-27"

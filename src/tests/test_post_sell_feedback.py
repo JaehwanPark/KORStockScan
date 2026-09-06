@@ -438,18 +438,43 @@ def test_backfill_sim_post_sell_candidates_is_idempotent(monkeypatch, tmp_path):
         "2026-05-18"
     )
 
-    assert first["events_seen"] == 2
+    assert first["events_seen"] == 1
     assert first["duplicate_source_events"] == 1
-    assert first["candidates_created"] == 2
-    assert second["events_seen"] == 2
+    assert first["candidates_created"] == 1
+    assert second["events_seen"] == 1
     assert second["candidates_created"] == 0
     candidates = feedback_mod._load_jsonl(
         feedback_mod._sim_candidate_path("2026-05-18")
     )
-    assert len(candidates) == 2
+    assert len(candidates) == 1
     assert candidates[0]["high_ai_hard_stop_conflict"] is True
     assert candidates[0]["ai_score_at_exit"] == 74
     assert candidates[0]["ai_model_at_exit"] == "bedrock-nova-lite-v2"
+
+
+def test_sim_post_sell_rejects_synthetic_runtime_state(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(POST_SELL_FEEDBACK_ENABLED=True),
+    )
+    feedback_mod._SIM_RECORDED_KEYS.clear()
+
+    candidate = feedback_mod.record_sim_post_sell_candidate(
+        sim_record_id="SYNTHETIC-1",
+        stock={"name": "ARMED", "code": "123456", "strategy": "SCALPING"},
+        code="123456",
+        sell_time="2026-09-04T10:00:00+09:00",
+        buy_price=10_000,
+        sell_price=10_100,
+        profit_rate=0.7,
+        buy_qty=1,
+        exit_rule="scalp_same_session_terminal_exit",
+    )
+
+    assert candidate is None
+    assert not feedback_mod._sim_candidate_path("2026-09-04").exists()
 
 
 def test_sim_post_sell_high_ai_conflict_falls_back_to_runtime_ai_prob(

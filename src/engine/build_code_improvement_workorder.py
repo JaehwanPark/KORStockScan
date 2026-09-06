@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import (
-    retired_artifact,
-    retired_status,
-    current_report_view,
-)
-
 import argparse
 import hashlib
 import json
@@ -23,6 +17,11 @@ from src.engine.ai_prompt_contracts import (
     swing_ai_structured_output_eval_prompt_contract,
 )
 from src.engine.ai_response_contracts import swing_ai_structured_output_eval_contract
+from src.engine.lifecycle.retirement import (
+    current_report_view,
+    retired_artifact,
+    retired_status,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"

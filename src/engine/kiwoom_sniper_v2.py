@@ -124,7 +124,6 @@ from src.engine.sniper_time import (
     TIME_09_10,
     TIME_10_30,
     TIME_11_00,
-    TIME_SCALPING_OVERNIGHT_DECISION,
     TIME_MARKET_CLOSE,
     TIME_15_30,
     TIME_20_00,
@@ -185,8 +184,6 @@ from src.engine.sniper_state_handlers import bind_state_dependencies
 from src.engine.sniper_scale_in import resolve_elapsed_sec, resolve_holding_elapsed_sec
 import src.engine.sniper_execution_receipts as sniper_execution_receipts
 from src.engine.sniper_execution_receipts import bind_execution_dependencies
-import src.engine.sniper_overnight_gatekeeper as sniper_overnight_gatekeeper
-from src.engine.sniper_overnight_gatekeeper import bind_overnight_dependencies
 import src.engine.sniper_market_regime as sniper_market_regime
 from src.engine.sniper_market_regime import bind_market_regime_dependencies
 import src.engine.sniper_trade_utils as sniper_trade_utils
@@ -1204,37 +1201,6 @@ def handle_real_execution(exec_data):
 def handle_order_notice(notice_data):
     _ensure_execution_deps()
     return sniper_execution_receipts.handle_order_notice(notice_data)
-
-
-_OVERNIGHT_DEPS = {}
-
-
-def _ensure_overnight_deps():
-    global _OVERNIGHT_DEPS
-    snapshot = {
-        "kiwoom_token": KIWOOM_TOKEN,
-        "db": DB,
-        "ws_manager": WS_MANAGER,
-        "event_bus_instance": event_bus,
-        "active_targets": ACTIVE_TARGETS,
-        "escape_markdown_fn": escape_markdown,
-        "confirm_cancel_or_reload_remaining": _confirm_cancel_or_reload_remaining,
-        "send_market_exit_now": _send_market_exit_now,
-        "is_ok_response": _is_ok_response,
-        "extract_ord_no": _extract_ord_no,
-        "process_sell_cancellation_fn": process_sell_cancellation,
-        "dual_persona_engine": DUAL_PERSONA_ENGINE,
-    }
-    if any(_OVERNIGHT_DEPS.get(k) is not v for k, v in snapshot.items()):
-        bind_overnight_dependencies(**snapshot)
-        _OVERNIGHT_DEPS = snapshot
-
-
-def run_scalping_overnight_gatekeeper(ai_engine=None):
-    _ensure_overnight_deps()
-    return sniper_overnight_gatekeeper.run_scalping_overnight_gatekeeper(
-        ai_engine=ai_engine
-    )
 
 
 _MARKET_REGIME_DEPS = {}
@@ -11762,7 +11728,6 @@ def run_sniper(is_test_mode=False):
         ),
     )
     bind_execution_dependencies(kiwoom_token=KIWOOM_TOKEN)
-    bind_overnight_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_trade_pause_event_bus(event_bus)
 
     radar = SniperRadar(KIWOOM_TOKEN)
@@ -11790,7 +11755,6 @@ def run_sniper(is_test_mode=False):
             log_error(f"Existing WS manager shutdown failed: {e}")
 
     WS_MANAGER = KiwoomWSManager(KIWOOM_TOKEN)
-    bind_overnight_dependencies(ws_manager=WS_MANAGER)
     bind_sync_dependencies(
         kiwoom_token=KIWOOM_TOKEN,
         db=DB,
@@ -11994,8 +11958,6 @@ def run_sniper(is_test_mode=False):
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)
     bind_state_dependencies(dual_persona_engine=DUAL_PERSONA_ENGINE)
-    bind_overnight_dependencies(dual_persona_engine=DUAL_PERSONA_ENGINE)
-
     bind_s15_dependencies(
         kiwoom_token=KIWOOM_TOKEN,
         ws_manager=WS_MANAGER,
@@ -12009,7 +11971,6 @@ def run_sniper(is_test_mode=False):
     bind_state_dependencies(active_targets=ACTIVE_TARGETS, ws_manager=WS_MANAGER)
     sniper_state_handlers.sanitize_pending_add_states(ACTIVE_TARGETS)
     bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
-    bind_overnight_dependencies(active_targets=ACTIVE_TARGETS)
     _restore_armed_candidates_from_database()
     _restore_fast_trade_states_from_journal()
     # ==========================================
@@ -12215,6 +12176,40 @@ def run_sniper(is_test_mode=False):
             )
 
             if not is_test_mode and now_t >= TIME_20_00:
+                unresolved_scalping = (
+                    sniper_state_handlers.unresolved_scalping_terminal_positions(
+                        targets
+                    )
+                )
+                terminal_reason = "market_close"
+                if unresolved_scalping:
+                    terminal_reason = "market_close_unresolved_scalping_positions"
+                    unresolved_codes = ",".join(
+                        sorted(
+                            {
+                                str(item.get("code") or "-")
+                                for item in unresolved_scalping
+                            }
+                        )
+                    )
+                    log_error(
+                        "[SCALPING_SAME_SESSION_TERMINAL_FAIL] unresolved positions "
+                        f"count={len(unresolved_scalping)} codes={unresolved_codes}; "
+                        "overnight carry is not authorized and broker/receipt "
+                        "reconciliation is required"
+                    )
+                    event_bus.publish(
+                        "TELEGRAM_BROADCAST",
+                        {
+                            "message": (
+                                "🚨 **[스캘핑 당일 종결 미완료]**\n"
+                                f"미종결: `{len(unresolved_scalping)}건` "
+                                f"(`{unresolved_codes}`)\n"
+                                "overnight 보유 승인은 없으며 다음 기동에서 "
+                                "브로커/체결 영수증 재조정이 필요합니다."
+                            )
+                        },
+                    )
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
                 highest_prices.clear()
                 alerted_stocks.clear()
@@ -12224,7 +12219,12 @@ def run_sniper(is_test_mode=False):
                 _sn_whb(
                     "sniper_engine",
                     alive=False,
-                    terminal_reason="market_close",
+                    terminal_reason=terminal_reason,
+                    unresolved_scalping_count=len(unresolved_scalping),
+                    unresolved_scalping_codes="|".join(
+                        str(item.get("code") or "-")
+                        for item in unresolved_scalping
+                    ),
                 )
                 break
 
@@ -12331,30 +12331,9 @@ def run_sniper(is_test_mode=False):
                     run_sniper.last_broker_snapshot_refresh_time = now_ts
             _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
 
-            # =====================================================
-            # Preclose SCALPING overnight decision (DB 기준, 무조건 1회 작동)
-            # =====================================================
-            last_eod_done = getattr(run_sniper, "scalping_eod_done_date", None)
-            last_eod_try = getattr(run_sniper, "last_scalping_eod_try", 0)
-            overnight_gatekeeper_enabled = bool(
-                getattr(TRADING_RULES, "SCALPING_OVERNIGHT_GATEKEEPER_ENABLED", False)
-            )
-            if (
-                overnight_gatekeeper_enabled
-                and now_t >= TIME_SCALPING_OVERNIGHT_DECISION
-                and last_eod_done != today_key
-            ):
-                if now_ts - last_eod_try >= 60:
-                    run_sniper.last_scalping_eod_try = now_ts
-                    if run_scalping_overnight_gatekeeper(ai_engine=ai_engine):
-                        run_sniper.scalping_eod_done_date = today_key
-                        last_eod_done = today_key
-
-            eod_ai_holding_fallback = (
-                overnight_gatekeeper_enabled
-                and now_t >= TIME_SCALPING_OVERNIGHT_DECISION
-                and (last_eod_done == today_key or last_eod_try > 0)
-            )
+            # Overnight carry is permanently retired. Holding AI remains
+            # available until the deterministic same-session terminal exit.
+            eod_ai_holding_fallback = False
 
             # =====================================================
             # 상태 로그

@@ -4,9 +4,11 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 
 from src.utils.constants import TRADING_RULES
 
-DEFAULT_SCALPING_BUY_WINDOWS = "08:03:00-08:40:00,09:03:00-15:20:00,16:00:00-19:45:00"
+DEFAULT_SCALPING_BUY_WINDOWS = "08:03:00-08:40:00,09:03:00-15:10:00,16:00:00-19:40:00"
 DEFAULT_SCALPING_PREWARM_LEAD_SEC = 180
 KST = timezone(timedelta(hours=9))
+SCALPING_KRX_NEW_BUY_HARD_CUTOFF = dt_time(hour=15, minute=10)
+SCALPING_NXT_NEW_BUY_HARD_CUTOFF = dt_time(hour=19, minute=40)
 
 
 def _rule_time(rule_name, default_value):
@@ -75,9 +77,22 @@ def describe_scalping_buy_windows(windows=None):
 
 def is_scalping_buy_time_allowed(now_value=None):
     now_t = _coerce_time(now_value)
+    if scalping_same_session_entry_cutoff_blocked(now_t):
+        return False
     return any(
         _in_time_window(now_t, start, end) for start, end in SCALPING_BUY_WINDOWS
     )
+
+
+def scalping_same_session_entry_cutoff_blocked(now_value=None):
+    """Hard-stop new entries early enough to reconcile before session close."""
+
+    now_t = _coerce_time(now_value)
+    if dt_time(hour=9) <= now_t < dt_time(hour=16):
+        return now_t >= SCALPING_KRX_NEW_BUY_HARD_CUTOFF
+    if dt_time(hour=16) <= now_t < dt_time(hour=20):
+        return now_t >= SCALPING_NXT_NEW_BUY_HARD_CUTOFF
+    return False
 
 
 def scalping_prewarm_window(now_value=None, *, lead_sec=None, windows=None):
@@ -194,7 +209,7 @@ TIME_11_00 = _rule_time("MIDDAY_SCALPING_END_TIME", "11:00:00")
 SCALPING_BUY_WINDOWS = _rule_time_windows(
     "SCALPING_BUY_WINDOWS", DEFAULT_SCALPING_BUY_WINDOWS
 )
-TIME_SCALPING_NEW_BUY_CUTOFF = _rule_time("SCALPING_NEW_BUY_CUTOFF", "19:45:00")
+TIME_SCALPING_NEW_BUY_CUTOFF = _rule_time("SCALPING_NEW_BUY_CUTOFF", "19:40:00")
 TIME_SCALPING_OVERNIGHT_DECISION = _rule_time(
     "SCALPING_OVERNIGHT_DECISION_TIME", "15:10:00"
 )

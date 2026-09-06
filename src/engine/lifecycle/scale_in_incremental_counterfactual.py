@@ -1,7 +1,12 @@
-"""Postclose scale-in incremental counterfactual EV producer.
+"""Retired scheduled scale-in counterfactual producer kept for offline analysis.
 
 Computes ADD vs NO_ADD incremental PnL for every sim scale-in decision
 over 10min/30min/60min/final-liquidation horizons.
+
+The postclose wrapper and LDM consumer were retired on 2026-09-06.  The CLI may
+still produce archive/offline evidence, while
+``compute_fixed_exit_incremental_economics`` remains a policy-neutral helper for
+the dedicated AVG_DOWN replay.  Neither path grants runtime or order authority.
 
 Input:
   - pipeline_events_{date}.jsonl / .jsonl.gz
@@ -43,6 +48,7 @@ NEGATIVE_INCREMENTAL_EV_PCT = -0.30
 EV_LABEL_VERSION = "incremental_counterfactual_v2"
 COUNTERFACTUAL_METHOD = "treatment_path_added_tranche_return"
 RUNTIME_AUTHORITY_METHOD = "paired_add_no_add_lifecycle_replay"
+INDEPENDENT_PRODUCER_STATUS = "retired_independent_producer"
 
 HORIZONS = {
     "10min": 10 * 60,
@@ -67,6 +73,22 @@ COHORT_FIELDS = [
     "quote_touched",
     "first_add",
 ]
+
+
+def _offline_report_authority_contract() -> dict[str, Any]:
+    """Return the fixed authority boundary for retained manual reports."""
+    return {
+        "operating_status": INDEPENDENT_PRODUCER_STATUS,
+        "report_scope": "offline_archive_analysis_only",
+        "scheduled_producer": False,
+        "manual_generation_allowed": True,
+        "current_automation_consumer": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_effect": False,
+        "decision_authority": "sim_scale_in_counterfactual_only",
+    }
 
 
 def report_paths(
@@ -466,8 +488,7 @@ def build_report(target_date: str) -> dict[str, Any]:
             "schema_version": SCHEMA_VERSION,
             "date": target_date,
             "report_type": REPORT_TYPE,
-            "runtime_effect": False,
-            "decision_authority": "sim_scale_in_counterfactual_only",
+            **_offline_report_authority_contract(),
             "error": "date_excluded_by_clean_baseline_policy",
             "clean_baseline_policy": clean_policy,
             "rows": [],
@@ -503,8 +524,7 @@ def build_report(target_date: str) -> dict[str, Any]:
             "schema_version": SCHEMA_VERSION,
             "date": target_date,
             "report_type": REPORT_TYPE,
-            "runtime_effect": False,
-            "decision_authority": "sim_scale_in_counterfactual_only",
+            **_offline_report_authority_contract(),
             "metric_role": "sim_probe_ev",
             "primary_decision_metric": "incremental_notional_ev_pct",
             "scale_in_ev_label_version": EV_LABEL_VERSION,
@@ -705,6 +725,7 @@ def build_report(target_date: str) -> dict[str, Any]:
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": REPORT_TYPE,
+        **_offline_report_authority_contract(),
         "status": (
             "instrumentation_gap" if partial_instrumentation_gap else "evaluated"
         ),
@@ -712,10 +733,8 @@ def build_report(target_date: str) -> dict[str, Any]:
             "counterfactual_event_contract_gap" if partial_instrumentation_gap else None
         ),
         "metric_role": "sim_probe_ev",
-        "decision_authority": "sim_scale_in_counterfactual_only",
         "primary_decision_metric": "incremental_notional_ev_pct",
         "scale_in_ev_label_version": EV_LABEL_VERSION,
-        "runtime_effect": False,
         "window_policy": "daily_only",
         "sample_floor": SAMPLE_FLOOR,
         "primary_authority_cohort": "ADD_FILLED",
@@ -1229,9 +1248,9 @@ def build_backfill_report(
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": REPORT_TYPE,
+        **_offline_report_authority_contract(),
         "status": aggregate_status,
         "metric_role": "sim_probe_ev",
-        "decision_authority": "sim_scale_in_counterfactual_only",
         "primary_decision_metric": "incremental_notional_ev_pct",
         "scale_in_ev_label_version": EV_LABEL_VERSION,
         "counterfactual_method": COUNTERFACTUAL_METHOD,
@@ -1239,7 +1258,6 @@ def build_backfill_report(
         "runtime_authority_ready": False,
         "window_policy": f"{start}_to_{end}",
         "artifact_suffix": artifact_suffix,
-        "runtime_effect": False,
         "source_quality_gate": (
             "instrumentation_gap"
             if aggregate_status == "instrumentation_gap"
@@ -1260,7 +1278,10 @@ def build_backfill_report(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build scale-in incremental counterfactual report."
+        description=(
+            "Build an offline/archive scale-in incremental counterfactual report; "
+            "this retired producer has no scheduled or runtime authority."
+        )
     )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--start-date")

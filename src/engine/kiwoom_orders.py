@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 # 💡 Level 1 & 2 공통 모듈
 from src.engine import sniper_config
+from src.engine.sniper_time import scalping_same_session_entry_cutoff_blocked
 from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.core.event_bus import EventBus
@@ -1436,14 +1437,16 @@ def _inside_sell_window(now_t) -> bool:
 
 
 def is_scalping_buy_window_blocked(now=None) -> bool:
-    if not bool(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_ENABLED", True)):
-        return False
-    if not _scalping_buy_windows():
-        return False
     current = now or datetime.now(KST)
     if current.tzinfo is None:
         current = current.replace(tzinfo=KST)
     current_kst = current.astimezone(KST)
+    if scalping_same_session_entry_cutoff_blocked(current_kst.time()):
+        return True
+    if not bool(getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_ENABLED", True)):
+        return False
+    if not _scalping_buy_windows():
+        return False
     return not _inside_scalping_buy_window(current_kst.time())
 
 

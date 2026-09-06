@@ -154,6 +154,8 @@ def holding_decision_context_enabled(
     decision_kind: str,
     now_ts: Any = None,
 ) -> bool:
+    if str(decision_kind or "").strip().lower().startswith("overnight"):
+        return False
     now = _now_kst(now_ts)
     activation = promotion_activation_state(now)
     if activation.get("activation_source") == "atomic_promotion_artifact":

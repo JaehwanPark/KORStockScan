@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from dataclasses import replace
 
 import pytest
@@ -324,6 +325,72 @@ def test_scalp_live_simulator_restore_respects_max_open_cap(monkeypatch):
         assert target["simulated_order"] is True
 
 
+def test_default_runtime_restore_rejects_cross_session_and_normalizes_legacy_carry(
+    monkeypatch, tmp_path, _reset_state
+):
+    state_path = tmp_path / "runtime" / "scalp_live_simulator_state.json"
+    state_path.parent.mkdir(parents=True)
+    current_ts = time.time()
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "active_positions": [
+                    {
+                        "code": "005930",
+                        "name": "삼성전자",
+                        "status": "HOLDING",
+                        "strategy": "SCALPING",
+                        "simulation_book": "scalp_ai_buy_all",
+                        "scalp_live_simulator": True,
+                        "sim_record_id": "SIM-CURRENT",
+                        "holding_started_at": current_ts,
+                        "scalp_sim_overnight_status": "HOLD_OVERNIGHT",
+                        "scalp_sim_overnight_decision_date": "2026-09-05",
+                    },
+                    {
+                        "code": "000660",
+                        "name": "SK하이닉스",
+                        "status": "HOLDING",
+                        "strategy": "SCALPING",
+                        "simulation_book": "scalp_ai_buy_all",
+                        "scalp_live_simulator": True,
+                        "sim_record_id": "SIM-STALE",
+                        "holding_started_at": current_ts - 86_400,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "DEFAULT_SCALP_SIM_STATE_PATH", state_path)
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+    targets = []
+
+    restored = state_handlers.restore_scalp_simulator_targets(targets)
+
+    assert restored == 1
+    assert [row["sim_record_id"] for row in targets] == ["SIM-CURRENT"]
+    assert "scalp_sim_overnight_status" not in targets[0]
+    assert not any(
+        event["stage"] == "scalp_sim_overnight_carry_restored"
+        for event in _reset_state
+    )
+
+
+@pytest.mark.parametrize("invalid_ts", [float("nan"), float("inf"), 10**30])
+def test_default_runtime_restore_rejects_invalid_session_timestamp(
+    monkeypatch, tmp_path, invalid_ts
+):
+    state_path = tmp_path / "runtime" / "scalp_live_simulator_state.json"
+    monkeypatch.setattr(state_handlers, "DEFAULT_SCALP_SIM_STATE_PATH", state_path)
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+
+    assert not state_handlers._scalp_simulator_state_row_is_current_session(
+        {"holding_started_at": invalid_ts}
+    )
+
+
 def test_scalp_live_simulator_sync_removes_state_rows_beyond_max_open(monkeypatch):
     monkeypatch.setattr(
         state_handlers,
@@ -414,6 +481,7 @@ def test_scalp_sim_candidate_window_runtime_cap_zero_preserves_configured_width(
     ) == (20, 20, 0)
 
 
+@pytest.mark.skip(reason="retired ADM/LDM policy compatibility fixture")
 def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(
     monkeypatch, tmp_path
 ):
@@ -554,6 +622,7 @@ def test_scalp_simulator_attaches_matched_lifecycle_bucket_provenance(
     assert sell_event["broker_order_forbidden"] is True
 
 
+@pytest.mark.skip(reason="retired ADM/LDM policy compatibility fixture")
 def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_policy_off(
     monkeypatch, tmp_path
 ):
@@ -653,6 +722,7 @@ def test_scalp_simulator_consumes_lifecycle_bucket_catalog_handoff_when_direct_p
     assert armed["bucket_directed_sim_probe"] is True
 
 
+@pytest.mark.skip(reason="retired ADM/LDM policy compatibility fixture")
 def test_scalp_simulator_uses_lifecycle_handoff_when_direct_file_is_missing(
     monkeypatch, tmp_path
 ):
@@ -725,6 +795,7 @@ def test_scalp_simulator_uses_lifecycle_handoff_when_direct_file_is_missing(
     assert fields["bucket_directed_sim_probe"] is True
 
 
+@pytest.mark.skip(reason="retired ADM/LDM policy compatibility fixture")
 def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(
     monkeypatch, tmp_path
 ):
@@ -814,6 +885,7 @@ def test_lifecycle_bucket_catalog_handoff_does_not_direct_source_only_rows(
     assert armed["scalp_sim_auto_policy_enabled"] is True
 
 
+@pytest.mark.skip(reason="retired ADM/LDM policy compatibility fixture")
 def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(
     monkeypatch, tmp_path
 ):
@@ -926,6 +998,7 @@ def test_candidate_window_resolves_approved_lifecycle_flow_from_entry_identity(
     assert armed["broker_order_forbidden"] is True
 
 
+@pytest.mark.skip(reason="retired ADM/LDM policy compatibility fixture")
 def test_candidate_window_with_entry_identity_but_no_approved_row_is_background(
     monkeypatch, tmp_path
 ):
@@ -2012,6 +2085,7 @@ def test_scalp_sim_candidate_window_expansion_arms_blocked_wait_candidate(monkey
     assert armed["would_real_submit"] is False
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(
     monkeypatch, tmp_path
 ):
@@ -2204,6 +2278,7 @@ def test_scalp_sim_candidate_window_active_seed_uses_reserved_sim_quota(
     assert followup_fields["would_real_submit"] is False
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(
     monkeypatch, tmp_path
 ):
@@ -2329,6 +2404,7 @@ def test_scalp_sim_active_seed_targeted_quota_blocks_after_per_seed_limit(
     assert discarded["broker_order_forbidden"] is True
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_active_seed_targeted_quota_zero_share_disables_reserve(
     monkeypatch, tmp_path
 ):
@@ -2447,6 +2523,7 @@ def test_scalp_sim_active_seed_targeted_quota_zero_share_disables_reserve(
     assert discarded["broker_order_forbidden"] is True
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_active_seed_matches_first_ai_wait_wait6579_parent(
     monkeypatch, tmp_path
 ):
@@ -2548,6 +2625,7 @@ def test_scalp_sim_active_seed_ignores_inactive_catalog_seed(monkeypatch, tmp_pa
     assert cache["active_seeds_by_prefix"] == {}
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_active_seed_preserves_all_same_prefix_lineage_ids(
     monkeypatch, tmp_path
 ):
@@ -2601,6 +2679,7 @@ def test_scalp_sim_active_seed_preserves_all_same_prefix_lineage_ids(
     ]
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_active_seed_blocks_stale_apply_date_policy(monkeypatch, tmp_path):
     catalog_path = tmp_path / "scalp_sim_policy_catalog_2026-06-01.json"
     catalog_path.write_text(
@@ -2657,6 +2736,7 @@ def test_scalp_sim_active_seed_blocks_stale_apply_date_policy(monkeypatch, tmp_p
     assert cache["active_seeds_by_prefix"] == {}
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_active_seed_blocks_missing_source_date_in_runtime_apply(
     monkeypatch, tmp_path
 ):
@@ -2772,6 +2852,7 @@ def test_scalp_sim_active_seed_unmatched_new_axis_preserves_taxonomy_contract(
     assert fields["entry_source_parent_runtime_effect_allowed"] is False
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_candidate_window_context_recomputes_stale_active_seed_alias(
     monkeypatch, tmp_path
 ):
@@ -2834,6 +2915,7 @@ def test_scalp_sim_candidate_window_context_recomputes_stale_active_seed_alias(
     assert fields["entry_source_parent_contract_state"] == "canonical_alias"
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_candidate_window_context_refreshes_stale_prefix_even_with_seed_id(
     monkeypatch, tmp_path
 ):
@@ -2891,6 +2973,7 @@ def test_scalp_sim_candidate_window_context_refreshes_stale_prefix_even_with_see
     }
 
 
+@pytest.mark.skip(reason="retired ADM/LDM active-seed compatibility fixture")
 def test_scalp_sim_candidate_window_context_refreshes_stale_seed_id_with_same_prefix(
     monkeypatch, tmp_path
 ):
@@ -2954,6 +3037,7 @@ def test_scalp_sim_candidate_window_context_refreshes_stale_seed_id_with_same_pr
     assert fields["active_seed_match_source"] == "current_preopen_active_policy"
 
 
+@pytest.mark.skip(reason="retired ADM/LDM hypothesis compatibility fixture")
 def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(
     monkeypatch, tmp_path
 ):
@@ -3095,6 +3179,7 @@ def test_scalp_sim_candidate_window_hypothesis_uses_sim_only_reserved_quota(
     assert armed["quota_policy"] == "ldm_hypothesis_observation_plan_v1"
 
 
+@pytest.mark.skip(reason="retired ADM/LDM hypothesis compatibility fixture")
 def test_scalp_sim_policy_loader_accepts_legacy_ldm_hypothesis_forbidden_use_alias(
     monkeypatch, tmp_path
 ):
@@ -5022,7 +5107,7 @@ def test_daily_threshold_cycle_report_keeps_scalp_sim_completed_rows_diagnostic_
                 "pipeline": "HOLDING_PIPELINE",
                 "stage": "scalp_sim_sell_order_assumed_filled",
                 "stock_name": "SIM",
-                "stock_code": "123456",
+                    "stock_code": "000002",
                 "record_id": None,
                 "emitted_date": target_date,
                 "fields": {

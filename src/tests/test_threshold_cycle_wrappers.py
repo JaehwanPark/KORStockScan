@@ -431,10 +431,8 @@ def test_postclose_large_reports_use_compact_stdout_and_verified_refresh():
         'src.engine.lifecycle_bucket_discovery --date "$TARGET_DATE" --print-summary'
         not in script
     )
-    assert (
-        'src.engine.latency_classifier_recommendation "${latency_args[@]}" --print-summary'
-        in script
-    )
+    assert "RUN_LATENCY_CLASSIFIER_RECOMMENDATION=false" in script
+    assert "src.engine.latency_classifier_recommendation" not in script
     assert "pipeline_verbosity_inputs=(" in script
     assert '"$PROJECT_DIR/src/engine/pipeline_event_summary.py"' in script
     assert '"$PROJECT_DIR/src/engine/pipeline_event_verbosity_report.py"' in script
@@ -975,41 +973,31 @@ def test_machine_microstructure_final_refresh_surfaces_weakness_hysteresis_failu
     assert "weakness_hysteresis_rc=9" in result.stderr
 
 
-def test_scalp_sim_overnight_preclose_wrapper_uses_live_openai_without_bedrock_lite_shadow():
+def test_scalp_sim_overnight_preclose_wrapper_is_retired_noop():
     script = Path("deploy/run_scalp_sim_overnight_preclose.sh").read_text(
         encoding="utf-8"
     )
 
-    assert "PYTHONPATH=." in script
-    assert (
-        'src.engine.scalp_sim_overnight --date "$TARGET_DATE" --live-openai' in script
-    )
-    assert "--report-only" not in script
-    assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_SHADOW_ENABLED" not in script
-    assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off" in script
+    assert "RETIRED" in script
+    assert "scalping_overnight_retirement_20260906" in script
+    assert "src.engine.scalp_sim_overnight" not in script
+    assert "OPENAI" not in script
 
 
-def test_threshold_cycle_postclose_recovers_late_scalp_sim_positions_with_openai():
+def test_threshold_cycle_postclose_has_no_overnight_report_or_openai_recovery():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
-    report_only = 'src.engine.scalp_sim_overnight --date "$TARGET_DATE" --report-only'
-    late_recovery = 'src.engine.scalp_sim_overnight --date "$TARGET_DATE" --live-openai'
-    assert report_only in script
-    assert late_recovery in script
-    assert script.index(report_only) < script.index(late_recovery)
-    assert '"active_undecided_count"' in script
-    assert "provider=openai runtime_effect=false" in script
-    assert "KORSTOCKSCAN_OPENAI_TRANSPORT_MODE" in script
-    assert "KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED" in script
-    assert "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE=off" in script
+    assert "RUN_SCALP_SIM_OVERNIGHT_REPORT" not in script
+    assert "src.engine.scalp_sim_overnight" not in script
+    assert "scalp_sim_overnight late-position recovery" not in script
 
 
-def test_threshold_cycle_cron_installs_scalp_sim_overnight_preclose_once():
+def test_threshold_cycle_cron_removes_but_does_not_install_overnight_preclose():
     script = Path("deploy/install_threshold_cycle_cron.sh").read_text(encoding="utf-8")
 
-    assert "SCALP_SIM_OVERNIGHT_PRECLOSE" in script
-    assert "10 15 * * 1-5" in script
-    assert "deploy/run_scalp_sim_overnight_preclose.sh" in script
+    assert script.count("SCALP_SIM_OVERNIGHT_PRECLOSE") == 1
+    assert "10 15 * * 1-5" not in script
+    assert "deploy/run_scalp_sim_overnight_preclose.sh" not in script
     assert "!/SCALP_SIM_OVERNIGHT_PRECLOSE/" in script
     assert "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false" in script
 

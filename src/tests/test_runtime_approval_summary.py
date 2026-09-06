@@ -1033,7 +1033,7 @@ def test_runtime_approval_summary_falls_back_to_lifecycle_bucket_source(
     assert matrix["runtime_effect"] is False
 
 
-def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(
+def test_runtime_approval_summary_ignores_retired_latency_runtime_selection(
     tmp_path, monkeypatch
 ):
     ev_dir = tmp_path / "threshold_cycle_ev"
@@ -1092,17 +1092,15 @@ def test_runtime_approval_summary_holds_latency_when_recommendation_not_allowed(
         for row in report["scalping"]
         if row["family"] == "latency_classifier_runtime_profile"
     )
-    assert latency["state"] == "hold_sample"
-    assert latency["selected_auto_bounded_live"] is True
-    assert latency["current_runtime_selected"] is True
-    assert latency["previous_selected_auto_bounded_live"] is True
+    assert latency["state"] == "baseline_hard_safety"
+    assert latency["selected_auto_bounded_live"] is False
+    assert latency["current_runtime_selected"] is False
+    assert latency["previous_selected_auto_bounded_live"] is False
     assert latency["allowed_runtime_apply"] is False
-    assert (
-        latency["current_application"]
-        == "현재 target-date PREOPEN env 적용: selected family"
-    )
+    assert "독립 PREOPEN 추천·임계값 적용은 폐기" in latency["current_application"]
     assert latency["next_preopen_candidate_state"] == "not_in_postclose_calibration"
-    assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
+    assert latency["recommendation_status"] == "retired"
+    assert report["summary"]["scalping_selected_auto_bounded_live"] == 0
 
 
 def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypatch):

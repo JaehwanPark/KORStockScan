@@ -15,6 +15,7 @@ from pathlib import Path
 
 from src.engine.log_archive_service import load_monitor_snapshot, save_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
+from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl, read_jsonl
 from src.utils.logger import log_error, log_info
@@ -549,12 +550,12 @@ def _post_sell_execution_route_contract(
     sell_time = sell_dt.time()
     if not session:
         configured_cutoff = str(
-            getattr(TRADING_RULES, "SCALPING_NEW_BUY_CUTOFF", "19:45:00") or "19:45:00"
+            getattr(TRADING_RULES, "SCALPING_NEW_BUY_CUTOFF", "19:40:00") or "19:40:00"
         ).strip()
         try:
             new_buy_cutoff = datetime.strptime(configured_cutoff, "%H:%M:%S").time()
         except ValueError:
-            new_buy_cutoff = datetime.strptime("19:45:00", "%H:%M:%S").time()
+            new_buy_cutoff = datetime.strptime("19:40:00", "%H:%M:%S").time()
         if (
             datetime.strptime("08:00:00", "%H:%M:%S").time()
             <= sell_time
@@ -834,7 +835,6 @@ def record_post_sell_candidate(
     norm_code = str(code or stock.get("code") or "").strip()[:6]
     if not norm_code:
         return None
-
     safe_sell_price = _safe_int(sell_price, 0)
     if safe_sell_price <= 0:
         return None
@@ -1079,6 +1079,16 @@ def record_sim_post_sell_candidate(
     stock = stock or {}
     norm_code = str(code or stock.get("code") or "").strip()[:6]
     if not norm_code:
+        return None
+    if is_synthetic_scalp_sim({**stock, "code": norm_code}):
+        log_info(
+            "[SIM_POST_SELL_CANDIDATE] synthetic simulator row excluded "
+            f"code={norm_code} name={stock.get('name') or '-'}"
+        )
+        return None
+    if str(exit_rule or stock.get("last_exit_rule") or "").strip() == (
+        "scalp_sim_overnight_sell_today"
+    ):
         return None
 
     safe_sell_price = _safe_int(sell_price, 0)
@@ -1615,8 +1625,18 @@ def evaluate_sim_post_sell_candidates(
         log_error(f"[SIM_POST_SELL_EVAL] kiwoom_utils import failed: {exc}")
         kiwoom_utils = None
 
-    candidates = _load_jsonl(_sim_candidate_path(target_date))
-    existing_evaluations = _load_jsonl(_sim_evaluation_path(target_date))
+    candidates = [
+        row
+        for row in _load_jsonl(_sim_candidate_path(target_date))
+        if not is_synthetic_scalp_sim(row)
+        and str(row.get("exit_rule") or "") != "scalp_sim_overnight_sell_today"
+    ]
+    existing_evaluations = [
+        row
+        for row in _load_jsonl(_sim_evaluation_path(target_date))
+        if not is_synthetic_scalp_sim(row)
+        and str(row.get("exit_rule") or "") != "scalp_sim_overnight_sell_today"
+    ]
     evaluated_ids = {
         str(item.get("post_sell_id", ""))
         for item in existing_evaluations
@@ -1856,9 +1876,13 @@ def backfill_sim_post_sell_candidates_from_threshold_events(target_date: str) ->
         for event in iter_jsonl(actual_path):
             if str(event.get("stage") or "") != "scalp_sim_sell_order_assumed_filled":
                 continue
+            if is_synthetic_scalp_sim(event):
+                continue
             fields = (
                 event.get("fields") if isinstance(event.get("fields"), dict) else {}
             )
+            if str(fields.get("exit_rule") or "") == "scalp_sim_overnight_sell_today":
+                continue
             norm_code = str(event.get("stock_code") or "").strip()[:6]
             sim_marker = str(
                 fields.get("sim_record_id")

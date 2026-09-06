@@ -21,8 +21,33 @@
 - [x] `[AdmLdmRetirementImplementation0907] ADM/LDM 권장 정리·반복 리뷰·통합 검증 종결` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
   - Source: [ADM/LDM 정리 리뷰](../audit-reports/2026-09-06-adm-ldm-retirement-review.md), [상세검토 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
   - 완료 판정(2026-09-06): 폐기 producer·prompt/bias·PREOPEN·보관 산출물 재유입·누락 FAIL 경로를 보완하고 최종 관련 통합 회귀 3,036 PASS, 문법·정적 검사·wrapper·parser 검증을 통과했다. 검토 범위 미해결 finding은 0건이다. 원천자료·전용 전략 분석·주문 안전장치는 유지했다.
+  - Scale-in CF 후속 현행화(2026-09-06): 독립 `scale_in_incremental_counterfactual` producer/LDM 소비는 RETIRED, #13 AVG_DOWN의 순수 증분 경제성 helper만 유지하는 경계를 traceability와 공통 retirement filter에 반영했다. wrapper의 helper 파일 참조는 재사용 artifact fingerprint이지 실행 명령이 아니며, 보존 forensic inventory에는 runtime/PREOPEN 권한이 없다.
   - 병행 작업 구분: 아래 recheck 항목의 1,797 PASS/25 FAIL 및 producer fixture 2 FAIL은 이번 최종 통합 검증 이전 기록이다. 관련 회귀 PASS가 report 재생성·exact-date PREOPEN 검증·실제 PID 소비 완료를 뜻하지는 않으므로 해당 OPEN owner와 남은 운영 작업은 유지한다.
   - 권한 경계: bot 재기동·수동 PREOPEN 적용·장후 전체 실행·실거래·operator lock 일괄삭제는 하지 않았다. 다음 자연 실행 확인은 `AdmLdmRetirementNaturalEvidence0907`이 소유한다.
+
+- [x] `[ScalpOvernightRetirementImplementation0907] scalping overnight·OpenAI recovery 폐기와 당일 종결 경로 구현·재리뷰` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:35`, `Track: RuntimeStability`)
+  - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-scalp-overnight-retirement-review.md), [상세검토 목록 #24~25](../audit-reports/2026-09-05-postclose-work-inventory.md), [traceability](../report-based-automation-traceability.md).
+  - 구현: overnight gatekeeper/OpenAI 호출·postclose/preclose producer·PREOPEN/context consumer를 폐기하고 양 env namespace를 fail-closed OFF로 고정했다. KRX 신규 BUY hard cutoff 15:10/terminal 15:15, NXT·sim cutoff 19:40/terminal 19:45를 기존 SELL 경로에 연결했으며 20:00 미종결 상태는 성공으로 합성하지 않고 incident로 남긴다. 현재-session 비합성 sim state만 복원·persist·feedback에 사용한다.
+  - 판정: 신규 튜닝축이나 AI 청산 경로를 추가하지 않았다. 기존 quote/account/order/receipt/venue 및 hard/protect/emergency safety가 계속 우선하고, 코드·env 검증을 실제 PID 소비나 수익 개선으로 간주하지 않는다.
+  - 권한 경계: bot 재기동·실주문·provider/threshold/수량/cap·broker/hard-safety 변경은 하지 않는다. 실제 자연 종결·receipt·post-sell 귀속은 아래 `ScalpSameSessionTerminalNaturalEvidence0907`이 소유한다.
+
+- [x] `[LatencyRecommendationRetirement0907] 독립 latency 추천 폐기·기존 안전 계측/진단 통합·반복 리뷰 종결` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:35`, `Track: RuntimeStability`)
+  - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-latency-recommendation-retirement-review.md), [상세검토 목록 #44](../audit-reports/2026-09-05-postclose-work-inventory.md), [traceability](../report-based-automation-traceability.md).
+  - 완료 판정: 독립 producer, PREOPEN loader/candidate, AI exemption과 current approval 승격을 폐기했다. historical primary/separate artifact와 동일 폐기 family의 stale operator lock도 env/selection을 복원하지 못한다. BUY Funnel/performance/daily report의 latency 진단과 runtime `LatencyMonitor`/`EntryPolicy` hard safety는 유지한다.
+  - 리뷰 보완: one-share latency/freshness가 양의 표본 floor를 만족하면 기존-family workorder로 재승격할 수 있던 경로와 stale operator lock 합성 candidate 경로를 차례로 닫았다. 관련 생산·적용·안전 회귀 **1,248 PASS**, Black/Ruff/compile/wrapper/parser/diff 검증 PASS이며 검토 범위 미해결 finding은 0건이다.
+  - 권한 경계: 별도 `latency_spread_relief_real_operator_override`를 유지했고 threshold/operator-lock 값, 실주문, provider, bot, quantity/cap과 hard safety를 변경하지 않았다. 코드 검증은 실제 PID 소비나 수익 개선 증거가 아니다.
+
+- [ ] `[LatencyDiagnosticNaturalEvidence0907] 폐기 producer 부재·PREOPEN 비선택·runtime 안전 계측 자연 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:50`, `Track: RuntimeStability`)
+  - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-latency-recommendation-retirement-review.md), `data/pipeline_events/pipeline_events_2026-09-07.jsonl`, `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-09-07.json`.
+  - 확인: PREOPEN selected family/env에 `latency_classifier_runtime_profile` candidate가 없고 postclose producer가 실행되지 않으며 DONE marker가 recommendation false인지 대사한다. 정상 PID의 `LatencyMonitor`/`EntryPolicy`에서 SAFE/CAUTION normal submit, DANGER/stale/broker block과 `latency_block/pass` 진단이 유지되는지 확인한다.
+  - 완료 조건: 폐기 artifact 누락이 verifier 실패나 복구 workorder를 만들지 않고 BUY Funnel/performance/daily report가 실제 latency 진단을 계속 집계해야 한다. 자연 대상 0건은 `not_observed`로 유지하며 성공·실패·threshold 조정 근거로 쓰지 않는다.
+  - 권한 경계: 별도 fresh spread-only operator lock을 자동 제거하지 않는다. 자연 표본을 만들기 위한 주문·guard 우회·bot 재기동·threshold/provider 변경은 금지한다.
+
+- [ ] `[ScalpSameSessionTerminalNaturalEvidence0907] 당일 종결·exact receipt·sim post-sell 자연 귀속 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 15:10~20:10`, `Track: RuntimeStability`)
+  - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-scalp-overnight-retirement-review.md), `data/pipeline_events/pipeline_events_2026-09-07.jsonl`, `data/post_sell/sim_post_sell_candidates_2026-09-07.jsonl`.
+  - 확인: 정상 기동 PID가 PREOPEN-selected cutoff를 소비하고 KRX 15:15/NXT·sim 19:45에 해당 포지션만 기존 SELL 경로로 보내는지, exact sell receipt 뒤 sim post-sell candidate/evaluation이 생성되는지 대사한다. 20:00 unresolved count/code/reason과 주문 불명확·quote stale·venue conflict를 분리한다.
+  - 완료 조건: 자연 대상이 있으면 terminal decision→order/fill receipt→state terminal→post-sell join이 동일 symbol/session/record lineage로 닫히고 unresolved=0이어야 한다. 자연 대상 0건은 `not_observed`이며 결함이나 성공 증거로 만들지 않고 다음 자연 표본까지 유지한다.
+  - 권한 경계: 검증을 위한 수동 주문·강제 포지션 생성·guard 우회·bot 재기동은 금지한다. 미종결이 발생하면 합성 완료나 overnight 복구를 복원하지 말고 정확한 기존 안전장치 blocker와 수리 수용시험을 남긴다.
 
 - [x] `[InstitutionalMicroContextRepair0907] 기관수급 중복 경로 폐기·micro 전달/누적 판정 계약 보완` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:20~07:35`, `Track: RuntimeStability`)
   - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-institutional-microstructure-context-final-review.md), [traceability](../report-based-automation-traceability.md), [상세검토 목록 #26~27](../audit-reports/2026-09-05-postclose-work-inventory.md).

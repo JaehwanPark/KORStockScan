@@ -251,11 +251,6 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         mod,
-        "LATENCY_CLASSIFIER_RECOMMENDATION_DIR",
-        tmp_path / "missing_latency_classifier_recommendation",
-    )
-    monkeypatch.setattr(
-        mod,
         "microstructure_reaction_report_paths",
         lambda target_date: (
             tmp_path
@@ -598,7 +593,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert "swing_runtime_approval:2026-05-08:swing_model_floor" in markdown
 
 
-def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(
+def test_build_threshold_cycle_ev_report_ignores_retired_latency_recommendation(
     tmp_path, monkeypatch
 ):
     report_dir = tmp_path / "report"
@@ -611,7 +606,6 @@ def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(
         path.mkdir(parents=True)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
     monkeypatch.setattr(
         mod,
@@ -665,14 +659,16 @@ def test_build_threshold_cycle_ev_report_surfaces_latency_apply_permission(
 
     report = mod.build_threshold_cycle_ev_report("2026-05-20")
 
-    assert (
-        report["entry_funnel"]["latency_submit_routing"]
-        == "latency_submit_recovery_hold"
+    assert report["entry_funnel"]["latency_submit_routing"] == (
+        "buy_funnel_diagnostic_only"
+    )
+    assert report["entry_funnel"]["latency_classifier_recommendation_status"] == (
+        "retired"
     )
     assert report["entry_funnel"]["allowed_runtime_apply"] is False
-    assert report["entry_funnel"]["calibration_state"] == "hold_sample"
-    assert report["entry_funnel"]["recommended_action"] == "hold"
-    assert report["entry_funnel"]["would_recovery_canary_events"] == 220
+    assert report["entry_funnel"]["calibration_state"] == "retired"
+    assert report["entry_funnel"]["recommended_action"] is None
+    assert "would_recovery_canary_events" not in report["entry_funnel"]
 
 
 def test_threshold_cycle_ev_lifecycle_summary_surfaces_submit_contract(

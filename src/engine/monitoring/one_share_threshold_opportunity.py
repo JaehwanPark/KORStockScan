@@ -48,8 +48,8 @@ THRESHOLD_GROUPS = {
     "latency_or_freshness": {
         "stages": {"latency_block", "entry_submit_revalidation_block"},
         "tokens": {"latency", "stale", "quote_freshness", "stale_context_or_quote"},
-        "hook_family": "latency_classifier_runtime_profile",
-        "target_subsystem": "entry_latency_freshness_recheck",
+        "hook_family": "buy_funnel_sentinel",
+        "target_subsystem": "entry_latency_hard_safety_attribution",
     },
     "strength_momentum_vpw": {
         "stages": {
@@ -98,6 +98,9 @@ THRESHOLD_GROUPS = {
         "target_subsystem": "entry_hard_safety_preserve",
     },
 }
+DIAGNOSTIC_ONLY_THRESHOLD_GROUPS = frozenset(
+    {"latency_or_freshness", "cooldown_or_hard_safety"}
+)
 TERMINAL_SELL_STAGES = {"sell_completed"}
 _PROVENANCE_STAGES = {
     "order_bundle_submitted",
@@ -1394,7 +1397,7 @@ def _primary_blocker_evaluations(
             summary["valid_profit_sample"] >= 3
             and avg is not None
             and avg > 0
-            and group != "cooldown_or_hard_safety"
+            and group not in DIAGNOSTIC_ONLY_THRESHOLD_GROUPS
         )
         opportunities.append(
             {
@@ -1415,6 +1418,11 @@ def _primary_blocker_evaluations(
                     "eligible_for_existing_family_evidence"
                     if eligible
                     else "diagnostic_not_actionable"
+                ),
+                "candidate_ineligibility_reason": (
+                    "hard_safety_diagnostic_only"
+                    if group in DIAGNOSTIC_ONLY_THRESHOLD_GROUPS
+                    else None
                 ),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -1478,7 +1486,7 @@ def _build_code_orders(
         ):
             continue
         group = str(item.get("threshold_group") or "")
-        if group == "cooldown_or_hard_safety":
+        if group in DIAGNOSTIC_ONLY_THRESHOLD_GROUPS:
             continue
         priority = 1 if sample >= 10 and avg >= 0.2 else 2
         orders.append(

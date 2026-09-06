@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.engine.lifecycle.retirement import (
     RETIRED_ENV_PREFIXES,
+    RETIRED_CALIBRATION_FAMILIES,
     retired_artifact,
     current_report_view,
     retired_status,
@@ -89,6 +90,8 @@ AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approval"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
+# Archive-path compatibility for isolated legacy test fixtures.  The retired
+# latency recommendation has no report loader or PREOPEN consumer.
 LATENCY_CLASSIFIER_RECOMMENDATION_DIR = (
     DATA_DIR / "report" / "latency_classifier_recommendation"
 )
@@ -200,7 +203,7 @@ REMOVED_TARGET_ENV_KEYS = {
 REMOVED_CALIBRATION_FAMILIES = {
     "position_sizing_cap_release",
     "preset_tp_soft_stop_runtime",
-}
+} | RETIRED_CALIBRATION_FAMILIES
 ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
     "entry_score_parent",
     "entry_source_parent",
@@ -236,6 +239,10 @@ HOLD_CARRY_FORWARD_BLOCK_REASON_KEYS: dict[str, frozenset[str]] = {
 }
 RETIRED_RUNTIME_FAMILY_REASONS = {
     **{family: "retired_runtime_family:adm_ldm" for family in RETIRED_FAMILIES},
+    **{
+        family: "retired_calibration_family:latency_recommendation"
+        for family in RETIRED_CALIBRATION_FAMILIES
+    },
     "aggressive_entry_price_override_runtime": (
         "retired_runtime_family:entry_price_gap_profile_and_quote_consistency_own_entry_price"
     ),
@@ -1402,46 +1409,6 @@ def _load_ai_review(
     return {"status": "missing_ai_review", "path": None, "items_by_family": {}}
 
 
-def _latency_classifier_recommendation_path(source_date: str) -> Path:
-    return (
-        LATENCY_CLASSIFIER_RECOMMENDATION_DIR
-        / f"latency_classifier_recommendation_{source_date}.json"
-    )
-
-
-def _load_latency_classifier_candidates(
-    source_date: str | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if not source_date:
-        return [], {"status": "missing_source_date", "path": None}
-    path = _latency_classifier_recommendation_path(source_date)
-    if not path.exists():
-        return [], {"status": "missing_report", "path": str(path)}
-    payload = _load_json(path)
-    candidates = payload.get("calibration_candidates")
-    if not isinstance(candidates, list):
-        candidate = payload.get("calibration_candidate")
-        candidates = [candidate] if isinstance(candidate, dict) else []
-    normalized = [item for item in candidates if isinstance(item, dict)]
-    selected_candidate = normalized[0] if normalized else {}
-    selected_metrics = (
-        selected_candidate.get("source_metrics")
-        if isinstance(selected_candidate.get("source_metrics"), dict)
-        else {}
-    )
-    return normalized, {
-        "status": "loaded",
-        "path": str(path),
-        "latency_block_count": payload.get("latency_block_count"),
-        "selected_profile_id": payload.get("selected_profile_id"),
-        "profile_generation": payload.get("profile_generation"),
-        "recommended_action": selected_metrics.get("recommended_action"),
-        "recommended_action_reason": selected_metrics.get("recommended_action_reason"),
-        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
-        "calibration_state": selected_candidate.get("calibration_state"),
-    }
-
-
 def _scalping_pyramid_quality_calibration_path(source_date: str) -> Path:
     return SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR / (
         f"scalping_pyramid_quality_calibration_{source_date}.json"
@@ -2605,7 +2572,6 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     calibration_state = str(candidate.get("calibration_state") or "")
     policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
     force_emit = policy_or_family in {
-        "latency_classifier_runtime_profile",
         "lifecycle_decision_matrix_runtime",
         ENTRY_OPPORTUNITY_RECHECK_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
@@ -3533,8 +3499,6 @@ def _ai_guard_allows_candidate(
         return (True, "deterministic_drought_conditional_preopen_policy")
     if family in DETERMINISTIC_POLICY_HANDOFF_FAMILIES:
         return (True, "deterministic_policy_handoff")
-    if family == "latency_classifier_runtime_profile":
-        return (True, "deterministic_latency_classifier_recommendation")
     items_by_family = (
         ai_review.get("items_by_family")
         if isinstance(ai_review.get("items_by_family"), dict)
@@ -5081,7 +5045,6 @@ def _holding_decision_context_runtime_audit(
     stage_keys = (
         "KORSTOCKSCAN_HOLDING_SCORE_CONTEXT_ENABLED",
         "KORSTOCKSCAN_HOLDING_FLOW_CONTEXT_ENABLED",
-        "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED",
     )
     required_env_keys = [enabled_key, active_date_key, *cohort_keys, *stage_keys]
     enabled = _runtime_env_enabled(effective_env.get(enabled_key))
@@ -7224,11 +7187,7 @@ def build_preopen_apply_manifest(
             else set()
         )
         report_source_date = str(report.get("date") or source_date or "")
-        latency_candidates, latency_recommendation = (
-            _load_latency_classifier_candidates(report_source_date)
-        )
-        if latency_candidates:
-            calibration_candidates = [*calibration_candidates, *latency_candidates]
+        latency_recommendation = retired_status("latency_classifier_recommendation")
         scalping_pyramid_quality_candidates, scalping_pyramid_quality_calibration = (
             _load_scalping_pyramid_quality_calibration_candidates(
                 report_source_date,

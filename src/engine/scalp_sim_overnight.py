@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.lifecycle.retirement import retired_status
+from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
 from src.engine.sniper_config import CONF
 from src.engine.sniper_post_sell_feedback import record_sim_post_sell_candidate
 from src.engine.trade_profit import (
@@ -162,6 +164,8 @@ def _write_state(
 def _is_active_sim_position(row: dict[str, Any]) -> bool:
     if not isinstance(row, dict):
         return False
+    if is_synthetic_scalp_sim(row):
+        return False
     if str(row.get("status") or "").upper() != "HOLDING":
         return False
     if str(row.get("strategy") or "").upper() != "SCALPING":
@@ -249,7 +253,7 @@ def _base_event_fields(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "decision_authority": DECISION_AUTHORITY,
-        "runtime_effect": DECISION_AUTHORITY,
+        "runtime_effect": False,
         "overnight_schema": OVERNIGHT_SCHEMA,
         "source_quality_gate": SOURCE_QUALITY_GATE,
         "forbidden_uses": "/".join(FORBIDDEN_USES),
@@ -507,7 +511,28 @@ def run_sim_overnight(
     state_path: Path = STATE_PATH,
     mutate_state: bool = True,
     emit_events: bool = True,
+    allow_retired_offline_replay: bool = False,
 ) -> dict[str, Any]:
+    if (
+        not allow_retired_offline_replay
+        or mutate_state
+        or emit_events
+    ):
+        return {
+            **retired_status("scalp_sim_overnight"),
+            "target_date": target_date,
+            "generated_at": _now_iso(),
+            "summary": {
+                "decision_target": 0,
+                "sell_today": 0,
+                "hold_overnight": 0,
+                "reason": (
+                    "retired_no_current_producer_or_runtime_authority;"
+                    "offline_replay_must_be_side_effect_free"
+                ),
+            },
+            "rows": [],
+        }
     if mutate_state:
         try:
             lock_context = _state_file_lock(state_path, blocking=False)
@@ -895,6 +920,7 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         event
         for event in iter_jsonl(events_path, errors="ignore")
         if _is_overnight_report_event(event)
+        and not is_synthetic_scalp_sim(event)
     ]
     stage_counts = Counter(str(event.get("stage") or "-") for event in overnight_events)
     action_counts = Counter(
@@ -938,6 +964,7 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
         row
         for row in active
         if isinstance(row, dict)
+        and not is_synthetic_scalp_sim(row)
         and str(row.get("scalp_sim_overnight_status") or "") == "HOLD_OVERNIGHT"
         and str(row.get("scalp_sim_overnight_decision_date") or "") == target_date
     ]
@@ -1203,27 +1230,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run decisions without mutating state or emitting events.",
     )
-    args = parser.parse_args(argv)
+    parser.parse_args(argv)
 
-    if args.report_only:
-        report = build_report(args.target_date, args.state_path)
-    else:
-        engine = _build_openai_engine() if args.live_openai else None
-        try:
-            report = run_sim_overnight(
-                target_date=args.target_date,
-                ai_engine=engine,
-                state_path=args.state_path,
-                mutate_state=not args.dry_run,
-                emit_events=not args.dry_run,
-            )
-        finally:
-            pool = getattr(locals().get("engine", None), "_responses_ws_pool", None)
-            if pool is not None:
-                pool.close()
-    json_path, md_path = write_outputs(report, args.output_dir)
-    print(f"[OK] wrote {json_path}")
-    print(f"[OK] wrote {md_path}")
+    status = retired_status("scalp_sim_overnight")
+    print(json.dumps(status, ensure_ascii=False, sort_keys=True))
     return 0
 
 

@@ -291,7 +291,8 @@ def test_pattern_lab_ai_review_resolves_source_only_warnings_before_late_bound_t
         "source_only_keep_collecting"
     }
     assert {item["source_context_resolution"]["status"] for item in conclusions} == {
-        "resolved_by_classified_source_quality_warning"
+        "resolved_as_retired_not_applicable",
+        "resolved_by_classified_source_quality_warning",
     }
     assert all(
         item["source_context_resolution"]["runtime_effect"] is False
@@ -765,8 +766,8 @@ def test_pattern_lab_ai_review_resolves_closed_ldm_threshold_feedback_false_posi
     conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
     assert conclusion["final_state"] == "source_only_keep_collecting"
     assert (
-        conclusion["feedback_handoff_resolution"]["status"]
-        == "resolved_by_currentness_feedback_handoff_pass"
+        conclusion["source_context_resolution"]["status"]
+        == "resolved_as_retired_not_applicable"
     )
 
 
@@ -1304,7 +1305,10 @@ def test_pattern_lab_ai_review_resolves_classified_source_quality_warning_gaps(
     assert {
         item["source_context_resolution"]["status"]
         for item in report["ai_two_pass_review"]["final_conclusions"]
-    } == {"resolved_by_classified_source_quality_warning"}
+    } == {
+        "resolved_as_retired_not_applicable",
+        "resolved_by_classified_source_quality_warning",
+    }
 
 
 def test_pattern_lab_ai_review_resolves_lifecycle_drift_from_source_wrapper(
@@ -1383,7 +1387,7 @@ def test_pattern_lab_ai_review_resolves_lifecycle_drift_from_source_wrapper(
     assert conclusion["final_state"] == "source_only_keep_collecting"
     assert (
         conclusion["source_context_resolution"]["status"]
-        == "resolved_by_classified_source_quality_warning"
+        == "resolved_as_retired_not_applicable"
     )
 
 
@@ -1531,6 +1535,7 @@ def test_pattern_lab_ai_review_resolves_generic_source_report_warning_ids(
         for item in report["ai_two_pass_review"]["final_conclusions"]
     }
     assert resolution_statuses == {
+        "resolved_as_retired_not_applicable",
         "resolved_by_currentness_ai_review_contract_pass",
         "resolved_by_classified_source_quality_warning",
         "resolved_by_classified_threshold_ev_source_only_warnings",
@@ -1666,7 +1671,7 @@ def test_pattern_lab_ai_review_resolves_exact_ai_source_only_warning_ids(
     )
 
 
-def test_pattern_lab_ai_review_keeps_exact_adm_sample_floor_gap_without_contract(
+def test_pattern_lab_ai_review_retires_exact_adm_sample_floor_gap(
     tmp_path, monkeypatch
 ):
     report_dir = tmp_path / "data" / "report"
@@ -1733,10 +1738,13 @@ def test_pattern_lab_ai_review_keeps_exact_adm_sample_floor_gap_without_contract
         "2026-05-15", provider="openai", ai_raw_response=raw_response
     )
 
-    assert report["status"] == "warning"
-    assert [order["order_id"] for order in report["code_improvement_orders"]] == [
-        "order_pattern_lab_ai_review_scalp_entry_adm_sample_floor"
-    ]
+    assert report["status"] == "pass"
+    assert report["code_improvement_orders"] == []
+    conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
+    assert (
+        conclusion["source_context_resolution"]["status"]
+        == "resolved_as_retired_not_applicable"
+    )
 
 
 def test_pattern_lab_ai_review_resolves_exact_source_maturity_contracts(

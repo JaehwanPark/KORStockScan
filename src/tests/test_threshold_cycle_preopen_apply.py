@@ -3734,29 +3734,55 @@ def test_preopen_apply_blocks_empty_lifecycle_bucket_sim_auto_approval(
     )
 
 
-def test_auto_bounded_live_imports_latency_classifier_recommendation(
+def test_auto_bounded_live_ignores_retired_latency_classifier_recommendation(
     tmp_path, monkeypatch
 ):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
     runtime_dir = tmp_path / "runtime_env"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
     ai_dir = report_dir / "threshold_cycle_ai_review"
     latency_dir = report_dir / "latency_classifier_recommendation"
     report_dir.mkdir(parents=True)
     ai_dir.mkdir(parents=True)
     latency_dir.mkdir(parents=True)
+    lock_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
     monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
     monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
 
+    retired_candidate = {
+        "family": "latency_classifier_runtime_profile",
+        "stage": "entry_latency_classifier",
+        "priority": 6,
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "calibration_state": "adjust_up",
+        "target_env_keys": [
+            "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
+            "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
+            "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
+        ],
+        "current_values": {
+            "max_ws_age_ms_for_caution": 700,
+            "max_ws_jitter_ms_for_caution": 300,
+            "max_spread_ratio_for_caution": 0.005,
+        },
+        "recommended_values": {
+            "max_ws_age_ms_for_caution": 1200,
+            "max_ws_jitter_ms_for_caution": 1500,
+            "max_spread_ratio_for_caution": 0.01,
+        },
+    }
     (report_dir / "threshold_cycle_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
                 "apply_candidate_list": [],
-                "calibration_candidates": [],
+                "calibration_candidates": [retired_candidate],
             }
         ),
         encoding="utf-8",
@@ -3767,31 +3793,21 @@ def test_auto_bounded_live_imports_latency_classifier_recommendation(
                 "date": "2026-05-08",
                 "latency_block_count": 24,
                 "selected_profile_id": "balanced_1200_1500_0100",
-                "calibration_candidates": [
-                    {
-                        "family": "latency_classifier_runtime_profile",
-                        "stage": "entry_latency_classifier",
-                        "priority": 6,
-                        "allowed_runtime_apply": True,
-                        "safety_revert_required": False,
-                        "calibration_state": "adjust_up",
-                        "target_env_keys": [
-                            "SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
-                            "SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
-                            "SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
-                        ],
-                        "current_values": {
-                            "max_ws_age_ms_for_caution": 700,
-                            "max_ws_jitter_ms_for_caution": 300,
-                            "max_spread_ratio_for_caution": 0.005,
-                        },
-                        "recommended_values": {
-                            "max_ws_age_ms_for_caution": 1200,
-                            "max_ws_jitter_ms_for_caution": 1500,
-                            "max_spread_ratio_for_caution": 0.01,
-                        },
-                    }
-                ],
+                "calibration_candidates": [retired_candidate],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (lock_dir / "retired_latency_lock.json").write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "lock_id": "stale_latency_recommendation_lock",
+                "family": "latency_classifier_runtime_profile",
+                "stage": "entry_latency_classifier",
+                "env_overrides": {
+                    "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION": "1200"
+                },
             }
         ),
         encoding="utf-8",
@@ -3804,25 +3820,25 @@ def test_auto_bounded_live_imports_latency_classifier_recommendation(
         auto_apply=True,
     )
 
-    assert manifest["status"] == "auto_bounded_live_ready"
-    assert manifest["latency_classifier_recommendation"]["status"] == "loaded"
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION"
-        ]
-        == "1200"
+    assert manifest["status"] == "auto_bounded_live_blocked"
+    assert manifest["runtime_change"] is False
+    assert manifest["latency_classifier_recommendation"]["status"] == "retired"
+    assert manifest["latency_classifier_recommendation"]["runtime_effect"] is False
+    assert not any(
+        "SCALP_ENTRY_LATENCY_MAX_" in key for key in manifest["runtime_env_overrides"]
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION"
-        ]
-        == "1500"
+    assert not any(
+        item.get("family") == "latency_classifier_runtime_profile"
+        for item in manifest["auto_apply_selected"]
     )
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION"
-        ]
-        == "0.01"
+    retired_decision = next(
+        item
+        for item in manifest["auto_apply_decisions"]
+        if item.get("family") == "latency_classifier_runtime_profile"
+    )
+    assert retired_decision["selected"] is False
+    assert retired_decision["decision_reason"] == (
+        "retired_calibration_family:latency_recommendation"
     )
     assert not any(
         key.startswith("KORSTOCKSCAN_SCALP_LATENCY_SUBMIT_RECOVERY")

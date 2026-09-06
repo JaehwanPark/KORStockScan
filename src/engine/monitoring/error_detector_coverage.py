@@ -11,7 +11,6 @@ REQUIRED_CRON_JOB_IDS: set[str] = {
     "panic_sell_defense",
     "buy_pause_guard",
     "monitor_snapshot",
-    "scalp_sim_overnight_preclose",
     "swing_live_dry_run",
     "threshold_cycle_postclose",
     "postclose_done_controller",

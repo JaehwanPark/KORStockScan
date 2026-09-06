@@ -217,7 +217,10 @@ def _eod_label() -> str:
 
 
 def _overnight_gatekeeper_enabled() -> bool:
-    return bool(getattr(TRADING_RULES, "SCALPING_OVERNIGHT_GATEKEEPER_ENABLED", False))
+    # Permanently retired by scalping_overnight_retirement_20260906.  Keep the
+    # compatibility module importable for historical tests and audit tooling,
+    # but never let an environment/config override restore real-order authority.
+    return False
 
 
 def _find_active_target_by_code(code):
@@ -1018,7 +1021,7 @@ def _apply_overnight_flow_override(
 
 
 def run_scalping_overnight_gatekeeper(ai_engine=None):
-    """Run the preclose scalping overnight / sell-today gatekeeper once."""
+    """Retired compatibility entrypoint; it never evaluates or submits orders."""
     global KIWOOM_TOKEN, DB, WS_MANAGER, event_bus, ACTIVE_TARGETS
 
     if not _overnight_gatekeeper_enabled():
