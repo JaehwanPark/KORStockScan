@@ -147,14 +147,27 @@ if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
 fi
 
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
+report_not_before_ts="$(date +%s)"
 echo "[START] panic sell defense target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN}" | tee -a "$LOG_FILE"
 
-if [[ "$MARKET_BREADTH_COLLECT_ENABLED" != "0" && "$MARKET_BREADTH_COLLECT_ENABLED" != "false" && "$MARKET_BREADTH_COLLECT_ENABLED" != "no" && "$MARKET_BREADTH_COLLECT_ENABLED" != "off" ]]; then
+if [[ "$DRY_RUN" != "1" && "$MARKET_BREADTH_COLLECT_ENABLED" != "0" && "$MARKET_BREADTH_COLLECT_ENABLED" != "false" && "$MARKET_BREADTH_COLLECT_ENABLED" != "no" && "$MARKET_BREADTH_COLLECT_ENABLED" != "off" ]]; then
   run_market_breadth_collect
 fi
 
 if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "[DONE] panic sell defense target_date=${TARGET_DATE} dry_run=1 runtime_state_updated=false cooldown_updated=false" | tee -a "$LOG_FILE"
+    exit 0
+  fi
   REPORT_FILE="$PROJECT_DIR/data/report/panic_sell_defense/panic_sell_defense_${TARGET_DATE}.json"
+  if ! env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_panic_state_transition \
+      --report-file "$REPORT_FILE" --kind market_weakness \
+      --expected-report-date "$TARGET_DATE" --report-not-before-ts "$report_not_before_ts" \
+      --state-file "$MARKET_WEAKNESS_STATE_FILE" --validate-report-only \
+      > >(tee -a "$LOG_FILE") 2>&1; then
+    echo "[FAIL] required panic report missing or stale target_date=${TARGET_DATE} path=${REPORT_FILE}" | tee -a "$LOG_FILE"
+    exit 1
+  fi
   if [[ -f "$REPORT_FILE" ]]; then
     notify_audience="$NOTIFY_AUDIENCE"
     if [[ "$DRY_RUN" == "1" ]]; then
@@ -175,13 +188,21 @@ if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
       env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_panic_state_transition
       --report-file "$REPORT_FILE"
       --kind market_weakness
+      --expected-report-date "$TARGET_DATE"
+      --report-not-before-ts "$report_not_before_ts"
       --audience "$weakness_notify_audience"
       --state-file "$MARKET_WEAKNESS_STATE_FILE"
     )
     if [[ "$NOTIFY_ENABLED" == "0" || "$NOTIFY_ENABLED" == "false" || "$NOTIFY_ENABLED" == "no" || "$NOTIFY_ENABLED" == "off" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "0" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "false" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "no" || "$MARKET_WEAKNESS_NOTIFY_ENABLED" == "off" ]]; then
       weakness_notify_cmd+=(--observe-only)
     fi
-    "${weakness_notify_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || true
+    if ! "${weakness_notify_cmd[@]}" > >(tee -a "$LOG_FILE") 2>&1; then
+      echo "[FAIL] market weakness observer state update failed target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+      exit 1
+    fi
+  else
+    echo "[FAIL] required panic report disappeared target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+    exit 1
   fi
   touch "$COOLDOWN_STATE_FILE"
   finished_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"

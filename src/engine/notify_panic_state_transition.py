@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
+import tempfile
 import time
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from urllib import parse, request
 
 from src.database.db_manager import DBManager
@@ -14,6 +18,10 @@ from src.engine.market_panic_breadth_collector import (
     market_weakness_observation_contract_errors,
 )
 from src.engine.risk.market_weakness_threshold_policy import observation_thresholds
+from src.engine.risk.market_weakness_state import (
+    advance_market_latch,
+    STATE_REPLAY_CONTRACT,
+)
 from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
 
 DEFAULT_STATE_FILE = PROJECT_ROOT / "tmp" / "panic_state_telegram_notify_state.json"
@@ -29,6 +37,18 @@ MARKET_WEAKNESS_RELEASE_STATE = "RECOVERY_EVIDENCE"
 MARKET_WEAKNESS_BOUNDARY_STATE = "NEAR_WEAKNESS_BOUNDARY"
 MARKET_WEAKNESS_MAX_REPORT_LAG_SEC = 180
 SUPPORTED_LISTING_MARKETS = {"KOSPI", "KOSDAQ"}
+MARKET_WEAKNESS_HEALTH_SCHEMA = "market_weakness_observer_health_v1"
+MARKET_WEAKNESS_UNHEALTHY_STATUSES = frozenset(
+    {
+        "missing_report",
+        "missing_observation",
+        "invalid_hysteresis_policy",
+        "intraday_hysteresis_policy_mismatch",
+        "source_quality_blocked",
+        "observation_out_of_order",
+        "report_freshness_failed",
+    }
+)
 
 
 def _report_session_key(report_file: Path, report: dict) -> str:
@@ -90,7 +110,73 @@ def _load_state(path: Path) -> dict:
 
 def _write_state(path: Path, state: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o640)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _record_market_weakness_health(
+    *,
+    state_file: Path,
+    report_file: Path,
+    report: dict,
+    status: str,
+    now_ts: float | None,
+) -> None:
+    """Persist observer readiness without mutating the last coherent latch."""
+
+    now = time.time() if now_ts is None else float(now_ts)
+    state = _load_state(state_file)
+    previous = (
+        state.get("market_weakness_observer_health")
+        if isinstance(state.get("market_weakness_observer_health"), dict)
+        else {}
+    )
+    observation = _effective_market_weakness_observation(report_file, report)
+    source_ready = (observation.get("notifier_source_gate") or {}).get("passed") is True
+    ready = source_ready and status not in MARKET_WEAKNESS_UNHEALTHY_STATUSES
+    latch = state.get("market_weakness") or {}
+    observation_as_of = str(observation.get("as_of") or "")
+    observation_id = str(observation.get("observation_id") or "")
+    accepted = bool(
+        ready
+        and latch.get("last_observation_id") == observation_id
+        and latch.get("last_observation_as_of") == observation_as_of
+        and (latch.get("last_source_gate") or {}).get("passed") is True
+    )
+    health = {
+        "schema": MARKET_WEAKNESS_HEALTH_SCHEMA,
+        "ready": ready,
+        "status": status,
+        "checked_at_ts": now,
+        "report_file": str(report_file),
+        "consecutive_failure_count": (
+            0 if ready else _safe_int(previous.get("consecutive_failure_count"), 0) + 1
+        ),
+        "last_healthy_observation_as_of": (
+            observation_as_of
+            if accepted and observation_as_of
+            else str(previous.get("last_healthy_observation_as_of") or "")
+        ),
+        "last_healthy_observation_id": (
+            observation_id
+            if accepted and observation_id
+            else str(previous.get("last_healthy_observation_id") or "")
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    state["market_weakness_observer_health"] = health
+    _write_state(state_file, state)
 
 
 def _send_telegram(token: str, chat_id: str, message: str) -> None:
@@ -175,7 +261,8 @@ SELL_CONTEXT_PRIORITY = {
 
 def _safe_float(value: object) -> float | None:
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 
@@ -541,11 +628,20 @@ def _notify_market_weakness_from_report(
         if not legacy_baseline_state and previous_policy_key != current_policy_key:
             return "intraday_hysteresis_policy_mismatch"
     now = time.time() if now_ts is None else now_ts
-    if (
-        not force
-        and observation_id
-        and observation_id == str(previous.get("last_observation_id") or "")
+    if observation_id and observation_id == str(
+        previous.get("last_observation_id") or ""
     ):
+        if raw_state == "UNKNOWN":
+            return "source_quality_blocked"
+        if force and notification_enabled:
+            previous["pending_notification"] = {
+                "transition": "status",
+                "state": raw_state,
+                "message": _market_weakness_message(observation, "status", previous),
+                "created_at_ts": now,
+            }
+            state["market_weakness"] = previous
+            _write_state(state_file, state)
         pending_status = (
             _deliver_market_weakness_pending(
                 state, state_file=state_file, audience=audience, now=now
@@ -567,12 +663,15 @@ def _notify_market_weakness_from_report(
         if current_as_of is not None and previous_as_of is not None
         else None
     )
+    if observation_spacing_sec is not None and observation_spacing_sec < 0:
+        return "observation_out_of_order"
     if (
-        not force
-        and previous
+        previous
         and observation_spacing_sec is not None
         and observation_spacing_sec < minimum_spacing_sec
     ):
+        if raw_state == "UNKNOWN":
+            return "source_quality_blocked"
         pending_status = (
             _deliver_market_weakness_pending(
                 state, state_file=state_file, audience=audience, now=now
@@ -636,29 +735,12 @@ def _notify_market_weakness_from_report(
             if market in current_affected_markets
             else "recovery" if market in current_recovery_markets else "neutral"
         )
-        if classification == "weak":
-            market_state["weak_streak"] = (
-                _safe_int(market_state.get("weak_streak"), 0) + 1
-                if market_state.get("last_class") == "weak"
-                else 1
-            )
-            market_state["recovery_streak"] = 0
-            if _safe_int(market_state["weak_streak"], 0) >= activation_observations:
-                market_state["active"] = True
-        elif classification == "recovery":
-            market_state["weak_streak"] = 0
-            market_state["recovery_streak"] = (
-                _safe_int(market_state.get("recovery_streak"), 0) + 1
-                if market_state.get("active") is True
-                and market_state.get("last_class") == "recovery"
-                else (1 if market_state.get("active") is True else 0)
-            )
-            if _safe_int(market_state["recovery_streak"], 0) >= release_observations:
-                market_state["active"] = False
-        else:
-            market_state["weak_streak"] = 0
-            market_state["recovery_streak"] = 0
-        market_state["last_class"] = classification
+        market_states[market] = advance_market_latch(
+            market_state,
+            classification,
+            activation=activation_observations,
+            release=release_observations,
+        )
 
     active_markets = sorted(
         market for market, value in market_states.items() if value["active"] is True
@@ -730,6 +812,7 @@ def _notify_market_weakness_from_report(
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "execution_bridge_runtime_effect": True,
+        "state_replay_contract": STATE_REPLAY_CONTRACT,
     }
     if isinstance(previous.get("last_notification"), dict):
         next_state["last_notification"] = previous["last_notification"]
@@ -748,6 +831,8 @@ def _notify_market_weakness_from_report(
         next_state.pop("pending_notification", None)
     state["market_weakness"] = next_state
     _write_state(state_file, state)
+    if raw_state == "UNKNOWN":
+        return "source_quality_blocked"
     if not notification_enabled:
         return "state_updated_notify_disabled"
     pending_status = _deliver_market_weakness_pending(
@@ -755,8 +840,6 @@ def _notify_market_weakness_from_report(
     )
     if pending_status is not None:
         return pending_status
-    if raw_state == "UNKNOWN":
-        return "source_quality_blocked"
     if phase == "activation_pending":
         return "activation_pending"
     if phase == "release_pending":
@@ -934,7 +1017,16 @@ def notify_from_report(
     force: bool = False,
     now_ts: float | None = None,
     send_enabled: bool = True,
+    expected_report_date: str | None = None,
+    report_not_before_ts: float | None = None,
+    validate_report_only: bool = False,
 ) -> str:
+    if kind != "market_weakness" and (
+        expected_report_date is not None
+        or report_not_before_ts is not None
+        or validate_report_only
+    ):
+        raise ValueError("Report validation options require kind=market_weakness")
     if state_file is None:
         state_file = (
             DEFAULT_MARKET_WEAKNESS_STATE_FILE
@@ -951,9 +1043,51 @@ def notify_from_report(
     }
     report = _load_report(report_file)
     if not report:
+        if kind == "market_weakness":
+            _record_market_weakness_health(
+                state_file=state_file,
+                report_file=report_file,
+                report={},
+                status="missing_report",
+                now_ts=now_ts,
+            )
         return "missing_report"
     if kind == "market_weakness":
-        return _notify_market_weakness_from_report(
+        if (
+            expected_report_date is not None
+            or report_not_before_ts is not None
+            or validate_report_only
+        ):
+            now = time.time() if now_ts is None else now_ts
+            try:
+                report_at = datetime.fromisoformat(str(report.get("as_of") or ""))
+                if report_at.tzinfo is None:
+                    # The existing panic report producer writes local KST without an offset.
+                    report_at = report_at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                fresh_report = bool(
+                    report.get("target_date") == expected_report_date
+                    and report_at.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+                    == expected_report_date
+                    and report_not_before_ts is not None
+                    and report_at.timestamp() >= report_not_before_ts
+                    and 0
+                    <= now - report_at.timestamp()
+                    <= MARKET_WEAKNESS_MAX_REPORT_LAG_SEC
+                )
+            except (TypeError, ValueError, OverflowError):
+                fresh_report = False
+            if not fresh_report:
+                _record_market_weakness_health(
+                    state_file=state_file,
+                    report_file=report_file,
+                    report=report,
+                    status="report_freshness_failed",
+                    now_ts=now_ts,
+                )
+                return "report_freshness_failed"
+            if validate_report_only:
+                return "report_freshness_passed"
+        status = _notify_market_weakness_from_report(
             report_file,
             report,
             audience=audience,
@@ -962,6 +1096,14 @@ def notify_from_report(
             now_ts=now_ts,
             notification_enabled=notification_enabled,
         )
+        _record_market_weakness_health(
+            state_file=state_file,
+            report_file=report_file,
+            report=report,
+            status=status,
+            now_ts=now_ts,
+        )
+        return status
     if not notification_enabled:
         return "disabled"
     current_value = _state_value(kind, report)
@@ -1098,6 +1240,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--audience", choices=["all", "admin"], default="all")
     parser.add_argument("--state-file")
+    parser.add_argument("--expected-report-date")
+    parser.add_argument("--report-not-before-ts", type=float)
+    parser.add_argument("--validate-report-only", action="store_true")
     parser.add_argument(
         "--force",
         action="store_true",
@@ -1120,10 +1265,15 @@ def main() -> int:
         state_file=Path(args.state_file) if args.state_file else None,
         force=bool(args.force),
         send_enabled=not bool(args.observe_only),
+        expected_report_date=getattr(args, "expected_report_date", None),
+        report_not_before_ts=getattr(args, "report_not_before_ts", None),
+        validate_report_only=getattr(args, "validate_report_only", False),
     )
     print(
         f"[INFO] panic state Telegram notify status={status} kind={args.kind} audience={args.audience}"
     )
+    if args.kind == "market_weakness" and status in MARKET_WEAKNESS_UNHEALTHY_STATUSES:
+        return 2
     return 0
 
 

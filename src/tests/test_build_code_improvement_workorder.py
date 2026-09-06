@@ -170,7 +170,7 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     report = mod.build_code_improvement_workorder("2026-05-08", max_orders=5)
 
     decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
-    assert decisions["order_latency_guard_miss_ev_recovery"] == "implement_now"
+    assert decisions["order_latency_guard_miss_ev_recovery"] == "attach_existing_family"
     assert decisions["order_ai_threshold_miss_ev_recovery"] == "attach_existing_family"
     assert (
         decisions["order_liquidity_gate_miss_ev_recovery"] == "design_family_candidate"
@@ -7340,7 +7340,41 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
     )
 
 
-def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_to_existing_family(
+def test_latency_diagnostic_consolidation_does_not_accept_runtime_mutation():
+    for runtime_effect, expected in [
+        (False, "attach_existing_family"),
+        (True, "reject"),
+    ]:
+        classified = mod._classify_order(
+            {
+                "order_id": "order_latency_guard_miss_ev_recovery",
+                "runtime_effect": runtime_effect,
+            },
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+        assert classified.decision == expected
+    assert (
+        "order_latency_guard_miss_ev_recovery"
+        not in mod._closed_instrumentation_order_families(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "dynamic_entry_price_resolver",
+                            "source_metrics": {"instrumentation_status": "implemented"},
+                        }
+                    ]
+                }
+            },
+            target_date="2026-09-04",
+        )
+    )
+
+
+def test_build_code_improvement_workorder_consolidates_legacy_latency_into_buy_funnel(
     tmp_path,
     monkeypatch,
 ):
@@ -7417,7 +7451,8 @@ def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_t
     order = report["orders"][0]
     assert order["order_id"] == "order_latency_guard_miss_ev_recovery"
     assert order["decision"] == "attach_existing_family"
-    assert order["mapped_family"] == "dynamic_entry_price_resolver"
+    assert order["mapped_family"] == "buy_funnel_sentinel"
+    assert "retired" in order["decision_reason"]
 
 
 def test_build_code_improvement_workorder_does_not_route_dynamic_entry_normal_telemetry(

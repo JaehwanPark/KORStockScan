@@ -17,6 +17,25 @@ def _now() -> datetime:
     return datetime(2026, 8, 31, 10, 0, tzinfo=KST)
 
 
+def test_cancel_requires_explicit_fresh_state_even_when_decision_is_constructed(
+    tmp_path,
+):
+    state_path = tmp_path / "state.json"
+    _write_state(state_path)
+    decision = evaluate_market_weakness_entry_guard(
+        symbol="005930",
+        owner="episode",
+        now=_now(),
+        state_path=state_path,
+        listing_market="KOSPI",
+    )
+    assert decision.exact_market_open_buy_cancel_allowed is True
+    assert (
+        replace(decision, state_fresh=False).exact_market_open_buy_cancel_allowed
+        is False
+    )
+
+
 def _write_state(path, *, phase="active", active_markets=None, session="2026-08-31"):
     if active_markets is None:
         active_markets = ["KOSPI"]
@@ -28,7 +47,7 @@ def _write_state(path, *, phase="active", active_markets=None, session="2026-08-
                     "active_markets": active_markets,
                     "session_key": session,
                     "last_observation_id": "weakness-2",
-                    "last_observation_as_of": "2026-08-31T09:08:00+09:00",
+                    "last_observation_as_of": "2026-08-31T09:59:00+09:00",
                 }
             }
         ),
@@ -102,6 +121,30 @@ def test_released_or_prior_session_state_does_not_block(tmp_path):
     assert released.blocked is False
     assert stale.blocked is False
     assert stale.source_status == "state_session_mismatch"
+
+
+def test_current_session_active_latch_expires_when_observer_evidence_is_stale(
+    tmp_path,
+):
+    state_path = tmp_path / "state.json"
+    _write_state(state_path)
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["market_weakness"]["last_observation_as_of"] = "2026-08-31T09:50:00+09:00"
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    decision = evaluate_market_weakness_entry_guard(
+        symbol="005930",
+        owner="episode",
+        now=_now(),
+        state_path=state_path,
+        listing_market="KOSPI",
+    )
+
+    assert decision.blocked is False
+    assert decision.reason == "market_weakness_state_stale"
+    assert decision.state_fresh is False
+    assert decision.state_age_sec == 600.0
+    assert decision.exact_market_open_buy_cancel_allowed is False
 
 
 def test_active_latch_fails_closed_when_symbol_market_is_unresolved(tmp_path):
@@ -233,14 +276,10 @@ def test_blocked_entry_counterfactual_anchor_is_immutable_and_idempotent(tmp_pat
     assert first["status"] == "recorded"
     assert second["status"] == "existing_immutable_observation"
     assert second["content_sha256"] == payload["content_sha256"]
-    assert refreshed_guard_observation["status"] == (
-        "existing_immutable_observation"
-    )
-    assert refreshed_guard_observation["content_sha256"] == (
-        payload["content_sha256"]
-    )
+    assert refreshed_guard_observation["status"] == ("existing_immutable_observation")
+    assert refreshed_guard_observation["content_sha256"] == (payload["content_sha256"])
     assert payload["guard_observation_id"] == "weakness-2"
-    assert payload["guard_observation_as_of"] == "2026-08-31T09:08:00+09:00"
+    assert payload["guard_observation_as_of"] == "2026-08-31T09:59:00+09:00"
     assert conflict["status"] == "existing_immutable_observation_conflict"
     assert conflict["conflict_fields"] == ["target_price"]
     assert payload["actual_order_submitted"] is False
@@ -296,6 +335,4 @@ def test_blocked_entry_counterfactual_rejects_corrupt_existing_anchor(tmp_path):
     )
 
     assert repeated["status"] == "existing_immutable_observation_invalid"
-    assert repeated["validation_errors"] == [
-        "blocked_entry_content_sha256_invalid"
-    ]
+    assert repeated["validation_errors"] == ["blocked_entry_content_sha256_invalid"]

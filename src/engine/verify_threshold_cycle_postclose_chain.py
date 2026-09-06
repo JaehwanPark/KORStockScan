@@ -33,6 +33,7 @@ from src.engine.build_code_improvement_workorder import (
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.lifecycle.retirement import (
+    current_calibration_rows,
     RETIRED_REPORTS,
     RETIRED_STAGE_FLAGS,
     current_report_view,
@@ -618,6 +619,21 @@ def _machine_entry_timing_postclose_contract_status(
     )
 
     issues: list[str] = []
+    if target_date >= "2026-09-07":
+        from src.engine.monitoring.machine_rebound_reentry_evaluation import (
+            SECTION as rebound_section,
+        )
+        from src.trading.config.machine_rebound_reentry_policy import REPLAY_VERSION
+
+        rebound = report.get(rebound_section)
+        if not isinstance(rebound, dict) or rebound.get("schema") != REPLAY_VERSION:
+            issues.append("rebound_evaluation_section_missing_or_invalid")
+        elif (
+            rebound.get("runtime_effect") is not False
+            or rebound.get("actual_order_submitted") is not False
+            or rebound.get("broker_order_forbidden") is not True
+        ):
+            issues.append("rebound_evaluation_authority_leak")
     sample_floor_assessment = (
         report.get("sample_floor_assessment")
         if isinstance(report.get("sample_floor_assessment"), dict)
@@ -2603,9 +2619,7 @@ def _runtime_candidates_requiring_ai(calibration_report: dict[str, Any]) -> list
         return []
 
     blocking: list[str] = []
-    for item in candidates:
-        if not isinstance(item, dict):
-            continue
+    for item in current_calibration_rows(candidates):
         family = str(item.get("family") or item.get("source_family") or "").strip()
         state = str(item.get("calibration_state") or "").strip()
         if not family or family in _AI_EXEMPT_RUNTIME_FAMILIES:

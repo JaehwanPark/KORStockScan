@@ -2,12 +2,15 @@
 
 작성 기준: `2026-09-06 KST` (기존 review index 유지)
 
-통합 기준: 기능 커밋 `7d809a02`, `main` 병합 커밋 `d96532da`가 `origin/main`에 반영된 상태.
+#45 후속 갱신: [반등·재진입 1차 구현 리뷰](2026-09-06-rebound-reentry-implementation-review.md). 일반 2-leg episode flat 신규 진입은 기존 timing 내 source-only paired 평가와 **조건 통과 시 별도 사용자 승인 없는 PREOPEN 자동 적용**을 연결했다. 현재 자연 EV와 신규 journal은 미확인이며 생산 정책/봇은 변경하지 않았다. 위젯 순차매수·passive/partial·terminal no-entry·세션 초과 exit는 미지원 replay로 분리한다. 아래 #45의 “평가 미구현/별도 실전 설계”는 최초 계획 시점의 기록이며 이 갱신과 리뷰 문서가 현재 상태다.
+
+현행 기준: 2026-09-06 Plan Rebase §1·§7~§8과 2026-09-07 체크리스트의 완료 기록·OPEN 자연증거 owner를 반영한다. 과거 기능/병합 commit은 완료 증거이며 현재 owner를 대체하지 않는다.
 
 목적: 설치된 장후 자동화의 각 실행 단위를 순서대로 검토하면서 목적·목표·기대효과·운영상태·상세검토 상태·연결 lock을 한 표에서 추적한다. 실행 원칙과 owner는 [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md) §1~§8과 [2026-09-07 체크리스트](../checklists/2026-09-07-stage2-todo-checklist.md)가 우선한다.
 
 ## 1. 이번 갱신 판정
 
+- **2026-09-06 전체 재통합 리뷰**: dirty 전체 범위를 재검토했고, 최종 리뷰에서 #45의 source-only 비교비용이 exact-date 적용 후보와 결속되지 않은 live 권한 경계 1건을 발견해 다음 거래일 비용 값·날짜·SHA-256을 candidate/evidence/runtime에 고정했다. 수정 후 변경범위 20개 test module **1,562 PASS**, rebound 단독 **34 PASS**, Python 47개 Black/Ruff/compile, wrapper 3개 `bash -n`, parser 42개 OPEN, diff check를 통과했다. 생산 report/policy/env·봇 상태·실주문은 변경하지 않았다.
 - **main 통합 완료**: 누적 장후 runtime 계약 보완을 전용 브랜치에 커밋·푸시한 뒤 명시적 merge commit으로 main에 병합했다. 병합 전 수정·신규 테스트 전체 2,928건, 포맷 보완 후 receipt·수익 귀속 관련 1,184건, Entry/Institutional/Microstructure 관련 1,260건을 각각 PASS했다. Python 97개 변경 파일 Black/compile, wrapper 3개 `bash -n`, 신규 systemd unit verify, checklist parser와 diff check도 PASS했다.
 - #15~16, #21, #23, #26~27까지 상세검토·보완 결과를 반영했다. 현재 완료 범위는 저가 2-leg/확장 추천의 source-only 경제성, one-share 기회 진단과 일일 drought controller, Institutional 전용 aggregate 폐기, Microstructure freshness/delivery v3/finite outcome 진단이다. 다음 자연 PID·PREOPEN·장후 성과 확인은 각 checklist OPEN owner가 소유한다.
 - Entry AI gate 누적 backtest는 `on_demand only`이고 20:10 정기 wrapper producer가 아니다. 병합 전 gate에서 이를 반대로 요구하던 stale retirement 회귀를 정정해 일일 controller 유지와 누적 backtest 미호출을 함께 고정했다.
@@ -16,6 +19,8 @@
 - PREOPEN은 폐기 namespace를 OFF로 고정하고 보관 산출물의 재승격을 차단한다. 상세검토·검증 근거는 [ADM/LDM 정리 리뷰](2026-09-06-adm-ldm-retirement-review.md)를 따른다. bot 재기동이나 기존 다음-session env의 수동 재적용은 하지 않았다.
 - 이번 정리의 최종 통합 회귀는 **3,036 PASS**다. 코드리뷰·수정·재리뷰 반복 후 검토 범위 미해결 finding 0건이며, 9월 7일 실제 PREOPEN/PID/장후 소비는 별도 자연증거 확인이다.
 - #21/#23 후속 재개: ADM/LDM 폐기 완료 상태에서 one-share 진단과 기존 recheck 조건부 정책의 producer→PREOPEN→runtime/receipt 계약을 재검증했다. F1~F6, source-quality 불합격 기간의 복귀 근거 오인, 폐기 필터의 생성기 해시 손실을 보완했고 최종 통합 회귀 **2,345 PASS**다. 9/4 report·sim-only catalog와 9/7 PREOPEN를 재생성·verify PASS했다. recheck는 KRX 정규장/NXT 애프터마켓 ON, 장중 확대 OFF이며 실제 PID·수익개선은 자연증거 대기다. 상세는 [recheck 최종 리뷰 §7](2026-09-06-one-share-drought-final-review.md#7-admldm-폐기-완료-후-재개-검증)을 따른다. 위 ADM/LDM 폐기 검증 수치와 합산하지 않는다.
+- #14 Samsung entry **v9 구현·재리뷰 종결, 자연 효과 검증 OPEN**. actual-policy/as-of·청산 원장, 기계별 연속 적용 cohort, broker 체결금액 EV와 기존 timing owner의 Samsung 상승·반등 recipe를 연결하고 신규 subset tightening 권한은 제거했다. 962 PASS이며 현재 OPEN owner는 `SamsungEntryRiseReboundNaturalEvidence0907`이다.
+- #45 Market panic breadth **R1~R5 및 일반 2-leg 반등 평가/자동 PREOPEN 구현 종결, 자연 효과 검증 OPEN**. 이전 정상 관측 688건/CF 4건은 새 paired 근거가 아니다. 후속 [구현 리뷰](2026-09-06-rebound-reentry-implementation-review.md)는 8/31~9/4 격리 재생성에서 과거 신규 원천 부재로 pair/후보 0건임을 확인했다. 최종 통합 리뷰에서는 다음 거래일 비용 계약의 값·날짜·hash를 candidate/영수증/runtime에 결속해 source-only 비교값의 직접 live 권한 누출을 차단했다. `MarketWeaknessReboundReentryIntegration0907`은 완료 증거이며 현재 OPEN owner는 `MarketWeaknessNaturalEvidence0907`과 미지원 recipe/유지 판정의 `MarketWeaknessReboundReentryRetention0911`이다. 실제 운영 lock·정책값·봇 상태는 변경하지 않았다.
 - 아래 1~13 종결 및 1,964 PASS 수치는 9월 5일의 이전 검증 기록이다. 이번 정리 변경의 통합 검증 수치와 혼용하지 않는다.
 
 - `Bot stop`부터 `AVG_DOWN recovery calibration`까지 13개 실행 단위의 코드·계약 점검과 허용된 보완을 완료했다.
@@ -79,18 +84,22 @@
 | 4 | Snapshot retention cleanup | 오래된 snapshot 정리 | 보존기간 밖의 완료 snapshot만 제거 | 디스크 증가와 scan 비용 억제 | ON | **구현·점검 종결**; live source 삭제 권한 없음 확인 | E9 |
 | 5 | Threshold compact/backfill | raw event를 날짜별 compact로 변환 | checkpoint·source hash·bounded resource guard로 EOF 도달 | 후속 EV 분석 입력 안정화 | ON | **구현·점검 종결**; 기존 availability/resource fail-closed 유지 | E2, partition lock |
 | 6 | Sim post-sell feedback | sim 후보의 성숙 결과 생성 | sim outcome과 monitor snapshot 완결 | sim 정책 평가 가능 | ON | **구현·점검 종결**; real execution authority 없음 확인 | E2, P16/P17 |
-| 7 | Limit-down watch report | 하한가·급락 위험 관찰 | exact-date source-only 위험 보고 생성 | 급락·유동성 위험 오판 방지 | ON | **구현·점검 종결**; 별도 runtime acceptance만 남음 | E2 |
+| 7 | Limit-down watch report | 하한가·급락 위험 관찰 | exact-date source-only 위험 보고 생성 | 급락·유동성 위험 오판 방지 | ON | **구현·보고서 계약 점검 종결**; 유효 정책 후보·PREOPEN/PID 소비·natural match·post-apply EV는 미판정. 이를 소유하는 별도 현행 OPEN 항목은 없음 | E2 |
 | 8 | Rising-missed finalization | 놓친 상승 후보 최종 집계 | intraday source와 blocker를 exact-date로 종결 | missed-upside 원인 분해 | ON | **구현·점검 종결**; source-quality pending은 별도 표기 | E2, E4, P15 |
 | 9 | Rising-missed scout workorder | 개선 가능한 missed 원인을 구현 항목으로 변환 | stable workorder와 source-only authority 결속 | 반복되는 entry source gap 감소 | ON | **구현·점검 종결**; runtime threshold 권한 없음 | E2, P15 |
 | 10 | PYRAMID feedback finalization | 추가매수 기회·차단·종료 연결 | same-event gate/BBO/resolver/terminal/coverage 보존 | 무효 추가매수 표본 제거 | ON | **구현·점검 종결, 자연증거 대기** | E2, E4, P14/P18 |
 | 11 | Observation source-quality preflight | 필수 field·label·lineage 검사 | 결손 row/window 제외 또는 fail-closed | 오염 자료의 EV·runtime 승격 방지 | ON, hard gate | **구현·점검 종결**; AVG_DOWN replay frame 계약 포함 | E2 |
 | 12 | PYRAMID quality calibration | 기존 min-profit 한 축의 증분 경제성 재현 | 동일 complete episode에서 current/candidate/NO_ADD와 비용 1회 비교 | 작은 유효 순기여 후보 식별, 과도한 허들 제거 | ON | **구현·점검 종결, 자연 AI/PREOPEN 증거 대기** | E2, P14/P18 |
 | 13 | AVG_DOWN recovery calibration | 기존 shallow buy-pressure 한 축의 A/B/C 경제성 재현 | production frame→full-policy replay→report→AI/PREOPEN/verifier 연결 | 중복 경로·고정 종료 착시 제거, 유효 후보만 선별 | ON | **구현·점검 종결, 자연 paired/PID/EV 증거 대기** | E2; 신규 operator lock 없음 |
-| 14 | Samsung machine entry tuning | 삼성 독립 머신 진입상태 분석 | 다음 PREOPEN bounded 후보 생성 | 종목 전용 진입 EV 개선 | ON | 상세검토 대기 | E2 |
+| 14 | Samsung machine entry tuning | 실제 적용 정책·신호·청산 기준의 독립 머신 진입 분석 | 기존 timing owner에서 Samsung 상승·반등 후보를 비용 차감 EV로 선별 | 허위 subset tightening 제거와 종목 전용 진입 순이익 개선 기대 | ON; v9 구현·재리뷰 종결, 자연 증거 대기 | [Samsung 최종 리뷰](2026-09-05-samsung-machine-entry-final-review.md): actual-policy/as-of·청산 원장·연속 적용 cohort·broker 체결금액 EV·상승/반등 recipe 연결, 962 PASS. 실적용·수익개선은 `SamsungEntryRiseReboundNaturalEvidence0907` OPEN | E2, E7; 신규 operator lock 없음 |
 | 15 | Low-price two-leg tuning | 저가주 2-leg 실제 결과·적용 정책 감사 | 실제 applied 정책 carry; 부분집합은 진단만 유지 | 허위 개선·근거 없는 정책 변경 차단 | ON | LP-F1/F2 보완; 신규 subset live 승격 제거, 50 loader-ready/3 격리 유지, 실적용·수익개선 별도 | E2 |
 | 16 | Low-price expanded recommendation | 기존 두 필터 경로 비교·후보/profile 연구 | 동일기간 순이익·양수 EV, 날짜 간 HELD, half 진단 | EV 착시와 보유 단절 제거 | ON, content-bound checkpoint/resume | LP-F3~F5 보완; paired 연구·추천은 source-only, 신규 실권한 없음 | E2 |
+| 17 | Machine microstructure attribution 20:10 사본 | 과거 중복 attribution 실행 | 21:15 단일 owner로 통합 | 이중 heavy 실행·혼합 generation 방지 | RETIRED (2026-09-05) | 20:10 실행·복구 경로 제거; 현재 기능 owner는 21:15 final refresh | 없음 |
+| 18 | Market-weakness hysteresis 20:10 사본 | 과거 중복 hysteresis 실행 | 21:15 attribution 후 단일 순서로 통합 | stale attribution 소비 방지 | RETIRED (2026-09-05) | 20:10 실행·복구 경로 제거; 현재 기능 owner는 21:15 final refresh | 없음 |
+| 19 | Machine entry timing 20:10 사본 | 과거 중복 timing 실행 | 21:15 단일 owner로 통합 | 이중 후보·정책 generation 방지 | RETIRED (2026-09-05) | 20:10 실행·복구 경로 제거; 현재 기능 owner는 21:15 final refresh | 없음 |
+| 20 | Machine policy approval 20:10 사본 | 과거 중복 approval 실행 | 21:15 결과만 PREOPEN handoff | 중복 승인·알림 방지 | RETIRED (2026-09-05) | 20:10 실행·복구 경로 제거; 현재 기능 owner는 21:15 final refresh | 없음 |
 
-20:10의 machine attribution·market-weakness hysteresis·entry timing·policy approval 중복 사본은 2026-09-05에 제거했다. 네 기능의 현재 실행 owner는 위 21:15 `korstockscan-machine-microstructure-final-refresh.timer` 하나이며, 명시적 복구도 전용 wrapper만 사용한다. 따라서 기존 review index 17~20은 재사용하지 않는다.
+17~20번은 기능 자체의 폐기가 아니라 **20:10 중복 scheduled copy의 폐기**다. 현재 네 기능은 위 21:15 `korstockscan-machine-microstructure-final-refresh.timer`와 전용 wrapper만 소유한다.
 
 ### 4.2 진입·분할·LDM·microstructure 단계
 
@@ -119,10 +128,10 @@
 | 41 | Bucket MTD | 월간 parent 집계 | sim/live candidate 입력 | promotion 안정화 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 42 | Runtime apply bridge | 후보와 실제 consumer 연결 | blocker/owner/env mapping 명시 | 보고서만 생성되는 경로 차단 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
 | 43 | Scalp-sim auto-approval | sim catalog 자동 생성 | 다음 PREOPEN sim handoff | sim 연구 자동화 | ON | LDM 정책·가설 제외; rising-missed 독립 source 유지 | E2, P16/P17 |
-| 44 | Latency recommendation | 독립 latency 임계값 추천(구 목적) | BUY Funnel/performance diagnostic으로 통합 | 죽은 후보·중복 권한 제거, hard safety 유지 | RETIRED (2026-09-06) | [구현·최종 리뷰](2026-09-06-latency-recommendation-retirement-review.md); producer/PREOPEN/AI exemption 및 one-share 재승격 경로 제거 | 없음; 과거 artifact archive only, spread-only operator lock 별도 유지 |
-| 45 | Market panic breadth | 시장 panic 폭 계산 | 개별종목과 시장 위험 분리 | 과잉 매도 방지 | ON | 상세검토 대기 | E2 |
+| 44 | Latency recommendation | 독립 latency 임계값 추천(구 목적) | BUY Funnel/performance diagnostic으로 통합 | 죽은 후보·중복 권한 제거, hard safety 유지 | RETIRED (2026-09-06) | [보완 최종 검증 §7](2026-09-06-latency-recommendation-retirement-review.md#7-r1r3-보완-구현-및-최종-재검증): R1 raw manifest/writer 차단, R2 calibration·AI 후보 제거, R3 event-candidate 허위 결손 제거와 가격해결기 오귀속 해소. 1,490 PASS·변경 범위 미해결0 | 과거 artifact archive only; 별도 spread-only operator lock 유지. 구현 완료 기록 `LatencyRetirementFinalReviewRepair0907`, 다음 자연 확인 owner `LatencyDiagnosticNaturalEvidence0907` |
+| 45 | Market panic breadth | 시장 panic 폭 계산 | 개별종목과 시장 위험 분리 | 과잉 차단·놓친 상승과 약세장 신규노출의 비용 차감 EV 균형 | ON; R1~R5 및 일반 2-leg 반등 평가/자동 PREOPEN 1차 구현; 자연 적용/경제성 검증 대기 | 기존 CF 4/778건은 새 paired 근거 아님. 신규 source→기존 timing 내 A0/A2 비교→조건 충족 시 추가 승인 없는 한 scope PREOPEN 적용. 위젯 순차·partial/passive·세션 초과 exit 등은 지원 외 계약으로 분리. [1차 리뷰](2026-09-06-rebound-reentry-implementation-review.md); 자연 검증/Retention OPEN | E2, E3, E7 유지 |
 | 46 | Panic-sell defense report | panic regime 종결 | recovery 상태 귀속 | exit 안정화 | ON | 상세검토 대기 | E2 |
-| 47 | Scale-in split plan | 추가매수 분할 정책 | scale-in policy 생성 | 체결·slippage 개선 | ON | 상세검토 대기 | E2 |
+| 47 | Scale-in split plan | AVG_DOWN 총수량 보존 2-leg 정책 | 유효한 paired 증분 경제성을 policy·PREOPEN에 연결 | 체결 참여율·순이익 개선 기대, 실제 효과 미검증 | PRODUCER ON / v3 보완 완료 / 9월 7일 env 비선택 | [보완 §6](2026-09-06-scale-in-split-order-plan-final-review.md#6-f1f7-구현-및-반복-리뷰): F1~F7 및 재리뷰 결함 수정. BUY/SELL lifecycle join·공유 TTL 10/20초·fixed control·버전별 R6·결측 이월·paired>=3/2일·lineage 일치. 시장가 runtime 제외·3-leg 진단 전용. 943 PASS, 검토 범위 미해결0. v1/v2 승격 금지, 실제 cancel delta는 미계측 진단 | 구현 완료 기록 `ScaleInSplitFinalReviewRepair0907`; 자연 실행·실효성 확인 OPEN owner `ScaleInSplitNaturalEvidence0907`. 현재 표본 부재를 강제 수량/조건 완화로 해결하지 않음 |
 | 48 | Strategy-position fact sync | 완료 거래 fact 갱신 | 실제 체결·PnL 확정 | EV 정확성 향상 | ON | 상세검토 대기 | DB writer lock |
 | 49 | Scanner lookup-attention tuning | 조회자원 배분 조정 | 정책 생성 후 verify | API 효율 개선 | ON, DB 필요 | 상세검토 대기 | E2 |
 | 50 | Daily threshold report | 일별·누적 후보 통합 | calibration·AI review 생성 | PREOPEN 근거 통합 | ON | 상세검토 대기 | E2 |
@@ -214,12 +223,16 @@
 3. `Low-price`: 실제 applied two-leg carry, paired research의 자연 결과, HELD·partial/full fill 분리와 source-only 권한을 `LowPriceEconomicReplayNaturalEvidence0907`에서 확인한다.
 4. `One-share / Entry recheck`: 고정 KRX/NXT profile의 실제 PID 소비와 exact submit/fill/청산·비용차감 EV를 `EntryRecheckNaturalAttribution0907`에서 확인한다. 누적 backtest는 정기 실행하지 않는다.
 5. `Microstructure`: delivery v3의 computed/payload/confirmed sent/internal consumed/cache identity와 같은 attempt 결과 결합을 `ContextDeliveryNaturalEvidence0907`에서 확인한다. 20건은 진단 해석 기준이며 PREOPEN 승격 조건이 아니다.
-6. 구현 완료를 실현 수익 개선으로 표시하지 않는다. 자연 match 0은 경제성 실패가 아니며, source/adapter gap과 자연 희소성을 구분한다.
-7. bot 재기동, 수동 env 적용, operator lock 변경, 주문·수량·provider·hard-safety 변경은 이 목록 갱신 범위에 포함하지 않는다.
+6. `Samsung`: 상승·반등 recipe의 자연 원천, exact PREOPEN/PID 소비와 broker 체결금액 EV를 `SamsungEntryRiseReboundNaturalEvidence0907`에서 확인한다.
+7. `Market weakness/rebound`: immutable hysteresis policy·observer health·0B/0D source yield와 비용 차감 paired EV를 `MarketWeaknessNaturalEvidence0907` 및 `MarketWeaknessReboundReentryRetention0911`에서 분리 확인한다.
+8. `Scale-in split`: qty>=2 자연 AVG_DOWN의 v3 policy/PREOPEN/R6 귀속을 `ScaleInSplitNaturalEvidence0907`에서 확인한다. 무표본을 음의 EV로 보거나 표본 확보를 위해 수량·허들을 완화하지 않는다.
+9. 구현 완료를 실현 수익 개선으로 표시하지 않는다. 자연 match 0은 경제성 실패가 아니며, source/adapter gap과 자연 희소성을 구분한다.
+10. bot 재기동, 수동 env 적용, operator lock 변경, 주문·수량·provider·hard-safety 변경은 이 목록 갱신 범위에 포함하지 않는다.
 
 ## 6. 다음 상세검토 우선순위
 
-1. #14 `Samsung machine entry tuning`: 목적·기대효과, 기존 전용 timing owner와 PREOPEN 자동 적용, 상승·반등 원천 및 자연 PID 소비를 점검한다.
-2. #24/#25 폐기 후 venue별 same-session terminal SELL과 20:00 미종결 reconciliation incident가 자연 런타임에서 정확히 귀속되는지 확인한다.
+1. #46 `Panic-sell defense report`: recovery 상태 귀속, stale/missing report fail-closed, observer health와 알림 실패가 runtime state에 미치는 영향을 상세 검토한다.
+2. #48~55 실제 체결 fact→daily/cumulative EV→AI correction→entry cancel-wait의 producer/consumer·runtime 허들을 순서대로 검토한다.
+3. #24/#25 폐기 후 venue별 same-session terminal SELL과 20:00 미종결 reconciliation incident가 자연 런타임에서 정확히 귀속되는지 확인한다.
 
-번호 순서보다 이미 시작된 사용자 지정 항목을 우선 반영했으므로 #14가 아직 `상세검토 대기`다. 다음 검토 시작 시 Plan Rebase와 당일 checklist의 current owner를 다시 확인한다.
+번호 순서보다 사용자 지정 항목을 우선 반영해 #14·#15~16·#21~29·#44~45·#47을 먼저 종결했다. 다음 검토 시작 시 Plan Rebase와 당일 checklist의 current owner를 다시 확인한다.

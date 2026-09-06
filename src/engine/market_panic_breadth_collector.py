@@ -95,6 +95,8 @@ def market_weakness_observation_id(observation: dict[str, Any]) -> str:
 
 def market_weakness_observation_contract_errors(
     observation: dict[str, Any],
+    *,
+    allow_legacy_policy: bool = False,
 ) -> list[str]:
     """Validate the immutable, market-scoped source-only observation contract."""
 
@@ -133,7 +135,7 @@ def market_weakness_observation_contract_errors(
     sample_floor = observation.get("sample_floor")
     try:
         activation_observations, release_observations, spacing_sec = (
-            observation_thresholds(observation)
+            observation_thresholds(observation, allow_legacy_policy=allow_legacy_policy)
         )
     except ValueError:
         activation_observations = None

@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+from src.engine.risk.market_weakness_state import STATE_REPLAY_CONTRACT
 
 from src.engine.automation.market_weakness_hysteresis_tuning import (
     build_outputs,
@@ -68,6 +69,8 @@ def _write_source(
             "misclassification_count": 4,
             "stratum_guards": stratum_guards,
             "review_status": "passed_out_of_sample_review",
+            "state_replay_contract": STATE_REPLAY_CONTRACT,
+            "misclassification_role": "diagnostic_only",
         }
     recommendation = {
         "window_start": "2026-06-05",
@@ -169,6 +172,76 @@ def test_no_candidate_carries_current_policy_instead_of_resetting_baseline(tmp_p
     )
     assert reason == "ready"
     assert loaded == applied
+    assert Path(applied["source_report"]).parent == policy_dir / "source_snapshots"
+    assert Path(applied["source_report"]).exists()
+    snapshot = json.loads(Path(applied["source_report"]).read_text(encoding="utf-8"))
+    assert set(snapshot) == {
+        "schema",
+        "source_date",
+        "source_origin_report",
+        "source_origin_report_canonical_sha256",
+        "market_weakness_entry_response",
+    }
+
+
+def test_applied_policy_uses_immutable_snapshot_after_daily_source_is_regenerated(
+    tmp_path,
+):
+    source_dir = tmp_path / "source"
+    policy_dir = tmp_path / "policy"
+    source_path = _write_source(source_dir)
+    report, applied = build_outputs(
+        source_date=SOURCE_DATE,
+        source_report_dir=source_dir,
+    )
+    write_outputs(
+        report,
+        applied,
+        output_dir=tmp_path / "report",
+        policy_dir=policy_dir,
+    )
+    regenerated = json.loads(source_path.read_text(encoding="utf-8"))
+    regenerated["regenerated_after_policy_publish"] = True
+    source_path.write_text(json.dumps(regenerated), encoding="utf-8")
+
+    loaded, reason = load_applied_policy(
+        target_date=EFFECTIVE_DATE,
+        policy_dir=policy_dir,
+        source_report_dir=source_dir,
+    )
+
+    assert reason == "ready"
+    assert loaded == applied
+
+
+def test_tampered_immutable_snapshot_fails_closed(tmp_path):
+    source_dir = tmp_path / "source"
+    policy_dir = tmp_path / "policy"
+    _write_source(source_dir)
+    report, applied = build_outputs(
+        source_date=SOURCE_DATE,
+        source_report_dir=source_dir,
+    )
+    write_outputs(
+        report,
+        applied,
+        output_dir=tmp_path / "report",
+        policy_dir=policy_dir,
+    )
+    snapshot_path = Path(applied["source_report"])
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot["tampered"] = True
+    snapshot_path.chmod(0o640)
+    snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
+
+    loaded, reason = load_applied_policy(
+        target_date=EFFECTIVE_DATE,
+        policy_dir=policy_dir,
+        source_report_dir=source_dir,
+    )
+
+    assert loaded is None
+    assert reason == "market_weakness_policy_source_report_contract_invalid"
 
 
 def test_reviewed_one_axis_neighbor_is_applied_to_next_exact_session(tmp_path):
@@ -286,3 +359,56 @@ def test_owner_stratum_economic_degradation_fails_closed_even_with_rehashed_revi
         ValueError, match="market_weakness_policy_economic_review_invalid"
     ):
         build_outputs(source_date=SOURCE_DATE, source_report_dir=source_dir)
+
+
+def test_positive_ev_is_not_vetoed_by_diagnostic_misclassification_count(tmp_path):
+    source_dir = tmp_path / "source"
+    source_path = _write_source(source_dir, selected_activation=3, selected_release=4)
+    payload = json.loads(source_path.read_text())
+    recommendation = payload["market_weakness_entry_response"][
+        "threshold_recommendation"
+    ]
+    selected = recommendation["selected_policy"]
+    selected["misclassification_count"] = (
+        recommendation["current_policy"]["misclassification_count"] + 1
+    )
+    for guard in selected["stratum_guards"].values():
+        guard["candidate_misclassification_count"] = (
+            guard["current_policy_misclassification_count"] + 1
+        )
+    recommendation["review_hash"] = threshold_recommendation_review_hash(recommendation)
+    source_path.write_text(json.dumps(payload))
+    _report, applied = build_outputs(
+        source_date=SOURCE_DATE, source_report_dir=source_dir
+    )
+    assert applied["release_unique_observations"] == 4
+    # A cached pre-repair matrix cannot be relabelled as a reviewed candidate.
+    del selected["state_replay_contract"]
+    recommendation["review_hash"] = threshold_recommendation_review_hash(recommendation)
+    source_path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="selected_policy_invalid"):
+        build_outputs(source_date=SOURCE_DATE, source_report_dir=source_dir)
+
+
+def test_nonfinite_snapshot_fails_closed_without_loader_exception(tmp_path):
+    source_dir = tmp_path / "source"
+    policy_dir = tmp_path / "policy"
+    _write_source(source_dir)
+    report, applied = build_outputs(
+        source_date=SOURCE_DATE, source_report_dir=source_dir
+    )
+    write_outputs(
+        report, applied, output_dir=tmp_path / "report", policy_dir=policy_dir
+    )
+    snapshot = Path(applied["source_report"])
+    payload = json.loads(snapshot.read_text())
+    payload["invalid_float"] = float("nan")
+    snapshot.chmod(0o640)
+    snapshot.write_text(json.dumps(payload))
+    loaded, reason = load_applied_policy(
+        target_date=date.fromisoformat(applied["target_date"]),
+        policy_dir=policy_dir,
+        source_report_dir=source_dir,
+    )
+    assert loaded is None
+    assert reason == "market_weakness_policy_source_report_contract_invalid"

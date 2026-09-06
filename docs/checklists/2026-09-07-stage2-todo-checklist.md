@@ -18,6 +18,28 @@
 
 ## 수동 보강 체크리스트
 
+- [x] `[ScaleInSplitFinalReviewRepair0907] AVG_DOWN 분할 실제 청산 결합·유효시간·control/R6·적용 조건 수리` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:40`, `Track: ScalpingLogic`)
+  - Source: [Scale-in split 보완 §6](../audit-reports/2026-09-06-scale-in-split-order-plan-final-review.md#6-f1f7-구현-및-반복-리뷰), [상세검토 목록 #47](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 완료(2026-09-06): F1~F7 구현·수정·재리뷰 완료. BUY/SELL stage별 exact join, runtime 공유 10/20초 TTL, fixed unsplit control, policy-version R6, 결측/악화 분리, 실제 paired>=3·source dates>=2 공통 계약, 시장가 runtime 제외·3-leg diagnostic-only, false/nested lineage 정규화를 보완했다. 현재 report/policy v3와 `ttl_paired_fixed_control_v3`가 권한 계약이며 v1/v2는 승격 근거가 아니다.
+  - 재리뷰 보완: partial submit 원 수량 보존, 상충 terminal/중복 receipt·overfill·청산 후 매수 제외, context 분류 전 attempt 중복 제거, 다른 날짜 raw 배제, daily paired 분모와 hold_sample 판정, R6 버전 누락 source-only workorder를 추가 검증했다.
+  - 검증: 관련 producer/daily/EV/PREOPEN/runtime summary/wrapper/verifier/workorder·공유 math 회귀 943 PASS, 문법·정적 검사·diff check PASS. 같은 정책 적용 성공이 자기 비교로 해제되지 않음, 170초 touch 미체결, paired 2건/당일-only 미승인, 정상 2일 evidence→policy→runtime 함수의 수량보존 split 통합 회귀를 포함한다. 검토 범위 미해결 code finding은 0건이다.
+  - 한계: sampled-touch/same-terminal replay는 실제 체결/청산 경로 재현 증명이 아니다. R6 partial/unfilled는 full-fill EV와 분리하고 실제 cancel delta는 exact receipt join 미보유로 not_measured 진단값이며 자동 rollback 조건이 아니다.
+  - 권한 경계: 코드 보완만 수행했고 runtime env 수동 적용·bot 재기동·실주문·운영 report write 재생성은 하지 않았다. 자연 실행·수익 효과 확인은 `ScaleInSplitNaturalEvidence0907`의 OPEN 작업이며 수량·broker/hard-safety·provider·bot 상태를 바꿔 표본을 만들지 않는다.
+
+- [x] `[ScaleInSplitEconomicGateRepair0907] AVG_DOWN 분할 실행형태 rolling 경제성·자동이월 계약 보완` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: ScalpingLogic`)
+  - 후속 재점검 정정: 아래 항목은 이전 구현 기록이다. 현재 구현 완료 판정은 `ScaleInSplitFinalReviewRepair0907`과 최종 리뷰 §6이 우선하며 자연 실행 owner는 `ScaleInSplitNaturalEvidence0907`이다.
+  - Source: [최종 보완·리뷰](../audit-reports/2026-09-06-scale-in-split-order-plan-final-review.md), [traceability](../report-based-automation-traceability.md), [상세검토 목록 #47](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 완료 판정(2026-09-06): 고유 qty>=2 AVG_DOWN attempt의 exact receipt/terminal/MFE-MAE를 최신 20 report date로 누적하고, outcome·MFE-MAE 각 3건, price join 80%, 비용 차감 EV>0, fill participation 70%, downside p10 delta>=-0.30%인 context만 policy v2에 넣는다. 기존 2-leg variant 전체를 순비용 EV로 비교하고 3-leg는 최선 2-leg보다 EV가 엄격히 높을 때만 선택한다. 미관측 context/default는 unsplit fail-closed다.
+  - 자동화: POSTCLOSE producer→daily threshold→PREOPEN strict policy preflight→runtime allocator 연결을 유지한다. `hold_sample`은 fresh한 직전 검증 policy만 이월하고 source-quality/negative-economic evidence 또는 `hold_no_edge`는 자동 해제한다.
+  - 검증: 관련 producer/daily/EV/PREOPEN/runtime summary/wrapper/verifier/workorder 회귀 910 PASS. 생성 policy content hash·env version·허용 child shape도 PREOPEN/runtime에서 재검증한다. 2026-09-04 최종 읽기 전용 결과는 eligible 0, runtime OFF이며 무표본 binary precheck 7.32초·약 36MB다. 코드 PASS는 실제 PID 소비나 수익 개선 증거가 아니다.
+  - 권한 경계: initial entry, PYRAMID, requested quantity, cap, threshold, provider/bot, broker/account/order/cooldown/stale quote 및 hard/protect/emergency safety를 변경하지 않았다.
+
+- [ ] `[ScaleInSplitNaturalEvidence0907] qty>=2 AVG_DOWN 분할 policy 자연 생성·PREOPEN·R6 귀속 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:35~21:50`, `Track: ScalpingLogic`)
+  - Source: [최종 보완·리뷰](../audit-reports/2026-09-06-scale-in-split-order-plan-final-review.md), `data/report/scale_in_split_order_plan/scale_in_split_order_plan_2026-09-07.json`, `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-09-08.json`.
+  - 확인: 자연 qty>=2 AVG_DOWN이 있으면 동일 attempt/order/record의 submit→fill receipt→terminal SELL→TTL 내 가격 관측 결합, v3 paired>=3/source dates>=2·EV/fill/downside, PREOPEN selection/audit/runtime policy version과 R6 full-fill/partial 분리를 대사한다. 무표본은 not_observed로 유지하고 버전 누락 workorder·70% 참여율 guard의 정수수량 민감도도 확인한다.
+  - 완료 조건: 적용 후보는 source-quality-pass와 strict economic contract를 모두 만족하고 승인 context에서만 수량보존 split이 관측돼야 한다. 자연 대상 0건은 `not_observed`이며 성공·실패나 조건 완화 근거로 만들지 않는다. `hold_no_edge` 또는 negative-economic evidence에서 직전 policy가 이월되면 실패다.
+  - 권한 경계: 표본 생성을 위한 수동 추가매수·주문·guard 우회·bot 재기동·threshold/provider/수량/cap 변경은 금지한다.
+
 - [x] `[AdmLdmRetirementImplementation0907] ADM/LDM 권장 정리·반복 리뷰·통합 검증 종결` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
   - Source: [ADM/LDM 정리 리뷰](../audit-reports/2026-09-06-adm-ldm-retirement-review.md), [상세검토 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
   - 완료 판정(2026-09-06): 폐기 producer·prompt/bias·PREOPEN·보관 산출물 재유입·누락 FAIL 경로를 보완하고 최종 관련 통합 회귀 3,036 PASS, 문법·정적 검사·wrapper·parser 검증을 통과했다. 검토 범위 미해결 finding은 0건이다. 원천자료·전용 전략 분석·주문 안전장치는 유지했다.
@@ -39,9 +61,17 @@
 
 - [ ] `[LatencyDiagnosticNaturalEvidence0907] 폐기 producer 부재·PREOPEN 비선택·runtime 안전 계측 자연 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:50`, `Track: RuntimeStability`)
   - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-latency-recommendation-retirement-review.md), `data/pipeline_events/pipeline_events_2026-09-07.jsonl`, `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-09-07.json`.
+  - 선행 보완 완료: 아래 `LatencyRetirementFinalReviewRepair0907`의 R1~R3 및 연결 owner 결함을 1,490 PASS로 종결했다. 다음 자연 실행 증거는 별도이며 최초 1,248 PASS는 이전 구현 기록이다.
   - 확인: PREOPEN selected family/env에 `latency_classifier_runtime_profile` candidate가 없고 postclose producer가 실행되지 않으며 DONE marker가 recommendation false인지 대사한다. 정상 PID의 `LatencyMonitor`/`EntryPolicy`에서 SAFE/CAUTION normal submit, DANGER/stale/broker block과 `latency_block/pass` 진단이 유지되는지 확인한다.
   - 완료 조건: 폐기 artifact 누락이 verifier 실패나 복구 workorder를 만들지 않고 BUY Funnel/performance/daily report가 실제 latency 진단을 계속 집계해야 한다. 자연 대상 0건은 `not_observed`로 유지하며 성공·실패·threshold 조정 근거로 쓰지 않는다.
   - 권한 경계: 별도 fresh spread-only operator lock을 자동 제거하지 않는다. 자연 표본을 만들기 위한 주문·guard 우회·bot 재기동·threshold/provider 변경은 금지한다.
+
+- [x] `[LatencyRetirementFinalReviewRepair0907] 폐기 latency manifest 검증·통합 후보 필터·결합 진단 R1~R3 보완` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: RuntimeStability`)
+  - Source: [R1~R3 보완 구현·검증 §7](../audit-reports/2026-09-06-latency-recommendation-retirement-review.md#7-r1r3-보완-구현-및-최종-재검증).
+  - R1 완료: raw selection에서 폐기 family를 FAIL 처리하고 writer는 파일 쓰기 전에 거부한다. 정상 baseline과 별도 operator owner는 보존하며 현재 9/7 manifest는 읽기 전용 검증 PASS다.
+  - R2 완료: calibration 전용 filter로 candidate/decision/approval 및 AI 요구를 차단했다. 진단 행 1개·다음 상태 `not_applicable_retired`·추천값 없음, raw telemetry 유지 반례를 통과했다.
+  - R3 완료: gap227 및 event227-candidate147의 gap80을 제거하고 미결합 값은 `not_evaluated`/null로 명시했다. 상세 원인과 BUY Funnel owner를 연결하고 가격해결기로의 잘못된 fallback/완료 귀속도 제거했다. 실제 source-quality 결손은 보존한다.
+  - 검증: 863+627=1,490 PASS, Black/Ruff·compile·문서 parser·diff 검증, 변경 범위 재리뷰 finding 0건. 자연 확인 owner는 `LatencyDiagnosticNaturalEvidence0907`이며 실제 수익 개선·PID 소비를 확정한 것은 아니다. threshold/score80 floor/spread lock, bot/실주문 권한 변경 없음.
 
 - [ ] `[ScalpSameSessionTerminalNaturalEvidence0907] 당일 종결·exact receipt·sim post-sell 자연 귀속 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 15:10~20:10`, `Track: RuntimeStability`)
   - Source: [최종 구현·리뷰](../audit-reports/2026-09-06-scalp-overnight-retirement-review.md), `data/pipeline_events/pipeline_events_2026-09-07.jsonl`, `data/post_sell/sim_post_sell_candidates_2026-09-07.jsonl`.
@@ -185,6 +215,52 @@
   - 완료 조건: 정상 process lifecycle 뒤 당일 receipt의 requested/item census가 manifest와 일치하고 설정·최초·마지막 수신시각이 생성시각 이전의 exact target date에서 인과순서를 지키며, 모든 active-owner exact route에 0B·0D 최초 수신시각·양의 수신 횟수·transport epoch·nonnegative 최대 inter-arrival gap이 있다. actual decision leg는 `source_entry_event_id`와 `signal_decision_at`을 보존한다.
   - 다음 액션: 전체 완결이면 rolling source 입력 허용, 일부 route만 미수신이면 해당 route 격리와 정상 route 유지, 전역 계약 결함이면 fail-closed, 거래일 종료 뒤 receipt-only 결손이면 사후 합성·반복 재실행 없이 exact source date quarantine으로 닫는다. 자연 신호 0건은 실패가 아니며 receipt/consumer 계약을 기준으로 판정한다.
   - 권한 경계: source-quality/runtime reflection 확인 전용이다. 이 acceptance를 위해 bot/service를 재기동하거나 실주문·취소, threshold, provider, quantity/cap, 가격·target·holding/exit, broker/hard safety를 변경하지 않는다.
+
+- [x] `[MarketWeaknessContractRepair0907] market breadth policy source·health·stale latch·달성가능성 보완 및 반복 리뷰` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 06:30~07:20`, `Track: RuntimeStability`)
+  - Source: [Market panic breadth 보완 리뷰](../audit-reports/2026-09-06-market-panic-breadth-remediation-review.md), [traceability](../report-based-automation-traceability.md), [상세검토 목록 #45](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 현재 판정 정정(2026-09-06): 아래 완료/605 PASS는 이전 구현 기록이다. §7의 반례는 후속 `MarketWeaknessFinalDefectRepair0907`과 `MarketWeaknessEconomicScopeDecision0907`에서 보완·판정 완료했다. 현재 근거는 리뷰 §8, OPEN owner는 자연 검증 및 기존 timing으로의 반등·재진입 평가 통합 구현 항목이다. 발동 빈도만으로 매수 차단의 경제적 적정성을 추론하지 않는다.
+  - 완료 판정: exact-date hysteresis policy를 content-addressed immutable source snapshot에 결속하고, notifier atomic health/state와 nonzero failure, wrapper FAIL 전파, live guard의 마지막 정상 관측 300초 TTL, threshold evidence의 eligible-yield/예상 floor 도달일/zero-yield strata를 구현했다. mutable 일별 report 재생성으로 장중 policy가 바뀌거나 stale active latch가 종일 BUY를 막는 경로를 닫았다.
+  - 조건 판정: 2회 activation/3회 release와 10일/50건/OOS floor는 낮추지 않았다. 관측 발동성은 충분하며 병목은 0B/0D registration receipt·30분 horizon 수집률이다. 수집률이 구조적으로 낮으면 `collection_contract_gap`으로 판정해 threshold 완화가 아니라 source 수리를 요구한다.
+  - 검증: 관련 producer/consumer·주문 owner·wrapper 확장 회귀 **605 PASS**, Ruff/Black/compileall, wrapper `bash -n`, parser와 diff check PASS다. 9/7 policy v2는 2/3 carry-forward로 `ready`이며, 발행 후 mutable origin을 다시 생성해 hash가 달라져도 immutable snapshot loader가 `ready`를 유지했다. 최종 재리뷰 미해결 finding은 0건이다.
+  - 권한 경계: 상승·반등 live 예외, breadth 기준, 수량/가격/target/holding/exit, main bot, provider, broker/hard safety를 변경하지 않았다. 실제 PID·수익 개선은 아래 자연증거 항목 전에는 완료로 판정하지 않는다.
+
+- [x] `[MarketWeaknessFinalDefectRepair0907] market breadth R1~R5 계약 회귀 수리 및 연결 반례 검증` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 06:30~07:20`, `Track: RuntimeStability`)
+  - Source: [Market panic breadth 보완·최종 검증 §8](../audit-reports/2026-09-06-market-panic-breadth-remediation-review.md#8-r1r5-보완재검증-및-반등재진입-구현-결정).
+  - 구현 완료: historical policy v1/v2 판독과 live v2 적용을 분리하고, source 실패/Telegram 결과 분리, 공유 latch/TTL·버전별 replay·허용 receipt, wrapper 실행별 report freshness/FAIL, horizon별 eligibility를 보완했다. 추가 리뷰에서 duplicate force·NaN snapshot·실패 관측 경계·dry-run 부작용도 수리했다.
+  - 검증 결과: 원문 변경 없이 정상 688건 복원/실제 결손 85건 제외, 유효 30분 CF 1→4/778건. observe-only 실패·TTL 300/301/600초·복구·wrapper missing/stale/source fail 및 dry-run을 회귀 검증했다. 최종 검증 상세는 리뷰 §8.4다. 보고서/정책 쓰기와 봇 재기동 없이 메모리에서 재평가했으며 현재 9/7 정책은 2/3 carry-forward 그대로다.
+  - 권한 경계: source-only 진단·수집 계약 수리와 실제 guard 변경을 구분한다. 과거 관측 identity/hash 재작성, 표본 합성, operator lock 삭제, threshold 완화, 봇 재기동·실주문/취소·provider·수량/cap·broker/hard safety 변경을 이 체크리스트만으로 허용하지 않는다.
+
+- [x] `[MarketWeaknessEconomicScopeDecision0907] market breadth EV 목적·미구현 arm·공통 적용 조건 재설계 판정` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:20~07:40`, `Track: ScalpingLogic`)
+  - Source: [Market panic breadth 보완·범위 결정 §8](../audit-reports/2026-09-06-market-panic-breadth-remediation-review.md).
+  - 판정 완료: 반등·재진입 평가는 기존 Machine entry timing에 통합 구현한다. 이번에는 결정까지이며 실제 평가 구현은 다음 항목이다. 미구현 arm은 `integration_required`, `automatic_evaluation_enabled=false`로 명시해 자연 대기만으로 자동 완성되는 오해를 제거했다. 오분류 건수 hard veto는 제거하고 진단으로 전환했다.
+  - 조건 유지: 10일/50건/OOS·source-quality·꼬리손실·한 축 제한을 일괄 완화하지 않는다. 공통 policy는 양 owner/market 근거를 유지한다. 부분 범위 적용은 충분한 근거 이후 동일 scope/version을 전 연결에 결속하는 별도 설계다. 4건/5일의 50건 floor 산술 외삽 58일은 전체 승인 완료 예상일이 아니다.
+  - 권한 경계: 설계/제거 검토는 live 예외 활성화나 기존 운영 lock 삭제 권한이 아니다. 자연 표본을 만들기 위한 강제 매수·guard 우회는 금지한다.
+
+- [x] `[MarketWeaknessReboundReentryPlan0907] 반등·재진입 평가 상세 구현안 및 다음 권장 액션 수립` (`Due: 2026-09-07`, `Slot: PREOPEN`, `TimeWindow: 07:20~07:40`, `Track: ScalpingLogic`)
+  - Source: [반등·재진입 평가 구현안](../proposals/market-weakness-rebound-reentry-evaluation-plan-2026-09-06.md), [Market panic breadth 보완 리뷰 §8](../audit-reports/2026-09-06-market-panic-breadth-remediation-review.md).
+  - 완료(2026-09-06): actual-only timing에 blocked CF를 섞지 않는 독립 section, A0 기존 재개 포함 control/A1 회복 후 새 신호/A2 약세 중 개별 반등 가설, causal source·owner exit·동일 분모 EV·horizon 분리·자동화 handoff·검증 및 유지/종료 기준을 수립했다.
+  - 문서 리뷰: 미평가 broker 검사는 경제성/실전 도달성 분리, report-only 재평가는 production source/report/policy 격리, 원 유효기간 내 같은 signal ID의 fresh 재검증 허용·만료 연장 금지로 구체화했다. 문서/parser 회귀 47 PASS와 실제 backlog parse/diff check를 통과했다.
+  - 권한 경계: 계획·문서 검증만 수행했다. 코드 구현, 생산 보고서/정책 쓰기, bot restart·실주문·live 예외 활성화는 하지 않았다. 이전 745 PASS는 R1~R5 보완 증거이지 미구현 평가의 검증 수치가 아니다.
+
+- [x] `[MarketWeaknessReboundReentryIntegration0907] 기존 Machine entry timing 반등·재진입 1차 평가 및 자동 PREOPEN 통합 검증` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~20:10`, `Track: ScalpingLogic`)
+  - Source: [상세 구현안 §2~5·7~8](../proposals/market-weakness-rebound-reentry-evaluation-plan-2026-09-06.md), [Market panic breadth 구현 결정 §8.3](../audit-reports/2026-09-06-market-panic-breadth-remediation-review.md#83-반등재진입-평가-구현-결정-기존-timing으로-통합).
+  - 1차 구현 종결(2026-09-06): 일반 2-leg episode의 owner journal/A0 재개 또는 정상 terminal no-entry/A2 최초 상승·반등→paired 평가→추가 사용자 승인 없는 exact-date PREOPEN→regular owner 소비를 구현했다. 반복 리뷰·수리 후 **1,075 PASS** 및 정적/문서 검증, 8/31~9/4 격리 보고서 5세트 생성과 production report/policy hash·loader 불변을 확인했다. [1차 구현 리뷰](../audit-reports/2026-09-06-rebound-reentry-implementation-review.md) 참조. 과거 source section 부재로 새 pair/후보 0건이며 자연 실전 효과는 미확인이다. 미지원 recipe와 다음 유지 판정은 Retention owner가 소유한다.
+  - 수용 기준: actual-only timing 승인 cohort와 미매수 source-only 평가를 분리하고 기존 `runtime_winner`/policy를 보존한다. A0 기존 자동 재개와 parity, 새 유효 신호·상승/반등·scan/cooldown, exact route/BBO/depth·비용·arm별 target/exit·동일 분모/종료시각·검열을 대사한다. A1 중복, TTL 실패를 회복으로 오인, 횡보를 상승으로 오인, missing을 0으로 채움, 30분 markout의 실체결 승격을 반례로 검증한다.
+  - 재평가: report-only/no-policy-write 실행면을 구현·검증한 뒤 기존 8/31~9/4 및 다음 새 source 거래일을 격리 평가한다. 원자료·production source report/policy hash와 기존 loader 판정 불변, 표본 전환 census와 결손 owner/test를 기록한다. 미평가 broker/account 검사는 경제성 계산과 실전 도달성을 분리하며 unknown을 통과로 합성하지 않는다. 수집이 정상이어도 owner exit 재현이 없으면 단순 성숙 대기가 아니다. 기존 raw 단일 decode/cache를 재사용하고 wall-clock/read bytes/eligible yield를 함께 검증한다.
+  - 권한 경계: 사용자가 조건 통과 후 별도 승인 없는 장전 적용을 지시했다. 일반 2-leg episode 한 scope의 초기 즉시 실행 가능한 양 leg에만 적용하고 cancel·quantity·target·no-stop·broker/hard safety·operator lock은 그대로다. 위젯 순차 평균단가/partial/passive/terminal no-entry/세션 초과 exit는 unsupported replay로 명시하고 Retention owner에 수리/축소를 넘긴다. 검증은 `--report-only-dir`로 production report/policy와 격리하며 bot restart·실주문을 실행하지 않는다.
+
+- [ ] `[MarketWeaknessReboundReentryRetention0911] 반등·재진입 paired yield·중복·EV 기반 유지와 후속 적용 설계 판정` (`Due: 2026-09-11`, `Slot: POSTCLOSE`, `TimeWindow: 21:15~21:50`, `Track: ScalpingLogic`)
+  - Source: [상세 구현안 §6~7](../proposals/market-weakness-rebound-reentry-evaluation-plan-2026-09-06.md), `MarketWeaknessReboundReentryIntegration0907`, 최초 구현 후 `machine_entry_timing_tuning`의 `market_weakness_rebound_reentry_evaluation` section.
+  - 다음 액션: 첫 주에는 구현/정상 source 시작 이후 실제 관측일과 natural opportunity→signal→executable pair→completed/pending 전환 수를 확인한다. 9/11까지 유효 창이 부족하면 조기 상태 점검이며 full evaluation 실패가 아니다. 새 수집/재평가를 이 항목만으로 자동 예약하지 않는다.
+  - 판정: 기회 없음은 관측 대기, 기회 있는데 pair 0은 원천/로직 수리·범위 축소, A1 동일 동작은 독립 후보 제거, 검토 가능한 A2 비용 차감 우위 없음은 on-demand/중단 검토다. 지원 scope의 5일/8 unique paired outcome·coverage 85%·누적 ΔEV≥0.005%p·rolling5/holdout 양수·candidate EV 양수·p10 guard는 현재 자동 PREOPEN 계약이다. 10/20일 창은 추가 hard floor가 아니다.
+  - 권한 경계: 2026-09-06 사용자 지시에 따른 지원 범위의 조건부 상시 승인이며 후보마다 재승인을 요구하지 않는다. 미지원 owner/exit 범위는 승인 대기가 아닌 코드·원천 수리/범위 축소 대상이다. 양수 CF를 actual execution quality로 부르지 않으며 cancel·수량·목표가·보유·broker/hard safety는 변경하지 않는다. 이후 실행/재점검은 current checklist에 기록한다.
+
+- [ ] `[MarketWeaknessNaturalEvidence0907] market breadth immutable policy·health·0B/0D yield·비용 차감 EV 자연 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 09:00~21:35`, `Track: RuntimeStability`)
+  - Source: [Market panic breadth 보완 리뷰](../audit-reports/2026-09-06-market-panic-breadth-remediation-review.md), `data/runtime/scalp_micro_reversion_collection_targets/scalp_micro_reversion_collection_targets_2026-09-07.json`, `data/runtime/scalp_micro_reversion_registration_receipt/scalp_micro_reversion_registration_receipt_2026-09-07.json`, `tmp/market_weakness_observer_state.json`, `data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-07.json`.
+  - 선행 상태: R1~R5 연결 수리와 목적/범위 판정·상세 계획은 완료했다. [상세 구현안 P0](../proposals/market-weakness-rebound-reentry-evaluation-plan-2026-09-06.md)의 자연 검증은 offline 구현 준비와 병행할 수 있으나 통합 구현의 완료 증거는 아니다. 9/7 policy `ready`는 2/3 carry-forward일 뿐 개선값 또는 실제 PID 소비 증거가 아니다. 이 항목은 실행 대기표이며 무인 모니터링/자동 수리 예약이 아니다.
+  - 확인: exact policy v2가 immutable snapshot hash로 로드되고 장중 source report 재생성과 무관하게 같은 policy hash를 유지하는지 확인한다. health ready/failure count와 last healthy age를 wrapper 로그에 대사하고, failure 때 DONE/cooldown이 기록되지 않으며 300초 뒤 stale latch의 BUY/cancel 권한이 만료되는지 확인한다.
+  - 수집/EV: `MachineExactRouteReceiptRuntimeAcceptance0907`의 manifest/receipt census와 함께 blocked entry의 최초 5초 ask 및 각 horizon bid/depth를 확인한다. 30분 평가에 다른 horizon 결손을 연쇄 적용하지 않는다. 반등은 1차 구현 완료 후 신규 owner journal·정상 terminal no-entry·raw/live epoch binding·timing의 paired section을 확인한다. 기존 breadth CF와 새 rebound EV를 혼합하지 않고, 현재 PID 코드 로딩과 실제 적용 receipt는 별도 증거로 확인한다.
+  - 권한 경계: 자연 표본 확보를 위한 주문·구독 범위 수동 확대·bot/service 재기동, threshold/floor 완화, 상승·반등 예외 live 적용, provider/quantity/cap/broker/hard-safety 변경은 금지한다. 양의 OOS 비용 차감 근거 전에는 baseline policy만 유지한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-09-04` postclose -> `2026-09-07`)

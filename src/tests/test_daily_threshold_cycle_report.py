@@ -9,6 +9,89 @@ import pytest
 from src.engine import daily_threshold_cycle_report as report_mod
 
 
+@pytest.mark.parametrize("candidate_count", [0, 147, 227, 300])
+def test_latency_diagnostics_do_not_subtract_event_and_candidate_counts(
+    monkeypatch, tmp_path, candidate_count
+):
+    paths = {
+        key: tmp_path / path.name
+        for key, path in report_mod._calibration_report_source_paths(
+            "2026-09-04"
+        ).items()
+    }
+    perf = {
+        "metrics": {"latency_block_events": 227, "latency_pass_events": 45},
+        "sections": {
+            "latency_guard_miss_ev_recovery": {
+                "instrumentation_status": "implemented",
+                "instrumentation_contract_version": 1,
+                "coverage_status": "reason_breakdown_ready",
+                "coverage_gap_type": "counterfactual_join_gap",
+                "counterfactual_join_gap_count": 227,
+                "missing_contract_fields": [],
+            }
+        },
+        "breakdowns": {
+            "latency_danger_reason_breakdown": [
+                {"label": "spread_too_wide", "count": 66}
+            ]
+        },
+    }
+    missed = {
+        "metrics": {
+            "blocker_outcome_metrics": {
+                "latency_block": {
+                    "evaluated_candidates": candidate_count,
+                    "avg_close_10m_pct": 0.05,
+                }
+            }
+        }
+    }
+    payloads = {
+        paths["performance_tuning"]: perf,
+        paths["missed_entry_counterfactual"]: missed,
+    }
+    monkeypatch.setattr(
+        report_mod, "_calibration_report_source_paths", lambda day: paths
+    )
+    monkeypatch.setattr(
+        report_mod, "_read_json_dict", lambda path: payloads.get(path, {})
+    )
+    monkeypatch.setattr(
+        report_mod, "_summarize_market_regime_continuous_sources", lambda day: {}
+    )
+    bundle = report_mod._summarize_calibration_report_sources("2026-09-04")
+    result = bundle["source_metrics"]["latency_guard_miss_ev_recovery"]
+    assert result["performance_latency_block_events"] == 227
+    assert result["evaluated_candidates"] == candidate_count
+    assert result["counterfactual_join_gap_count"] is None
+    assert result["events_without_counterfactual"] is None
+    assert result["attribution_gap"] is None
+    assert result["counterfactual_join_status"] == "not_evaluated"
+    assert result["coverage_gap_type"] == "none"
+    assert result["next_action"] != "backfill_latency_block_counterfactual_join"
+    assert (
+        result["latency_danger_reason_breakdown"]
+        == perf["breakdowns"]["latency_danger_reason_breakdown"]
+    )
+    assert result["runtime_effect"] is False
+    assert (
+        report_mod._source_metrics_for_family(
+            "dynamic_entry_price_resolver",
+            {"source_metrics": {"latency_guard_miss_ev_recovery": result}},
+        )
+        == {}
+    )
+    perf["sections"]["latency_guard_miss_ev_recovery"]["missing_contract_fields"] = [
+        "latency_reason_breakdown"
+    ]
+    broken = report_mod._summarize_calibration_report_sources("2026-09-04")[
+        "source_metrics"
+    ]["latency_guard_miss_ev_recovery"]
+    assert broken["coverage_gap_type"] == "source_contract_gap"
+    assert broken["next_action"] == "repair_latency_diagnostic_source_contract"
+
+
 def test_completed_rows_loader_prefers_exact_performance_fact_economics():
     sql = report_mod._completed_rows_sql()
 
@@ -980,10 +1063,12 @@ def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_fa
         candidates["dynamic_entry_price_resolver"]["calibration_state"] == "hold_sample"
     )
     assert (
-        candidates["dynamic_entry_price_resolver"]["source_metrics"][
-            "missed_winner_rate"
-        ]
-        == 70.0
+        "missed_winner_rate"
+        not in candidates["dynamic_entry_price_resolver"]["source_metrics"]
+    )
+    assert (
+        "performance_latency_block_events"
+        not in candidates["dynamic_entry_price_resolver"]["source_metrics"]
     )
     assert (
         candidates["score65_74_recovery_probe"]["source_metrics"][
@@ -3191,7 +3276,7 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
                 "evaluated_candidates": 10,
                 "avg_close_10m_pct": 1.2,
                 "performance_latency_block_events": 10,
-                "events_without_counterfactual": 0,
+                "events_without_counterfactual": 21,
                 "next_action": "use_latency_block_ev_for_refined_guard_review",
             },
             "bad_entry": {
@@ -3234,15 +3319,15 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
         candidates["score65_74_recovery_probe"]["source_metrics"]["partial_samples"]
         == 0
     )
+    dynamic = candidates["dynamic_entry_price_resolver"]["source_metrics"]
+    assert dynamic["events_without_counterfactual"] == 0
     assert (
-        candidates["dynamic_entry_price_resolver"]["source_metrics"][
-            "events_without_counterfactual"
-        ]
-        == 0
+        dynamic["counterfactual_join_rate_scope"]
+        == "dynamic_entry_price_counterfactual_diagnostics"
     )
     assert (
-        candidates["dynamic_entry_price_resolver"]["source_metrics"]["next_action"]
-        == "use_latency_block_ev_for_refined_guard_review"
+        "next_action"
+        not in candidates["dynamic_entry_price_resolver"]["source_metrics"]
     )
     assert (
         candidates["bad_entry_refined_canary"]["apply_mode"]
@@ -3585,16 +3670,25 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
     (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_plan_v1",
+                "schema_version": "scale_in_split_order_plan_v3",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
-                    "avg_down_observation_count": 3,
+                    "avg_down_observation_count": 9,
+                    "daily_unique_attempt_count": 3,
+                    "rolling_unique_attempt_count": 3,
+                    "rolling_eligible_runtime_attempt_count": 3,
                     "counterfactual_selected_count": 2,
                     "baseline_fallback_count": 0,
                     "price_observation_join_gap_count": 0,
                     "base_price_reconstruction_gap_count": 0,
                     "market_qty_split_only_count": 0,
-                    "runtime_three_leg_candidate_count": 1,
+                    "runtime_three_leg_candidate_count": 0,
+                },
+                "rolling_summary": {
+                    "rolling_unique_attempt_count": 3,
+                    "rolling_eligible_runtime_attempt_count": 3,
+                    "rolling_real_outcome_joined_sample": 3,
+                    "rolling_additional_mfe_mae_joined_sample": 3,
                 },
                 "candidate_grid": [
                     {
@@ -3607,6 +3701,14 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
                     "runtime_refresh_evidence": {
+                        "economic_gate_version": "ttl_paired_fixed_control_v3",
+                        "eligible_runtime_bucket_count": 1,
+                        "paired_economic_sample_count": 3,
+                        "economic_source_dates": ["2026-07-06", "2026-07-07"],
+                        "economic_source_date_count": 2,
+                        "source_quality_adjusted_ev_pct": 0.1,
+                        "modeled_fill_participation": 1.0,
+                        "downside_p10_profit_rate": 0.05,
                         "runtime_policy_refresh_allowed": True,
                         "real_outcome_joined_sample": 3,
                         "additional_mfe_mae_joined_sample": 3,
@@ -3644,8 +3746,8 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
         == "scale_in_split_order_plan:test-counterfactual"
     )
     assert candidate["source_metrics"]["counterfactual_selected_count"] == 2
-    assert candidate["source_metrics"]["runtime_three_leg_candidate_count"] == 1
-    assert "counterfactual" in candidate["calibration_reason"]
+    assert candidate["source_metrics"]["runtime_three_leg_candidate_count"] == 0
+    assert "cost-adjusted EV" in candidate["calibration_reason"]
 
 
 def test_scale_in_split_order_plan_policy_seed_waits_for_direct_observation_floor(
@@ -3660,7 +3762,7 @@ def test_scale_in_split_order_plan_policy_seed_waits_for_direct_observation_floo
     (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_plan_v1",
+                "schema_version": "scale_in_split_order_plan_v2",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
                     "avg_down_observation_count": 0,

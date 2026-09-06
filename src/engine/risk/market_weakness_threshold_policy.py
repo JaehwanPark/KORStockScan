@@ -18,9 +18,12 @@ from typing import Any, Mapping
 
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
+from src.engine.risk.market_weakness_state import STATE_REPLAY_CONTRACT
 
-SCHEMA = "market_weakness_hysteresis_policy_applied_v1"
+SCHEMA = "market_weakness_hysteresis_policy_applied_v2"
+LEGACY_OBSERVATION_POLICY_SCHEMA = "market_weakness_hysteresis_policy_applied_v1"
 SOURCE_REPORT_SCHEMA = "machine_market_weakness_response_v2"
+SOURCE_SNAPSHOT_SCHEMA = "market_weakness_hysteresis_source_snapshot_v1"
 AUTHORITY = "explicit_user_approved_auto_bounded_market_weakness_hysteresis_v1"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 
@@ -34,6 +37,7 @@ DEFAULT_POLICY_DIR = DATA_DIR / "runtime" / "market_weakness_hysteresis_policy"
 DEFAULT_SOURCE_REPORT_DIR = DATA_DIR / "report" / "machine_microstructure_attribution"
 POLICY_PREFIX = "market_weakness_hysteresis_policy"
 SOURCE_REPORT_PREFIX = "machine_microstructure_attribution"
+SOURCE_SNAPSHOT_DIRNAME = "source_snapshots"
 THRESHOLD_REVIEW_METHOD = (
     "deterministic_current_policy_neighbor_calibration_plus_latest_date_holdout_v2"
 )
@@ -132,6 +136,8 @@ def validate_threshold_recommendation(
             or not isinstance(selected_release, int)
             or selected_release not in ALLOWED_RELEASE_OBSERVATIONS
             or selected.get("review_status") != "passed_out_of_sample_review"
+            or selected.get("state_replay_contract") != STATE_REPLAY_CONTRACT
+            or selected.get("misclassification_role") != "diagnostic_only"
             or int(selected_activation != current_activation)
             + int(selected_release != current_release)
             != 1
@@ -279,8 +285,8 @@ def validate_threshold_recommendation(
                     or not isinstance(
                         guard.get("current_policy_misclassification_count"), int
                     )
-                    or int(guard["candidate_misclassification_count"])
-                    > int(guard["current_policy_misclassification_count"])
+                    or int(guard["candidate_misclassification_count"]) < 0
+                    or int(guard["current_policy_misclassification_count"]) < 0
                 ):
                     stratum_guards_valid = False
                     break
@@ -303,7 +309,8 @@ def validate_threshold_recommendation(
             or not isinstance(current_misclassification, int)
             or isinstance(selected_misclassification, bool)
             or not isinstance(selected_misclassification, int)
-            or selected_misclassification > current_misclassification
+            or selected_misclassification < 0
+            or current_misclassification < 0
             or not stratum_guards_valid
         ):
             return False, "market_weakness_policy_economic_review_invalid"
@@ -328,6 +335,21 @@ def source_report_path(
     source_date: date, *, source_report_dir: Path = DEFAULT_SOURCE_REPORT_DIR
 ) -> Path:
     return source_report_dir / f"{SOURCE_REPORT_PREFIX}_{source_date.isoformat()}.json"
+
+
+def source_snapshot_path(
+    source_date: date,
+    source_hash: str,
+    *,
+    policy_dir: Path = DEFAULT_POLICY_DIR,
+) -> Path:
+    """Return the content-addressed immutable policy evidence path."""
+
+    return (
+        policy_dir
+        / SOURCE_SNAPSHOT_DIRNAME
+        / f"{SOURCE_REPORT_PREFIX}_{source_date.isoformat()}_{source_hash}.json"
+    )
 
 
 def next_krx_trading_day(source_date: date) -> date:
@@ -432,7 +454,9 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
     expected_hash = threshold_hash(activation=activation, release=release)
     review = payload.get("review")
     source_report = payload.get("source_report")
+    source_origin_report = payload.get("source_origin_report")
     source_hash = payload.get("source_report_canonical_sha256")
+    source_snapshot_hash = payload.get("source_snapshot_canonical_sha256")
     source_review_hash = (
         review.get("source_review_hash") if isinstance(review, dict) else None
     )
@@ -442,9 +466,14 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
         or payload.get("policy_hash") != expected_hash
         or not isinstance(source_report, str)
         or not source_report.strip()
+        or not isinstance(source_origin_report, str)
+        or not source_origin_report.strip()
         or not isinstance(source_hash, str)
         or len(source_hash) != 64
         or any(char not in "0123456789abcdef" for char in source_hash)
+        or not isinstance(source_snapshot_hash, str)
+        or len(source_snapshot_hash) != 64
+        or any(char not in "0123456789abcdef" for char in source_snapshot_hash)
         or not isinstance(review, dict)
         or not isinstance(source_review_hash, str)
         or len(source_review_hash) != 64
@@ -500,11 +529,22 @@ def load_applied_policy(
     declared_source = Path(str(payload["source_report"]))
     if not declared_source.is_absolute():
         declared_source = PROJECT_ROOT / declared_source
-    expected_source = source_report_path(
-        source_date, source_report_dir=source_report_dir
+    source_hash = str(payload["source_snapshot_canonical_sha256"])
+    expected_source = source_snapshot_path(
+        source_date,
+        source_hash,
+        policy_dir=policy_dir,
     )
     if declared_source.resolve() != expected_source.resolve():
         return None, "market_weakness_policy_source_report_path_invalid"
+    declared_origin = Path(str(payload["source_origin_report"]))
+    if not declared_origin.is_absolute():
+        declared_origin = PROJECT_ROOT / declared_origin
+    expected_origin = source_report_path(
+        source_date, source_report_dir=source_report_dir
+    )
+    if declared_origin.resolve() != expected_origin.resolve():
+        return None, "market_weakness_policy_source_origin_report_path_invalid"
     try:
         source_payload = json.loads(declared_source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -514,12 +554,22 @@ def load_applied_policy(
         if isinstance(source_payload, dict)
         else None
     )
+    try:
+        actual_source_hash = canonical_sha256(source_payload)
+    except (TypeError, ValueError):
+        return None, "market_weakness_policy_source_report_contract_invalid"
     if (
-        not isinstance(response, dict)
+        not isinstance(source_payload, dict)
+        or source_payload.get("schema") != SOURCE_SNAPSHOT_SCHEMA
+        or source_payload.get("source_date") != source_date.isoformat()
+        or source_payload.get("source_origin_report")
+        != payload.get("source_origin_report")
+        or source_payload.get("source_origin_report_canonical_sha256")
+        != payload.get("source_report_canonical_sha256")
+        or actual_source_hash != payload.get("source_snapshot_canonical_sha256")
+        or not isinstance(response, dict)
         or response.get("schema") != SOURCE_REPORT_SCHEMA
         or response.get("target_date") != source_date.isoformat()
-        or payload.get("source_report_canonical_sha256")
-        != canonical_sha256(source_payload)
     ):
         return None, "market_weakness_policy_source_report_contract_invalid"
     recommendation = response.get("threshold_recommendation")
@@ -580,7 +630,9 @@ def resolve_effective_thresholds(
     )
 
 
-def observation_thresholds(observation: Mapping[str, Any]) -> tuple[int, int, int]:
+def observation_thresholds(
+    observation: Mapping[str, Any], *, allow_legacy_policy: bool = False
+) -> tuple[int, int, int]:
     """Return thresholds bound to an immutable observation.
 
     Legacy schema-v2 observations created before this exact-date policy existed
@@ -621,8 +673,11 @@ def observation_thresholds(observation: Mapping[str, Any]) -> tuple[int, int, in
         raise ValueError("market_weakness_observation_policy_invalid")
     policy_source = policy.get("source")
     target_date = str(observation.get("target_date") or "")
+    allowed_schemas = {SCHEMA}
+    if allow_legacy_policy:
+        allowed_schemas.add(LEGACY_OBSERVATION_POLICY_SCHEMA)
     if (
-        policy.get("schema") != SCHEMA
+        policy.get("schema") not in allowed_schemas
         or policy.get("target_date") != target_date
         or not str(policy.get("policy_path") or "").strip()
     ):

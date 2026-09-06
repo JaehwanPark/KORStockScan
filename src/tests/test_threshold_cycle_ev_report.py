@@ -6,6 +6,30 @@ import pytest
 from src.engine import threshold_cycle_ev_report as mod
 
 
+def test_ev_filters_retired_latency_decisions_and_approval_requests():
+    retired = {
+        "family": "latency_classifier_runtime_profile",
+        "calibration_state": "approval_required",
+        "human_approval_required": True,
+    }
+    active = {**retired, "family": "scalping_pyramid_quality_gate"}
+    payload = {
+        "date": "2026-09-04",
+        "calibration_candidates": [retired, active],
+        "post_apply_attribution": {"calibration_decisions": [retired, active]},
+    }
+    assert [row["family"] for row in mod._cohort_decisions(payload)] == [
+        active["family"]
+    ]
+    assert [row["family"] for row in mod._approval_requests(payload)] == [
+        active["family"]
+    ]
+    payload.pop("post_apply_attribution")
+    assert [row["family"] for row in mod._cohort_decisions(payload)] == [
+        active["family"]
+    ]
+
+
 def test_warning_contract_dedupes_and_classifies_disabled_sources():
     active, contract = mod._warning_contract(
         [
@@ -83,7 +107,7 @@ def test_scale_in_split_order_summary_preserves_runtime_three_leg_count(
     (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_plan_v1",
+                "schema_version": "scale_in_split_order_plan_v3",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
                     "runtime_three_leg_candidate_count": 1,

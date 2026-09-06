@@ -48,6 +48,9 @@ from src.engine.scalping.entry_split_order_plan import (
 )
 from src.engine.scalping.scale_in_split_order_plan import (
     MAX_POLICY_AGE_KRX_TRADING_DAYS,
+    POLICY_SCHEMA_VERSION as SCALE_IN_SPLIT_POLICY_SCHEMA_VERSION,
+    policy_runtime_contract_error as scale_in_policy_runtime_contract_error,
+    runtime_refresh_contract_error as scale_in_runtime_refresh_contract_error,
 )
 from src.engine.scalping.multi_timeframe_context import (
     PROMOTION_ARTIFACT_REQUIRED_FROM_DATE,
@@ -142,6 +145,15 @@ AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down"}
 AUTO_APPLY_BLOCK_STATES = {"freeze", "hold_sample", "hold_no_edge"}
 HOLD_SUB_STATES = frozenset({"hold", "hold_sample", "hold_no_edge"})
 HOLD_CARRY_FORWARD_STATES = frozenset({"hold"})
+SCALE_IN_SPLIT_HOLD_CARRY_FORWARD_STATES = frozenset({"hold_sample"})
+SCALE_IN_SPLIT_NEGATIVE_ECONOMIC_BLOCKERS = frozenset(
+    {
+        "post_apply_negative_economic_evidence",
+        "cost_adjusted_ev_not_positive",
+        "modeled_fill_participation_floor",
+        "downside_p10_delta_floor",
+    }
+)
 AVG_DOWN_HOLD_CARRY_FORWARD_STATES = frozenset(
     {"hold_sample", "hold_no_edge", "hold_no_change", "hold_runtime_scope"}
 )
@@ -2356,6 +2368,29 @@ def _avg_down_hold_carry_forward_blockers(
     return blockers
 
 
+def _scale_in_split_hold_carry_forward_blockers(
+    candidate: dict[str, Any],
+) -> list[str]:
+    """Do not preserve a prior split after current negative economic evidence."""
+
+    source_metrics = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
+    refresh_evidence = (
+        source_metrics.get("runtime_refresh_evidence")
+        if isinstance(source_metrics.get("runtime_refresh_evidence"), dict)
+        else {}
+    )
+    observed_blockers = {
+        str(item) for item in (refresh_evidence.get("blockers") or []) if str(item)
+    }
+    if observed_blockers.intersection(SCALE_IN_SPLIT_NEGATIVE_ECONOMIC_BLOCKERS):
+        return ["scale_in_split_negative_economic_evidence"]
+    return []
+
+
 def _avg_down_previous_env_migration_state(previous_env: dict[str, str]) -> str:
     if not previous_env:
         return "previous_avg_down_env_missing"
@@ -3779,6 +3814,10 @@ def _select_auto_apply_candidates(
             family == AVG_DOWN_RECOVERY_FAMILY
             and state in AVG_DOWN_HOLD_CARRY_FORWARD_STATES
         )
+        scale_in_split_hold_carry_forward = bool(
+            family == "scale_in_split_order_plan"
+            and state in SCALE_IN_SPLIT_HOLD_CARRY_FORWARD_STATES
+        )
         if family in RETIRED_RUNTIME_FAMILY_REASONS:
             reject_reason = RETIRED_RUNTIME_FAMILY_REASONS[family]
         elif include_families is not None and family not in include_families:
@@ -3789,12 +3828,16 @@ def _select_auto_apply_candidates(
         ):
             reject_reason = "non_live_selectable_sim_lifecycle_source"
         elif not bool(candidate.get("allowed_runtime_apply")) and not (
-            avg_down_hold_carry_forward
+            avg_down_hold_carry_forward or scale_in_split_hold_carry_forward
         ):
             reject_reason = "runtime_apply_not_allowed"
         elif bool(candidate.get("safety_revert_required")):
             reject_reason = "safety_revert_required"
-        elif state in HOLD_CARRY_FORWARD_STATES or avg_down_hold_carry_forward:
+        elif (
+            state in HOLD_CARRY_FORWARD_STATES
+            or avg_down_hold_carry_forward
+            or scale_in_split_hold_carry_forward
+        ):
             previously_enabled = family in previous_selected_families
             if not previously_enabled:
                 reject_reason = "hold_not_previously_enabled"
@@ -3810,6 +3853,10 @@ def _select_auto_apply_candidates(
                         _avg_down_hold_carry_forward_blockers(
                             candidate, hold_carry_forward_env_overrides
                         )
+                    )
+                if scale_in_split_hold_carry_forward:
+                    hold_carry_forward_blockers.extend(
+                        _scale_in_split_hold_carry_forward_blockers(candidate)
                     )
                 if stage in selected_by_stage:
                     hold_carry_forward_blockers.append("same_stage_owner_conflict")
@@ -5399,7 +5446,7 @@ def _split_runtime_policy_audits(
         {
             "family": "scale_in_split_order_plan",
             "prefix": "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_",
-            "schema": "scale_in_split_order_policy_v1",
+            "schema": SCALE_IN_SPLIT_POLICY_SCHEMA_VERSION,
             "freshness_field": "generated_at",
             "max_age_trading_days": MAX_POLICY_AGE_KRX_TRADING_DAYS,
             "require_runtime_apply_allowed": True,
@@ -5569,25 +5616,17 @@ def _split_runtime_policy_audits(
         if spec["family"] == "scale_in_split_order_plan":
             refresh_evidence = policy.get("runtime_refresh_evidence")
             audit["runtime_refresh_evidence"] = refresh_evidence
-            if not isinstance(refresh_evidence, dict):
+            refresh_error = scale_in_runtime_refresh_contract_error(refresh_evidence)
+            if refresh_error:
                 audit.update(
                     status="fail",
-                    reason="runtime_refresh_evidence_missing",
+                    reason=refresh_error,
                 )
                 audits.append(audit)
                 continue
-            if refresh_evidence.get("runtime_policy_refresh_allowed") is not True:
-                audit.update(
-                    status="fail",
-                    reason="runtime_refresh_evidence_not_allowed",
-                )
-                audits.append(audit)
-                continue
-            if refresh_evidence.get("blockers"):
-                audit.update(
-                    status="fail",
-                    reason="runtime_refresh_evidence_blocked",
-                )
+            policy_error = scale_in_policy_runtime_contract_error(policy)
+            if policy_error:
+                audit.update(status="fail", reason=policy_error)
                 audits.append(audit)
                 continue
         freshness_value = str(policy.get(str(spec["freshness_field"])) or "").strip()
@@ -5776,7 +5815,7 @@ def verify_runtime_env_handoff(
         _load_json(manifest_path, sanitize=False) if manifest_path.exists() else {}
     )
     raw_selected_families = [
-        str(item)
+        str(item).strip()
         for item in (manifest.get("selected_families") or [])
         if isinstance(item, str) and item.strip()
     ]
@@ -5799,7 +5838,7 @@ def verify_runtime_env_handoff(
     ]
     retired_selected_families = sorted(
         family
-        for family in selected_families
+        for family in raw_selected_families
         if family in RETIRED_RUNTIME_FAMILY_REASONS
     )
     raw_env_overrides = manifest.get("env_overrides")
@@ -6669,7 +6708,6 @@ def _write_runtime_env(
     target_date: str, manifest: dict[str, Any], env_overrides: dict[str, str]
 ) -> None:
     env_overrides = {**without_retired_env(env_overrides), **retirement_env()}
-    RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
     env_overrides = {
         key: value
         for key, value in env_overrides.items()
@@ -6709,6 +6747,27 @@ def _write_runtime_env(
     ]
     selected_families: list[str] = []
     removed_selected_families: list[str] = []
+    # Calibration-only retirement cannot strip these shared live safety keys.
+    # Reject the owner before writing either artifact, rather than orphan its env.
+    retired_calibration_selections = sorted(
+        {
+            str(item.get("family") or "").strip()
+            for item in selected_items
+            if isinstance(item, dict)
+            and str(item.get("family") or "").strip() in RETIRED_CALIBRATION_FAMILIES
+        }
+        | {
+            family.strip()
+            for family in (manifest.get("selected_families") or [])
+            if isinstance(family, str)
+            and family.strip() in RETIRED_CALIBRATION_FAMILIES
+        }
+    )
+    if retired_calibration_selections:
+        raise ValueError(
+            "retired_calibration_family_selected: "
+            + ",".join(retired_calibration_selections)
+        )
     for item in selected_items:
         family = str((item or {}).get("family") or "").strip()
         if not family:
@@ -6791,6 +6850,7 @@ def _write_runtime_env(
         "disabled_or_removed": disabled_or_removed,
         "removed_selected_families_ignored": removed_selected_families,
     }
+    RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
     runtime_env_path(target_date).write_text("\n".join(lines) + "\n", encoding="utf-8")
     runtime_env_manifest_path(target_date).write_text(
         json.dumps(

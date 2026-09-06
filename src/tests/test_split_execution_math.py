@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from src.trading.order.split_execution_math import split_qty, split_qty_by_weights
+from src.trading.order.split_execution_math import (
+    scale_in_leg_ttl_seconds,
+    split_qty,
+    split_qty_by_weights,
+)
+
+
+def test_scale_in_runtime_and_replay_share_existing_ttls() -> None:
+    assert scale_in_leg_ttl_seconds(1, "SCALPING") == [20]
+    assert scale_in_leg_ttl_seconds(2, "SCALPING") == [10, 20]
+    assert scale_in_leg_ttl_seconds(3, "SCALP") == [10, 20, 40]
+    assert scale_in_leg_ttl_seconds(2, "SWING", order_timeout_sec=40) == [20, 40]
 
 
 def test_split_qty_conserves_quantity_and_clips_leg_count() -> None:

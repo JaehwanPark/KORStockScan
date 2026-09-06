@@ -20,6 +20,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.engine.risk.market_weakness_state import (
+    MAX_HEALTHY_OBSERVATION_AGE_SEC,
+    STATE_REPLAY_CONTRACT,
+    observation_freshness,
+)
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils.constants import PROJECT_ROOT
 from src.utils.jsonl_io import (
@@ -42,6 +47,7 @@ BLOCKED_ENTRY_OBSERVATION_SCHEMA = "machine_market_weakness_blocked_entry_v1"
 ENABLE_ENV = "KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED"
 POLICY_ID = "WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_FREEZE_OPEN_BUY_CANCEL_V2"
 OPERATOR_APPROVAL_DATE = "2026-08-31"
+OBSERVER_HEALTH_SCHEMA = "market_weakness_observer_health_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +65,9 @@ class MarketWeaknessEntryDecision:
     source_status: str
     state_path: str
     symbol_master_path: str | None
+    observer_health_status: str = "legacy_state_without_health_receipt"
+    state_age_sec: float | None = None
+    state_fresh: bool = False
 
     @property
     def exact_market_open_buy_cancel_allowed(self) -> bool:
@@ -72,6 +81,7 @@ class MarketWeaknessEntryDecision:
 
         return bool(
             self.blocked
+            and self.state_fresh
             and self.reason == "entry_blocked_market_weakness_active"
             and self.phase in {"active", "release_pending"}
             and self.listing_market in SUPPORTED_LISTING_MARKETS
@@ -82,6 +92,7 @@ class MarketWeaknessEntryDecision:
     def event_fields(self) -> dict[str, Any]:
         return {
             "market_weakness_entry_guard_policy_id": POLICY_ID,
+            "market_weakness_entry_guard_state_contract": STATE_REPLAY_CONTRACT,
             "market_weakness_entry_guard_operator_approval_date": (
                 OPERATOR_APPROVAL_DATE
             ),
@@ -94,6 +105,14 @@ class MarketWeaknessEntryDecision:
             "market_weakness_entry_guard_observation_id": self.observation_id,
             "market_weakness_entry_guard_observation_as_of": self.observation_as_of,
             "market_weakness_entry_guard_source_status": self.source_status,
+            "market_weakness_entry_guard_observer_health_status": (
+                self.observer_health_status
+            ),
+            "market_weakness_entry_guard_state_age_sec": self.state_age_sec,
+            "market_weakness_entry_guard_state_fresh": self.state_fresh,
+            "market_weakness_entry_guard_max_state_age_sec": (
+                MAX_HEALTHY_OBSERVATION_AGE_SEC
+            ),
             "market_weakness_entry_guard_state_path": self.state_path,
             "market_weakness_entry_guard_symbol_master_path": (self.symbol_master_path),
             "market_weakness_entry_guard_blocked": self.blocked,
@@ -532,6 +551,9 @@ def _decision(
     source_status: str,
     state_path: Path,
     symbol_master_path: str | None = None,
+    observer_health_status: str = "legacy_state_without_health_receipt",
+    state_age_sec: float | None = None,
+    state_fresh: bool = False,
 ) -> MarketWeaknessEntryDecision:
     return MarketWeaknessEntryDecision(
         blocked=blocked,
@@ -547,7 +569,38 @@ def _decision(
         source_status=source_status,
         state_path=str(state_path),
         symbol_master_path=symbol_master_path,
+        observer_health_status=observer_health_status,
+        state_age_sec=state_age_sec,
+        state_fresh=state_fresh,
     )
+
+
+def _healthy_observation_freshness(
+    payload: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    now: datetime,
+) -> tuple[bool, float | None, str]:
+    health = payload.get("market_weakness_observer_health")
+    health_present = health is not None
+    if health_present and not (
+        isinstance(health, dict) and health.get("schema") == OBSERVER_HEALTH_SCHEMA
+    ):
+        return False, None, "observer_health_receipt_invalid"
+    if isinstance(health, dict):
+        timestamp = health.get("last_healthy_observation_as_of")
+        health_status = str(health.get("status") or "observer_health_status_missing")
+    else:
+        timestamp = state.get("last_observation_as_of")
+        health_status = "legacy_state_without_health_receipt"
+    try:
+        parsed = datetime.fromisoformat(str(timestamp or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False, None, f"{health_status}:healthy_observation_time_invalid"
+    if parsed.tzinfo is None:
+        return False, None, f"{health_status}:healthy_observation_timezone_missing"
+    fresh, age_sec = observation_freshness(parsed, now)
+    return fresh, round(age_sec, 3), health_status
 
 
 def evaluate_market_weakness_entry_guard(
@@ -631,6 +684,27 @@ def evaluate_market_weakness_entry_guard(
             source_status="state_session_mismatch",
             state_path=state_path,
         )
+    state_fresh, state_age_sec, observer_health_status = _healthy_observation_freshness(
+        payload, state, now=observed_at
+    )
+    if not state_fresh:
+        return _decision(
+            blocked=False,
+            reason="market_weakness_state_stale",
+            symbol=clean_symbol,
+            owner=clean_owner,
+            listing_market=listing_market,
+            phase=phase,
+            active_markets=active_markets,
+            session_key=session_key,
+            observation_id=observation_id,
+            observation_as_of=observation_as_of,
+            source_status="healthy_observation_stale_or_invalid",
+            state_path=state_path,
+            observer_health_status=observer_health_status,
+            state_age_sec=state_age_sec,
+            state_fresh=False,
+        )
     latch_active = phase in {"active", "release_pending"}
     if latch_active and (not active_market_scope_valid or not active_markets):
         return _decision(
@@ -646,6 +720,9 @@ def evaluate_market_weakness_entry_guard(
             observation_as_of=observation_as_of,
             source_status="active_latch_market_scope_invalid",
             state_path=state_path,
+            observer_health_status=observer_health_status,
+            state_age_sec=state_age_sec,
+            state_fresh=True,
         )
     if not latch_active or not active_markets:
         return _decision(
@@ -661,6 +738,9 @@ def evaluate_market_weakness_entry_guard(
             observation_as_of=observation_as_of,
             source_status="current_session_latch_inactive",
             state_path=state_path,
+            observer_health_status=observer_health_status,
+            state_age_sec=state_age_sec,
+            state_fresh=True,
         )
     normalized_market = str(listing_market or "").strip().upper() or None
     master_path: str | None = None
@@ -686,6 +766,9 @@ def evaluate_market_weakness_entry_guard(
             source_status=market_source_status,
             state_path=state_path,
             symbol_master_path=master_path,
+            observer_health_status=observer_health_status,
+            state_age_sec=state_age_sec,
+            state_fresh=True,
         )
     blocked = normalized_market in active_markets
     return _decision(
@@ -706,4 +789,7 @@ def evaluate_market_weakness_entry_guard(
         source_status=market_source_status,
         state_path=state_path,
         symbol_master_path=master_path,
+        observer_health_status=observer_health_status,
+        state_age_sec=state_age_sec,
+        state_fresh=True,
     )

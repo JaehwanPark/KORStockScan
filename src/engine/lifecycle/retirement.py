@@ -191,6 +191,18 @@ def _dict_rows(value: Any) -> list[dict[str, Any]]:
     )
 
 
+def current_calibration_rows(value: Any) -> list[dict[str, Any]]:
+    """Filter calibration authority only; keep the same family's raw telemetry."""
+    return [
+        item
+        for item in _dict_rows(value)
+        if not any(
+            str(item.get(key) or "").strip() in RETIRED_CALIBRATION_FAMILIES
+            for key in ("family", "source_family", "mapped_family")
+        )
+    ]
+
+
 def current_report_view(payload: Any) -> Any:
     """Exclude archived policy sources from current mixed automation bundles."""
     if isinstance(payload, list):
@@ -221,10 +233,23 @@ def current_report_view(payload: Any) -> Any:
         ):
             return {}
         result = {
-            key: current_report_view(value)
+            key: current_report_view(
+                current_calibration_rows(value)
+                if key
+                in {
+                    "calibration_candidates",
+                    "calibration_decisions",
+                    "approval_requests",
+                }
+                and isinstance(value, list)
+                else value
+            )
             for key, value in payload.items()
             if not retired_owner(key)
         }
+        outcome = result.get("calibration_outcome")
+        if isinstance(outcome, dict) and isinstance(outcome.get("decisions"), list):
+            outcome["decisions"] = current_calibration_rows(outcome["decisions"])
         if payload.get("schema_version") == "scalp_sim_policy_catalog_v1":
             allowed_seeds = {
                 str(seed.get("active_seed_id"))

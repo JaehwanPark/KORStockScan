@@ -2827,6 +2827,18 @@ def _classify_order(
         str(finding.get("confidence") or order.get("confidence") or "").strip() or None
     )
     closed_family = closed_instrumentation_order_families.get(order_id)
+    if order_id == "order_latency_guard_miss_ev_recovery" and not bool(
+        order.get("runtime_effect")
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason="Independent latency calibration and aggregate join-gap inference are retired; retain existing BUY Funnel diagnostics only.",
+            mapped_family="buy_funnel_sentinel",
+            route="existing_family",
+            confidence=confidence,
+            automation_reentry="Next BUY Funnel postclose diagnostics retain block/pass reasons and source quality; no independent sample/join gate or runtime mutation.",
+        )
     if closed_family:
         return ClassifiedOrder(
             order=order,
@@ -5400,9 +5412,7 @@ def _closed_instrumentation_order_families(
         )
         if source_metrics.get("instrumentation_status") != "implemented":
             continue
-        if family == "dynamic_entry_price_resolver":
-            closed["order_latency_guard_miss_ev_recovery"] = family
-        elif family == "pre_submit_price_guard":
+        if family == "pre_submit_price_guard":
             closed["order_pre_submit_price_guard_safety_audit"] = family
         elif family == "holding_exit_decision_matrix_advisory":
             closed["order_holding_exit_decision_matrix_edge_counterfactual"] = family
@@ -5726,7 +5736,7 @@ def _scale_in_split_order_plan_followup_orders(
         issues.append("source_quality_gap")
     if (
         summary.get("schema_version")
-        and summary.get("schema_version") != "scale_in_split_order_plan_v1"
+        and summary.get("schema_version") != "scale_in_split_order_plan_v3"
     ):
         issues.append("report_contract_gap")
     if _safe_int(summary.get("price_observation_join_gap_count"), 0) > 0:
@@ -5735,6 +5745,8 @@ def _scale_in_split_order_plan_followup_orders(
         issues.append("base_price_reconstruction_gap")
     if _safe_int(summary.get("recommended_policy_candidate_count"), 0) <= 0:
         issues.append("runtime_policy_handoff_gap")
+    if _safe_int(summary.get("unattributed_split_attempt_count"), 0) > 0:
+        issues.append("post_apply_policy_provenance_gap")
     if not issues:
         return []
     source_path = (

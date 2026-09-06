@@ -53,7 +53,7 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
-PERFORMANCE_TUNING_SCHEMA_VERSION = 8
+PERFORMANCE_TUNING_SCHEMA_VERSION = 9
 _PERF_EVENT_FIELD_KEYS = frozenset(
     {
         "action",
@@ -2358,37 +2358,51 @@ def _build_latency_guard_miss_ev_recovery_section(
     quote_fresh_passes = int(metrics.get("quote_fresh_latency_passes", 0) or 0)
     unique_stocks = int(metrics.get("latency_guard_miss_unique_stocks", 0) or 0)
     reason_breakdown = list(breakdowns.get("latency_reason_breakdown") or [])[:10]
-    top_reason = reason_breakdown[0] if reason_breakdown else {}
+    danger_reason_breakdown = list(
+        breakdowns.get("latency_danger_reason_breakdown") or []
+    )[:10]
+    top_reasons = danger_reason_breakdown or reason_breakdown
+    top_reason = top_reasons[0] if top_reasons else {}
     top_reason_count = _safe_int(top_reason.get("count"), 0) or 0
     coverage_status = (
-        "sample_pending_next_postclose"
-        if latency_block_events <= 0
-        else "reason_breakdown_ready"
+        "no_latency_blocks" if latency_block_events <= 0 else "reason_breakdown_ready"
     )
     provenance_contract = [
         "latency_block_events",
         "latency_guard_miss_unique_stocks",
         "quote_fresh_latency_pass_rate",
         "latency_reason_breakdown",
+        "latency_danger_reason_breakdown",
     ]
     missing_contract_fields = [
         key
         for key in provenance_contract
         if key not in metrics and key not in breakdowns
     ]
-    counterfactual_join_gap = max(
-        0,
-        latency_block_events
-        - int(metrics.get("latency_guard_counterfactual_joined", 0) or 0),
-    )
-
     return {
         "runtime_effect": False,
         "allowed_runtime_apply": False,
-        "instrumentation_status": "implemented",
-        "instrumentation_contract_version": 1,
-        "threshold_family": "pre_submit_price_guard",
-        "evaluated_candidates": latency_block_events,
+        "instrumentation_status": (
+            "missing_contract" if missing_contract_fields else "implemented"
+        ),
+        "instrumentation_contract_version": 2,
+        "threshold_family": "latency_classifier_runtime_profile",
+        "diagnostic_owner": "buy_funnel_sentinel",
+        "metric_role": "source_quality_and_funnel_diagnostic",
+        "decision_authority": "diagnostic_only",
+        "window_policy": "same_day_clean_baseline_observation",
+        "sample_floor": "not_applicable_no_runtime_candidate",
+        "primary_decision_metric": "not_applicable_no_runtime_candidate",
+        "source_quality_gate": "observation_source_quality_preflight",
+        "forbidden_uses": [
+            "runtime_threshold_mutation",
+            "broker_guard_bypass",
+            "operator_lock_override",
+            "gross_counterfactual_live_promotion",
+            "event_count_minus_candidate_count",
+        ],
+        "evaluated_candidates": None,
+        "count_basis": "latency_decision_events_not_unique_candidates",
         "latency_block_events": latency_block_events,
         "latency_pass_events": latency_pass_events,
         "latency_block_rate": _ratio(latency_block_events, total_latency_decisions),
@@ -2407,22 +2421,26 @@ def _build_latency_guard_miss_ev_recovery_section(
         ),
         "latency_guard_miss_unique_stocks": unique_stocks,
         "latency_reason_breakdown": reason_breakdown,
+        "latency_danger_reason_breakdown": danger_reason_breakdown,
+        "reason_count_basis": "per_block_event_reason_occurrences_may_overlap",
         "top_latency_reason": top_reason.get("label"),
         "top_latency_reason_share_pct": _ratio(top_reason_count, latency_block_events),
-        "coverage_status": coverage_status,
-        "coverage_gap_type": (
-            "counterfactual_join_gap" if counterfactual_join_gap > 0 else "none"
+        "coverage_status": (
+            "missing_contract" if missing_contract_fields else coverage_status
         ),
-        "counterfactual_join_gap_count": counterfactual_join_gap,
+        "coverage_gap_type": (
+            "source_contract_gap" if missing_contract_fields else "none"
+        ),
+        "counterfactual_join_status": "not_evaluated",
+        "counterfactual_join_reason": "no_exact_attempt_join_contract_diagnostic_only",
+        "counterfactual_join_gap_count": None,
         "missing_contract_fields": missing_contract_fields,
         "coverage_warning": (
-            "latency_block 표본이 없어 다음 postclose source freshness 확인 필요"
-            if latency_block_events <= 0
-            else ""
+            "latency source contract fields missing" if missing_contract_fields else ""
         ),
         "provenance_contract": provenance_contract,
         "automation_reentry": "threshold_cycle.source_metrics.latency_guard_miss_ev_recovery",
-        "next_postclose_metric": "source freshness/warning reduction and latency block attribution coverage",
+        "next_postclose_metric": "BUY Funnel source quality and latency block/pass reasons; no independent join gate",
     }
 
 

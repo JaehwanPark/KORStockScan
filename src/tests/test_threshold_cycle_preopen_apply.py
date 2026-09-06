@@ -14,6 +14,37 @@ from src.engine.scalping import (
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
 
 
+def _valid_scale_in_split_runtime_refresh_evidence():
+    return {
+        "economic_gate_version": "ttl_paired_fixed_control_v3",
+        "paired_economic_sample_count": 3,
+        "economic_source_dates": ["2026-07-06", "2026-07-07"],
+        "economic_source_date_count": 2,
+        "runtime_policy_refresh_allowed": True,
+        "eligible_runtime_bucket_count": 1,
+        "real_outcome_joined_sample": 3,
+        "additional_mfe_mae_joined_sample": 3,
+        "price_join_coverage": 1.0,
+        "source_quality_adjusted_ev_pct": 0.10,
+        "modeled_fill_participation": 1.0,
+        "downside_p10_profit_rate": 0.05,
+        "blockers": [],
+    }
+
+
+def _valid_scale_in_split_runtime_bucket():
+    return {
+        "context_bucket": "scalping:loss_recovery:normal",
+        "runtime_apply_allowed": True,
+        "policy_mode": "counterfactual_tick_band_selector",
+        "split_variant_id": "scale_in_counterfactual_50_50_offset_0pct_0_3pct",
+        "leg_count": 2,
+        "qty_weights": [0.5, 0.5],
+        "price_offsets_pct": [0.0, 0.3],
+        "price_offsets_ticks": [0, 1],
+    }
+
+
 def _valid_entry_recheck_candidate():
     from src.engine.scalping import entry_ai_gate_backtest as producer
     from src.engine.scalping.entry_recheck_policy import (
@@ -9881,6 +9912,184 @@ def test_hold_sample_always_blocks_even_when_previously_enabled(tmp_path, monkey
     assert decision["decision_reason"] == "calibration_state_blocked:hold_sample"
 
 
+@pytest.mark.parametrize(
+    ("calibration_state", "expected_selected", "expected_reason"),
+    [
+        (
+            "hold_sample",
+            True,
+            "hold_carry_forward_previous_runtime:scale_in_split_order_plan",
+        ),
+        (
+            "hold_no_edge",
+            False,
+            "calibration_state_blocked:hold_no_edge",
+        ),
+    ],
+)
+def test_scale_in_split_policy_carries_only_on_low_sample(
+    tmp_path,
+    monkeypatch,
+    calibration_state,
+    expected_selected,
+    expected_reason,
+):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
+    lock_dir = tmp_path / "operator_runtime_env_locks"
+    report_dir.mkdir(parents=True)
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
+    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
+
+    policy_file = tmp_path / "scale_in_split_order_policy_2026-06-10.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v3",
+                "policy_version": "scale-split-validated",
+                "generated_at": "2026-06-10T20:30:00+09:00",
+                "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": (
+                    _valid_scale_in_split_runtime_refresh_evidence()
+                ),
+                "default_bucket": {"runtime_apply_allowed": False},
+                "buckets": {
+                    "scalping:loss_recovery:normal": (
+                        _valid_scale_in_split_runtime_bucket()
+                    )
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    prior_env = {
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(policy_file),
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": ("scale-split-validated"),
+    }
+    (runtime_dir / "threshold_runtime_env_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["scale_in_split_order_plan"],
+                "env_overrides": prior_env,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "threshold_cycle_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-06-10",
+                "calibration_candidates": [
+                    {
+                        "family": "scale_in_split_order_plan",
+                        "stage": "scale_in",
+                        "priority": 9,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": calibration_state,
+                        "target_env_keys": [],
+                        "recommended_values": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-06-11",
+        source_date="2026-06-10",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    decision = manifest["auto_apply_decisions"][0]
+    assert decision["selected"] is expected_selected
+    assert decision["decision_reason"] == expected_reason
+    if expected_selected:
+        assert decision["selection_change_class"] == "carried_forward_unchanged"
+        assert decision["env_overrides"] == prior_env
+        scale_audit = next(
+            item
+            for item in mod._split_runtime_policy_audits(
+                "2026-06-11", manifest["runtime_env_overrides"]
+            )
+            if item["family"] == "scale_in_split_order_plan"
+        )
+        assert scale_audit["status"] == "pass"
+    else:
+        assert not any(
+            key.startswith("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_")
+            for key in manifest["runtime_env_overrides"]
+        )
+
+
+def test_scale_in_split_low_sample_does_not_carry_negative_economic_evidence(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    policy_file = tmp_path / "scale.json"
+    policy_file.write_text("{}", encoding="utf-8")
+    prior_env = {
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(policy_file),
+        "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "prior",
+    }
+    (runtime_dir / "threshold_runtime_env_2026-06-10.json").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-06-10",
+                "selected_families": ["scale_in_split_order_plan"],
+                "env_overrides": prior_env,
+            }
+        ),
+        encoding="utf-8",
+    )
+    candidate = {
+        "family": "scale_in_split_order_plan",
+        "stage": "scale_in",
+        "priority": 9,
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "calibration_state": "hold_sample",
+        "target_env_keys": [],
+        "recommended_values": {},
+        "source_metrics": {
+            "runtime_refresh_evidence": {
+                "blockers": [
+                    "real_outcome_sample_floor",
+                    "cost_adjusted_ev_not_positive",
+                ]
+            }
+        },
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-06-11",
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == (
+        "hold_carry_forward_blocked:scale_in_split_negative_economic_evidence"
+    )
+
+
 def test_hold_carry_forward_blocked_by_safety_revert_required(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
@@ -10142,6 +10351,94 @@ def test_verify_runtime_env_handoff_rejects_retired_selected_family(
     assert result["findings"][0]["severity"] == "retired_runtime_family_selected"
 
 
+@pytest.mark.parametrize(
+    "env_key",
+    [
+        None,
+        "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION",
+        "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_JITTER_MS_FOR_CAUTION",
+        "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_SPREAD_RATIO_FOR_CAUTION",
+    ],
+)
+def test_verify_rejects_retired_calibration_before_display_filter(
+    tmp_path, monkeypatch, env_key
+):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path)
+    family = "latency_classifier_runtime_profile"
+    mod.runtime_env_manifest_path("2026-09-07").write_text(
+        json.dumps(
+            {
+                "target_date": "2026-09-07",
+                "selected_families": [family],
+                "env_overrides": {env_key: "1200"} if env_key else {},
+            }
+        )
+    )
+    result = mod.verify_runtime_env_handoff("2026-09-07")
+    assert result["status"] == "fail"
+    assert result["retired_selected_families_blocked"] == [family]
+    assert any(
+        row["severity"] == "retired_runtime_family_selected"
+        for row in result["findings"]
+    )
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        {"auto_apply_selected": [{"family": "latency_classifier_runtime_profile"}]},
+        {"selected_families": [" latency_classifier_runtime_profile "]},
+        {
+            "swing_runtime_approval": {
+                "selected": [{"family": "latency_classifier_runtime_profile"}]
+            }
+        },
+    ],
+)
+@pytest.mark.parametrize("existing", [False, True])
+def test_writer_rejects_retired_calibration_without_partial_write(
+    tmp_path, monkeypatch, selection, existing
+):
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    paths = [
+        mod.runtime_env_path("2026-09-07"),
+        mod.runtime_env_manifest_path("2026-09-07"),
+    ]
+    if existing:
+        runtime_dir.mkdir()
+        for path in paths:
+            path.write_text("original")
+    with pytest.raises(ValueError, match="retired_calibration_family_selected"):
+        mod._write_runtime_env(
+            "2026-09-07",
+            selection,
+            {
+                "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION": "1200",
+            },
+        )
+    if existing:
+        assert all(path.read_text() == "original" for path in paths)
+    else:
+        assert not runtime_dir.exists()
+
+
+def test_retired_audit_history_does_not_block_baseline_latency_keys(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path)
+    key = "KORSTOCKSCAN_SCALP_ENTRY_LATENCY_MAX_WS_AGE_MS_FOR_CAUTION"
+    mod._write_runtime_env("2026-09-07", {}, {key: "700"})
+    path = mod.runtime_env_manifest_path("2026-09-07")
+    manifest = json.loads(path.read_text())
+    manifest["removed_selected_families_ignored"] = [
+        "latency_classifier_runtime_profile"
+    ]
+    path.write_text(json.dumps(manifest))
+    assert manifest["env_overrides"][key] == "700"
+    assert mod.verify_runtime_env_handoff("2026-09-07")["status"] == "pass"
+
+
 def test_verify_runtime_env_handoff_verifies_selected_pyramid_quality_gate(
     tmp_path, monkeypatch
 ):
@@ -10280,15 +10577,19 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v1",
+                "schema_version": "scale_in_split_order_policy_v3",
                 "policy_version": "scale-current",
                 "generated_at": "2026-07-13T20:28:03+09:00",
                 "runtime_apply_allowed": True,
-                "runtime_refresh_evidence": {
-                    "runtime_policy_refresh_allowed": True,
-                    "blockers": [],
+                "runtime_refresh_evidence": (
+                    _valid_scale_in_split_runtime_refresh_evidence()
+                ),
+                "default_bucket": {"runtime_apply_allowed": False},
+                "buckets": {
+                    "scalping:loss_recovery:normal": (
+                        _valid_scale_in_split_runtime_bucket()
+                    )
                 },
-                "buckets": {"default": {}},
             }
         ),
         encoding="utf-8",
@@ -10310,6 +10611,43 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     assert [audit["status"] for audit in audits] == ["pass", "pass"]
     assert [audit["reason"] for audit in audits] == ["policy_usable", "policy_usable"]
     assert audits[0]["operator_fallback_authorized"] is True
+
+
+def test_split_runtime_policy_audit_rejects_unbounded_scale_in_bucket(tmp_path):
+    scale_policy = tmp_path / "scale.json"
+    invalid_bucket = _valid_scale_in_split_runtime_bucket()
+    invalid_bucket["price_offsets_pct"] = [0.0, 9.0]
+    scale_policy.write_text(
+        json.dumps(
+            {
+                "schema_version": "scale_in_split_order_policy_v3",
+                "policy_version": "scale-unbounded",
+                "generated_at": "2026-07-13T20:28:03+09:00",
+                "runtime_apply_allowed": True,
+                "runtime_refresh_evidence": (
+                    _valid_scale_in_split_runtime_refresh_evidence()
+                ),
+                "default_bucket": {"runtime_apply_allowed": False},
+                "buckets": {"scalping:loss_recovery:normal": invalid_bucket},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    audits = mod._split_runtime_policy_audits(
+        "2026-07-14",
+        {
+            "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE": str(scale_policy),
+            "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "scale-unbounded",
+        },
+    )
+
+    scale_audit = next(
+        item for item in audits if item["family"] == "scale_in_split_order_plan"
+    )
+    assert scale_audit["status"] == "fail"
+    assert scale_audit["reason"] == "context_bucket_price_offsets_invalid"
 
 
 def test_split_runtime_policy_audit_requires_selected_policy_version(tmp_path):
@@ -10387,15 +10725,19 @@ def test_split_runtime_policy_audit_accepts_scale_in_policy_across_krx_holiday_w
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v1",
+                "schema_version": "scale_in_split_order_policy_v3",
                 "policy_version": "scale-holiday-handoff",
                 "generated_at": "2026-07-16T20:28:37+09:00",
                 "runtime_apply_allowed": True,
-                "runtime_refresh_evidence": {
-                    "runtime_policy_refresh_allowed": True,
-                    "blockers": [],
+                "runtime_refresh_evidence": (
+                    _valid_scale_in_split_runtime_refresh_evidence()
+                ),
+                "default_bucket": {"runtime_apply_allowed": False},
+                "buckets": {
+                    "scalping:loss_recovery:normal": (
+                        _valid_scale_in_split_runtime_bucket()
+                    )
                 },
-                "buckets": {"default": {}},
             }
         ),
         encoding="utf-8",
@@ -10468,11 +10810,16 @@ def test_split_runtime_policy_audit_rejects_scale_policy_without_refresh_evidenc
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v1",
+                "schema_version": "scale_in_split_order_policy_v3",
                 "policy_version": "scale-legacy",
                 "generated_at": "2026-07-16T20:28:37+09:00",
                 "runtime_apply_allowed": True,
-                "buckets": {"default": {}},
+                "default_bucket": {"runtime_apply_allowed": False},
+                "buckets": {
+                    "scalping:loss_recovery:normal": (
+                        _valid_scale_in_split_runtime_bucket()
+                    )
+                },
             }
         ),
         encoding="utf-8",
@@ -10499,15 +10846,19 @@ def test_split_runtime_policy_audit_rejects_scale_in_policy_after_three_trading_
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v1",
+                "schema_version": "scale_in_split_order_policy_v3",
                 "policy_version": "scale-stale-trading-days",
                 "generated_at": "2026-07-13T20:28:37+09:00",
                 "runtime_apply_allowed": True,
-                "runtime_refresh_evidence": {
-                    "runtime_policy_refresh_allowed": True,
-                    "blockers": [],
+                "runtime_refresh_evidence": (
+                    _valid_scale_in_split_runtime_refresh_evidence()
+                ),
+                "default_bucket": {"runtime_apply_allowed": False},
+                "buckets": {
+                    "scalping:loss_recovery:normal": (
+                        _valid_scale_in_split_runtime_bucket()
+                    )
                 },
-                "buckets": {"default": {}},
             }
         ),
         encoding="utf-8",
@@ -10535,7 +10886,7 @@ def test_preopen_drops_selected_scale_policy_when_source_file_version_changed(
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v1",
+                "schema_version": "scale_in_split_order_policy_v3",
                 "policy_version": "regenerated-blocked-version",
                 "generated_at": "2026-08-05T08:00:00+09:00",
                 "runtime_apply_allowed": False,

@@ -567,19 +567,20 @@ CALIBRATION_FAMILY_METADATA = {
         "primary_key": "enabled",
         "bounds": {},
         "sample_floor": 3,
-        "sample_window": "daily_direct_observation_with_rolling_diagnostic",
+        "sample_window": "rolling_20_report_dates_unique_attempt_with_daily_increment",
         "window_policy": {
-            "primary": "daily_intraday",
-            "secondary": ["rolling_10d"],
-            "use": "AVG_DOWN 직접 관측 3건부터 기존 scale-in qty를 보존한 split policy만 다음 PREOPEN bounded env로 연결한다. 미달 표본도 source-only seed로 계속 축적한다.",
-            "daily_only_allowed": True,
+            "primary": "rolling_20_report_dates",
+            "secondary": ["daily_intraday_unique_attempt"],
+            "use": "AVG_DOWN qty>=2 exact attempt/outcome/MFE-MAE를 rolling으로 누적하고 비용 차감 EV·fill participation·downside gate를 통과한 context bucket의 qty-preserving split policy만 다음 PREOPEN bounded env로 연결한다.",
+            "daily_only_allowed": False,
         },
         "sample_denominator_keys": [
-            "avg_down_observation_count",
-            "real_sample_count",
-            "sim_sample_count",
+            "paired_economic_sample_count",
+            "rolling_eligible_runtime_attempt_count",
+            "rolling_real_outcome_joined_sample",
+            "rolling_additional_mfe_mae_joined_sample",
         ],
-        "primary_decision_metric": "qty_preserving_execution_shape_seed",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "allowed_runtime_apply": True,
     },
     "entry_price_execution_quality": {
@@ -2299,11 +2300,28 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(performance_tuning.get("sections"), dict)
         else {}
     )
+    perf_breakdowns = (
+        performance_tuning.get("breakdowns")
+        if isinstance(performance_tuning.get("breakdowns"), dict)
+        else {}
+    )
     perf_latency_section = (
         perf_sections.get("latency_guard_miss_ev_recovery")
         if isinstance(perf_sections.get("latency_guard_miss_ev_recovery"), dict)
         else {}
     )
+    latency_diagnostic_gap = str(
+        perf_latency_section.get("coverage_gap_type") or "none"
+    )
+    if latency_diagnostic_gap == "counterfactual_join_gap":
+        latency_diagnostic_gap = "none"
+    if not perf_latency_section:
+        latency_diagnostic_gap = "source_contract_missing"
+    elif (
+        perf_latency_section.get("missing_contract_fields")
+        or perf_latency_section.get("instrumentation_status") == "missing_contract"
+    ):
+        latency_diagnostic_gap = "source_contract_gap"
     microstructure_reaction_summary = (
         microstructure_reaction_context.get("summary")
         if isinstance(microstructure_reaction_context.get("summary"), dict)
@@ -2741,13 +2759,32 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 if isinstance(perf_latency_section.get("provenance_contract"), list)
                 else []
             ),
-            "coverage_status": perf_latency_section.get("coverage_status"),
-            "coverage_gap_type": perf_latency_section.get("coverage_gap_type"),
-            "counterfactual_join_gap_count": _safe_int(
-                perf_latency_section.get("counterfactual_join_gap_count"),
-                0,
-            )
-            or 0,
+            "coverage_status": (
+                "missing_contract"
+                if latency_diagnostic_gap != "none"
+                else (
+                    "reason_breakdown_ready"
+                    if (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0) > 0
+                    else "no_latency_blocks"
+                )
+            ),
+            # Historical v1 sections subtracted unrelated event/candidate totals.
+            # Do not copy that fabricated gap even when reading an old artifact.
+            "coverage_gap_type": latency_diagnostic_gap,
+            "counterfactual_join_status": "not_evaluated",
+            "counterfactual_join_reason": "no_exact_attempt_join_contract_diagnostic_only",
+            "counterfactual_join_gap_count": None,
+            "event_count_basis": "performance_tuning_latency_decision_events",
+            "outcome_count_basis": "missed_entry_counterfactual_evaluated_candidates",
+            "outcome_authority": "gross_counterfactual_diagnostic_not_realized_net_ev",
+            "latency_danger_reason_breakdown": (
+                perf_breakdowns.get("latency_danger_reason_breakdown")
+                if isinstance(
+                    perf_breakdowns.get("latency_danger_reason_breakdown"), list
+                )
+                else []
+            ),
+            "reason_count_basis": "per_block_event_reason_occurrences_may_overlap",
             "missing_contract_fields": (
                 perf_latency_section.get("missing_contract_fields")
                 if isinstance(perf_latency_section.get("missing_contract_fields"), list)
@@ -2799,19 +2836,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 and _safe_float(latency_outcome.get("avg_close_10m_pct"), None)
                 is not None
             ),
-            "attribution_gap": bool(
-                (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
-                > (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0)
-            ),
-            "events_without_counterfactual": max(
-                0,
-                (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
-                - (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0),
-            ),
+            "attribution_ready_scope": "independent_candidate_outcome_summary_only_not_event_join",
+            "attribution_gap": None,
+            "events_without_counterfactual": None,
             "next_action": (
-                "backfill_latency_block_counterfactual_join"
-                if (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
-                > (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0)
+                "repair_latency_diagnostic_source_contract"
+                if latency_diagnostic_gap != "none"
                 else "use_latency_block_attribution_for_existing_guard_review"
             ),
             "latency_classifier_recommendation_status": "retired",
@@ -7964,6 +7994,11 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
 
 
 def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -> dict:
+    from src.engine.scalping.scale_in_split_order_plan import (
+        SCHEMA_VERSION,
+        runtime_refresh_contract_error,
+    )
+
     report_path = _scale_in_split_order_plan_path(target_date)
     payload = _read_json_dict(report_path) if report_path is not None else {}
     recommended_policy = (
@@ -7986,10 +8021,22 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
         if isinstance(payload.get("input_summary"), dict)
         else {}
     )
+    rolling_summary = (
+        payload.get("rolling_summary")
+        if isinstance(payload.get("rolling_summary"), dict)
+        else {}
+    )
     candidates = (
         recommended_policy.get("candidates")
         if isinstance(recommended_policy.get("candidates"), list)
         else []
+    )
+    runtime_candidate_count = _safe_int(
+        recommended_policy.get("runtime_candidate_count"), 0
+    ) or sum(
+        1
+        for item in candidates
+        if isinstance(item, dict) and item.get("runtime_apply_allowed") is True
     )
     baseline_count = sum(
         1
@@ -8015,15 +8062,15 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     )
     policy_file = str(recommended_policy.get("policy_file") or "")
     policy_version = str(recommended_policy.get("policy_version") or "")
-    source_quality_blocked = source_quality.get("tuning_input_allowed") is False
+    source_quality_blocked = source_quality.get("tuning_input_allowed") is not True
     runtime_refresh_evidence = (
         recommended_policy.get("runtime_refresh_evidence")
         if isinstance(recommended_policy.get("runtime_refresh_evidence"), dict)
         else {}
     )
-    runtime_policy_refresh_allowed = (
-        runtime_refresh_evidence.get("runtime_policy_refresh_allowed") is True
-    )
+    runtime_policy_refresh_allowed = payload.get(
+        "schema_version"
+    ) == SCHEMA_VERSION and not runtime_refresh_contract_error(runtime_refresh_evidence)
     runtime_apply_allowed = bool(
         recommended_policy.get("runtime_apply_allowed") is True
         and runtime_policy_refresh_allowed
@@ -8031,20 +8078,32 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     avg_down_observation_count = (
         _safe_int(input_summary.get("avg_down_observation_count"), 0) or 0
     )
-    direct_observation_count = max(
-        avg_down_observation_count,
-        real_sample + sim_sample,
+    daily_unique_attempt_count = (
+        _safe_int(input_summary.get("daily_unique_attempt_count"), 0) or 0
+    )
+    rolling_unique_attempt_count = (
+        _safe_int(rolling_summary.get("rolling_unique_attempt_count"), None)
+        or _safe_int(input_summary.get("rolling_unique_attempt_count"), 0)
+        or 0
+    )
+    rolling_eligible_attempt_count = (
+        _safe_int(rolling_summary.get("rolling_eligible_runtime_attempt_count"), None)
+        or _safe_int(input_summary.get("rolling_eligible_runtime_attempt_count"), 0)
+        or 0
     )
     sample_floor = int(
         CALIBRATION_FAMILY_METADATA["scale_in_split_order_plan"]["sample_floor"]
     )
-    direct_sample_ready = direct_observation_count >= sample_floor
+    paired_count = (
+        _safe_int(runtime_refresh_evidence.get("paired_economic_sample_count"), 0) or 0
+    )
+    rolling_sample_ready = paired_count >= sample_floor
     recommended = {
         "enabled": bool(candidates)
         and bool(policy_file)
         and not source_quality_blocked
         and runtime_apply_allowed
-        and direct_sample_ready,
+        and rolling_sample_ready,
         "policy_file": policy_file,
         "policy_version": policy_version,
     }
@@ -8058,6 +8117,7 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             ),
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
+            "runtime_policy_candidate_count": runtime_candidate_count,
             "bounded_equal_split_baseline_candidate_count": baseline_count,
             "counterfactual_selected_count": _safe_int(
                 input_summary.get("counterfactual_selected_count"), 0
@@ -8088,12 +8148,29 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             )
             or 0,
             "avg_down_observation_count": avg_down_observation_count,
+            "daily_unique_attempt_count": daily_unique_attempt_count,
+            "rolling_unique_attempt_count": rolling_unique_attempt_count,
+            "rolling_eligible_runtime_attempt_count": rolling_eligible_attempt_count,
+            "rolling_real_outcome_joined_sample": _safe_int(
+                rolling_summary.get("rolling_real_outcome_joined_sample"), 0
+            )
+            or 0,
+            "rolling_additional_mfe_mae_joined_sample": _safe_int(
+                rolling_summary.get("rolling_additional_mfe_mae_joined_sample"),
+                0,
+            )
+            or 0,
             "real_sample_count": real_sample,
             "sim_sample_count": sim_sample,
-            "direct_observation_count": direct_observation_count,
+            "direct_observation_count": paired_count,
+            "paired_economic_sample_count": paired_count,
+            "economic_source_date_count": _safe_int(
+                runtime_refresh_evidence.get("economic_source_date_count"), 0
+            )
+            or 0,
             "direct_observation_sample_floor": sample_floor,
-            "direct_observation_sample_ready": direct_sample_ready,
-            "primary_sample_book": "post_submit_tick_band_counterfactual",
+            "direct_observation_sample_ready": rolling_sample_ready,
+            "primary_sample_book": "rolling_exact_attempt_cost_adjusted_counterfactual",
             "source_quality_blocked": bool(source_quality_blocked),
             "source_quality_status": source_quality.get("status"),
             "excluded_source_quality_event_count": input_summary.get(
@@ -8104,6 +8181,15 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             "runtime_apply_allowed": runtime_apply_allowed,
             "runtime_policy_refresh_allowed": runtime_policy_refresh_allowed,
             "runtime_refresh_evidence": runtime_refresh_evidence,
+            "source_quality_adjusted_ev_pct": runtime_refresh_evidence.get(
+                "source_quality_adjusted_ev_pct"
+            ),
+            "modeled_fill_participation": runtime_refresh_evidence.get(
+                "modeled_fill_participation"
+            ),
+            "downside_p10_profit_rate": runtime_refresh_evidence.get(
+                "downside_p10_profit_rate"
+            ),
             "post_apply_attribution": recommended_policy.get("post_apply_attribution"),
             "rollback_guard": recommended_policy.get("rollback_guard"),
         },
@@ -8122,9 +8208,10 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
         ),
         "notes": [
             "scale_in_split_order_plan only decomposes AVG_DOWN scale-in orders and never increases requested_qty.",
-            "PYRAMID is excluded from v1 because it is not avg-down averaging.",
-            "Policy candidates remain source-only seeds until at least three direct AVG_DOWN/real+sim observations are available.",
-            "A new runtime policy version also requires real outcome, additional MFE/MAE, and price-join coverage; otherwise PREOPEN carries the prior policy forward.",
+            "PYRAMID is excluded because it is not avg-down averaging.",
+            "Event rows are deduplicated to qty>=2 exact AVG_DOWN attempts; qty=1 and identity-incomplete rows cannot satisfy runtime gates.",
+            "A new runtime policy requires rolling exact real outcome and MFE/MAE floors, >=80% price join, positive cost-adjusted EV, >=70% modeled fill participation, and downside p10 >= -0.30%.",
+            "A missing/low-sample daily artifact may carry a still-fresh previously validated policy; source-quality or negative-economic evidence does not carry forward.",
             "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
         ],
     }
@@ -11814,11 +11901,7 @@ def _source_metrics_for_family(
         return (
             metrics.get("dynamic_entry_price_resolver")
             if isinstance(metrics.get("dynamic_entry_price_resolver"), dict)
-            else (
-                metrics.get("latency_guard_miss_ev_recovery")
-                if isinstance(metrics.get("latency_guard_miss_ev_recovery"), dict)
-                else {}
-            )
+            else {}
         )
     if output_family == "entry_split_order_plan":
         return (
@@ -11935,11 +12018,7 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0,
         )
     if output_family == "scale_in_split_order_plan":
-        return max(
-            _safe_int(source_metrics.get("avg_down_observation_count"), 0) or 0,
-            (_safe_int(source_metrics.get("real_sample_count"), 0) or 0)
-            + (_safe_int(source_metrics.get("sim_sample_count"), 0) or 0),
-        )
+        return _safe_int(source_metrics.get("paired_economic_sample_count"), 0) or 0
     if output_family == "entry_price_execution_quality":
         return max(
             _safe_int(source_metrics.get("real_broker_events"), 0) or 0,
@@ -12364,10 +12443,8 @@ def _calibration_state_for_family(
         market_policy_count = (
             _safe_int(source_metrics.get("market_qty_split_only_count"), 0) or 0
         )
-        direct_observation_count = max(
-            _safe_int(source_metrics.get("avg_down_observation_count"), 0) or 0,
-            (_safe_int(source_metrics.get("real_sample_count"), 0) or 0)
-            + (_safe_int(source_metrics.get("sim_sample_count"), 0) or 0),
+        paired_count = (
+            _safe_int(source_metrics.get("paired_economic_sample_count"), 0) or 0
         )
         if not source_metrics.get("report_loaded"):
             return (
@@ -12379,11 +12456,27 @@ def _calibration_state_for_family(
                 "source_quality_blocked",
                 "scale_in_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
             )
-        if direct_observation_count < sample_floor:
+        refresh_evidence = source_metrics.get("runtime_refresh_evidence") or {}
+        blockers = refresh_evidence.get("blockers") or []
+        economic_blockers = {
+            "cost_adjusted_ev_not_positive",
+            "modeled_fill_participation_floor",
+            "downside_p10_delta_floor",
+            "post_apply_negative_economic_evidence",
+        }
+        if economic_blockers.intersection(set(blockers)):
+            return (
+                "hold_no_edge",
+                f"scale-in split measured negative economic evidence: {blockers}; do not carry prior policy.",
+            )
+        if (
+            paired_count < sample_floor
+            or (_safe_int(source_metrics.get("economic_source_date_count"), 0) or 0) < 2
+        ):
             return (
                 "hold_sample",
-                "scale-in split policy seed는 유지하지만 직접 AVG_DOWN/real+sim 표본이 "
-                f"초기 bounded floor에 미달({direct_observation_count}/{sample_floor})해 PREOPEN 적용은 보류한다.",
+                "scale-in split paired economic samples or source dates are insufficient "
+                f"({paired_count}/{sample_floor}, minimum two source dates); only a fresh validated prior policy may carry.",
             )
         if source_metrics.get("runtime_apply_allowed") is not True:
             refresh_evidence = source_metrics.get("runtime_refresh_evidence")
@@ -12392,11 +12485,22 @@ def _calibration_state_for_family(
                 if isinstance(refresh_evidence, dict)
                 else []
             )
+            economic_blockers = {
+                "cost_adjusted_ev_not_positive",
+                "modeled_fill_participation_floor",
+                "downside_p10_delta_floor",
+                "post_apply_negative_economic_evidence",
+            }
+            state = (
+                "hold_no_edge"
+                if economic_blockers.intersection(set(blockers or []))
+                else "hold"
+            )
             return (
-                "hold",
-                "scale_in_split_order_plan direct sample exists but runtime refresh "
-                f"evidence is incomplete(blockers={blockers or ['runtime_apply_not_allowed']}); "
-                "carry the previous PREOPEN policy forward.",
+                state,
+                "scale_in_split_order_plan rolling exact-attempt evidence did not pass "
+                f"the runtime refresh contract(blockers={blockers or ['runtime_apply_not_allowed']}); "
+                "negative economic evidence disables carry-forward.",
             )
         if policy_count > 0 and (
             baseline_policy_count > 0
@@ -12405,7 +12509,7 @@ def _calibration_state_for_family(
         ):
             return (
                 "adjust_up",
-                "AVG_DOWN scale-in split policy is qty-preserving, guard-bounded, and has baseline/counterfactual/market candidates; next PREOPEN env may point to its policy file.",
+                "AVG_DOWN scale-in split policy passed rolling exact-attempt cost-adjusted EV, fill-participation, downside, source-quality, and quantity-preservation guards; next PREOPEN env may point to its policy file.",
             )
         return (
             "hold_sample",
@@ -13153,6 +13257,14 @@ def _build_calibration_candidates(
             )
             source_metrics = {
                 **source_metrics,
+                "paired_economic_sample_count": _safe_int(
+                    family_sample.get("paired_economic_sample_count"), 0
+                )
+                or 0,
+                "economic_source_date_count": _safe_int(
+                    family_sample.get("economic_source_date_count"), 0
+                )
+                or 0,
                 "report_loaded": bool(family_sample.get("report_loaded")),
                 "report_path": family_sample.get("report_path"),
                 "candidate_grid_count": _safe_int(
@@ -13161,6 +13273,10 @@ def _build_calibration_candidates(
                 or 0,
                 "recommended_policy_candidate_count": _safe_int(
                     family_sample.get("recommended_policy_candidate_count"), 0
+                )
+                or 0,
+                "runtime_policy_candidate_count": _safe_int(
+                    family_sample.get("runtime_policy_candidate_count"), 0
                 )
                 or 0,
                 "bounded_equal_split_baseline_candidate_count": _safe_int(
@@ -13199,6 +13315,27 @@ def _build_calibration_candidates(
                     family_sample.get("avg_down_observation_count"), 0
                 )
                 or 0,
+                "daily_unique_attempt_count": _safe_int(
+                    family_sample.get("daily_unique_attempt_count"), 0
+                )
+                or 0,
+                "rolling_unique_attempt_count": _safe_int(
+                    family_sample.get("rolling_unique_attempt_count"), 0
+                )
+                or 0,
+                "rolling_eligible_runtime_attempt_count": _safe_int(
+                    family_sample.get("rolling_eligible_runtime_attempt_count"), 0
+                )
+                or 0,
+                "rolling_real_outcome_joined_sample": _safe_int(
+                    family_sample.get("rolling_real_outcome_joined_sample"), 0
+                )
+                or 0,
+                "rolling_additional_mfe_mae_joined_sample": _safe_int(
+                    family_sample.get("rolling_additional_mfe_mae_joined_sample"),
+                    0,
+                )
+                or 0,
                 "real_sample_count": _safe_int(
                     family_sample.get("real_sample_count"), 0
                 )
@@ -13226,6 +13363,15 @@ def _build_calibration_candidates(
                     family_sample.get("runtime_refresh_evidence")
                     if isinstance(family_sample.get("runtime_refresh_evidence"), dict)
                     else {}
+                ),
+                "source_quality_adjusted_ev_pct": family_sample.get(
+                    "source_quality_adjusted_ev_pct"
+                ),
+                "modeled_fill_participation": family_sample.get(
+                    "modeled_fill_participation"
+                ),
+                "downside_p10_profit_rate": family_sample.get(
+                    "downside_p10_profit_rate"
                 ),
                 "post_apply_attribution": family_sample.get("post_apply_attribution"),
                 "rollback_guard": family_sample.get("rollback_guard"),

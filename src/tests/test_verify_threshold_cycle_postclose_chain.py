@@ -9,6 +9,19 @@ import pytest
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 
 
+def test_retired_latency_is_not_an_ai_candidate_or_an_exemption():
+    stale = {
+        "family": "latency_classifier_runtime_profile",
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+    }
+    active = {**stale, "family": "scalping_pyramid_quality_gate"}
+    assert mod._runtime_candidates_requiring_ai(
+        {"calibration_candidates": [stale, active]}
+    ) == [active["family"]]
+    assert stale["family"] not in mod._AI_EXEMPT_RUNTIME_FAMILIES
+
+
 def _independent_prior_catalog(payload):
     payload["policies"] = [
         {

@@ -1051,6 +1051,8 @@ def build_live_dynamic_confirmation_checkpoint(
                 "sequence_epoch": trade_epoch if same_epoch else None,
                 "best_bid": current_bid,
                 "best_ask": current_ask,
+                "best_ask_quantity": current_ask_qty,
+                "depth_received_at_ms": depth_received_ms,
                 "bid_return_bps": (
                     round(bid_return, 6) if bid_return is not None else None
                 ),

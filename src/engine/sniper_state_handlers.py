@@ -346,6 +346,7 @@ from src.engine.scalping.entry_split_order_plan import (
 from src.engine.scalping.scale_in_split_order_plan import (
     apply_scale_in_split_order_policy,
 )
+from src.trading.order.split_execution_math import scale_in_leg_ttl_seconds
 from src.engine.scalping.position_peak_ledger import POSITION_PEAK_LEDGER
 from src.engine.scalping.scanner_async_eval import (
     ScannerAsyncEvalContext,
@@ -42982,18 +42983,12 @@ def _decorate_scale_in_split_leg_ttls(split_orders, stock, strategy):
     ):
         return split_orders
     raw_strategy = str(strategy or (stock or {}).get("strategy") or "").strip().upper()
-    if raw_strategy in {"SCALP", "SCALPING"}:
-        base_sec = 20
-        max_sec = 120
-    else:
-        base_sec = _rule_int("ORDER_TIMEOUT_SEC", 30)
-        max_sec = 300
-    ttl_values = _split_leg_ttl_values(
-        base_sec, len(split_orders), max_sec=max_sec, min_sec=5
+    ttl_values = scale_in_leg_ttl_seconds(
+        len(split_orders),
+        raw_strategy,
+        order_timeout_sec=_rule_int("ORDER_TIMEOUT_SEC", 30),
     )
-    hard_ttl_sec = (
-        max(ttl_values) if ttl_values else max(5, min(max_sec, int(base_sec or 30)))
-    )
+    hard_ttl_sec = max(ttl_values)
     decorated = []
     for idx, order in enumerate(split_orders):
         if not isinstance(order, dict):
@@ -94250,6 +94245,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             broker_order_no_list=joined_ord_nos or "-",
             broker_order_qty_list=",".join(submitted_order_qty_pairs) or "-",
             resolved_price=resolved_price,
+            final_price=final_price,
+            order_type_code=order_type_code,
+            **scale_in_split_fields,
             partial_submit_failure=partial_submit_failure or "-",
             broker_route=scale_in_broker_route,
             broker_route_resolution=scale_in_route_resolution,

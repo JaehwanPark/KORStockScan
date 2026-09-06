@@ -1,9 +1,10 @@
-"""Pure quantity and price math shared by stage-specific split policies.
+"""Pure quantity, price and existing scale-in TTL math for split policies.
 
 This module deliberately owns no evidence, policy selection, runtime enablement,
 or order authority.  Entry and AVG_DOWN scale-in keep separate producers and
 consumers; only their deterministic quantity-conservation and tick math is
-shared here.
+shared here. Scale-in runtime and its offline replay also share unchanged TTL
+arithmetic; this does not grant replay any runtime timing authority.
 """
 
 from __future__ import annotations
@@ -11,6 +12,21 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from src.trading.order.tick_utils import clamp_price_to_tick, get_tick_size
+
+
+def scale_in_leg_ttl_seconds(
+    leg_count: int, strategy: str, *, order_timeout_sec: int = 30
+) -> list[int]:
+    """The existing scale-in TTL arithmetic, shared by runtime and replay."""
+    scalping = str(strategy or "").strip().upper() in {"SCALPING", "SCALP"}
+    base = 20 if scalping else max(1, int(order_timeout_sec))
+    maximum = 120 if scalping else 300
+    if leg_count <= 1:
+        return [base]
+    return [
+        max(5, min(maximum, int(round(base * (0.5, 1.0, 2.0)[min(i, 2)]))))
+        for i in range(leg_count)
+    ]
 
 
 def split_qty(total_qty: int, leg_count: int, first_weight: float) -> list[int]:
@@ -68,10 +84,7 @@ def split_qty_by_weights(
         quantities[index] += value
     leftover = remaining - sum(floors)
     remainders = sorted(
-        (
-            (raw_allocations[index] - floors[index], index)
-            for index in range(leg_count)
-        ),
+        ((raw_allocations[index] - floors[index], index) for index in range(leg_count)),
         key=lambda item: (-item[0], item[1]),
     )
     for _remainder, index in remainders[:leftover]:

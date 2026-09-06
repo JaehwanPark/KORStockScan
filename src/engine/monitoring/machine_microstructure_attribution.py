@@ -18,7 +18,7 @@ import os
 import re
 import statistics
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -54,6 +54,7 @@ from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
 )
 from src.engine.monitoring.machine_market_weakness_response import (
     build_machine_market_weakness_response,
+    COUNTERFACTUAL_MAX_QUOTE_AGE_SEC,
 )
 from src.engine.monitoring.widget_comparison_cost import (
     comparison_cost_contract,
@@ -181,7 +182,7 @@ POSTCLOSE_COMPLETE_TIME = time(20, 0)
 ENTRY_CONFIRMATION_HORIZONS_SEC = (1, 3, 5)
 ENTRY_CONFIRMATION_MAX_QUOTE_AGE_SEC = 1
 MARKET_WEAKNESS_COUNTERFACTUAL_HORIZONS_SEC = (60, 180, 300, 600, 1200, 1800)
-MARKET_WEAKNESS_COUNTERFACTUAL_MAX_QUOTE_AGE_SEC = 5
+MARKET_WEAKNESS_COUNTERFACTUAL_MAX_QUOTE_AGE_SEC = COUNTERFACTUAL_MAX_QUOTE_AGE_SEC
 MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
 MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 
@@ -5045,9 +5046,22 @@ def _micro_context(
             anchors_by_symbol[anchor["symbol"]].append((anchor, anchor_at))
 
     def post_window_sec(anchor: Mapping[str, Any]) -> int:
+        rebound_frame = anchor.get("rebound_source_frame")
+        if isinstance(rebound_frame, Mapping):
+            observation_end = _parse_ts(rebound_frame.get("parent_horizon_end"))
+            observation_start = _parse_ts(anchor.get("anchor_at"))
+            if observation_end is not None and observation_start is not None:
+                return max(
+                    0,
+                    min(
+                        8 * 3600,
+                        int((observation_end - observation_start).total_seconds()),
+                    ),
+                )
         return (
             MARKET_WEAKNESS_COUNTERFACTUAL_POST_WINDOW_SEC
             if anchor.get("anchor_role") in _ENTRY_CONFIRMATION_ANCHOR_ROLES
+            or anchor.get("anchor_role") == "source_only_rebound_owner_decision"
             else POST_WINDOW_SEC
         )
 
@@ -6348,6 +6362,36 @@ def _anchor_result(
                 "eligible" if not counterfactual_gaps else "blocked"
             ),
             "source_gap_reasons": sorted(set(counterfactual_gaps)),
+            "horizon_eligibility": {
+                minute: {
+                    "source_quality_status": (
+                        "blocked"
+                        if any(
+                            gap
+                            not in {
+                                f"executable_bbo_horizon_{other}m_missing"
+                                for other in horizons
+                                if other != minute
+                            }
+                            for gap in counterfactual_gaps
+                        )
+                        else "eligible"
+                    ),
+                    "source_gap_reasons": sorted(
+                        {
+                            gap
+                            for gap in counterfactual_gaps
+                            if gap
+                            not in {
+                                f"executable_bbo_horizon_{other}m_missing"
+                                for other in horizons
+                                if other != minute
+                            }
+                        }
+                    ),
+                }
+                for minute in horizons
+            },
             "entry": {
                 "observed": executable_entry_row is not None,
                 "ask_price": round(entry_price, 6) if entry_price is not None else None,
@@ -8204,12 +8248,40 @@ def build_report(
     weakness_blocked_anchors, weakness_blocked_source = (
         _market_weakness_blocked_entry_inventory(target_date, report_root)
     )
-    anchors = widget_anchors + episode_anchors + weakness_blocked_anchors
+    from src.engine.monitoring.machine_rebound_reentry_source import (
+        load_anchors,
+        project_outcome,
+    )
+    from src.engine.monitoring.machine_rebound_reentry_evaluation import (
+        SOURCE_SCHEMA as REBOUND_SOURCE_SCHEMA,
+    )
+
+    rebound_anchors, rebound_source = load_anchors(target_date, report_root)
+    rebound_source["blocked_opportunity_census"] = dict(
+        Counter(str(anchor.get("owner")) for anchor in weakness_blocked_anchors)
+    )
+    rebound_source["runtime_adapter_scope"] = "regular_two_leg_episode_flat_new_entry"
+    rebound_source["unsupported_owner_reason"] = {
+        "widget": "sequential_average_target_exit_requires_separate_owner_replay",
+        "morning_legacy": "different_owner_execution_recipe",
+    }
+    if weakness_blocked_anchors and not rebound_anchors:
+        rebound_source["gap_counts"][
+            (
+                "pre_instrumentation_owner_journal_unavailable"
+                if target_day < date(2026, 9, 7)
+                else "owner_journal_missing_despite_blocked_opportunity"
+            )
+        ] = len(weakness_blocked_anchors)
+    anchors = (
+        widget_anchors + episode_anchors + weakness_blocked_anchors + rebound_anchors
+    )
     symbols = set(widget_symbols)
     symbols.update(
         str(row.get("symbol")) for row in episode_profiles.values() if row.get("symbol")
     )
     symbols.update(str(row["symbol"]) for row in weakness_blocked_anchors)
+    symbols.update(str(row["symbol"]) for row in rebound_anchors)
     micro_source, micro_inventory, windows = _micro_context(
         target_date,
         observation_root,
@@ -8258,21 +8330,34 @@ def build_report(
         )
     )
     results: list[dict[str, Any]] = []
+    rebound_frames: dict[str, dict[str, Any]] = {}
     for anchor in anchors:
         receipt_binding = _runtime_registration_receipt_binding(
             anchor, registration_receipt
         )
-        results.append(
-            _anchor_result(
-                anchor,
-                micro_inventory[anchor["symbol"]],
-                windows[anchor["anchor_id"]],
-                partition_loaded=micro_source["partition_status"] == "loaded",
-                source_contract_gap=source_contract_gap,
-                clean_baseline_allowed=clean_baseline_allowed,
-                registration_receipt_binding=receipt_binding,
-            )
+        result = _anchor_result(
+            anchor,
+            micro_inventory[anchor["symbol"]],
+            windows[anchor["anchor_id"]],
+            partition_loaded=micro_source["partition_status"] == "loaded",
+            source_contract_gap=source_contract_gap,
+            clean_baseline_allowed=clean_baseline_allowed,
+            registration_receipt_binding=receipt_binding,
         )
+        if "rebound_source_frame" in anchor:
+            rebound_frames[anchor["anchor_id"]] = project_outcome(
+                anchor["rebound_source_frame"],
+                windows[anchor["anchor_id"]],
+                # This observation intentionally has no actual-order tuning
+                # eligibility. Only the shared source-quality verdict applies.
+                source_ready=result.get("micro_context_status") == "matched",
+            )
+        else:
+            results.append(result)
+    for case in rebound_source["cases"]:
+        case["frames"] = [
+            rebound_frames[frame["anchor_id"]] for frame in case["frames"]
+        ]
     micro_entry_confirmation = _micro_entry_confirmation_summary(
         results,
         widget_sources=widget_sources,
@@ -8661,6 +8746,7 @@ def build_report(
         "rolling_paired_policy_research": rolling_paired_policy_research,
         "micro_entry_confirmation": micro_entry_confirmation,
         "market_weakness_entry_response": market_weakness_response,
+        REBOUND_SOURCE_SCHEMA: rebound_source,
         "objective_followups": objective_followups,
         "policy_change_readiness": POLICY_CHANGE_READINESS_CONTRACT,
         "promotion_candidate_intake_contract": PROMOTION_CANDIDATE_INTAKE_CONTRACT,
@@ -8936,6 +9022,11 @@ def render_markdown(report: dict[str, Any]) -> str:
     if isinstance(weakness_response, dict):
         weakness_summary = weakness_response.get("summary") or {}
         weakness_cumulative = weakness_response.get("clean_baseline_cumulative") or {}
+        weakness_recommendation = (
+            weakness_response.get("threshold_recommendation") or {}
+        )
+        weakness_policy = weakness_recommendation.get("current_policy") or {}
+        weakness_attainability = weakness_recommendation.get("attainability") or {}
         lines.extend(
             [
                 "## Market-Scoped Weakness Entry Response",
@@ -8964,9 +9055,26 @@ def render_markdown(report: dict[str, Any]) -> str:
                     f"`{weakness_cumulative.get('source_only_review_ready', False)}`."
                 ),
                 (
-                    "- KOSPI/KOSDAQ listing market and two-observation activation / "
-                    "three-observation release are reconstructed from past-only "
-                    "schema-v2 observations."
+                    "- Observed activation/release: "
+                    f"`{weakness_policy.get('activation_unique_observations')}` / "
+                    f"`{weakness_policy.get('release_unique_observations')}`. "
+                    "Historical state replay is versioned separately from fresh-300s "
+                    "source-only policy hypotheses; neither proves actual PID consumption."
+                ),
+                (
+                    "- Eligible 30m cost-aware counterfactual signals: "
+                    f"`{weakness_recommendation.get('counterfactual_entry_signal_count', 0)}`; "
+                    "policy candidate ready: "
+                    f"`{weakness_recommendation.get('policy_candidate_ready', False)}`; "
+                    "attainability: "
+                    f"`{weakness_attainability.get('status', 'unavailable')}`. "
+                    "Counterfactual markouts are not actual realized returns."
+                ),
+                (
+                    "- Rebound/reentry owner source: `market_weakness_rebound_reentry_source_v1`; "
+                    "paired economics and automatic PREOPEN candidate selection belong "
+                    "to `machine_entry_timing_tuning`. Fresh rising owner signals are "
+                    "required; expired signals and market recovery alone cannot grant BUY."
                 ),
                 "- Response arms are source-only; no entry block, cancel, target, holding, exit, price, or quantity authority exists.",
                 "",
