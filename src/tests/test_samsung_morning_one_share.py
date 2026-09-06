@@ -243,6 +243,9 @@ def test_market_weakness_guard_preserves_morning_attempt_for_release(
     released = machine.run_once(_at(11, 8, 1))
     assert released["attempt_consumed"] is True
     assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
+    receipt = released["signal_features"]["market_weakness_entry_guard"]
+    assert receipt["market_weakness_entry_guard_blocked"] is False
+    assert receipt["decision_checked_at"] == _at(11, 8, 1).isoformat()
 
 
 def test_market_weakness_cancels_nxt_buys_and_blocks_sor_fallback(
@@ -269,6 +272,8 @@ def test_market_weakness_cancels_nxt_buys_and_blocks_sor_fallback(
             active_markets=("KOSPI",) if active else (),
             session_key=started_at.date().isoformat(),
             observation_id="weakness-morning-cancel-1",
+            state_fresh=True,
+            state_age_sec=0,
             observation_as_of=started_at.isoformat(),
             source_status="test",
             state_path="test-state.json",

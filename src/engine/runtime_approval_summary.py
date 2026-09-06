@@ -13,6 +13,7 @@ from typing import Any
 from src.engine.approval_contracts import approval_contract_for
 from src.engine.lifecycle.retirement import (
     RETIRED_CALIBRATION_FAMILIES,
+    current_calibration_rows,
     current_report_view,
     retired_artifact,
     retired_status,
@@ -718,8 +719,8 @@ def _candidate_by_family(items: Any) -> dict[str, dict[str, Any]]:
         return {}
     return {
         str(item.get("family") or ""): item
-        for item in items
-        if isinstance(item, dict) and item.get("family")
+        for item in current_calibration_rows(items)
+        if item.get("family")
     }
 
 
@@ -1076,9 +1077,7 @@ def _scalping_rows(
         else {}
     )
     rows: list[dict[str, Any]] = []
-    for item in decisions:
-        if not isinstance(item, dict):
-            continue
+    for item in current_calibration_rows(decisions):
         family = str(item.get("family") or "").strip()
         if not family:
             continue
@@ -1300,8 +1299,8 @@ def _scalping_rows(
             "allowed_runtime_apply": False,
             "runtime_effect": False,
             "runtime_bias_scope": "hard_safety_and_diagnostic_only",
-            "latency_submit_routing": entry_funnel.get("latency_submit_routing"),
-            "latency_diagnostic_owner": entry_funnel.get("latency_diagnostic_owner"),
+            "latency_submit_routing": "buy_funnel_diagnostic_only",
+            "latency_diagnostic_owner": "buy_funnel_sentinel+performance_tuning+daily_threshold_cycle_report",
             "recommendation_status": "retired",
         }
         row.update(
@@ -1315,6 +1314,8 @@ def _scalping_rows(
             candidate=candidates.get(family, {}),
             selection=runtime_selections.get(family, {}),
         )
+        if family in RETIRED_CALIBRATION_FAMILIES:
+            row["next_preopen_candidate_state"] = "not_applicable_retired"
     return rows
 
 
@@ -2450,6 +2451,23 @@ def build_runtime_approval_summary(
                 scale_in_split_order_plan_summary.get(
                     "runtime_three_leg_candidate_count"
                 )
+            ),
+            "scale_in_split_order_plan_runtime_apply_allowed": (
+                scale_in_split_order_plan_summary.get("runtime_apply_allowed")
+            ),
+            "scale_in_split_order_plan_runtime_candidate_count": (
+                scale_in_split_order_plan_summary.get("runtime_candidate_count")
+            ),
+            "scale_in_split_order_plan_rolling_unique_attempt_count": (
+                scale_in_split_order_plan_summary.get("rolling_unique_attempt_count")
+            ),
+            "scale_in_split_order_plan_rolling_eligible_runtime_attempt_count": (
+                scale_in_split_order_plan_summary.get(
+                    "rolling_eligible_runtime_attempt_count"
+                )
+            ),
+            "scale_in_split_order_plan_runtime_refresh_evidence": (
+                scale_in_split_order_plan_summary.get("runtime_refresh_evidence")
             ),
             "buy_funnel_sentinel_primary": (
                 (ev_report.get("buy_funnel_sentinel") or {}).get("primary")

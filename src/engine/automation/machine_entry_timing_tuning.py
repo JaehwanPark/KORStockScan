@@ -22,6 +22,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.machine_rebound_reentry_evaluation import (
+    SECTION as REBOUND_SECTION,
+    build_evaluation as build_rebound_evaluation,
+)
 from src.trading.config.machine_entry_timing_policy import (
     ALLOWED_DELAYS_SEC,
     AUTHORITY,
@@ -2319,6 +2323,15 @@ def build_report(
     )
     return {
         "schema": REPORT_SCHEMA,
+        REBOUND_SECTION: build_rebound_evaluation(
+            target_date=target_date,
+            sources=[payload for _, _, payload in reports],
+            same_stage_clear=(
+                target_source_ready
+                and runtime_winner is None
+                and same_stage_owner_guard.get("mutation_present") is False
+            ),
+        ),
         "status": status,
         "decision": (
             (
@@ -2578,6 +2591,15 @@ def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
             "- No scope passed its bounded fixed or dynamic floors; entry remains immediate."
         )
     sample_assessment = report.get("sample_floor_assessment") or {}
+    rebound = report.get(REBOUND_SECTION) or {}
+    lines.extend(
+        [
+            f"- Rebound/reentry: `{rebound.get('status', 'missing')}`; eligible paired opportunities `{rebound.get('eligible_pair_count', 0)}`.",
+            f"- Rebound source gaps: `{json.dumps(rebound.get('gap_counts', {}), sort_keys=True)}`.",
+            "- Rebound automatic PREOPEN: standing user authority; no per-candidate approval; exact scope, source/EV/owner/conflict/rollback checks remain.",
+            "- Rebound modeled owner exits are not actual broker fills; missing control resumption is not zero PnL.",
+        ]
+    )
     lines.append(
         "- Sample-floor state: "
         f"`{sample_assessment.get('state')}`; next action "
@@ -2621,15 +2643,212 @@ def write_outputs(
     return report_path, markdown_path, None
 
 
+def apply_rebound_preopen(
+    *,
+    target_date: date,
+    now: datetime | None = None,
+    write: bool = False,
+    report_dir: Path = OUTPUT_DIR,
+    source_dir: Path = SOURCE_DIR,
+    policy_dir: Path | None = None,
+    low_price_candidate_dir: Path = LOW_PRICE_CANDIDATE_DIR,
+    samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
+    widget_policy_dir: Path = WIDGET_POLICY_DIR,
+) -> dict[str, Any]:
+    """Revalidate the fixed experiment before issuing an exact-date receipt.
+
+    A production report is staging evidence only. The immutable snapshot here
+    avoids later report refresh invalidating a valid PREOPEN decision.
+    """
+    from src.trading.config.machine_rebound_reentry_policy import (
+        AUTHORITY as REBOUND_AUTHORITY,
+        SCHEMA as REBOUND_SCHEMA,
+        DEFAULT_POLICY_DIR as REBOUND_POLICY_DIR,
+        digest,
+        policy_path as rebound_path,
+        valid_candidate,
+    )
+
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        return {"status": "blocked_naive_preopen_time", "runtime_effect": False}
+    current = current.astimezone(KST)
+    if (
+        current.date() != target_date
+        or current.hour >= 8
+        or not is_krx_trading_day(target_date)
+    ):
+        return {"status": "blocked_not_exact_preopen", "runtime_effect": False}
+    source_date = target_date - timedelta(days=1)
+    while not is_krx_trading_day(source_date):
+        source_date -= timedelta(days=1)
+    root = policy_dir or REBOUND_POLICY_DIR
+    path = rebound_path(target_date, root)
+
+    def baseline(status: str, reason: str) -> dict[str, Any]:
+        result = {
+            "schema": REBOUND_SCHEMA,
+            "status": status,
+            "reason": reason,
+            "target_date": target_date.isoformat(),
+            "source_date": source_date.isoformat(),
+            "applied_at": current.isoformat(),
+            "runtime_effect": False,
+            "per_candidate_user_approval_required": False,
+            "candidate": None,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        if write:
+            _atomic_write_json(path, result)
+        return result
+
+    report_path = (
+        report_dir / f"machine_entry_timing_tuning_{source_date.isoformat()}.json"
+    )
+    report = _read_json(report_path)
+    if (
+        not report
+        or report.get("schema") != REPORT_SCHEMA
+        or report.get("target_date") != source_date.isoformat()
+        or report.get("effective_date") != target_date.isoformat()
+    ):
+        return baseline(
+            "blocked_source_report", "exact_completed_source_report_missing_or_invalid"
+        )
+    section = report.get(REBOUND_SECTION)
+    if not isinstance(section, dict):
+        if source_date < date(2026, 9, 7):
+            return baseline(
+                "baseline_no_candidate",
+                "pre_instrumentation_source_section_unavailable",
+            )
+        return baseline("blocked_source_report", "rebound_evaluation_section_missing")
+    if section.get("selected_candidate") is None:
+        return baseline("baseline_no_candidate", str(section.get("status")))
+    if not valid_candidate(section["selected_candidate"]):
+        return baseline("blocked_candidate_bounds", "candidate_bounds_invalid")
+    from src.engine.risk.market_weakness_threshold_policy import (
+        resolve_effective_thresholds,
+    )
+
+    hysteresis = resolve_effective_thresholds(target_date=target_date)
+    if hysteresis.review_status == "passed_out_of_sample_review":
+        return baseline("blocked_same_stage_owner", "market_hysteresis_axis_selected")
+    try:
+        owner_guard = _same_stage_owner_guard(
+            target_date=source_date,
+            low_price_candidate_dir=low_price_candidate_dir,
+            samsung_candidate_dir=samsung_candidate_dir,
+            widget_policy_dir=widget_policy_dir,
+        )
+        sources, rejected = _source_reports(
+            target_date=source_date, source_dir=source_dir
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return baseline(
+            "blocked_source_revalidation", "owner_or_source_contract_failure"
+        )
+    if (
+        owner_guard.get("mutation_present") is not False
+        or report.get("runtime_winner") is not None
+    ):
+        return baseline(
+            "blocked_same_stage_owner", "another_machine_entry_axis_selected"
+        )
+    if not any(day == source_date for day, _, _ in sources):
+        return baseline(
+            "blocked_source_report", "fresh_target_source_quality_not_ready"
+        )
+    try:
+        rebuilt = build_rebound_evaluation(
+            target_date=source_date,
+            sources=[payload for _, _, payload in sources],
+            same_stage_clear=True,
+        )
+        if (
+            digest(rebuilt) != digest(section)
+            or rebuilt.get("selected_candidate") is None
+        ):
+            return baseline(
+                "blocked_source_revalidation", "source_or_economic_evidence_changed"
+            )
+    except (OSError, ValueError, TypeError, KeyError):
+        return baseline("blocked_source_revalidation", "source_replay_contract_failure")
+    snapshot_hash = digest(rebuilt)
+    snapshot_path = root / "evidence" / f"{snapshot_hash}.json"
+    candidate = rebuilt["selected_candidate"]
+    expected_cost = comparison_cost_contract(target_date)
+    if candidate.get("executable_confirmation") != {
+        "mode": "fresh_rebound_checkpoint0",
+        "round_trip_cost_pct": expected_cost["round_trip_cost_pct"],
+        "cost_trade_date": expected_cost["trade_date"],
+        "cost_contract_sha256": expected_cost["contract_sha256"],
+    }:
+        return baseline(
+            "blocked_candidate_bounds", "runtime_cost_contract_not_exact_target_date"
+        )
+    result = {
+        "schema": REBOUND_SCHEMA,
+        "authority": REBOUND_AUTHORITY,
+        "target_date": target_date.isoformat(),
+        "source_date": source_date.isoformat(),
+        "applied_at": current.isoformat(),
+        "candidate": candidate,
+        "evidence_snapshot": str(snapshot_path.resolve()),
+        "evidence_sha256": snapshot_hash,
+        "policy_hash": digest(candidate),
+        "same_stage_clear": True,
+        "status": "applied" if write else "dry_run_ready",
+        "runtime_effect": bool(write),
+        "allowed_runtime_apply": bool(write),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": not write,
+        "per_candidate_user_approval_required": False,
+        "rollback": "exact_date_baseline_on_missing_invalid_or_failed_preopen_revalidation",
+        "cancel_quantity_target_exit_provider_broker_guards_unchanged": True,
+    }
+    if write:
+        _atomic_write_json(snapshot_path, rebuilt)
+        _atomic_write_json(path, result)
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--write", action="store_true")
+    parser.add_argument(
+        "--phase", choices=("postclose", "preopen"), default="postclose"
+    )
+    parser.add_argument("--report-only-dir", type=Path)
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
     target_date = date.fromisoformat(args.target_date)
+    if args.phase == "preopen":
+        if args.report_only_dir is not None:
+            parser.error("--report-only-dir is postclose-only")
+        result = apply_rebound_preopen(target_date=target_date, write=args.write)
+        print(json.dumps(result, ensure_ascii=False))
+        return (
+            0
+            if result["status"] in {"applied", "baseline_no_candidate", "dry_run_ready"}
+            else 1
+        )
+    if (
+        args.report_only_dir is not None
+        and args.report_only_dir.resolve() == OUTPUT_DIR.resolve()
+    ):
+        parser.error("report-only output must not overwrite production source reports")
     report = build_report(target_date=target_date)
     publication = policy_publication_gate(report)
+    if args.report_only_dir is not None:
+        publication = {
+            **publication,
+            "allowed": False,
+            "status": "isolated_report_only_no_policy_write",
+        }
     report["policy_publication"] = publication
     if publication["allowed"] is not True:
         dynamic = report.get("per_signal_dynamic_confirmation_source_only")
@@ -2637,11 +2856,13 @@ def main(argv: list[str] | None = None) -> int:
             dynamic["runtime_policy_emitted"] = False
     applied = build_applied_policy(report)
     paths: tuple[Path, Path, Path | None] | None = None
-    if args.write:
+    if args.write or args.report_only_dir is not None:
         paths = write_outputs(
             report,
             applied,
-            publish_policy=publication["allowed"] is True,
+            output_dir=args.report_only_dir or OUTPUT_DIR,
+            publish_policy=args.report_only_dir is None
+            and publication["allowed"] is True,
         )
     if args.print_summary:
         print(
@@ -2652,6 +2873,17 @@ def main(argv: list[str] | None = None) -> int:
                     "winner": report.get("runtime_winner"),
                     "fixed_delay_diagnostic_winner": report.get("winner"),
                     "policy_publication": publication,
+                    "rebound_reentry": {
+                        key: (report.get(REBOUND_SECTION) or {}).get(key)
+                        for key in (
+                            "status",
+                            "case_count",
+                            "eligible_pair_count",
+                            "gap_counts",
+                            "selected_candidate",
+                            "automatic_preopen",
+                        )
+                    },
                     "paths": (
                         [str(path) for path in paths if path is not None]
                         if paths

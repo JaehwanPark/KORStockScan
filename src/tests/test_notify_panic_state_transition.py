@@ -1,10 +1,194 @@
 import json
+from datetime import datetime, timedelta
+import pytest
+from types import SimpleNamespace
 
 from src.engine import notify_panic_state_transition as mod
 from src.engine.market_panic_breadth_collector import (
     market_weakness_observation_id,
 )
 from src.engine.risk.market_weakness_threshold_policy import SCHEMA, threshold_hash
+
+
+@pytest.mark.parametrize("send_enabled", [False, True])
+def test_failed_source_never_renews_health_even_with_pending_notice(
+    tmp_path, monkeypatch, send_enabled
+):
+    monkeypatch.setattr(mod, "_load_telegram_config", lambda: ("", ""))
+    report_path = tmp_path / "report.json"
+    state_path = tmp_path / "state.json"
+    for minute in (0, 2):
+        report = _weakness_report("SINGLE_MARKET_WEAKNESS", minute)
+        report_path.write_text(json.dumps(report))
+        mod.notify_from_report(
+            report_path,
+            kind="market_weakness",
+            state_file=state_path,
+            send_enabled=send_enabled,
+        )
+    before = json.loads(state_path.read_text())["market_weakness_observer_health"]
+    report = _weakness_report("SINGLE_MARKET_WEAKNESS", 12)
+    report["market_weakness_observation"]["source_quality_ready"] = False
+    _refresh_weakness_identity(report)
+    report_path.write_text(json.dumps(report))
+    for _ in range(2):
+        assert (
+            mod.notify_from_report(
+                report_path,
+                kind="market_weakness",
+                state_file=state_path,
+                send_enabled=send_enabled,
+            )
+            == "source_quality_blocked"
+        )
+    health = json.loads(state_path.read_text())["market_weakness_observer_health"]
+    assert health["ready"] is False
+    assert health["consecutive_failure_count"] == 2
+    assert (
+        health["last_healthy_observation_as_of"]
+        == before["last_healthy_observation_as_of"]
+    )
+    from src.engine.risk.market_weakness_entry_guard import (
+        evaluate_market_weakness_entry_guard,
+    )
+
+    decision = evaluate_market_weakness_entry_guard(
+        symbol="005930",
+        owner="episode",
+        listing_market="KOSPI",
+        now=datetime.fromisoformat(report["as_of"]),
+        state_path=state_path,
+    )
+    assert decision.blocked is False
+    assert decision.state_age_sec == 600
+
+
+def test_too_close_or_out_of_order_does_not_advance_healthy_time(tmp_path):
+    report_path = tmp_path / "report.json"
+    state_path = tmp_path / "state.json"
+    report = _weakness_report("SINGLE_MARKET_WEAKNESS", 2)
+    report_path.write_text(json.dumps(report))
+    mod.notify_from_report(
+        report_path, kind="market_weakness", state_file=state_path, send_enabled=False
+    )
+    for delta, expected in (
+        (30, "observation_too_close"),
+        (-60, "observation_out_of_order"),
+    ):
+        updated = _weakness_report("SINGLE_MARKET_WEAKNESS", 2)
+        updated["as_of"] = (
+            datetime.fromisoformat(report["as_of"]) + timedelta(seconds=delta)
+        ).isoformat()
+        updated["market_weakness_observation"]["as_of"] = updated["as_of"]
+        _refresh_weakness_identity(updated)
+        report_path.write_text(json.dumps(updated))
+        assert (
+            mod.notify_from_report(
+                report_path,
+                kind="market_weakness",
+                state_file=state_path,
+                send_enabled=False,
+            )
+            == expected
+        )
+        assert (
+            json.loads(state_path.read_text())["market_weakness_observer_health"][
+                "last_healthy_observation_as_of"
+            ]
+            == report["as_of"]
+        )
+
+
+def test_force_notification_cannot_recount_one_observation(tmp_path):
+    report_path = tmp_path / "report.json"
+    state_path = tmp_path / "state.json"
+    report_path.write_text(json.dumps(_weakness_report("SINGLE_MARKET_WEAKNESS", 0)))
+    for _ in range(3):
+        mod.notify_from_report(
+            report_path,
+            kind="market_weakness",
+            state_file=state_path,
+            send_enabled=False,
+            force=True,
+        )
+    state = json.loads(state_path.read_text())["market_weakness"]
+    assert state["phase"] == "activation_pending"
+    assert state["market_states"]["KOSPI"]["weak_streak"] == 1
+
+
+@pytest.mark.parametrize(
+    "age,wrong_date,expected",
+    [
+        (0, False, "state_updated_notify_disabled"),
+        (600, False, "report_freshness_failed"),
+        (0, True, "report_freshness_failed"),
+    ],
+)
+def test_required_report_is_bound_to_this_wrapper_run(
+    tmp_path, age, wrong_date, expected
+):
+    report = _weakness_report("SINGLE_MARKET_WEAKNESS", 2)
+    report_path = tmp_path / "report.json"
+    state_path = tmp_path / "state.json"
+    report_path.write_text(json.dumps(report))
+    now = datetime.fromisoformat(report["as_of"]).timestamp() + age
+    assert (
+        mod.notify_from_report(
+            report_path,
+            kind="market_weakness",
+            state_file=state_path,
+            send_enabled=False,
+            now_ts=now,
+            expected_report_date="2026-08-27" if wrong_date else "2026-08-28",
+            report_not_before_ts=now,
+        )
+        == expected
+    )
+
+
+def test_latch_and_freshness_match_source_hypothesis_at_ttl_boundary(tmp_path):
+    from src.engine.monitoring.machine_market_weakness_response import (
+        _market_timelines,
+        _state_at,
+    )
+    from src.engine.risk.market_weakness_entry_guard import (
+        evaluate_market_weakness_entry_guard,
+    )
+
+    report_path = tmp_path / "report.json"
+    state_path = tmp_path / "state.json"
+    observations = []
+    for minute in (0, 1, 2, 4, 15, 17, 19):
+        state = "SINGLE_MARKET_WEAKNESS" if minute < 15 else "RECOVERY_EVIDENCE"
+        report = _weakness_report(state, minute)
+        if minute == 1:
+            report["market_weakness_observation"]["source_quality_ready"] = False
+            _refresh_weakness_identity(report)
+        report_path.write_text(json.dumps(report))
+        mod.notify_from_report(
+            report_path,
+            kind="market_weakness",
+            state_file=state_path,
+            send_enabled=False,
+        )
+        observation = report["market_weakness_observation"]
+        observations.append(
+            {**observation, "as_of": datetime.fromisoformat(observation["as_of"])}
+        )
+        timeline = _market_timelines(
+            observations, activation_observations=2, release_observations=3
+        )["KOSPI"]
+        for elapsed in (1, 300, 301, 600):
+            now = observations[-1]["as_of"] + timedelta(seconds=elapsed)
+            replay, _ = _state_at(timeline, now)
+            live = evaluate_market_weakness_entry_guard(
+                symbol="005930",
+                owner="episode",
+                listing_market="KOSPI",
+                now=now,
+                state_path=state_path,
+            )
+            assert live.blocked == replay["active"]
 
 
 def _refresh_weakness_identity(report: dict) -> dict:
@@ -907,7 +1091,41 @@ def test_market_weakness_notifier_rejects_intraday_hysteresis_policy_change(
     )
 
     assert result == "intraday_hysteresis_policy_mismatch"
-    assert json.loads(state_path.read_text(encoding="utf-8")) == before
+    after = json.loads(state_path.read_text(encoding="utf-8"))
+    assert after["market_weakness"] == before["market_weakness"]
+    assert after["market_weakness_observer_health"]["ready"] is False
+    assert after["market_weakness_observer_health"]["status"] == result
+    assert (
+        after["market_weakness_observer_health"]["last_healthy_observation_id"]
+        == before["market_weakness_observer_health"]["last_healthy_observation_id"]
+    )
+
+
+def test_market_weakness_cli_returns_nonzero_for_state_update_contract_failure(
+    tmp_path,
+    monkeypatch,
+):
+    report_path = tmp_path / "panic_sell.json"
+    state_path = tmp_path / "state.json"
+    report_path.write_text(json.dumps({"target_date": "2026-08-28"}), encoding="utf-8")
+
+    class _Parser:
+        @staticmethod
+        def parse_args():
+            return SimpleNamespace(
+                report_file=str(report_path),
+                kind="market_weakness",
+                audience="admin",
+                state_file=str(state_path),
+                force=False,
+                observe_only=True,
+            )
+
+    monkeypatch.setattr(mod, "build_parser", lambda: _Parser())
+
+    assert mod.main() == 2
+    saved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert saved["market_weakness_observer_health"]["status"] == ("missing_observation")
 
 
 def test_single_market_weakness_streak_does_not_cross_listing_markets(
@@ -1280,6 +1498,32 @@ def test_market_weakness_release_needs_three_margin_passes(tmp_path, monkeypatch
     saved = json.loads(state.read_text(encoding="utf-8"))
     assert saved["market_weakness"]["phase"] == "released"
     assert saved["market_weakness"]["recovery_streak"] == 3
+
+
+@pytest.mark.parametrize(
+    "validation_options",
+    [
+        {"validate_report_only": True},
+        {"expected_report_date": "2026-09-07"},
+        {"report_not_before_ts": 1.0},
+    ],
+)
+def test_report_validation_options_reject_other_notifier_without_side_effects(
+    tmp_path, monkeypatch, validation_options
+):
+    def unexpected_load(*args, **kwargs):
+        pytest.fail("Invalid validation options must be rejected before loading inputs")
+
+    monkeypatch.setattr(mod, "_load_report", unexpected_load)
+    state_file = tmp_path / "state.json"
+    with pytest.raises(ValueError, match="require kind=market_weakness"):
+        mod.notify_from_report(
+            tmp_path / "report.json",
+            kind="panic_sell",
+            state_file=state_file,
+            **validation_options,
+        )
+    assert not state_file.exists()
 
 
 def test_market_weakness_source_gap_never_releases_active_latch(tmp_path, monkeypatch):

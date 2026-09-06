@@ -917,6 +917,11 @@ class WidgetSignalAutoTrader:
                 execution_policy["evidence_artifact"] if execution_policy else None
             ),
             **EXECUTION_CONTRACT,
+            "market_weakness_entry_guard": (
+                symbol_state.get("market_weakness_entry_guard")
+                if symbol_state
+                else None
+            ),
             **fields,
         }
         self.event_recorder.record(payload, now)
@@ -964,6 +969,10 @@ class WidgetSignalAutoTrader:
         counterfactual_anchor: dict[str, Any] | None = None,
     ) -> bool:
         decision = self._market_weakness_decision(spec=spec, now=now)
+        symbol_state["market_weakness_entry_guard"] = {
+            **decision.event_fields(),
+            "decision_checked_at": now.isoformat(),
+        }
         if not decision.blocked:
             return False
         counterfactual_receipt: dict[str, Any] | None = None

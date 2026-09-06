@@ -38,7 +38,7 @@
 
 ## Market-Scoped Weakness Entry Response
 
-- Confirmed-weakness entry anchors: `0`; actual realized comparisons: `0`; source blocked: `0`.
+- Confirmed-weakness entry anchors: `0`; actual realized comparisons: `0`; source blocked: `28`.
 - Actual realized skip-vs-control incremental average: `None`.
 - Clean-baseline cumulative: dates `0`; comparisons `0`; average/p10 `None` / `None`; source-only review ready `False`.
 - KOSPI/KOSDAQ listing market and two-observation activation / three-observation release are reconstructed from past-only schema-v2 observations.
@@ -67,10 +67,10 @@
 | episode | sk_telecom_afternoon | 017670 | owner_anchor_contract_invalid | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | samsung_ea_late_morning | 028050 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | hanse_morning | 105630 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
-| episode | youngone_afternoon | 111770 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | cj_cgv_late_morning | 079160 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
-| episode | youngone_morning | 111770 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| episode | youngone_afternoon | 111770 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | kepco_midday | 015760 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
+| episode | youngone_morning | 111770 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | mirae_asset_late_morning | 006800 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | kepco_morning | 015760 | owner_anchor_contract_invalid | micro_context_unavailable_base_owner_tuning_unchanged |
 | episode | nhn_late_morning | 181710 | micro_runtime_registration_receipt_missing_or_incomplete | micro_context_unavailable_base_owner_tuning_unchanged |

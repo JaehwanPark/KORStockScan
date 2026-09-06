@@ -319,6 +319,8 @@ def _market_weakness_decision(now, *, mode: str):
         active_markets=active_markets,
         session_key=now.date().isoformat(),
         observation_id="weakness-cancel-1",
+        state_fresh=True,
+        state_age_sec=0,
         observation_as_of=now.isoformat(),
         source_status="test",
         state_path="test-state.json",
@@ -2555,8 +2557,18 @@ def test_market_weakness_guard_does_not_consume_widget_signal(tmp_path, monkeypa
         "evaluate_market_weakness_entry_guard",
         lambda **kwargs: decision(blocked=False),
     )
-    trader.run_once(now)
+    released = trader.run_once(now)
     assert gateway.buy_calls == [("999999", 1, "SOR")]
+    receipt = released["symbols"]["999999"]["market_weakness_entry_guard"]
+    assert receipt["market_weakness_entry_guard_blocked"] is False
+    assert receipt["decision_checked_at"] == now.isoformat()
+    assert any(
+        (event.get("market_weakness_entry_guard") or {}).get(
+            "market_weakness_entry_guard_blocked"
+        )
+        is False
+        for event in recorder.events
+    )
 
 
 def test_market_weakness_transition_during_entry_checks_blocks_pre_submit(
@@ -3851,8 +3863,7 @@ def test_widget_evaluation_wrapper_requires_completed_same_date_eod(
     )
     fake_python.chmod(0o755)
     status_path = (
-        tmp_path
-        / "data/runtime/update_kospi_status/update_kospi_2026-08-14.json"
+        tmp_path / "data/runtime/update_kospi_status/update_kospi_2026-08-14.json"
     )
     status_path.parent.mkdir(parents=True)
     status_path.write_text(
@@ -3903,8 +3914,7 @@ def test_widget_evaluation_wrapper_fails_closed_when_eod_failed(
     )
     fake_python.chmod(0o755)
     status_path = (
-        tmp_path
-        / "data/runtime/update_kospi_status/update_kospi_2026-08-14.json"
+        tmp_path / "data/runtime/update_kospi_status/update_kospi_2026-08-14.json"
     )
     status_path.parent.mkdir(parents=True)
     status_path.write_text(json.dumps({"status": "failed"}), encoding="utf-8")

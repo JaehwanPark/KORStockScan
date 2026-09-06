@@ -1098,9 +1098,41 @@ def test_runtime_approval_summary_ignores_retired_latency_runtime_selection(
     assert latency["previous_selected_auto_bounded_live"] is False
     assert latency["allowed_runtime_apply"] is False
     assert "독립 PREOPEN 추천·임계값 적용은 폐기" in latency["current_application"]
-    assert latency["next_preopen_candidate_state"] == "not_in_postclose_calibration"
+    assert latency["next_preopen_candidate_state"] == "not_applicable_retired"
     assert latency["recommendation_status"] == "retired"
     assert report["summary"]["scalping_selected_auto_bounded_live"] == 0
+
+
+def test_mixed_retired_latency_candidates_cannot_reappear_in_summary():
+    family = "latency_classifier_runtime_profile"
+    candidate = {
+        "family": family,
+        "allowed_runtime_apply": True,
+        "calibration_state": "adjust_up",
+        "sample_count": 100,
+        "recommended_values": {"max_ws_age_ms_for_caution": 1200},
+    }
+    ev = {
+        "runtime_apply": {"selected_families": [family]},
+        "entry_funnel": {
+            "latency_submit_routing": "buy_funnel_diagnostic_only",
+            "latency_block_events": 227,
+        },
+        "calibration_outcome": {"decisions": [candidate]},
+    }
+    for require_ai in (False, True):
+        rows = mod._scalping_rows(
+            ev, {"calibration_candidates": [candidate]}, require_ai=require_ai
+        )
+        latency_rows = [row for row in rows if row["family"] == family]
+        assert len(latency_rows) == 1
+        row = latency_rows[0]
+        assert row["state"] == "baseline_hard_safety"
+        assert row["next_preopen_candidate_state"] == "not_applicable_retired"
+        assert row["postclose_recommended_values"] is None
+        assert row["current_runtime_selected"] is False
+        assert row["allowed_runtime_apply"] is False
+        assert row["sample"]["count"] == 227
 
 
 def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypatch):

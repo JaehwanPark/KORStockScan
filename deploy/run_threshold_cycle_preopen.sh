@@ -174,6 +174,15 @@ if ! PYTHONPATH=. "$VENV_PY" \
   --notify; then
   echo "[WARN] machine microstructure policy approval ledger failed target_date=$TARGET_DATE runtime_apply_unchanged=true"
 fi
+rebound_preopen_args=(--phase preopen --target-date "$TARGET_DATE")
+if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ]; then
+  rebound_preopen_args+=(--write)
+fi
+if ! PYTHONPATH=. "$VENV_PY" \
+  -m src.engine.automation.machine_entry_timing_tuning \
+  "${rebound_preopen_args[@]}"; then
+  echo "[WARN] machine rebound reentry preopen failed target_date=$TARGET_DATE family_baseline_preserved=true"
+fi
 if ! PYTHONPATH=. "$VENV_PY" \
   -m src.engine.automation.main_ai_quality_runtime_family \
   --phase preopen \

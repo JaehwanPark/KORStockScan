@@ -3,6 +3,42 @@ import json
 from src.engine import sniper_performance_tuning_report as report_mod
 
 
+def test_latency_diagnostics_do_not_invent_a_join_denominator():
+    metrics = {
+        "latency_block_events": 227,
+        "latency_pass_events": 45,
+        "latency_guard_miss_unique_stocks": 61,
+        "quote_fresh_latency_pass_rate": 16.6,
+    }
+    details = [
+        {"label": "spread_above_caution_below_guard_cap", "count": 143},
+        {"label": "spread_too_wide", "count": 66},
+        {"label": "ws_age_too_high", "count": 29},
+    ]
+    breakdowns = {
+        "latency_reason_breakdown": [{"label": "latency_state_danger", "count": 227}],
+        "latency_danger_reason_breakdown": details,
+    }
+    result = report_mod._build_latency_guard_miss_ev_recovery_section(
+        metrics, breakdowns
+    )
+    assert result["counterfactual_join_status"] == "not_evaluated"
+    assert result["counterfactual_join_gap_count"] is None
+    assert result["evaluated_candidates"] is None
+    assert result["coverage_gap_type"] == "none"
+    assert result["latency_block_events"] == 227
+    assert result["latency_guard_miss_unique_stocks"] == 61
+    assert result["latency_danger_reason_breakdown"] == details
+    assert result["top_latency_reason"] == details[0]["label"]
+    assert result["decision_authority"] == "diagnostic_only"
+    assert result["allowed_runtime_apply"] is False
+    assert result["runtime_effect"] is False
+    missing = report_mod._build_latency_guard_miss_ev_recovery_section({}, {})
+    assert missing["missing_contract_fields"]
+    assert missing["coverage_gap_type"] == "source_contract_gap"
+    assert missing["coverage_status"] == "missing_contract"
+
+
 def test_trade_history_rows_prefers_exact_performance_fact_economics():
     sql = report_mod._trade_history_rows_sql()
 
@@ -568,13 +604,15 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert latency_ev["runtime_effect"] is False
     assert latency_ev["allowed_runtime_apply"] is False
     assert latency_ev["instrumentation_status"] == "implemented"
-    assert latency_ev["instrumentation_contract_version"] == 1
-    assert latency_ev["threshold_family"] == "pre_submit_price_guard"
-    assert latency_ev["evaluated_candidates"] == 1
+    assert latency_ev["instrumentation_contract_version"] == 2
+    assert latency_ev["threshold_family"] == "latency_classifier_runtime_profile"
+    assert latency_ev["evaluated_candidates"] is None
     assert latency_ev["latency_block_events"] == 1
     assert latency_ev["latency_guard_miss_unique_stocks"] == 1
     assert latency_ev["coverage_status"] == "reason_breakdown_ready"
-    assert latency_ev["coverage_gap_type"] == "counterfactual_join_gap"
+    assert latency_ev["coverage_gap_type"] == "none"
+    assert latency_ev["counterfactual_join_gap_count"] is None
+    assert latency_ev["counterfactual_join_status"] == "not_evaluated"
     assert latency_ev["top_latency_reason"] == "latency_state_danger"
     assert "latency_reason_breakdown" in latency_ev["provenance_contract"]
     assert report["metrics"]["entry_blocked_liquidity_events"] == 1

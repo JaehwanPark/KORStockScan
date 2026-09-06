@@ -1,5 +1,6 @@
 import gzip
 import json
+import pytest
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -348,7 +349,8 @@ def _depth_row(
     }
 
 
-def test_market_weakness_blocked_signal_uses_depth_backed_1_to_30m_bbo():
+@pytest.mark.parametrize("missing_horizon", [None, 1200])
+def test_market_weakness_blocked_signal_uses_depth_backed_1_to_30m_bbo(missing_horizon):
     anchor_at = datetime(2026, 8, 31, 10, 0, tzinfo=KST)
     points = [
         (1, 9_950, 10_000),
@@ -362,6 +364,8 @@ def test_market_weakness_blocked_signal_uses_depth_backed_1_to_30m_bbo():
     rows = []
     depth_points = []
     for sequence, (offset, bid, ask) in enumerate(points, start=1):
+        if offset == missing_horizon:
+            continue
         observed_at = anchor_at + timedelta(seconds=offset)
         rows.append(
             {
@@ -422,7 +426,16 @@ def test_market_weakness_blocked_signal_uses_depth_backed_1_to_30m_bbo():
     )
 
     counterfactual = result["metrics"]["market_weakness_counterfactual"]
-    assert counterfactual["source_quality_status"] == "eligible"
+    assert counterfactual["source_quality_status"] == (
+        "blocked" if missing_horizon else "eligible"
+    )
+    assert (
+        counterfactual["horizon_eligibility"]["30"]["source_quality_status"]
+        == "eligible"
+    )
+    assert counterfactual["horizon_eligibility"]["20"]["source_quality_status"] == (
+        "blocked" if missing_horizon else "eligible"
+    )
     assert set(counterfactual["horizons_minutes"]) == {
         "1",
         "3",
@@ -939,12 +952,18 @@ def test_dynamic_widget_symbol_is_matched_without_changing_owner_policy(tmp_path
         "policy_selection_authority": False,
         "runtime_effect": False,
     }
-    assert report["decision_ownership"]["entry_timing_policy"][
-        "single_public_policy_owner"
-    ] is True
-    assert report["decision_ownership"]["lifecycle_turnover_research"][
-        "separate_from_entry_timing"
-    ] is True
+    assert (
+        report["decision_ownership"]["entry_timing_policy"][
+            "single_public_policy_owner"
+        ]
+        is True
+    )
+    assert (
+        report["decision_ownership"]["lifecycle_turnover_research"][
+            "separate_from_entry_timing"
+        ]
+        is True
+    )
     assert report["policy_promotion_candidates"] == []
     assert (
         report["promotion_candidate_intake_contract"]["consumer"]
@@ -2019,6 +2038,17 @@ def test_report_writer_creates_json_and_markdown(tmp_path):
         "target_date": "2026-08-14",
         "status": "warning",
         "decision": "partial_owner_or_micro_source_gap_base_tuning_unchanged",
+        "market_weakness_entry_response": {
+            "threshold_recommendation": {
+                "current_policy": {
+                    "activation_unique_observations": 3,
+                    "release_unique_observations": 4,
+                },
+                "counterfactual_entry_signal_count": 4,
+                "policy_candidate_ready": False,
+                "attainability": {"status": "collection_contract_gap"},
+            }
+        },
         "summary": {
             "dynamic_symbol_count": 1,
             "widget_symbol_count": 1,
@@ -2041,6 +2071,14 @@ def test_report_writer_creates_json_and_markdown(tmp_path):
 
     assert json.loads(json_path.read_text(encoding="utf-8"))["status"] == "warning"
     assert "Missing micro data is not imputed" in md_path.read_text(encoding="utf-8")
+    markdown = md_path.read_text(encoding="utf-8")
+    assert "Observed activation/release: `3` / `4`" in markdown
+    assert "Eligible 30m cost-aware counterfactual signals: `4`" in markdown
+    assert "Counterfactual markouts are not actual realized returns" in markdown
+    assert "market_weakness_rebound_reentry_source_v1" in markdown
+    assert "automatic PREOPEN candidate selection" in markdown
+    assert "machine_entry_timing_tuning" in markdown
+    assert "collection_contract_gap" in markdown
 
 
 def test_invalid_source_exclusion_manifest_blocks_only_micro_context(tmp_path):
@@ -2949,9 +2987,7 @@ def test_runtime_registration_receipt_requires_exact_manifest_and_both_types(
     ]
 
     receipt["configured_at"] = (configured_at + timedelta(minutes=1)).isoformat()
-    receipt["configured_at_epoch"] = (
-        configured_at + timedelta(minutes=1)
-    ).timestamp()
+    receipt["configured_at_epoch"] = (configured_at + timedelta(minutes=1)).timestamp()
     receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
     future_configuration = attribution_module._runtime_registration_receipt_status(
         "2026-09-04",
@@ -3027,9 +3063,9 @@ def test_runtime_registration_receipt_does_not_block_on_prospective_receive_gap(
         },
         "summary": {"max_interarrival_gap_sec": 3.0},
     }
-    (receipt_root / "scalp_micro_reversion_registration_receipt_2026-09-04.json").write_text(
-        json.dumps(receipt), encoding="utf-8"
-    )
+    (
+        receipt_root / "scalp_micro_reversion_registration_receipt_2026-09-04.json"
+    ).write_text(json.dumps(receipt), encoding="utf-8")
 
     status = attribution_module._runtime_registration_receipt_status(
         "2026-09-04",
@@ -3693,9 +3729,7 @@ def test_queue_loss_canary_is_archived_without_promotion_authority(tmp_path):
 
 
 def _timestamp_quarantine_canary_payload(target_date: str) -> dict:
-    zero_fields = {
-        field: 0 for field in attribution_module.CANARY_LOSS_COUNTERS
-    }
+    zero_fields = {field: 0 for field in attribution_module.CANARY_LOSS_COUNTERS}
     forbidden_true_fields = {
         field: False for field in attribution_module.CANARY_FORBIDDEN_TRUE_FIELDS
     }
@@ -3735,9 +3769,7 @@ def _timestamp_quarantine_canary_payload(target_date: str) -> dict:
             "depth_writer_persisted_envelope_count": 200,
             "metric_contracts": {
                 "exchange_timestamp_regression_canary": {
-                    "metric_role": (
-                        "source_quality_incident_and_raw_row_exclusion"
-                    ),
+                    "metric_role": ("source_quality_incident_and_raw_row_exclusion"),
                     "decision_authority": "observer_row_quarantine_only",
                     "primary_decision_metric": (
                         "path_exchange_timestamp_regression_exceeded_count"

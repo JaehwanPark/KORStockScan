@@ -219,6 +219,8 @@ def _episode_market_weakness_decision(now: datetime, *, mode: str):
         active_markets=active_markets,
         session_key=now.date().isoformat(),
         observation_id="weakness-episode-cancel-1",
+        state_fresh=True,
+        state_age_sec=0,
         observation_as_of=now.isoformat(),
         source_status="test",
         state_path="test-state.json",

@@ -42,6 +42,30 @@ def test_latency_recommendation_retirement_preserves_runtime_safety_telemetry():
     assert status["allowed_runtime_apply"] is False
 
 
+def test_calibration_only_retirement_filters_mixed_collections_not_raw_telemetry():
+    family = "latency_classifier_runtime_profile"
+    stale = {"family": family, "allowed_runtime_apply": True}
+    active = {"family": "samsung_machine_entry_policy"}
+    raw = {"family": family, "threshold_family": family, "stage": "latency_block"}
+    cleaned = policy.current_report_view(
+        {
+            "calibration_candidates": [stale, active],
+            "calibration_outcome": {"decisions": [stale, active]},
+            "post_apply_attribution": {"calibration_decisions": [stale, active]},
+            "approval_requests": [{"source_family": family}, active],
+            "raw_rows": [raw],
+        }
+    )
+    assert cleaned["calibration_candidates"] == [active]
+    assert cleaned["calibration_outcome"]["decisions"] == [active]
+    assert cleaned["post_apply_attribution"]["calibration_decisions"] == [active]
+    assert cleaned["approval_requests"] == [active]
+    assert cleaned["raw_rows"] == [raw]
+    assert policy.current_report_view({"summary": {"approval_requests": 2}}) == {
+        "summary": {"approval_requests": 2}
+    }
+
+
 @pytest.mark.parametrize(
     "module,function",
     [

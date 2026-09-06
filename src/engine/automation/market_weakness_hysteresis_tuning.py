@@ -27,9 +27,11 @@ from src.engine.risk.market_weakness_threshold_policy import (
     DEFAULT_POLICY_DIR,
     DEFAULT_SOURCE_REPORT_DIR,
     MIN_OBSERVATION_SPACING_SEC,
+    SOURCE_SNAPSHOT_SCHEMA,
     canonical_sha256,
     next_krx_trading_day,
     policy_path,
+    source_snapshot_path,
     threshold_hash,
     validate_threshold_recommendation,
     validate_applied_policy,
@@ -37,7 +39,7 @@ from src.engine.risk.market_weakness_threshold_policy import (
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
-REPORT_SCHEMA = "market_weakness_hysteresis_tuning_report_v1"
+REPORT_SCHEMA = "market_weakness_hysteresis_tuning_report_v2"
 OUTPUT_DIR = DATA_DIR / "report" / "market_weakness_hysteresis_tuning"
 
 
@@ -87,6 +89,56 @@ def _atomic_write_text(path: Path, value: str) -> None:
             os.unlink(temporary)
 
 
+def _write_immutable_json(path: Path, payload: dict[str, Any]) -> None:
+    """Create a content-addressed snapshot without replacing an existing inode."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                payload,
+                handle,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o440)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            existing = _read_json(path)
+            if existing is None or canonical_sha256(existing) != canonical_sha256(
+                payload
+            ):
+                raise ValueError("market_weakness_hysteresis_source_snapshot_conflict")
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _source_snapshot_payload(
+    *,
+    source_path: Path,
+    source_date: date,
+    source: dict[str, Any],
+) -> dict[str, Any]:
+    response = source.get("market_weakness_entry_response")
+    if not isinstance(response, dict):
+        raise ValueError("market_weakness_hysteresis_source_response_missing")
+    return {
+        "schema": SOURCE_SNAPSHOT_SCHEMA,
+        "source_date": source_date.isoformat(),
+        "source_origin_report": str(source_path),
+        "source_origin_report_canonical_sha256": canonical_sha256(source),
+        "market_weakness_entry_response": response,
+    }
+
+
 def build_outputs(
     *,
     source_date: date,
@@ -95,7 +147,7 @@ def build_outputs(
     source_path = (
         source_report_dir
         / f"machine_microstructure_attribution_{source_date.isoformat()}.json"
-    )
+    ).resolve()
     source = _read_json(source_path)
     response = (
         source.get("market_weakness_entry_response")
@@ -177,15 +229,23 @@ def build_outputs(
     )
     effective_date = next_krx_trading_day(source_date)
     source_hash = canonical_sha256(source)
+    source_snapshot = _source_snapshot_payload(
+        source_path=source_path,
+        source_date=source_date,
+        source=source,
+    )
+    source_snapshot_hash = canonical_sha256(source_snapshot)
     review_hash = str(recommendation.get("review_hash") or "")
     applied = {
-        "schema": "market_weakness_hysteresis_policy_applied_v1",
+        "schema": "market_weakness_hysteresis_policy_applied_v2",
         "target_date": effective_date.isoformat(),
         "source_date": source_date.isoformat(),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "decision_authority": AUTHORITY,
         "source_report": str(source_path),
+        "source_origin_report": str(source_path),
         "source_report_canonical_sha256": source_hash,
+        "source_snapshot_canonical_sha256": source_snapshot_hash,
         "prior_activation_unique_observations": current_activation,
         "prior_release_unique_observations": current_release,
         "activation_unique_observations": activation,
@@ -237,6 +297,7 @@ def build_outputs(
         ),
         "source_report": str(source_path),
         "source_report_canonical_sha256": source_hash,
+        "source_snapshot_canonical_sha256": source_snapshot_hash,
         "source_contract_valid": source_contract_valid,
         "review_hash": review_hash,
         "selected_policy": selected if selected_valid else None,
@@ -287,6 +348,44 @@ def write_outputs(
     applied_path = policy_path(
         date.fromisoformat(applied["target_date"]), policy_dir=policy_dir
     )
+    source_date = date.fromisoformat(str(applied["source_date"]))
+    source_hash = str(applied["source_report_canonical_sha256"])
+    source_snapshot_hash = str(applied["source_snapshot_canonical_sha256"])
+    origin_path = Path(str(applied.get("source_origin_report") or ""))
+    if not origin_path.is_absolute():
+        origin_path = (Path.cwd() / origin_path).resolve()
+    source_payload = _read_json(origin_path)
+    if source_payload is None or canonical_sha256(source_payload) != source_hash:
+        raise ValueError("market_weakness_hysteresis_source_changed_before_publish")
+    source_snapshot = _source_snapshot_payload(
+        source_path=origin_path,
+        source_date=source_date,
+        source=source_payload,
+    )
+    if canonical_sha256(source_snapshot) != source_snapshot_hash:
+        raise ValueError("market_weakness_hysteresis_source_snapshot_hash_mismatch")
+    snapshot_path = source_snapshot_path(
+        source_date,
+        source_snapshot_hash,
+        policy_dir=policy_dir,
+    )
+    existing_snapshot = _read_json(snapshot_path) if snapshot_path.exists() else None
+    if snapshot_path.exists() and (
+        existing_snapshot is None
+        or canonical_sha256(existing_snapshot) != source_snapshot_hash
+    ):
+        raise ValueError("market_weakness_hysteresis_source_snapshot_conflict")
+    if existing_snapshot is None:
+        _write_immutable_json(snapshot_path, source_snapshot)
+    applied["source_report"] = str(snapshot_path)
+    report["source_origin_report"] = str(origin_path)
+    report["source_snapshot"] = str(snapshot_path)
+    valid, reason = validate_applied_policy(
+        applied,
+        target_date=date.fromisoformat(str(applied["target_date"])),
+    )
+    if not valid:
+        raise ValueError(f"generated_market_weakness_policy_invalid:{reason}")
     _atomic_write_json(report_path, report)
     _atomic_write_text(markdown_path, render_markdown(report, applied))
     _atomic_write_json(applied_path, applied)

@@ -5,9 +5,93 @@ import signal
 import subprocess
 import sys
 import time
+import textwrap
 from pathlib import Path
 
 import pytest
+
+
+@pytest.mark.parametrize(
+    "mode", ["missing", "stale", "wrong_date", "invalid_source", "fresh", "dry_run"]
+)
+def test_panic_wrapper_requires_fresh_valid_report_before_done(tmp_path, mode):
+    from src.tests.test_notify_panic_state_transition import _weakness_report
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    root = Path.cwd()
+    seed = tmp_path / "seed.json"
+    seed.write_text(json.dumps(_weakness_report("SINGLE_MARKET_WEAKNESS", 0)))
+    fake_python = tmp_path / ".venv/bin/python"
+    fake_python.parent.mkdir(parents=True)
+    fake_python.write_text(f"#!{sys.executable}\n" + textwrap.dedent("""
+        import json, os, sys
+        from datetime import datetime, timedelta
+        from pathlib import Path
+        from zoneinfo import ZoneInfo
+        os.environ['PYTHONPATH'] = os.environ['PANIC_TEST_REPO']
+        sys.path.insert(0, os.environ['PANIC_TEST_REPO'])
+        if 'src.engine.panic_sell_defense_report' in sys.argv:
+            mode = os.environ['PANIC_TEST_MODE']
+            if mode == 'missing' or '--dry-run' in sys.argv:
+                raise SystemExit(0)
+            from src.engine.market_panic_breadth_collector import market_weakness_observation_id
+            report = json.loads(Path(os.environ['PANIC_TEST_SEED']).read_text())
+            now = datetime.now(ZoneInfo('Asia/Seoul'))
+            target = now.date().isoformat()
+            observed = now - timedelta(seconds=600 if mode == 'stale' else 0)
+            report['target_date'] = target if mode != 'wrong_date' else '2026-08-28'
+            report['as_of'] = observed.isoformat()
+            obs = report['market_weakness_observation']
+            obs['as_of'] = report['as_of']
+            obs['target_date'] = report['target_date']
+            obs['source_quality_ready'] = mode != 'invalid_source'
+            obs['observation_id'] = market_weakness_observation_id(obs)
+            path = Path('data/report/panic_sell_defense') / f'panic_sell_defense_{target}.json'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(report))
+            raise SystemExit(0)
+        if '-m' in sys.argv and 'src.engine.notify_panic_state_transition' not in sys.argv:
+            raise SystemExit(97)
+        os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+    """))
+    fake_python.chmod(0o700)
+    env = {
+        **os.environ,
+        "PROJECT_DIR": str(tmp_path),
+        "PYTHON_BIN": sys.executable,
+        "PANIC_TEST_REPO": str(root),
+        "PANIC_TEST_SEED": str(seed),
+        "PANIC_TEST_MODE": mode,
+        "PANIC_MARKET_BREADTH_COLLECT_ENABLED": (
+            "true" if mode == "dry_run" else "false"
+        ),
+        "PANIC_SELL_DEFENSE_DRY_RUN": "1" if mode == "dry_run" else "0",
+        "PANIC_SELL_DEFENSE_NOTIFY_TELEGRAM_ENABLED": "false",
+        "PANIC_SELL_DEFENSE_COOLDOWN_SEC": "0",
+    }
+    result = subprocess.run(
+        [
+            "bash",
+            str(root / "deploy/run_panic_sell_defense_intraday.sh"),
+            datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    success = mode in {"fresh", "dry_run"}
+    assert (result.returncode == 0) == success, result.stdout + result.stderr
+    assert ("[DONE] panic sell defense" in result.stdout) == success
+    assert (tmp_path / "tmp/run_panic_sell_defense_success.state").exists() == (
+        mode == "fresh"
+    )
+    if mode == "dry_run":
+        assert not (tmp_path / "tmp/market_weakness_observer_state.json").exists()
+        assert "[START] market panic breadth collect" not in result.stdout
+    if not success:
+        assert "[FAIL]" in result.stdout
 
 
 def test_postclose_wrapper_executes_syntax_checked_immutable_snapshot():
@@ -2087,7 +2171,9 @@ def test_panic_intraday_wrapper_separates_panic_and_market_weakness_alerts():
     )
 
     panic_idx = script.index("--kind panic_sell")
-    weakness_idx = script.index("--kind market_weakness")
+    weakness_idx = script.index(
+        "--kind market_weakness", script.index("weakness_notify_cmd=(")
+    )
 
     assert panic_idx < weakness_idx
     assert (
@@ -2103,8 +2189,14 @@ def test_panic_intraday_wrapper_separates_panic_and_market_weakness_alerts():
         in script
     )
     assert "weakness_notify_cmd+=(--observe-only)" in script
+    assert (
+        'if ! "${weakness_notify_cmd[@]}" > >(tee -a "$LOG_FILE") 2>&1; then' in script
+    )
+    assert "market weakness observer state update failed" in script
+    assert '"${weakness_notify_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || true' not in script
     assert script.count('--state-file "$NOTIFY_STATE_FILE"') == 1
-    assert script.count('--state-file "$MARKET_WEAKNESS_STATE_FILE"') == 1
+    assert script.count('--state-file "$MARKET_WEAKNESS_STATE_FILE"') == 2
+    assert script.index("--validate-report-only") < panic_idx
 
 
 def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_steps():

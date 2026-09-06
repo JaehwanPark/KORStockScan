@@ -597,8 +597,59 @@ class SamsungRegularTwoLegMachine:
         required_quantity: int | None = None,
         expected_venues: tuple[str, ...] | list[str] | None = None,
         counterfactual_session: str | None = None,
+        rebound_owner_context: dict | None = None,
     ) -> bool:
         decision = self._market_weakness_entry_decision(now)
+        features = dict(self._state.get("signal_features") or {})
+        features["market_weakness_entry_guard"] = {
+            **decision.event_fields(),
+            "decision_checked_at": now.isoformat(),
+        }
+        self._state["signal_features"] = features
+        if rebound_owner_context is not None:
+            from src.trading.market.machine_rebound_reentry import (
+                observe_owner_decision,
+            )
+
+            try:
+                permit = observe_owner_decision(
+                    state=self._state,
+                    now=now,
+                    decision=decision,
+                    scope_id=self.entry_timing_scope_id,
+                    session=str(
+                        counterfactual_session
+                        or (
+                            "SOR_REGULAR"
+                            if rebound_owner_context.get("route") == "SOR"
+                            else self.entry_timing_session
+                        )
+                    ),
+                    **rebound_owner_context,
+                )
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                permit = {
+                    "allow_market_exception": False,
+                    "status": f"source_contract_gap:{type(exc).__name__}",
+                }
+            self._state["rebound_reentry_permit"] = permit
+            if permit.get("allow_market_exception") is True:
+                self._record(
+                    now,
+                    "market_weakness_bounded_rebound_entry",
+                    rebound_reentry=permit,
+                    **decision.event_fields(),
+                )
+                return True
+        elif decision.blocked:
+            from src.trading.market.machine_rebound_reentry import (
+                permit_allows_initial_plan,
+            )
+
+            if permit_allows_initial_plan(
+                state=self._state, decision=decision, now=now
+            ):
+                return True
         if not decision.blocked:
             return True
         fingerprint = ":".join(
@@ -613,8 +664,6 @@ class SamsungRegularTwoLegMachine:
         if preserve_signal_for_recheck:
             self._state["last_evaluated_bar"] = ""
         self._state["blocked_reason"] = decision.reason
-        features = dict(self._state.get("signal_features") or {})
-        features["market_weakness_entry_guard"] = decision.event_fields()
         resolved_reference = int(
             reference_price or self._state.get("signal_close") or 0
         )
@@ -2148,6 +2197,45 @@ class SamsungRegularTwoLegMachine:
             expected_venues=[
                 str(getattr(self.policy, "route", "SOR") or "SOR").upper()
             ],
+            rebound_owner_context={
+                "timing_session": self.entry_timing_session,
+                "source_signal_id": f"{self.policy.symbol}:{latest_iso}",
+                "signal_valid_until": min(
+                    latest.timestamp
+                    + timedelta(
+                        minutes=int(self.policy.entry_valid_completed_bars) + 1
+                    ),
+                    datetime.combine(now.date(), self.policy.scan_last_bar, tzinfo=KST)
+                    + timedelta(minutes=1),
+                ),
+                "owner_contract": {
+                    "recipe": "regular_two_leg_fixed_tick_no_stop_v1",
+                    "target_ticks": int(self.policy.target_ticks),
+                    "entry_valid_completed_bars": int(
+                        self.policy.entry_valid_completed_bars
+                    ),
+                    "scan_start": self.policy.scan_start.isoformat(),
+                    "scan_last_bar": self.policy.scan_last_bar.isoformat(),
+                    "leg_quantities": [EPISODE_LEG_QUANTITY for _ in plans],
+                    "runtime_policy_hash": str(self.policy.runtime_policy_hash),
+                    "lookback_bars": int(self.policy.lookback_bars),
+                    "rolling_high_drawdown_pct": float(
+                        self.policy.rolling_high_drawdown_pct
+                    ),
+                    "rolling_low_proximity_pct": float(
+                        self.policy.rolling_low_proximity_pct
+                    ),
+                    "entry_price_roles": [str(plan["price_role"]) for plan in plans],
+                    "baseline_confirmation_mode": (
+                        "other_timing_policy"
+                        if pending_confirmation
+                        else "immediate_owner_guards"
+                    ),
+                },
+                "legs": [{**plan, "quantity": EPISODE_LEG_QUANTITY} for plan in plans],
+                "reference_price": int(signal.signal_bar.close_price),
+                "route": str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
+            },
         ):
             return self.snapshot()
         if confirmed_pending:
@@ -2355,6 +2443,9 @@ class SamsungRegularTwoLegMachine:
                     "signal_close": int(latest.close_price),
                     "entry_confirmation_delay_sec": delay_sec,
                     "entry_timing_policy_provenance": timing_policy_provenance,
+                    "rebound_reentry_policy_provenance": dict(
+                        self._state.get("rebound_reentry_permit") or {}
+                    ),
                     "entry_confirmation_anchor_snapshot": (
                         pending_confirmation.get("anchor_liquidity_snapshot")
                         if isinstance(pending_confirmation, dict)
@@ -2408,6 +2499,15 @@ class SamsungRegularTwoLegMachine:
         return self.snapshot()
 
     def run_once(self, now: datetime | None = None) -> dict:
+        from src.trading.market.machine_rebound_reentry import observe_owner_terminal
+
+        observed = (now or datetime.now(tz=KST)).astimezone(KST)
+        result = self._run_once_impl(observed)
+        if observe_owner_terminal(state=self._state, now=observed):
+            self._save()
+        return result
+
+    def _run_once_impl(self, now: datetime | None = None) -> dict:
         now = (now or datetime.now(tz=KST)).astimezone(KST)
         if self._state and self._state.get("status") == "BLOCKED":
             return self.snapshot()

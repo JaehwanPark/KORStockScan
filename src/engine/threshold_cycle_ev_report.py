@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.lifecycle.retirement import (
+    current_calibration_rows,
     current_report_view,
     retired_artifact,
     retired_status,
@@ -669,7 +670,9 @@ def _lifecycle_bucket_discovery_apply_summary(
 def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
     attribution = calibration_report.get("post_apply_attribution")
     attribution = attribution if isinstance(attribution, dict) else {}
-    candidates = calibration_report.get("calibration_candidates")
+    candidates = current_calibration_rows(
+        calibration_report.get("calibration_candidates")
+    )
     candidate_by_family = (
         {
             str(item.get("family") or ""): item
@@ -692,9 +695,7 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
     decisions = attribution.get("calibration_decisions")
     if isinstance(decisions, list):
         merged: list[dict[str, Any]] = []
-        for item in decisions:
-            if not isinstance(item, dict):
-                continue
+        for item in current_calibration_rows(decisions):
             family = str(item.get("family") or "")
             source = candidate_by_family.get(family) or {}
             merged.append(
@@ -744,7 +745,9 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
 
 
 def _approval_requests(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
-    candidates = calibration_report.get("calibration_candidates")
+    candidates = current_calibration_rows(
+        calibration_report.get("calibration_candidates")
+    )
     if not isinstance(candidates, list):
         return []
     requests: list[dict[str, Any]] = []
@@ -2116,7 +2119,7 @@ def _scale_in_split_order_plan_summary(
     warnings: list[str] = []
     if source_quality.get("tuning_input_allowed") is False:
         warnings.append("scale_in_split_order_plan_source_quality_blocked")
-    if payload.get("schema_version") != "scale_in_split_order_plan_v1":
+    if payload.get("schema_version") != "scale_in_split_order_plan_v3":
         warnings.append("scale_in_split_order_plan_schema_mismatch")
     return (
         {
@@ -2152,6 +2155,20 @@ def _scale_in_split_order_plan_summary(
             "policy_file": recommended.get("policy_file"),
             "policy_version": recommended.get("policy_version"),
             "runtime_apply_allowed": recommended.get("runtime_apply_allowed"),
+            "runtime_candidate_count": _safe_int(
+                recommended.get("runtime_candidate_count"), 0
+            ),
+            "runtime_refresh_evidence": recommended.get("runtime_refresh_evidence"),
+            "post_apply_attribution": recommended.get("post_apply_attribution"),
+            "unattributed_split_attempt_count": _safe_int(
+                input_summary.get("unattributed_split_attempt_count"), 0
+            ),
+            "rolling_unique_attempt_count": _safe_int(
+                input_summary.get("rolling_unique_attempt_count"), 0
+            ),
+            "rolling_eligible_runtime_attempt_count": _safe_int(
+                input_summary.get("rolling_eligible_runtime_attempt_count"), 0
+            ),
             "source_quality_status": source_quality.get("status"),
             "runtime_effect": False,
             "decision_authority": "next_preopen_bounded_scale_in_split_policy",
