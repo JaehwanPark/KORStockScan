@@ -29,11 +29,11 @@
 - stage_hook_runtime_scaffold: `-`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-09-07.json`
 - microstructure_reaction_context: `/home/ubuntu/KORStockScan/data/report/microstructure_reaction_context/microstructure_reaction_context_2026-09-07.json`
-- generated_at: `2026-09-07T21:58:50+09:00`
-- generation_id: `2026-09-07-e930940341be`
-- generation_hash: `e930940341be6a6a9992859396be6f075b487c9ef0b22397a70dc533cf4533a4`
-- source_hash: `808dcb741aeaeef914895c2f78cc90ca0555430b9d43fe088ab25880287a2b9f`
-- producer_contract_version: `code_improvement_workorder_producer_v4`
+- generated_at: `2026-09-07T23:18:40+09:00`
+- generation_id: `2026-09-07-18b622a64a1e`
+- generation_hash: `18b622a64a1e7b1b1ff69459dc653c2d983edfafeeef8e124a440980f29b7914`
+- source_hash: `0980ca27f51b41092474751aaae34ffc230d819900d584cc4e55ae4671d1325e`
+- producer_contract_version: `code_improvement_workorder_producer_v5`
 
 ## 운영 원칙
 
@@ -55,15 +55,15 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-09-07-bd72e3a29f41`
-- previous_source_hash: `808dcb741aeaeef914895c2f78cc90ca0555430b9d43fe088ab25880287a2b9f`
+- previous_generation_id: `2026-09-07-1226091fb766`
+- previous_source_hash: `dcc6f193cff886895458d75ab248e8ff06a6b709579fec4cde43c4c53a67f87e`
 - new_order_ids: `[]`
-- removed_order_ids: `[]`
+- removed_order_ids: `['order_threshold_window_policy_source_snapshot_alignment']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `38`
+- source_order_count: `37`
 - scalping_source_order_count: `10`
 - swing_source_order_count: `0`
 - swing_entry_bottleneck_primary: `None`
@@ -74,7 +74,7 @@
 - swing_lifecycle_bucket_discovery_source_order_count: `0`
 - pattern_lab_currentness_source_order_count: `0`
 - pattern_lab_ai_review_source_order_count: `2`
-- threshold_ev_source_order_count: `10`
+- threshold_ev_source_order_count: `9`
 - entry_hurdle_backtest_source_order_count: `0`
 - microstructure_reaction_context_source_order_count: `2`
 - lifecycle_submit_bucket_source_order_count: `0`
@@ -86,37 +86,37 @@
 - entry_submit_drought_selected: `True`
 - entry_submit_drought_handoff_missing: `False`
 - panic_lifecycle_source_order_count: `1`
-- selected_order_count: `16`
+- selected_order_count: `15`
 - non_selected_order_count: `22`
-- operator_workload_summary: `{'implementation_required_count': 10, 'existing_family_attribution_count': 5, 'visibility_only_count': 1, 'other_selected_count': 0, 'root_cause_open_count': 14, 'selected_total_count': 16, 'category_count_reconciled': True, 'runtime_effect_true_count': 0}`
-- source_decision_counts: `{'implement_now': 10, 'attach_existing_family': 25, 'design_family_candidate': 2, 'reject': 1}`
-- selected_decision_counts: `{'implement_now': 10, 'attach_existing_family': 6}`
-- selected_route_counts: `{'instrumentation_order': 8, 'source_quality_warning_producer_fix': 1, 'implement_now': 1, 'existing_family': 5, 'source_quality_raw_row_exclusion_revalidated_closed': 1}`
-- selected_implement_now_route_count: `10`
-- selected_runtime_effect_false_count: `16`
-- selected_unimplemented_runtime_effect_false_count: `10`
-- selected_unimplemented_route_counts: `{'instrumentation_order': 8, 'source_quality_warning_producer_fix': 1, 'implement_now': 1}`
+- operator_workload_summary: `{'implementation_required_count': 9, 'existing_family_attribution_count': 5, 'visibility_only_count': 1, 'other_selected_count': 0, 'root_cause_open_count': 13, 'selected_total_count': 15, 'category_count_reconciled': True, 'runtime_effect_true_count': 0}`
+- source_decision_counts: `{'implement_now': 9, 'attach_existing_family': 25, 'design_family_candidate': 2, 'reject': 1}`
+- selected_decision_counts: `{'implement_now': 9, 'attach_existing_family': 6}`
+- selected_route_counts: `{'instrumentation_order': 7, 'source_quality_warning_producer_fix': 1, 'implement_now': 1, 'existing_family': 5, 'source_quality_raw_row_exclusion_revalidated_closed': 1}`
+- selected_implement_now_route_count: `9`
+- selected_runtime_effect_false_count: `15`
+- selected_unimplemented_runtime_effect_false_count: `9`
+- selected_unimplemented_route_counts: `{'instrumentation_order': 7, 'source_quality_warning_producer_fix': 1, 'implement_now': 1}`
 - selected_terminal_non_implement_runtime_effect_false_count: `1`
 - selected_terminal_non_implement_route_counts: `{'source_quality_raw_row_exclusion_revalidated_closed': 1}`
 - selected_implement_now_existing_implementation_count: `0`
 - selected_implement_now_existing_implementation_order_ids: `[]`
-- selected_implement_now_new_runtime_effect_false_count: `10`
-- selected_implement_now_new_runtime_effect_false_order_ids: `['order_entry_broker_receipt_contract_gap_review', 'order_entry_fill_quality_contract_gap_review', 'order_entry_post_submit_contract_gap_review', 'order_entry_source_taxonomy_contract_gap_review', 'order_entry_telegram_post_submit_contract_gap_review', 'order_microstructure_v3_evaluation_venue_missing_or_conflicting', 'order_microstructure_v3_required_holding_payload_missing', 'order_observation_source_quality_unknown_token_provenance_gap', 'order_pattern_lab_ai_review_ai_review_gap', 'order_threshold_window_policy_source_snapshot_alignment']`
+- selected_implement_now_new_runtime_effect_false_count: `9`
+- selected_implement_now_new_runtime_effect_false_order_ids: `['order_entry_broker_receipt_contract_gap_review', 'order_entry_fill_quality_contract_gap_review', 'order_entry_post_submit_contract_gap_review', 'order_entry_source_taxonomy_contract_gap_review', 'order_entry_telegram_post_submit_contract_gap_review', 'order_microstructure_v3_evaluation_venue_missing_or_conflicting', 'order_microstructure_v3_required_holding_payload_missing', 'order_observation_source_quality_unknown_token_provenance_gap', 'order_pattern_lab_ai_review_ai_review_gap']`
 - repeat_unresolved_escalation_count: `0`
 - repeat_unresolved_escalated_order_ids: `[]`
 - repeat_unresolved_structural_blocker_count: `0`
 - repeat_unresolved_structural_blocker_order_ids: `[]`
-- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 3, 'needs_followup_workorder': 10, 'root_cause_closed': 1, 'source_quality_blocked': 1}`
+- root_cause_closure_status_counts: `{'handoff_closed_root_cause_open': 3, 'needs_followup_workorder': 9, 'root_cause_closed': 1, 'source_quality_blocked': 1}`
 - implementation_done_count: `0`
 - artifact_regeneration_required_count: `0`
 - source_quality_blocked_count: `1`
 - handoff_closed_root_cause_open_count: `3`
 - root_cause_closed_count: `1`
-- needs_followup_workorder_count: `10`
-- root_cause_followup_contract_required_count: `14`
-- root_cause_followup_contract_complete_count: `14`
+- needs_followup_workorder_count: `9`
+- root_cause_followup_contract_required_count: `13`
+- root_cause_followup_contract_complete_count: `13`
 - root_cause_followup_contract_missing_order_ids: `[]`
-- root_cause_open_top: `[{'order_id': 'order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:ENTRY_AI_AUTHORITY_REVALIDATION:open', 'acceptance_test': 'entry-AI-authority blocks preserve canonical reason and exact payload lineage through consumer validation; repair leaves AI semantics and submit guards unchanged and does not depend on positive EV samples', 'next_repair_action': 'join exact AI authority reason, executable BBO, and target/adverse first-hit outcomes before proposing a bounded one-share probe'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_latency_pre_submit', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:LATENCY_PRE_SUBMIT:open', 'acceptance_test': 'the same attempt joins budget to latency block/pass and terminal; an earlier-stage retry is not recovery and DANGER safety is unchanged', 'next_repair_action': 'close_submit_drought_latency_pre_submit_quote_freshness'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_upstream_gate', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:UPSTREAM_GATE:open', 'acceptance_test': 'exact attempts preserve canonical upstream terminal reasons and retry boundaries; raw/cache/consumer counts reconcile without unknown loss; repair does not require economic replay or grant runtime authority', 'next_repair_action': 'join upstream action/reason cohorts to executable BBO and first-hit outcomes; AI semantic tuning remains separately owned'}, {'order_id': 'order_entry_broker_receipt_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'open_post_submit_provenance_join_gap', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_fill_quality_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'open_post_submit_provenance_join_gap', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_post_submit_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'open_post_submit_provenance_join_gap', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_source_taxonomy_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'open_source_taxonomy_provenance_gap', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_telegram_post_submit_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'open_post_submit_provenance_join_gap', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_microstructure_v3_evaluation_venue_missing_or_conflicting', 'status': 'needs_followup_workorder', 'source_report_type': 'microstructure_reaction_context', 'threshold_family': 'microstructure_reaction_context', 'implementation_status': None, 'root_cause_signal': 'microstructure_reaction_context:source_quality_contract_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py', 'next_repair_action': 'collect new evidence for microstructure_reaction_context:source_quality_contract_gap:open and re-run the owning verifier'}, {'order_id': 'order_microstructure_v3_required_holding_payload_missing', 'status': 'needs_followup_workorder', 'source_report_type': 'microstructure_reaction_context', 'threshold_family': 'microstructure_reaction_context', 'implementation_status': None, 'root_cause_signal': 'microstructure_reaction_context:source_quality_contract_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py', 'next_repair_action': 'collect new evidence for microstructure_reaction_context:source_quality_contract_gap:open and re-run the owning verifier'}]`
+- root_cause_open_top: `[{'order_id': 'order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:ENTRY_AI_AUTHORITY_REVALIDATION:open', 'acceptance_test': 'entry-AI-authority blocks preserve canonical reason and exact payload lineage through consumer validation; repair leaves AI semantics and submit guards unchanged and does not depend on positive EV samples', 'next_repair_action': 'join exact AI authority reason, executable BBO, and target/adverse first-hit outcomes before proposing a bounded one-share probe'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_latency_pre_submit', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:LATENCY_PRE_SUBMIT:open', 'acceptance_test': 'the same attempt joins budget to latency block/pass and terminal; an earlier-stage retry is not recovery and DANGER safety is unchanged', 'next_repair_action': 'close_submit_drought_latency_pre_submit_quote_freshness'}, {'order_id': 'order_conversion_lane_submit_drought_submit_drought_upstream_gate', 'status': 'handoff_closed_root_cause_open', 'source_report_type': 'conversion_lane', 'threshold_family': 'sim_to_real_conversion_lane', 'implementation_status': 'implemented', 'root_cause_signal': 'conversion_lane:submit_drought:UPSTREAM_GATE:open', 'acceptance_test': 'exact attempts preserve canonical upstream terminal reasons and retry boundaries; raw/cache/consumer counts reconcile without unknown loss; repair does not require economic replay or grant runtime authority', 'next_repair_action': 'join upstream action/reason cohorts to executable BBO and first-hit outcomes; AI semantic tuning remains separately owned'}, {'order_id': 'order_entry_broker_receipt_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'pending_exact_post_submit_verification', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_fill_quality_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'pending_exact_post_submit_verification', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_post_submit_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'pending_exact_post_submit_verification', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_source_taxonomy_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'pending_exact_source_taxonomy_verification', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_entry_telegram_post_submit_contract_gap_review', 'status': 'needs_followup_workorder', 'source_report_type': 'buy_funnel_sentinel', 'threshold_family': 'entry_submit_drought_attribution', 'implementation_status': 'pending_exact_post_submit_verification', 'root_cause_signal': 'buy_funnel_sentinel:unknown_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py', 'next_repair_action': 'collect new evidence for buy_funnel_sentinel:unknown_gap:open and re-run the owning verifier'}, {'order_id': 'order_microstructure_v3_evaluation_venue_missing_or_conflicting', 'status': 'needs_followup_workorder', 'source_report_type': 'microstructure_reaction_context', 'threshold_family': 'microstructure_reaction_context', 'implementation_status': None, 'root_cause_signal': 'microstructure_reaction_context:source_quality_contract_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py', 'next_repair_action': 'collect new evidence for microstructure_reaction_context:source_quality_contract_gap:open and re-run the owning verifier'}, {'order_id': 'order_microstructure_v3_required_holding_payload_missing', 'status': 'needs_followup_workorder', 'source_report_type': 'microstructure_reaction_context', 'threshold_family': 'microstructure_reaction_context', 'implementation_status': None, 'root_cause_signal': 'microstructure_reaction_context:source_quality_contract_gap:open', 'acceptance_test': 'PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py', 'next_repair_action': 'collect new evidence for microstructure_reaction_context:source_quality_contract_gap:open and re-run the owning verifier'}]`
 - selected_terminal_non_implement_longstanding_count: `1`
 - selected_terminal_non_implement_longstanding_order_ids: `['order_observation_source_quality_raw_row_exclusion_producer_gap']`
 - selected_longstanding_non_implement_disposition_counts: `{'review_required': 1}`
@@ -181,9 +181,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - next_postclose_metric: Entry post-submit weak contracts remain source-only workorders with runtime_effect=false and allowed_runtime_apply=false until explicit implementation and verification.
 - files_likely_touched: `src/engine/buy_funnel_sentinel.py`, `src/engine/scalping/main_lifecycle_paired.py`, `src/engine/build_code_improvement_workorder.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `open_post_submit_provenance_join_gap`
+- implementation_status: `pending_exact_post_submit_verification`
 - root_cause_closure_status: `needs_followup_workorder`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_type": "broker_receipt_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_exists_broker_or_fill_join_missing", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_confirmation": "not_established_by_submit_count", "gap_type": "broker_receipt_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_requires_exact_join_verification", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`
@@ -220,9 +220,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - next_postclose_metric: Entry post-submit weak contracts remain source-only workorders with runtime_effect=false and allowed_runtime_apply=false until explicit implementation and verification.
 - files_likely_touched: `src/engine/buy_funnel_sentinel.py`, `src/engine/scalping/main_lifecycle_paired.py`, `src/engine/build_code_improvement_workorder.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `open_post_submit_provenance_join_gap`
+- implementation_status: `pending_exact_post_submit_verification`
 - root_cause_closure_status: `needs_followup_workorder`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_type": "fill_quality_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_exists_broker_or_fill_join_missing", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_confirmation": "not_established_by_submit_count", "gap_type": "fill_quality_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_requires_exact_join_verification", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`
@@ -259,9 +259,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - next_postclose_metric: Entry post-submit weak contracts remain source-only workorders with runtime_effect=false and allowed_runtime_apply=false until explicit implementation and verification.
 - files_likely_touched: `src/engine/buy_funnel_sentinel.py`, `src/engine/scalping/main_lifecycle_paired.py`, `src/engine/build_code_improvement_workorder.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `open_post_submit_provenance_join_gap`
+- implementation_status: `pending_exact_post_submit_verification`
 - root_cause_closure_status: `needs_followup_workorder`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_type": "post_submit_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_exists_broker_or_fill_join_missing", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_confirmation": "not_established_by_submit_count", "gap_type": "post_submit_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_requires_exact_join_verification", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`
@@ -298,9 +298,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - next_postclose_metric: Entry post-submit weak contracts remain source-only workorders with runtime_effect=false and allowed_runtime_apply=false until explicit implementation and verification.
 - files_likely_touched: `src/engine/buy_funnel_sentinel.py`, `src/engine/scalping/main_lifecycle_paired.py`, `src/engine/build_code_improvement_workorder.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `open_source_taxonomy_provenance_gap`
+- implementation_status: `pending_exact_source_taxonomy_verification`
 - root_cause_closure_status: `needs_followup_workorder`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_type": "source_taxonomy_contract_gap", "implementation_type": "source_taxonomy_provenance_gap", "runtime_effect": false, "sample_status": "submitted_sample_exists_source_taxonomy_missing", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_confirmation": "not_established_by_submit_count", "gap_type": "source_taxonomy_contract_gap", "implementation_type": "source_taxonomy_provenance_gap", "runtime_effect": false, "sample_status": "submitted_sample_requires_exact_taxonomy_verification", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`
@@ -337,9 +337,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - next_postclose_metric: Entry post-submit weak contracts remain source-only workorders with runtime_effect=false and allowed_runtime_apply=false until explicit implementation and verification.
 - files_likely_touched: `src/engine/buy_funnel_sentinel.py`, `src/engine/scalping/main_lifecycle_paired.py`, `src/engine/build_code_improvement_workorder.py`, `src/engine/verify_threshold_cycle_postclose_chain.py`
 - acceptance_tests: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py`
-- implementation_status: `open_post_submit_provenance_join_gap`
+- implementation_status: `pending_exact_post_submit_verification`
 - root_cause_closure_status: `needs_followup_workorder`
-- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_type": "telegram_post_submit_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_exists_broker_or_fill_join_missing", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
+- implementation_provenance: `{"allowed_runtime_apply": false, "downstream_consumer": "code_improvement_workorder", "gap_confirmation": "not_established_by_submit_count", "gap_type": "telegram_post_submit_contract_gap", "implementation_type": "post_submit_provenance_join_gap", "runtime_effect": false, "sample_status": "submitted_sample_requires_exact_join_verification", "source_report_type": "buy_funnel_sentinel", "submitted_unique": 2, "weak_contract_matches": ["BROKER_RECEIPT", "BUDGET_PASS_COLLAPSE", "ECONOMIC_PARTICIPATION", "FILL_QUALITY", "LATENCY_PRE_SUBMIT", "SIM_REAL_AUTHORITY", "TELEGRAM_POST_SUBMIT_ONLY"]}`
 - repeat_unresolved_escalation: `-`
 - longstanding_non_implement_review: `-`
 - longstanding_non_implement_action: `-`
@@ -469,46 +469,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 9. `order_threshold_window_policy_source_snapshot_alignment`
-
-- title: threshold window policy source snapshot alignment
-- decision: `implement_now`
-- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
-- source_report_type: `threshold_cycle_calibration`
-- lifecycle_stage: `threshold_cycle`
-- target_subsystem: `threshold_cycle_report`
-- route: `instrumentation_order`
-- mapped_family: `-`
-- threshold_family: `window_policy_registry`
-- improvement_type: `source_quality_alignment`
-- confidence: `consensus`
-- priority: `3`
-- runtime_effect: `False`
-- strategy_effect: `False`
-- data_quality_effect: `False`
-- tuning_axis_effect: `False`
-- expected_ev_effect: Prevent daily-only or snapshot-only calibration blind spots by aligning rolling/cumulative source metrics, snapshot denominators, AI correction context, and EV/workorder rendering.
-- evidence: `issue_counts={"rolling_consumer_gap": 1}`, `affected_families=scale_in_split_order_plan`, `family=scale_in_split_order_plan primary=rolling_20_report_dates state=hold_sample primary_sample=0 snapshot_sample=None source_sample=0 issues=rolling_consumer_gap`
-- parity_contract: -
-- next_postclose_metric: window_policy_audit should have no daily_only_leak or rolling_consumer_gap; rolling_source_snapshot_mismatch must be explained as rendering-only or eliminated.
-- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/build_code_improvement_workorder.py`, `data/threshold_cycle/README.md`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py`, `threshold_cycle_YYYY-MM-DD.json includes window_policy_audit and calibration_source_bundle_by_window lineage`
-- implementation_status: `-`
-- root_cause_closure_status: `needs_followup_workorder`
-- implementation_provenance: `-`
-- repeat_unresolved_escalation: `-`
-- longstanding_non_implement_review: `-`
-- longstanding_non_implement_action: `-`
-- structural_blocker_escalation: `-`
-- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
-
-실행 기준:
-
-- instrumentation/provenance/report source 보강을 우선 구현한다.
-- runtime 판단값을 직접 바꾸지 않는다.
-- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
-
-### 10. `order_pattern_lab_ai_review_ai_review_gap`
+### 9. `order_pattern_lab_ai_review_ai_review_gap`
 
 - title: Pattern Lab AI review follow-up: ai_review_gap
 - decision: `implement_now`
@@ -547,7 +508,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 11. `order_entry_submit_drought_auto_resolution`
+### 10. `order_entry_submit_drought_auto_resolution`
 
 - title: Entry submit drought automatic resolution handoff
 - decision: `attach_existing_family`
@@ -586,7 +547,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 12. `order_observation_source_quality_raw_row_exclusion_producer_gap`
+### 11. `order_observation_source_quality_raw_row_exclusion_producer_gap`
 
 - title: Observation source-quality raw row exclusion revalidation closed
 - decision: `attach_existing_family`
@@ -625,7 +586,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 13. `order_conversion_lane_submit_drought_submit_drought_latency_pre_submit`
+### 12. `order_conversion_lane_submit_drought_submit_drought_latency_pre_submit`
 
 - title: Conversion lane blocker follow-up: submit_drought submit_drought:LATENCY_PRE_SUBMIT
 - decision: `attach_existing_family`
@@ -664,7 +625,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 14. `order_conversion_lane_submit_drought_submit_drought_upstream_gate`
+### 13. `order_conversion_lane_submit_drought_submit_drought_upstream_gate`
 
 - title: Conversion lane blocker follow-up: submit_drought submit_drought:UPSTREAM_GATE
 - decision: `attach_existing_family`
@@ -703,7 +664,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 15. `order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation`
+### 14. `order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation`
 
 - title: Conversion lane blocker follow-up: submit_drought submit_drought:ENTRY_AI_AUTHORITY_REVALIDATION
 - decision: `attach_existing_family`
@@ -742,7 +703,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 16. `order_pattern_lab_ai_review_source_quality_gap`
+### 15. `order_pattern_lab_ai_review_source_quality_gap`
 
 - title: Pattern Lab AI review follow-up: source_quality_gap
 - decision: `attach_existing_family`

@@ -2636,3 +2636,76 @@ def test_postclose_done_controller_waits_for_missing_predecessor_status_without_
         "predecessor_status_missing",
         "pass",
     ]
+
+
+def _diagnostic_warning_verification():
+    return {
+        "status": "warning",
+        "missing_required_artifacts": [],
+        "artifact_status": _passable_artifact_status(),
+        "predecessor_integrity": {"log_issues": ["postclose_fail_marker_present"]},
+        "handoff_warnings": ["microstructure_diagnostic:warning"],
+        "microstructure_diagnostic_handoff": {
+            "status": "warning",
+            "issues": [],
+            "expected_order_ids": ["native-order"],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "conversion_kpi": {
+            "status": "warning",
+            "issues": [],
+            "warnings": ["conversion_lane_no_candidates"],
+            "conversion_lane_summary": {
+                "conversion_candidate_count": 0,
+                "buy_funnel_source_present": True,
+                "key_lineage_blocker_count": 0,
+            },
+        },
+    }
+
+
+def test_verified_diagnostic_warning_and_empty_conversion_can_close_tail(monkeypatch):
+    verification = _diagnostic_warning_verification()
+    assert mod._can_finalize_tail_repair(verification) is True
+    monkeypatch.setattr(mod, "_postclose_status_succeeded", lambda _: True)
+    verification["latest_done_marker"] = (
+        "[DONE] threshold-cycle postclose target_date=2026-09-07"
+    )
+    verification["predecessor_integrity"]["log_issues"] = []
+    assert (
+        mod._is_done_verifier_status(
+            "2026-09-07", verification, mod._flatten_issues(verification)
+        )
+        is True
+    )
+
+
+def test_diagnostic_warning_without_verified_non_authority_handoff_stays_blocked():
+    for field, value in [
+        ("issues", ["missing_order"]),
+        ("runtime_effect", True),
+        ("allowed_runtime_apply", True),
+        ("expected_order_ids", []),
+    ]:
+        verification = _diagnostic_warning_verification()
+        verification["microstructure_diagnostic_handoff"][field] = value
+        assert mod._can_finalize_tail_repair(verification) is False
+    verification = _diagnostic_warning_verification()
+    del verification["microstructure_diagnostic_handoff"]
+    assert mod._can_finalize_tail_repair(verification) is False
+
+
+def test_empty_conversion_warning_does_not_mask_missing_source_or_lineage_gap():
+    for field, value in [
+        ("conversion_candidate_count", 1),
+        ("conversion_candidate_count", False),
+        ("buy_funnel_source_present", False),
+        ("key_lineage_blocker_count", 1),
+    ]:
+        verification = _diagnostic_warning_verification()
+        verification["conversion_kpi"]["conversion_lane_summary"][field] = value
+        assert mod._can_finalize_tail_repair(verification) is False
+    verification = _diagnostic_warning_verification()
+    verification["conversion_kpi"]["issues"] = ["source_contract_missing"]
+    assert mod._can_finalize_tail_repair(verification) is False

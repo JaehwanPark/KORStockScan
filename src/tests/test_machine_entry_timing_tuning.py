@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -2011,3 +2012,43 @@ def test_late_report_regeneration_does_not_overwrite_runtime_policy(
     assert written_report["policy_publication"]["status"] == (
         "blocked_effective_date_preopen_cutoff_elapsed"
     )
+
+
+@pytest.mark.parametrize(
+    "repairable,closed", [(False, True), (True, True), (False, False)]
+)
+def test_closed_ingress_quarantine_keeps_companion_repairs_blocking(repairable, closed):
+    target_date = date(2026, 9, 7)
+    blocked = _entry_row(target_date, 1)
+    blocked["classification"] = "source_quality_blocked"
+    blocked["source_gap_reasons"] = ["micro_canary_source_quality_missing_or_invalid"]
+    if repairable:
+        blocked["source_gap_reasons"].append("source_entry_event_id_missing")
+    payload = {
+        "micro_entry_confirmation": {"entry_anchors": [blocked]},
+        "sources": {
+            "micro_reversion": {
+                "canary_source_quality": {
+                    "immutable_ingress_receipt_loss": closed,
+                    "status": "missing_or_invalid",
+                    "target_day_complete": True,
+                    "stopped_clean_closed": closed,
+                    "raw_row_exclusion_required": True,
+                    "source_sha256": "a" * 64,
+                }
+            }
+        },
+    }
+    assessment = _report_sample_floor_assessment(
+        target_date=target_date,
+        reports=[(target_date, Path("unused.json"), payload)],
+        target_source_ready=True,
+        cohorts=[],
+        winner=None,
+    )
+    assert assessment["immutable_source_date_quarantine_eligible"] is (
+        closed and not repairable
+    )
+    assert assessment["target_source_quality_eligible_anchor_count"] == 0
+    assert assessment["runtime_effect"] is False
+    assert assessment["allowed_runtime_apply"] is False

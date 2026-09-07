@@ -192,9 +192,34 @@ def _entry_base_paths(
     entry_optimizer = (optimizer_report.get("stage_optimizers") or {}).get(
         "entry"
     ) or {}
-    for cohort in entry_optimizer.get("cohort_optimizers") or []:
-        if not isinstance(cohort, Mapping):
+    cohort_census = [
+        row
+        for row in entry_optimizer.get("cohort_optimizers") or []
+        if isinstance(row, Mapping)
+    ]
+    optimizer_keys = {_cohort_key(row) for row in cohort_census}
+    for key, batch_cohort in batch_cohorts.items():
+        if key in optimizer_keys:
             continue
+        version = str(declared_plan.get(f"{key[0]}/{key[1]}") or "")
+        # The frozen batch already owns these no-source cohorts. Their absence
+        # from the prepared optimizer pool must not erase terminal observations.
+        terminal_no_source = bool(
+            batch_cohort.get("status") == "hold_no_exact_entry_control"
+            and key in entry_batch.DEFAULT_COHORTS
+            and version in optimizer.ENTRY_CANDIDATE_ORDER
+        )
+        cohort_census.append(
+            {
+                "effective_venue": key[0],
+                "session_bucket": key[1],
+                "selected_challenger": {
+                    "prompt_version": version if terminal_no_source else ""
+                },
+                "cohort_census_source": "frozen_entry_batch",
+            }
+        )
+    for cohort in cohort_census:
         venue, session = _cohort_key(cohort)
         version, prompt_sha = _desired_prompt_identity(stage="entry", cohort=cohort)
         row: dict[str, Any] = {
@@ -204,6 +229,7 @@ def _entry_base_paths(
             "selected_prompt_version": version,
             "selected_prompt_sha256": prompt_sha or None,
             "batch_path": str(batch_path),
+            "cohort_census_source": cohort.get("cohort_census_source", "optimizer"),
         }
         batch_cohort = batch_cohorts.get((venue, session))
         if (

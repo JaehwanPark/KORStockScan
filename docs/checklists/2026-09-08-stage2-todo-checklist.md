@@ -90,11 +90,11 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: `implement_now`, `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design`, `already_implemented`, `defer_design`, `reject` 중 하나로 닫는다.
 
-- [ ] `[MachineMicroPolicyApprovalSourceGap0908] micro 정책 승인·목적 ledger source gap 복구` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 21:25~21:30`, `Track: RuntimeStability`)
-  - Source: [machine_microstructure_policy_approval_postclose_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-07.json), [machine_microstructure_policy_approval.py](/home/ubuntu/KORStockScan/src/engine/automation/machine_microstructure_policy_approval.py), [machine final refresh service](/home/ubuntu/KORStockScan/deploy/systemd/korstockscan-machine-microstructure-final-refresh.service)
-  - 판정 기준: 21:15 final refresh의 exact-date POSTCLOSE approval report가 `source_status=missing`이므로 schema/phase/target-date/non-runtime authority와 generated-at/source hash·mtime predecessor 계약을 복구하고 checklist를 재생성한다.
-  - 완료 조건: 동일 source date의 approval report가 현재 attribution source hash·mtime 이후의 exact contract로 재생성되고, 미완료 objective는 별도 POSTCLOSE followup task로 이월되며 closed objective는 제거되어야 한다.
-  - 권한 경계: source gap 복구는 report/checklist 제어면 작업이며 runtime env, 실주문, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.
+- [ ] `[MachineLifecycleTurnoverObjectiveFollowup0908] 위젯·episode 빠른 회전 목적의 미완료 후속 구현 확인` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 21:30~21:40`, `Track: ScalpingLogic`)
+  - Source: [machine_microstructure_policy_approval_postclose_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-07.json), [machine_microstructure_attribution.py](/home/ubuntu/KORStockScan/src/engine/monitoring/machine_microstructure_attribution.py)
+  - 판정 기준: 승인 후보 수와 무관하게 `followup_required=true`인 미완료 목적 항목 `machine_lifecycle_turnover_policy_research_v1`(status=`EVIDENCE_ACCUMULATING`, next_action=`repair_current_attribution_source_contract_and_rerun`)의 상태와 상태별 `next_action`을 확인하고 구현 또는 표본수집 경로로 닫는다.
+  - 상태별 다음 액션: `IMPLEMENTATION_REQUIRED`는 source-only rolling paired policy 연구를 구현하고, `EVIDENCE_ACCUMULATING`은 exact-date floor 충족까지 수집·재검증한다. `CANDIDATE_QUEUE_HANDOFF|COMPLETE`는 closed 상태이므로 report에서 제외되고 다음 refresh에서 builder-owned 항목이 제거된다.
+  - 권한 경계: 이 POSTCLOSE 후속 항목은 source-only 구현·검증 작업이며 runtime env, 실주문, target/timeout/cooldown/cap, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.
 
 - [ ] `[AutomationTriggerDecisionSummary0908] 자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: RuntimeStability`)
   - Source: [automation_chain_trigger_decision_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_2026-09-07.json), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
@@ -109,6 +109,16 @@
   - 다음 액션: `source_quality_gate_pass`, `defective_rows_excluded_and_ev_allowed`, `source_quality_blocked`, `unknown_warning_workorder_created`, `handoff_missing_fix_automation_first` 중 하나로 닫는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
+## 9/7 postclose 복구의 다음 자연 acceptance
+
+- [ ] `[PostcloseRecoverySourceAcceptance0908] 복구 후 exact source·receipt 및 native 추천 ID 재검증` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: RuntimeStability`)
+  - Source: [9/7 복구 검토](../audit-reports/2026-09-07-postclose-monitoring-recovery-review.md), [Pass 2 native intake ledger](../audit-reports/2026-09-07-postclose-recommendation-intake-ledger.json). `PostcloseSourceQualityGateReview0908`과 같은 audit/workorder를 소비한다.
+  - 범위: ledger의 미완료 implement-now 9건은 NXT order/attempt/owner별 실제 결손 census, unknown/N/A의 원본 provenance, micro evaluation venue 및 holding payload receipt, AI review 원본 source hash를 요구한다. 저장되지 않은 원본을 합성하거나 0으로 채우지 않는다. 전체 시장/퇴역 sim의 표본 모집은 이 항목의 권한이 아니다.
+  - machine/R0: 검증된 ingress loss의 9/7 날짜 제외를 유지하고 다음 exact-date ordered/route/epoch receipt를 확인한다. 보존된 과거 R2/R3 9개 날짜의 semantic mismatch는 비압축 storage warning이며 튜닝 재사용·재생성·삭제 권한이 없다.
+  - 추천: ID 없는 26행은 authoritative producer native ID와 직접 consumer/acceptance가 발급될 때만 구현 intake로 재분류한다. research-watch/profile ID를 구현 ID로 바꾸지 않는다.
+  - Acceptance: 동일 corrected producer→candidate→consumer→verifier에서 source/hash/date가 일치하고, 각 기존 native ID에 신규 exact evidence 또는 직접 결함 위치가 결속됐을 때만 resolved 판정한다. source-quality-valid paired 0은 hold_sample이며 live threshold/provider/bot/order/수량/안전 변경을 허용하지 않는다.
+
 
 ## Project/Calendar 동기화
 

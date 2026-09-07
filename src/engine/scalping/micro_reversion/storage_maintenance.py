@@ -2606,11 +2606,13 @@ def maintain_report_artifact_storage(
         "immutable_source_artifact_count": 0,
         "immutable_source_artifact_bytes": 0,
     }
+    historical_contract_preservations: list[dict[str, object]] = []
     for (set_lane, _, trade_date), candidate_roots in sorted(
         artifact_candidates_by_set.items()
     ):
         candidates = sorted(candidate_roots)
         physical_bytes = 0
+        validation_complete = False
         try:
             with ExitStack() as generation_locks:
                 if apply:
@@ -2660,6 +2662,7 @@ def maintain_report_artifact_storage(
                     validated_source_payloads,
                     trade_date=trade_date,
                 )
+                validation_complete = True
                 artifact_set_census["set_count"] += 1
                 artifact_set_census["set_bytes"] += physical_bytes
                 artifact_set_census[f"{state}_count"] += 1
@@ -2732,6 +2735,38 @@ def maintain_report_artifact_storage(
                             )
                         )
         except Exception as exc:
+            # Older semantic contracts are not repaired by recompression. Leave
+            # every source byte in place; this is no authority to reuse the data.
+            if (
+                not validation_complete
+                and type(exc) is ValueError
+                and str(exc) in {
+                    "r3_manifest_research_projection_mismatch",
+                    "r2_current_run_blocker_binding_invalid",
+                }
+                and trade_date < as_of_date
+                and trade_date not in protected_dates
+                and not any(
+                    logical.exists()
+                    and logical.with_suffix(f"{logical.suffix}.gz").exists()
+                    for logical in candidates
+                )
+            ):
+                historical_contract_preservations.append({
+                    "trade_date": trade_date.isoformat(),
+                    "paths": [str(path) for path in candidates],
+                    "candidate_count": len(candidates),
+                    "candidate_bytes": physical_bytes,
+                    "reason": str(exc),
+                    "disposition": "historical_semantic_contract_preserved_uncompressed",
+                    "decision_authority": "storage_preservation_only",
+                    "source_preserved": True,
+                    "compression_allowed": False,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "tuning_input_approval": False,
+                })
+                continue
             failures.append(
                 _failure_row(
                     trade_date=trade_date,
@@ -2866,6 +2901,8 @@ def maintain_report_artifact_storage(
         ),
         "failure_count": len(failures),
         "failures": failures,
+        "historical_contract_preservation_count": len(historical_contract_preservations),
+        "historical_contract_preservations": historical_contract_preservations,
         "action_count": len(normalized_actions),
         "source_bytes": sum(action.source_bytes for action in actions),
         "compressed_count": sum(

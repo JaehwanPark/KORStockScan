@@ -1,0 +1,2067 @@
+{
+  "target_date": "2026-09-07",
+  "captured_at": "2026-09-07T23:19:59.322571+09:00",
+  "phase": "pass2_intake",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "summary": {
+    "intake_total": 66,
+    "implementation_requested_total": 9,
+    "nonimplementation_total": 57,
+    "eligible_runtime_effect_false_total": 9,
+    "user_authority_total": 0,
+    "invalid_or_missing_authority_total": 0,
+    "implement_now_unaccounted_count": 0,
+    "intake_unaccounted_count": 0,
+    "dispositions": {
+      "blocked_missing_evidence": 9,
+      "observed_no_patch": 25,
+      "deferred": 2,
+      "rejected": 1,
+      "invalid_or_missing_authority": 26,
+      "blocked_external_dependency": 3
+    },
+    "already_implemented_verified_eligible": 0,
+    "implemented_pass1": 0,
+    "implemented_pass2": 0,
+    "blocked_missing_evidence": 9,
+    "blocked_external_dependency": 0,
+    "eligible_actionable_open": 0,
+    "already_implemented_verified_nonrequest": 0,
+    "observed_no_patch": 25,
+    "deferred": 2,
+    "rejected": 1,
+    "blocked_missing_evidence_nonrequest": 0,
+    "blocked_external_dependency_nonrequest": 3,
+    "invalid_or_missing_authority_nonrequest": 26
+  },
+  "sources": [
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07-18b622a64a1e"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T22:10:57.306415+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-07.json",
+      "sha256": "cd86999d3d37801e7079786f4be6140dd995f397079d9850ce5c3674a9885dbd",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T22:08:36+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_runtime_policy_apply/widget_symbol_runtime_policy_apply_2026-09-07.json",
+      "sha256": "c90f3232394ca77ae1dae00d4bf4a6513df17cf64f6ee663243a0d3d8686f9a9",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T22:08:41+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_2026-09-07.json",
+      "sha256": "8512795572dc28e902bf7f6ef6d9dc14dc047d432794c16375e25a6374bee7ad",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T21:52:53+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-07.json",
+      "sha256": "d9eaa99b97507709e95bf36ea8a92d315235eaeb5ae271a887bee626ef2cd97c",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T21:53:04+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T21:20:07+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-07.json",
+      "sha256": "4449ce3ad3a632dae284af5faddbd8da77eae618f93ee1a67fe7fe558d44f560",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T23:13:37.017936+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_2026-09-07.json",
+      "sha256": "9dc2bd84190ada822148baf0f0d97bd59d2637ee18cb121cc011581356bd3e06",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T23:14:05+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-07.json",
+      "sha256": "099b313ebbe5873238599cd777ab9fae22855ef2de0e5650d822a513ebafcbcc",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T23:14:05+09:00"
+    },
+    {
+      "path": "/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-09-07.json",
+      "sha256": "8db14ac1f54522a3c16bd05c93d83e3c183d6a0b1b4114d2d7585dacf10bccab",
+      "target_date": "2026-09-07",
+      "generation": "2026-09-07T21:39:38.567736+09:00"
+    }
+  ],
+  "rows": [
+    {
+      "ID": "order_entry_broker_receipt_contract_gap_review",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/0",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "NXT submitted_unique=2 establishes the need for exact review, not a specific receipt/fill/taxonomy/Telegram defect. v5 removes that unsupported inference. The authoritative row supplies no per-order missing-key census that closes this distinct contract.",
+      "consumer": [
+        "buy_funnel_sentinel",
+        "scalping/main_lifecycle_paired",
+        "workorder",
+        "postclose verifier"
+      ],
+      "acceptance": "Bind each NXT exact attempt/order/owner to the specific requested gap, retain full/partial/cancel/terminal and real/source-only separation, then classify pass or repair the first evidenced missing field.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "code_repair_applied": true,
+      "raw_row_sha256": "09314943eed74ca9c1cfbc355411974ef6f25ec8ab0254de5cda40fb47568452"
+    },
+    {
+      "ID": "order_entry_fill_quality_contract_gap_review",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/1",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "NXT submitted_unique=2 establishes the need for exact review, not a specific receipt/fill/taxonomy/Telegram defect. v5 removes that unsupported inference. The authoritative row supplies no per-order missing-key census that closes this distinct contract.",
+      "consumer": [
+        "buy_funnel_sentinel",
+        "scalping/main_lifecycle_paired",
+        "workorder",
+        "postclose verifier"
+      ],
+      "acceptance": "Bind each NXT exact attempt/order/owner to the specific requested gap, retain full/partial/cancel/terminal and real/source-only separation, then classify pass or repair the first evidenced missing field.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "code_repair_applied": true,
+      "raw_row_sha256": "5b31ab6a7d97ad2b97e40b5f595628987e5cefab06419c0991e6e7feb5a3a3c2"
+    },
+    {
+      "ID": "order_entry_post_submit_contract_gap_review",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/2",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "NXT submitted_unique=2 establishes the need for exact review, not a specific receipt/fill/taxonomy/Telegram defect. v5 removes that unsupported inference. The authoritative row supplies no per-order missing-key census that closes this distinct contract.",
+      "consumer": [
+        "buy_funnel_sentinel",
+        "scalping/main_lifecycle_paired",
+        "workorder",
+        "postclose verifier"
+      ],
+      "acceptance": "Bind each NXT exact attempt/order/owner to the specific requested gap, retain full/partial/cancel/terminal and real/source-only separation, then classify pass or repair the first evidenced missing field.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "code_repair_applied": true,
+      "raw_row_sha256": "bbe2d36a61ff04c396785378233a388b64b44dc70e14e1fd808a21124c20d393"
+    },
+    {
+      "ID": "order_entry_source_taxonomy_contract_gap_review",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/3",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "NXT submitted_unique=2 establishes the need for exact review, not a specific receipt/fill/taxonomy/Telegram defect. v5 removes that unsupported inference. The authoritative row supplies no per-order missing-key census that closes this distinct contract.",
+      "consumer": [
+        "buy_funnel_sentinel",
+        "scalping/main_lifecycle_paired",
+        "workorder",
+        "postclose verifier"
+      ],
+      "acceptance": "Bind each NXT exact attempt/order/owner to the specific requested gap, retain full/partial/cancel/terminal and real/source-only separation, then classify pass or repair the first evidenced missing field.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "code_repair_applied": true,
+      "raw_row_sha256": "031afc20696c658cfbdede48708006d493b9d5e6bd4aca9ae100c5851d2abba0"
+    },
+    {
+      "ID": "order_entry_telegram_post_submit_contract_gap_review",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/4",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "NXT submitted_unique=2 establishes the need for exact review, not a specific receipt/fill/taxonomy/Telegram defect. v5 removes that unsupported inference. The authoritative row supplies no per-order missing-key census that closes this distinct contract.",
+      "consumer": [
+        "buy_funnel_sentinel",
+        "scalping/main_lifecycle_paired",
+        "workorder",
+        "postclose verifier"
+      ],
+      "acceptance": "Bind each NXT exact attempt/order/owner to the specific requested gap, retain full/partial/cancel/terminal and real/source-only separation, then classify pass or repair the first evidenced missing field.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "code_repair_applied": true,
+      "raw_row_sha256": "02f6e45c3c647c1f3b0ef1d5178f92f63c55d3e6b832f5e954eb745e194df9d2"
+    },
+    {
+      "ID": "order_observation_source_quality_unknown_token_provenance_gap",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/5",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "Audit retains 104 neutral_or_unknown score_prior_band observations and 3 AVG_DOWN rows with unknown previous pressure/signature provenance. The current previous policy value is not recoverable from this recommendation; unknown alone is not a hard block or authority to restore retired statistical-weight consumers.",
+      "consumer": [
+        "observation_source_quality_audit",
+        "code_improvement_workorder"
+      ],
+      "acceptance": "Same-owner previous-policy/source receipt or explicit producer-proven not-applicable reason must bind to those exact rows; no zero imputation or whole-date exclusion. Next owner: PostcloseSourceQualityGateReview0908.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "997affb302aadde67648d06b950e3ca47283fde2a40878ee33439ce03a58e344"
+    },
+    {
+      "ID": "order_microstructure_v3_evaluation_venue_missing_or_conflicting",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/6",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "99 unique evaluation-venue defects remain in the full 27130-row source census. The saved 200-row diagnostic tail is not a replacement denominator. Current code/tests preserve missing data; existing payload/venue evidence cannot be fabricated from later snapshots.",
+      "consumer": [
+        "microstructure_reaction_context",
+        "Entry/Holding exact delivery receipt",
+        "workorder"
+      ],
+      "acceptance": "ContextDeliveryNaturalEvidence0907/current next-date source review: exact evaluation/attempt, current PID provenance, included/sent/internal/cache receipt and same-route venue must close. Runtime prompt/process change requires its own authorized handoff.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "3f43893a72e5a0e2e82d3d8f589f587e13f5b00fb588eb22234b8233f49e2ad7"
+    },
+    {
+      "ID": "order_microstructure_v3_required_holding_payload_missing",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/7",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "324 required holding payload receipts missing remain in the full 27130-row source census. The saved 200-row diagnostic tail is not a replacement denominator. Current code/tests preserve missing data; existing payload/venue evidence cannot be fabricated from later snapshots.",
+      "consumer": [
+        "microstructure_reaction_context",
+        "Entry/Holding exact delivery receipt",
+        "workorder"
+      ],
+      "acceptance": "ContextDeliveryNaturalEvidence0907/current next-date source review: exact evaluation/attempt, current PID provenance, included/sent/internal/cache receipt and same-route venue must close. Runtime prompt/process change requires its own authorized handoff.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "0d0d94385ffbae47c01c857d0b1b2332f8ac7dcd25dfb067268f7fd8d847fb06"
+    },
+    {
+      "ID": "order_pattern_lab_ai_review_ai_review_gap",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/8",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "implement_now",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": true,
+      "eligible_runtime_effect_false": true,
+      "reason": "Reused AI review asserts source missing/sample-floor gap, while currentness audit has 8 checks, fail_count=0, missing_feedback_source_count=0. No exact missing file/row or deterministic implementation location resolves this generic assertion. Recalling the provider or lowering floors is not an accepted repair.",
+      "consumer": [
+        "pattern_lab_ai_review",
+        "pattern_lab_currentness_audit",
+        "workorder"
+      ],
+      "acceptance": "Bind the original exact AI payload/source hash to the claimed missing report or sample denominator before any further producer repair; preserve existing parsed response and source-quality block.",
+      "final_disposition": "blocked_missing_evidence",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "57ed6cdddeedd7bc8256dfa7c232f709ece94d366fd028b38e4f0a07c6276648"
+    },
+    {
+      "ID": "order_entry_submit_drought_auto_resolution",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/9",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [
+        "code_improvement_workorder",
+        "threshold_cycle_ev_report",
+        "runtime_approval_summary",
+        "postclose_verifier"
+      ],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "19ceaac21e9bf32133e97854a185969b127f4fe88395fae1b06c2e840b466606"
+    },
+    {
+      "ID": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/10",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "73e5c56886e4413760eb21cb35fb12fee1ce873fd31fdbd591ae4308d64d72ee"
+    },
+    {
+      "ID": "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/11",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "b8497c7ec3e30716897d4071719e3adbd8809cf31a94e8bce8864fa0f5bebb73"
+    },
+    {
+      "ID": "order_conversion_lane_submit_drought_submit_drought_upstream_gate",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/12",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "e7249a5325369520f110887992b1b5f1c520065727166c5d4a44455afb1e4005"
+    },
+    {
+      "ID": "order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/13",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "28d6923a901e72e185e41c986bce1c479a316c41ef5a73c0c43b6943a3002529"
+    },
+    {
+      "ID": "order_pattern_lab_ai_review_source_quality_gap",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/orders/14",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "ce3045315f20760f96a18ba5be84dad61ab161bf3d679abdbb58c85626335f46"
+    },
+    {
+      "ID": "order_latency_canary_tag_완화_1축_canary_승인",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/0",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "52145e62dfec8ff3f80ee66c16b3ccba0ff04c9d863c51efc325b45911bf7597"
+    },
+    {
+      "ID": "order_rising_missed_entry_turn_bbo_coverage",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/1",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "exact_ws_bbo_join_coverage_pct>=95",
+        "pre_anchor_bbo_coverage_pct>=95",
+        "paired_coverage_pct>=95",
+        "primary_right_censored_pct<=20",
+        "primary_resolved_outcome_count>=20",
+        "source_quality_adjusted_ev_pct remains null until every floor passes",
+        "runtime_effect=false, allowed_runtime_apply=false, actual_order_submitted=false, broker_order_forbidden=true"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "a9f26bd109a2d98198271fd409523f19ecb6091d1f587bce51b25f6939eb14a0"
+    },
+    {
+      "ID": "order_scanner_eligible_no_heavy_closed_loop",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/2",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pipeline_threshold_mirror_events_are_deduplicated",
+        "every_unique_promotion_has_one_final_outcome_or_active_right_censored",
+        "missing_executable_bbo_remains_source_quality_blocked_not_zero_ev"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "3b38b38d56024ae927d8c3464ca7dd89840a70be394a8bbd0790be0c343520ac"
+    },
+    {
+      "ID": "order_ws_decision_stage_stale_backoff_attribution",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/3",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_kiwoom_websocket.py src/tests/test_intraday_ws_freshness_monitor.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "736f2c6d6632798b7451ecfecdd246af44f199462aae42f9af694cbf52a007dd"
+    },
+    {
+      "ID": "order_ws_total_stale_escalation",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/4",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_kiwoom_websocket.py src/tests/test_intraday_ws_freshness_monitor.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "a7fdea313f6ba3648ebb6683f2f9487de2800d003643ec7b77e8a20dba6eb98f"
+    },
+    {
+      "ID": "order_latency_guard_miss_ev_recovery",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/5",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "b799bae73998934cd0fe875108c6e7368cf4f7acad700af8752b4f067b03e55e"
+    },
+    {
+      "ID": "order_one_share_threshold_ai_score_near_buy_entry_hook_review",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/6",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest src/tests/test_one_share_threshold_opportunity.py src/tests/test_build_code_improvement_workorder.py",
+        "A separate source-gap/root-cause order is required before any implementation decision",
+        "source-only audit must not mutate intraday runtime thresholds, broker/order guards, provider route, bot state, quantity, or caps"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "6244074cbe209f081555ab217244c480d0ec740bbb286fdd18d111db40753e75"
+    },
+    {
+      "ID": "order_one_share_threshold_strength_momentum_vpw_entry_hook_review",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/7",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest src/tests/test_one_share_threshold_opportunity.py src/tests/test_build_code_improvement_workorder.py",
+        "A separate source-gap/root-cause order is required before any implementation decision",
+        "source-only audit must not mutate intraday runtime thresholds, broker/order guards, provider route, bot state, quantity, or caps"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "8a39b77530e806d631f3a7236ed9d8ab3c48a2947b494bbf0c3f341bfa2878d9"
+    },
+    {
+      "ID": "order_rising_missed_classifier_prior_feedback_bridge",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/8",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_classifier_prior.py src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+        "prior bridge remains source-only and cannot mutate one-share allow/block, runtime thresholds, broker/order guards, provider route, or bot state"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "fae602541302e5f04392df56fe4c922e4f79a8aac6a4a48bb88ec3c084a70afc"
+    },
+    {
+      "ID": "order_rising_missed_scout_scale_in_qty_evidence_split",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/9",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+        "qty/evidence split remains source-only and does not release position cap or quantity guard"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "81dc5d1eb2f57e062436f0de3eabdd4a60218be4632a54af201f915e92568da9"
+    },
+    {
+      "ID": "order_scanner_funnel_executable_bbo_join",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/10",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "source_capture_preserves_active_owner_targets_and_adds_zero_ws_registrations",
+        "ka10004_requests_remain_within_process_daily_and_interval_budget",
+        "bounded_observer_selected_episode_bbo_join_coverage_pct>=95",
+        "each_selected_prune_cohort_venue_session_resolved_outcome_count>=20",
+        "each_selected_prune_cohort_venue_session_right_censored_pct<=20",
+        "full_prune_population_ev_extrapolation_allowed=false",
+        "missing_bbo_is_source_quality_blocked_not_zero_profit",
+        "KRX_PREMARKET_KRX_LIKE_NXT_results_are_separate",
+        "fixed_cost_contract_effective_date_and_source_hash_match",
+        "official_common_stock_master_exact_date_hash_and_lookup_pass"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "4521f06fcaa178709a063a771a44710281fe8ee7227df7754a3258f71664f4ab"
+    },
+    {
+      "ID": "order_ws_trade_tick_quiet_low_liquidity_classification",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/11",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_state_handler_fast_signatures.py src/tests/test_intraday_ws_freshness_monitor.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "ca3ff770d06fd170b832b4d1db87f17c55951b1d96c47fcb044d09795c7f829b"
+    },
+    {
+      "ID": "order_ai_threshold_dominance",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/12",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "04b38b2d16011df41b1d4a4d10e0400e75a1cd8ee73ba16708210ba1d29b833d"
+    },
+    {
+      "ID": "order_rising_missed_classifier_prior_bridge",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/13",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "9dc2a1a96b18bc2b276bdf49137a175e24f524e6c4c50d7fae853e2c7e0ed83c"
+    },
+    {
+      "ID": "order_ai_threshold_miss_ev_recovery",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/14",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "b377a7da6dfa10df3b72c532f9413b8e399167259411b8d3ef183dee63632123"
+    },
+    {
+      "ID": "order_panic_sell_defense_lifecycle_transition_pack",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/15",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest panic sell defense/report lifecycle tests",
+        "pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "1da46482715298b3028dc7e8e1d48db9ea12d732e53e63cef2ddec6b68be9d9a"
+    },
+    {
+      "ID": "order_partial_only_표류_전용_timeout_report_only",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/16",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "4d08c2b253d5d6e04564a43b9a61c1dc2b7152a092fa1186f53237f5958da562"
+    },
+    {
+      "ID": "order_split_entry_rebase_수량_정합성_report_only_감사",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/17",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "46c0940262f129680557546ef3fbb67c4db25ca431aa08fb55e53173dc46f6ed"
+    },
+    {
+      "ID": "order_동일_종목_split_entry_soft_stop_재진입_cooldown_report_only",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/18",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "attach_existing_family",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native existing-family handoff retained; implementation_status claims are not used here to claim natural acceptance or new authority.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "observed_no_patch",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "750cf7c9f133ca828c1accccda25f7eaeda418557da7fafbd1ef88832d4ea8e2"
+    },
+    {
+      "ID": "order_liquidity_gate_miss_ev_recovery",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/19",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "design_family_candidate",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Design candidate only; no implementation or runtime selection inferred.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "deferred",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "6615f45c9db667173b9356a2d5ff2fa72473541eae8f05f3ad751733a9eabced"
+    },
+    {
+      "ID": "order_overbought_gate_miss_ev_recovery",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/20",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "design_family_candidate",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Design candidate only; no implementation or runtime selection inferred.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "deferred",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "2f6df44332bfa4aaa97403989015ca25bb326ded436d25425d45d72e31580121"
+    },
+    {
+      "ID": "order_partial_fallback_확대_직후_즉시_재평가_report_only",
+      "native_id_field": "order_id",
+      "owner": "main",
+      "source": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json",
+      "pointer": "/non_selected_orders/21",
+      "source_sha256": "8192468cacf70a490fa5d34d382efec20ab336ced8c4f1c6bed42fc463f7278d",
+      "source_generation": "2026-09-07-18b622a64a1e",
+      "decision": "reject",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native producer rejection retained.",
+      "consumer": [],
+      "acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "final_disposition": "rejected",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "0e0a37b01e910e6f9dc92d951135ea3f4d397d9b4350bd2266cc6c0f146ab248"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "pointer": "/recommendations/0",
+      "source_sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "source_generation": "2026-09-07T22:10:57.306415+09:00",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "8143d3b60428e5913862c6c277650a8c661c87b776fca13fb02c7f9b880c81d6"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "pointer": "/recommendations/1",
+      "source_sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "source_generation": "2026-09-07T22:10:57.306415+09:00",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "3081dfe6dd37667a2ef8b71c8a3d2bc85c2198236df9c94c404e6f7212e1f07e"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "pointer": "/recommendations/2",
+      "source_sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "source_generation": "2026-09-07T22:10:57.306415+09:00",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "b2e2597e378aa65a63ec864c8f5710ec3b6094fdb1d36b2b8510cbe8588bb857"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "pointer": "/recommendations/3",
+      "source_sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "source_generation": "2026-09-07T22:10:57.306415+09:00",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "0539f98ad64fe241aa801bb14210b7a976de14248b745a8fcebfbe6c160d7fc0"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "pointer": "/recommendations/4",
+      "source_sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "source_generation": "2026-09-07T22:10:57.306415+09:00",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "3ad19aff48b566a5eeb4f2ca252401c8c213ac140fe7edc3136aa3a75a41adb3"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "pointer": "/recommendations/5",
+      "source_sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "source_generation": "2026-09-07T22:10:57.306415+09:00",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "30b8f8a7a9d96bd5be3d3c9ba0216254ffa4f7ec3a31fbcb99c99d4adf200371"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-07.json",
+      "pointer": "/recommendations/6",
+      "source_sha256": "24c647d64f7214ee59d528440baafa6814335b85e43c548d377f8a8492c7ab7c",
+      "source_generation": "2026-09-07T22:10:57.306415+09:00",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "def268ef95dcfff48e32e4921e54d81ba441148afde9eac3ed7bb5a90358b349"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-07.json",
+      "pointer": "/symbols/006800",
+      "source_sha256": "cd86999d3d37801e7079786f4be6140dd995f397079d9850ce5c3674a9885dbd",
+      "source_generation": "2026-09-07T22:08:36+09:00",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "108db5e70cf7e4490b0b184d963d70951a0ff5a520f5ed0e8d54cab8c94efb02"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-07.json",
+      "pointer": "/symbols/010140",
+      "source_sha256": "cd86999d3d37801e7079786f4be6140dd995f397079d9850ce5c3674a9885dbd",
+      "source_generation": "2026-09-07T22:08:36+09:00",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "4948d047ae2cd8b45ba45bfe408ea6671aa4c4b765a024b12d7d7ecdf5702648"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-07.json",
+      "pointer": "/symbols/080220",
+      "source_sha256": "cd86999d3d37801e7079786f4be6140dd995f397079d9850ce5c3674a9885dbd",
+      "source_generation": "2026-09-07T22:08:36+09:00",
+      "decision": "holdout_pass_widget_signal_policy_candidate",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "9cdde6f33e5204877a92ce9860c0b287acd440ffb00262dc73752372e29dc0de"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "widget",
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-07.json",
+      "pointer": "/symbols/475150",
+      "source_sha256": "cd86999d3d37801e7079786f4be6140dd995f397079d9850ce5c3674a9885dbd",
+      "source_generation": "2026-09-07T22:08:36+09:00",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "46b211e100ae041ca986420802504d8ac7fdfea74e1862d14b25f1f8a82c9083"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/0",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "679f360eae7b89b410a1ec686c19621e625852763cd5adb22cf475d3ce9f29a1"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/1",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "778e87de1dc8cd4e487289c10a081608ca46cd67a423239b0db0f72266910c6c"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/2",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "2330a7fdf07fa820a1c0019be02b8f1306f5cabf03f67e0268aadf5c58743628"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/3",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "33901f640d9086f7504751fc90d4f489b9a067513d8c15b4420c86d22f3f939f"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/4",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "e5e6c5866ae6ce124207d4b7dbe23e8db2b89269e62b145024d2f01956640160"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/5",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "c3077c7d283985f9132964844733eefebfa064c55357d363728f1a471fb07df1"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/6",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "f980e2393aeeb4831aa6b8d9f24cdfa45933d991d54c61de83f11f5c441cea16"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/7",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "875d32255adcdfa806c5cb5c010ce430e1e9955de7d2de858ce8696e9dc6a420"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/8",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "f75765a25a7741aa010aa2931ff1d41114e0e7aa7a2ba5a7344f345b3a2c9dfd"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/9",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "e9f2e8b1bd0dc20273276685e3cea8d3336aefd7bdb77e7b3ce956c78c3007f7"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/10",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "c65801490536664834e3286f6327b7825b91aa66d41a30f1c27b12e318fb6fcb"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/11",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "e8c84d73264790bd0003149e9a0fa54a4a300d498bdc87d649eb4f530e9bba29"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/recommendations/12",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "ac9938e9260e7b6c4f7db901e7e24484f6278be0c57fce25c49bc98279036c94"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/postclose_logic_recommendations/0",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "recommend_cumulative_logic_candidate_review",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": null,
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "3c51456f2c292d68848b42c3c020f35a6b71b3146139f5843989874b9d029ce5"
+    },
+    {
+      "ID": null,
+      "native_id_field": null,
+      "owner": "episode",
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-07.json",
+      "pointer": "/operator_observation_candidate_inventory/candidate_475560_morning",
+      "source_sha256": "6cb5b2293dbf01bdb9ed4c8c3bc1816ad7d1f5a5834972f92c5c7db27b4c3178",
+      "source_generation": "2026-09-07T21:20:07+09:00",
+      "decision": "source_only_keep_collecting",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Published recommendation has no native order/recommendation ID; preserve source pointer and do not infer implementation or runtime authority.",
+      "consumer": "source_only_observation_no_runtime_authority",
+      "acceptance": "Authoritative producer must issue a stable native recommendation/order ID and explicit implementation consumer/acceptance. Existing research and approved policy handoffs remain distinct; do not enroll symbols or mutate prices/quantity/targets.",
+      "final_disposition": "invalid_or_missing_authority",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "dd7dd86b8396c06890dca983ac60443ac72274ec57ba94378a4aac5bbfab3707"
+    },
+    {
+      "ID": "machine_lifecycle_turnover_policy_research_v1",
+      "native_id_field": "followup_id",
+      "owner": "machine",
+      "source": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-07.json",
+      "pointer": "/objective_followups/0",
+      "source_sha256": "4449ce3ad3a632dae284af5faddbd8da77eae618f93ee1a67fe7fe558d44f560",
+      "source_generation": "2026-09-07T23:13:37.017936+09:00",
+      "decision": "EVIDENCE_ACCUMULATING",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Pass 1 fixed objective-followup classification to consume the same verified closed ingress-loss receipt as timing. The two rejected timestamps lack historical per-row receipts; same-source-date rerun is now forbidden and the date remains excluded.",
+      "consumer": [
+        "machine_microstructure_attribution",
+        "machine_entry_timing_tuning",
+        "machine_microstructure_policy_approval"
+      ],
+      "acceptance": "Next exact date must provide ordered route/epoch receipts and source-quality-valid paired lifecycles; original economic floors remain unchanged.",
+      "final_disposition": "blocked_external_dependency",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "code_repair_applied": true,
+      "raw_row_sha256": "3658e6da86f5bc3bb4a1614d5c48f6d3c99a0a0f4be8f6362a5745104b5e4998"
+    },
+    {
+      "ID": "main-ai-gap-ed4ddcd772f6b4eced07cf72",
+      "native_id_field": "workorder_id",
+      "owner": "MicroReversionForwardCollectorContinuity",
+      "source": "/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-09-07.json",
+      "pointer": "/source_only_gap_workorders/0",
+      "source_sha256": "8db14ac1f54522a3c16bd05c93d83e3c183d6a0b1b4114d2d7585dacf10bccab",
+      "source_generation": "2026-09-07T21:39:38.567736+09:00",
+      "decision": "open_source_producer_repair",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native R0 workorder remains source-only: 18 past market rows / 5 lifecycle instrumentation gaps in 3 real lifecycles and 7 broker receipts. The original missing event envelope cannot be synthesized; the affected rows remain excluded.",
+      "consumer": "MicroReversionForwardCollectorContinuity",
+      "acceptance": "exact-date canary remains pass or row-exclusion-only through close; later clean windows continue collecting; provider replay remains held until queue-loss scope has an exact exclusion receipt or the next clean date",
+      "final_disposition": "blocked_external_dependency",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "992477e9467dbff41be02f384d38d265f8cb728a7d000d2d71e615fd7f4d2d29"
+    },
+    {
+      "ID": "main-ai-gap-aa95ee8a62abfc8036cd4876",
+      "native_id_field": "workorder_id",
+      "owner": "RuntimeExecutionReceiptCustodyRepair",
+      "source": "/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-09-07.json",
+      "pointer": "/source_only_gap_workorders/1",
+      "source_sha256": "8db14ac1f54522a3c16bd05c93d83e3c183d6a0b1b4114d2d7585dacf10bccab",
+      "source_generation": "2026-09-07T21:39:38.567736+09:00",
+      "decision": "open_source_producer_repair",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "implementation_requested": false,
+      "eligible_runtime_effect_false": false,
+      "reason": "Native R0 workorder remains source-only: 18 past market rows / 5 lifecycle instrumentation gaps in 3 real lifecycles and 7 broker receipts. The original missing event envelope cannot be synthesized; the affected rows remain excluded.",
+      "consumer": "RuntimeExecutionReceiptCustodyRepair",
+      "acceptance": "official raw execution envelope/order/execution identity is complete for each repair-required lifecycle or the affected row remains explicitly excluded; custody and order authority remain unchanged",
+      "final_disposition": "blocked_external_dependency",
+      "review_scope": "source-only implementation and exact contract evidence; no runtime/economic acceptance inferred",
+      "raw_row_sha256": "068d4fe2e2d064e342cd5b70d01c9489afcb8f7ba58ffda62c540992c025fa2d"
+    }
+  ],
+  "handoffs": [
+    {
+      "source": "/home/ubuntu/KORStockScan/data/report/widget_symbol_runtime_policy_apply/widget_symbol_runtime_policy_apply_2026-09-07.json",
+      "selected": [
+        "080220"
+      ],
+      "withheld": [
+        "006800",
+        "010140",
+        "475150"
+      ],
+      "policy_verification": {
+        "expected_observation_symbols": [
+          "006800",
+          "010140",
+          "080220",
+          "475150"
+        ],
+        "expected_symbols": [
+          "080220"
+        ],
+        "loaded_observation_symbols": [
+          "006800",
+          "010140",
+          "080220",
+          "475150"
+        ],
+        "loaded_symbols": [
+          "080220"
+        ],
+        "policy_path": "/home/ubuntu/KORStockScan/data/runtime/widget_symbol_runtime_policy/widget_symbol_runtime_policy_2026-09-08.json",
+        "status": "pass"
+      }
+    },
+    {
+      "source": "/home/ubuntu/KORStockScan/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_2026-09-07.json",
+      "handoff": {
+        "actual_order_submitted": false,
+        "objective": "causal_rise_or_rebound_confirmation_ev_and_net_profit",
+        "owner": "machine_entry_timing_tuning",
+        "required_evidence": "exact_route_causal_confirmation_and_paired_outcomes",
+        "source_consumer": "machine_microstructure_attribution",
+        "status": "existing_entry_timing_chain_owns_candidate_selection",
+        "subset_new_runtime_authority": false
+      }
+    },
+    {
+      "source": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-07.json",
+      "handoff": {
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "owner": "low_price_two_leg_expanded_candidate_research",
+        "profile_field": "existing_axis_economic_replay",
+        "reason": "observed_signal_subset_cannot_reconstruct_next_entry_or_custody",
+        "runtime_effect": false
+      }
+    },
+    {
+      "source": "/home/ubuntu/KORStockScan/data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_2026-09-07.json",
+      "cohort_diagnostic_count": 28,
+      "winner": null,
+      "runtime_winner": null,
+      "decision": "baseline_immediate_entry_carry_forward"
+    },
+    {
+      "source": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-07.json",
+      "mirrored_followup_native_ids": [
+        "machine_lifecycle_turnover_policy_research_v1"
+      ],
+      "intake_rejections": [],
+      "objective_followup_rejections": []
+    }
+  ],
+  "duplicate_alias_rule": "Published subset arrays and downstream native followup mirrors are preserved as source receipts, not duplicated in the denominator. ID-less distinct published rows use source pointers only.",
+  "pass_comparison": {
+    "pass1_generation": "2026-09-07-1226091fb766",
+    "pass2_generation": "2026-09-07-18b622a64a1e",
+    "new_native_ids": [],
+    "decision_changed_native_ids": [],
+    "removed_native_ids": [
+      [
+        "main",
+        "order_threshold_window_policy_source_snapshot_alignment"
+      ]
+    ],
+    "removed_history": [
+      {
+        "ID": "order_threshold_window_policy_source_snapshot_alignment",
+        "final_disposition": "removed_or_superseded",
+        "implementation_result": "implemented_pass1",
+        "acceptance": "Actual rolling source binding and audit closure; sample floor still unmet."
+      }
+    ],
+    "eligible_new_or_decision_changed_implement_now": 0,
+    "final_eligible_actionable_open_count": 0,
+    "review_p0_p2_findings": 0,
+    "implementation_fixed_point": true,
+    "operational_terminal_recheck": "passed_final_detector_DONE_2026-09-07T23:23:30+09:00",
+    "maximum_control_state": "YELLOW",
+    "blocked_is_implementation_complete": false
+  },
+  "pass1_summary": {
+    "intake_total": 67,
+    "implementation_requested_total": 10,
+    "nonimplementation_total": 57,
+    "eligible_runtime_effect_false_total": 10,
+    "user_authority_total": 0,
+    "invalid_or_missing_authority_total": 0,
+    "implement_now_unaccounted_count": 0,
+    "intake_unaccounted_count": 0,
+    "dispositions": {
+      "blocked_missing_evidence": 9,
+      "implemented_pass1": 1,
+      "observed_no_patch": 25,
+      "deferred": 2,
+      "rejected": 1,
+      "invalid_or_missing_authority": 26,
+      "blocked_external_dependency": 3
+    },
+    "already_implemented_verified_eligible": 0,
+    "implemented_pass1": 1,
+    "implemented_pass2": 0,
+    "blocked_missing_evidence": 9,
+    "blocked_external_dependency": 0,
+    "eligible_actionable_open": 0,
+    "already_implemented_verified_nonrequest": 0,
+    "observed_no_patch": 25,
+    "deferred": 2,
+    "rejected": 1,
+    "blocked_missing_evidence_nonrequest": 0,
+    "blocked_external_dependency_nonrequest": 3,
+    "invalid_or_missing_authority_nonrequest": 26
+  },
+  "final_control_state": "YELLOW",
+  "final_owner_evidence": {
+    "EOD": {
+      "path": "data/runtime/update_kospi_status/update_kospi_2026-09-07.json",
+      "sha256": "cfe5fc24f3d09f58b40993a7d8c4cce5d8a112defe4d66c4f3ecbb66f0d6aab7",
+      "status": "completed",
+      "target_date": "2026-09-07"
+    },
+    "Main postclose": {
+      "path": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_2026-09-07.status.json",
+      "sha256": "ccd434df28de975a1e60cb9f18ed01d51ac895754de6bea2da312c20232b33bb",
+      "status": "succeeded",
+      "target_date": "2026-09-07"
+    },
+    "Final verifier": {
+      "path": "data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-09-07.json",
+      "sha256": "2fbdaec853fc72f1d2d72cf6ad56fc03fea950f4c386f775c745ad56e0990d4b",
+      "status": "warning",
+      "target_date": "2026-09-07"
+    },
+    "Controller": {
+      "path": "data/report/postclose_done_controller/postclose_done_controller_2026-09-07.json",
+      "sha256": "15fffa88e0408a1df9a25ccc2a66ceeaa4882d02096ea5ead793a1b3ad392479",
+      "status": "done",
+      "target_date": "2026-09-07"
+    },
+    "Tuning monitoring": {
+      "path": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_2026-09-07.json",
+      "sha256": "b8bd5845df262c3594782f32b31fa6833268498586c91caa766b36a36ab6f5d6",
+      "status": "success",
+      "target_date": "2026-09-07"
+    },
+    "AI batch": {
+      "path": "data/report/ai_entry_setup_paired_replay_batch/ai_entry_setup_paired_replay_batch_2026-09-07.json",
+      "sha256": "271c6f363eda85e9973d230c46bb9e996e0bd555687f0dd7a1f796450f490d75",
+      "status": "completed_offline_only",
+      "target_date": "2026-09-07"
+    },
+    "Main AI consumer": {
+      "path": "data/report/main_ai_prompt_consumer/main_ai_prompt_consumer_2026-09-07.json",
+      "sha256": "e679e5bfb22948db08449c4d9a244f67a324404251325234690e4abdfb619cb4",
+      "status": "ready_source_only_consumer_closure",
+      "target_date": "2026-09-07"
+    },
+    "Error detector": {
+      "path": "data/report/error_detection/error_detection_2026-09-07.json",
+      "sha256": "836e4e3ff3b97cb175da27b9b68800ab6464ca5f71b122c72c46e72cc486b02b",
+      "status": "pass",
+      "target_date": "2026-09-07",
+      "run_id": "cron-20260907T232329-1916901",
+      "initialization_failure_count": 0,
+      "results": [
+        {
+          "id": "artifact_freshness",
+          "severity": "pass",
+          "status": null
+        },
+        {
+          "id": "cron_completion",
+          "severity": "pass",
+          "status": null
+        },
+        {
+          "id": "kiwoom_auth_8005_restart",
+          "severity": "pass",
+          "status": null
+        },
+        {
+          "id": "log_scanner",
+          "severity": "pass",
+          "status": null
+        },
+        {
+          "id": "process_health",
+          "severity": "pass",
+          "status": null
+        },
+        {
+          "id": "resource_usage",
+          "severity": "pass",
+          "status": null
+        },
+        {
+          "id": "stale_lock",
+          "severity": "pass",
+          "status": null
+        }
+      ]
+    }
+  }
+}

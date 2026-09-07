@@ -643,3 +643,80 @@ def test_consumer_isolates_optional_micro_contract_from_base_paths(
     assert optional_path["cell_count"] == 1
     assert optional_path["cells"][0]["owner"] == ("MainAIMicroReversionSourceContract")
     assert report["runtime_effect"] is False
+
+
+@pytest.mark.parametrize("bound", [True, False])
+def test_entry_terminal_census_keeps_batch_no_source_cohorts_absent_from_optimizer(
+    monkeypatch, bound
+):
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    batch = {
+        "schema": consumer.entry_batch.BATCH_SCHEMA,
+        "target_date": "2026-09-07",
+        **_source_only(),
+        "candidate_prompt_selection_source": {
+            "status": "optimizer_candidate_plan_applied_offline_only",
+            "artifact_content_sha256": "a" * 64 if bound else "b" * 64,
+        },
+        "candidate_prompt_versions_by_cohort": {
+            "KRX/KRX_REGULAR": version,
+            "NXT/NXT_AFTERMARKET": version,
+        },
+        "cohorts": [
+            {
+                "effective_venue": v,
+                "session_bucket": s,
+                "status": "hold_no_exact_entry_control",
+                "candidate_prompt_version": version,
+            }
+            for v, s in consumer.entry_batch.DEFAULT_COHORTS
+        ],
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda _: batch)
+    rows, requests = consumer._entry_base_paths(
+        "2026-09-07",
+        optimizer_report={
+            "artifact_content_sha256": "a" * 64,
+            "stage_optimizers": {"holding": {}},
+        },
+    )
+    assert len(rows) == 2
+    assert requests == {}
+    assert all(row["cohort_census_source"] == "frozen_entry_batch" for row in rows)
+    assert all(row["path_status"] == consumer.BLOCKED for row in rows)
+    if bound:
+        assert all(row["terminality"] == "terminal_source_observation" for row in rows)
+    else:
+        assert all(
+            row["terminality"] == "requires_retry_or_owner_closure" for row in rows
+        )
+
+
+def test_completed_batch_without_optimizer_cohort_does_not_gain_connection(monkeypatch):
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    batch = {
+        "schema": consumer.entry_batch.BATCH_SCHEMA,
+        "target_date": "2026-09-07",
+        **_source_only(),
+        "candidate_prompt_selection_source": {
+            "status": "optimizer_candidate_plan_applied_offline_only",
+            "artifact_content_sha256": "a" * 64,
+        },
+        "candidate_prompt_versions_by_cohort": {"KRX/KRX_REGULAR": version},
+        "cohorts": [
+            {
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "candidate_prompt_version": version,
+                "status": "completed_offline_only",
+            }
+        ],
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda _: batch)
+    rows, requests = consumer._entry_base_paths(
+        "2026-09-07",
+        optimizer_report={"artifact_content_sha256": "a" * 64, "stage_optimizers": {}},
+    )
+    assert len(rows) == 1 and rows[0]["path_status"] == consumer.BLOCKED
+    assert rows[0]["terminality"] == "requires_retry_or_owner_closure"
+    assert requests == {}

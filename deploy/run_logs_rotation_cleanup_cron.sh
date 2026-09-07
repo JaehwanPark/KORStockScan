@@ -519,20 +519,20 @@ run_micro_reversion_storage_maintenance() {
         "${maintenance_command[@]}"
     fi
   ) >"$result_path" || lock_rc=$?
+  # Keep the exact diagnostic receipt, including partial success and rejection.
+  # The normal dated temporary-file retention owns eventual cleanup.
+  echo "[MICRO_REVERSION_STORAGE_RECEIPT] target_date=$TARGET_DATE path=$result_path exit_code=$lock_rc"
   if [[ "$lock_rc" -eq 75 ]]; then
-    rm -f "$result_path"
       micro_reversion_storage_status="lock_busy"
       micro_reversion_storage_purge_status="not_run_lock_busy"
     return 1
   fi
   if [[ "$lock_rc" -eq 76 ]]; then
-    rm -f "$result_path"
       micro_reversion_storage_status="unsafe_lock"
       micro_reversion_storage_purge_status="not_run_unsafe_lock"
     return 1
   fi
   if [[ "$lock_rc" -ne 0 && ! -s "$result_path" ]]; then
-    rm -f "$result_path"
     micro_reversion_storage_status="failed"
     micro_reversion_storage_purge_status="execution_failed"
     return 1
@@ -1282,7 +1282,6 @@ print(
 )
 PY
   )"; then
-    rm -f "$result_path"
     micro_reversion_storage_status="invalid_result"
     micro_reversion_storage_purge_status="invalid_result"
     return 1
@@ -1354,32 +1353,26 @@ PY
     micro_reversion_storage_capacity_status_written \
     micro_reversion_storage_capacity_status_write_failures <<<"$parsed"
   if [[ "$micro_reversion_storage_purge_enabled" != "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" ]]; then
-    rm -f "$result_path"
     micro_reversion_storage_status="purge_authority_mismatch"
     micro_reversion_storage_purge_status="authority_mismatch"
     return 1
   fi
   if [[ "$micro_reversion_storage_capacity_status_write_failures" -gt 0 ]]; then
-    rm -f "$result_path"
     micro_reversion_storage_status="capacity_status_write_failure"
     return 1
   fi
   if [[ "$micro_reversion_storage_capacity_failure" == "true" ]]; then
-    rm -f "$result_path"
     micro_reversion_storage_status="critical_capacity"
     return 1
   fi
   if [[ "$micro_reversion_storage_partition_failure_count" -gt 0 || "$micro_reversion_report_artifact_failure_count" -gt 0 ]]; then
-    rm -f "$result_path"
     micro_reversion_storage_status="partial_failure"
     return 1
   fi
   if [[ "$lock_rc" -ne 0 ]]; then
-    rm -f "$result_path"
     micro_reversion_storage_status="unexpected_nonzero_exit"
     return 1
   fi
-  rm -f "$result_path"
   micro_reversion_storage_status="pass"
 }
 

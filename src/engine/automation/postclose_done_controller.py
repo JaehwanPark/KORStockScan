@@ -291,6 +291,42 @@ def _predecessor_wait_state(target_date: str) -> str | None:
     return None
 
 
+def _done_acceptable_warning_issues(verification: dict[str, Any]) -> set[str]:
+    """Accept diagnostic warnings only after their owning verifier closed handoff."""
+    allowed = set(DONE_ACCEPTABLE_WARNING_ISSUES)
+    micro = verification.get("microstructure_diagnostic_handoff")
+    if (
+        isinstance(micro, dict)
+        and micro.get("status") == "warning"
+        and micro.get("issues") == []
+        and micro.get("runtime_effect") is False
+        and micro.get("allowed_runtime_apply") is False
+        and isinstance(micro.get("expected_order_ids"), list)
+        and bool(micro["expected_order_ids"])
+        and all(
+            isinstance(value, str) and value.strip()
+            for value in micro["expected_order_ids"]
+        )
+    ):
+        allowed.add("microstructure_diagnostic:warning")
+    conversion = verification.get("conversion_kpi")
+    if isinstance(conversion, dict):
+        summary = conversion.get("conversion_lane_summary")
+        if (
+            conversion.get("status") == "warning"
+            and conversion.get("issues") == []
+            and conversion.get("warnings") == ["conversion_lane_no_candidates"]
+            and isinstance(summary, dict)
+            and type(summary.get("conversion_candidate_count")) is int
+            and summary["conversion_candidate_count"] == 0
+            and summary.get("buy_funnel_source_present") is True
+            and type(summary.get("key_lineage_blocker_count")) is int
+            and summary["key_lineage_blocker_count"] == 0
+        ):
+            allowed.add("conversion_lane_no_candidates")
+    return allowed
+
+
 def _flatten_issues(verification: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     predecessor = verification.get("predecessor_integrity")
@@ -456,7 +492,7 @@ def _is_done_verifier_status(
         target_date
     ):
         return False
-    return set(issues).issubset(DONE_ACCEPTABLE_WARNING_ISSUES)
+    return set(issues).issubset(_done_acceptable_warning_issues(verification))
 
 
 def _runner_completed(
@@ -951,7 +987,7 @@ def _can_finalize_tail_repair(verification: dict[str, Any]) -> bool:
     allowed_issues = (
         MARKER_RECONCILIATION_LOG_ISSUES
         | {"postclose_done_marker_missing"}
-        | DONE_ACCEPTABLE_WARNING_ISSUES
+        | _done_acceptable_warning_issues(verification)
     )
     if flattened_issues and not flattened_issues.issubset(allowed_issues):
         return False
@@ -984,7 +1020,9 @@ def _can_attempt_failed_done_reconciliation(
     if log_issues != {"postclose_fail_marker_present"}:
         return False
     flattened_issues = set(_flatten_issues(verification))
-    allowed_issues = {"postclose_fail_marker_present"} | DONE_ACCEPTABLE_WARNING_ISSUES
+    allowed_issues = {
+        "postclose_fail_marker_present"
+    } | _done_acceptable_warning_issues(verification)
     if flattened_issues and not flattened_issues.issubset(allowed_issues):
         return False
     if verification.get("missing_required_artifacts"):
@@ -1028,7 +1066,7 @@ def _can_reconcile_marker(target_date: str, verification: dict[str, Any]) -> boo
     if predecessor and isinstance(predecessor, dict) and predecessor.get("timeouts"):
         return False
     allowed_reconciliation_issues = (
-        MARKER_RECONCILIATION_LOG_ISSUES | DONE_ACCEPTABLE_WARNING_ISSUES
+        MARKER_RECONCILIATION_LOG_ISSUES | _done_acceptable_warning_issues(verification)
     )
     flattened_issues = set(_flatten_issues(verification))
     if flattened_issues and not flattened_issues.issubset(
@@ -1054,7 +1092,7 @@ def _can_reconcile_marker(target_date: str, verification: dict[str, Any]) -> boo
         if str(item)
     ]
     if warning_issues and not set(warning_issues).issubset(
-        DONE_ACCEPTABLE_WARNING_ISSUES
+        _done_acceptable_warning_issues(verification)
     ):
         return False
     if verification.get("runtime_apply_gap_issues"):
@@ -1220,7 +1258,7 @@ def _recovery_actions(
         issue
         for issue in issues
         if issue != runtime_gap_stale_issue
-        and issue not in DONE_ACCEPTABLE_WARNING_ISSUES
+        and issue not in _done_acceptable_warning_issues(verification)
     }
     if runtime_gap_stale_issue in issues and not runtime_gap_other_actionable_issues:
         actions.extend(

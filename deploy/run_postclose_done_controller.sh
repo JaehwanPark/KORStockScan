@@ -261,12 +261,36 @@ if candidate.get("effective_date_policy") != "first_available_krx_preopen_v1":
 if candidate.get("preopen_candidate_cutoff_kst") != "07:35:00":
     print("retry_required:candidate_preopen_cutoff_mismatch")
     raise SystemExit(0)
-candidate_contract_sha256 = candidate.get("candidate_contract_sha256")
-if not isinstance(candidate_contract_sha256, str) or len(candidate_contract_sha256) != 64:
-    print("retry_required:candidate_contract_hash_missing_or_invalid")
-    raise SystemExit(0)
 if candidate.get("artifact_sha256") != candidate_ref.get("artifact_sha256"):
     print("retry_required:candidate_hash_mismatch")
+    raise SystemExit(0)
+candidate_contract_sha256 = candidate.get("candidate_contract_sha256")
+krx_cohorts = [
+    row for row in batch.get("cohorts", [])
+    if isinstance(row, dict)
+    and row.get("effective_venue") == "KRX"
+    and row.get("session_bucket") == "KRX_REGULAR"
+]
+# A source-empty blocked artifact has no model candidate to hash. Keep all
+# artifact/date/consumer checks above, and never use this terminal as approval.
+if (
+    candidate.get("status") == "blocked"
+    and candidate.get("canary_mode") is None
+    and candidate_contract_sha256 is None
+    and candidate_ref.get("allowed_runtime_apply") is False
+    and all(candidate.get(key) is False for key in (
+        "runtime_effect", "allowed_runtime_apply", "actual_order_submitted"
+    ))
+    and candidate.get("broker_order_forbidden") is True
+    and len(krx_cohorts) == 1
+    and krx_cohorts[0].get("status") == "hold_no_exact_entry_control"
+    and type(krx_cohorts[0].get("entry_control_sample_count")) is int
+    and krx_cohorts[0]["entry_control_sample_count"] == 0
+):
+    print("terminal_ready:validated_blocked_candidate_without_exact_entry_control")
+    raise SystemExit(0)
+if not isinstance(candidate_contract_sha256, str) or len(candidate_contract_sha256) != 64:
+    print("retry_required:candidate_contract_hash_missing_or_invalid")
     raise SystemExit(0)
 print("terminal_ready:validated_batch_candidate_and_main_ai_consumer")
 PY

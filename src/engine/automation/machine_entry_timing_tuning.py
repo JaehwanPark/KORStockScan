@@ -1938,9 +1938,22 @@ def _report_sample_floor_assessment(
     """Classify why a missing winner cannot be resolved by blind waiting."""
 
     target_actual_rows: list[dict[str, Any]] = []
+    immutable_ingress_receipt_loss = False
     for source_date, _, payload in reports:
         if source_date != target_date:
             continue
+        canary = ((payload.get("sources") or {}).get("micro_reversion") or {}).get(
+            "canary_source_quality"
+        ) or {}
+        immutable_ingress_receipt_loss = bool(
+            canary.get("immutable_ingress_receipt_loss") is True
+            and canary.get("status") == "missing_or_invalid"
+            and canary.get("target_day_complete") is True
+            and canary.get("stopped_clean_closed") is True
+            and canary.get("raw_row_exclusion_required") is True
+            and isinstance(canary.get("source_sha256"), str)
+            and len(canary["source_sha256"]) == 64
+        )
         confirmation = payload.get("micro_entry_confirmation") or {}
         for row in confirmation.get("entry_anchors") or []:
             if (
@@ -1995,7 +2008,13 @@ def _report_sample_floor_assessment(
     immutable_source_date_quarantine_eligible = bool(
         target_actual_rows
         and len(target_blocked_rows) == len(target_actual_rows)
-        and receipt_gap_present
+        and (
+            receipt_gap_present
+            or (
+                immutable_ingress_receipt_loss
+                and "micro_canary_source_quality_missing_or_invalid" in gap_reasons
+            )
+        )
         and not repairable_receipt_companion_gaps
         and invalid_owner_contract_anchor_count == 0
     )
@@ -2082,6 +2101,7 @@ def _report_sample_floor_assessment(
             immutable_source_date_quarantine_eligible
         ),
         "repairable_receipt_companion_gaps": repairable_receipt_companion_gaps,
+        "immutable_ingress_receipt_loss": immutable_ingress_receipt_loss,
         "invalid_owner_contract_anchor_count": invalid_owner_contract_anchor_count,
         "policy_ineligible_anchor_count": policy_ineligible_anchor_count,
         "cohort_state_counts": {

@@ -8767,3 +8767,33 @@ def test_force_exit_quarantine_does_not_clear_unrelated_ingestion_failure(monkey
     assert result.meta["smoothing_source_only_ingestion"]["issues"] == [
         "checkpoint_source_missing"
     ]
+
+
+def test_owned_scale_in_window_source_distinguishes_zero_from_missing(tmp_path, monkeypatch):
+    target_date = "2026-09-07"
+    monkeypatch.setattr(report_mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", tmp_path)
+    path = tmp_path / f"scale_in_split_order_plan_{target_date}.json"
+    payload = {
+        "schema_version": "scale_in_split_order_plan_v3", "target_date": target_date,
+        "rolling_summary": {"target_date": target_date,
+            "window_policy": "latest_20_report_dates_including_target",
+            "current_source_date_included": True},
+        "recommended_policy": {"runtime_refresh_evidence": {"paired_economic_sample_count": 0}},
+    }
+    path.write_text(json.dumps(payload))
+    family = report_mod._build_scale_in_split_order_plan_family(target_date=target_date)
+    candidate = next(row for row in report_mod._build_calibration_candidates([family], {})
+                     if row["family"] == "scale_in_split_order_plan")
+    candidate["sample_count"] = 99
+    resolution = report_mod._build_window_policy_resolution(candidate, {})
+    assert resolution["primary_source_available"] is True
+    assert resolution["primary_sample_count"] == 0
+    assert resolution["primary_sample_ready"] is False
+    assert family["apply_ready"] is False
+    payload["rolling_summary"]["target_date"] = "2026-09-04"
+    path.write_text(json.dumps(payload))
+    assert report_mod._build_window_policy_resolution(candidate, {})["primary_source_available"] is False
+    candidate["source_metrics"]["report_content_sha256"] = report_mod._json_sha256(payload)
+    assert report_mod._build_window_policy_resolution(candidate, {})["primary_source_available"] is False
+    path.unlink()
+    assert report_mod._build_window_policy_resolution(candidate, {})["primary_source_available"] is False

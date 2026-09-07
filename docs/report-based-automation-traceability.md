@@ -795,3 +795,29 @@ daily calibration의 표본 분모도 paired count다. 순수 표본·날짜 부
 ### Entry submit workorder 현행 owner 결속 (2026-09-07)
 
 `build_code_improvement_workorder` producer v4는 `buy_funnel_sentinel`의 post-submit/broker receipt/fill quality/Telegram/source taxonomy 5개 native order를 독립 `entry_submit_drought_attribution`에 결속한다. 퇴역 LDM mapped family를 사용해 current-report filter에서 현행 source-only 주문계약 점검이 사라지지 않게 한다. 원인추적 followup의 `source_quality_blocked`는 producer와 verifier 모두 필수 계약 검사에 포함한다. 실주문/threshold/quantity/Provider 권한은 없고, 미완료 자연 증거를 코드 완료로 바꾸지 않는다. 상세 검증은 [당일 복구 기록](./audit-reports/2026-09-07-postclose-monitoring-recovery-review.md)을 따른다.
+
+
+### 2026-09-07 smoothing diagnostic census recovery
+
+Daily pipeline input의 `smoothing_force_exit_row_exclusion_v1`은 식별 가능한 force-exit 필드 결손만 원본·projected hash·결손 사유와 보존식으로 제외한다. Verifier는 실제 결손, target date, hash와 included/excluded count를 검증하며 정상 행 제외나 다른 ingestion failure 제거를 허용하지 않는다. `smoothing_source_only_path_journal_v3.rows`와 exclusion receipt는 일반 diagnostic tail compaction 대상이 아니며 cumulative scalar 계수와 같은 전수 분모를 보존한다. Force-exit telemetry helper 추가는 logging-only이며 기존 safety action을 바꾸지 않는다. 코드·595-test·22:11 재생성 근거는 [장후 복구 검토](./audit-reports/2026-09-07-postclose-monitoring-recovery-review.md)에서 확인한다.
+
+
+### 2026-09-07 machine closed-source quarantine handoff
+
+`machine_microstructure_attribution`은 native widget execution signal ID를 exact owner/symbol/date/session 계약으로 결속한다. 닫힌 collector의 enqueue 전 거절과 복원 불가능한 exact-row receipt 결손은 hash-bound canary의 `immutable_ingress_receipt_loss`로 진단하며 source는 계속 invalid다. `machine_entry_timing_tuning`은 전수 actual anchor source-blocked 및 repairable companion gap0일 때만 기존 exact-source-date quarantine handoff를 사용한다. Verifier/controller는 이 terminal source exclusion과 구조 수리 필요를 구분한다. 자연 표본·정책 승격·PID 소비 완료가 아니며 기존 수량/target/guards와 baseline policy를 바꾸지 않는다. 379-test 및 실제 source replay 근거는 [장후 복구 검토](./audit-reports/2026-09-07-postclose-monitoring-recovery-review.md)에 있다.
+
+
+### Controller source-only warning terminal contract
+
+Verifier의 micro diagnostic warning은 required workorder ID와 issues0·runtime/apply false가 확인될 때만 controller의 DONE-acceptable warning이다. Conversion candidate0 역시 source 존재·정수 candidate0·lineage blocker0·다른 issues 없음이 확인돼야 한다. Warning 문자열만으로 허용하지 않는다. 이 terminal은 원본 결손 수리·자연 성과 완료를 대신하지 않는다. 2026-09-07 controller/verifier260-test와22:32:59 tail recovery 근거는 당일 복구 검토에 보존한다.
+
+
+### AI entry replay excluded-control census terminal
+
+`entry_setup_paired_replay_batch`는 self-hash·target cohort·non-authority가 유효하고 conflicts0/controls empty/명시 제외 census가 있는 control gap을 `hold_no_exact_entry_control`로 보존한다. Candidate materialization/Provider는 실행하지 않으며 원본 control gap·제외 계수·미래 exact source 필요성을 후행 consumer에 전달한다. Invalid manifest 또는 signature conflict는 실패이고 재시도로 source를 합성하지 않는다. 기존 `terminal detailed 또는 no-exact-control → calibration → frozen optimizer → provider0 metadata rebind → holding manifest → consumer`의 no-sample branch다.
+
+- 2026-09-07 postclose recovery: Main AI consumer also accounts for frozen batch cohorts absent from the optimizer when the exact entry source is empty. The controller accepts a self-hashed, exact-date/ref-bound blocked KRX candidate without a model contract hash only for a unique zero-sample `hold_no_exact_entry_control` cohort and explicit runtime/apply/order OFF. This is source-only terminal accounting; all candidate promotion gates remain closed.
+
+- 2026-09-07 cleanup recovery: storage maintenance preserves each unique JSON receipt under the normal temporary-file retention policy. Pre-publication rejection of older, unprotected R2/R3 sets for the two explicit semantic-contract mismatch codes is a `historical_semantic_contract_preserved_uncompressed` warning. All candidate bytes stay untouched, no compression or tuning approval is granted, and current/protected-date, hash, I/O, ambiguous dual-file and publication failures remain fatal. Receipt paths retain the exact rejected source census.
+
+- 2026-09-07 recommendation Pass 1: `scale_in_split_order_plan` window resolution binds the dedicated v3 exact-date producer content hash and declared latest-20-report-dates window. A paired count of zero is a present source with an unmet floor, not a missing consumer. Neither sample floors nor runtime apply gates change. Workorder producer v5 retains submit-review IDs but explicitly distinguishes a submitted sample from proof of a broker/fill/taxonomy gap. Machine objective followup consumes the same verified immutable ingress-loss receipt as timing; such dates remain excluded and are not scheduled for same-source reconstruction.

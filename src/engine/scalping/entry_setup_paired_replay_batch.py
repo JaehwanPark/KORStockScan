@@ -288,6 +288,47 @@ def _wait_for_predecessor(
         time.sleep(max(1, min(int(interval_sec), 60)))
 
 
+def _verified_empty_control(
+    control: dict[str, Any], *, target_date: str, venue: str, session_bucket: str
+) -> bool:
+    """A complete exclusion census is terminal source evidence, never replay input."""
+    exclusions = control.get("excluded_counts")
+    cohort = control.get("cohort_filter")
+    return bool(
+        control.get("schema") == quality.CONTROL_SCHEMA
+        and control.get("target_date") == target_date
+        and control.get("status") == "control_manifest_gap_fix_required"
+        and control.get("controls") == []
+        and control.get("conflicts") == []
+        and control.get("supplemental_conflicts") == []
+        and control.get("missing_natural_stages")
+        == ["entry", "entry_price", "holding", "overnight"]
+        and isinstance(exclusions, dict)
+        and bool(exclusions)
+        and all(
+            isinstance(key, str) and type(value) is int and value >= 0
+            for key, value in exclusions.items()
+        )
+        and any(value > 0 for value in exclusions.values())
+        and isinstance(cohort, dict)
+        and cohort.get("effective_venue") == venue
+        and cohort.get("session_bucket") == session_bucket
+        and cohort.get("runtime_effect") is False
+        and control.get("runtime_effect") is False
+        and control.get("allowed_runtime_apply") is False
+        and control.get("actual_order_submitted") is False
+        and control.get("broker_order_forbidden") is True
+        and control.get("control_manifest_sha256")
+        == quality._sha256(
+            {
+                key: value
+                for key, value in control.items()
+                if key not in {"control_manifest_sha256", "cohort_filter"}
+            }
+        )
+    )
+
+
 def _cohort_result(
     *,
     target_date: str,
@@ -317,6 +358,24 @@ def _cohort_result(
         session_bucket=session_bucket,
     )
     control = _read_json(control_path)
+    if _verified_empty_control(
+        control, target_date=target_date, venue=venue, session_bucket=session_bucket
+    ):
+        return {
+            "effective_venue": venue,
+            "session_bucket": session_bucket,
+            "status": "hold_no_exact_entry_control",
+            "candidate_prompt_version": candidate_prompt_version,
+            "control_path": str(control_path),
+            "control_manifest_sha256": control["control_manifest_sha256"],
+            "control_source_quality_status": control["status"],
+            "source_excluded_counts": control["excluded_counts"],
+            "source_gap_resolution": "requires_future_exact_source_no_same_payload_retry",
+            "entry_control_sample_count": 0,
+            "provider_call_count": 0,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
     if control.get("status") != "control_manifest_frozen_collect_exact_samples":
         raise RuntimeError(f"control_manifest_not_ready:{venue}:{session_bucket}")
     entry_controls = [

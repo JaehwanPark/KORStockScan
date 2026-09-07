@@ -4479,6 +4479,12 @@ def test_actual_widget_execution_journal_is_attributed_as_real_lifecycle(tmp_pat
         for row in actual_scope["anchor_results"]
         if row["anchor_role"] == "actual_widget_entry_signal"
     )
+    native_signal = next(
+        row
+        for row in actual_scope["anchor_results"]
+        if row["anchor_role"] == "actual_widget_entry_signal"
+    )
+    assert native_signal["source_entry_event_id"] == signal_id
     assert actual_outcome["signal_to_entry_submit_record_ms"] == 1_000
     assert actual_outcome["entry_submit_record_to_first_fill_confirmation_ms"] == 500
     assert actual_outcome["entry_execution_venues"] == ["KRX"]
@@ -5411,3 +5417,54 @@ def test_widget_partial_only_anchor_uses_latest_confirmation_not_first(tmp_path)
     assert fill_anchor["anchor_at"] == "2026-08-14T10:00:03+09:00"
     assert fill_anchor["anchor_price"] == 10_020
     assert fill_anchor["owner_policy_tuning_eligible"] is False
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [None, "running", "loss", "missing_counter", "claimed_row_receipt", "mixed_reason"],
+)
+def test_closed_ingress_loss_is_quarantine_only_and_requires_complete_evidence(defect):
+    payload = _timestamp_quarantine_canary_payload("2026-09-07")
+    guard, collector = payload["canary_guard"], payload["collector_snapshot"]
+    issue = "timestamp_source_rejected_before_enqueue:invalid_depth_timestamp_count=2"
+    guard["source_quality_row_exclusions"] = [issue]
+    guard["timestamp_source_quality"] = {
+        "counts": {
+            "invalid_depth_timestamp_count": 2,
+            "invalid_exchange_timestamp_count": 0,
+            "stale_exchange_timestamp_block_count": 0,
+        },
+        "issues": [issue],
+        "exact_rejected_row_exclusion_proven": False,
+        "rejection_stage": "before_observer_enqueue",
+    }
+    if defect == "running":
+        collector["collector_lifecycle"] = "running"
+    if defect == "loss":
+        collector["writer_error_count"] = 1
+    if defect == "missing_counter":
+        collector.pop("writer_error_count")
+    if defect == "claimed_row_receipt":
+        guard["timestamp_source_quality"]["exact_rejected_row_exclusion_proven"] = True
+    if defect == "mixed_reason":
+        guard["source_quality_row_exclusions"].append(None)
+    assert attribution_module._closed_ingress_receipt_loss(guard, collector) is (
+        defect is None
+    )
+    # Irrecoverable input remains forbidden as evidence even when terminally classified.
+    assert (
+        _timestamp_regression_row_quarantine_validation(guard, collector)["eligible"]
+        is False
+    )
+
+
+def test_closed_ingress_loss_followup_does_not_retry_immutable_date():
+    gap = "micro_canary_source_quality_missing_or_invalid"
+    assert _rolling_source_contract_recovery(gap)["rerun_same_source_date_allowed"] is True
+    recovery = _rolling_source_contract_recovery(gap, immutable_ingress_receipt_loss=True)
+    assert recovery["rerun_same_source_date_allowed"] is False
+    assert recovery["excluded_from_rolling_policy_evidence"] is True
+    assert recovery["disposition"] == "immutable_source_date_quarantine"
+    assert _rolling_source_contract_recovery(
+        "micro_source_exclusion_manifest_missing_or_invalid", immutable_ingress_receipt_loss=True
+    )["rerun_same_source_date_allowed"] is True

@@ -60,7 +60,7 @@ MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_cont
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 2
-WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v4"
+WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v5"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -2310,7 +2310,7 @@ def _entry_submit_weak_contract_implementation_marker(
     submitted_unique = _safe_int(stage_unique.get("order_bundle_submitted"), 0)
     if submitted_unique > 0 and gap_type == "source_taxonomy_contract_gap":
         return {
-            "implementation_status": "open_source_taxonomy_provenance_gap",
+            "implementation_status": "pending_exact_source_taxonomy_verification",
             "implementation_checks": [
                 "buy_funnel_sentinel weak contract workorder is source-only",
                 "real order_bundle_submitted samples exist",
@@ -2325,8 +2325,9 @@ def _entry_submit_weak_contract_implementation_marker(
                 "downstream_consumer": "code_improvement_workorder",
                 "gap_type": gap_type,
                 "weak_contract_matches": contract.get("weak_contract_matches") or [],
-                "sample_status": "submitted_sample_exists_source_taxonomy_missing",
+                "sample_status": "submitted_sample_requires_exact_taxonomy_verification",
                 "submitted_unique": submitted_unique,
+                "gap_confirmation": "not_established_by_submit_count",
                 "runtime_effect": contract.get("runtime_effect"),
                 "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
             },
@@ -2338,7 +2339,7 @@ def _entry_submit_weak_contract_implementation_marker(
         "telegram_post_submit_contract_gap",
     }:
         return {
-            "implementation_status": "open_post_submit_provenance_join_gap",
+            "implementation_status": "pending_exact_post_submit_verification",
             "implementation_checks": [
                 "buy_funnel_sentinel weak contract workorder is source-only",
                 "real order_bundle_submitted samples exist",
@@ -2353,8 +2354,9 @@ def _entry_submit_weak_contract_implementation_marker(
                 "downstream_consumer": "code_improvement_workorder",
                 "gap_type": gap_type,
                 "weak_contract_matches": contract.get("weak_contract_matches") or [],
-                "sample_status": "submitted_sample_exists_broker_or_fill_join_missing",
+                "sample_status": "submitted_sample_requires_exact_join_verification",
                 "submitted_unique": submitted_unique,
+                "gap_confirmation": "not_established_by_submit_count",
                 "runtime_effect": contract.get("runtime_effect"),
                 "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
             },

@@ -2117,7 +2117,21 @@ def _widget_actual_execution_inventory(
                     else None
                 ),
                 "source_entry_event_id": (
-                    advisory_entry.get("event_id") if advisory_entry else None
+                    advisory_entry.get("event_id")
+                    if advisory_entry
+                    else (
+                        signal_id
+                        if _widget_entry_signal_contract(
+                            signal_id, symbol=symbol, target_date=target_date
+                        )
+                        is not None
+                        else None
+                    )
+                ),
+                "source_entry_event_id_provenance": (
+                    "advisory_entry_event"
+                    if advisory_entry
+                    else "native_execution_signal_id"
                 ),
                 **owner_cost_contract,
                 "owner_outcome": owner_outcome,
@@ -4571,6 +4585,57 @@ def _validate_reference_row(
     return False, None
 
 
+def _closed_ingress_receipt_loss(
+    guard: dict[str, Any], collector: dict[str, Any]
+) -> bool:
+    """Recognize irreversible source loss, never permission to consume bad input."""
+    timestamp = guard.get("timestamp_source_quality") or {}
+    if not isinstance(timestamp, dict):
+        return False
+    counts = timestamp.get("counts") or {}
+    if not isinstance(counts, dict):
+        return False
+    fields = (
+        "invalid_depth_timestamp_count",
+        "invalid_exchange_timestamp_count",
+        "stale_exchange_timestamp_block_count",
+    )
+    if any(type(counts.get(key)) is not int or counts[key] < 0 for key in fields):
+        return False
+    issues = [
+        f"timestamp_source_rejected_before_enqueue:{key}={counts[key]}"
+        for key in fields
+        if counts[key] > 0
+    ]
+    declared_exclusions = guard.get("source_quality_row_exclusions")
+    declared_issues = timestamp.get("issues")
+    if any(
+        not isinstance(values, list)
+        or any(not isinstance(value, str) for value in values)
+        for values in (declared_exclusions, declared_issues)
+    ):
+        return False
+    return bool(
+        issues
+        and guard.get("status") == "stopped_clean"
+        and guard.get("stop_required") is False
+        and guard.get("stop_reasons") == []
+        and guard.get("raw_row_exclusion_required") is True
+        and sorted(declared_exclusions) == sorted(issues)
+        and sorted(declared_issues) == sorted(issues)
+        and timestamp.get("exact_rejected_row_exclusion_proven") is False
+        and timestamp.get("rejection_stage") == "before_observer_enqueue"
+        and collector.get("collector_lifecycle") == "closed"
+        and collector.get("reference_reconciliation_completed") is True
+        and all(
+            type(collector.get(key)) is int and collector[key] == 0
+            for key in CANARY_LOSS_COUNTERS
+        )
+        and all(collector.get(key) is False for key in CANARY_FORBIDDEN_TRUE_FIELDS)
+        and collector.get("broker_order_forbidden") is True
+    )
+
+
 def _micro_context(
     target_date: str,
     observation_root: Path,
@@ -4764,6 +4829,14 @@ def _micro_context(
                 else None
             ),
             "row_quarantine_validation": row_quarantine_validation,
+            "immutable_ingress_receipt_loss": bool(
+                (canary_payload or {}).get("schema")
+                == "scalp_micro_reversion_canary_monitor_v1"
+                and canary_target_day_complete
+                and generation_causal
+                and canary_freshness_valid
+                and _closed_ingress_receipt_loss(guard, collector)
+            ),
             "sequence_epoch": (
                 collector.get("sequence_epoch") if isinstance(collector, dict) else None
             ),
@@ -7618,7 +7691,9 @@ def _fast_lifecycle_objective_followup(
     return row
 
 
-def _rolling_source_contract_recovery(gap: str | None) -> dict[str, Any]:
+def _rolling_source_contract_recovery(
+    gap: str | None, *, immutable_ingress_receipt_loss: bool = False
+) -> dict[str, Any]:
     if gap is None:
         return {
             "disposition": "not_required",
@@ -7629,7 +7704,10 @@ def _rolling_source_contract_recovery(gap: str | None) -> dict[str, Any]:
     if gap in {
         "micro_canary_target_date_evidence_incomplete",
         "micro_runtime_registration_receipt_missing_or_incomplete",
-    }:
+    } or (
+        gap == "micro_canary_source_quality_missing_or_invalid"
+        and immutable_ingress_receipt_loss is True
+    ):
         return {
             "disposition": "immutable_source_date_quarantine",
             "rerun_same_source_date_allowed": False,
@@ -8379,7 +8457,12 @@ def build_report(
             )
         ),
         "gap": source_contract_gap,
-        "recovery": _rolling_source_contract_recovery(source_contract_gap),
+        "recovery": _rolling_source_contract_recovery(
+            source_contract_gap,
+            immutable_ingress_receipt_loss=(micro_source.get("canary_source_quality") or {}).get(
+                "immutable_ingress_receipt_loss"
+            ) is True,
+        ),
         "required": (
             "clean_baseline_exact_date_partition_manifest_canary_stream_and_runtime_registration_receipt_contract"
         ),

@@ -8579,6 +8579,8 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
         "stage": "scale_in",
         "sample": {
             "report_loaded": bool(payload),
+            "report_target_date": target_date,
+            "report_content_sha256": _json_sha256(payload) if payload else None,
             "report_path": (
                 str(report_path) if report_path and report_path.exists() else None
             ),
@@ -14039,6 +14041,8 @@ def _build_calibration_candidates(
                 or 0,
                 "report_loaded": bool(family_sample.get("report_loaded")),
                 "report_path": family_sample.get("report_path"),
+                "report_target_date": family_sample.get("report_target_date"),
+                "report_content_sha256": family_sample.get("report_content_sha256"),
                 "candidate_grid_count": _safe_int(
                     family_sample.get("candidate_grid_count"), 0
                 )
@@ -14974,6 +14978,41 @@ def _refresh_candidate_from_primary_window(
         candidate["source_metrics"] = source_metrics
 
 
+def _owned_scale_in_rolling_metrics(candidate: dict) -> dict:
+    """Bind the dedicated producer's exact report window without granting readiness."""
+    metrics = candidate.get("source_metrics")
+    if not isinstance(metrics, dict):
+        return {}
+    target_date = metrics.get("report_target_date")
+    if not isinstance(target_date, str):
+        return {}
+    path = _scale_in_split_order_plan_path(target_date)
+    if path is None or metrics.get("report_path") != str(path):
+        return {}
+    payload = _read_json_dict(path)
+    rolling = payload.get("rolling_summary")
+    policy = payload.get("recommended_policy")
+    if not isinstance(rolling, dict) or not isinstance(policy, dict):
+        return {}
+    evidence = policy.get("runtime_refresh_evidence")
+    if not isinstance(evidence, dict):
+        return {}
+    paired = evidence.get("paired_economic_sample_count")
+    if (
+        payload.get("schema_version") != "scale_in_split_order_plan_v3"
+        or payload.get("target_date") != target_date
+        or metrics.get("report_content_sha256") != _json_sha256(payload)
+        or not isinstance(rolling, dict)
+        or rolling.get("target_date") != target_date
+        or rolling.get("window_policy") != "latest_20_report_dates_including_target"
+        or rolling.get("current_source_date_included") is not True
+        or type(paired) is not int or paired < 0
+        or metrics.get("paired_economic_sample_count") != paired
+    ):
+        return {}
+    return dict(metrics)
+
+
 def _build_window_policy_resolution(
     candidate: dict, cumulative_report: dict | None
 ) -> dict:
@@ -14997,6 +15036,12 @@ def _build_window_policy_resolution(
     primary_source_metrics = _source_metrics_for_family(
         str(candidate.get("family") or ""), primary_source_context
     )
+    if (
+        not primary_source_metrics
+        and candidate.get("family") == "scale_in_split_order_plan"
+        and primary == "rolling_20_report_dates"
+    ):
+        primary_source_metrics = _owned_scale_in_rolling_metrics(candidate)
     primary_source_sample = _source_sample_count_for_family(
         str(candidate.get("family") or ""), primary_source_metrics
     )

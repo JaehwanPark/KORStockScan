@@ -599,6 +599,8 @@
   - 금지: trigger decision을 PREOPEN apply, final verifier, broker/order/provider/cap/bot/threshold, hard-safety/source-quality fail-closed 경계 변경 근거로 사용하지 않는다.
   - 다음 액션: `trigger_contract_pass`, `unexpected_all_run`, `skip_marker_missing`, `source_missing_run_required`, `force_override_detected`, `needs_followup_patch` 중 하나로 닫는다.
 
+  - 22:28 recovery: workorder current-owner/v4+required followup330 PASS, smoothing raw exclusion/full journal595 PASS와22:11 재생성 PASS. Widget22:08·machine6단계22:13 terminal success. Controller는 machine timing source-quality structural shortage로 blocked하여 전체 완료 보류. [복구 검토](../audit-reports/2026-09-07-postclose-monitoring-recovery-review.md)에서 후속 보완·terminal·전수 추천 intake를 계속 추적한다.
+
 - [ ] `[PostcloseSourceQualityGateReview0907] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: RuntimeStability`)
   - Source: [observation_source_quality_audit_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-09-07.json), [threshold_cycle_ev_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-07.json), [code_improvement_workorder_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json), [threshold_cycle_postclose_verification_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-09-07.json)
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.
@@ -626,3 +628,10 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+
+- [x] `[PostcloseMonitorRecoveryReview0907] 장후 실행 복구·source-only 추천 Pass 1/2 검토 종결` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~23:25`, `Track: RuntimeStability`)
+  - 결과: YELLOW. 최신 controller 23:19:09 DONE, final cleanup 23:23:29 및 final detector 23:23:30 DONE. 오류 detector pass/critical-error0, source hash 대사 mismatch0. 기존 실행 worker 중복/잔존 0.
+  - 구현/review: detector/workorder/verifier/smoothing, machine source·followup, AI empty-source terminal·consumer/controller, storage preservation·receipt 및 scale-in rolling source 전달을 보완했다. 관련 gate/실제 replay는 [복구 검토](../audit-reports/2026-09-07-postclose-monitoring-recovery-review.md)를 따른다.
+  - 추천: [전수 ledger](../audit-reports/2026-09-07-postclose-recommendation-intake-ledger.json) 67→66행, 구현 요청10→9, 신규/decision 변경/누락/actionable open0. 남은 근거 대기9·외부 source추적3·native ID결손26은 구현 완료가 아니다. 다음 `PostcloseRecoverySourceAcceptance0908`로 인계했다.
+  - 경계: 실주문·매매 process·live env/provider/threshold/cap/수량/operator lock 변경 없음. 다음 PID 반영 및 비용 차감 EV는 별도 acceptance다.

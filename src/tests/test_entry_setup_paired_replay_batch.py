@@ -659,3 +659,112 @@ def test_cohort_rejects_stale_candidate_execution_selection_policy(
         assert str(exc) == "candidate_execution_contract_failed:KRX:KRX_REGULAR"
     else:
         raise AssertionError("stale selection policy must fail closed")
+
+
+def _empty_control_manifest():
+    control = {
+        "schema": quality.CONTROL_SCHEMA,
+        "target_date": "2026-09-07",
+        "status": "control_manifest_gap_fix_required",
+        "controls": [],
+        "conflicts": [],
+        "supplemental_conflicts": [],
+        "missing_natural_stages": ["entry", "entry_price", "holding", "overnight"],
+        "excluded_counts": {"payload_hash_missing": 2},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    control["control_manifest_sha256"] = quality._sha256(control)
+    control["cohort_filter"] = {
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "runtime_effect": False,
+    }
+    return control
+
+
+def test_empty_source_quality_control_is_terminal_without_provider_replay(
+    monkeypatch, tmp_path
+):
+    control = _empty_control_manifest()
+    path = tmp_path / "control.json"
+    path.write_text(json.dumps(control))
+    calls = []
+    monkeypatch.setattr(batch, "_run_quality_cli", lambda args: calls.append(args))
+    monkeypatch.setattr(quality, "control_path", lambda *a, **kw: path)
+    result = batch._cohort_result(
+        target_date="2026-09-07",
+        as_of=datetime(2026, 9, 7, 22, 0, tzinfo=quality.KST),
+        venue="KRX",
+        session_bucket="KRX_REGULAR",
+        max_new_requests=30,
+        workers=2,
+        timeout_sec=60,
+    )
+    assert len(calls) == 1 and calls[0][-1] == "control"
+    assert result["status"] == "hold_no_exact_entry_control"
+    assert (
+        result["control_source_quality_status"] == "control_manifest_gap_fix_required"
+    )
+    assert result["provider_call_count"] == 0
+    assert result["source_excluded_counts"] == {"payload_hash_missing": 2}
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("target_date", "2026-09-04"),
+        ("status", "promotion_failed_no_control_reset"),
+        ("controls", [{"decision_stage": "entry"}]),
+        ("conflicts", ["signature_conflict"]),
+        ("supplemental_conflicts", ["signature_conflict"]),
+        ("excluded_counts", {}),
+        ("excluded_counts", {"bad": True}),
+        ("excluded_counts", {"bad": -1}),
+        ("runtime_effect", True),
+        ("allowed_runtime_apply", True),
+        ("actual_order_submitted", True),
+        ("broker_order_forbidden", False),
+    ],
+)
+def test_empty_control_rejects_invalid_or_conflicting_manifest_even_with_valid_hash(
+    field, value
+):
+    control = _empty_control_manifest()
+    control[field] = value
+    control["control_manifest_sha256"] = quality._sha256(
+        {
+            k: v
+            for k, v in control.items()
+            if k not in {"control_manifest_sha256", "cohort_filter"}
+        }
+    )
+    assert (
+        batch._verified_empty_control(
+            control, target_date="2026-09-07", venue="KRX", session_bucket="KRX_REGULAR"
+        )
+        is False
+    )
+
+
+def test_empty_control_rejects_hash_and_cohort_mismatch():
+    control = _empty_control_manifest()
+    control["excluded_counts"]["payload_hash_missing"] = 3
+    assert (
+        batch._verified_empty_control(
+            control, target_date="2026-09-07", venue="KRX", session_bucket="KRX_REGULAR"
+        )
+        is False
+    )
+    control = _empty_control_manifest()
+    assert (
+        batch._verified_empty_control(
+            control,
+            target_date="2026-09-07",
+            venue="NXT",
+            session_bucket="NXT_AFTERMARKET",
+        )
+        is False
+    )
