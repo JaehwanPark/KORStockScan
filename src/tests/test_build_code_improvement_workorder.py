@@ -4790,7 +4790,7 @@ def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought
     assert order["decision"] == "implement_now"
     assert order["runtime_effect"] is False
     assert order["source_report_type"] == "buy_funnel_sentinel"
-    assert order["mapped_family"] == "lifecycle_decision_matrix_runtime"
+    assert order["mapped_family"] == "entry_submit_drought_attribution"
     assert "submitted_to_ai_pct=5.77" in order["evidence"]
     assert report["summary"]["buy_funnel_sentinel_source_order_count"] == 6
     assert report["summary"]["buy_funnel_sentinel_primary"] == "SUBMIT_DROUGHT_CRITICAL"
@@ -5336,7 +5336,7 @@ def test_buy_funnel_submit_drought_marks_post_submit_gap_when_submit_sample_exis
     assert taxonomy_order["implementation_provenance"]["submitted_unique"] == 17
 
 
-def test_buy_funnel_submit_drought_marks_submit_contract_verified_from_ldm_attribution():
+def test_buy_funnel_submit_drought_rejects_archived_ldm_closure():
     orders = mod._buy_funnel_sentinel_followup_orders(
         {
             "classification": {
@@ -5406,14 +5406,16 @@ def test_buy_funnel_submit_drought_marks_submit_contract_verified_from_ldm_attri
         "order_entry_source_taxonomy_contract_gap_review",
     }:
         order = by_id[order_id]
-        assert order["implementation_status"] == "implemented_submit_contract_verified"
-        assert order["implementation_provenance"]["implementation_type"] == (
-            "submit_contract_report_provenance_verified"
+        expected = (
+            "open_source_taxonomy_provenance_gap"
+            if order_id == "order_entry_source_taxonomy_contract_gap_review"
+            else "open_post_submit_provenance_join_gap"
         )
-        assert order["implementation_provenance"]["submit_rows"] == 41
-        assert order["implementation_provenance"]["missing_broker_order_key_count"] == 0
-        assert order["implementation_provenance"]["runtime_effect"] is False
-        assert order["implementation_provenance"]["allowed_runtime_apply"] is False
+        assert order["implementation_status"] == expected
+        assert (
+            order["implementation_provenance"]["downstream_consumer"]
+            == "code_improvement_workorder"
+        )
 
 
 def test_buy_funnel_submit_drought_keeps_source_taxonomy_gap_open_when_leakage_remains():
@@ -5480,7 +5482,7 @@ def test_buy_funnel_submit_drought_keeps_source_taxonomy_gap_open_when_leakage_r
     )
     receipt_order = by_id["order_entry_broker_receipt_contract_gap_review"]
     assert (
-        receipt_order["implementation_status"] == "implemented_submit_contract_verified"
+        receipt_order["implementation_status"] == "open_post_submit_provenance_join_gap"
     )
 
 
@@ -8052,3 +8054,31 @@ def test_workorder_swing_scope_classifier_is_explicit():
             "source_report_type": "lifecycle_bucket_discovery",
         }
     )
+
+
+def test_submit_drought_legacy_contract_keeps_current_workorder_after_retirement():
+    from src.engine.lifecycle.retirement import current_report_view, retired_owner
+
+    report = {
+        "classification": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "entry_submit_drought_contract": {
+            "required_downstream": [
+                "code_improvement_workorder",
+                "lifecycle_decision_matrix.submit_bucket_attribution",
+                "threshold_cycle_ev_report",
+                "runtime_approval_summary",
+                "postclose_verifier",
+            ]
+        },
+    }
+    orders = mod._buy_funnel_sentinel_followup_orders(report)
+    order = orders[0]
+    assert not retired_owner(order["mapped_family"])
+    assert not any(retired_owner(item) for item in order["required_downstream"])
+    assert "code_improvement_workorder" in order["required_downstream"]
+    assert order["runtime_effect"] is False
+    assert order["allowed_runtime_apply"] is False
+    assert "order_entry_submit_drought_auto_resolution" in str(
+        current_report_view({"orders": orders})
+    )
+    assert "lifecycle_decision_matrix" not in str(order)

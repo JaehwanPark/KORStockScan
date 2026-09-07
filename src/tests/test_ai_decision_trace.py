@@ -102,6 +102,8 @@ def test_timeout_exception_trace_normalizes_transport_provenance(monkeypatch, tm
             "provider_called": False,
             "openai_http_attempt_count": 1,
             "openai_http_timeout_budget_exhausted": True,
+            "openai_http_provider_total_ms": 11974,
+            "openai_http_provider_future_cancelled": True,
             "openai_transport_mode": "http",
             "ai_parse_ok": False,
         },
@@ -118,6 +120,8 @@ def test_timeout_exception_trace_normalizes_transport_provenance(monkeypatch, tm
     assert row["decision_evaluation_status"] == "not_evaluated_transport_timeout"
     assert row["provider_called"] is True
     assert row["provider_actual"] == "openai"
+    assert row["transport_timing"]["openai_http_provider_total_ms"] == 11974
+    assert row["transport_timing"]["openai_http_provider_future_cancelled"] is True
 
 
 def test_non_timeout_transport_failure_is_not_labeled_timeout(monkeypatch, tmp_path):
@@ -2136,3 +2140,60 @@ def test_same_input_with_different_request_config_keeps_two_envelopes(
     assert first["ai_input_payload_sha256"] == second["ai_input_payload_sha256"]
     assert first["ai_request_envelope_sha256"] != second["ai_request_envelope_sha256"]
     assert len(_rows(trace._payload_path(trace._date_text()))) == 2
+
+
+@pytest.mark.parametrize(
+    "payload, source, expected",
+    [
+        (
+            {"parse_ok": False, "timeout": True},
+            "timeout",
+            "not_attempted_transport_timeout",
+        ),
+        (
+            {"ai_parse_ok": False, "openai_http_timeout_budget_exhausted": True},
+            "exception",
+            "not_attempted_transport_timeout",
+        ),
+        (
+            {"ai_parse_ok": False, "provider_response_id": "resp-1"},
+            "exception",
+            "parse_failed",
+        ),
+        ({"ai_parse_ok": False}, "exception", "unknown_missing_parse_receipt"),
+        (
+            {"ai_parse_ok": False},
+            "input_preflight_blocked",
+            "not_attempted_input_preflight",
+        ),
+        ({"ai_parse_ok": True}, "live", "parsed"),
+    ],
+)
+def test_parse_status_requires_response_receipt(payload, source, expected):
+    assert trace.decision_parse_status(payload, source) == expected
+
+
+def test_trace_preserves_input_timing_and_timeout_parse_status(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    timing = {"tape": {"age_ms": 10000.0, "quality": "stale"}}
+    trace.record_ai_decision_trace(
+        {
+            "action": "DROP",
+            "ai_parse_ok": False,
+            "openai_http_timeout_budget_exhausted": True,
+            "ai_input_preflight_source_timing": timing,
+            "ai_input_preflight_source_timing_basis": "source_observed_at_to_snapshot_capture",
+            "ai_input_preflight_external_delay_attribution": "unproven_without_exchange_and_receive_clocks",
+        },
+        prompt_type="scalping_entry",
+        prompt_version="test",
+        result_source="timeout",
+        stock_code="005930",
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["parse_status"] == "not_attempted_transport_timeout"
+    assert row["input_source_timing"] == timing
+    assert (
+        row["input_external_delay_attribution"]
+        == "unproven_without_exchange_and_receive_clocks"
+    )

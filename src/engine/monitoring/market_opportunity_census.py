@@ -139,12 +139,13 @@ METRIC_CONTRACT = {
         "panel": "liquid_common",
         "top_n": 20,
         "view": "forward_exact",
-        "grouping": "venue",
+        "grouping": "venue_session",
         "formula": (
-            "unique_opportunity_episodes_reaching_provider_within_validity / "
-            "unique_opportunity_episodes * 100"
+            "entry_ai_provider_reached_unique / "
+            "denominator_unique_opportunity_episode_count * 100"
         ),
         "cross_venue_aggregation_authority": "diagnostic_only",
+        "cross_session_aggregation_authority": "diagnostic_only",
     },
     "secondary_diagnostic_metrics": {
         "scanner_to_entry_ai_decision_latency_sec": (
@@ -2535,6 +2536,14 @@ def _coverage_row(
             for key, value in first_times.items()
         },
         "stage_latency_from_scanner_promoted_sec": (stage_latency_from_promotion_sec),
+        "stage_latency_from_benchmark_sec": {
+            stage: round((stage_at - first_census_at).total_seconds(), 6)
+            for stage, stage_at in first_times.items()
+            if require_lineage
+            and isinstance(first_census_at, datetime)
+            and stage_at is not None
+            and stage_at >= first_census_at
+        },
         "stage_raw_events": stage_raw_events,
         "stage_reason_codes": stage_reason_codes,
         "first_stage_reason_code": first_stage_reason_code,
@@ -2720,6 +2729,7 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "entry_ai_provider_reached_within_sla_count": (
             provider_reached_within_sla_count
         ),
+        "entry_ai_provider_reached_unique": provider_reached_within_sla_count,
         "promotion_recall_pct": (
             round(scanner_detection_sla_met_count / total * 100.0, 2)
             if total and has_sla_contract
@@ -2771,6 +2781,21 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for row in rows
         ),
         "stage_latency_from_scanner_promoted_sec": latency_by_stage,
+        "stage_latency_from_benchmark_sec": {
+            stage: _latency_summary(
+                [
+                    latency
+                    for row in rows
+                    if (
+                        latency := (
+                            row.get("stage_latency_from_benchmark_sec") or {}
+                        ).get(stage)
+                    )
+                    is not None
+                ]
+            )
+            for stage in STAGE_ORDER
+        },
         "ex_post_executable_opportunity": {
             "denominator_unique_opportunity_episode_count": total,
             "exact_bbo_joined_count": ex_post_exact_bbo_joined_count,
@@ -2816,7 +2841,62 @@ def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         venue: _summarize_rows_base([row for row in rows if row.get("venue") == venue])
         for venue in VENUE_REQUEST_CODES
     }
+    summary["by_venue_session"] = {
+        f"{venue}|{session}": _summarize_rows_base(
+            [
+                row
+                for row in rows
+                if (
+                    str(row.get("venue") or "UNKNOWN"),
+                    str(row.get("session") or "UNKNOWN"),
+                )
+                == (venue, session)
+            ]
+        )
+        for venue, session in sorted(
+            {
+                (
+                    str(row.get("venue") or "UNKNOWN"),
+                    str(row.get("session") or "UNKNOWN"),
+                )
+                for row in rows
+            }
+        )
+    }
     return summary
+
+
+def _scanner_recall_assessment(
+    rows: list[dict[str, Any]], instrumentation_blockers: list[str]
+) -> tuple[str, list[str]]:
+    """A complete observer is necessary, but is not proof of scanner coverage."""
+    insufficient = "insufficient_evidence_scanner_recall"
+    if instrumentation_blockers:
+        return insufficient, list(instrumentation_blockers)
+    if not rows:
+        return insufficient, ["external_opportunity_denominator_missing"]
+    if any(row.get("scanner_detection_sla_met") is not True for row in rows):
+        # Missing/late promotion alone cannot prove an actionable miss: the
+        # current partial observer cannot resolve all intended exclusions.
+        return insufficient, ["scanner_discovery_or_intended_exclusion_unresolved"]
+    handoff_stages = ("fast_precheck", "heavy_eval", "entry_ai_trace")
+    if any(
+        not all((row.get("stage_reached") or {}).get(stage) for stage in handoff_stages)
+        for row in rows
+    ):
+        return "post_promotion_handoff_gap_candidate", [
+            "post_promotion_handoff_incomplete"
+        ]
+    terminal_reasons = {str(row.get("terminal_coverage_reason") or "") for row in rows}
+    if not terminal_reasons <= {
+        "submitted",
+        "submit_safety_block",
+        "entry_authority_guard_block",
+    }:
+        return insufficient, ["downstream_terminal_attribution_incomplete"]
+    if "submitted" in terminal_reasons:
+        return "scanner_coverage_valid_with_submissions", []
+    return "scanner_coverage_valid_submit_drought_downstream", []
 
 
 def _summarize_ex_post_by_scope(
@@ -2852,6 +2932,10 @@ def _snapshot_contract_error(row: dict[str, Any], *, target_date: str) -> str:
         return "capture_timestamp_mismatch"
     if row.get("venue") not in VENUE_REQUEST_CODES:
         return "venue_invalid"
+    if row.get("session") and row["session"] != _session_for_capture(
+        venue=row["venue"], captured_at=captured_at
+    ):
+        return "capture_session_timestamp_mismatch"
     if row.get("panel") not in PANEL_CONTRACTS:
         return "panel_invalid"
     rows = row.get("rows")
@@ -2974,9 +3058,7 @@ def build_report(
                 external_bbo_request_attempted_count += int(
                     raw_observation.get("request_attempted") is True
                 )
-                reservation_ordinal = _external_bbo_reservation_ordinal(
-                    raw_observation
-                )
+                reservation_ordinal = _external_bbo_reservation_ordinal(raw_observation)
                 if reservation_ordinal is not None:
                     external_bbo_reserved_contract_row_count += 1
                     external_bbo_reservation_ordinals.append(reservation_ordinal)
@@ -3026,8 +3108,7 @@ def build_report(
         + external_bbo_invalid_reservation_attempt_count
     )
     external_bbo_reservation_conservation_delta = (
-        external_bbo_request_attempted_count
-        - external_bbo_reservation_accounted_count
+        external_bbo_request_attempted_count - external_bbo_reservation_accounted_count
     )
     external_bbo_reservation_conservation_status = (
         "pass"
@@ -3098,6 +3179,27 @@ def build_report(
         for panel in PANEL_CONTRACTS:
             key = f"{venue}|{panel}"
             session_times: dict[str, set[datetime]] = defaultdict(set)
+            session_watermarks: dict[str, datetime] = {}
+            for row in snapshots:
+                captured_at = _parse_ts(row.get("captured_at"))
+                if captured_at is None:
+                    continue
+                expected_session = _session_for_capture(
+                    venue=venue, captured_at=captured_at
+                )
+                if expected_session.startswith("OUTSIDE_"):
+                    continue
+                # The installed 08:xx trigger captures NXT only. KRX-like
+                # premarket is a recognized source scope, not an expected
+                # collector window under this trigger contract.
+                if venue == "KRX" and expected_session != "KRX_REGULAR":
+                    continue
+                session_watermarks[expected_session] = max(
+                    captured_at, session_watermarks.get(expected_session, captured_at)
+                )
+                # An absent/failed current session must not borrow an earlier
+                # session's completed sample floor.
+                session_times.setdefault(expected_session, set())
             for row in valid_snapshots:
                 if row.get("venue") != venue or row.get("panel") != panel:
                     continue
@@ -3116,21 +3218,37 @@ def build_report(
                     (right - left).total_seconds()
                     for left, right in zip(ordered, ordered[1:], strict=False)
                 ]
+                watermark = session_watermarks.get(
+                    session, ordered[-1] if ordered else None
+                )
+                trailing_gap = (
+                    max(0.0, (watermark - ordered[-1]).total_seconds())
+                    if watermark is not None and ordered
+                    else None
+                )
                 session_summaries[session] = {
                     "capture_time_count": len(ordered),
                     "first_capture_at": ordered[0].isoformat() if ordered else None,
                     "last_capture_at": ordered[-1].isoformat() if ordered else None,
                     "max_consecutive_gap_sec": max(gaps) if gaps else None,
+                    "capture_watermark_at": (
+                        watermark.isoformat() if watermark else None
+                    ),
+                    "trailing_gap_sec": trailing_gap,
                     "cadence_floor_met": (
                         len(ordered) >= MIN_VALID_CAPTURE_TIMES_PER_VENUE_PANEL
                         and bool(gaps)
                         and max(gaps)
                         <= CAPTURE_CADENCE_SEC + CAPTURE_CADENCE_TOLERANCE_SEC
+                        and trailing_gap is not None
+                        and trailing_gap
+                        <= CAPTURE_CADENCE_SEC + CAPTURE_CADENCE_TOLERANCE_SEC
                     ),
                 }
             observed_capture_cadence_by_venue_panel[key] = {
                 "sessions": session_summaries,
-                "cadence_floor_met": any(
+                "cadence_floor_met": bool(session_summaries)
+                and all(
                     bool(summary.get("cadence_floor_met"))
                     for summary in session_summaries.values()
                 ),
@@ -3326,10 +3444,8 @@ def build_report(
         instrumentation_blockers.append(
             "ex_post_executable_right_censored_ceiling_exceeded"
         )
-    scanner_recall_state = (
-        "scanner_coverage_valid_submit_drought_downstream"
-        if not instrumentation_blockers
-        else "insufficient_evidence_scanner_recall"
+    scanner_recall_state, scanner_recall_blockers = _scanner_recall_assessment(
+        primary_eligible_forward_rows, instrumentation_blockers
     )
     primary_summary = primary_eligible_forward_summary
     source_quality_warnings = []
@@ -3422,6 +3538,7 @@ def build_report(
             )
         ),
         "scanner_recall_state": scanner_recall_state,
+        "scanner_recall_blockers": scanner_recall_blockers,
         "instrumentation_blockers": instrumentation_blockers,
         "source_quality_warnings": source_quality_warnings,
         "metric_contract": METRIC_CONTRACT,
@@ -3429,14 +3546,16 @@ def build_report(
             "panel": "liquid_common",
             "top_n": 20,
             "view": "forward_exact",
-            "grouping": "venue",
+            "grouping": "venue_session",
             "metric": "entry_ai_provider_reach_rate_pct",
             "formula": (
                 "entry_ai_provider_reached_unique / "
                 "denominator_unique_opportunity_episode_count * 100"
             ),
             "by_venue": primary_decision_by_venue,
+            "by_venue_session": primary_summary["by_venue_session"],
             "cross_venue_summary_authority": "diagnostic_only",
+            "cross_session_summary_authority": "diagnostic_only",
             "ex_post_executable_opportunity": primary_ex_post_summary,
         },
         "source_quality": {
@@ -3628,9 +3747,9 @@ def build_report(
 
 def render_markdown(report: dict[str, Any]) -> str:
     primary = report.get("primary_decision") or {}
-    ex_post_bbo_source = (
-        (report.get("source_quality") or {}).get("ex_post_bbo_source") or {}
-    )
+    ex_post_bbo_source = (report.get("source_quality") or {}).get(
+        "ex_post_bbo_source"
+    ) or {}
     lines = [
         f"# Market Opportunity Census - {report.get('target_date')}",
         "",
@@ -3645,19 +3764,38 @@ def render_markdown(report: dict[str, Any]) -> str:
         ),
         "- instrumentation_blockers: "
         + ", ".join(f"`{item}`" for item in report.get("instrumentation_blockers", [])),
+        "- scanner_recall_blockers: "
+        + ", ".join(f"`{item}`" for item in report.get("scanner_recall_blockers", [])),
         "",
         "## Primary Decision Metric",
         "",
         (
             "- scope: "
             f"`{primary.get('panel')}/top_{primary.get('top_n')}/"
-            f"{primary.get('view')}`; official-master eligible; venue-separated"
+            f"{primary.get('view')}`; official-master eligible; venue/session-separated"
         ),
         f"- metric: `{primary.get('metric')}`",
         "",
-        "| Venue | Eligible episodes | Provider reached within SLA | Provider reach % | Promotion recall % | Terminal count sum | Conservation delta | Conservation |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
+        "| Venue/session | Eligible episodes | Provider reached within SLA | Provider reach % | Promotion recall % |",
+        "|---|---:|---:|---:|---:|",
     ]
+    for scope, summary in (primary.get("by_venue_session") or {}).items():
+        lines.append(
+            f"| {scope.replace('|', '/')} | "
+            f"{summary.get('denominator_unique_opportunity_episode_count', 0)} | "
+            f"{summary.get('entry_ai_provider_reached_unique', 0)} | "
+            f"{summary.get('entry_ai_provider_reach_rate_pct', 0.0)} | "
+            f"{summary.get('promotion_recall_pct', 0.0)} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### Venue aggregation (diagnostic only)",
+            "",
+            "| Venue | Eligible episodes | Provider reached within SLA | Provider reach % | Promotion recall % | Terminal count sum | Conservation delta | Conservation |",
+            "|---|---:|---:|---:|---:|---:|---:|---|",
+        ]
+    )
     terminal_reason_lines: list[str] = []
     candidate_not_promoted_reason_lines: list[str] = []
     for venue, summary in (primary.get("by_venue") or {}).items():

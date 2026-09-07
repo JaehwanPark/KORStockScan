@@ -6464,6 +6464,8 @@ def build_future_outcome(
         position_average_price = None
     rows: list[Mapping[str, Any]] = []
     rejected_market_times_us: list[int] = []
+    rejected_market_reasons: Counter[str] = Counter()
+    rejected_market_path_statuses: Counter[str] = Counter()
     for row in market_source_rows:
         if _scope_key(row) != (symbol, venue, session, epoch):
             continue
@@ -6481,9 +6483,24 @@ def build_future_outcome(
                 + selected_config.max_outcome_endpoint_lag_ms
             )
         ):
-            valid, _ = _valid_market_row(row)
+            valid, reason = _valid_market_row(row)
+            if valid:
+                bid = _positive_float(row.get("best_bid"))
+                ask = _positive_float(row.get("best_ask"))
+                quote_age = _finite_float(row.get("quote_age_ms"))
+                if bid is None or ask is None:
+                    valid, reason = False, "market_bbo_missing"
+                elif quote_age is None:
+                    valid, reason = False, "market_quote_age_missing"
+                elif quote_age > selected_config.max_quote_age_ms:
+                    valid, reason = False, "market_bbo_stale"
             if not valid:
                 rejected_market_times_us.append(received_us)
+                rejected_market_reasons[reason or "market_invalid"] += 1
+                if reason == "market_path_consumer_ineligible":
+                    rejected_market_path_statuses[
+                        str(row.get("path_order_status"))
+                    ] += 1
                 continue
             rows.append(row)
     rows.sort(
@@ -7017,6 +7034,22 @@ def build_future_outcome(
     )
     outcome_without_hash = {
         "schema": OUTCOME_SCHEMA,
+        # Keep unchanged clean outcomes byte/hash compatible. Only affected
+        # paths gain an exclusion receipt and require source-only rebuilding.
+        **(
+            {"rejected_market_reason_counts": dict(rejected_market_reasons)}
+            if rejected_market_reasons
+            else {}
+        ),
+        **(
+            {
+                "rejected_market_path_order_status_counts": dict(
+                    rejected_market_path_statuses
+                )
+            }
+            if rejected_market_path_statuses
+            else {}
+        ),
         "bridge_config_sha256": selected_contract["config_sha256"],
         "bridge_producer_version": evidence_producer_version,
         "decision_trace_id": evidence.get("decision_trace_id"),

@@ -2394,3 +2394,184 @@ def test_markdown_is_stable_after_sorted_json_round_trip():
     round_tripped = json.loads(json.dumps(report, sort_keys=True))
 
     assert census.render_markdown(report) == census.render_markdown(round_tripped)
+
+
+def test_cadence_cannot_borrow_a_previous_sessions_floor(tmp_path):
+    snapshots = []
+    for session, times in {
+        "NXT_PREMARKET": ["08:30", "08:35", "08:40"],
+        "NXT_REGULAR_OVERLAP": ["09:00", "09:10"],
+    }.items():
+        for clock in times:
+            snapshots.append(
+                {
+                    "schema_version": census.SCHEMA_VERSION,
+                    "target_date": "2026-07-30",
+                    "captured_at": f"2026-07-30T{clock}:00+09:00",
+                    "venue": "NXT",
+                    "session": session,
+                    "panel": "all",
+                    "source_quality_status": "ok",
+                    "rows": [
+                        {
+                            "rank": 1,
+                            "stock_code": "005930",
+                            "current_price": 10000,
+                            "change_rate_pct": 5.0,
+                        }
+                    ],
+                }
+            )
+    path = tmp_path / "snapshots.jsonl"
+    _write_jsonl(path, snapshots)
+    report = census.build_report(
+        "2026-07-30",
+        snapshot_path=path,
+        pipeline_path=tmp_path / "pipeline.jsonl",
+        ai_trace_path=tmp_path / "ai.jsonl",
+        symbol_master_path=tmp_path / "master.json",
+        trigger_receipt_path=tmp_path / "trigger.json",
+    )
+    cadence = report["source_quality"]["observed_capture_cadence_by_venue_panel"][
+        "NXT|all"
+    ]
+    assert cadence["sessions"]["NXT_PREMARKET"]["cadence_floor_met"] is True
+    assert cadence["sessions"]["NXT_REGULAR_OVERLAP"]["cadence_floor_met"] is False
+    assert cadence["cadence_floor_met"] is False
+    assert "PREMARKET_KRX_LIKE" not in report["source_quality"]["observed_capture_cadence_by_venue_panel"]["KRX|all"]["sessions"]
+    # A completely absent current NXT session is also a gap, even when another
+    # venue continues to provide the target-date capture watermark.
+    for row in snapshots:
+        if row["session"] == "NXT_REGULAR_OVERLAP":
+            row.update(venue="KRX", session="KRX_REGULAR")
+    _write_jsonl(path, snapshots)
+    report = census.build_report(
+        "2026-07-30",
+        snapshot_path=path,
+        pipeline_path=tmp_path / "pipeline.jsonl",
+        ai_trace_path=tmp_path / "ai.jsonl",
+        symbol_master_path=tmp_path / "master.json",
+        trigger_receipt_path=tmp_path / "trigger.json",
+    )
+    missing = report["source_quality"]["observed_capture_cadence_by_venue_panel"][
+        "NXT|all"
+    ]
+    assert missing["sessions"]["NXT_REGULAR_OVERLAP"]["capture_time_count"] == 0
+    assert missing["cadence_floor_met"] is False
+
+
+def test_instrumentation_success_is_not_scanner_coverage_success():
+    row = {
+        "scanner_detection_sla_met": False,
+        "stage_reached": {},
+        "terminal_coverage_reason": "scanner_discovery_gap_or_unobserved",
+    }
+    state, blockers = census._scanner_recall_assessment([row], [])
+    assert state == "insufficient_evidence_scanner_recall"
+    assert blockers == ["scanner_discovery_or_intended_exclusion_unresolved"]
+    row["scanner_detection_sla_met"] = True
+    assert (
+        census._scanner_recall_assessment(
+            [row], ["capture_session_provenance_missing"]
+        )[0]
+        == "insufficient_evidence_scanner_recall"
+    )
+    assert (
+        census._scanner_recall_assessment([row], [])[0]
+        == "post_promotion_handoff_gap_candidate"
+    )
+    row["stage_reached"] = dict.fromkeys(
+        ("fast_precheck", "heavy_eval", "entry_ai_trace"), True
+    )
+    row["terminal_coverage_reason"] = "submit_safety_block"
+    assert (
+        census._scanner_recall_assessment([row], [])[0]
+        == "scanner_coverage_valid_submit_drought_downstream"
+    )
+    row["terminal_coverage_reason"] = "submitted"
+    assert (
+        census._scanner_recall_assessment([row], [])[0]
+        == "scanner_coverage_valid_with_submissions"
+    )
+    row["terminal_coverage_reason"] = "post_authority_submit_safety_gap"
+    assert (
+        census._scanner_recall_assessment([row], [])[0]
+        == "insufficient_evidence_scanner_recall"
+    )
+
+
+def test_capture_session_must_match_its_clock():
+    row = {
+        "schema_version": census.SCHEMA_VERSION,
+        "target_date": "2026-09-07",
+        "captured_at": "2026-09-07T10:00:00+09:00",
+        "venue": "NXT",
+        "session": "NXT_PREMARKET",
+        "panel": "all",
+        "source_quality_status": "ok",
+        "rows": [{"rank": 1, "stock_code": "005930"}],
+    }
+    assert (
+        census._snapshot_contract_error(row, target_date="2026-09-07")
+        == "capture_session_timestamp_mismatch"
+    )
+    row["session"] = "NXT_REGULAR_OVERLAP"
+    assert census._snapshot_contract_error(row, target_date="2026-09-07") == ""
+
+
+def test_session_summaries_preserve_independent_denominators_and_latency():
+    def row(session, detected, lag):
+        return {
+            "venue": "NXT",
+            "session": session,
+            "scanner_detection_sla_met": detected,
+            "stage_reached": dict.fromkeys(census.STAGE_ORDER, detected),
+            "terminal_coverage_reason": (
+                "submitted" if detected else "scanner_discovery_gap_or_unobserved"
+            ),
+            "stage_latency_from_benchmark_sec": (
+                {"scanner_promoted": lag} if detected else {}
+            ),
+        }
+
+    summary = census._summarize_rows(
+        [
+            row("NXT_PREMARKET", True, 10.0),
+            row("NXT_REGULAR_OVERLAP", False, None),
+        ]
+    )
+    premarket = summary["by_venue_session"]["NXT|NXT_PREMARKET"]
+    overlap = summary["by_venue_session"]["NXT|NXT_REGULAR_OVERLAP"]
+    assert premarket["denominator_unique_opportunity_episode_count"] == 1
+    assert overlap["denominator_unique_opportunity_episode_count"] == 1
+    assert premarket["entry_ai_provider_reached_unique"] == 1
+    assert overlap["entry_ai_provider_reached_unique"] == 0
+    assert premarket["promotion_recall_pct"] == 100.0
+    assert overlap["promotion_recall_pct"] == 0.0
+    assert (
+        premarket["stage_latency_from_benchmark_sec"]["scanner_promoted"]["p95_sec"]
+        == 10.0
+    )
+    assert (
+        overlap["stage_latency_from_benchmark_sec"]["scanner_promoted"]["p95_sec"]
+        is None
+    )
+
+
+def test_missing_session_remains_in_diagnostic_denominator():
+    summary = census._summarize_rows(
+        [
+            {
+                "venue": "KRX",
+                "session": None,
+                "stage_reached": {},
+                "terminal_coverage_reason": "unresolved_source_quality",
+            }
+        ]
+    )
+    assert (
+        summary["by_venue_session"]["KRX|UNKNOWN"][
+            "denominator_unique_opportunity_episode_count"
+        ]
+        == 1
+    )

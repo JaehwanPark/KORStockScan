@@ -1461,6 +1461,35 @@ def _timeout_like_decision_failure(
     )
 
 
+def decision_parse_status(payload: dict[str, Any], result_source: str | None) -> str:
+    """Keep transport/preflight absence separate from an observed parse failure.
+
+    This diagnostic accepts persisted traces as well as producer metadata;
+    parse_ok=False alone supplies no evidence that a response was parsed.
+    """
+    if _safe_bool(payload.get("timeout")) is True or _timeout_like_decision_failure(
+        payload, result_source
+    ):
+        return "not_attempted_transport_timeout"
+    if _safe_bool(payload.get("ai_parse_ok", payload.get("parse_ok"))) is True:
+        return "parsed"
+    received = (
+        payload.get("microstructure_provider_delivery_status") == "response_received"
+        or bool(payload.get("provider_response_id"))
+        or bool(payload.get("openai_response_id"))
+        or bool(payload.get("bedrock_response_id"))
+    )
+    explicit_failure = _safe_bool(payload.get("ai_parse_fail")) is True
+    if received and (
+        explicit_failure
+        or _safe_bool(payload.get("ai_parse_ok", payload.get("parse_ok"))) is False
+    ):
+        return "parse_failed"
+    if str(result_source or "") == "input_preflight_blocked":
+        return "not_attempted_input_preflight"
+    return "unknown_missing_parse_receipt"
+
+
 def record_ai_decision_trace(
     result: dict[str, Any] | None,
     *,
@@ -1818,6 +1847,18 @@ def record_ai_decision_trace(
             ),
             "provider_called": bool(provider_called),
             "transport": _optional(merged, "openai_transport_mode"),
+            "transport_timing": {
+                key: merged[key]
+                for key in (
+                    "openai_http_provider_ms",
+                    "openai_http_provider_total_ms",
+                    "openai_http_attempt_count",
+                    "openai_http_wall_deadline_exceeded",
+                    "openai_http_provider_future_cancelled",
+                    "openai_http_timeout_budget_exhausted",
+                )
+                if key in merged
+            },
             "response_ms": _safe_number(
                 _optional(
                     merged,
@@ -1851,6 +1892,7 @@ def record_ai_decision_trace(
             "cache_hit": bool(merged.get("cache_hit", False)),
             "timeout": timeout_like,
             "parse_ok": bool(merged.get("ai_parse_ok", False)),
+            "parse_status": decision_parse_status(merged, normalized_result_source),
             "result_source": normalized_result_source,
             "attempt": _safe_number(merged.get("forensic_attempt")),
             "attempt_final": (
@@ -2211,6 +2253,13 @@ def record_ai_decision_trace(
                 else None
             ),
             "input_blockers": merged.get("ai_input_preflight_blockers", []),
+            "input_source_timing": merged.get("ai_input_preflight_source_timing", {}),
+            "input_source_timing_basis": merged.get(
+                "ai_input_preflight_source_timing_basis"
+            ),
+            "input_external_delay_attribution": merged.get(
+                "ai_input_preflight_external_delay_attribution"
+            ),
             "input_quality_warnings": merged.get(
                 "ai_input_preflight_quality_warnings", []
             ),

@@ -1915,7 +1915,27 @@ def ai_market_snapshot_log_fields(
         f"{observation_contract_prefix}{key}": value
         for key, value in OBSERVATION_CONTRACT.items()
     }
+    # Diagnostic receipt only: keep the exact source clocks out of decision
+    # inputs and never infer pre-receipt network delay from snapshot age.
+    source_timing = {
+        name: {
+            key: row.get(key)
+            for key in (
+                "source",
+                "observed_at",
+                "age_ms",
+                "quality",
+                "freshness_limit_ms",
+                "market_route",
+            )
+        }
+        for name, row in (snapshot.get("sources") or {}).items()
+        if isinstance(row, dict)
+    }
     return {
+        "ai_input_preflight_source_timing": source_timing,
+        "ai_input_preflight_source_timing_basis": "source_observed_at_to_snapshot_capture",
+        "ai_input_preflight_external_delay_attribution": "unproven_without_exchange_and_receive_clocks",
         "ai_market_snapshot_schema": snapshot.get("schema", SCHEMA),
         "ai_market_snapshot_id": snapshot.get("snapshot_id"),
         "ai_market_snapshot_captured_at": snapshot.get("captured_at"),

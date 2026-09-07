@@ -5416,3 +5416,89 @@ def test_scheduled_census_reseal_uses_artifact_hash_contract_with_non_ascii() ->
         expected_target_date="2026-08-14",
     )
     assert commitment["bridge_report_content_sha256"] == bound["report_content_sha256"]
+
+
+@pytest.mark.parametrize(
+    "gap, reason",
+    [
+        ({"best_bid": None}, "market_bbo_missing"),
+        ({"best_ask": None}, "market_bbo_missing"),
+        ({"quote_age_ms": None}, "market_quote_age_missing"),
+        ({"quote_age_ms": 10000}, "market_bbo_stale"),
+        (
+            {
+                "path_order_status": "exchange_timestamp_regression_exceeded",
+                "path_consumer_eligible": False,
+                "exchange_timestamp_regression_ms": 2000,
+            },
+            "market_path_consumer_ineligible",
+        ),
+    ],
+)
+def test_future_outcome_does_not_bridge_a_quote_or_ordering_gap(gap, reason):
+    evidence = build_tactical_evidence(
+        trace=_trace(),
+        payload=_payload(),
+        market_rows=_past_market_rows(),
+        depth_rows=[_depth()],
+        event_references=[_reference()],
+        config=_verified_config(),
+        verified_symbol_metadata=_verified_symbol_metadata(),
+    )
+    future = [
+        _market(
+            "2026-08-14T09:00:10.500+09:00",
+            price=10030,
+            side="BUY",
+            qty=100,
+            sequence=5,
+            bid=10020,
+            ask=10030,
+        ),
+        _market(
+            "2026-08-14T09:00:11.500+09:00",
+            price=10050,
+            side="BUY",
+            qty=100,
+            sequence=6,
+            bid=10040,
+            ask=10050,
+        ),
+    ]
+    depths = [
+        _depth("2026-08-14T09:00:10.500+09:00", sequence=2, bid=10020, ask=10030),
+        _depth("2026-08-14T09:00:11.500+09:00", sequence=3, bid=10040, ask=10050),
+    ]
+    control = build_future_outcome(
+        evidence=evidence,
+        market_rows=future,
+        depth_rows=depths,
+        config=_verified_config(),
+    )
+    assert control["horizons"][0]["mature"] is True
+    damaged = [{**future[0], **gap}, future[1]]
+    outcome = build_future_outcome(
+        evidence=evidence,
+        market_rows=damaged,
+        depth_rows=depths,
+        config=_verified_config(),
+    )
+    assert outcome["horizons"][0]["mature"] is False
+    assert outcome["horizons"][0]["action_neutral_executable_end_return_bps"] is None
+    assert outcome["rejected_market_reason_counts"] == {reason: 1}
+    if reason == "market_path_consumer_ineligible":
+        assert outcome["rejected_market_path_order_status_counts"] == {
+            "exchange_timestamp_regression_exceeded": 1
+        }
+    assert outcome["economic_promotion_evidence_eligible"] is False
+    # Other dates/symbols/epochs do not contaminate the exact outcome scope.
+    foreign = {**damaged[0], "sequence_epoch": 999}
+    unaffected = build_future_outcome(
+        evidence=evidence,
+        market_rows=[*future, foreign],
+        depth_rows=depths,
+        config=_verified_config(),
+    )
+    assert unaffected["horizons"][0]["mature"] is True
+    assert "rejected_market_reason_counts" not in unaffected
+    assert unaffected["outcome_sha256"] == control["outcome_sha256"]

@@ -632,18 +632,19 @@ def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
         return None
     if session is None:
         session = _session_for_venue(venue, event.emitted_at)
-    elif venue == "NXT" and session == "NXT_REGULAR" and (
-        event.emitted_at.time() < time(9, 0)
-        or event.emitted_at.time() > time(15, 30)
+    elif (
+        venue == "NXT"
+        and session == "NXT_REGULAR"
+        and (
+            event.emitted_at.time() < time(9, 0)
+            or event.emitted_at.time() > time(15, 30)
+        )
     ):
         session = _session_for_venue(venue, event.emitted_at)
     if (
         (venue == "NXT" and not session.startswith("NXT_"))
         or (venue == "KRX" and session != "KRX_REGULAR")
-        or (
-            venue == "PREMARKET_KRX_LIKE"
-            and session != "PREMARKET_KRX_LIKE"
-        )
+        or (venue == "PREMARKET_KRX_LIKE" and session != "PREMARKET_KRX_LIKE")
     ):
         return "CONFLICT", "CONFLICT", "conflict"
     return venue, session, "pass"
@@ -652,9 +653,9 @@ def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
 def _partition_events_by_venue_session(
     events: list[PipelineEvent],
 ) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
-    explicit_by_attempt: dict[
-        str, list[tuple[datetime, tuple[str, str]]]
-    ] = defaultdict(list)
+    explicit_by_attempt: dict[str, list[tuple[datetime, tuple[str, str]]]] = (
+        defaultdict(list)
+    )
     for event in events:
         scope = _explicit_event_scope(event)
         exact_key = _exact_attempt_key(event)
@@ -2136,9 +2137,7 @@ def _classify(
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
     if _safe_str(scope_key).startswith("NXT|"):
         before_sentinel_hours = as_of.time() < NXT_SENTINEL_START
-        during_sentinel_hours = (
-            NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
-        )
+        during_sentinel_hours = NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
     else:
         before_sentinel_hours = as_of.time() < SENTINEL_START
         during_sentinel_hours = SENTINEL_START <= as_of.time() <= SENTINEL_END
@@ -2308,7 +2307,7 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
         ]
     if primary == "SUBMIT_DROUGHT_CRITICAL":
         return [
-            "Auto-route ai_confirmed -> budget_pass -> latency_pass -> order_bundle_submitted drought into postclose workorder/LDM handoff.",
+            "Auto-route ai_confirmed -> budget_pass -> latency_pass -> order_bundle_submitted drought into postclose code-improvement workorder handoff.",
             "Split root cause into upstream gate, budget pass, latency/pre-submit guard, and broker receipt buckets before tuning thresholds.",
             "Do not require operator approval for submitted drought surfacing or downstream workorder generation.",
         ]
@@ -2361,10 +2360,10 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     if primary == "SUBMIT_DROUGHT_CRITICAL":
         return {
             "route": "entry_submit_drought_auto_workorder",
-            "owner": "postclose_threshold_cycle_and_lifecycle_decision_matrix",
+            "owner": "postclose_threshold_cycle",
             "operator_action_required": False,
             "runtime_effect": "auto_workorder_no_intraday_mutation",
-            "next_artifact": "code_improvement_workorder_and_lifecycle_decision_matrix",
+            "next_artifact": "code_improvement_workorder",
         }
     if primary == "UPSTREAM_AI_THRESHOLD":
         return {
@@ -2471,7 +2470,6 @@ def _entry_submit_drought_contract(
         "broker_order_submit_allowed": False,
         "required_downstream": [
             "code_improvement_workorder",
-            "lifecycle_decision_matrix.submit_bucket_attribution",
             "threshold_cycle_ev_report",
             "runtime_approval_summary",
             "postclose_verifier",
@@ -2662,7 +2660,7 @@ def _entry_submit_drought_observation_breakdown(
                 ),
                 "quote_freshness_attribution": quote_freshness,
             },
-            "next_repair_action": "close unknown latency labels or route quote freshness gaps to LDM attribution",
+            "next_repair_action": "close unknown latency labels or route quote freshness gaps to Sentinel attribution",
         },
         "PRICE_REVALIDATION": {
             "status": (
@@ -2892,9 +2890,7 @@ def build_buy_funnel_sentinel_report(
             summary_rows=baseline_summary_rows,
         )
 
-    global_classification = _classify(
-        session_summary, baseline_summary, as_of=as_of
-    )
+    global_classification = _classify(session_summary, baseline_summary, as_of=as_of)
     scoped_events, scope_quality_counts = _partition_events_by_venue_session(events)
     scoped_baseline_events, _ = _partition_events_by_venue_session(
         baseline_events if baseline_date else []
@@ -2942,9 +2938,7 @@ def build_buy_funnel_sentinel_report(
                 scope_classification, scope_summary
             ),
         }
-    classification = _select_scope_classification(
-        scope_reports, global_classification
-    )
+    classification = _select_scope_classification(scope_reports, global_classification)
     excluded_scope_event_count = sum(
         int((row.get("summary") or {}).get("event_count") or 0)
         for row in scope_reports.values()

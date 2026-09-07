@@ -20,6 +20,7 @@ from src.engine.ai_response_contracts import swing_ai_structured_output_eval_con
 from src.engine.lifecycle.retirement import (
     current_report_view,
     retired_artifact,
+    retired_owner,
     retired_status,
 )
 
@@ -2214,7 +2215,7 @@ def _entry_submit_drought_implementation_marker(
         "implementation_checks": [
             "buy_funnel_sentinel emits entry_submit_drought_contract",
             "code_improvement_workorder selects drought and weak-contract follow-ups",
-            "required_downstream includes LDM, EV, runtime summary, and verifier consumers",
+            "required_downstream includes workorder, EV, runtime summary, and verifier consumers",
             "runtime_effect=false",
             "allowed_runtime_apply=false",
         ],
@@ -2261,79 +2262,9 @@ def _entry_submit_weak_contract_implementation_marker(
         if isinstance(contract.get("required_downstream"), list)
         else []
     )
-    if "lifecycle_decision_matrix.submit_bucket_attribution" not in {
-        str(item) for item in required
-    }:
+    if "code_improvement_workorder" not in {str(item) for item in required}:
         return {}
-    submit_attribution = (
-        lifecycle_report.get("submit_bucket_attribution")
-        if isinstance(lifecycle_report, dict)
-        and isinstance(lifecycle_report.get("submit_bucket_attribution"), dict)
-        else {}
-    )
-    submit_summary = (
-        submit_attribution.get("summary")
-        if isinstance(submit_attribution.get("summary"), dict)
-        else {}
-    )
-    post_submit_gaps = (
-        submit_attribution.get("post_submit_contract_gaps")
-        if isinstance(submit_attribution.get("post_submit_contract_gaps"), list)
-        else []
-    )
-    unresolved_gap_types = {
-        str(item.get("gap_type") or "")
-        for item in post_submit_gaps
-        if isinstance(item, dict)
-    }
-    unresolved_taxonomy_leakage = [
-        str(item) for item in (taxonomy_leakage_labels or []) if str(item).strip()
-    ]
-    if (
-        submit_attribution
-        and _safe_int(submit_summary.get("submit_rows"), 0) > 0
-        and _safe_int(submit_summary.get("contract_gap_count"), 0) == 0
-        and not bool(submit_summary.get("post_submit_provenance_join_gap"))
-        and gap_type not in unresolved_gap_types
-        and (
-            gap_type != "source_taxonomy_contract_gap"
-            or not unresolved_taxonomy_leakage
-        )
-    ):
-        return {
-            "implementation_status": "implemented_submit_contract_verified",
-            "implementation_checks": [
-                "buy_funnel_sentinel weak contract workorder is source-only",
-                "lifecycle_decision_matrix submit_bucket_attribution is present",
-                "submit_bucket_attribution contract_gap_count=0",
-                "post_submit_provenance_join_gap=false",
-                f"weak contract gap={gap_type}",
-                "runtime_effect=false",
-                "allowed_runtime_apply=false",
-            ],
-            "implementation_provenance": {
-                "implementation_type": "submit_contract_report_provenance_verified",
-                "source_report_type": "buy_funnel_sentinel",
-                "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
-                "gap_type": gap_type,
-                "weak_contract_matches": contract.get("weak_contract_matches") or [],
-                "sample_status": "ldm_submit_contract_verified",
-                "submit_rows": _safe_int(submit_summary.get("submit_rows"), 0),
-                "real_submitted_row_count": _safe_int(
-                    submit_summary.get("real_submitted_row_count"), 0
-                ),
-                "missing_broker_order_key_count": _safe_int(
-                    submit_summary.get("missing_broker_order_key_count"),
-                    0,
-                ),
-                "taxonomy_leakage_labels": unresolved_taxonomy_leakage,
-                "post_submit_provenance_join_resolution": submit_summary.get(
-                    "post_submit_provenance_join_resolution"
-                ),
-                "runtime_effect": contract.get("runtime_effect"),
-                "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
-            },
-        }
+    # Archived LDM attribution cannot verify a current broker/receipt contract.
     stage_unique = (
         contract.get("stage_unique")
         if isinstance(contract.get("stage_unique"), dict)
@@ -2354,7 +2285,7 @@ def _entry_submit_weak_contract_implementation_marker(
             "implementation_provenance": {
                 "implementation_type": "source_taxonomy_provenance_gap",
                 "source_report_type": "buy_funnel_sentinel",
-                "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
+                "downstream_consumer": "code_improvement_workorder",
                 "gap_type": gap_type,
                 "weak_contract_matches": contract.get("weak_contract_matches") or [],
                 "sample_status": "submitted_sample_exists_source_taxonomy_missing",
@@ -2382,7 +2313,7 @@ def _entry_submit_weak_contract_implementation_marker(
             "implementation_provenance": {
                 "implementation_type": "post_submit_provenance_join_gap",
                 "source_report_type": "buy_funnel_sentinel",
-                "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
+                "downstream_consumer": "code_improvement_workorder",
                 "gap_type": gap_type,
                 "weak_contract_matches": contract.get("weak_contract_matches") or [],
                 "sample_status": "submitted_sample_exists_broker_or_fill_join_missing",
@@ -2395,7 +2326,7 @@ def _entry_submit_weak_contract_implementation_marker(
         "implementation_status": "implemented_but_waiting_sample",
         "implementation_checks": [
             "buy_funnel_sentinel weak contract workorder is source-only",
-            "lifecycle_decision_matrix submit_bucket_attribution is the downstream consumer",
+            "code_improvement_workorder owns raw submit/receipt source repair",
             f"weak contract gap={gap_type}",
             "runtime_effect=false",
             "allowed_runtime_apply=false",
@@ -2403,7 +2334,7 @@ def _entry_submit_weak_contract_implementation_marker(
         "implementation_provenance": {
             "implementation_type": "entry_submit_source_contract_waiting_real_sample",
             "source_report_type": "buy_funnel_sentinel",
-            "downstream_consumer": "lifecycle_decision_matrix.submit_bucket_attribution",
+            "downstream_consumer": "code_improvement_workorder",
             "gap_type": gap_type,
             "weak_contract_matches": contract.get("weak_contract_matches") or [],
             "sample_status": "waiting_real_broker_or_fill_sample",
@@ -5290,6 +5221,15 @@ def _buy_funnel_sentinel_followup_orders(
         if isinstance(report.get("entry_submit_drought_contract"), dict)
         else {}
     )
+    if isinstance(contract.get("required_downstream"), list):
+        contract = {
+            **contract,
+            "required_downstream": [
+                item
+                for item in contract["required_downstream"]
+                if not retired_owner(str(item))
+            ],
+        }
     implementation_marker = _entry_submit_drought_implementation_marker(
         report,
         contract,
@@ -5325,28 +5265,31 @@ def _buy_funnel_sentinel_followup_orders(
             "target_subsystem": "runtime_instrumentation",
             "lifecycle_stage": "entry_submit",
             "route": "instrumentation_order",
-            "mapped_family": "lifecycle_decision_matrix_runtime",
-            "threshold_family": "lifecycle_decision_matrix_runtime",
+            "mapped_family": "entry_submit_drought_attribution",
+            "threshold_family": "entry_submit_drought_attribution",
             "priority": 0,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             **implementation_marker,
             "strategy_effect": "entry_submit_drought_handoff",
             "data_quality_effect": "funnel_root_cause_split_required",
-            "tuning_axis_effect": "auto_surface_to_ldm_and_workorder",
+            "tuning_axis_effect": "auto_surface_to_sentinel_and_workorder",
             "expected_ev_effect": "restore submitted coverage before evaluating EV edge",
             "intent": (
-                "When submitted/ai is below the critical threshold, automatically create a Codex workorder/LDM "
+                "When submitted/ai is below the critical threshold, automatically create a Codex source-only workorder "
                 "handoff so upstream gate, budget pass, latency/pre-submit, and broker receipt blockers are fixed "
                 "or routed without operator approval."
             ),
             "evidence": evidence,
             "required_downstream": (
-                contract.get("required_downstream")
-                if contract
+                [
+                    item
+                    for item in contract.get("required_downstream", [])
+                    if not retired_owner(str(item))
+                ]
+                if isinstance(contract.get("required_downstream"), list)
                 else [
                     "code_improvement_workorder",
-                    "lifecycle_decision_matrix.submit_bucket_attribution",
                     "threshold_cycle_ev_report",
                     "runtime_approval_summary",
                     "postclose_verifier",
@@ -5356,8 +5299,6 @@ def _buy_funnel_sentinel_followup_orders(
             "files_likely_touched": [
                 "src/engine/buy_funnel_sentinel.py",
                 "src/engine/build_code_improvement_workorder.py",
-                "src/engine/lifecycle_decision_matrix.py",
-                "src/engine/runtime_apply_bridge.py",
                 "src/engine/threshold_cycle_ev_report.py",
             ],
             "acceptance_tests": [
@@ -5367,7 +5308,7 @@ def _buy_funnel_sentinel_followup_orders(
             ],
             "next_postclose_metric": (
                 "SUBMIT_DROUGHT_CRITICAL must produce a selected implement_now workorder and the next "
-                "postclose LDM/runtime summary must show submit blocker attribution."
+                "postclose Sentinel/runtime summary must show submit blocker attribution."
             ),
         }
     ]

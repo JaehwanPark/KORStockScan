@@ -422,6 +422,8 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     assert report["classification"]["primary"] == "SUBMIT_DROUGHT_CRITICAL"
     assert "LATENCY_DROUGHT" in report["classification"]["secondary"]
     assert report["followup"]["route"] == "entry_submit_drought_auto_workorder"
+    assert report["followup"]["owner"] == "postclose_threshold_cycle"
+    assert report["followup"]["next_artifact"] == "code_improvement_workorder"
     assert report["followup"]["operator_action_required"] is False
     contract = report["entry_submit_drought_contract"]
     assert contract["operator_action_required"] is False
@@ -430,7 +432,7 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     assert "code_improvement_workorder" in contract["required_downstream"]
     assert (
         "lifecycle_decision_matrix.submit_bucket_attribution"
-        in contract["required_downstream"]
+        not in contract["required_downstream"]
     )
     assert "BROKER_RECEIPT" in contract["weak_contract_matches"]
     breakdown = contract["observation_breakdown"]
