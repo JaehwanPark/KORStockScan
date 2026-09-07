@@ -51104,6 +51104,7 @@ def _holding_flow_max_defer_micro_support(
 
 
 _HOLDING_FLOW_OFI_SOURCE_QUALITY_FORCE_REASONS = {
+    "holding_context_cannot_defer",
     "ai_engine_unavailable",
     "context_fetch_failed",
     "no_recent_ticks",
@@ -55494,6 +55495,12 @@ def _evaluate_holding_flow_override(
     ):
         context_force_exit_fields = {
             **holding_context_log_fields,
+            **_holding_flow_ofi_force_exit_phase_fields(
+                stock,
+                force_reason="holding_context_cannot_defer",
+                profit_rate=profit_rate,
+                now_ts=now_ts,
+            ),
             **_holding_flow_override_force_exit_contract_fields(),
         }
         _log_holding_pipeline(
@@ -56327,7 +56334,8 @@ def _is_wait65_79_candidate(action, ai_score) -> bool:
         score = float(ai_score or 0.0)
     except Exception:
         return False
-    return 65.0 <= score <= 79.0
+    # Historical event name is retained; the active research band starts at 60.
+    return 60.0 <= score <= 79.0
 
 
 def _log_wait65_79_ev_candidate(
@@ -56341,6 +56349,8 @@ def _log_wait65_79_ev_candidate(
     feature_probe,
     ai_call_trigger_reason="-",
 ):
+    from src.engine.scalping.score_recovery_observation import observation_fields
+
     probe = feature_probe or {}
     latency_state = (
         str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
@@ -56371,6 +56381,29 @@ def _log_wait65_79_ev_candidate(
         parse_ok=bool((ai_decision or {}).get("ai_parse_ok", False)),
         ai_response_ms=int((ai_decision or {}).get("ai_response_ms", 0) or 0),
         terminal_blocker="-",
+        **observation_fields(
+            action=action,
+            score=ai_score,
+            decision=ai_decision or {},
+            probe=probe,
+            latency_state=latency_state,
+            source_blocked=_buy_recovery_probe_source_quality_hard_block(probe),
+            scope=_scanner_runtime_event_venue_fields(stock),
+            reference_price=(ws_data or {}).get("curr"),
+            policy={
+                "min_score": _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 60),
+                "max_score": _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74),
+                "min_buy_pressure": _rule_float(
+                    "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65
+                ),
+                "min_tick_accel": _rule_float(
+                    "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.2
+                ),
+                "min_micro_vwap_bp": _rule_float(
+                    "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0
+                ),
+            },
+        ),
         **_build_observation_contract_fields("source_quality_gate"),
     )
 

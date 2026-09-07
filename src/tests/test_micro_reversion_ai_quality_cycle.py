@@ -16,6 +16,393 @@ from src.engine.scalping import main_lifecycle_journal as lifecycle_journal
 from src.engine.scalping import main_lifecycle_paired as lifecycle_paired
 from src.engine.scalping.micro_reversion import ai_quality_cycle as cycle
 from src.engine.scalping.micro_reversion import ai_quality_bridge as bridge
+from src.engine.scalping.micro_reversion import observer_source_quality
+
+
+def _review_history(days=5, *, symbol_count=10, current_run_blockers=(), probe_days=()):
+    dates = _krx_trading_dates(date(2026, 7, 20), days)
+    executions, lifecycles = [], []
+    for index, day in enumerate(dates):
+        identity = {
+            "trace_id": f"review-trace-{index}",
+            "stock_code": f"{index % symbol_count + 1:06d}",
+        }
+        producer = (
+            _probe_execution_report
+            if index in probe_days
+            else _current_execution_report if probe_days else _execution_report
+        )
+        executions.append(
+            producer(day.isoformat(), parent_id=f"review-parent-{index}", **identity)
+        )
+        lifecycles.append(_lifecycle_report(day.isoformat(), **identity))
+    passed = {day.isoformat(): True for day in dates}
+    return cycle.build_rolling_source_only_candidates(
+        target_date=dates[-1].isoformat(),
+        execution_reports=executions,
+        lifecycle_reports=lifecycles,
+        source_quality_pass_by_date=passed,
+        economic_reference_pass_by_date=passed,
+        current_run_global_blockers=current_run_blockers,
+    )
+
+
+@pytest.mark.parametrize(
+    "days,symbols,status,research,full",
+    [
+        (4, 4, "hold_sample", 0, 0),
+        (5, 5, "research_candidate", 1, 0),
+        (5, 1, "hold_sample", 0, 0),
+        (20, 10, "runtime_review_ready", 1, 1),
+    ],
+)
+def test_research_progress_does_not_grant_full_gate_authority(
+    days, symbols, status, research, full
+):
+    rolling, manifest = _review_history(days, symbol_count=symbols)
+    assert rolling["partitions"][0]["research_progress"]["status"] == status
+    assert manifest["research_candidate_count"] == research
+    assert manifest["candidate_count"] == full
+    assert manifest["allowed_runtime_apply"] is False
+    cycle.validate_r3_source_only_manifest(manifest, source_rolling_artifact=rolling)
+    if research:
+        assert manifest["research_candidates"][0]["runtime_effect"] is False
+        forged = deepcopy(manifest)
+        forged["research_candidates"][0]["progress"]["runtime_effect"] = True
+        forged["artifact_content_sha256"] = cycle._content_hash(
+            forged, "artifact_content_sha256"
+        )
+        with pytest.raises(ValueError, match="research_projection"):
+            cycle.validate_r3_source_only_manifest(
+                forged, source_rolling_artifact=rolling
+            )
+    if research and not full:
+        forged = deepcopy(manifest)
+        forged["candidates"] = forged["research_candidates"]
+        forged["candidate_count"] = research
+        forged["artifact_content_sha256"] = cycle._content_hash(
+            forged, "artifact_content_sha256"
+        )
+        with pytest.raises(ValueError, match="candidate_projection"):
+            cycle.validate_r3_source_only_manifest(
+                forged, source_rolling_artifact=rolling
+            )
+
+
+def test_paired_notional_gate_rejects_lower_profit_despite_positive_percentage_ev():
+    rolling, _ = _review_history(20)
+    metrics = rolling["partitions"][0]["windows"]["20"]
+    rows = [
+        {
+            "control_comparison_notional_krw": 300.0,
+            "candidate_comparison_notional_krw": 200.0,
+            "control_signal_selected": True,
+            "candidate_signal_selected": True,
+            "lifecycle": {
+                "session_exposure_sec": 3600.0,
+                "capital_time_krw_hours": 50000.0,
+            },
+        }
+        for _ in range(20)
+    ]
+    metrics["paired_notional_comparison"] = cycle._paired_notional_metrics(rows)
+    findings = cycle._window_gate_findings(metrics)
+    assert "candidate_ev_not_positive" not in findings
+    assert "paired_ev_delta_not_positive" not in findings
+    assert "paired_notional_net_profit_not_improved" in findings
+    comparison = metrics["paired_notional_comparison"]
+    assert comparison["paired_total_notional_net_profit_delta_krw"] == -2000
+    assert (
+        comparison["control_net_profit_per_reference_capital_krw_hour"]
+        > comparison["candidate_net_profit_per_reference_capital_krw_hour"]
+    )
+    comparison["paired_total_notional_net_profit_delta_krw"] = 2000
+    assert "paired_notional_comparison_contract_invalid" in cycle._window_gate_findings(
+        metrics
+    )
+
+
+def test_valid_no_signal_day_preserves_clean_history_but_not_source_failures():
+    rolling, manifest = _review_history(
+        20, current_run_blockers=["no_micro_reversion_eligible_requests"]
+    )
+    assert rolling["current_run_observation_states"] == [
+        "no_micro_reversion_eligible_requests"
+    ]
+    assert rolling["global_candidate_blockers"] == []
+    assert manifest["research_candidate_count"] == manifest["candidate_count"] == 1
+    cycle.validate_r3_source_only_manifest(manifest, source_rolling_artifact=rolling)
+    rolling, manifest = _review_history(
+        20,
+        current_run_blockers=[
+            "no_micro_reversion_eligible_requests",
+            "materialized_artifact_invalid",
+        ],
+    )
+    assert (
+        rolling["partitions"][0]["research_progress"]["status"]
+        == "source_quality_blocked"
+    )
+    assert manifest["research_candidate_count"] == manifest["candidate_count"] == 0
+
+
+def test_wait_hold_counts_do_not_veto_better_economics():
+    rolling, _ = _review_history(20)
+    metrics = rolling["partitions"][0]["windows"]["20"]
+    metrics.update(control_deferred_count=0, candidate_deferred_count=1)
+    assert cycle._window_gate_findings(metrics) == []
+    metrics["invalid_transition_count"] = 1
+    assert "rolling_invalid_transition_present" in cycle._window_gate_findings(metrics)
+
+
+def test_composite_improvement_does_not_require_feature_only_improvement():
+    rolling, _ = _review_history(5)
+    metrics = rolling["partitions"][0]["windows"]["5"]
+    metrics.update(
+        ablation_design_version=cycle.CURRENT_DESIGN_VERSION,
+        baseline_metric_parent_count=5,
+        baseline_source_quality_adjusted_ev_pct=0.1,
+        control_source_quality_adjusted_ev_pct=0.08,
+        candidate_source_quality_adjusted_ev_pct=0.2,
+        paired_ev_delta_pct=0.12,
+        relative_uplift_pct=150.0,
+        feature_ev_delta_pct=-0.02,
+        composite_ev_delta_pct=0.1,
+        composite_relative_uplift_pct=100.0,
+        baseline_p10_ev_pct=0.1,
+        control_p10_ev_pct=0.08,
+        candidate_p10_ev_pct=0.2,
+        baseline_severe_tail_count=0,
+    )
+    assert cycle._window_gate_findings(metrics) == []
+    metrics["feature_ev_delta_pct"] = None
+    assert "feature_ev_delta_missing" in cycle._window_gate_findings(metrics)
+
+
+@pytest.mark.parametrize(
+    "finding",
+    [
+        "relative_uplift_below_floor",
+        "paired_ev_delta_not_positive",
+        "paired_notional_net_profit_not_improved",
+    ],
+)
+def test_research_keeps_other_window_economics_as_diagnostics(finding):
+    rolling, _ = _review_history(20)
+    partition = rolling["partitions"][0]
+    partition["gate_findings"]["20"].append(finding)
+    partition["r3_source_candidate_eligible"] = False
+    progress = cycle._research_progress(partition)
+    assert progress["status"] == "research_candidate"
+    assert progress["runtime_evidence_ready"] is False
+    assert progress["runtime_apply_ready"] is False
+    assert finding in progress["other_window_economic_diagnostics"]["20"]
+    partition["gate_findings"]["20"].append("severe_tail_worsened")
+    assert cycle._research_progress(partition)["status"] == "hold_no_edge"
+
+
+def test_research_does_not_require_one_percent_relative_uplift():
+    rolling, _ = _review_history(5)
+    partition = rolling["partitions"][0]
+    partition["gate_findings"]["5"].append("relative_uplift_below_floor")
+    assert cycle._research_progress(partition)["status"] == "research_candidate"
+
+
+def test_probe_population_is_separate_from_full_exposure_candidate():
+    rolling, manifest = _review_history(24, probe_days={5})
+    assert len(rolling["partitions"]) == 2
+    full, probe = sorted(rolling["partitions"], key=lambda p: p["economic_population"])
+    assert full["economic_population"] == "full_or_zero_exposure"
+    assert full["source_row_count"] == 23
+    assert probe["source_row_count"] == 1
+    assert probe["r3_source_candidate_eligible"] is False
+    assert "probe_population_not_runtime_evidence" in probe["gate_findings"]["20"]
+    assert manifest["candidate_count"] == 1
+    cycle.validate_r3_source_only_manifest(manifest, source_rolling_artifact=rolling)
+
+
+def test_research_readiness_revalidates_all_window_source_contracts():
+    rolling, _ = _review_history(5)
+    partition = rolling["partitions"][0]
+    partition["gate_findings"]["20"].append(
+        "paired_notional_comparison_contract_invalid"
+    )
+    assert cycle._research_progress(partition)["status"] == "source_quality_blocked"
+
+
+@pytest.mark.parametrize(
+    "days,symbols,finding",
+    [
+        (5, 2, "rolling_unique_symbol_floor_not_met"),
+        (10, 4, "rolling_unique_symbol_floor_not_met"),
+    ],
+)
+def test_short_windows_have_proportional_sample_floors(days, symbols, finding):
+    rolling, _ = _review_history(days, symbol_count=symbols)
+    assert finding in rolling["partitions"][0]["gate_findings"][str(days)]
+
+
+def test_paired_notional_does_not_impute_missing_probe_or_counterpart():
+    rows = [
+        {
+            "control_comparison_notional_krw": None,
+            "candidate_comparison_notional_krw": 200.0,
+            "lifecycle": {},
+        }
+    ]
+    metrics = cycle._paired_notional_metrics(rows)
+    assert metrics["paired_count"] == 0
+    assert metrics["missing_pair_count"] == 1
+    assert metrics["paired_total_notional_net_profit_delta_krw"] is None
+    assert cycle._paired_notional_contract_valid(metrics, 1)
+    row = cycle._validated_execution_rows(
+        _execution_report(
+            "2026-08-14",
+            parent_id="no-exposure",
+            trace_id="no-exposure-trace",
+            stock_code="000001",
+        )
+    )[0]
+    assert row["control_notional_value_krw"] is None
+    assert row["control_comparison_notional_krw"] == 0.0  # verified no exposure
+
+
+def _review_quarantine_snapshot():
+    return {
+        "schema": "scalp_micro_reversion_canary_monitor_v1",
+        "generated_at": "2026-09-07T20:10:00+09:00",
+        "canary_guard": {
+            "status": "stopped_clean",
+            "stop_required": False,
+            "stop_reasons": [],
+            "raw_row_exclusion_required": True,
+            "source_quality_row_exclusions": [
+                "raw_row_exclusion_required:path_exchange_timestamp_regression_exceeded_count=5"
+            ],
+        },
+        "collector_snapshot": {
+            **dict.fromkeys(observer_source_quality.CANARY_LOSS_COUNTERS, 0),
+            **dict.fromkeys(
+                observer_source_quality.CANARY_FORBIDDEN_TRUE_FIELDS, False
+            ),
+            "broker_order_forbidden": True,
+            "collector_lifecycle": "closed",
+            "reference_reconciliation_completed": True,
+            "depth_capture_requested": True,
+            "path_exchange_timestamp_regression_count": 116,
+            "path_exchange_timestamp_regression_quarantined_count": 111,
+            "path_exchange_timestamp_regression_exceeded_count": 5,
+            "invalid_exchange_timestamp_count": 0,
+            "stale_exchange_timestamp_block_count": 0,
+            "invalid_depth_timestamp_count": 0,
+            "enqueued_count": 1000,
+            "worker_processed_count": 1000,
+            "writer_persisted_envelope_count": 1000,
+            "path_point_submitted_count": 1000,
+            "depth_enqueued_count": 2000,
+            "depth_worker_processed_count": 2000,
+            "depth_writer_persisted_envelope_count": 2000,
+            "metric_contracts": {
+                "exchange_timestamp_regression_canary": {
+                    "metric_role": "source_quality_incident_and_raw_row_exclusion",
+                    "decision_authority": "observer_row_quarantine_only",
+                    "primary_decision_metric": "path_exchange_timestamp_regression_exceeded_count",
+                    "source_quality_gate": "affected_rows_remain_path_consumer_ineligible_and_are_skipped_by_p2_reconstruction_without_imputation",
+                    "forbidden_uses": [
+                        "detector_or_path_consumption_of_quarantined_row",
+                        "broker_order_submission",
+                    ],
+                }
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "count_mismatch",
+        "writer_loss",
+        "pre_enqueue_loss",
+        "missing_counter",
+        "mixed_reasons",
+        "authority",
+        "impossible_observation_count",
+        "malformed_metric_contract",
+    ],
+)
+def test_observer_allows_only_proven_lossless_row_quarantine(tmp_path, mutation):
+    payload = _review_quarantine_snapshot()
+    collector = payload["collector_snapshot"]
+    if mutation == "count_mismatch":
+        collector["path_exchange_timestamp_regression_count"] += 1
+    elif mutation == "writer_loss":
+        collector["writer_dropped_envelope_count"] = 1
+    elif mutation == "pre_enqueue_loss":
+        collector["invalid_exchange_timestamp_count"] = 1
+    elif mutation == "missing_counter":
+        del collector["invalid_depth_timestamp_count"]
+    elif mutation == "mixed_reasons":
+        payload["canary_guard"]["source_quality_row_exclusions"].append("unknown_loss")
+    elif mutation == "authority":
+        collector["trading_decision_effect"] = True
+    elif mutation == "impossible_observation_count":
+        collector["path_exchange_timestamp_regression_count"] = 1116
+        collector["path_exchange_timestamp_regression_quarantined_count"] = 1111
+    elif mutation == "malformed_metric_contract":
+        collector["metric_contracts"]["exchange_timestamp_regression_canary"][
+            "forbidden_uses"
+        ] = "detector_or_path_consumption_of_quarantined_row,broker_order_submission"
+    path = tmp_path / "canary.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    result = cycle._observer_canary_diagnostic(
+        target_date="2026-09-07", latest_path=path, daily_path=tmp_path / "absent.json"
+    )
+    if mutation is None:
+        assert result["status"] == "pass_with_row_quarantine"
+        assert (
+            result["timestamp_row_quarantine_validation"]["quarantined_row_count"] == 5
+        )
+        assert cycle._observer_provider_gate_blocker(result) is None
+        diagnostics = cycle._source_only_gap_diagnostics(
+            target_date="2026-09-07",
+            observer_canary=result,
+            bridge_report=None,
+            lifecycle_report=None,
+        )
+        assert (
+            "micro_observer_canary_row_exclusion_required"
+            not in diagnostics["blocker_codes"]
+        )
+    else:
+        assert cycle._observer_provider_gate_blocker(result) is not None
+    assert cycle._observer_source_only_stage_gate(result)[
+        "observer_blocks_provider_replay"
+    ] is (mutation is not None)
+
+
+def test_receipt_gap_count_uses_defects_not_submitted_denominator():
+    lifecycle = {
+        "target_date": "2026-09-04",
+        "promotion_evidence_eligible_count": 0,
+        "broker_execution_provenance_gap_count": 0,
+        "pipeline_lifecycle_instrumentation_gap_count": 1,
+        "real_submitted_lifecycle_count": 3,
+        "broker_execution_unique_count": 2,
+        **cycle.OFFLINE_AUTHORITY,
+    }
+    lifecycle["artifact_content_sha256"] = cycle._content_hash(
+        lifecycle, "artifact_content_sha256"
+    )
+    result = cycle._source_only_gap_diagnostics(
+        target_date="2026-09-04",
+        observer_canary={"status": "pass"},
+        bridge_report=None,
+        lifecycle_report=lifecycle,
+    )
+    assert result["blocker_codes"] == ["main_lifecycle_execution_receipt_custody_gap:1"]
+    assert "real_submitted_lifecycle_count=3" in result["workorders"][0]["reason_codes"]
 
 
 def _paired_request(trace_id: str = "trace-1", *, stage: str = "entry") -> dict:
@@ -1564,7 +1951,9 @@ def test_current_r3_applies_feature_and_composite_baseline_gates(
     assert metrics["baseline_metric_parent_count"] == 20
     if baseline_matches_candidate:
         assert partition["r3_source_candidate_eligible"] is False
-        assert "feature_ev_noninferiority_failed" in partition["gate_findings"]["20"]
+        assert (
+            "feature_ev_noninferiority_failed" not in partition["gate_findings"]["20"]
+        )
         assert "composite_ev_delta_not_positive" in partition["gate_findings"]["20"]
         assert manifest["candidate_count"] == 0
     else:
@@ -1575,10 +1964,8 @@ def test_current_r3_applies_feature_and_composite_baseline_gates(
         assert manifest["candidate_count"] == 1
         candidate = manifest["candidates"][0]
         assert (
-            candidate["evidence_contract"][
-                "requires_ask_depletion_feature_ev_noninferiority_against_current_micro"
-            ]
-            is True
+            candidate["evidence_contract"]["ask_depletion_feature_only_ev_role"]
+            == "diagnostic_not_composite_veto"
         )
         assert (
             candidate["evidence_contract"][
@@ -1590,12 +1977,16 @@ def test_current_r3_applies_feature_and_composite_baseline_gates(
         assert candidate["broker_order_forbidden"] is True
 
 
-def test_wait_probe_percentage_ev_is_comparable_but_notional_stays_separate():
+def _probe_execution_report(target_date="2026-08-24", **identity):
+    identity = {
+        "parent_id": "probe-vs-full-parent",
+        "trace_id": "probe-vs-full-trace",
+        "stock_code": "000001",
+        **identity,
+    }
     report = _current_execution_report(
-        "2026-08-24",
-        parent_id="probe-vs-full-parent",
-        trace_id="probe-vs-full-trace",
-        stock_code="000001",
+        target_date,
+        **identity,
     )
     feature_arm = report["ablation_arms"][1]
     feature_result = next(
@@ -1632,6 +2023,11 @@ def test_wait_probe_percentage_ev_is_comparable_but_notional_stays_separate():
     )
     _reseal_execution_result_ids(report)
 
+    return report
+
+
+def test_wait_probe_percentage_ev_is_comparable_but_notional_stays_separate():
+    report = _probe_execution_report()
     normalized = cycle._validated_execution_rows(report)
 
     assert len(normalized) == 1
@@ -6232,6 +6628,23 @@ def test_current_run_excludes_stale_same_date_lifecycle_after_producer_failure()
     assert lifecycle == []
 
 
+def test_cycle_cli_accepts_normal_no_new_sample(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cycle,
+        "run_cycle",
+        lambda **_kwargs: {
+            "schema": cycle.CYCLE_SCHEMA,
+            "target_date": "2026-09-07",
+            "status": "source_only_no_new_sample",
+            "blockers": [],
+            "current_run_observation_states": ["no_micro_reversion_eligible_requests"],
+            **cycle.OFFLINE_AUTHORITY,
+        },
+    )
+    assert cycle.main(["--date", "2026-09-07"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "source_only_no_new_sample"
+
+
 def test_cycle_cli_returns_nonzero_for_terminal_blocked_artifact(monkeypatch, capsys):
     blocked = {
         "schema": cycle.CYCLE_SCHEMA,
@@ -6284,6 +6697,8 @@ def test_r3_manifest_binds_one_exact_validated_r2_generation():
         "source_current_run_global_blockers_sha256": cycle._sha256([]),
         "candidate_count": 0,
         "candidates": [],
+        "research_candidate_count": 0,
+        "research_candidates": [],
         "global_candidate_blockers": [],
         "blocked_pre_clear_candidate_count": 0,
         "first_runtime_candidate_auto_apply_performed": False,

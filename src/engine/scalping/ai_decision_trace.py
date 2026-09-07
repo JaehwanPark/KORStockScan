@@ -2116,6 +2116,9 @@ def record_ai_decision_trace(
             "main_ai_quality_live_policy_status": _optional(
                 merged, "main_ai_quality_live_policy_status"
             ),
+            "main_ai_current_axis_receipt": _optional(
+                merged, "main_ai_current_axis_receipt"
+            ),
             "main_ai_quality_live_policy_target_date": _optional(
                 merged, "main_ai_quality_live_policy_target_date"
             ),

@@ -614,3 +614,68 @@ def _mock_time(hour: int, minute: int):
         yield
     finally:
         cc.datetime = orig
+
+
+def test_once_markers_survive_verbose_output_and_new_run(tmp_path):
+    path = tmp_path / "postclose.log"
+    day = "2026-09-07"
+    path.with_suffix(".log.1").write_text(
+        f"[START] postclose target_date={day}\n[DONE] postclose target_date={day}\n"
+    )
+    path.write_text(f"[START] postclose target_date={day}\n" + "report row\n" * 6000)
+    text = CronCompletionDetector._read_once_markers(path, day)
+    assert "[START]" in text
+    assert "[DONE]" not in text
+    assert len(text.splitlines()) == 1
+    with path.open("a") as stream:
+        stream.write(f"[FAIL] postclose target_date={day}\n" + "report row\n" * 6000)
+    assert (
+        CronCompletionDetector._last_terminal_marker(
+            CronCompletionDetector._read_once_markers(path, day)
+        )
+        == "error"
+    )
+
+
+def test_once_in_progress_marker_outside_tail_is_not_missing(monkeypatch, tmp_path):
+    import src.engine.error_detectors.cron_completion as cc
+
+    path = tmp_path / "postclose.log"
+    path.write_text(
+        "[START] postclose target_date=2026-09-07\n"
+        + "status target_date=2026-09-07\n" * 6000
+    )
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-07")
+    monkeypatch.setattr(
+        cc,
+        "CRON_JOB_REGISTRY",
+        [
+            dict(
+                id="test_postclose",
+                log="postclose.log",
+                window_start=(20, 10),
+                window_end=(21, 40),
+                mode="once",
+                critical=True,
+            )
+        ],
+    )
+    with _mock_time(21, 20):
+        result = CronCompletionDetector().check()
+    assert result.details["test_postclose_status"] == "in_progress"
+    assert result.severity == "pass"
+    with _mock_time(21, 45):
+        result = CronCompletionDetector().check()
+    assert result.details["test_postclose_status"] == "fail"
+
+
+def test_once_marker_census_rejects_embedded_json_receipts(tmp_path):
+    path = tmp_path / "postclose.log"
+    path.write_text(
+        "[START] postclose target_date=2026-09-07\n"
+        '{"example": "[DONE] postclose target_date=2026-09-07"}\n'
+    )
+    text = CronCompletionDetector._read_once_markers(path, "2026-09-07")
+    assert "[START]" in text
+    assert "[DONE]" not in text

@@ -180,13 +180,13 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     assert report["generation_id"].startswith("2026-05-08-")
     assert report["schema_version"] == 2
     assert report["producer_contract_version"] == (
-        "code_improvement_workorder_producer_v3"
+        "code_improvement_workorder_producer_v4"
     )
     assert len(report["generation_hash"]) == 64
     assert report["generation_inputs"] == {
         "source_hash": report["source_hash"],
         "schema_version": 2,
-        "producer_contract_version": "code_improvement_workorder_producer_v3",
+        "producer_contract_version": "code_improvement_workorder_producer_v4",
         "max_orders": 5,
         "include_swing": True,
     }
@@ -5325,7 +5325,13 @@ def test_buy_funnel_submit_drought_creates_all_post_submit_weak_contract_workord
         }
     )
 
-    by_id = {item["order_id"]: item for item in orders}
+    from src.engine.lifecycle.retirement import current_report_view
+
+    filtered = current_report_view({"orders": orders})["orders"]
+    assert {item["order_id"] for item in filtered} == {
+        item["order_id"] for item in orders
+    }
+    by_id = {item["order_id"]: item for item in filtered}
     for order_id in {
         "order_entry_post_submit_contract_gap_review",
         "order_entry_broker_receipt_contract_gap_review",
@@ -5336,6 +5342,13 @@ def test_buy_funnel_submit_drought_creates_all_post_submit_weak_contract_workord
         assert by_id[order_id]["runtime_effect"] is False
         assert by_id[order_id]["allowed_runtime_apply"] is False
         assert by_id[order_id]["source_report_type"] == "buy_funnel_sentinel"
+
+    for order in filtered:
+        assert order["mapped_family"] == "entry_submit_drought_attribution"
+        assert (
+            "src/engine/lifecycle_decision_matrix.py"
+            not in order["files_likely_touched"]
+        )
 
 
 def test_buy_funnel_submit_drought_marks_post_submit_gap_when_submit_sample_exists():

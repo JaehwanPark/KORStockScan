@@ -866,9 +866,7 @@ def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
     prompt_consumer_index = script.index(
         "-m src.engine.scalping.main_ai_prompt_consumer"
     )
-    runtime_family_index = script.index(
-        "-m src.engine.automation.main_ai_quality_runtime_family"
-    )
+    runtime_family_index = script.index("[SKIP] main-ai-quality-runtime-family")
     assert (
         r0_index
         < action_outcome_index
@@ -1971,9 +1969,7 @@ def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain(
     cycle_index = script.index(
         "-m src.engine.scalping.micro_reversion.ai_quality_cycle"
     )
-    runtime_family_index = script.index(
-        "-m src.engine.automation.main_ai_quality_runtime_family"
-    )
+    runtime_family_index = script.index("[SKIP] main-ai-quality-runtime-family")
     calibration_index = script.index(
         "-m src.engine.scalping.ai_action_outcome_calibration"
     )
@@ -1987,20 +1983,14 @@ def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain(
         < optimizer_index
         < runtime_family_index
     )
-    assert (
-        'RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY:-true}"'
-        in script
-    )
+    assert "-m src.engine.automation.main_ai_quality_runtime_family" not in script
     runtime_family_block = script[
         runtime_family_index : script.index(
             'if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ]',
             runtime_family_index,
         )
     ]
-    assert "--phase postclose" in runtime_family_block
-    assert '--target-date "$TARGET_DATE"' in runtime_family_block
-    assert "--write" in runtime_family_block
-    assert "blocked_fail_closed" in runtime_family_block
+    assert "status=retired_disabled" in runtime_family_block
     assert "runtime_effect=false actual_order_submitted=false" in runtime_family_block
     cycle_block_start = script.rindex(
         'if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]',
@@ -2095,9 +2085,9 @@ echo unrelated_postclose_continues
     assert ("artifact_waited" in result.stdout) is expect_artifact_wait
 
 
-def test_postclose_wrapper_isolates_bounded_runtime_family_failure() -> None:
+def test_postclose_wrapper_never_calls_disabled_runtime_family() -> None:
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-    start = script.index('if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ]')
+    start = script.index('emit_postclose_marker "[SKIP] main-ai-quality-runtime-family')
     end = script.index(
         'if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ]', start
     )
@@ -2107,6 +2097,7 @@ def test_postclose_wrapper_isolates_bounded_runtime_family_failure() -> None:
             """
 set -Eeuo pipefail
 RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY=true
+THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY=true
 TARGET_DATE=2026-08-14
 VENV_PY=/tmp/unused-python
 run_postclose_cmd() { echo family_called; return 31; }
@@ -2122,8 +2113,8 @@ emit_postclose_marker() { echo "$1"; }
     )
 
     assert result.returncode == 0
-    assert "family_called" in result.stdout
-    assert "status=blocked_fail_closed" in result.stdout
+    assert "family_called" not in result.stdout
+    assert "status=retired_disabled" in result.stdout
     assert "runtime_effect=false actual_order_submitted=false" in result.stdout
     assert "unrelated_postclose_continues" in result.stdout
 
@@ -3525,15 +3516,11 @@ def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():
     approval_index = script.index(
         "src.engine.automation.machine_microstructure_policy_approval"
     )
-    runtime_family_index = script.index(
-        "src.engine.automation.main_ai_quality_runtime_family"
-    )
+    assert "src.engine.automation.main_ai_quality_runtime_family" not in script
+    runtime_family_index = script.index("[SKIP] main-ai-quality-runtime-family")
     assert approval_index < runtime_family_index
     runtime_family_block = script[runtime_family_index:]
-    assert "--phase preopen" in runtime_family_block
-    assert '--target-date "$TARGET_DATE"' in runtime_family_block
-    assert "--write" in runtime_family_block
-    assert "exact_candidate_or_standing_intent_not_ready=true" in (runtime_family_block)
+    assert "status=retired_disabled" in runtime_family_block
 
 
 def test_preopen_wrapper_treats_operator_lock_ready_manifest_as_succeeded():

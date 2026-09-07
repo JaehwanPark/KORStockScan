@@ -13,6 +13,7 @@ import hashlib
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import date
 from types import MappingProxyType
 from typing import Any
 
@@ -45,6 +46,26 @@ PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS = 30
 PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS = 5
 PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS = 20
 PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS = 10
+PROVIDER_RESEARCH_ADMISSION_ACTIVATION_DATE = "2026-09-07"
+
+
+def provider_ablation_floor_requirements(target_date: str) -> tuple[int, int, int]:
+    """Effective-dated research admission, never runtime promotion authority.
+
+    Historical receipts keep their exact original floor. New bounded Provider
+    evaluations align with the R2 research floor; monetary/attempt/lineage
+    guards and the independent full economic acceptance gate are unchanged.
+    """
+    if date.fromisoformat(target_date) >= date.fromisoformat(
+        PROVIDER_RESEARCH_ADMISSION_ACTIVATION_DATE
+    ):
+        return (5, 5, 3)
+    return (
+        PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS,
+        PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS,
+        PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS,
+    )
+
 
 LEGACY_ARMS = (
     "replay_control_exact_no_micro",
@@ -525,6 +546,8 @@ __all__ = (
     "PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS",
     "PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS",
     "PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS",
+    "PROVIDER_RESEARCH_ADMISSION_ACTIVATION_DATE",
+    "provider_ablation_floor_requirements",
     "LEGACY_ARMS",
     "CURRENT_ARMS",
     "CURRENT_BASE_CONTROL_ARM",

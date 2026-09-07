@@ -187,13 +187,8 @@ if ! PYTHONPATH=. "$VENV_PY" \
   "${rebound_preopen_args[@]}"; then
   echo "[WARN] machine rebound reentry preopen failed target_date=$TARGET_DATE family_baseline_preserved=true"
 fi
-if ! PYTHONPATH=. "$VENV_PY" \
-  -m src.engine.automation.main_ai_quality_runtime_family \
-  --phase preopen \
-  --target-date "$TARGET_DATE" \
-  --write; then
-  echo "[WARN] main AI quality runtime family not applied target_date=$TARGET_DATE exact_candidate_or_standing_intent_not_ready=true runtime_apply_unchanged=true"
-fi
+# Legacy Main AI runtime remains disabled; the current axis has separate consent.
+echo "[SKIP] main-ai-quality-runtime-family target_date=$TARGET_DATE status=retired_disabled runtime_effect=false actual_order_submitted=false"
 
 args=(--date "$TARGET_DATE" --apply-mode "$APPLY_MODE")
 if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ] && [[ "$TARGET_DATE" > "2026-09-07" ]]; then
@@ -236,6 +231,16 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
   --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env" \
   --dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env" \
   --write
+current_axis_preopen_args=(--phase preopen --target-date "$TARGET_DATE")
+if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ]; then
+  current_axis_preopen_args+=(--write)
+fi
+if [[ "$TARGET_DATE" > "2026-09-07" ]]; then
+  if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.main_ai_current_axis "${current_axis_preopen_args[@]}"; then
+    echo "[FAIL] main-ai-current-axis PREOPEN contract target_date=$TARGET_DATE baseline_preserved=true"
+    mark_preopen_failed 1
+  fi
+fi
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 preopen_reason="completed"
 if "$VENV_PY" - "$MANIFEST_CAPTURE_FILE" <<'PY'

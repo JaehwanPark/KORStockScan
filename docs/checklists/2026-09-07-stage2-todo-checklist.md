@@ -4,7 +4,7 @@
 
 - 전일 postclose 자동화가 만든 장전 apply 후보와 사용자 개입 요구사항을 산출물 기준으로 확인한다.
 - 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
-- code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
+- code-improvement workorder 생성만으로 repo를 수정하지 않는다. 사용자 구현 지시 또는 명시적으로 호출된 장후 모니터링 지시문의 허용 2-pass 범위에서만 실행한다. 문서 현행화는 실행 요청이 아니다.
 
 ## 오늘 강제 규칙
 
@@ -17,6 +17,55 @@
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
 ## 수동 보강 체크리스트
+
+- [x] `[DailyThresholdFinalDefectRepair0907] Daily threshold 최종 결함 보완·실행 세대 보호 후 반영` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:15~23:20`, `Track: RuntimeStability`)
+  - Source: [최종 결함 보완](../audit-reports/2026-09-07-daily-threshold-final-defect-review.md). 사용자 권장순서 실행 지시로 과도한 전역 차단, 적용 표본 순환, 거래일 window, AI payload 상한 및 정규 CLI 계측을 보완했다.
+  - 검증: 임시 작업본 10-file 회귀 2,051 PASS, 작업 트리 1차 2,053 PASS. 비용 표본-only 분모와 로그 문자열→당시 가격 결속 보강 후 최종 2,055 PASS, 검토한 코드 범위 finding 0, Black/Ruff/compile/diff/print-only parser PASS. DB/source loader 포함 무기록 CLI 계측은 46.438초/378.09MiB다. 이 계측을 종전 9.9초/274MB와 같은 전체 경로 개선으로 비교하지 않는다.
+  - 반영: 원 main PID895257이 21:44:45 verifier FAIL로 terminal이고 관련 동일-code worker가 없음을 확인한 후 원본 snapshot 일치 검사, 21:47 변경분 반영을 수행했다. 해당 main/controller 실패는 이번 작업에서 재실행·복구하지 않았으며 전체 장후 GREEN으로 보지 않는다. env/lock/provider/주문/매매 process는 변경하지 않았다.
+  - 경제성: 2% 절대 문턱은 임의 완화하지 않으며 새 exact 분포가 나오면 기존 자연 owner에서 증분 net EV 기준 대체/제거를 판정한다. 코드 완료가 자연 산출물·실수익 완료는 아니다.
+
+- [x] `[PostcloseDetectorFalsePositiveRepair0907] 장후 진행 marker·lock 오탐 보완` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 21:20~21:35`, `Track: RuntimeStability`)
+  - Source: [장후 모니터링·복구 검토](../audit-reports/2026-09-07-postclose-monitoring-recovery-review.md). 긴 로그의 START 소실 및 lock 나이 기준 stale/자동삭제를 보완했다. 점유는 owner 진행상태와 별도 대조하며 미점유 marker도 보존한다.
+  - 완료: 별도 작업 트리 review/fix/재리뷰, 관련59 PASS/compile/diff, 실제 source 읽기 전용 재판정 후21:30 정기 detector 자연 PASS. 매매 process·주문·env·provider·strategy guard 변경 없음.
+  - 이 완료는 detector 결함 범위다. 전체 장후 terminal 및 추천 intake/Pass1/2는 `AutomationTriggerDecisionSummary0907`와 Source에서 계속 확인하며 완료를 선행 주장하지 않는다.
+
+- [x] `[MainAIR0R3ObjectiveGateRepair0907] #77 목적 부합 판정·연구 입장·consumer 재보완` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~20:00`, `Track: ScalpingLogic`)
+  - Source: [R0–R3 2차 보완](../audit-reports/2026-09-07-main-ai-r0-r3-remediation-review.md). 새 반례를 기준으로 정상 무신호/자료 결손 분리, WAIT/HOLD 및 feature-only veto 제거, 5일 연구/누적 심사 분리, probe 경제성 집단 분리, effective-dated Provider 연구 하한 및 exact R2/R3 consumer receipt를 보완한다.
+  - 완료 조건: 관련 producer/leaf/consumer/CLI의 review→fix→재리뷰, targeted 회귀·compile·diff·parser PASS. 소스 검증·호출/비용 상한·실매매 safety는 유지하고 runtime consumer 미등록은 경제성 완료와 분리한다.
+  - 자연 생성은 기존 `AIDecisionActionOutcomeNaturalEvidence0908`에서 확인한다. 이 항목은 source-only 코드 보완이며 실제 보고서/Provider 실행·env/봇/실주문 변경이 아니다.
+  - 완료 증거: 14-module 최종1113 PASS/작업 전부터의 benchmark hash1 FAIL, Ruff/Black8/compile4/bash2/diff/parser PASS. source-only 변경 범위 finding0이고 기존 hash 결손은 `Intraday1120SourceAcceptance0907`, live consumer 미구현은 아래 별도 OPEN owner에 남긴다.
+
+- [x] `[MainAICurrentAxisRuntimeContract0908] 현행 ask-depletion Entry AI 연결 구현·재리뷰` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:30`, `Track: ScalpingLogic`)
+  - Source: [R0–R3 현행 연결 3차 보완](../audit-reports/2026-09-07-main-ai-r0-r3-remediation-review.md). 사용자 `이어서 진행`으로 구현 범위를 확정했다. 새 family는 기존 ask-depletion 축의 연결이고 #81 disabled 및 별도 V2.14/V2.15 owner를 보존한다.
+  - 구현: 동일 provider/model/transport/schema/parser/budget의 KRX SCANNER Entry prompt/input 소비, exact 최초 승인 및 명시적 동일 계약 renewal, postclose 최신 source→다음 세션 후보→PREOPEN immutable apply/rollback→exact 전달 census를 연결했다. 미완결 기록 재시도·scope 격리·진행 중 철회·capture 실패 baseline 복귀를 보완한다.
+  - 코드 종결 조건: Source의 최종 회귀/정적/문서 검증과 재리뷰. 기존 frozen benchmark hash 및 이번 normalized collector 변경의 새 성능 증거는 `Intraday1120SourceAcceptance0907`, 최초 활성화는 아래 준비 owner, 자연/실수익은 `AIDecisionActionOutcomeNaturalEvidence0908`로 분리한다. 실제 등록·승인·env·PID·Provider/주문 변경은 이번 범위가 아니다.
+  - 완료 증거: 20-module 최종1410 PASS/성능 증거 세대 hash1 FAIL. 검토한 기능 범위 finding0이며 기존 benchmark 실패를 지우지 않고 다음 측정/승인 경계를 유지한다. 정적·shell·문서 parser 결과는 Source의 최종 검증을 따른다.
+
+- [x] `[MainAICurrentAxisSyntheticPerf0907] 현행 Entry adapter 새 source 합성 성능 검증` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 20:33~20:47`, `Track: RuntimeStability`)
+  - Source: [승인·성능·배포 판정](../audit-reports/2026-09-07-main-ai-current-axis-approval-performance-deployment.md). 사용자 `최초 승인·새 소스 세대 성능 검증·배포` 지시로 기존0B preflight OFF/ON 각5000×5, canonical input50회, buffer copy24,001행×20회, 별도0D OFF/ON 각5000회 및 source48개 hash를 검증했다.
+  - 결과: 0B ON internal p99 최대0.035517ms/기존2ms, 입력 p99 3.540855ms, buffer p99 86.573561ms, 0D ON p99 0.059456ms. queue/worker/writer loss0, 합성 source census PASS. 관련123 PASS/현재 active frozen hash1건 명시 제외. prospective guard/새 baseline은 별도 보존했고 실제 config는 미게시다.
+  - 경계: 실시간 collector 부하·현재 PID·정책 승인·경제성 PASS가 아니다. 과거 benchmark 수치/hash를 덮어쓰거나 운영 enable/env·Provider·broker·bot을 변경하지 않았다. 게시·배포는 아래 기존 owner가 소유한다.
+
+- [ ] `[MainAICurrentAxisActivationReadiness0908] 최초 승인 지시 접수·exact 후보 및 clean 배포 gate 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 07:30~07:40`, `Track: ScalpingLogic`)
+  - 22시 후속 지시: 사용자가 전체 소스 commit/push/main 통합을 선택했고 장후 전체 모니터링은 다른 세션 소유로 명시했다. [통합·재생성 handoff](../audit-reports/2026-09-07-source-integration-review.md)에서 진행한다. 아래 20:45 범위 확인 대기는 해소됐지만 정책 승인·env/봇 기동은 이번 Git 통합에 포함하지 않는다. 새 성능48 source 재확인 뒤 동일 한도 기준 참조를 게시했고 frozen 회귀27 PASS다. 21:39 당일 R3는 생성됐으나 source-only blocked/deferred이며 최초 활성화 OPEN은 유지한다.
+  - 20:45 실행 판정: 사용자 승인·성능 검증·배포 지시는 접수했다. [성능/배포 기록](../audit-reports/2026-09-07-main-ai-current-axis-approval-performance-deployment.md)의 synthetic preflight PASS와 prospective baseline/guard를 준비했다. 다만 최신 완료9/4 R3후보0/source BLOCK, 9/7 R3는 점검 시 예정 chain 실행 중 미생성이다. exact 후보 없는 승인 artifact를 만들지 않았다.
+  - 배포 선행: PID895257 장후 wrapper의 운영 stop을 보존한다. active chain 완료 전에 코드/config를 교체하거나 bot을 시작하지 않는다. Main AI 외 daily-threshold/WAIT6579/EV/PREOPEN 미커밋 변경의 전체 통합 검증·commit 또는 분리 배포 범위를 사용자에게 확인했다. 선택된 범위의 clean source/commit 없이 재기동하지 않는다.
+  - Source: [현행 연결과 승인 경계](../audit-reports/2026-09-07-main-ai-r0-r3-remediation-review.md). 코드 구현과 활성화를 구분한다. 현재 registration/정확한 최초 승인/자연 full 후보가 없으므로 표본 누적이나 구현 완료만으로 활성화하지 않는다.
+  - 다음 판정: 지원되는 동일 parser/실제 baseline prompt 계약, full-gate R2/R3/latest terminal·cost/master, 첫 exact candidate 승인, PREOPEN와 bot의 동일 명시적 enable 환경, 비충돌 owner, 새 collector 성능·fresh depth/PID를 확인한다. 첫 적용 승인과 배포·env/봇 변경은 별도 명시 지시가 있어야 실행하며 없으면 disabled/source-only로 기록한다.
+  - 수용 조건: 승인된 최초 적용 뒤에만 grant 유효기간 내 동일 계약 renewal을 자동 확인한다. `allow_same_contract_renewal`은 명시 grant 옵션이지 자동 동의가 아니다. 5/10/20일 경제성/실수익·지원하지 않는 adapter 결손을 승인 파일로 우회하지 않는다.
+
+- [x] `[MainAIR0R3RemediationReview0907] #77 연구 후보·명목 경제성·격리·legacy 예약 호출 보완` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~19:00`, `Track: ScalpingLogic`)
+  - Source: [Main AI R0–R3 보완 리뷰](../audit-reports/2026-09-07-main-ai-r0-r3-remediation-review.md). 사용자 구현 지시에 따라 기존 A/B/C 축의 5일 연구 후보와 5/10/20일 full gate를 분리하고 exact R2/R3 projection 검증, 공통 lifecycle 원화 증분손익·빈도/기준 자본시간 진단, lossless row quarantine, custody 실제 gap 수를 보완했다.
+  - 자동화: #81 legacy publisher/selector의 postclose/PREOPEN 예약 호출을 제거하고 `retired_disabled` SKIP로 종결한다. 환경 잔재로 재활성화되지 않으며 R0–R3/#82/optimizer/consumer 연구 순서를 유지한다. 새 source-quality 모듈은 기존 micro-reversion package 소유이고 frozen canary benchmark 파일은 보존했다.
+  - 검증 경계: review→fix→re-review와 관련 회귀/정적/문서 검증은 Source의 최종 기록을 따른다. 기존 HEAD부터 존재한 frozen benchmark hash 불일치는 아래 `Intraday1120SourceAcceptance0907`에 남긴다. 과거 증거 hash만 변경하지 않는다. 본 완료는 코드 보완 범위이며 운영 report 재생성·Provider 실행·PID/env·주문·실수익 판정은 아니다.
+  - 최종 증거: 11-module 782 PASS/기존 benchmark hash 1 FAIL, Ruff/Black7/compile/shell2/diff/parser PASS. 변경 범위 미해결 code finding0이며 9/4 읽기 전용 재검증은 사전 timestamp 손실 때문에 차단을 유지했다. 기존 실패·자연 생성·실수익·현행축 runtime 미등록을 코드 종결과 분리했다.
+  - 자연 수용: 기존 `AIDecisionActionOutcomeNaturalEvidence0908`에서 R0–R3 generation·연구/심사 상태·후속 소비와 #81 SKIP를 확인한다. source/maturity 결손 및 현행축 runtime consumer 미등록은 표본 누적만으로 해소된 것으로 처리하지 않는다.
+
+- [x] `[TuningOperatingDocsRefresh0907] 장후 목록·모니터링·AGENTS·review skill·튜닝 운영기준 현행화 검증` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 17:05~18:00`, `Track: RuntimeStability`)
+  - Source: [문서 현행화 리뷰](../audit-reports/2026-09-07-tuning-operating-docs-refresh-review.md), [상세검토 목록](../audit-reports/2026-09-05-postclose-work-inventory.md), [장후 모니터링 지시문](../postclose-tuning-result-review-task-instructions.md). 사용자 요청은 문서/스킬 수정이며 장후 모니터링·추천구현·report 재생성·재기동 실행은 아니다.
+  - 완료 조건: 코드 검토/배포/자연/EV 구분, #8/#9 완료 유지, #11 예정 전 판정, #119/#23/#49 및 #76/#78/#82의 기존 자연 owner, #81 OFF/별도 entry owner, 퇴역 LDM과 surviving sim producer 구분을 대사한다. 문서·링크·안전권한 재리뷰, targeted 문서/parser 시험, print-only parser·skill validator·diff 검증을 닫는다.
+  - 경계: 기존 OPEN acceptance를 복제/완료하지 않는다. 저장소 밖 review skill도 별도 검증하며 runtime/env/operator lock/provider/order 변경, 운영 보고서 재생성, commit/push/Project·Calendar sync는 수행하지 않는다.
+  - 완료 증거: 문서/parser targeted 50 PASS(보완 후 재실행 동일), 변경 문서14개·로컬 link target21개/anchor4개 검증, 실행목록1~119 중복·누락0, 기존 자연 OPEN owner 보존, skill validator/UI metadata·print-only parser·diff PASS. 문서/스킬 및 직접 대조 계약 범위의 미해결 finding0이며 자연 장후·PID·EV 완료 판정은 아니다. 병행 widget 코드·테스트와 운영 cache/report는 이 작업 범위에서 수정하지 않았다.
 
 - [x] `[FullWorkspaceSecondMergeRestart0907] 전체 소스 직접 main 병합 후 우아한 재기동` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~20:00`, `Track: RuntimeStability`)
   - Source: [두 번째 전체 소스 배포 검토](../audit-reports/2026-09-07-full-workspace-second-merge-review.md). 사용자의 전체 커밋·푸시·main 병합 후 재기동 지시를 대상으로 수동 veto/공존, scanner lookup, AI calibration/consumer 및 관련 문서·wrapper를 통합 검증했다. 운영 cache/runtime/report는 소스 commit 제외·보존한다.
@@ -96,6 +145,9 @@
   - Source: [11:20 모니터링·보완·부족 ledger](../audit-reports/2026-09-07-intraday-1120-monitoring.md). PID195755 exact-date verify pass, broker 3종목/미체결5건 불변, main submit0. Source-only wrapper tee 실패가 exit0으로 숨겨지는 결함과 AI preflight/cache caller record ID 전달 결손을 수정했다. 재리뷰 finding0, 관련417 PASS. Wrapper는 11:10 자연 실행과 동일 cron receipt 갱신으로 반영됐고 AI 코드는 현재 PID 미반영이다.
   - 이전 source timing 보완은 자연 trace31/31에서 확인했으나 master/cadence/BBO gate·Main AI terminal 경제성은 OPEN이다. 11:12 WS 재연결 뒤 micro timestamp 차단률50.37%를 입력품질 결손으로 별도 기록했다. 이번 작업에서 재기동·주문·provider·threshold·수량 변경은 수행하지 않았다.
 - [ ] `[Intraday1120SourceAcceptance0907] AI caller lineage·micro timestamp·prune bounded 경제성 source acceptance` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:20`, `Track: RuntimeStability`)
+  - 20:44 성능 follow-up: [새 소스 합성 preflight](../audit-reports/2026-09-07-main-ai-current-axis-approval-performance-deployment.md)는 0B OFF/ON 각5000×5·0D 각5000·canonical input50·buffer copy20 및 source48개 hash PASS다. 한도1ms/2ms 불변의 prospective guard를 만들었지만 active 장후 chain 때문에 운영 config는 미게시이고 기존 frozen hash 회귀1건도 아직 active 기준 미해결이다. 자연 collector source/latency acceptance는 그대로 OPEN이다.
+  - #77 3차 연결 보강: 이번에는 forward_collector에 기본 OFF의 normalized read-only buffer/barrier를 추가했다. 1·2차의 HEAD 동일 기록은 당시 증거이며 현재 변경의 성능 승인이 아니다. 다음 별도 허용된 소스 세대 측정에서 callback/queue/writer·메모리/입력 준비 지연을 확인하고 frozen benchmark 원 측정 artifact를 hash 교체로 통과시키지 않는다.
+  - #77 재검증 보강: 9/4 snapshot에는 timestamp 역행 5건 외 대량 pre-enqueue rejection이 있어 lossless row quarantine 통과 대상이 아니다. 정상 신규 collector generation과 정확한 제외 근거를 확인한다. 기존 HEAD의 forward_collector/path_journal/kiwoom_websocket hash가 frozen benchmark artifact와 달라 full hash regression 1건이 실패한다. 원 측정값·guard는 보존하고 후속 허용된 성능 source 검증에서 현재 소스와 측정 세대를 정합화한다. 이 기록은 Kiwoom protocol/latency safety 기준 변경 권한이 아니다.
   - Source: [11:20 부족 ledger](../audit-reports/2026-09-07-intraday-1120-monitoring.md). `ai_trace_record_lineage_20260907`은 다음 별도 허용된 fresh PID의 preflight/cache/live에서 caller가 준 exact record ID 전달을 확인한다. 이 항목은 추가 재기동 권한이 아니며 code-only 상태를 runtime resolved로 바꾸지 않는다.
   - 구현 후속: [반복리뷰 완료](../audit-reports/2026-09-07-intraday-source-repair-review.md)의 새 timestamp tail/canary→AI source gate와 scanner stage_recall_counts/recall_metric_contract를 다음 실제 consumer에서 확인한다. Prune floor는 기존 WS freshness report의 prune_observer_selected_venue_session_economics가 소유하며 consumer 부재로 분류하지 않는다.
   - 17:00 follow-up: 16:46 0B callback p99 2.360669ms/한도2ms 3회로 source-only collector가 stop됐음을 [배포 검토](../audit-reports/2026-09-07-full-workspace-second-merge-review.md)에 기록했다. 승인된 main 재기동 후 새 epoch은 fresh warming_up이며 과거 결손은 보존한다. frozen sample floor·latency·writer/drop 및 후속 consumer source gate를 다시 만족해야 readiness를 인정한다. 지연 임계치 완화나 report 재생성으로 과거 gap을 덮지 않는다.
@@ -469,7 +521,10 @@
 
 ## 장후 체크리스트 (16:25~22:35)
 
-- [ ] `[AIDecisionActionOutcomeNaturalEvidence0908] #76→#82→optimizer→후속 consumer 자연 handoff 검증` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 21:05~21:55`, `Track: ScalpingLogic`)
+- [ ] `[AIDecisionActionOutcomeNaturalEvidence0908] #76→R0–R3→#82→optimizer→후속 consumer 자연 handoff 검증` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: ScalpingLogic`)
+  - 3차 연결 확인: 9/7 이후 cycle의 R2/R3 hash와 current-axis postclose terminal, 다음 PREOPEN의 disabled/미승인/실패/적용 상태를 구분한다. 등록·승인·배포 없이 실제 적용을 기대하지 않으며 향후 허용된 적용의 exact request 전달/철회 census를 #76/#82 경제성과 구분한다. 최초 활성화 준비는 `MainAICurrentAxisActivationReadiness0908`가 소유한다.
+  - 2차 보완 확인: 정상 `source_only_no_new_sample`, 연구 v2의 5일/10·20일 진단 분리, full/probe partition, 9/7 이후 Provider 연구 하한 5/5/3 및 #80 `r3_research_handoff` source hash/상태를 대사한다. 경제성 준비와 runtime 최초 승인·배포는 별도다.
+  - #77 선행 확인: [R0–R3 리뷰](../audit-reports/2026-09-07-main-ai-r0-r3-remediation-review.md)의 `research_candidates`/full-gate `candidates` 분리, 5/10/20일 표본·paired 명목 비교·gap 수, exact R2 hash/권한/목록 검증과 postclose 및 다음 정상 PREOPEN의 #81 `retired_disabled` SKIP를 확인한다. valid empty·hold_sample·hold_no_edge·source gap을 분리하며 표본/실수익을 합성하지 않는다. 실제 Provider는 기존 승인된 budget/source gate 안에서만 자연 실행한다.
   - Source: [#76→#82 최종 보완 리뷰](../audit-reports/2026-09-07-ai-decision-action-outcome-calibration-final-review.md), `data/report/ai_prompt_detailed_paired_replay/`, `data/report/ai_decision_action_outcome_calibration/`, `data/report/main_ai_prompt_optimizer/`.
   - 판정 기준: terminal detailed artifact의 canonical hash/부분 성공 learning contract와 exact stage/venue/session/prompt/contract identity, #82 policy v5 accepted/excluded/current count, thin-positive/review-ready, optimizer 누적경제성 소비·당일 선택 고정·다음 세션 권고, metadata-only batch 재결속과 consumer 동일 hash를 대사한다. lifecycle custody 결손은 기존 `MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0907` owner에 연결한다.
   - 완료 조건: 21:05 후속 상세 재현 뒤 #82가 다시 생성되고 source generation이 optimizer/consumer까지 일치하며 central contract 검증이 PASS해야 한다. 호출 실패 행은 제외되고 정상 행은 보존되어야 한다. #81 legacy는 OFF이므로 R3가 생겨도 자동적용 경로로 보지 않는다. 지원되는 V2.14/V2.15 KRX만 기존 entry_setup_live_policy의 독립 promotion·PREOPEN·receipt 판정을 참조하고, 미지원 cohort는 source-only로 종결한다. 표본/EV 부족과 source gap·registry 고갈은 분리한다.
@@ -549,6 +604,18 @@
   - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.
   - 금지: source-quality preflight missing/stale, row exclusion 실패, hard block candidate 생성, unknown-token workorder handoff 누락을 정상 postclose 완료로 처리하지 않는다. sim/combined EV, live-auto promotion, runtime approval, LDM, threshold apply candidate에 결손 row/window가 섞이면 fail로 닫는다.
   - 다음 액션: `source_quality_gate_pass`, `defective_rows_excluded_and_ev_allowed`, `source_quality_blocked`, `unknown_warning_workorder_created`, `handoff_missing_fix_automation_first` 중 하나로 닫는다.
+
+- [x] `[DailyThresholdReportContractRepair0907] Daily threshold exact 경제성·적용후보·누적경로 보완` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 19:00~20:10`, `Track: RuntimeStability`)
+  - Source: [Daily threshold 보완·코드리뷰](../audit-reports/2026-09-07-daily-threshold-report-remediation-review.md). score60~74 exact probe와 effective-dated 비용 차감 CF, Entry split real-only 분모, family readiness/current apply 분리, hold 제외, 실제 AI payload/비용 계약, clean-baseline 누적 projection/cache를 구현했다.
+  - 완료 증거: producer/consumer/PREOPEN/verifier review→fix→re-review를 닫았고 관련 회귀 `777 passed`, 문서 회귀 `50 passed`, Black/Ruff/compile/diff check와 print-only parser가 PASS했다. 9/4 무기록 재생성은 약 9.9초·최대 RSS 약 274MB, 선택 partition read complete, 적용/AI 검토 후보 0건, Entry split real 179/sim diagnostic 410,133건으로 종료됐다. runtime/env/lock/provider/bot/주문·운영 report는 변경하지 않았다.
+  - 경계: 구현 완료는 자연 report, AI provider 성공, PREOPEN 선택, PID 소비 또는 비용 차감 실수익 수용 완료가 아니다.
+
+- [ ] `[DailyThresholdNaturalAcceptance0908] 새 Daily threshold 자연 산출물·PREOPEN 적용·경제성 수용 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 07:20~08:00`, `Track: RuntimeStability`)
+  - 최종 보완 연결: [2차 결함 보완](../audit-reports/2026-09-07-daily-threshold-final-defect-review.md). `score_recovery_observation_v1`은 다음 정상 매매 process의 코드 로드 이후부터 생성된다. 9/7 과거 자료에 새 필드가 없다는 이유로 source를 합성하거나 과거 main FAIL을 성공으로 바꾸지 않는다. PREOPEN 기존 자동 계약 확인과 향후 신규 관측의 경제성 수용을 구분하며 `positive_edge_below_absolute_floor`이면 증분 net EV 기반 절대 floor 대체/제거를 판정한다. 시장/정책 hash 혼합이면 정확한 적용 scope를 먼저 분리하며 무한 표본 대기로 닫지 않는다.
+  - Source: [Daily threshold 보완·코드리뷰](../audit-reports/2026-09-07-daily-threshold-report-remediation-review.md), [POSTCLOSE verifier](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-09-07.json), [PREOPEN apply](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-09-08.json).
+  - 판정 기준: 새 schema의 exact score probe·effective-dated cost completeness·Entry split real-only denominator, `family_readiness_list`와 현재 `apply_candidate_list` 분리, 실제 eligible adjust 후보만의 parsed AI review를 확인한다. 다음 PREOPEN selection/receipt/PID가 같은 version/hash를 소비했는지 대사한다.
+  - 경제성 수용: report 생성이나 sim/CF를 실전 성과로 보지 않는다. 적용 후 동일 version real cohort의 full/partial 분리, 비용 차감 EV와 순이익, 제출·체결 참여율 및 rollback guard로 `accept|keep_collecting|repair_source|rollback|retire`를 결정한다. 표본이 없으면 어떤 upstream 병목인지 특정하며 threshold를 강제로 낮추지 않는다.
+  - 권한 경계: hard safety, broker/account/order/quantity/cooldown, provider, bot, operator lock은 이 확인 항목이 변경하지 않는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 

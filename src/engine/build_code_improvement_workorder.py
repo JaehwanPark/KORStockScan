@@ -60,7 +60,7 @@ MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_cont
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 2
-WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v3"
+WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v4"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -3745,8 +3745,8 @@ def _entry_post_submit_weak_contract_orders(
                 "target_subsystem": "runtime_instrumentation",
                 "lifecycle_stage": "entry_submit",
                 "route": "instrumentation_order",
-                "mapped_family": "lifecycle_decision_matrix_runtime",
-                "threshold_family": "lifecycle_decision_matrix_runtime",
+                "mapped_family": "entry_submit_drought_attribution",
+                "threshold_family": "entry_submit_drought_attribution",
                 "priority": 1,
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -3766,7 +3766,7 @@ def _entry_post_submit_weak_contract_orders(
                 "weak_contract_matches": weak_contract_matches,
                 "files_likely_touched": [
                     "src/engine/buy_funnel_sentinel.py",
-                    "src/engine/lifecycle_decision_matrix.py",
+                    "src/engine/scalping/main_lifecycle_paired.py",
                     "src/engine/build_code_improvement_workorder.py",
                     "src/engine/verify_threshold_cycle_postclose_chain.py",
                 ],

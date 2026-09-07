@@ -764,6 +764,91 @@ def _factorial_cells(
     return cells
 
 
+def _r3_research_handoff(target_date: str) -> dict[str, Any]:
+    """Consume exact R2/R3 research without converting it into live authority."""
+    from src.engine.scalping.micro_reversion import ai_quality_cycle as cycle
+
+    rolling_path = cycle.rolling_report_path(target_date)
+    manifest_path = cycle.r3_manifest_path(target_date)
+    rolling = _read_json(rolling_path)
+    manifest = _read_json(manifest_path)
+    receipt: dict[str, Any] = {
+        **SOURCE_ONLY_CONTRACT,
+        "schema": "main_ai_r3_research_handoff_v1",
+        "target_date": target_date,
+        "metric_role": "source_only_research_to_runtime_contract_handoff",
+        "sample_floor": "complete_exact_r2_r3_research_census_including_valid_empty",
+        "rolling_path": str(rolling_path),
+        "manifest_path": str(manifest_path),
+        "source_rolling_sha256": rolling.get("artifact_content_sha256"),
+        "source_manifest_sha256": manifest.get("artifact_content_sha256"),
+        "research_count": 0,
+        "economic_evidence_ready_count": 0,
+        "runtime_apply_ready": False,
+        "rows": [],
+    }
+    try:
+        if (
+            rolling.get("target_date") != target_date
+            or manifest.get("target_date") != target_date
+        ):
+            raise ValueError("r3_research_source_missing_or_wrong_date")
+        cycle.validate_r3_source_only_manifest(
+            manifest, source_rolling_artifact=rolling
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        receipt.update(
+            status="source_unavailable_or_invalid",
+            blocking_reason=str(exc),
+            owner="MainAIQualityR0R3Materializer",
+            acceptance_test="exact-date validated R2 and R3 generation with matching hashes",
+        )
+        return receipt
+    rows = []
+    for candidate in manifest["research_candidates"]:
+        ready = candidate["progress"]["runtime_evidence_ready"]
+        rows.append(
+            {
+                "research_id": candidate["research_id"],
+                "source_windows_sha256": candidate["source_windows_sha256"],
+                "decision_stage": candidate["decision_stage"],
+                "effective_venue": candidate["effective_venue"],
+                "session_bucket": candidate["session_bucket"],
+                "tuning_axis": candidate["tuning_axis"],
+                "economic_population": candidate["economic_population"],
+                "economic_evidence_ready": ready,
+                "status": (
+                    "current_axis_registration_and_authorization_required"
+                    if ready
+                    else "continue_bounded_offline_research"
+                ),
+                "owner": (
+                    "MainAICurrentAxisRuntimeContract"
+                    if ready
+                    else "MainAIQualityR0R3Materializer"
+                ),
+                "acceptance_test": (
+                    "current-axis same-parser mapping, exact first approval and explicit enable, "
+                    "PREOPEN apply/rollback and delivery attribution; unsupported adapters and legacy stay disabled"
+                    if ready
+                    else "next bounded same-cohort evaluation with source and economic gates; no duplicate queue"
+                ),
+                "runtime_apply_ready": False,
+                "provider_request_requeued": False,
+            }
+        )
+    receipt.update(
+        status="consumed_source_only",
+        blocking_reason=None,
+        rows=rows,
+        research_count=len(rows),
+        economic_evidence_ready_count=sum(
+            row["economic_evidence_ready"] for row in rows
+        ),
+    )
+    return receipt
+
+
 def _render_markdown(report: Mapping[str, Any]) -> str:
     paths = report.get("request_paths") or {}
     factorial = paths.get("optional_micro_enriched_2x2") or {}
@@ -803,7 +888,8 @@ def _render_markdown(report: Mapping[str, Any]) -> str:
             "- Existing exact R0-R3 cells are routed as duplicates; they are not queued by this consumer.",
             "",
             "## Runtime Guard",
-            "- Runtime prompt update remains blocked until isolated 5/10/20-day EV, net-profit, p10-tail, HELD, and post-apply guards pass.",
+            "- Economic readiness is not runtime readiness. The current R3 axis needs a reviewed consumer, exact approval, PREOPEN apply/rollback and post-apply attribution; the legacy family stays disabled.",
+            f"- R3 research handoff: `{(report.get('r3_research_handoff') or {}).get('status')}`; economic-ready count: `{(report.get('r3_research_handoff') or {}).get('economic_evidence_ready_count')}`.",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -1012,6 +1098,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     )
     body: dict[str, Any] = {
         "schema": SCHEMA,
+        "r3_research_handoff": _r3_research_handoff(target_date),
         "target_date": target_date,
         "generated_at": datetime.now(quality.KST).isoformat(timespec="seconds"),
         "status": (
@@ -1099,7 +1186,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
                 "isolated_10d_ev_and_net_profit_guard_not_closed",
                 "isolated_20d_ev_and_net_profit_guard_not_closed",
                 "p10_tail_guard_not_closed",
-                "held_and_post_apply_attribution_guard_not_closed",
+                "terminal_custody_and_post_apply_attribution_guard_not_closed",
                 "new_prompt_live_family_not_registered",
             ],
             "future_profit_improving_output_likelihood": (

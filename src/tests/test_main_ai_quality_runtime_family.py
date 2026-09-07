@@ -98,6 +98,12 @@ def _manifest(candidate: dict | None = None) -> dict:
         ],
         "candidate_count": len(candidates),
         "candidates": candidates,
+        "research_candidate_count": len(
+            ai_quality_cycle._research_candidates(rolling["partitions"])
+        ),
+        "research_candidates": ai_quality_cycle._research_candidates(
+            rolling["partitions"]
+        ),
         "global_candidate_blockers": [],
         "blocked_pre_clear_candidate_count": 0,
         "first_runtime_candidate_auto_apply_performed": False,
@@ -108,6 +114,24 @@ def _manifest(candidate: dict | None = None) -> dict:
 
 def _window(days: int) -> dict:
     return {
+        "economic_population": "full_or_zero_exposure",
+        "deferred_action_count_role": "diagnostic_not_terminal_unresolved",
+        "paired_notional_comparison": ai_quality_cycle._paired_notional_metrics(
+            [
+                {
+                    "control_comparison_notional_krw": 400.0,
+                    "candidate_comparison_notional_krw": 500.0,
+                    "baseline_comparison_notional_krw": 400.0,
+                    "control_signal_selected": True,
+                    "candidate_signal_selected": True,
+                    "lifecycle": {
+                        "session_exposure_sec": 180.0,
+                        "capital_time_krw_hours": 0.05,
+                    },
+                }
+                for _ in range(20)
+            ]
+        ),
         "window_trading_days": days,
         "observed_trading_days": days,
         "selected_dates": ["2026-08-17"] * days,
@@ -157,6 +181,7 @@ def _rolling() -> dict:
     floor_bindings: list[dict] = []
     floor_sha256 = ai_quality_cycle._sha256(floor_bindings)
     partition = {
+        "economic_population": "full_or_zero_exposure",
         "decision_stage": "entry",
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
@@ -180,6 +205,7 @@ def _rolling() -> dict:
         "gate_findings": {str(days): [] for days in (5, 10, 20)},
         "r3_source_candidate_eligible": True,
     }
+    partition["research_progress"] = ai_quality_cycle._research_progress(partition)
     body = {
         "schema": ai_quality_cycle.ROLLING_SCHEMA,
         "target_date": "2026-08-17",
@@ -230,6 +256,7 @@ def _post_apply_rolling() -> dict:
     partition["r3_source_candidate_eligible"] = all(
         not findings for findings in partition["gate_findings"].values()
     )
+    partition["research_progress"] = ai_quality_cycle._research_progress(partition)
     rolling["artifact_content_sha256"] = mod._sha256(
         {
             key: value

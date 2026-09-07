@@ -205,6 +205,8 @@ AI가 사용되는 endpoint마다 세 층을 분리해 점검한다.
 
 Main AI R0→R3의 목적은 현재 프롬프트를 고정 보존하는 것이 아니라, 새로 성숙한 동일 payload/outcome 근거가 들어올 때마다 stage별 Control 대비 더 나은 Candidate 프롬프트를 탐색하고 다음 검토 가능한 manifest를 갱신하는 것이다. 따라서 “사용자가 프롬프트 변경을 원할 때만 실행”하지 않는다. R0 exact source 수집, R1 daily 해석, R2 cumulative/paired 경제성 비교는 자연 표본과 maturity가 생길 때 계속 누적한다. 다만 R3는 source-quality, 동일 payload, complete terminal, 비용 차감 EV와 표본 floor가 닫힌 후보만 만들며 `runtime_effect=false`다. 프롬프트 변경·provider/model 변경·실주문 반영은 별도 review와 target-date PREOPEN/PID 계약 전에는 수행하지 않는다.
 
+9/7 현행 #76→#82→#78은 self-hash·격리 cohort·부분 정상행 학습을 이용한 offline 평가 환류다. #81 legacy runtime은 `LEGACY_RUNTIME_AUTHORITY_ENABLED=False`이므로 R3/#82 증가를 실적용 대기로 보고하지 않는다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·PID receipt와 분리한다. 코드 보완 완료와 자연 late-follower generation/경제성 확인은 `AIDecisionActionOutcomeNaturalEvidence0908`에서 별도 판정한다.
+
 micro-reversion은 Main AI에 action label을 주입하는 별도 권한축이 아니다. exact same-epoch BBO·0B/0D, spread, refill/trade backing, venue/session과 후행 action-neutral outcome을 입력 품질·오판 taxonomy에 결속하되 future first-hit이나 사후 MFE를 당시 prompt input으로 역류시키지 않는다. Entry와 holding/exit payload cohort를 합치지 않고 각각 `entry_candle_context_v1`, `holding_decision_context_v1` 경계를 유지한다.
 
 - `BUY`, `WAIT + probe intent`, `WAIT observation-only`, `DROP`, `INSUFFICIENT_DATA`의 의미를 혼합하지 않는다.

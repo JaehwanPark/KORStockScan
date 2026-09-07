@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
+import fcntl
 import time
-from datetime import datetime
 from pathlib import Path
 
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
-
 from src.engine.error_detectors.base import (
     BaseDetector,
     DetectionResult,
@@ -15,7 +13,7 @@ from src.engine.error_detectors.base import (
 
 LOCK_DIR = PROJECT_ROOT / "tmp"
 MAX_LOCK_AGE_SEC = 3600
-MAX_LOCKS_TO_CLEAN = 20
+MAX_LOCKS_TO_CLEAN = 20  # Compatibility name; inspection never deletes a lock file.
 
 
 @register_detector
@@ -33,94 +31,80 @@ class StaleLockDetector(BaseDetector):
                 summary="Lock directory not found.",
             )
         now_ts = time.time()
-        cleaned: list[str] = []
-        stale_not_cleaned: list[str] = []
-        would_clean: list[str] = []
-        details: dict = {}
         max_age = int(
             getattr(
                 TRADING_RULES, "ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC", MAX_LOCK_AGE_SEC
             )
         )
-        cleanup_enabled = bool(
-            getattr(TRADING_RULES, "ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED", True)
-        )
-
-        lock_files = sorted(
-            [p for p in LOCK_DIR.glob("*.lock") if p.is_file()],
-            key=lambda p: p.stat().st_mtime,
-        )
-        if len(lock_files) > MAX_LOCKS_TO_CLEAN:
-            lock_files = lock_files[:MAX_LOCKS_TO_CLEAN]
-
-        for lock_path in lock_files:
+        observations = []
+        unknown = []
+        # An old marker is not a stale mutex. Do not unlink even an unlocked
+        # inode: a concurrent waiter may already hold an open descriptor to it.
+        for path in sorted(LOCK_DIR.glob("*.lock")):
             try:
-                mtime = lock_path.stat().st_mtime
+                stat = path.stat()
+                if not path.is_file():
+                    continue
+                age = now_ts - stat.st_mtime
+                state = self._inspect_lock(path)
             except OSError:
-                continue
-            age_sec = now_ts - mtime
-            if age_sec < max_age:
-                continue
-            if self.dry_run:
-                would_clean.append(f"{lock_path.name}({age_sec:.0f}s)")
-                continue
-            if not cleanup_enabled:
-                stale_not_cleaned.append(f"{lock_path.name}({age_sec:.0f}s)")
-                continue
-            was_stale = self._try_remove_stale_lock(lock_path)
-            if was_stale:
-                cleaned.append(f"{lock_path.name}({age_sec:.0f}s)")
-            else:
-                stale_not_cleaned.append(f"{lock_path.name}({age_sec:.0f}s)")
-
-        if cleaned:
-            details["stale_locks_cleaned"] = cleaned
-        if stale_not_cleaned:
-            details["stale_locks_cannot_remove"] = stale_not_cleaned
-        if would_clean:
-            details["stale_locks_would_clean_dry_run"] = would_clean
-
-        if cleaned or stale_not_cleaned or would_clean:
-            parts: list[str] = []
-            if cleaned:
-                parts.append(f"cleaned {len(cleaned)} stale locks")
-            if stale_not_cleaned:
-                parts.append(f"{len(stale_not_cleaned)} still locked")
-            if would_clean:
-                parts.append(f"{len(would_clean)} would clean (dry-run)")
-            summary = (
-                "Stale locks: " + "; ".join(parts) if parts else "All locks healthy."
-            )
-            severity = "warning" if (cleaned or stale_not_cleaned) else "pass"
-            action = f"Cleanup performed: {', '.join(cleaned[:5])}" if cleaned else ""
-            return DetectionResult(
-                detector_id=self.id,
-                category=self.category,
-                severity=severity,
-                summary=summary,
-                details=details,
-                recommended_action=action,
-            )
-
+                state, age = "inspection_unavailable", None
+            row = {
+                "path": str(path),
+                "state": state,
+                "age_sec": age,
+                "age_threshold_exceeded": age is not None and age >= max_age,
+                "owner_health": "not_assessed",
+                "deleted": False,
+            }
+            observations.append(row)
+            if state == "inspection_unavailable":
+                unknown.append(str(path))
         return DetectionResult(
             detector_id=self.id,
             category=self.category,
-            severity="pass",
-            summary="All lock files healthy.",
-            details={"locks_checked": len(lock_files)},
+            severity="warning" if unknown else "pass",
+            summary=(
+                "Lock occupancy inspection incomplete."
+                if unknown
+                else "Lock occupancy inspected; age alone does not establish stale ownership."
+            ),
+            details={
+                "locks_checked": len(observations),
+                "lock_observations": observations,
+                "inspection_unavailable": unknown,
+                "cleanup_performed": False,
+                "metric_contract": {
+                    "metric_role": "source_quality_diagnostic",
+                    "decision_authority": "read_only_lock_occupancy_observation",
+                    "window_policy": "current_check_each_existing_lock_inode",
+                    "sample_floor": "per_lock_inspection_not_economic_sampling",
+                    "primary_decision_metric": "lock_observations",
+                    "source_quality_gate": "unreadable_occupancy_remains_unknown",
+                    "forbidden_uses": [
+                        "lock_deletion",
+                        "owner_health_from_age_or_occupancy",
+                        "process_restart",
+                        "trading_authority",
+                    ],
+                },
+                "decision_authority": "read_only_lock_occupancy_observation",
+                "held_owner_progress_check_required": any(
+                    r["state"] == "held" for r in observations
+                ),
+            },
+            recommended_action="Check holder PID/start time and progress before classifying any held lock as stale.",
         )
 
     @staticmethod
-    def _try_remove_stale_lock(lock_path: Path) -> bool:
+    def _inspect_lock(path: Path) -> str:
         try:
-            with open(lock_path, "a+b") as fp:
+            with path.open("rb") as stream:
                 try:
-                    import fcntl
-
-                    fcntl.flock(fp, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    os.remove(lock_path)
-                    return True
-                except (BlockingIOError, OSError):
-                    return False
+                    fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return "held"
+                fcntl.flock(stream, fcntl.LOCK_UN)
+                return "unheld_marker_preserved"
         except OSError:
-            return False
+            return "inspection_unavailable"

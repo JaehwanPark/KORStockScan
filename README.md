@@ -6,7 +6,7 @@ KORStockScan은 키움증권 REST/WebSocket과 연동하는 개인용 스캘핑 
 
 현재 정책과 active/open 상태의 기준은 [Plan Rebase](docs/plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 실행 항목은 [Stage2 Checklist](docs/checklists/README.md), 운영 순서는 [Time-Based Operations Runbook](docs/time-based-operations-runbook.md)이 소유합니다.
 
-- 문서 기준일: `2026-08-20 KST`
+- 튜닝 운영문서 현행화: `2026-09-07 KST`
 - 튜닝 데이터 clean baseline: `2026-06-05T00:00:00+09:00 KST`
 - baseline 이전 자료: archive/audit evidence 전용이며 현재 EV, rolling/cumulative 튜닝, runtime 승인 또는 실거래 품질 승인의 근거로 사용하지 않음
 
@@ -79,6 +79,8 @@ AI 호출 성공 여부만 보지 않고 호출, 입력, 판단 결과를 각각
 
 정확한 입력에서도 오판이 반복되면 feature, prompt, reason-code와 판단 계약을 고치고 real payload를 replay합니다. 비정상 응답을 임의로 유효 판단처럼 해석하거나 AI가 broker·hard safety를 우회하게 하지 않습니다.
 
+Main AI R0–R3는 변경 요청이 있을 때만 실행하는 작업이 아니라 성숙한 exact 근거로 더 나은 prompt/input을 계속 찾는 offline 연구입니다. #76→#82 v5→#78 optimizer의 환류와 21:05 terminal 후속 갱신을 사용하되, #81 legacy live family는 DISABLED입니다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·PID receipt 없이는 자동 실적용을 주장하지 않습니다.
+
 ### 위젯
 
 위젯 튜닝은 종목별 신호가 실제로 체결 가능한 가격에서 반복 이익을 만드는지 검증합니다.
@@ -111,6 +113,8 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
 
 장후 작업은 당일 이벤트를 복기해 다음 장전의 bounded 후보를 만드는 자동화 체인입니다. 현재 소비되는 핵심 경로만 요약하면 다음과 같습니다.
 
+진행상태는 [장후 상세검토 목록](docs/audit-reports/2026-09-05-postclose-work-inventory.md), 실행·복구·허용 추천 구현은 명시적으로 호출된 [모니터링 지시문](docs/postclose-tuning-result-review-task-instructions.md)을 따릅니다. 문서 현행화는 그 절차의 실행 요청이 아닙니다. 완료 검토와 자연 산출물·PID·실수익 acceptance를 구분하며, ADM/LDM·bucket·greenfield·전용 institutional aggregate는 퇴역, Swing은 OFF입니다. 남아 있는 비-LDM sim producer는 source-only이며 현재 우선 상세튜닝 대상이 아닙니다.
+
 ```text
 장중 raw event와 broker receipt 종료
   -> source-quality audit
@@ -123,7 +127,7 @@ Smoothing은 순간적인 tick·호가·OFI/QI 흔들림 때문에 진입·보�
   -> 다음 세션 post-apply attribution
 ```
 
-1. **Source-quality preflight:** clean baseline, 필수 필드, venue, 시각, executable price와 provenance를 검증합니다. 계약이 깨지면 tuning input을 차단하고 보완 workorder로 넘깁니다.
+1. **Source-quality preflight:** clean baseline, 필수 필드, venue, 시각, executable price와 provenance를 검증합니다. 결손 row/window를 안정적으로 격리해 정상 입력을 보존하고, 전역 계약 결손·격리 실패는 전체 차단합니다. 예약 stage 전 미생성은 실패가 아닙니다.
 2. **Lifecycle 복기:** 실제 주문, 미진입, probe/residual, scale-in, 부분익절·trailing·최종 청산을 같은 흐름으로 재구성하되 real·sim·source-only를 분리합니다.
 3. **Calibration:** 네 튜닝축과 smoothing 경로를 raw 대안과 비교하고 비용 반영 EV, MFE/MAE, first-hit, 표본 충족 여부를 계산합니다.
 4. **적용 후보 생성:** 기존 owner의 한 축만 바꾸는 bounded PREOPEN 후보와 rollback 값을 만듭니다. 계측·리포트·provenance 결손은 `runtime_effect=false` workorder로 분리합니다.

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.scalping.score_recovery_observation import (
+    eligible_observation,
+    score_recovery_cohort_member,
+)
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
     infer_scalping_venue,
@@ -19,7 +25,7 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 from src.utils.logger import log_error
 
-WAIT6579_EV_COHORT_SCHEMA_VERSION = 2
+WAIT6579_EV_COHORT_SCHEMA_VERSION = 4
 _WAIT6579_STAGE = "wait65_79_ev_candidate"
 _SCORE65_74_PROBE_STAGE = "score65_74_recovery_probe"
 _COUNTERFACTUAL_BOOK = "scalp_score65_74_probe_counterfactual"
@@ -585,6 +591,14 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                 or candidate_event.fields.get("target_buy_price"),
                 0,
             )
+            if candidate_event.fields.get("score_recovery_observation_schema"):
+                # Never borrow a later armed price for pre-decision evidence.
+                signal_price = _safe_int(
+                    candidate_event.fields.get(
+                        "score_recovery_observation_reference_price"
+                    ),
+                    0,
+                )
             has_submitted = any(
                 event.stage == "order_bundle_submitted" for event in attempt_events
             )
@@ -730,6 +744,11 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                     "recovery_promoted": recovery_promoted,
                     "has_probe_applied": has_probe_applied,
                     "has_score65_74_probe": has_score65_74_probe,
+                    **{
+                        key: value
+                        for key, value in candidate_event.fields.items()
+                        if key.startswith("score_recovery_observation_")
+                    },
                     "has_budget_pass": has_budget_pass,
                     "has_latency_pass": has_latency_pass,
                     "has_latency_block": has_latency_block,
@@ -861,6 +880,11 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
     sizing_fields = _counterfactual_sizing_fields(capacity)
     qty_source = "scalping_position_sizing_allocator" if qty > 0 else "unpriced"
     virtual_budget_override = True
+    signal_date = str(candidate.get("signal_date") or "").strip()
+    try:
+        cost_contract = comparison_cost_contract(signal_date)
+    except (TypeError, ValueError):
+        cost_contract = None
 
     partial_tolerance_bp = float(
         getattr(TRADING_RULES, "AI_WAIT6579_PAPER_FILL_PARTIAL_TOLERANCE_BP", 15.0)
@@ -885,6 +909,12 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
             "expected_fill_rate_pct": 0.0,
             "expected_ev_pct": 0.0,
             "expected_ev_krw": 0,
+            "gross_counterfactual_expected_ev_pct": 0.0,
+            "gross_counterfactual_expected_ev_krw": 0,
+            "cost_adjusted_expected_ev_pct": None,
+            "cost_adjusted_expected_ev_krw": None,
+            "economic_status": "unpriced_or_cost_contract_unavailable",
+            "comparison_cost_contract": cost_contract,
             "counterfactual_qty": int(qty),
             "counterfactual_qty_source": qty_source,
             "virtual_budget_override": bool(virtual_budget_override),
@@ -938,10 +968,24 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
 
     expected_fill_prob = full_prob + partial_prob
     effective_fill_prob = full_prob + (partial_prob * partial_weight)
-    expected_ev_pct = close_ret_pct * effective_fill_prob
-    expected_ev_krw = (
-        int(round(entry_price * qty * (expected_ev_pct / 100.0))) if qty > 0 else 0
+    gross_expected_ev_pct = close_ret_pct * effective_fill_prob
+    gross_expected_ev_krw = (
+        int(round(entry_price * qty * (gross_expected_ev_pct / 100.0)))
+        if qty > 0
+        else 0
     )
+    cost_adjusted_expected_ev_pct = None
+    cost_adjusted_expected_ev_krw = None
+    if isinstance(cost_contract, dict):
+        round_trip_cost_pct = _safe_float(cost_contract.get("round_trip_cost_pct"), 0.0)
+        cost_adjusted_expected_ev_pct = (
+            close_ret_pct - round_trip_cost_pct
+        ) * effective_fill_prob
+        cost_adjusted_expected_ev_krw = (
+            int(round(entry_price * qty * (cost_adjusted_expected_ev_pct / 100.0)))
+            if qty > 0
+            else 0
+        )
 
     if full_touch and full_prob >= 0.50:
         expected_fill_class = "FULL"
@@ -957,8 +1001,24 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
         "partial_fill_prob": round(partial_prob, 4),
         "expected_fill_prob": round(expected_fill_prob, 4),
         "expected_fill_rate_pct": round(expected_fill_prob * 100.0, 2),
-        "expected_ev_pct": round(expected_ev_pct, 4),
-        "expected_ev_krw": int(expected_ev_krw),
+        # Compatibility aliases remain gross. Decision consumers must use the
+        # explicit cost-adjusted fields below.
+        "expected_ev_pct": round(gross_expected_ev_pct, 4),
+        "expected_ev_krw": int(gross_expected_ev_krw),
+        "gross_counterfactual_expected_ev_pct": round(gross_expected_ev_pct, 4),
+        "gross_counterfactual_expected_ev_krw": int(gross_expected_ev_krw),
+        "cost_adjusted_expected_ev_pct": (
+            round(cost_adjusted_expected_ev_pct, 4)
+            if cost_adjusted_expected_ev_pct is not None
+            else None
+        ),
+        "cost_adjusted_expected_ev_krw": cost_adjusted_expected_ev_krw,
+        "economic_status": (
+            "cost_adjusted_counterfactual_available"
+            if cost_adjusted_expected_ev_pct is not None
+            else "cost_contract_unavailable"
+        ),
+        "comparison_cost_contract": cost_contract,
         "counterfactual_qty": int(qty),
         "counterfactual_qty_source": qty_source,
         "virtual_budget_override": bool(virtual_budget_override),
@@ -989,6 +1049,16 @@ def _fill_split_rows(rows: list[dict]) -> list[dict]:
         items = buckets.get(key, [])
         if not items:
             continue
+        net_ev_values = [
+            _safe_float(item.get("cost_adjusted_expected_ev_pct"), None)
+            for item in items
+            if item.get("cost_adjusted_expected_ev_pct") is not None
+        ]
+        net_ev_krw_values = [
+            _safe_int(item.get("cost_adjusted_expected_ev_krw"), 0)
+            for item in items
+            if item.get("cost_adjusted_expected_ev_krw") is not None
+        ]
         out.append(
             {
                 "fill_type": key,
@@ -1002,8 +1072,24 @@ def _fill_split_rows(rows: list[dict]) -> list[dict]:
                 "avg_expected_ev_pct": _avg(
                     [_safe_float(item.get("expected_ev_pct"), 0.0) for item in items]
                 ),
+                "avg_gross_counterfactual_expected_ev_pct": _avg(
+                    [
+                        _safe_float(
+                            item.get("gross_counterfactual_expected_ev_pct"), 0.0
+                        )
+                        for item in items
+                    ]
+                ),
+                "avg_cost_adjusted_expected_ev_pct": (
+                    _avg(net_ev_values) if len(net_ev_values) == len(items) else None
+                ),
                 "expected_ev_krw_sum": int(
                     sum(_safe_int(item.get("expected_ev_krw"), 0) for item in items)
+                ),
+                "cost_adjusted_expected_ev_krw_sum": (
+                    int(sum(net_ev_krw_values))
+                    if len(net_ev_krw_values) == len(items)
+                    else None
                 ),
                 "avg_close_10m_pct": _avg(
                     [_safe_float(item.get("close_10m_pct"), 0.0) for item in items]
@@ -1013,33 +1099,115 @@ def _fill_split_rows(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _counterfactual_economic_row_eligible(row: dict) -> bool:
+    if str(row.get("minute_candle_source_quality_gate") or "") != "pass":
+        return False
+    net_ev = _safe_float(row.get("cost_adjusted_expected_ev_pct"), None)
+    return net_ev is not None and math.isfinite(net_ev)
+
+
 def _counterfactual_summary(rows: list[dict]) -> dict:
-    score65_rows = [row for row in rows if bool(row.get("has_score65_74_probe"))]
+    economic_rows = [row for row in rows if _counterfactual_economic_row_eligible(row)]
+    raw_score60_rows = [
+        row
+        for row in rows
+        if 60 <= _safe_float(row.get("ai_score"), 0.0) <= 74
+        and score_recovery_cohort_member(row)
+    ]
+    score60_rows = [
+        row for row in raw_score60_rows if _counterfactual_economic_row_eligible(row)
+    ]
     full_rows = [
-        row for row in rows if str(row.get("expected_fill_class") or "") == "FULL"
+        row
+        for row in economic_rows
+        if str(row.get("expected_fill_class") or "") == "FULL"
     ]
     partial_rows = [
-        row for row in rows if str(row.get("expected_fill_class") or "") == "PARTIAL"
+        row
+        for row in economic_rows
+        if str(row.get("expected_fill_class") or "") == "PARTIAL"
+    ]
+    net_values = [
+        _safe_float(row.get("cost_adjusted_expected_ev_pct"), None)
+        for row in economic_rows
+    ]
+    score60_net_values = [
+        _safe_float(row.get("cost_adjusted_expected_ev_pct"), None)
+        for row in score60_rows
+    ]
+    score60_gross_values = [
+        _safe_float(row.get("gross_counterfactual_expected_ev_pct"), 0.0)
+        for row in score60_rows
     ]
     return {
         **_COUNTERFACTUAL_POLICY,
         "total_candidates": len(rows),
-        "score65_74_probe_candidates": len(score65_rows),
+        "economic_eligible_candidates": len(economic_rows),
+        "source_quality_or_cost_excluded_candidates": len(rows) - len(economic_rows),
+        "score60_74_raw_probe_candidates": len(raw_score60_rows),
+        "score60_74_applied_probe_candidates": sum(
+            bool(row.get("has_score65_74_probe")) for row in score60_rows
+        ),
+        "score60_74_unapplied_observation_candidates": sum(
+            not bool(row.get("has_score65_74_probe")) and eligible_observation(row)
+            for row in score60_rows
+        ),
+        "score60_74_observation_policy_hashes": sorted(
+            {
+                str(row["score_recovery_observation_policy_hash"])
+                for row in score60_rows
+                if eligible_observation(row)
+            }
+        ),
+        "score60_74_probe_candidates": len(score60_rows),
+        "score65_74_probe_candidates": len(score60_rows),
         "full_samples": len(full_rows),
         "partial_samples": len(partial_rows),
         "avg_expected_ev_pct": _avg(
             [_safe_float(row.get("expected_ev_pct"), 0.0) for row in rows]
         ),
-        "score65_74_avg_expected_ev_pct": _avg(
-            [_safe_float(row.get("expected_ev_pct"), 0.0) for row in score65_rows]
+        "avg_gross_counterfactual_expected_ev_pct": _avg(
+            [
+                _safe_float(row.get("gross_counterfactual_expected_ev_pct"), 0.0)
+                for row in rows
+            ]
         ),
+        "avg_cost_adjusted_expected_ev_pct": (
+            _avg(net_values) if economic_rows else None
+        ),
+        "score60_74_avg_gross_counterfactual_expected_ev_pct": _avg(
+            score60_gross_values
+        ),
+        "score60_74_avg_cost_adjusted_expected_ev_pct": (
+            _avg(score60_net_values)
+            if score60_rows and len(score60_net_values) == len(score60_rows)
+            else None
+        ),
+        "score60_74_cost_adjusted_sample_count": len(score60_net_values),
+        "score60_74_gross_counterfactual_sample_count": len(score60_gross_values),
+        "score60_74_source_quality_or_cost_excluded_count": len(raw_score60_rows)
+        - len(score60_rows),
+        "score60_74_cost_contract_complete": bool(score60_rows),
+        "score60_74_avg_close_10m_pct": _avg(
+            [_safe_float(row.get("close_10m_pct"), 0.0) for row in score60_rows]
+        ),
+        "score60_74_avg_mfe_10m_pct": _avg(
+            [_safe_float(row.get("mfe_10m_pct"), 0.0) for row in score60_rows]
+        ),
+        # Legacy labels are explicit gross-only diagnostics.
+        "score65_74_avg_expected_ev_pct": _avg(score60_gross_values),
         "score65_74_avg_close_10m_pct": _avg(
-            [_safe_float(row.get("close_10m_pct"), 0.0) for row in score65_rows]
+            [_safe_float(row.get("close_10m_pct"), 0.0) for row in score60_rows]
+        ),
+        "score65_74_avg_mfe_10m_pct": _avg(
+            [_safe_float(row.get("mfe_10m_pct"), 0.0) for row in score60_rows]
         ),
         "expected_ev_krw_sum": int(
             sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)
         ),
-        "source_authority": "observe_only_threshold_relaxation_input",
+        "source_authority": "counterfactual_exploration_seed_only",
+        "primary_decision_metric": "cost_adjusted_expected_ev_pct",
+        "gross_ev_runtime_authority": "forbidden",
         "real_execution_quality_source": "none",
     }
 
@@ -1333,12 +1501,19 @@ def build_wait6579_ev_cohort_report(
                 "entered_attempts": 0,
                 "missed_attempts": 0,
                 "counterfactual_candidates": 0,
+                "economic_eligible_candidates": 0,
+                "source_quality_or_cost_excluded_candidates": 0,
+                "score60_74_probe_candidates": 0,
                 "score65_74_probe_candidates": 0,
                 "expected_fill_rate_pct": 0.0,
                 "avg_expected_ev_pct": 0.0,
+                "avg_gross_counterfactual_expected_ev_pct": 0.0,
+                "avg_cost_adjusted_expected_ev_pct": None,
                 "expected_ev_krw_sum": 0,
+                "cost_adjusted_expected_ev_krw_sum": None,
             },
             "fill_split": [],
+            "economic_fill_split": [],
             "terminal_breakdown": [],
             "counterfactual_summary": _counterfactual_summary([]),
             "preflight": _preflight_summary([]),
@@ -1350,6 +1525,15 @@ def build_wait6579_ev_cohort_report(
                 "min_sample_gate_passed": False,
                 "ev_directional_check_passed": False,
                 "threshold_relaxation_approved": False,
+                "cost_contract_complete": False,
+                "economic_source_quality_eligible_samples": 0,
+                "economic_source_quality_excluded_samples": 0,
+                "primary_decision_metric": "cost_adjusted_expected_ev_pct",
+                "gross_ev_runtime_authority": "forbidden",
+                "full_avg_expected_ev_pct": None,
+                "partial_avg_expected_ev_pct": None,
+                "full_avg_cost_adjusted_expected_ev_pct": None,
+                "partial_avg_cost_adjusted_expected_ev_pct": None,
             },
             "rows": [],
             "meta": {
@@ -1426,6 +1610,11 @@ def build_wait6579_ev_cohort_report(
                 "recovery_promoted": bool(candidate.get("recovery_promoted")),
                 "has_probe_applied": bool(candidate.get("has_probe_applied")),
                 "has_score65_74_probe": bool(candidate.get("has_score65_74_probe")),
+                **{
+                    key: value
+                    for key, value in candidate.items()
+                    if key.startswith("score_recovery_observation_")
+                },
                 "has_budget_pass": bool(candidate.get("has_budget_pass")),
                 "has_latency_pass": bool(candidate.get("has_latency_pass")),
                 "has_latency_block": bool(candidate.get("has_latency_block")),
@@ -1489,10 +1678,15 @@ def build_wait6579_ev_cohort_report(
     missed_attempts = sum(
         1 for row in rows if str(row.get("attempt_status") or "") == "MISSED"
     )
-    score65_74_probe_candidates = sum(
-        1 for row in rows if bool(row.get("has_score65_74_probe"))
+    score60_74_probe_candidates = sum(
+        1
+        for row in rows
+        if 60 <= _safe_float(row.get("ai_score"), 0.0) <= 74
+        and score_recovery_cohort_member(row)
     )
     fill_split = _fill_split_rows(rows)
+    economic_rows = [row for row in rows if _counterfactual_economic_row_eligible(row)]
+    economic_fill_split = _fill_split_rows(economic_rows)
     terminal_breakdown = _terminal_breakdown(rows)
     minute_candle_source_quality_counts = dict(
         Counter(
@@ -1500,17 +1694,31 @@ def build_wait6579_ev_cohort_report(
         )
     )
 
-    split_map = {str(item.get("fill_type") or ""): item for item in fill_split}
+    split_map = {str(item.get("fill_type") or ""): item for item in economic_fill_split}
     full_samples = _safe_int((split_map.get("FULL") or {}).get("samples"), 0)
     partial_samples = _safe_int((split_map.get("PARTIAL") or {}).get("samples"), 0)
-    full_ev = _safe_float((split_map.get("FULL") or {}).get("avg_expected_ev_pct"), 0.0)
+    full_ev = _safe_float(
+        (split_map.get("FULL") or {}).get("avg_cost_adjusted_expected_ev_pct"),
+        None,
+    )
     partial_ev = _safe_float(
-        (split_map.get("PARTIAL") or {}).get("avg_expected_ev_pct"), 0.0
+        (split_map.get("PARTIAL") or {}).get("avg_cost_adjusted_expected_ev_pct"),
+        None,
     )
     min_sample_gate_passed = (
         full_samples >= min_full_samples and partial_samples >= min_partial_samples
     )
-    ev_directional_check_passed = full_ev >= 0.0 and partial_ev >= 0.0
+    cost_contract_complete = full_ev is not None and partial_ev is not None
+    ev_directional_check_passed = bool(
+        cost_contract_complete and full_ev >= 0.0 and partial_ev >= 0.0
+    )
+    net_values = [
+        _safe_float(row.get("cost_adjusted_expected_ev_pct"), None)
+        for row in economic_rows
+    ]
+    net_krw_values = [
+        _safe_int(row.get("cost_adjusted_expected_ev_krw"), 0) for row in economic_rows
+    ]
 
     return {
         "date": safe_date,
@@ -1519,7 +1727,10 @@ def build_wait6579_ev_cohort_report(
             "entered_attempts": int(entered_attempts),
             "missed_attempts": int(missed_attempts),
             "counterfactual_candidates": int(total),
-            "score65_74_probe_candidates": int(score65_74_probe_candidates),
+            "economic_eligible_candidates": len(economic_rows),
+            "source_quality_or_cost_excluded_candidates": total - len(economic_rows),
+            "score60_74_probe_candidates": int(score60_74_probe_candidates),
+            "score65_74_probe_candidates": int(score60_74_probe_candidates),
             "entered_rate": _ratio(entered_attempts, total),
             "expected_fill_rate_pct": _avg(
                 [_safe_float(row.get("expected_fill_rate_pct"), 0.0) for row in rows]
@@ -1527,8 +1738,20 @@ def build_wait6579_ev_cohort_report(
             "avg_expected_ev_pct": _avg(
                 [_safe_float(row.get("expected_ev_pct"), 0.0) for row in rows]
             ),
+            "avg_gross_counterfactual_expected_ev_pct": _avg(
+                [
+                    _safe_float(row.get("gross_counterfactual_expected_ev_pct"), 0.0)
+                    for row in rows
+                ]
+            ),
+            "avg_cost_adjusted_expected_ev_pct": (
+                _avg(net_values) if economic_rows else None
+            ),
             "expected_ev_krw_sum": int(
                 sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)
+            ),
+            "cost_adjusted_expected_ev_krw_sum": (
+                int(sum(net_krw_values)) if economic_rows else None
             ),
             "avg_close_10m_pct": _avg(
                 [_safe_float(row.get("close_10m_pct"), 0.0) for row in rows]
@@ -1539,6 +1762,7 @@ def build_wait6579_ev_cohort_report(
             "minute_candle_source_quality_counts": minute_candle_source_quality_counts,
         },
         "fill_split": fill_split,
+        "economic_fill_split": economic_fill_split,
         "terminal_breakdown": terminal_breakdown,
         "counterfactual_summary": _counterfactual_summary(rows),
         "preflight": _preflight_summary(rows),
@@ -1552,8 +1776,15 @@ def build_wait6579_ev_cohort_report(
             "threshold_relaxation_approved": bool(
                 min_sample_gate_passed and ev_directional_check_passed
             ),
-            "full_avg_expected_ev_pct": float(full_ev),
-            "partial_avg_expected_ev_pct": float(partial_ev),
+            "cost_contract_complete": cost_contract_complete,
+            "economic_source_quality_eligible_samples": len(economic_rows),
+            "economic_source_quality_excluded_samples": total - len(economic_rows),
+            "primary_decision_metric": "cost_adjusted_expected_ev_pct",
+            "gross_ev_runtime_authority": "forbidden",
+            "full_avg_expected_ev_pct": full_ev,
+            "partial_avg_expected_ev_pct": partial_ev,
+            "full_avg_cost_adjusted_expected_ev_pct": full_ev,
+            "partial_avg_cost_adjusted_expected_ev_pct": partial_ev,
         },
         "rows": capped_rows,
         "meta": {

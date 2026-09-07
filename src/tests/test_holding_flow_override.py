@@ -397,6 +397,9 @@ def test_enabled_holding_context_blocks_ai_hold_deferral_when_sources_conflict(
     assert any(
         stage == "holding_flow_override_force_exit"
         and fields.get("force_reason") == "holding_context_cannot_defer"
+        and fields.get("ofi_force_exit_phase") == "source_quality_guard"
+        and fields.get("ofi_force_exit_terminal_reason")
+        == "holding_context_cannot_defer"
         for stage, fields in logs
     )
     assert not any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)

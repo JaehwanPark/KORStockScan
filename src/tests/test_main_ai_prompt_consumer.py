@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from src.engine.scalping import main_ai_holding_base_replay_batch as holding
 from src.engine.scalping import main_ai_prompt_consumer as consumer
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
@@ -17,6 +18,40 @@ def _source_only() -> dict[str, bool]:
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+
+
+@pytest.mark.parametrize("days,ready", [(5, 0), (20, 1)])
+def test_consumer_binds_r3_research_without_requeue_or_live_authority(
+    monkeypatch, days, ready
+):
+    from src.tests.test_micro_reversion_ai_quality_cycle import _review_history
+    from src.engine.scalping.micro_reversion import ai_quality_cycle as cycle
+
+    rolling, manifest = _review_history(days)
+    day = manifest["target_date"]
+    sources = {
+        cycle.rolling_report_path(day): rolling,
+        cycle.r3_manifest_path(day): manifest,
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda path: sources.get(path, {}))
+    handoff = consumer._r3_research_handoff(day)
+    assert handoff["status"] == "consumed_source_only"
+    assert handoff["research_count"] == 1
+    assert handoff["economic_evidence_ready_count"] == ready
+    assert handoff["runtime_apply_ready"] is False
+    assert handoff["rows"][0]["provider_request_requeued"] is False
+    assert handoff["source_manifest_sha256"] == manifest["artifact_content_sha256"]
+    assert (
+        handoff["rows"][0]["research_id"]
+        == manifest["research_candidates"][0]["research_id"]
+    )
+    manifest["research_candidates"][0]["runtime_effect"] = True
+    manifest["artifact_content_sha256"] = cycle._content_hash(
+        manifest, "artifact_content_sha256"
+    )
+    rejected = consumer._r3_research_handoff(day)
+    assert rejected["status"] == "source_unavailable_or_invalid"
+    assert rejected["rows"] == []
 
 
 def test_exhausted_entry_registry_is_terminal_source_only_patch_handoff(monkeypatch):

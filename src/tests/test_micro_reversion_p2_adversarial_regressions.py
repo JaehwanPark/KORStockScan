@@ -242,7 +242,9 @@ def _postactivation_lineage_fixture(bound_source_fixture, monkeypatch) -> dict:
     }
 
 
-def _persisted_provider_floor_fixture(tmp_path, monkeypatch):
+def _persisted_provider_floor_fixture(
+    tmp_path, monkeypatch, *, days=None, parent_count=4
+):
     materialized_root = tmp_path / "materialized"
     source_root = tmp_path / "source"
     prepared_root = tmp_path / "prepared"
@@ -294,7 +296,7 @@ def _persisted_provider_floor_fixture(tmp_path, monkeypatch):
     )
     reports = []
     materialized_reports = []
-    days = (
+    days = days or (
         "2026-08-25",
         "2026-08-26",
         "2026-08-27",
@@ -305,8 +307,8 @@ def _persisted_provider_floor_fixture(tmp_path, monkeypatch):
     for index, day in enumerate(days):
         report = _sample_floor_materialized_report(
             day,
-            parent_start=index * 4,
-            parent_count=4,
+            parent_start=index * parent_count,
+            parent_count=parent_count,
         )
         companions = {
             "source_bundle": {"target_date": day, "kind": "source"},
@@ -450,6 +452,40 @@ def test_provider_floor_leaf_revalidates_full_canonical_window(
     )
 
     assert validated == floor
+
+
+def test_provider_research_floor_is_effective_dated_and_leaf_revalidated(
+    tmp_path,
+    monkeypatch,
+):
+    floor, materialized, _ = _persisted_provider_floor_fixture(
+        tmp_path,
+        monkeypatch,
+        days=("2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07"),
+        parent_count=1,
+    )
+    assert cycle.provider_ablation_floor_requirements("2026-09-04") == (5, 20, 10)
+    assert cycle.provider_ablation_floor_requirements("2026-09-07") == (5, 5, 3)
+    assert floor["observed_common_parent_count"] == 5
+    assert floor["required_common_parent_count"] == 5
+    assert floor["required_unique_symbol_count"] == 3
+    assert (
+        quality.validate_micro_reversion_provider_ablation_floor_artifact(
+            floor,
+            expected_target_date="2026-09-07",
+            current_materialized_report=materialized,
+        )
+        == floor
+    )
+    forged = deepcopy(floor)
+    forged["required_common_parent_count"] = 1
+    forged["floor_content_sha256"] = cycle._content_hash(forged, "floor_content_sha256")
+    with pytest.raises(ValueError, match="provider_ablation_floor_contract_invalid"):
+        quality.validate_micro_reversion_provider_ablation_floor_artifact(
+            forged,
+            expected_target_date="2026-09-07",
+            current_materialized_report=materialized,
+        )
 
 
 def test_provider_floor_leaf_admits_exact_historical_materialized_generation(

@@ -29,7 +29,10 @@ from typing import Any
 from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.engine.approval_contracts import annotate_approval_request
 from src.engine.lifecycle.avg_down_replay import cost_rate_from_version
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.daily_threshold_cycle_report import (
+    REPORT_DIR,
+    THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES,
+)
 from src.engine.runtime_apply_bridge import (
     ARCHIVED_RUNTIME_APPLY_BRIDGE_FAMILIES,
     GREENFIELD_REAL_ENV_FAMILY,
@@ -635,13 +638,7 @@ SOFT_STOP_DYNAMIC_GRACE_ENV_KEYS = frozenset(
         "KORSTOCKSCAN_SCALP_SOFT_STOP_DYNAMIC_GRACE_MAX_WORSEN_PCT",
     }
 )
-DETERMINISTIC_POLICY_HANDOFF_FAMILIES = frozenset(
-    {
-        "entry_split_order_plan",
-        "scale_in_split_order_plan",
-        POST_PROBE_WINNER_RECOVERY_FAMILY,
-    }
-)
+DETERMINISTIC_POLICY_HANDOFF_FAMILIES = THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES
 
 
 def _load_json(path: Path, *, sanitize: bool = True) -> dict[str, Any]:
@@ -2722,6 +2719,8 @@ def _dedupe_calibration_candidates(
 
 
 def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
+    from src.engine.scalping.score_recovery_observation import observation_cohort_valid
+
     if str(candidate.get("family") or "") != "score65_74_recovery_probe":
         return False
     metrics = (
@@ -2729,8 +2728,18 @@ def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
         if isinstance(candidate.get("source_metrics"), dict)
         else {}
     )
-    if bool(metrics.get("entry_unlock_probe_ready")):
-        return True
+    risk_gate = str(metrics.get("risk_regime_gate_state") or "").lower()
+    if not observation_cohort_valid(metrics):
+        return False
+    if (
+        metrics.get("score60_74_cost_contract_complete") is not True
+        or metrics.get("source_quality_blocked") is True
+        or any(
+            marker in risk_gate
+            for marker in ("source_quality_blocked", "invalid", "fail")
+        )
+    ):
+        return False
     try:
         sample_count = int(candidate.get("sample_count") or 0)
         sample_floor = int(candidate.get("sample_floor") or 0)
@@ -2739,24 +2748,49 @@ def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
     if sample_floor <= 0 or sample_count < sample_floor:
         return False
     try:
-        avg_ev = float(
-            metrics.get("score60_74_avg_expected_ev_pct")
-            if metrics.get("score60_74_avg_expected_ev_pct") is not None
-            else metrics.get("score65_74_avg_expected_ev_pct") or 0.0
+        cost_adjusted_sample_count = int(
+            metrics.get("score60_74_cost_adjusted_sample_count") or 0
         )
+    except (TypeError, ValueError):
+        return False
+    if cost_adjusted_sample_count < sample_floor:
+        return False
+    try:
+        avg_ev = float(metrics["score60_74_avg_cost_adjusted_expected_ev_pct"])
         avg_close = float(
             metrics.get("score60_74_avg_close_10m_pct")
             if metrics.get("score60_74_avg_close_10m_pct") is not None
             else metrics.get("score65_74_avg_close_10m_pct") or 0.0
         )
-    except Exception:
+        avg_mfe_raw = metrics.get("score60_74_avg_mfe_10m_pct")
+        avg_mfe = float(avg_mfe_raw) if avg_mfe_raw is not None else None
+    except (KeyError, TypeError, ValueError):
         return False
-    risk_gate = str(metrics.get("risk_regime_gate_state") or "").lower()
-    submitted = float(metrics.get("order_bundle_submitted") or 0.0)
+    if not math.isfinite(avg_ev) or not math.isfinite(avg_close):
+        return False
+    if avg_mfe is not None and (not math.isfinite(avg_mfe) or avg_mfe < 2.0):
+        return False
+    submitted_to_budget = metrics.get("submitted_to_budget_unique_pct")
+    submitted = metrics.get("order_bundle_submitted")
+    try:
+        submitted_to_budget = (
+            float(submitted_to_budget) if submitted_to_budget is not None else None
+        )
+        submitted = float(submitted) if submitted is not None else None
+    except (TypeError, ValueError):
+        return False
+    if submitted_to_budget is not None:
+        drought_ready = (
+            math.isfinite(submitted_to_budget) and 0.0 <= submitted_to_budget <= 10.0
+        )
+    else:
+        drought_ready = (
+            submitted is not None and math.isfinite(submitted) and submitted == 0.0
+        )
     return (
         avg_ev >= 2.0
         and avg_close >= 1.0
-        and submitted <= 0.0
+        and drought_ready
         and risk_gate != "confirmed_panic"
     )
 
@@ -3882,6 +3916,12 @@ def _select_auto_apply_candidates(
                         hold_carry_forward = True
                         reject_reason = ""
                         reason = f"hold_carry_forward_previous_runtime:{family}"
+        elif (
+            lock is None
+            and "runtime_apply_eligible_now" in candidate
+            and candidate.get("runtime_apply_eligible_now") is not True
+        ):
+            reject_reason = "runtime_apply_not_currently_eligible"
         elif contract_blockers:
             reject_reason = ",".join(contract_blockers)
         elif state in AUTO_APPLY_BLOCK_STATES or state not in AUTO_APPLY_ALLOWED_STATES:

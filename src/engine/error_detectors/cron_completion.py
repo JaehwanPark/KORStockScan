@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 import os
 import re
 import time
@@ -329,7 +330,11 @@ class CronCompletionDetector(BaseDetector):
                     details[f"{jid}_status"] = "not_yet_due"
                 continue
 
-            recent_lines = self._read_tail(log_path, self.MARKER_TAIL_LINES)
+            recent_lines = (
+                self._read_once_markers(log_path, today_str)
+                if job.get("mode", "once") == "once"
+                else self._read_tail(log_path, self.MARKER_TAIL_LINES)
+            )
             today_lines = self._filter_today_lines(recent_lines, today_str)
             has_matching_date = bool(today_lines)
             has_done = (
@@ -427,6 +432,33 @@ class CronCompletionDetector(BaseDetector):
         for item in paths:
             lines.extend(CronCompletionDetector._read_tail_lines(item, n))
         return "".join(lines[-n:])
+
+    @staticmethod
+    def _read_once_markers(path: Path, today_str: str) -> str:
+        # Verbose report JSON must not evict the wrapper lifecycle markers.
+        # Keep bounded marker memory while scanning the same rotated bundle.
+        markers: deque[str] = deque(maxlen=128)
+        for item in CronCompletionDetector._log_bundle_paths(path):
+            try:
+                with item.open("r", encoding="utf-8", errors="replace") as stream:
+                    for line in stream:
+                        marker = re.search(
+                            r"\[(START|BEGIN|DONE|OK|SUCCESS|COMPLETED|FAIL|ERROR|CRITICAL)\]",
+                            line,
+                            re.IGNORECASE,
+                        )
+                        if marker is None:
+                            continue
+                        prefix = line[: marker.start()].strip()
+                        if prefix and not re.fullmatch(r"[0-9T Z:+.,/\-\[\]]+", prefix):
+                            continue  # JSON/text quoting a marker is not a wrapper receipt.
+                        if CronCompletionDetector._filter_today_lines(line, today_str):
+                            if _START_MARKER.search(line):
+                                markers.clear()  # A new run supersedes old terminal evidence.
+                            markers.append(line)
+            except OSError:
+                continue
+        return "".join(markers)
 
     @staticmethod
     def _log_bundle_paths(path: Path) -> list[Path]:

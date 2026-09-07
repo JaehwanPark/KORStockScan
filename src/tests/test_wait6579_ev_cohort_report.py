@@ -93,6 +93,67 @@ def test_wait6579_minute_forward_source_quality_marks_truncated_ka10080_window_p
     assert quality["minute_candle_source_quality_reason"] == "ka10080_truncated_window"
 
 
+def test_wait6579_counterfactual_separates_gross_and_effective_dated_cost_ev():
+    result = report_mod._simulate_paper_fill(
+        {
+            "signal_date": "2026-09-04",
+            "ai_score": 70,
+            "buy_pressure": 72.0,
+            "tick_accel": 1.3,
+            "micro_vwap_bp": 2.0,
+            "latency_state": "SAFE",
+            "parse_ok": True,
+            "ai_response_ms": 200,
+        },
+        {
+            "entry_price_used": 10_000,
+            "window_low_price": 10_000,
+            "close_ret_pct": 1.0,
+        },
+    )
+
+    effective_fill_prob = result["full_fill_prob"] + (
+        result["partial_fill_prob"] * result["partial_weight"]
+    )
+    expected_cost_delta = 0.23 * effective_fill_prob
+    assert result["comparison_cost_contract"]["round_trip_cost_pct"] == 0.23
+    assert result["expected_ev_pct"] == result["gross_counterfactual_expected_ev_pct"]
+    assert result["cost_adjusted_expected_ev_pct"] < result["expected_ev_pct"]
+    assert round(
+        result["expected_ev_pct"] - result["cost_adjusted_expected_ev_pct"], 4
+    ) == round(expected_cost_delta, 4)
+    assert result["economic_status"] == "cost_adjusted_counterfactual_available"
+
+
+def test_counterfactual_summary_excludes_nonpass_source_rows_from_economics():
+    valid = {
+        "ai_score": 68,
+        "has_score65_74_probe": True,
+        "minute_candle_source_quality_gate": "pass",
+        "expected_fill_class": "FULL",
+        "gross_counterfactual_expected_ev_pct": 1.2,
+        "cost_adjusted_expected_ev_pct": 0.9,
+        "close_10m_pct": 1.5,
+        "mfe_10m_pct": 2.0,
+        "expected_ev_pct": 1.2,
+        "expected_ev_krw": 1200,
+    }
+    invalid = {
+        **valid,
+        "minute_candle_source_quality_gate": "source_quality_warning",
+        "gross_counterfactual_expected_ev_pct": 8.0,
+        "cost_adjusted_expected_ev_pct": 7.7,
+    }
+
+    summary = report_mod._counterfactual_summary([valid, invalid])
+
+    assert summary["score60_74_raw_probe_candidates"] == 2
+    assert summary["score60_74_probe_candidates"] == 1
+    assert summary["score60_74_source_quality_or_cost_excluded_count"] == 1
+    assert summary["score60_74_avg_cost_adjusted_expected_ev_pct"] == 0.9
+    assert summary["score60_74_cost_contract_complete"] is True
+
+
 def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-04-21"
@@ -317,7 +378,8 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
     assert blocker_map["latency_block"] == 1
     assert report["approval_gate"]["min_sample_gate_passed"] is False
     assert report["counterfactual_summary"]["total_candidates"] == 2
-    assert report["counterfactual_summary"]["score65_74_probe_candidates"] == 1
+    assert report["counterfactual_summary"]["score60_74_raw_probe_candidates"] == 1
+    assert report["counterfactual_summary"]["score65_74_probe_candidates"] == 0
     assert report["counterfactual_summary"]["real_execution_quality_source"] == "none"
 
 
@@ -333,6 +395,10 @@ def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
     assert report["preflight"]["behavior_change"] == "none"
     assert report["preflight"]["observability_passed"] is True
     assert report["approval_gate"]["threshold_relaxation_approved"] is False
+    assert report["metrics"]["score60_74_probe_candidates"] == 0
+    assert report["metrics"]["avg_cost_adjusted_expected_ev_pct"] is None
+    assert report["approval_gate"]["cost_contract_complete"] is False
+    assert report["approval_gate"]["gross_ev_runtime_authority"] == "forbidden"
     assert (
         report["counterfactual_summary"]["book"]
         == "scalp_score65_74_probe_counterfactual"

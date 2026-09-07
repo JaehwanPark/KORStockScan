@@ -98,6 +98,7 @@ from src.engine.scalping.entry_setup_live_policy import (  # noqa: E402
 from src.engine.scalping.main_ai_quality_live_policy import (  # noqa: E402
     resolve_main_ai_quality_live_policy,
 )
+from src.engine.scalping import main_ai_current_axis_runtime  # noqa: E402
 from src.engine.scalping.entry_price_live_policy import (  # noqa: E402
     resolve_entry_price_live_policy,
 )
@@ -1883,6 +1884,23 @@ class GPTSniperEngine:
             if transport_meta:
                 payload.update(transport_meta)
         settle_scalping_feature_delivery(payload, cache_hit=cache_hit)
+        current_axis_raw = payload.get("main_ai_current_axis_receipt")
+        if current_axis_raw:
+            try:
+                current_axis_receipt = json.loads(current_axis_raw)
+            except (TypeError, ValueError):
+                current_axis_receipt = {}
+            if (
+                isinstance(current_axis_receipt, dict)
+                and current_axis_receipt.get("runtime_effect") is True
+                and current_axis_receipt.get("selected_prompt_version")
+                and current_axis_receipt.get("input_sha256")
+            ):
+                prompt_version = current_axis_receipt["selected_prompt_version"]
+                payload["ai_prompt_version"] = prompt_version
+                payload["ai_input_payload_sha256"] = current_axis_receipt[
+                    "input_sha256"
+                ]
         payload.update(
             record_ai_decision_trace(
                 payload,
@@ -4610,23 +4628,100 @@ class GPTSniperEngine:
                 and entry_setup_schema_evidence
             ),
         }
-        transport_meta.update(
-            capture_ai_request(
-                prompt=request.prompt,
-                user_input=request.user_input,
-                endpoint_name=request.endpoint_name,
-                symbol=request.symbol,
-                request_id=request.request_id,
-                model=request.model_name,
-                schema_name=request.schema_name,
-                require_json=request.require_json,
-                temperature=request.temperature,
-                max_output_tokens=request.max_output_tokens,
-                reasoning_effort=request.reasoning_effort,
-                metadata=request.metadata,
+        baseline_request = request
+        request, current_axis_receipt = main_ai_current_axis_runtime.select_request(
+            request,
+            metadata=dict(metadata_extra or {}),
+            execution={
+                "provider": (
+                    "unapproved_route"
+                    if self._uses_openai_primary_bedrock_fallback(request)
+                    or (
+                        request.model_name == "gpt-5.4-mini"
+                        and os.getenv(
+                            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "off"
+                        ).lower()
+                        != "off"
+                    )
+                    else "openai"
+                ),
+                "model": request.model_name,
+                "temperature": request.temperature,
+                "reasoning_effort": request.reasoning_effort,
+                "transport": (
+                    "responses_ws"
+                    if self._should_use_responses_ws(
+                        request, transport_mode_override=transport_mode_override
+                    )
+                    else "responses_http"
+                ),
+                "schema_name": request.schema_name,
+                "require_json": request.require_json,
+                "max_output_tokens": request.max_output_tokens,
+                "response_schema_mode": transport_meta["openai_response_schema_mode"],
+                "response_schema_application": (
+                    "provider_enforced_openai"
+                    if response_schema_registry_used
+                    else "provider_json_object_openai"
+                ),
+                "response_schema_registry_used": response_schema_registry_used,
+                "response_schema_sha256": response_schema_sha256,
+                "semantic_validator_version": _expected_semantic_contract_version(
+                    request.schema_name
+                ),
+            },
+        )
+        transport_meta["main_ai_current_axis_receipt"] = (
+            json.dumps(current_axis_receipt, sort_keys=True)
+            if current_axis_receipt
+            else None
+        )
+
+        def capture_request(selected_request):
+            return capture_ai_request(
+                prompt=selected_request.prompt,
+                user_input=selected_request.user_input,
+                endpoint_name=selected_request.endpoint_name,
+                symbol=selected_request.symbol,
+                request_id=selected_request.request_id,
+                model=selected_request.model_name,
+                schema_name=selected_request.schema_name,
+                require_json=selected_request.require_json,
+                temperature=selected_request.temperature,
+                max_output_tokens=selected_request.max_output_tokens,
+                reasoning_effort=selected_request.reasoning_effort,
+                metadata=selected_request.metadata,
                 replay_context=replay_context,
             )
-        )
+
+        capture_meta = capture_request(request)
+        if current_axis_receipt.get("runtime_effect") is True and (
+            capture_meta.get("ai_prompt_sha256")
+            != current_axis_receipt.get("prompt_sha256")
+            or capture_meta.get("ai_input_payload_sha256")
+            != current_axis_receipt.get("input_sha256")
+            or capture_meta.get("ai_prompt_replay_exact") is not True
+            or capture_meta.get("ai_input_payload_replay_exact") is not True
+        ):
+            # Optional enrichment cannot proceed without exact custody. Reuse
+            # the baseline with a new unsent identity, not a second provider
+            # call or a new entry veto. Partial preparation stays non-delivered.
+            request = replace(baseline_request, request_id=uuid.uuid4().hex)
+            current_axis_receipt = {
+                **current_axis_receipt,
+                "request_id": request.request_id,
+                "failed_preparation_request_id": baseline_request.request_id,
+                "status": "not_applied",
+                "runtime_effect": False,
+                "provider_delivery_confirmed": False,
+                "reason": "exact_candidate_request_capture_unavailable",
+            }
+            transport_meta["openai_request_id"] = request.request_id
+            transport_meta["main_ai_current_axis_receipt"] = json.dumps(
+                current_axis_receipt, sort_keys=True
+            )
+            capture_meta = capture_request(request)
+        transport_meta.update(capture_meta)
         bedrock_primary_payload = self._try_bedrock_primary_provider(
             request=request, transport_meta=transport_meta
         )
@@ -4801,6 +4896,22 @@ class GPTSniperEngine:
             if response_schema_registry_used
             else "provider_json_object_openai"
         )
+        if current_axis_receipt:
+            current_axis_receipt = main_ai_current_axis_runtime.settle_response(
+                current_axis_receipt,
+                provider_transport=transport_meta.get("openai_transport_mode"),
+            )
+            transport_meta["main_ai_current_axis_receipt"] = json.dumps(
+                current_axis_receipt, sort_keys=True
+            )
+            if current_axis_receipt.get("decision_usable") is False:
+                self._set_last_transport_meta(transport_meta)
+                return {
+                    "action": "WAIT",
+                    "score": 0,
+                    "reason": "current_axis_revoked_while_in_flight",
+                    "ai_decision_outcome_eligible": False,
+                }
         self._set_last_transport_meta(transport_meta)
         if isinstance(result.payload, dict):
             return result.payload
@@ -8460,6 +8571,12 @@ class GPTSniperEngine:
             cache_profile=cache_profile,
             candle_context=candle_context,
         )
+        if is_scalping_entry_call:
+            cache_key = (
+                cache_key,
+                "main_ai_current_axis",
+                main_ai_current_axis_runtime.cache_token(),
+            )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
             cached_result = _merge_runtime_fields(cached_result)
@@ -8826,6 +8943,7 @@ class GPTSniperEngine:
                 {
                     "ai_trace_strategy": strategy,
                     "ai_trace_prompt_type": prompt_type,
+                    "main_ai_current_axis_baseline_prompt_version": prompt_version,
                 }
             )
             if main_ai_quality_live_policy.get("enabled") is True:
@@ -8909,6 +9027,20 @@ class GPTSniperEngine:
                 or target_name
                 or "-"
             ).strip()
+            if not trace_metadata_extra.get("position_tag"):
+                trace_metadata_extra["position_tag"] = (
+                    snapshot.get("position_tag")
+                    or (
+                        candle_context.get("position_tag")
+                        if isinstance(candle_context, dict)
+                        else None
+                    )
+                    or (
+                        ws_data.get("position_tag")
+                        if isinstance(ws_data, dict)
+                        else None
+                    )
+                )
             provider_attempted = True
             result = self._call_openai_safe(
                 prompt,

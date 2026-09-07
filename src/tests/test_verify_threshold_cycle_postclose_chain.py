@@ -3800,7 +3800,12 @@ def test_buy_funnel_submit_drought_handoff_warns_when_quote_freshness_attributio
     assert report["submit_drought_refresh_attempted_count"] == 4
 
 
-def test_code_improvement_workorder_contract_status_verifies_declared_contract():
+@pytest.mark.parametrize(
+    "closure_status", ["handoff_closed_root_cause_open", "source_quality_blocked"]
+)
+def test_code_improvement_workorder_contract_status_verifies_declared_contract(
+    closure_status,
+):
     report = mod._code_improvement_workorder_contract_status(
         {
             "summary": {
@@ -3812,7 +3817,7 @@ def test_code_improvement_workorder_contract_status_verifies_declared_contract()
             "orders": [
                 {
                     "order_id": "order_open",
-                    "root_cause_closure_status": "handoff_closed_root_cause_open",
+                    "root_cause_closure_status": closure_status,
                     "root_cause_followup_contract": {
                         "root_cause_signal": "conversion_lane:submit_drought:open",
                         "acceptance_test": "new artifact closes the blocker",
@@ -4514,7 +4519,7 @@ def test_ai_correction_status_reads_current_provider_status_key(tmp_path, monkey
 
 @pytest.mark.parametrize(
     ("allowed_runtime_apply", "expected_status"),
-    [(False, "warning"), (True, "fail")],
+    [(False, "warning"), (True, "warning")],
 )
 def test_ai_correction_status_exposes_incomplete_family_coverage(
     tmp_path, monkeypatch, allowed_runtime_apply, expected_status
@@ -4570,9 +4575,112 @@ def test_ai_correction_status_exposes_incomplete_family_coverage(
     assert report["status"] == expected_status
     assert report["ai_coverage_status"] == "incomplete"
     assert report["missing_families"] == ["family_a"]
-    assert report["incomplete_runtime_candidate_families"] == (
-        ["family_a"] if allowed_runtime_apply else []
+    assert report["incomplete_runtime_candidate_families"] == ([])
+
+
+def test_ai_correction_status_blocks_only_non_deterministic_adjust_candidate(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    review_dir = report_dir / "threshold_cycle_ai_review"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    review_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    (review_dir / "threshold_cycle_ai_review_2026-09-03_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "ai_coverage": {
+                    "status": "incomplete",
+                    "all_expected_families_reviewed_once": False,
+                    "missing_families": ["runtime_family", "entry_split_order_plan"],
+                },
+                "items": [],
+            }
+        ),
+        encoding="utf-8",
     )
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-09-03_postclose.json"
+    ).write_text(
+        json.dumps(
+            {
+                "calibration_candidates": [
+                    {
+                        "family": "runtime_family",
+                        "calibration_state": "adjust_up",
+                        "allowed_runtime_apply": True,
+                        "runtime_apply_eligible_now": True,
+                    },
+                    {
+                        "family": "entry_split_order_plan",
+                        "calibration_state": "adjust_up",
+                        "allowed_runtime_apply": True,
+                        "runtime_apply_eligible_now": True,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod._ai_correction_status("2026-09-03")
+
+    assert report["status"] == "fail"
+    assert report["blocking_runtime_candidate_families"] == ["runtime_family"]
+    assert report["incomplete_runtime_candidate_families"] == ["runtime_family"]
+
+
+def test_ai_correction_status_cannot_omit_runtime_candidate_from_coverage_manifest(
+    tmp_path, monkeypatch
+):
+    report_dir = tmp_path / "data" / "report"
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    review_dir = report_dir / "threshold_cycle_ai_review"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    review_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    (review_dir / "threshold_cycle_ai_review_2026-09-03_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "ai_coverage": {
+                    "status": "complete",
+                    "expected_families": [],
+                    "all_expected_families_reviewed_once": True,
+                    "missing_families": [],
+                },
+                "items": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (
+        calibration_dir / "threshold_cycle_calibration_2026-09-03_postclose.json"
+    ).write_text(
+        json.dumps(
+            {
+                "calibration_candidates": [
+                    {
+                        "family": "runtime_family",
+                        "calibration_state": "adjust_up",
+                        "allowed_runtime_apply": True,
+                        "runtime_apply_eligible_now": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod._ai_correction_status("2026-09-03")
+
+    assert report["status"] == "fail"
+    assert report["missing_families"] == ["runtime_family"]
+    assert report["incomplete_runtime_candidate_families"] == ["runtime_family"]
 
 
 def test_producer_gap_discovery_handoff_fails_sim_first_coverage_gap_without_workorder():
@@ -8395,3 +8503,28 @@ def test_avg_down_verifier_rejects_source_only_runtime_authority_leak(
 
     assert status["status"] == "fail"
     assert "avg_down_runtime_candidate_source_only_authority_leak" in status["issues"]
+
+
+def test_source_quality_blocked_workorder_requires_complete_followup_contract():
+    report = mod._code_improvement_workorder_contract_status(
+        {
+            "summary": {
+                "root_cause_followup_contract_required_count": 1,
+                "root_cause_followup_contract_complete_count": 0,
+                "root_cause_followup_contract_missing_order_ids": ["blocked"],
+            },
+            "orders": [
+                {
+                    "order_id": "blocked",
+                    "root_cause_closure_status": "source_quality_blocked",
+                }
+            ],
+        },
+        target_date="2026-09-07",
+    )
+    assert report["status"] == "fail"
+    assert report["root_cause_followup_contract_required_count"] == 1
+    assert (
+        "code_improvement_workorder_root_cause_followup_contract_incomplete"
+        in report["issues"]
+    )

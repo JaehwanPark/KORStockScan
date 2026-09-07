@@ -1,62 +1,42 @@
 # 계획: KORStockScan 성능 최적화 실행안 (Session Prompt)
 
-기준 시각: `2026-06-04 KST (clean tuning data baseline 현행화)`
-역할: 다음 세션에서 중심 기준 문서로 진입하기 위한 경량 포인터다.
-
-이 문서는 세션 시작용 포인터만 남긴다. 현재 판단의 source of truth는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 작업은 날짜별 `stage2 todo checklist`, 자동화 산출물/consumer 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다. 2026-05-13 이전 prompt 원문은 [pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md)에 보존했다. 기준 문서 갱신은 사용자의 명시 작업지시가 있을 때만 수행하고 runtime/order/provider/bot/threshold 변경과 분리한다.
-
-튜닝 데이터 의사결정 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 정책 source는 `data/source_quality/clean_baseline_policy.json`이며, pre-baseline raw/report/analytics artifact는 archive/audit evidence로만 남기고 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval에 사용하지 않는다.
+현행화: `2026-09-07 KST`
+역할: 세션 진입용 경량 포인터이며 별도의 runtime owner/ON 목록을 복제하지 않는다. 일반 작업마다 이 문서를 다시 읽을 필요는 없다.
 
 ## 현재 Source of Truth
 
-1. 중심 기준: [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)
-2. 당일 실행표: [checklists/2026-05-20-stage2-todo-checklist.md](./checklists/2026-05-20-stage2-todo-checklist.md)
-3. 자동화체인/Metric Decision Contract: [report-based-automation-traceability.md](./report-based-automation-traceability.md)
-4. threshold collector/report/apply plan/runtime env: [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)
-5. report inventory와 Markdown 누락 후보: [data/report/README.md](../data/report/README.md)
-6. clean tuning data baseline policy: [data/source_quality/clean_baseline_policy.json](../data/source_quality/clean_baseline_policy.json)
-7. 원안 대비 실행 변경과 종료 이력: [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
-8. 반복 판단 기준과 감리 Q&A: [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md)
-9. 종료/폐기 관찰축: [archive/closed-observation-axes-2026-05-01.md](./archive/closed-observation-axes-2026-05-01.md)
+| 용도 | 문서 |
+| --- | --- |
+| 튜닝 원칙·current/open 판단 | [Plan Rebase §1~§8](./plan-korStockScanPerformanceOptimization.rebase.md) |
+| 실행 항목·시간·OPEN owner | 당일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md` — 이번 현행화 기준 [9/7 checklist](./checklists/2026-09-07-stage2-todo-checklist.md) |
+| producer/consumer·승인·Metric Contract | [Traceability](./report-based-automation-traceability.md) |
+| 실행·복구 권한 | [Time-based runbook](./time-based-operations-runbook.md) |
+| 장후 상세검토 진행 | [Stable-index inventory](./audit-reports/2026-09-05-postclose-work-inventory.md) |
+| 명시적으로 호출된 장후 모니터링·안전범위 추천 구현 | [Postclose task instructions](./postclose-tuning-result-review-task-instructions.md) |
+| 장중 점검 | [Intraday task instructions](./intraday-monitoring-task-instructions.md) |
+| collector/report/apply/runtime env | [Threshold README](../data/threshold_cycle/README.md) |
+| clean baseline | [Policy artifact](../data/source_quality/clean_baseline_policy.json) |
+| 이력·종료축 | [Execution delta](./plan-korStockScanPerformanceOptimization.execution-delta.md), [archive](./archive/) |
 
-## 현재 운영 원칙
+## 세션 시작과 판단 경계
 
-1. 목표는 손실 억제가 아니라 기대값/순이익 극대화다.
-2. 중심 루프는 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`다.
-3. 장중 runtime threshold mutation은 금지한다. 적용은 장후 report/calibration/AI review와 다음 장전 runtime env를 통해서만 한다.
-4. `2026-05-20` postclose renewal 기준 selected runtime family는 `soft_stop_whipsaw_confirmation`, `latency_classifier_runtime_profile`, `scalp_sim_candidate_window_expansion`, `scalp_sim_ai_budget_manager`, `lifecycle_decision_matrix_runtime`다.
-5. live AI route는 OpenAI 고정이며 provider transport/provenance는 threshold, 주문가/수량, 스윙 dry-run guard 변경과 분리한다.
-6. 스윙은 기본적으로 dry-run self-improvement 체인이다. 일반 swing dry-run env 변경은 hard floor/source-quality와 parsed AI Tier2 review가 닫히면 pre-final auto approval로 다음 PREOPEN에 반영될 수 있다. AI Tier2 missing/unavailable/parse-rejected는 fail-closed다. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 parsed AI Tier2 review, source report hard floor/source-quality/allowlist/cap 통과 시 phase0 자동승인으로 다음 PREOPEN에 반영될 수 있다. 사용자 승인은 final full-live conversion, bounded cap 초과 cap release, provider/bot 변경, hard/protect/emergency safety 완화에만 남긴다.
-7. sim/probe/counterfactual은 source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
-8. Sentinel, panic sell/buying, system error detector는 report-only/source-quality/incident 입력이며 자동 threshold/order/provider/bot restart 변경 권한이 없다.
+1. Plan Rebase §1~§8, 당일 checklist의 오늘 목적·오늘 강제 규칙, `AGENTS.md` current-state snapshot을 읽는다. 과거 체크리스트 완료는 현재 OPEN owner가 아니다.
+2. 목표는 EV/순이익 극대화다. Clean tuning 기준은 `2026-06-05T00:00:00+09:00`; 그 이전 자료는 archive/audit only다. 기존 문서의 6/4 시각을 현재 기준으로 쓰지 않는다.
+3. 자동 적용은 활성 family의 source·경제성·AI/deterministic guard를 통과한 다음 PREOPEN candidate/policy/receipt가 소유한다. 코드 구현·merge·report 성공·selected·PID 소비·실현 EV를 각각 구분한다.
+4. ADM/LDM·bucket·greenfield 및 전용 institutional aggregate는 retired, Swing은 OFF다. 비우선 sim의 단순 무표본을 복구/승격 작업으로 만들지 않는다. 실제 surviving producer와 OFF 상태는 설치 계약으로 확인한다.
+5. Main AI R0–R3는 지속적 offline prompt/input 개선 경로다. #76/#82/#78 환류와 #81 legacy live OFF, 별도 KRX `entry_setup_live_policy`를 혼동하지 않는다.
+6. 완료된 #8/#9 등은 신규 결함·계약 변경·필수 소비 실패 없이 재검토하지 않는다. 미관측 성과와 자연 source/receipt 대기는 기존 checklist acceptance로 추적한다.
+7. Operator lock은 단지 오래됐다는 이유로 해제하지 않는다. 명시적 장중 override도 Plan Rebase의 단일 축·cohort·rollback·hard-safety 경계를 따라야 한다. provider/bot/order/quantity 변경 권한을 추론하지 않는다.
+8. 문서 현행화는 그 문서 속 monitoring/repair/restart 절차를 실행하라는 요청이 아니다. 사용자 변경을 보존하고 요청 범위만 수정한다.
+9. 변경 후 `korstockscan-review-gate`의 review→fix→re-review→targeted validation을 닫는다. 문서는 parser·링크·현재 owner·권한 정합성으로 검증하며 비용 큰 report/provider 실행을 요구하지 않는다.
 
-## Metric Decision Contract 요약
+## Metric Decision Contract
 
-1. 새 관찰지표는 `metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, `forbidden_uses`를 생성 시점에 선언한다.
-2. 승률은 `diagnostic_win_rate`이며 단독 live/canary 승인 기준이 아니다.
-3. EV는 `primary_ev`가 맡고, 필드명은 `equal_weight_avg_profit_pct`, `notional_weighted_ev_pct`, `source_quality_adjusted_ev_pct` 중 하나로 쓴다.
-4. 단순 손익 합산은 EV가 아니며 `simple_sum_profit_pct`로 표시한다.
-5. daily-only 수치는 incident/safety/source-quality/운영 trigger에는 쓸 수 있지만, edge apply 승인은 rolling/cumulative 또는 post-apply version window와 함께 본다.
-6. 계약 없는 새 metric은 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅한다.
+새 관찰지표에는 `metric_role`, `decision_authority`, `window_policy`, `sample_floor`, `primary_decision_metric`, `source_quality_gate`, `forbidden_uses`가 필요하다. EV는 `equal_weight_avg_profit_pct|notional_weighted_ev_pct|source_quality_adjusted_ev_pct`, 승률은 보조 `diagnostic_win_rate`다. 결측 비용/미완료 결과를 0 또는 gross EV로 대체하지 않고 real full-fill/partial/sim/CF를 분리한다. 진단 수리 완료에 별도 live 승격 허들을 추가하지 않는다.
 
-## 세션 시작 체크
+## 문서 검증과 사용자 동기화
 
-1. Plan Rebase §1~§8을 읽는다.
-2. 당일 checklist 상단 `오늘 목적`, `오늘 강제 규칙`을 읽는다.
-3. AGENTS.md `현재 상태 기준` 날짜가 Plan Rebase와 맞는지 확인한다.
-4. clean tuning data baseline이 `2026-06-04T14:29:09+09:00` 이후 데이터만 tuning decision input으로 허용하는지 확인한다.
-5. dirty worktree가 있으면 사용자/runtime 변경을 되돌리지 않는다.
-6. README/런북(runbook)/Plan Rebase/prompt/AGENTS를 바꾸면 1차 수정 후 2차 감리에서 이력성 내용 archive 여부, 영어 약칭의 한글/영어 병기, runtime/order/provider/bot mutation 금지선을 확인한 뒤 최종 수정으로 닫는다.
-7. 문서/checklist를 바꾸면 parser 검증을 실행하고, Project/Calendar 동기화는 사용자 수동 명령으로만 남긴다.
-
-## 문서 운영 규칙
-
-1. 현재 원칙과 active/open 상태는 Rebase가 소유한다.
-2. 실행 작업항목은 날짜별 checklist만 소유한다.
-3. 자동화 산출물, source bundle, Metric Decision Contract는 report traceability 문서가 소유한다.
-4. 완료된 과거 checklist `[x]` 항목은 증적이지 현재 OPEN owner가 아니다.
-5. 과거 일정표, 지나간 owner 판정 메모, 종료된 latency/fallback/shadow 축은 archive 또는 execution-delta에 둔다.
-6. Project/Calendar 동기화 명령은 아래 1개로 통일한다.
+AI는 print-only parser 검증만 실행한다. Project/Calendar sync와 token 검사는 하지 않는다. 동기화는 사용자가 아래 표준 명령 하나로 수행한다.
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar

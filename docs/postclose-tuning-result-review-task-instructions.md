@@ -1,12 +1,12 @@
 # 장후작업 실행 모니터링·장애복구·추천구현 지시문
 
-작성 기준: `2026-09-04 KST`
+작성 기준: `2026-09-07 KST`
 
 이 지시문의 목적은 장후작업이 실행되는 동안 상태를 계속 확인하고, `FAIL`, timeout, hang, 필수 산출물 누락 또는 handoff 단절이 발생하면 최초 원인을 찾아 안전한 범위에서 수정·검증·최소 재실행하여 대상 거래일 작업을 정상 terminal 상태로 닫는 것이다.
 
 운영 체인이 정상화된 뒤에는 같은 generation의 authoritative `implement_now`와 위젯·에피소드 매매기계의 구현 추천을 전수 intake한다. 허용 범위의 항목은 `Pass 1 구현 → review/fix → 영향 산출물 재생성 → Pass 2 재판정·추가 구현`을 fixed-point까지 반복한다.
 
-사용자가 이 지시문에 따라 장후작업을 모니터링하라고 요청하면 위 허용 범위의 2-pass 구현도 함께 지시한 것으로 본다. 별도의 구현 재지시를 기다리지 않는다.
+사용자가 이 지시문에 따라 장후작업을 모니터링하라고 요청하면 위 허용 범위의 2-pass 구현도 함께 지시한 것으로 본다. 별도의 구현 재지시를 기다리지 않는다. 단, 이 문서의 인용·열람·현행화 또는 읽기 전용 점검 요청은 모니터링/추천 구현 실행 지시가 아니다. 문서 수정만 요청받았으면 운영 산출물·PID·env를 변경하지 않는다.
 
 상세 EV 연구, 전략별 장기성과 재평가와 모든 report의 계산 재현은 기본 범위가 아니다. 장애 원인 또는 추천의 구현 가능성·권한을 판정하는 데 필요한 근거만 확인하고, 사용자가 별도 성과 분석을 요청했을 때 확장한다.
 
@@ -19,7 +19,7 @@
 다음을 모두 충족하면 장후작업과 허용된 추천 구현이 완료된 것으로 판정한다.
 
 1. 대상 거래일이 모든 wrapper, status artifact와 후행 작업에서 동일하다.
-2. due인 필수 작업이 `not_yet_due`, `waiting`, `running`, `recovering`, `done`, `failed` 중 하나로 설명되며 상태 미상의 작업이 없다.
+2. 모든 필수 작업의 예정/진행/terminal 상태가 설명되고 상태 미상은 없다. 예정 전은 `not_yet_due`, 정상 대기는 `waiting`으로 구분하되 due 작업이 `running|recovering|waiting`이면 최종 완료가 아니다.
 3. 필수 producer가 최신 `[DONE]` 또는 성공 status artifact로 종료되고, 실패 후 복구한 경우 이전 FAIL보다 최신인 성공 근거가 있다.
 4. main postclose verifier가 terminal이고 필수 artifact, predecessor와 downstream link 결손이 없다.
 5. DONE controller JSON과 controller wrapper가 모두 terminal이며, due인 AI entry replay follower도 terminal이다.
@@ -29,6 +29,8 @@
 9. authoritative `implement_now`와 위젯·에피소드 추천 전수가 stable ID로 분류되고 누락이 없다.
 10. 허용된 구현 항목은 Pass 1과 Pass 2 fixed-point, review finding 0, targeted validation과 영향 산출물 재생성까지 닫힌다.
 11. 권한 밖 추천은 구현하지 않고 `user_authority`와 필요한 승인 근거를 명시한다.
+
+코드·계약 검토, 배포, 자연 산출물, PREOPEN 선택, PID 소비, 비용 차감 EV/순이익 검증은 각각 별도 상태다. 기존 review finding 0을 이유로 자연 acceptance를 완료하지 않으며, 반대로 미관측 EV를 이유로 수리 완료를 취소하지 않는다. #8/#9처럼 완료된 상세검토는 새 결함·계약 변경·필수 handoff 실패가 입증될 때만 재개한다.
 
 source-only 자연 표본 부족이나 전략 후보 0건은 작업 실패가 아니다. 반대로 process 종료 코드가 0이어도 필수 artifact가 없거나 target date가 다르면 정상 종료로 보지 않는다.
 
@@ -76,7 +78,7 @@ source-only 자연 표본 부족이나 전략 후보 0건은 작업 실패가 �
 
 NXT 구간의 opportunity census, BUY/HOLD sentinels, rising-missed, pyramid, websocket freshness와 system metric sampler는 main postclose의 입력 owner다. 이 작업의 오류가 main source-quality 또는 verifier 실패로 이어질 때 장애복구 범위에 포함한다.
 
-Swing은 설치된 main postclose cron의 `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`이면 정상 OFF다. 20:10 main wrapper 안의 machine microstructure/timing/approval 사본은 21:15 systemd가 단일 owner이면 정상 OFF다. OFF·retired 단계를 누락 또는 실패로 세지 않는다.
+Swing은 설치된 main postclose cron의 `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`이면 정상 OFF다. 20:10 main wrapper 안의 machine microstructure/timing/approval 사본은 21:15 systemd가 단일 owner이면 정상 OFF다. OFF·retired 단계를 누락 또는 실패로 세지 않는다. ADM/LDM·bucket·greenfield·전용 institutional aggregate는 복구하지 않는다. 남아 있는 scalp-sim control tower 전체를 폐기된 것으로 오인하지 않고 설치된 flag와 비-LDM consumer만 확인한다. sim/Swing은 현재 우선 상세튜닝 대상이 아니다.
 
 ## 4. 모니터링 시작
 
@@ -111,6 +113,8 @@ jq . "data/report/threshold_cycle_postclose_verification/threshold_cycle_postclo
 jq . "data/report/postclose_done_controller/postclose_done_controller_${TARGET_DATE}.json"
 jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_DATE}.json"
 ```
+
+#11 source-quality preflight는 20:10 main wrapper의 해당 stage가 당일 자연 생성 owner다. 예약 전 없는 당일 파일을 실패 또는 현재 실매매 전체 차단으로 해석하지 않는다. 기존/수동 진단 artifact와 자연 산출물을 구분해 생성시각·run/source hash를 기록하고, #74 final audit 및 영향 row/window의 실제 consumer 판정을 확인한다.
 
 파일이 없으면 예정 시각과 process부터 확인한다. 실행시각 전이면 `not_yet_due`, predecessor를 정상 대기 중이면 `waiting`이며 실패로 처리하지 않는다.
 
@@ -166,8 +170,8 @@ jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_
 
 - 실제 점유가 없으면 lock marker 파일은 그대로 둔다.
 - 실행 중인 정상 owner가 점유하면 기다린다.
-- 중복 owner가 있으면 target date와 시작시각을 비교해 authoritative run을 하나만 남긴다.
-- lock 파일 삭제로 문제를 우회하지 않는다.
+- 중복 owner가 있으면 target date·snapshot·stage·시작시각으로 authoritative run을 식별한다. 증거 보존 후 권한 내의 중복 장후 분석 worker만 처리하고, 정상 main wrapper나 매매 process는 중단하지 않는다.
+- lock 파일 삭제로 문제를 우회하지 않는다. 실행 mutex와 operator policy lock은 다른 계약이다. 오래됐거나 EV 재검증이 없다는 이유로 운영 override를 해제하지 않는다.
 - `run_with_owned_log.sh`의 lock은 로그 회전 보호이며 main wrapper 전체 실행 mutex가 아님을 전제로 중복 PID를 별도로 확인한다.
 
 ### 6.3 코드 보완과 review gate
@@ -186,6 +190,8 @@ jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
 ```
 
+문서만 바꾼 경우 직접 consumer/owner·링크·파서·권한 정합성을 검증하고 provider 호출·비용 큰 report 재생성·무관한 trading 테스트를 요구하지 않는다. 진단 수리는 exact 원인·schema·consumer로 닫으며 all-horizon MFE/MAE, 양수 EV, 실체결 또는 승격 floor를 별도 요구하지 않는다. 미래 자연 확인은 기존 OPEN acceptance를 재사용하고 없을 때만 당일 체크리스트에 `Due/Slot/TimeWindow/Track`을 갖춰 기록한다.
+
 GitHub Project와 Google Calendar sync는 실행하지 않는다.
 
 ### 6.4 최소 재실행
@@ -196,7 +202,7 @@ GitHub Project와 Google Calendar sync는 실행하지 않는다.
 - 실패 producer부터 그 결과를 소비하는 downstream까지만 순서대로 재실행한다.
 - 생성된 artifact의 target date, status, source hash/fingerprint와 completion time을 재확인한다.
 - main wrapper 전체 재실행은 controller/runbook이 허용하고 부분 재생성으로 닫을 수 없을 때만 사용한다.
-- AI Provider 호출은 검증된 checkpoint를 재사용하고 실패 request만 bounded retry한다.
+- AI Provider 호출은 검증된 checkpoint와 해당 producer의 resumable 상태만 재사용한다. terminal schema/provider/receipt rejection을 새 retry로 재개하지 않는다. 실제 실패 request도 기존 retry/capacity/ledger 계약이 허용할 때만 재시도한다.
 - 자정 이후 recovery도 최초 `TARGET_DATE`를 유지한다.
 - postclose worker 재실행 전 기존 PID와 실제 lock 점유가 0인지 확인한다.
 
@@ -228,22 +234,26 @@ GitHub Project와 Google Calendar sync는 실행하지 않는다.
 | ID | stable order/recommendation ID |
 | owner | main, widget symbol, Samsung machine, low-price machine 또는 공통 automation owner |
 | source | artifact path, target date, generation/hash |
-| decision | `implement_now`, `already_implemented`, `observe`, `defer`, `reject` |
+| decision | producer 원값 보존: `implement_now`, `code_patch_required`, `objective_followup_required`, `already_implemented`, `observe`, `keep_collecting`, `defer`, `reject` 등 |
 | authority | `runtime_effect`, `allowed_runtime_apply`, order/provider/bot/safety 영향 |
 | reason | 직접 결함 또는 기대 개선점 |
 | consumer | 수정 결과를 소비해야 하는 마지막 artifact/wrapper |
 | acceptance | 테스트, report 상태와 handoff 완료조건 |
-| final disposition | `already_implemented_verified`, `implemented_pass1`, `implemented_pass2`, `blocked_missing_evidence`, `blocked_external_dependency`, `user_authority`, `invalid_or_missing_authority`, `removed_or_superseded` |
+| final disposition | `already_implemented_verified`, `implemented_pass1`, `implemented_pass2`, `blocked_missing_evidence`, `blocked_external_dependency`, `user_authority`, `invalid_or_missing_authority`, `observed_no_patch`, `deferred`, `rejected`, `removed_or_superseded` |
 
 추천 문장만 있고 구현 위치·consumer·acceptance가 없으면 추정 구현하지 않고 `blocked_missing_evidence`로 둔다. 권한 필드가 없으면 직접 producer/schema에서 비권한 계약을 확인하며, 거기에도 없으면 `invalid_or_missing_authority`로 둔다.
 
-Pass 1을 시작하기 전에 authoritative generation의 전수보존을 다음 식으로 검증한다.
+Pass 1 전에 현재 generation의 main/위젯/에피소드 추천 **전수**를 보존한다. 동일 owner의 같은 native ID가 JSON/Markdown에 중복되면 한 항목으로 대사하고, 원본 충돌은 intake 결함이다. ID 없는 row는 원본 경로·위치로 누락 여부만 추적하며 구현 ID를 발명하지 않는다.
 
-- `implement_now_total = eligible_runtime_effect_false_total + user_authority_total + invalid_or_missing_authority_total`
-- `final_eligible_runtime_effect_false_total = already_implemented_verified + implemented_pass1 + implemented_pass2 + blocked_missing_evidence + blocked_external_dependency`
-- `implement_now_unaccounted_count = 0`
+- `intake_total = implementation_requested_total + nonimplementation_total`
+- `implementation_requested_total = eligible_runtime_effect_false_total + user_authority_total + invalid_or_missing_authority_total`
+- `nonimplementation_total = already_implemented_verified_nonrequest + observed_no_patch + deferred + rejected + blocked_missing_evidence_nonrequest + blocked_external_dependency_nonrequest + invalid_or_missing_authority_nonrequest`
+- 각 pass 종료: `eligible_runtime_effect_false_total = already_implemented_verified_eligible + implemented_pass1 + implemented_pass2 + blocked_missing_evidence + blocked_external_dependency + eligible_actionable_open`
+- 최종 `eligible_actionable_open=0`, `implement_now_unaccounted_count=0`, `intake_unaccounted_count=0`
 
-첫 번째 식 또는 ID 유일성 검사가 실패하면 `intake_contract_defect`로 판정하고 Pass 1 구현을 시작하지 않는다. 두 번째 식은 각 pass 종료 시 누적 ledger에 적용하며, 최종 fixed-point에서는 모든 항목의 disposition 합계가 authoritative intake와 일치해야 한다.
+`implementation_requested_total`에는 native `implement_now|code_patch_required`, §7.2 계약으로 채택된 `objective_followup_required`, 검증되지 않아 수리/증거 대기로 이관된 `already_implemented` 주장을 센다. 위 식의 클래스는 상호배타적이다. 구현이 불필요하다는 검증이 끝나지 않은 `already_implemented` 주장은 완료 계수에 넣지 않고 권한 확인 후 eligible 수리/증거 대기로 분류한다. 비구현 추천의 권한/근거 결손은 대응하는 `_nonrequest` 계수로 기록한다. 이는 집계상 구분이며 final disposition의 원래 사유를 바꾸지 않는다. `removed_or_superseded`는 이전 generation 이력에 남기고 현재 분모와 섞지 않는다.
+
+보존식, 동일 owner/native ID 유일성 또는 source generation 대사가 실패하면 `intake_contract_defect`로 Pass 1을 시작하지 않는다. 각 pass에서 동일한 분모/분류를 재계산하고 ledger의 현재 합계와 이전 generation 변경 이력을 분리한다.
 
 ### 7.2 구현 가능성 판정
 
@@ -296,8 +306,8 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 5. 다음 조건을 모두 만족할 때 fixed-point다.
 
 - eligible `new|decision_changed implement_now=0`
-- `implement_now_unaccounted_count=0`
-- `final_eligible_actionable_open_count=0`
+- `implement_now_unaccounted_count=0` 및 `intake_unaccounted_count=0`
+- `final_eligible_actionable_open_count=0` (현재 ledger의 `eligible_actionable_open`과 동일)
 - 위젯·에피소드 recommendation 미분류 건수 0
 - review P0~P2 finding 0
 - targeted validation 통과
@@ -321,6 +331,8 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 - controller JSON `done`만으로 끝내지 않고 controller cron log의 최신 DONE을 확인한다.
 - fixed 21:05 runner와 controller follower가 날짜별 replay lock으로 중복되지 않았는지 확인한다.
 - batch는 `completed_offline_only`, consumer는 terminal path/hash 검증 상태여야 한다.
+- 21:05 follower는 `terminal detailed → #82 calibration v5 → #78 optimizer(당일 선택 고정) → provider0 batch metadata-only 재결속 → #79 holding manifest → #80 consumer` 순서와 같은 generation/hash를 확인한다. 정상 paired 행의 부분 성공 학습과 producer 전체 실패 terminal을 분리하며 학습 가능을 live promotion 성공으로 바꾸지 않는다.
+- #77 Main AI R0–R3는 지속적인 offline prompt/input 개선 경로다. #81 legacy runtime은 `LEGACY_RUNTIME_AUTHORITY_ENABLED=False`라 표본 누적만으로 활성화되지 않는다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·receipt와 혼동하지 않는다.
 - 기본 OFF인 Codex workorder runner가 실행되지 않은 것을 실패로 보지 않는다.
 
 ### 8.3 Tuning monitoring과 archive
@@ -361,7 +373,8 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 
 - finalization은 main postclose, controller/follower, tuning monitoring, dashboard archive의 exact-date terminal을 기다린다.
 - predecessor fail/timeout이면 cleanup이 실행되지 않아야 한다.
-- predecessor가 모두 성공한 뒤 cleanup DONE, finalization DONE, final detector DONE 순서를 확인한다.
+- predecessor가 모두 성공한 뒤 cleanup DONE → `[DONE] postclose_finalization ... detector_handoff=started` → `[DONE] postclose_final_detector`를 확인한다. 중간 finalization DONE은 detector self-audit 순환 방지 marker일 뿐 최종 성공이 아니며, 이후 detector 실패의 최신 FAIL이 우선한다.
+- 기본 predecessor wait 5100초/23:20 KST hard deadline과 cleanup·detector 각 600초 상한을 확인한다. predecessor 실패/timeout이면 cleanup은 건너뛰되 bounded detector를 실행하고 finalization FAIL로 닫는 현행 계약을 따른다.
 - finalization 실패 후 재실행은 선행 owner를 먼저 정상화한 뒤 수행한다.
 - error detector의 stale 과거 FAIL보다 최신 recovery DONE이 권위를 갖는지 확인한다.
 
@@ -384,9 +397,10 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 
 최종 상태는 다음처럼 사용한다.
 
-- `GREEN`: 모든 due 필수 owner가 성공 terminal이고, eligible implement-now·추천 fixed-point와 review finding 0까지 닫혔으며 unresolved failure와 실제 점유 stale lock이 없다.
+- `진행 중`: 아직 미래 작업 또는 정상 running/waiting/recovering이 남으면 현재 상태만 보고하고 GREEN 완료로 종료하지 않는다. 정해진 기한 내 정상 대기를 RED 장애로 오판하지 않는다.
+- `GREEN`: 대상일 마지막 필수 owner까지 due가 되었고 모든 due 필수 owner가 성공 terminal이고, eligible implement-now·추천 fixed-point와 review finding 0까지 닫혔으며 unresolved failure와 실제 점유 stale lock이 없다.
 - `YELLOW`: 필수 실행은 정상 terminal이지만 source-only warning, 외부 dependency, user-authority 추천 또는 다음 거래일 관찰이 남아 있다.
-- `RED`: 필수 owner가 failed/hung/missing 상태이거나 verifier/controller/finalization이 닫히지 않았거나 허용 범위의 actionable 구현이 누락됐다.
+- `RED`: due 필수 owner의 실패·확정 hang·비정상 missing, deadline/실패 때문에 닫히지 못한 verifier/controller/finalization, 또는 완료를 선언하면서 누락한 허용 범위 actionable 구현이 있다.
 
 보고는 `판정 → 근거 → 다음 액션` 순서로 간단히 작성한다.
 

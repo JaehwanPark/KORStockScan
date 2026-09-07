@@ -1,6 +1,6 @@
 # KORStockScan 문서 구조
 
-작성 기준: 2026-08-20 KST
+작성 기준: 2026-09-07 KST
 
 이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, runbook, report traceability, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
 
@@ -13,6 +13,8 @@
 - `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 당일 실행 항목의 유일한 소유 문서.
 - `time-based-operations-runbook.md`: 장전, 장중, 장후, 20:05 EOD 데이터 갱신과 20:10 POSTCLOSE controller 확인 절차.
 - `report-based-automation-traceability.md`: report 산출물, downstream consumer, runtime mutation 금지선, postclose chain contract.
+- [장후 상세검토 진행목록](audit-reports/2026-09-05-postclose-work-inventory.md): stable index별 코드 검토 완료와 기존 OPEN 자연/경제성 acceptance를 분리한다.
+- [장후 모니터링 지시문](postclose-tuning-result-review-task-instructions.md): 명시적으로 호출했을 때만 bounded recovery·safe-scope 추천 fixed-point를 수행한다. 이 문서의 열람/현행화는 실행 권한이 아니다.
 - `intraday-monitoring-task-instructions.md`: 메인 봇·위젯·에피소드 매매기계와 micro-reversion·AI 판단품질·smoothing·위젯·에피소드 튜닝축의 장중 점검 계약.
 - `widget-signal-auto-trading-runbook.md`: 위젯 매매의 독립 owner, 정책과 청산 계약.
 - `low-price-two-leg-machines.md`, `samsung-morning-one-share-machine.md`: 에피소드 매매기계의 exact-date 정책과 custody 계약.

@@ -3021,6 +3021,7 @@ def test_required_runtime_handoff_contract_does_not_replace_operator_lock_author
         "priority": 10,
         "calibration_state": "adjust_up",
         "allowed_runtime_apply": True,
+        "runtime_apply_eligible_now": False,
         "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
         "current_values": {"enabled": False},
         "recommended_values": {"enabled": True},
@@ -3163,7 +3164,7 @@ def test_build_preopen_apply_manifest_uses_latest_prior_report(tmp_path, monkeyp
     assert saved["source_date"] == "2026-04-30"
 
 
-def test_score65_74_entry_unlock_candidate_accepts_score60_74_alias_metrics():
+def test_score65_74_entry_unlock_candidate_requires_cost_adjusted_metrics():
     assert (
         mod._score65_74_entry_unlock_candidate(
             {
@@ -3171,14 +3172,85 @@ def test_score65_74_entry_unlock_candidate_accepts_score60_74_alias_metrics():
                 "sample_count": 24,
                 "sample_floor": 20,
                 "source_metrics": {
-                    "score60_74_avg_expected_ev_pct": 3.1,
+                    "score60_74_avg_cost_adjusted_expected_ev_pct": 3.1,
                     "score60_74_avg_close_10m_pct": 1.4,
-                    "order_bundle_submitted": 0,
+                    "score60_74_cost_adjusted_sample_count": 24,
+                    "score60_74_cost_contract_complete": True,
+                    "submitted_to_budget_unique_pct": 5.0,
+                    "order_bundle_submitted": 1,
                 },
             }
         )
         is True
     )
+
+
+def test_score65_74_entry_unlock_candidate_rejects_gross_only_or_blocked_source():
+    candidate = {
+        "family": "score65_74_recovery_probe",
+        "sample_count": 24,
+        "sample_floor": 20,
+        "source_metrics": {
+            "entry_unlock_probe_ready": True,
+            "score60_74_avg_expected_ev_pct": 3.1,
+            "score60_74_avg_close_10m_pct": 1.4,
+            "order_bundle_submitted": 0,
+        },
+    }
+    assert mod._score65_74_entry_unlock_candidate(candidate) is False
+
+    candidate["source_metrics"].update(
+        {
+            "score60_74_avg_cost_adjusted_expected_ev_pct": 3.1,
+            "score60_74_cost_adjusted_sample_count": 24,
+            "score60_74_cost_contract_complete": True,
+            "source_quality_blocked": True,
+        }
+    )
+    assert mod._score65_74_entry_unlock_candidate(candidate) is False
+
+
+def test_score65_74_entry_unlock_candidate_rejects_invalid_economic_denominator():
+    candidate = {
+        "family": "score65_74_recovery_probe",
+        "sample_count": 24,
+        "sample_floor": 20,
+        "source_metrics": {
+            "score60_74_avg_cost_adjusted_expected_ev_pct": 3.1,
+            "score60_74_avg_close_10m_pct": 1.4,
+            "score60_74_cost_adjusted_sample_count": 19,
+            "score60_74_cost_contract_complete": True,
+            "submitted_to_budget_unique_pct": 5.0,
+        },
+    }
+    assert mod._score65_74_entry_unlock_candidate(candidate) is False
+
+    candidate["source_metrics"]["score60_74_cost_adjusted_sample_count"] = 24
+    candidate["source_metrics"]["submitted_to_budget_unique_pct"] = -1.0
+    assert mod._score65_74_entry_unlock_candidate(candidate) is False
+
+
+def test_auto_apply_blocks_explicit_not_currently_eligible_machine_candidate():
+    candidate = {
+        "family": "score65_74_recovery_probe",
+        "stage": "entry",
+        "priority": 10,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "runtime_apply_eligible_now": False,
+        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+        "recommended_values": {"enabled": True},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["decision_reason"] == "runtime_apply_not_currently_eligible"
 
 
 def test_build_preopen_apply_manifest_accepts_calibrated_apply_candidate(

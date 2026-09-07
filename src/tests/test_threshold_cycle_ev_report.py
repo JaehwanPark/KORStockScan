@@ -610,6 +610,9 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
     assert "## Summary" in markdown
     assert "Missed Probe Counterfactual" in markdown
+    assert "avg_gross_counterfactual_ev" in markdown
+    assert "avg_cost_adjusted_counterfactual_ev" in markdown
+    assert "gross_runtime_authority: `forbidden`" in markdown
     assert "Swing Runtime Approval" in markdown
     assert "Scalp Entry ADM" in markdown
     assert "Lifecycle Decision Matrix" in markdown

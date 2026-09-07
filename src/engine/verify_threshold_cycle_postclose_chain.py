@@ -31,7 +31,10 @@ from src.engine.automation.source_quality_hard_gate import (
 from src.engine.build_code_improvement_workorder import (
     lifecycle_entry_bucket_order_id,
 )
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.daily_threshold_cycle_report import (
+    REPORT_DIR,
+    THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES,
+)
 from src.engine.lifecycle.retirement import (
     current_calibration_rows,
     RETIRED_REPORTS,
@@ -173,8 +176,6 @@ _TIMEOUT_RE = re.compile(
 _AI_RUNTIME_STATES = {
     "adjust_up",
     "adjust_down",
-    "hold",
-    "hold_no_edge",
 }
 _OPTIONAL_ARTIFACT_LABELS = {
     "buy_funnel_sentinel",
@@ -201,7 +202,7 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "machine_entry_timing_tuning",
     "machine_entry_timing_policy",
 }
-_AI_EXEMPT_RUNTIME_FAMILIES: frozenset[str] = frozenset()
+_AI_EXEMPT_RUNTIME_FAMILIES = THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES
 SCALE_IN_POLICY_FAMILY = "scale_in_bucket_runtime_policy_v1"
 SCALE_IN_POLICY_EXCLUSION_REASON = "paired_add_lifecycle_replay_or_final_label_missing"
 ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS = [
@@ -1597,6 +1598,89 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _smoothing_force_exit_exclusion_issues(receipt: Any, target_date: str) -> list[str]:
+    """Verify an isolated diagnostic exclusion without accepting missing fields."""
+    if receipt is None:
+        return []
+    issue = "smoothing_force_exit_row_exclusion_invalid"
+    if not isinstance(receipt, dict):
+        return [issue]
+    rows = receipt.get("excluded_rows")
+
+    def digest(value: Any) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    if (
+        receipt.get("schema") != "smoothing_force_exit_row_exclusion_v1"
+        or receipt.get("target_date") != target_date
+        or receipt.get("decision_authority") != "source_quality_row_exclusion_only"
+        or receipt.get("runtime_effect") is not False
+        or receipt.get("allowed_runtime_apply") is not False
+        or receipt.get("raw_source_mutated") is not False
+        or receipt.get("row_hash_scope")
+        != "canonical_projected_event_not_full_raw_envelope"
+        or not isinstance(rows, list)
+        or not rows
+        or any(
+            type(receipt.get(k)) is not int or receipt[k] < 0
+            for k in ("source_row_count", "included_row_count", "excluded_row_count")
+        )
+    ):
+        return [issue]
+    if (
+        receipt["source_row_count"] != receipt["included_row_count"] + len(rows)
+        or receipt["excluded_row_count"] != len(rows)
+        or receipt.get("excluded_rows_sha256") != digest(rows)
+    ):
+        return [issue]
+    for item in rows:
+        if not isinstance(item, dict) or not isinstance(
+            item.get("projected_row"), dict
+        ):
+            return [issue]
+        row = item["projected_row"]
+        if row.get("stage") != "holding_flow_override_force_exit" or item.get(
+            "projected_row_sha256"
+        ) != digest(row):
+            return [issue]
+        if str(row.get("emitted_at") or "")[:10] != target_date:
+            return [issue]
+        fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        missing: dict[str, int] = {}
+        invalid: dict[str, int] = {}
+        phase = str(fields.get("ofi_force_exit_phase") or "")
+        if not phase:
+            missing["ofi_force_exit_phase"] = 1
+        elif phase not in {
+            "pre_smoothing_guard",
+            "post_debounce_guard",
+            "source_quality_guard",
+        }:
+            invalid["ofi_force_exit_phase"] = 1
+        required = ["ofi_force_exit_terminal_reason"]
+        if phase == "post_debounce_guard":
+            required.append("ofi_debounce_profit_delta")
+        for key in required:
+            value = fields.get(key)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                missing[key] = 1
+        if (
+            not (missing or invalid)
+            or item.get("missing_field_counts") != missing
+            or item.get("invalid_value_counts") != invalid
+        ):
+            return [issue]
+    return []
+
+
 def _smoothing_source_only_path_journal_contract_status(
     daily_report: dict[str, Any],
     cumulative_report: dict[str, Any],
@@ -1871,6 +1955,24 @@ def _smoothing_source_only_path_journal_contract_status(
         else {}
     )
     daily_pipeline_meta = pipeline_load.get(daily_date)
+    for report in (daily_report, cumulative_report):
+        report_meta = report.get("meta") if isinstance(report.get("meta"), dict) else {}
+        loads = report_meta.get("pipeline_load")
+        if isinstance(loads, dict):
+            for source_date, source_meta in loads.items():
+                if isinstance(source_meta, dict):
+                    receipt = source_meta.get("smoothing_force_exit_row_exclusion")
+                    if isinstance(receipt, dict) and source_meta.get(
+                        "line_count"
+                    ) != receipt.get("included_row_count"):
+                        issues.append(
+                            "smoothing_force_exit_exclusion_line_count_mismatch"
+                        )
+                    issues.extend(
+                        _smoothing_force_exit_exclusion_issues(
+                            receipt, str(source_date)
+                        )
+                    )
     if (
         daily_date >= "2026-08-13"
         and isinstance(daily_report.get("meta"), dict)
@@ -2939,6 +3041,8 @@ def _runtime_candidates_requiring_ai(calibration_report: dict[str, Any]) -> list
         if state not in _AI_RUNTIME_STATES:
             continue
         if item.get("allowed_runtime_apply") is not True:
+            continue
+        if item.get("runtime_apply_eligible_now") is False:
             continue
         if item.get("human_approval_required") is True:
             continue
@@ -5641,11 +5745,22 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
     parse_warnings = ai_review.get("parse_warnings")
     if not isinstance(parse_warnings, list):
         parse_warnings = []
+    coverage = (
+        ai_review.get("ai_coverage")
+        if isinstance(ai_review.get("ai_coverage"), dict)
+        else {}
+    )
+    explicit_expected_families = coverage.get("expected_families")
+    declared_expected = (
+        explicit_expected_families
+        if isinstance(explicit_expected_families, list)
+        else []
+    )
     expected_families = list(
         dict.fromkeys(
-            str(item.get("family") or "")
-            for item in calibration_report.get("calibration_candidates") or []
-            if isinstance(item, dict) and str(item.get("family") or "")
+            str(value or "").strip()
+            for value in [*declared_expected, *blocking_families]
+            if str(value or "").strip()
         )
     )
     expected_set = set(expected_families)
@@ -5678,11 +5793,6 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
         if family in expected_set and count > 1
     )
     derived_unexpected = sorted(set(item_counts) - expected_set)
-    coverage = (
-        ai_review.get("ai_coverage")
-        if isinstance(ai_review.get("ai_coverage"), dict)
-        else {}
-    )
     explicit_missing = (
         coverage.get("missing_families")
         if isinstance(coverage.get("missing_families"), list)
@@ -5808,6 +5918,7 @@ def _code_improvement_workorder_contract_status(
         if str(item.get("root_cause_closure_status") or "").strip()
         in {
             "artifact_regeneration_required",
+            "source_quality_blocked",
             "handoff_closed_root_cause_open",
             "needs_followup_workorder",
         }

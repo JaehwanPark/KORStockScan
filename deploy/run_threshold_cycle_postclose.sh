@@ -205,7 +205,6 @@ RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION="${THRESHOLD_CYCLE_RUN_AI_DECISION
 RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-true}"
 RUN_MAIN_AI_PROMPT_OPTIMIZER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_OPTIMIZER:-$RUN_MAIN_AI_QUALITY_R0_R3}"
 RUN_MAIN_AI_PROMPT_CONSUMER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_CONSUMER:-$RUN_MAIN_AI_PROMPT_OPTIMIZER}"
-RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY:-true}"
 RUN_INTRADAY_WS_FRESHNESS_FINALIZE="${THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_FINALIZE:-$RUN_MAIN_AI_QUALITY_R0_R3}"
 MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY:-true}"
 MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP:-390}"
@@ -2081,15 +2080,12 @@ if [ "${RUN_MAIN_AI_PROMPT_CONSUMER:-false}" = "true" ] || [ "${RUN_MAIN_AI_PROM
     emit_postclose_marker "[WARN] main-ai-prompt-consumer target_date=$TARGET_DATE rc=$main_ai_prompt_consumer_rc status=blocked_source_contract runtime_effect=false actual_order_submitted=false"
   fi
 fi
-if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "1" ]; then
-  main_ai_quality_family_rc=0
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
-    -m src.engine.automation.main_ai_quality_runtime_family \
-    --phase postclose \
-    --target-date "$TARGET_DATE" \
-    --write || main_ai_quality_family_rc=$?
-  if [ "$main_ai_quality_family_rc" -ne 0 ]; then
-    emit_postclose_marker "[WARN] main-ai-quality-runtime-family target_date=$TARGET_DATE rc=$main_ai_quality_family_rc status=blocked_fail_closed runtime_effect=false actual_order_submitted=false"
+# Legacy Main AI runtime is disabled; inherited flags cannot restore scheduled authority.
+emit_postclose_marker "[SKIP] main-ai-quality-runtime-family target_date=$TARGET_DATE status=retired_disabled runtime_effect=false actual_order_submitted=false"
+if [[ "$TARGET_DATE" > "2026-09-06" ]]; then
+  if ! run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.main_ai_current_axis \
+    --phase postclose --target-date "$TARGET_DATE" --write; then
+    emit_postclose_marker "[WARN] main-ai-current-axis target_date=$TARGET_DATE status=blocked_contract runtime_effect=false"
   fi
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then

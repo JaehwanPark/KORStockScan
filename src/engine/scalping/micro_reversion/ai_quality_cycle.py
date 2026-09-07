@@ -70,14 +70,12 @@ from src.engine.scalping.micro_reversion.replay_ablation_contract import (
     LEGACY_DESIGN_VERSION,
     PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE,
     PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
-    PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS,
-    PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS,
-    PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS,
     PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
     SOURCE_ONLY_AUTHORITY_CONTRACT,
     SOURCE_ONLY_FALSE_AUTHORITY_ALIASES,
     arm_set_for_design,
     comparison_roles_for_design,
+    provider_ablation_floor_requirements,
     resolve_replay_ablation_design_version,
     validate_exact_one_design_per_parent,
 )
@@ -195,6 +193,13 @@ MIN_UNIQUE_SYMBOLS = 10
 MIN_BBO_COVERAGE_PCT = 95.0
 MIN_DEPTH_COVERAGE_PCT = 90.0
 MIN_RELATIVE_UPLIFT_PCT = 1.0
+WINDOW_SAMPLE_FLOORS = {5: (5, 3), 10: (10, 5), 20: (20, 10)}
+ECONOMIC_COMPARISON_SCHEMA = "main_ai_quality_paired_notional_comparison_v1"
+RESEARCH_PROGRESS_SCHEMA = "main_ai_quality_research_progress_v2"
+NO_NEW_SAMPLE_STATES = frozenset({"no_micro_reversion_eligible_requests"})
+ECONOMIC_POPULATIONS = frozenset(
+    {"full_or_zero_exposure", "standardized_probe_research_only"}
+)
 MAX_LIFECYCLE_FINDINGS = 200
 PIPELINE_OWNER_SCOPED_GAP_HARD_BLOCK_MIN_ROWS = 1_000
 LIFECYCLE_POPULATION_REAL_SUBMITTED = "real_submitted"
@@ -221,6 +226,7 @@ LIFECYCLE_PROMOTION_ESTIMATOR_CONTRACT: dict[str, Any] = {
         "at_most_one_deterministic_divergence_representative_per_unique_lifecycle"
     ),
     "primary_decision_metric": "candidate_total_notional_net_profit_krw",
+    "economic_comparison_schema": ECONOMIC_COMPARISON_SCHEMA,
     "source_quality_gate": (
         "exact_lifecycle_identity_stage_and_aware_decision_timestamp"
     ),
@@ -774,11 +780,14 @@ def _provider_ablation_sample_floor_from_reports(
     trading_dates = sorted({value[0] for value in parents.values()})
     symbols = sorted({value[1] for value in parents.values()})
     parent_ids = sorted(parents)
+    required_days, required_parents, required_symbols = (
+        provider_ablation_floor_requirements(target_date)
+    )
     passed = bool(
         not findings
-        and len(trading_dates) >= PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS
-        and len(parent_ids) >= PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS
-        and len(symbols) >= PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS
+        and len(trading_dates) >= required_days
+        and len(parent_ids) >= required_parents
+        and len(symbols) >= required_symbols
     )
     body = {
         "schema": PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
@@ -789,9 +798,9 @@ def _provider_ablation_sample_floor_from_reports(
         ),
         "lookback_calendar_days": PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
         "ablation_design_version": CURRENT_DESIGN_VERSION,
-        "required_trading_days": PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS,
-        "required_common_parent_count": PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS,
-        "required_unique_symbol_count": PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS,
+        "required_trading_days": required_days,
+        "required_common_parent_count": required_parents,
+        "required_unique_symbol_count": required_symbols,
         "observed_trading_days": len(trading_dates),
         "observed_common_parent_count": len(parent_ids),
         "observed_unique_symbol_count": len(symbols),
@@ -2669,6 +2678,21 @@ def _validated_execution_rows(
         baseline_ev, baseline_ev_basis = comparable_ev(baseline)
         control_ev, control_ev_basis = comparable_ev(micro_control)
         candidate_ev, candidate_ev_basis = comparable_ev(candidate)
+
+        def comparison_notional(arm: Mapping[str, Any]) -> float | None:
+            # A verified no-entry decision has zero allocated exposure. Missing
+            # economics and standardized probes remain unknown, never zero.
+            if (
+                arm.get("exposure_role") == "no_entry_exposure"
+                and arm.get("exposure_fraction") == 0.0
+                and arm.get("economic_signal_selected") is False
+                and arm.get("source_quality_adjusted_ev_pct") == 0.0
+            ):
+                return 0.0
+            if arm.get("notional_net_profit_eligible") is True:
+                return _finite_number(arm.get("notional_incremental_value_krw"))
+            return None
+
         reference_fields = {
             "cost_profile_artifact_sha256": row.get("cost_profile_artifact_sha256"),
             "cost_catalog_content_sha256": row.get("cost_catalog_content_sha256"),
@@ -2694,6 +2718,7 @@ def _validated_execution_rows(
                 "baseline_notional_value_krw": _finite_number(
                     baseline.get("notional_incremental_value_krw")
                 ),
+                "baseline_comparison_notional_krw": comparison_notional(baseline),
                 "baseline_severe_tail": baseline.get("severe_tail_exposure") is True,
                 "baseline_signal_selected": (
                     baseline.get("economic_signal_selected") is True
@@ -2837,6 +2862,8 @@ def _validated_execution_rows(
                 "candidate_notional_value_krw": _finite_number(
                     candidate.get("notional_incremental_value_krw")
                 ),
+                "control_comparison_notional_krw": comparison_notional(micro_control),
+                "candidate_comparison_notional_krw": comparison_notional(candidate),
                 "control_severe_tail": micro_control.get("severe_tail_exposure")
                 is True,
                 "candidate_severe_tail": candidate.get("severe_tail_exposure") is True,
@@ -4985,6 +5012,18 @@ def _date_window_rows(
     )
 
 
+def _economic_population(row: Mapping[str, Any]) -> str:
+    """Stratify by validated exposure semantics, never by realized returns."""
+    return (
+        "standardized_probe_research_only"
+        if any(
+            row.get(f"{arm}_ev_basis") == "standardized_one_share_probe_ev_pct"
+            for arm in ("baseline", "control", "candidate")
+        )
+        else "full_or_zero_exposure"
+    )
+
+
 def _lifecycle_promotion_estimator(
     rows: Sequence[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -5164,6 +5203,15 @@ def _lifecycle_promotion_estimator(
                 "candidate_notional_value_krw": _finite_number(
                     row.get("candidate_notional_value_krw")
                 ),
+                "control_comparison_notional_krw": _finite_number(
+                    row.get("control_comparison_notional_krw")
+                ),
+                "candidate_comparison_notional_krw": _finite_number(
+                    row.get("candidate_comparison_notional_krw")
+                ),
+                "baseline_comparison_notional_krw": _finite_number(
+                    row.get("baseline_comparison_notional_krw")
+                ),
             }
             for lifecycle_parent_rows in lifecycle_rows.values()
             for row, decision_ts, decision_divergence in lifecycle_parent_rows
@@ -5192,6 +5240,121 @@ def _lifecycle_promotion_estimator(
         "lifecycle_promotion_censored_parent_count": len(rows) - len(representatives),
         "lifecycle_no_divergence_count": no_divergence_lifecycle_count,
         "lifecycle_selected_parent_census_sha256": _sha256(selected_parent_census),
+    }
+
+
+def _paired_notional_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Compare both arms on the same unique lifecycle representatives.
+
+    Capital time and session exposure are observed reference denominators, not
+    independently replayed holding durations for either hypothetical arm.
+    """
+    pairs = [
+        row
+        for row in rows
+        if all(
+            _finite_number(row.get(f"{arm}_comparison_notional_krw")) is not None
+            for arm in ("control", "candidate")
+        )
+    ]
+    session_seconds = sum(
+        float((row.get("lifecycle") or {}).get("session_exposure_sec") or 0)
+        for row in pairs
+    )
+    capital_hours = sum(
+        float((row.get("lifecycle") or {}).get("capital_time_krw_hours") or 0)
+        for row in pairs
+    )
+    totals = {
+        arm: (
+            sum(float(row[f"{arm}_comparison_notional_krw"]) for row in pairs)
+            if pairs
+            else None
+        )
+        for arm in ("control", "candidate")
+    }
+    signal_counts = {
+        arm: sum(row.get(f"{arm}_signal_selected") is True for row in pairs)
+        for arm in totals
+    }
+    composite_pairs = [
+        row
+        for row in pairs
+        if _finite_number(row.get("baseline_comparison_notional_krw")) is not None
+    ]
+    return {
+        "schema": ECONOMIC_COMPARISON_SCHEMA,
+        "metric_role": "paired_lifecycle_incremental_net_profit",
+        "decision_authority": OFFLINE_AUTHORITY["decision_authority"],
+        "window_policy": "same_window_earliest_divergence_common_lifecycle_pairs",
+        "sample_floor": "complete_notional_comparison_for_all_selected_representatives",
+        "primary_decision_metric": "paired_total_notional_net_profit_delta_krw",
+        "source_quality_gate": "validated_three_arm_cost_binding_and_reconciled_lifecycle",
+        "forbidden_uses": [
+            "missing_notional_as_zero",
+            "probe_as_broker_profit",
+            "reference_capital_time_as_independent_arm_duration",
+            "runtime_apply",
+        ],
+        "representative_count": len(rows),
+        "paired_count": len(pairs),
+        "missing_pair_count": len(rows) - len(pairs),
+        "control_total_notional_net_profit_krw": totals["control"],
+        "candidate_total_notional_net_profit_krw": totals["candidate"],
+        "paired_total_notional_net_profit_delta_krw": (
+            totals["candidate"] - totals["control"] if pairs else None
+        ),
+        "composite_paired_count": len(composite_pairs),
+        "baseline_paired_notional_net_profit_krw": (
+            sum(
+                float(row["baseline_comparison_notional_krw"])
+                for row in composite_pairs
+            )
+            if composite_pairs
+            else None
+        ),
+        "composite_candidate_paired_notional_net_profit_krw": (
+            sum(
+                float(row["candidate_comparison_notional_krw"])
+                for row in composite_pairs
+            )
+            if composite_pairs
+            else None
+        ),
+        "composite_total_notional_net_profit_delta_krw": (
+            sum(
+                float(row["candidate_comparison_notional_krw"])
+                - float(row["baseline_comparison_notional_krw"])
+                for row in composite_pairs
+            )
+            if composite_pairs
+            else None
+        ),
+        "reference_session_exposure_hours": (
+            session_seconds / 3600 if session_seconds > 0 else None
+        ),
+        "reference_capital_time_krw_hours": (
+            capital_hours if capital_hours > 0 else None
+        ),
+        "signal_count_delta": signal_counts["candidate"] - signal_counts["control"],
+        **{f"{arm}_signal_count": value for arm, value in signal_counts.items()},
+        **{
+            f"{arm}_signals_per_reference_session_hour": (
+                signal_counts[arm] / (session_seconds / 3600)
+                if session_seconds > 0
+                else None
+            )
+            for arm in totals
+        },
+        **{
+            f"{arm}_net_profit_per_reference_capital_krw_hour": (
+                totals[arm] / capital_hours if pairs and capital_hours > 0 else None
+            )
+            for arm in totals
+        },
+        "frequency_role": "diagnostic_tradeoff_not_independent_veto",
+        "notional_basis": "cost_bound_counterfactual_incremental_value_not_realized_profit",
+        **OFFLINE_AUTHORITY,
     }
 
 
@@ -5238,9 +5401,16 @@ def _window_metrics(
     )
     metrics = {
         "window_trading_days": trading_days,
+        "economic_population": (
+            next(iter(populations))
+            if len(populations := {_economic_population(row) for row in rows}) == 1
+            else "invalid_mixed_population"
+        ),
+        "deferred_action_count_role": "diagnostic_not_terminal_unresolved",
         "observed_trading_days": len(selected_dates),
         "selected_dates": selected_dates,
         "common_parent_count": len(selected),
+        "paired_notional_comparison": _paired_notional_metrics(promotion_rows),
         **promotion_census,
         "unique_symbol_count": len(
             {str(row.get("stock_code") or "") for row in selected}
@@ -5369,8 +5539,135 @@ def _window_metrics(
     return metrics
 
 
+def _paired_notional_contract_valid(value: Any, expected_count: int | None) -> bool:
+    if (
+        not isinstance(value, Mapping)
+        or value.get("schema") != ECONOMIC_COMPARISON_SCHEMA
+    ):
+        return False
+    try:
+        _validate_exact_offline_authority(value, label="paired_notional")
+    except ValueError:
+        return False
+    expected_contract = _paired_notional_metrics(())
+    if any(
+        value.get(key) != expected_contract[key]
+        for key in (
+            "metric_role",
+            "window_policy",
+            "sample_floor",
+            "primary_decision_metric",
+            "source_quality_gate",
+            "forbidden_uses",
+            "frequency_role",
+            "notional_basis",
+        )
+    ):
+        return False
+    counts = {
+        key: _native_nonnegative_int(value.get(key))
+        for key in (
+            "representative_count",
+            "paired_count",
+            "missing_pair_count",
+            "composite_paired_count",
+            "control_signal_count",
+            "candidate_signal_count",
+        )
+    }
+    if any(count is None for count in counts.values()):
+        return False
+    pairs = counts["paired_count"]
+    if (
+        counts["representative_count"] != expected_count
+        or counts["missing_pair_count"] + pairs != expected_count
+        or counts["composite_paired_count"] > pairs
+        or any(
+            counts[f"{arm}_signal_count"] > pairs for arm in ("control", "candidate")
+        )
+        or type(value.get("signal_count_delta")) is not int
+        or value["signal_count_delta"]
+        != counts["candidate_signal_count"] - counts["control_signal_count"]
+    ):
+        return False
+    for count, left, right, delta in (
+        (
+            pairs,
+            "candidate_total_notional_net_profit_krw",
+            "control_total_notional_net_profit_krw",
+            "paired_total_notional_net_profit_delta_krw",
+        ),
+        (
+            counts["composite_paired_count"],
+            "composite_candidate_paired_notional_net_profit_krw",
+            "baseline_paired_notional_net_profit_krw",
+            "composite_total_notional_net_profit_delta_krw",
+        ),
+    ):
+        values = [_finite_number(value.get(field)) for field in (left, right, delta)]
+        if count:
+            if any(number is None for number in values) or not math.isclose(
+                values[0] - values[1], values[2], abs_tol=1e-8, rel_tol=1e-12
+            ):
+                return False
+        elif any(value.get(field) is not None for field in (left, right, delta)):
+            return False
+    if (
+        pairs
+        and counts["composite_paired_count"] == pairs
+        and not math.isclose(
+            value["composite_candidate_paired_notional_net_profit_krw"],
+            value["candidate_total_notional_net_profit_krw"],
+            abs_tol=1e-8,
+            rel_tol=1e-12,
+        )
+    ):
+        return False
+    for denominator, numerator_suffix, rate_suffix in (
+        (
+            "reference_session_exposure_hours",
+            "signal_count",
+            "signals_per_reference_session_hour",
+        ),
+        (
+            "reference_capital_time_krw_hours",
+            "total_notional_net_profit_krw",
+            "net_profit_per_reference_capital_krw_hour",
+        ),
+    ):
+        divisor = _finite_number(value.get(denominator))
+        if pairs and (divisor is None or divisor <= 0):
+            return False
+        if not pairs and value.get(denominator) is not None:
+            return False
+        for arm in ("control", "candidate"):
+            rate = _finite_number(value.get(f"{arm}_{rate_suffix}"))
+            if pairs:
+                numerator = _finite_number(value.get(f"{arm}_{numerator_suffix}"))
+                if (
+                    numerator is None
+                    or rate is None
+                    or not math.isclose(
+                        rate, numerator / divisor, abs_tol=1e-8, rel_tol=1e-12
+                    )
+                ):
+                    return False
+            elif value.get(f"{arm}_{rate_suffix}") is not None:
+                return False
+    return True
+
+
 def _window_gate_findings(metrics: Mapping[str, Any]) -> list[str]:
     findings: list[str] = []
+    if metrics.get("economic_population") not in ECONOMIC_POPULATIONS:
+        findings.append("economic_population_contract_invalid")
+    elif metrics.get("economic_population") == "standardized_probe_research_only":
+        findings.append("probe_population_not_runtime_evidence")
+    if (
+        metrics.get("deferred_action_count_role")
+        != "diagnostic_not_terminal_unresolved"
+    ):
+        findings.append("deferred_action_diagnostic_contract_invalid")
     expected_days = int(metrics.get("window_trading_days") or 0)
     common_parent_count = _native_nonnegative_int(metrics.get("common_parent_count"))
     decision_level_parent_count = _native_nonnegative_int(
@@ -5391,6 +5688,10 @@ def _window_gate_findings(metrics: Mapping[str, Any]) -> list[str]:
     no_divergence_lifecycle_count = _native_nonnegative_int(
         metrics.get("lifecycle_no_divergence_count")
     )
+    if not _paired_notional_contract_valid(
+        metrics.get("paired_notional_comparison"), estimated_parent_count
+    ):
+        findings.append("paired_notional_comparison_contract_invalid")
     if (
         metrics.get("lifecycle_promotion_estimator_id")
         != LIFECYCLE_PROMOTION_ESTIMATOR_ID
@@ -5424,15 +5725,12 @@ def _window_gate_findings(metrics: Mapping[str, Any]) -> list[str]:
         findings.append("lifecycle_promotion_estimator_census_invalid")
     if int(metrics.get("observed_trading_days") or 0) < expected_days:
         findings.append("rolling_trading_day_floor_not_met")
-    if (
-        expected_days == 20
-        and int(metrics.get("common_parent_count") or 0) < MIN_COMMON_PARENTS
-    ):
+    parent_floor, symbol_floor = WINDOW_SAMPLE_FLOORS.get(
+        expected_days, (MIN_COMMON_PARENTS, MIN_UNIQUE_SYMBOLS)
+    )
+    if int(metrics.get("common_parent_count") or 0) < parent_floor:
         findings.append("rolling_common_parent_floor_not_met")
-    if (
-        expected_days == 20
-        and int(metrics.get("unique_symbol_count") or 0) < MIN_UNIQUE_SYMBOLS
-    ):
+    if int(metrics.get("unique_symbol_count") or 0) < symbol_floor:
         findings.append("rolling_unique_symbol_floor_not_met")
     if (
         _finite_number(metrics.get("candidate_source_quality_adjusted_ev_pct"))
@@ -5453,10 +5751,8 @@ def _window_gate_findings(metrics: Mapping[str, Any]) -> list[str]:
         metrics.get("control_severe_tail_count") or 0
     ):
         findings.append("severe_tail_worsened")
-    if int(metrics.get("candidate_deferred_count") or 0) > int(
-        metrics.get("control_deferred_count") or 0
-    ):
-        findings.append("held_or_unresolved_proxy_worsened")
+    # WAIT/HOLD are valid decisions, not evidence of an unresolved terminal.
+    # Terminal custody, maturity and costs remain validated upstream.
     if metrics.get("ablation_design_version") == CURRENT_DESIGN_VERSION:
         baseline_parent_count = _native_nonnegative_int(
             metrics.get("baseline_metric_parent_count")
@@ -5471,8 +5767,8 @@ def _window_gate_findings(metrics: Mapping[str, Any]) -> list[str]:
         ):
             findings.append("current_baseline_metric_census_invalid")
         feature_ev_delta = _finite_number(metrics.get("feature_ev_delta_pct"))
-        if feature_ev_delta is None or feature_ev_delta < 0:
-            findings.append("feature_ev_noninferiority_failed")
+        if feature_ev_delta is None:
+            findings.append("feature_ev_delta_missing")
         composite_ev_delta = _finite_number(metrics.get("composite_ev_delta_pct"))
         if composite_ev_delta is None or composite_ev_delta <= 0:
             findings.append("composite_ev_delta_not_positive")
@@ -5515,6 +5811,40 @@ def _window_gate_findings(metrics: Mapping[str, Any]) -> list[str]:
         <= 0
     ):
         findings.append("twenty_day_notional_net_profit_not_positive")
+    if expected_days == 20:
+        comparison = metrics.get("paired_notional_comparison")
+        if (
+            not isinstance(comparison, Mapping)
+            or comparison.get("schema") != ECONOMIC_COMPARISON_SCHEMA
+        ):
+            findings.append("paired_notional_comparison_missing")
+        else:
+            pair_count = _native_nonnegative_int(comparison.get("paired_count"))
+            if (
+                not pair_count
+                or pair_count != estimated_parent_count
+                or comparison.get("representative_count") != estimated_parent_count
+                or comparison.get("missing_pair_count") != 0
+            ):
+                findings.append("paired_notional_comparison_incomplete")
+            delta = _finite_number(
+                comparison.get("paired_total_notional_net_profit_delta_krw")
+            )
+            if delta is None:
+                findings.append("paired_notional_delta_missing")
+            elif delta <= 0:
+                findings.append("paired_notional_net_profit_not_improved")
+            if metrics.get("ablation_design_version") == CURRENT_DESIGN_VERSION:
+                composite_delta = _finite_number(
+                    comparison.get("composite_total_notional_net_profit_delta_krw")
+                )
+                if (
+                    comparison.get("composite_paired_count") != estimated_parent_count
+                    or composite_delta is None
+                ):
+                    findings.append("composite_notional_comparison_incomplete")
+                elif composite_delta <= 0:
+                    findings.append("composite_notional_net_profit_not_improved")
     return findings
 
 
@@ -5650,11 +5980,19 @@ def _r3_evidence_contract(design_version: str) -> dict[str, Any]:
         "required_trading_days": [5, 10, 20],
         "minimum_common_parents_20d": MIN_COMMON_PARENTS,
         "minimum_unique_symbols_20d": MIN_UNIQUE_SYMBOLS,
+        "window_sample_floors": {
+            str(days): {"common_parents": floors[0], "unique_symbols": floors[1]}
+            for days, floors in WINDOW_SAMPLE_FLOORS.items()
+        },
         "minimum_bbo_coverage_pct": MIN_BBO_COVERAGE_PCT,
         "minimum_depth_coverage_pct": MIN_DEPTH_COVERAGE_PCT,
         "minimum_relative_uplift_pct": MIN_RELATIVE_UPLIFT_PCT,
         "requires_positive_notional_net_profit_20d": True,
-        "requires_nonworse_p10_tail_and_deferred_rate": True,
+        "requires_complete_paired_notional_net_profit_improvement_20d": True,
+        "frequency_and_reference_capital_efficiency_role": "paired_diagnostic_tradeoff",
+        "requires_nonworse_p10_and_severe_tail": True,
+        "deferred_action_count_role": "diagnostic_not_terminal_unresolved",
+        "economic_population": "full_or_zero_exposure",
         "requires_reconciled_actual_lifecycle": True,
         "lifecycle_promotion_estimator_id": LIFECYCLE_PROMOTION_ESTIMATOR_ID,
         "lifecycle_promotion_estimator_contract_sha256": _sha256(
@@ -5666,12 +6004,168 @@ def _r3_evidence_contract(design_version: str) -> dict[str, Any]:
     if design_version == CURRENT_DESIGN_VERSION:
         contract.update(
             {
-                "requires_ask_depletion_feature_ev_noninferiority_against_current_micro": True,
+                "ask_depletion_feature_only_ev_role": "diagnostic_not_composite_veto",
                 "requires_composite_ev_improvement_against_current_micro": True,
                 "requires_composite_nonworse_p10_and_severe_tail_against_current_micro": True,
             }
         )
     return contract
+
+
+def _research_progress(partition: Mapping[str, Any]) -> dict[str, Any]:
+    """Expose early evidence without populating the full-gate candidate list."""
+    gates = partition["gate_findings"]
+    blocking_contract = [
+        finding
+        for key, values in gates.items()
+        if key not in {"5", "10", "20"}
+        for finding in values
+    ]
+    five_day = list(gates["5"])
+    sample_findings = {
+        "rolling_trading_day_floor_not_met",
+        "rolling_common_parent_floor_not_met",
+        "rolling_unique_symbol_floor_not_met",
+    }
+    economic_findings = {
+        "candidate_ev_not_positive",
+        "paired_ev_delta_not_positive",
+        "relative_uplift_below_floor",
+        "paired_p10_worsened_or_missing",
+        "severe_tail_worsened",
+        "composite_ev_delta_not_positive",
+        "composite_relative_uplift_below_floor",
+        "composite_p10_worsened_or_missing",
+        "composite_severe_tail_worsened",
+        "paired_notional_net_profit_not_improved",
+        "composite_notional_net_profit_not_improved",
+    }
+    deferred_full_gate_findings = {
+        "twenty_day_notional_net_profit_not_positive",
+        "paired_notional_comparison_incomplete",
+        "paired_notional_delta_missing",
+        "composite_notional_comparison_incomplete",
+        "probe_population_not_runtime_evidence",
+    }
+    source_findings = sorted(
+        {
+            value
+            for key in ("5", "10", "20")
+            for value in gates[key]
+            if value
+            not in sample_findings | economic_findings | deferred_full_gate_findings
+        }
+    )
+    # Research asks whether another bounded evaluation is useful. It is not
+    # the 5/10/20-day economic acceptance vote used by the full manifest.
+    research_diagnostic_findings = {
+        "relative_uplift_below_floor",
+        "composite_relative_uplift_below_floor",
+    }
+    measured_failures = sorted(
+        {
+            value
+            for value in five_day
+            if value in economic_findings - research_diagnostic_findings
+        }
+        | {
+            value
+            for key in ("10", "20")
+            for value in gates[key]
+            if value in {"severe_tail_worsened", "composite_severe_tail_worsened"}
+        }
+    )
+    status = (
+        "source_quality_blocked"
+        if blocking_contract or source_findings
+        else (
+            "hold_no_edge"
+            if measured_failures
+            else (
+                "hold_sample"
+                if any(value in sample_findings for value in five_day)
+                else (
+                    "runtime_review_ready"
+                    if partition["r3_source_candidate_eligible"]
+                    else "research_candidate"
+                )
+            )
+        )
+    )
+    return {
+        "schema": RESEARCH_PROGRESS_SCHEMA,
+        "status": status,
+        "research_candidate_eligible": status
+        in {"research_candidate", "runtime_review_ready"},
+        "runtime_evidence_ready": status == "runtime_review_ready",
+        "runtime_consumer_status": (
+            "current_axis_adapter_available_requires_mapping_and_authorization"
+            if partition.get("ablation_design_version") == CURRENT_DESIGN_VERSION
+            else "legacy_runtime_disabled"
+        ),
+        "runtime_apply_ready": False,
+        "other_window_economic_diagnostics": {
+            key: [value for value in gates[key] if value in economic_findings]
+            for key in ("10", "20")
+        },
+        "research_blockers": sorted(
+            set(
+                blocking_contract
+                + source_findings
+                + measured_failures
+                + [value for value in five_day if value in sample_findings]
+            )
+        ),
+        "runtime_evidence_blockers": {
+            key: list(values) for key, values in gates.items() if values
+        },
+        "metric_role": "source_only_research_progress",
+        "window_policy": "research_5d_full_gate_5_10_20d",
+        "sample_floor": "research_5_parents_3_symbols_5_trading_days",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "source_quality_gate": "exact_cost_bound_three_arm_and_lifecycle_source",
+        "forbidden_uses": [
+            "research_candidate_as_full_gate_candidate",
+            "runtime_or_order_apply",
+        ],
+        **OFFLINE_AUTHORITY,
+    }
+
+
+def _research_candidates(
+    partitions: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    result = []
+    identity_fields = (
+        "decision_stage",
+        "effective_venue",
+        "session_bucket",
+        "control_contract_sha256",
+        "candidate_contract_sha256",
+        "current_prompt_sha256",
+        "recommended_prompt_sha256",
+        "ablation_design_version",
+        "tuning_axis",
+        "selected_cost_profile_id",
+        "selected_cost_profile_content_sha256",
+        "economic_reference_bindings_sha256",
+        "economic_population",
+    )
+    for partition in partitions:
+        progress = _research_progress(partition)
+        if not progress["research_candidate_eligible"]:
+            continue
+        identity = {key: partition[key] for key in identity_fields}
+        result.append(
+            {
+                "research_id": _sha256(identity),
+                **identity,
+                "source_windows_sha256": _sha256(partition["windows"]),
+                "progress": progress,
+                **OFFLINE_AUTHORITY,
+            }
+        )
+    return result
 
 
 def _validated_r2_partition_candidate_state(
@@ -5695,6 +6189,14 @@ def _validated_r2_partition_candidate_state(
         if _native_nonnegative_int(metrics.get("window_trading_days")) != int(window):
             raise ValueError(f"r2_partition_window_identity_invalid:{window}")
         expected_findings[window] = _window_gate_findings(metrics)
+        if partition.get(
+            "economic_population"
+        ) not in ECONOMIC_POPULATIONS or metrics.get(
+            "economic_population"
+        ) != partition.get(
+            "economic_population"
+        ):
+            raise ValueError("r2_partition_economic_population_mismatch")
 
     try:
         target_day = date.fromisoformat(target_date)
@@ -5763,6 +6265,8 @@ def _validated_r2_partition_candidate_state(
     )
     if partition.get("r3_source_candidate_eligible") is not expected_eligible:
         raise ValueError("r2_partition_candidate_eligibility_mismatch")
+    if partition.get("research_progress") != _research_progress(partition):
+        raise ValueError("r2_partition_research_progress_mismatch")
     return expected_eligible
 
 
@@ -5868,7 +6372,11 @@ def canonical_r3_candidate_from_r2_partition(
             provider_ablation_floor_bindings_sha256
         ),
         "evidence_contract": _r3_evidence_contract(design_version),
-        "runtime_design_status": "design_required_no_registered_consumer",
+        "runtime_design_status": (
+            "current_axis_contract_mapping_and_exact_approval_required"
+            if design_version == CURRENT_DESIGN_VERSION
+            else "design_required_no_registered_consumer"
+        ),
         "first_exact_candidate_approval_required": True,
         "continuous_auto_chain_eligible": False,
         "provider_or_order_authority": False,
@@ -5963,12 +6471,21 @@ def validate_r2_rolling_artifact(rolling: Mapping[str, Any]) -> None:
     ):
         raise ValueError("r2_provider_floor_binding_hash_invalid")
     current_run_blockers = rolling.get("current_run_global_blockers")
+    observation_states = rolling.get("current_run_observation_states", [])
+    if (
+        not isinstance(observation_states, list)
+        or any(not isinstance(value, str) for value in observation_states)
+        or observation_states != sorted(set(observation_states))
+        or not set(observation_states) <= NO_NEW_SAMPLE_STATES
+    ):
+        raise ValueError("r2_observation_state_contract_invalid")
     if (
         not isinstance(current_run_blockers, list)
         or any(
             not isinstance(value, str) or not value for value in current_run_blockers
         )
         or current_run_blockers != sorted(set(current_run_blockers))
+        or set(current_run_blockers) & NO_NEW_SAMPLE_STATES
         or rolling.get("current_run_global_blockers_sha256")
         != _sha256(current_run_blockers)
     ):
@@ -6092,6 +6609,13 @@ def validate_r3_source_only_manifest(
         raise ValueError("r3_manifest_candidate_projection_mismatch")
     if candidate_count != len(projected_candidates):
         raise ValueError("r3_manifest_candidate_projection_census_mismatch")
+    research = _research_candidates(source_rolling_artifact["partitions"])
+    if (
+        manifest.get("research_candidates") != research
+        or type(manifest.get("research_candidate_count")) is not int
+        or manifest.get("research_candidate_count") != len(research)
+    ):
+        raise ValueError("r3_manifest_research_projection_mismatch")
     blocked_pre_clear_candidate_count = source_rolling_artifact.get(
         "blocked_pre_clear_candidate_count"
     )
@@ -6213,6 +6737,12 @@ def build_rolling_source_only_candidates(
             if str(blocker).strip()
         }
     )
+    current_run_observation_states = sorted(
+        set(current_run_blockers) & NO_NEW_SAMPLE_STATES
+    )
+    current_run_blockers = [
+        value for value in current_run_blockers if value not in NO_NEW_SAMPLE_STATES
+    ]
     current_run_blockers_sha256 = _sha256(current_run_blockers)
     global_candidate_blockers = [
         f"current_run_composed_chain_blocked:{blocker}"
@@ -6650,7 +7180,7 @@ def build_rolling_source_only_candidates(
         counterfactual_entry_diagnostic_out.update(counterfactual_entry_artifact)
 
     grouped: dict[
-        tuple[str, str, str, str, str, str, str, str, str, str, str],
+        tuple[str, ...],
         list[dict[str, Any]],
     ] = defaultdict(list)
     for row in joined_rows:
@@ -6666,6 +7196,7 @@ def build_rolling_source_only_candidates(
             str(row.get("candidate_prompt_sha256") or ""),
             str(row.get("ablation_design_version") or LEGACY_DESIGN_VERSION),
             str(row.get("r3_tuning_axis") or "prompt_contract_effect"),
+            _economic_population(row),
         )
         grouped[key].append(row)
 
@@ -6762,6 +7293,7 @@ def build_rolling_source_only_candidates(
             "recommended_prompt_sha256": key[8],
             "ablation_design_version": key[9],
             "tuning_axis": key[10],
+            "economic_population": key[11],
             "economic_reference_bindings_sha256": reference_bindings_sha256,
             "economic_reference_binding_count": len(reference_binding_rows),
             "latest_symbol_master_source_date": latest_reference_date,
@@ -6777,6 +7309,7 @@ def build_rolling_source_only_candidates(
             "gate_findings": gate_findings,
             "r3_source_candidate_eligible": all_gates_pass,
         }
+        partition["research_progress"] = _research_progress(partition)
         partitions.append(partition)
         if not all_gates_pass:
             continue
@@ -6826,6 +7359,7 @@ def build_rolling_source_only_candidates(
         "exclusions": exclusions,
         "global_candidate_blockers": global_candidate_blockers,
         "current_run_global_blockers": current_run_blockers,
+        "current_run_observation_states": current_run_observation_states,
         "current_run_global_blockers_sha256": current_run_blockers_sha256,
         "blocked_pre_clear_candidate_count": blocked_pre_clear_candidate_count,
         "lifecycle_report_findings": lifecycle_findings,
@@ -6878,6 +7412,8 @@ def build_rolling_source_only_candidates(
         ),
         "candidate_count": len(source_candidates),
         "candidates": source_candidates,
+        "research_candidate_count": len(_research_candidates(partitions)),
+        "research_candidates": _research_candidates(partitions),
         "global_candidate_blockers": global_candidate_blockers,
         "source_current_run_global_blockers_sha256": current_run_blockers_sha256,
         "blocked_pre_clear_candidate_count": blocked_pre_clear_candidate_count,
@@ -6888,7 +7424,7 @@ def build_rolling_source_only_candidates(
         ),
         "continuous_tuning_contract": (
             "next_mutation_requires_previous_post_apply_attributed_and_"
-            "continuation_ev_tail_held_pass"
+            "continuation_economics_and_terminal_custody_pass"
         ),
         "metric_role": "r3_manifest_only_source_candidate",
         "window_policy": "same_stage_venue_session_single_prompt_axis",
@@ -7182,6 +7718,7 @@ def _observer_canary_diagnostic(
     # Old canary writers could report healthy despite pre-enqueue timestamp
     # loss. Revalidate the same hashed collector snapshot, not only its label.
     from .canary_monitor import timestamp_source_quality_census
+    from .observer_source_quality import timestamp_regression_row_quarantine_validation
 
     timestamp_quality = timestamp_source_quality_census(dict(collector))
     normalized_row_exclusions = (
@@ -7191,6 +7728,13 @@ def _observer_canary_diagnostic(
     )
     row_exclusion_required = guard.get("raw_row_exclusion_required") is True or bool(
         timestamp_quality["issues"]
+    )
+    quarantine_validation = timestamp_regression_row_quarantine_validation(
+        guard, collector
+    )
+    isolated_quarantine = (
+        quarantine_validation.get("eligible") is True
+        and not timestamp_quality["issues"]
     )
     status = (
         "invalid_exact_date_canary_contract"
@@ -7202,7 +7746,11 @@ def _observer_canary_diagnostic(
                 "stop_required"
                 if stop_required
                 else (
-                    "row_exclusion_required"
+                    (
+                        "pass_with_row_quarantine"
+                        if isolated_quarantine
+                        else "row_exclusion_required"
+                    )
                     if row_exclusion_required
                     else ("warming_up" if guard_status == "warming_up" else "pass")
                 )
@@ -7234,6 +7782,7 @@ def _observer_canary_diagnostic(
             dict.fromkeys([*normalized_row_exclusions, *timestamp_quality["issues"]])
         ),
         "timestamp_source_quality": timestamp_quality,
+        "timestamp_row_quarantine_validation": quarantine_validation,
         "queue_loss_census": queue_loss_census,
         "collector_lifecycle": collector_lifecycle,
     }
@@ -7748,7 +8297,7 @@ def _source_only_gap_diagnostics(
         else:
             blocker_codes.append(
                 "main_lifecycle_execution_receipt_custody_gap:"
-                f"{max(lifecycle_pipeline_gap, lifecycle_real_submitted)}"
+                f"{lifecycle_pipeline_gap if lifecycle_pipeline_gap > 0 else lifecycle_real_submitted}"
             )
     if current_lifecycle_receipt_gap or lifecycle_exact_join_missing_count > 0:
         reason_codes = []
@@ -10001,21 +10550,28 @@ def run_cycle(
         )
     )
 
+    observation_states = sorted(set(blockers) & NO_NEW_SAMPLE_STATES)
+    blockers = [value for value in blockers if value not in NO_NEW_SAMPLE_STATES]
     body = {
         "schema": CYCLE_SCHEMA,
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(),
         "status": (
-            "r0_r1_materialized_provider_replay_bounded"
-            if execute_provider_replay and not blockers
+            "source_only_no_new_sample"
+            if observation_states and not blockers
             else (
-                "r0_r1_materialized_provider_replay_not_requested"
-                if not execute_provider_replay and not blockers
-                else "source_only_blocked_or_deferred"
+                "r0_r1_materialized_provider_replay_bounded"
+                if execute_provider_replay and not blockers
+                else (
+                    "r0_r1_materialized_provider_replay_not_requested"
+                    if not execute_provider_replay and not blockers
+                    else "source_only_blocked_or_deferred"
+                )
             )
         ),
         "steps": steps,
         "blockers": blockers,
+        "current_run_observation_states": observation_states,
         "source_quality_audit": audit_source,
         "storage_capacity_gate": storage_capacity_gate,
         "provider_capacity_recheck": provider_capacity_recheck,
@@ -10050,7 +10606,18 @@ def run_cycle(
         ),
         "rolling_status": rolling.get("status"),
         "r3_status": r3_manifest.get("status"),
+        "rolling_artifact_sha256": rolling.get("artifact_content_sha256"),
+        "r3_manifest_artifact_sha256": r3_manifest.get("artifact_content_sha256"),
         "r3_source_candidate_count": int(r3_manifest.get("candidate_count") or 0),
+        "r3_research_candidate_count": int(
+            r3_manifest.get("research_candidate_count") or 0
+        ),
+        "research_progress_counts": dict(
+            Counter(
+                partition["research_progress"]["status"]
+                for partition in rolling.get("partitions") or []
+            )
+        ),
         "counterfactual_entry_diagnostic_status": (
             counterfactual_entry_artifact.get("status")
         ),

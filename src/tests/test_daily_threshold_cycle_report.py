@@ -117,6 +117,27 @@ def test_threshold_ai_cost_rejects_partial_env_price_contract(monkeypatch):
     )
 
 
+def test_threshold_ai_cost_rejects_invalid_rates_and_usage(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD", "nan")
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD", "1")
+    assert report_mod._threshold_ai_estimated_cost("gpt-5.5", 10, 5) == (
+        None,
+        "missing_price_contract",
+    )
+
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD", "-1")
+    assert report_mod._threshold_ai_estimated_cost("gpt-5.5", 10, 5) == (
+        None,
+        "missing_price_contract",
+    )
+
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD", "1")
+    assert report_mod._threshold_ai_estimated_cost("gpt-5.5", -1, 5) == (
+        None,
+        "missing_token_usage",
+    )
+
+
 def test_save_threshold_calibration_report_declares_runtime_handoff_contract_version(
     tmp_path, monkeypatch
 ):
@@ -658,7 +679,9 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     apply_families = {item["family"] for item in report["apply_candidate_list"]}
     assert "pre_submit_price_guard" not in apply_families
     assert "dynamic_entry_price_resolver" not in apply_families
-    assert "entry_mechanical_momentum" in apply_families
+    assert "entry_mechanical_momentum" not in apply_families
+    readiness_families = {item["family"] for item in report["family_readiness_list"]}
+    assert "entry_mechanical_momentum" in readiness_families
 
 
 def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
@@ -1662,6 +1685,7 @@ def test_dynamic_entry_price_resolver_partial_sim_recommendation_keeps_unspecifi
 
 def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_denominator():
     report = {
+        "date": "2026-08-21",
         "calibration_candidates": [
             {
                 "family": "score65_74_recovery_probe",
@@ -1687,7 +1711,7 @@ def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_de
                 "apply_mode": "efficient_tradeoff_canary_candidate",
                 "allowed_runtime_apply": True,
             }
-        ]
+        ],
     }
     cumulative = {
         "threshold_snapshot_by_window": {
@@ -2208,6 +2232,168 @@ def test_ai_correction_context_keeps_every_family_when_inventory_is_large():
     assert report_mod._json_chars(context) <= (
         report_mod.AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT
     )
+    assert report_mod._json_chars(context) == len(
+        report_mod._provider_json_text(context)
+    )
+
+
+def test_ai_context_requires_only_current_nondeterministic_adjust_candidates():
+    candidates = [
+        {
+            "family": "active_adjust",
+            "calibration_state": "adjust_up",
+            "allowed_runtime_apply": True,
+            "runtime_apply_eligible_now": True,
+        },
+        {
+            "family": "ordinary_hold",
+            "calibration_state": "hold",
+            "allowed_runtime_apply": True,
+            "runtime_apply_eligible_now": False,
+        },
+        {
+            "family": "entry_split_order_plan",
+            "calibration_state": "adjust_up",
+            "allowed_runtime_apply": True,
+            "runtime_apply_eligible_now": True,
+        },
+    ]
+
+    context = report_mod._build_ai_correction_input_context(
+        {"date": "2026-09-07", "calibration_candidates": candidates}
+    )
+
+    assert context["required_family_manifest"] == ["active_adjust"]
+    assert [item["family"] for item in context["calibration_candidates"]] == [
+        "active_adjust"
+    ]
+
+
+def test_ai_context_cumulative_metrics_are_scoped_to_review_candidates():
+    candidates = [
+        {
+            "family": "score65_74_recovery_probe",
+            "calibration_state": "adjust_up",
+            "allowed_runtime_apply": True,
+            "runtime_apply_eligible_now": True,
+        },
+        {
+            "family": "holding_flow_ofi_smoothing",
+            "calibration_state": "hold",
+            "allowed_runtime_apply": True,
+            "runtime_apply_eligible_now": False,
+        },
+    ]
+    cumulative = {
+        "date": "2026-09-07",
+        "threshold_snapshot_by_window": {
+            "rolling_5d": {
+                "score65_74_recovery_probe": {"sample_ready": True},
+                "holding_flow_ofi_smoothing": {"sample_ready": True},
+            }
+        },
+        "calibration_source_bundle_by_window": {
+            "rolling_5d": {
+                "sources": {},
+                "source_metrics": {
+                    "buy_score65_74": {"score60_74_candidates": 24},
+                    "holding_flow": {"holding_flow_override_defer_exit": 99},
+                },
+            }
+        },
+    }
+
+    context = report_mod._build_ai_correction_input_context(
+        {"date": "2026-09-07", "calibration_candidates": candidates},
+        cumulative,
+    )
+
+    window = context["threshold_cycle_cumulative"]["family_window_context"]
+    assert list(window["threshold_snapshot_by_window"]["rolling_5d"]) == [
+        "score65_74_recovery_probe"
+    ]
+    assert list(
+        window["calibration_source_bundle_by_window"]["rolling_5d"][
+            "source_metrics_by_candidate_family"
+        ]
+    ) == ["score65_74_recovery_probe"]
+
+
+def test_main_skips_provider_when_no_current_review_candidate(tmp_path, monkeypatch):
+    report = {
+        "date": "2026-09-07",
+        "meta": {"calibration_run_phase": "postclose"},
+        "calibration_candidates": [
+            {
+                "family": "ordinary_hold",
+                "calibration_state": "hold",
+                "allowed_runtime_apply": True,
+                "runtime_apply_eligible_now": False,
+            }
+        ],
+        "calibration_source_bundle": {},
+    }
+    saved_ai_reports = []
+    monkeypatch.setattr(
+        report_mod,
+        "build_daily_threshold_cycle_report",
+        lambda *args, **kwargs: report,
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "build_cumulative_threshold_cycle_report",
+        lambda *args, **kwargs: {"date": "2026-09-07"},
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "apply_window_policy_registry_to_report",
+        lambda daily, cumulative: daily,
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "merge_scalping_avg_down_recovery_calibration_candidate",
+        lambda daily, target_date: daily,
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "merge_scalping_pyramid_quality_calibration_candidate",
+        lambda daily, target_date: daily,
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "save_threshold_calibration_report",
+        lambda *args, **kwargs: tmp_path / "calibration.json",
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "save_threshold_cycle_ai_correction_report",
+        lambda value: saved_ai_reports.append(value),
+    )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("provider must not be called without a review candidate")
+
+    monkeypatch.setattr(
+        report_mod, "_call_openai_threshold_ai_correction", fail_if_called
+    )
+
+    result = report_mod.main(
+        [
+            "--date",
+            "2026-09-07",
+            "--calibration-only",
+            "--ai-correction-provider",
+            "openai",
+        ]
+    )
+
+    assert result == 0
+    assert saved_ai_reports[0]["ai_status"] == "parsed"
+    assert saved_ai_reports[0]["ai_coverage"]["status"] == "complete"
+    assert saved_ai_reports[0]["ai_provider_status"]["status"] == (
+        "skipped_no_review_candidates"
+    )
+    assert saved_ai_reports[0]["ai_provider_status"]["new_provider_call"] is False
 
 
 def test_ai_correction_retries_eighteen_missing_families_in_bounded_shards(
@@ -2365,7 +2551,13 @@ def test_ai_correction_duplicate_and_missing_family_are_fail_closed():
                 _ai_review_proposal("family_a"),
             ],
         },
-        ai_input_context={"calibration_candidates": [{"family": "family_a"}]},
+        ai_input_context={
+            "required_family_manifest": ["family_a", "family_b"],
+            "calibration_candidates": [
+                {"family": "family_a"},
+                {"family": "family_b"},
+            ],
+        },
     )
 
     assert review["ai_status"] == "parsed"
@@ -2378,7 +2570,7 @@ def test_ai_correction_duplicate_and_missing_family_are_fail_closed():
     ]
 
 
-def test_ai_correction_keeps_soft_stop_single_sample_as_hold_sample():
+def test_ai_correction_excludes_soft_stop_single_sample_hold_from_provider_review():
     report_sources = {
         "schema_version": 1,
         "target_date": "2026-05-08",
@@ -2410,40 +2602,16 @@ def test_ai_correction_keeps_soft_stop_single_sample_as_hold_sample():
         completed_rows_loader=lambda start_date, end_date: [],
         calibration_run_phase="intraday",
     )
-    ai_response = {
-        "schema_version": 1,
-        "corrections": [
-            {
-                "family": "soft_stop_whipsaw_confirmation",
-                "anomaly_type": "late_rebound",
-                "ai_review_state": "correction_proposed",
-                "correction_proposal": {
-                    "proposed_state": "adjust_up",
-                    "proposed_value": 80,
-                    "anomaly_route": "threshold_candidate",
-                    "sample_window": "rolling_10d",
-                },
-                "correction_reason": "single late rebound case",
-                "required_evidence": ["rolling soft-stop tail"],
-                "risk_flags": ["single_case"],
-            }
-        ],
-    }
-
+    context = report_mod._build_ai_correction_input_context(report)
     review = report_mod.build_threshold_cycle_ai_correction_report(
-        report, ai_raw_response=ai_response
+        report,
+        ai_raw_response={"schema_version": 1, "corrections": []},
+        ai_input_context=context,
     )
-    item = next(
-        item
-        for item in review["items"]
-        if item["family"] == "soft_stop_whipsaw_confirmation"
-    )
-
-    assert item["guard_accepted"] is False
-    assert item["guard_decision"]["effective_state"] == "hold_sample"
-    assert (
-        "window_policy_blocks_single_case_live_candidate" in item["guard_reject_reason"]
-    )
+    assert context["required_family_manifest"] == []
+    assert context["calibration_candidates"] == []
+    assert review["items"] == []
+    assert review["ai_coverage"]["status"] == "complete"
     deterministic = next(
         candidate
         for candidate in report["calibration_candidates"]
@@ -2574,12 +2742,19 @@ def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkey
     assert status["attempted_model_count"] == 1
     assert status["input_context_hash"]
     assert status["prompt_chars"] >= status["input_context_chars"]
+    assert status["input_context_chars"] == len(captured["input"])
+    assert captured["input"] == report_mod._provider_json_text(
+        {"calibration_candidates": [], "calibration_source_bundle": {}}
+    )
+    assert status["input_context_hash"] == report_mod._provider_json_sha256(
+        {"calibration_candidates": [], "calibration_source_bundle": {}}
+    )
     assert status["output_chars"] == len(raw_response)
     assert status["input_tokens"] == 123
     assert status["output_tokens"] == 45
     assert status["total_tokens"] == 168
-    assert status["estimated_cost_usd"] == 0.0
-    assert status["cost_estimate_status"] == "operator_zero_cost_default"
+    assert status["estimated_cost_usd"] is None
+    assert status["cost_estimate_status"] == "missing_price_contract"
     assert captured["model"] == "gpt-5.5"
     assert captured["reasoning"]["effort"] == "high"
     assert captured["text"]["format"]["type"] == "json_schema"
@@ -2699,7 +2874,7 @@ def test_ai_correction_input_context_is_compact_and_hash_referenced():
         ),
     ],
 )
-def test_direct_scale_in_calibration_is_merged_into_ai_review_inventory(
+def test_direct_scale_in_hold_calibration_is_merged_but_excluded_from_ai_review(
     tmp_path, report_type, family, merge_function
 ):
     source_path = tmp_path / f"{report_type}_2026-07-29.json"
@@ -2740,27 +2915,7 @@ def test_direct_scale_in_calibration_is_merged_into_ai_review_inventory(
     context = report_mod._build_ai_correction_input_context(report)
     ai_report = report_mod.build_threshold_cycle_ai_correction_report(
         report,
-        ai_raw_response=json.dumps(
-            {
-                "schema_version": 1,
-                "corrections": [
-                    {
-                        "family": family,
-                        "anomaly_type": "normal_drift",
-                        "ai_review_state": "agree",
-                        "correction_proposal": {
-                            "proposed_state": "hold",
-                            "proposed_value": None,
-                            "anomaly_route": "normal_drift",
-                            "sample_window": "cumulative",
-                        },
-                        "correction_reason": "Negative final EV keeps the gate closed.",
-                        "required_evidence": ["rolling post-add EV"],
-                        "risk_flags": ["downside exceeds MFE"],
-                    }
-                ],
-            }
-        ),
+        ai_raw_response=json.dumps({"schema_version": 1, "corrections": []}),
         ai_provider_status={"provider": "openai", "status": "success"},
         ai_input_context=context,
     )
@@ -2771,14 +2926,17 @@ def test_direct_scale_in_calibration_is_merged_into_ai_review_inventory(
         ]
         == 1
     )
-    candidate = context["calibration_candidates"][0]
-    assert candidate["family"] == family
-    assert candidate["current_values"]["shallow_max_per_position"] == 2
-    assert candidate["recommended_values"]["shallow_max_per_position"] == 2
+    merged_candidate = report["calibration_candidates"][0]
+    assert merged_candidate["family"] == family
+    assert merged_candidate["condition_feasibility"]["state"] == (
+        "no_economic_candidate"
+    )
+    assert context["required_family_manifest"] == []
+    assert context["calibration_candidates"] == []
     assert ai_report["candidate_count"] == 1
-    assert ai_report["items"][0]["family"] == family
-    assert ai_report["items"][0]["ai_review_state"] == "agree"
-    assert candidate["condition_feasibility"]["state"] == "no_economic_candidate"
+    assert ai_report["review_required_candidate_count"] == 0
+    assert ai_report["items"] == []
+    assert ai_report["ai_coverage"]["status"] == "complete"
 
 
 def test_pyramid_positive_candidate_reaches_preopen_after_parsed_review(
@@ -3239,22 +3397,22 @@ def test_calibration_report_sources_preserve_buy_funnel_latency_microstructure_c
 def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates():
     report_sources = {
         "schema_version": 1,
-        "target_date": "2026-05-07",
+        "target_date": "2026-08-07",
         "sources": {
             "buy_funnel_sentinel": {
-                "path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-07.json",
+                "path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-08-07.json",
                 "exists": True,
             },
             "wait6579_ev_cohort": {
-                "path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-07.json",
+                "path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-08-07.json",
                 "exists": True,
             },
             "holding_exit_decision_matrix": {
-                "path": "data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_2026-05-07.json",
+                "path": "data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_2026-08-07.json",
                 "exists": True,
             },
             "statistical_action_weight": {
-                "path": "data/report/statistical_action_weight/statistical_action_weight_2026-05-07.json",
+                "path": "data/report/statistical_action_weight/statistical_action_weight_2026-08-07.json",
                 "exists": True,
             },
         },
@@ -3264,13 +3422,16 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
                 "sentinel_secondary": ["LATENCY_DROUGHT"],
                 "score65_74_candidates": 191,
                 "score65_74_avg_expected_ev_pct": 4.7,
+                "score60_74_avg_cost_adjusted_expected_ev_pct": 4.5,
+                "score60_74_cost_adjusted_sample_count": 191,
+                "score60_74_cost_contract_complete": True,
                 "score65_74_avg_close_10m_pct": 5.5,
                 "full_samples": 181,
                 "partial_samples": 0,
                 "threshold_relaxation_approved": False,
                 "partial_sample_zero_is_calibration_target": True,
                 "budget_pass": 30,
-                "order_bundle_submitted": 10,
+                "order_bundle_submitted": 0,
             },
             "latency_guard_miss_ev_recovery": {
                 "evaluated_candidates": 10,
@@ -3300,7 +3461,7 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     }
 
     report = report_mod.build_daily_threshold_cycle_report(
-        "2026-05-07",
+        "2026-08-07",
         pipeline_loader=lambda target_date: [
             {"stage": "bad_entry_refined_candidate", "fields": {"would_exit": "True"}}
             for _ in range(12)
@@ -3506,18 +3667,18 @@ def test_score65_74_recovery_probe_does_not_use_raw_panic_adjusted_floor():
 def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_primary_ready():
     report_sources = {
         "schema_version": 1,
-        "target_date": "2026-05-18",
+        "target_date": "2026-08-18",
         "sources": {
             "buy_funnel_sentinel": {
-                "path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-18.json",
+                "path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-08-18.json",
                 "exists": True,
             },
             "wait6579_ev_cohort": {
-                "path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-18.json",
+                "path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-08-18.json",
                 "exists": True,
             },
             "panic_sell_defense": {
-                "path": "data/report/panic_sell_defense/panic_sell_defense_2026-05-18.json",
+                "path": "data/report/panic_sell_defense/panic_sell_defense_2026-08-18.json",
                 "exists": True,
             },
         },
@@ -3532,6 +3693,9 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
                 "score65_74_candidates": 50,
                 "wait6579_total_candidates": 50,
                 "score65_74_avg_expected_ev_pct": 4.5216,
+                "score60_74_avg_cost_adjusted_expected_ev_pct": 4.3,
+                "score60_74_cost_adjusted_sample_count": 50,
+                "score60_74_cost_contract_complete": True,
                 "score65_74_avg_close_10m_pct": 5.243,
                 "score65_74_avg_mfe_10m_pct": 7.7935,
                 "full_samples": 50,
@@ -3547,13 +3711,13 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
     }
 
     report = report_mod.build_daily_threshold_cycle_report(
-        "2026-05-18",
+        "2026-08-18",
         pipeline_loader=lambda target_date: [],
         report_source_loader=lambda target_date: report_sources,
         completed_rows_loader=lambda start_date, end_date: [],
         runtime_apply_observation={
             "status": "observed_verified",
-            "source_path": "threshold_apply_2026-05-18.json",
+            "source_path": "threshold_apply_2026-08-18.json",
             "source_sha256": "a" * 64,
             "families": {
                 "score65_74_recovery_probe": {
@@ -3613,7 +3777,7 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
 def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
     report_sources = {
         "schema_version": 1,
-        "target_date": "2026-05-18",
+        "target_date": "2026-08-18",
         "sources": {
             "buy_funnel_sentinel": {"path": "sentinel.json", "exists": True},
             "wait6579_ev_cohort": {"path": "cohort.json", "exists": True},
@@ -3629,6 +3793,9 @@ def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
                 "score60_74_candidates": 41,
                 "wait6579_total_candidates": 41,
                 "score60_74_avg_expected_ev_pct": 3.2,
+                "score60_74_avg_cost_adjusted_expected_ev_pct": 3.0,
+                "score60_74_cost_adjusted_sample_count": 41,
+                "score60_74_cost_contract_complete": True,
                 "score60_74_avg_close_10m_pct": 1.8,
                 "score60_74_avg_mfe_10m_pct": 4.4,
                 "full_samples": 41,
@@ -3642,7 +3809,7 @@ def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
     }
 
     report = report_mod.build_daily_threshold_cycle_report(
-        "2026-05-18",
+        "2026-08-18",
         pipeline_loader=lambda target_date: [],
         report_source_loader=lambda target_date: report_sources,
         completed_rows_loader=lambda start_date, end_date: [],
@@ -3656,6 +3823,148 @@ def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
     assert candidate["calibration_state"] == "adjust_up"
     assert candidate["source_metrics"]["entry_unlock_probe_ready"] is True
     assert candidate["source_metrics"]["score60_74_avg_expected_ev_pct"] == 3.2
+
+
+def test_threshold_source_denominators_exclude_broad_or_simulated_counts():
+    assert (
+        report_mod._source_sample_count_for_family(
+            "score65_74_recovery_probe",
+            {
+                "score60_74_candidates": 7,
+                "blocked_ai_score_evaluated": 12_000,
+                "wait6579_total_candidates": 15_000,
+            },
+        )
+        == 7
+    )
+    assert (
+        report_mod._source_sample_count_for_family(
+            "entry_split_order_plan",
+            {
+                "real_sample_count": 19,
+                "sim_sample_count": 410_133,
+                "policy_receipt_count": 1,
+            },
+        )
+        == 19
+    )
+    assert (
+        report_mod._snapshot_relevant_sample_count(
+            "entry_split_order_plan",
+            {
+                "sample": {
+                    "real_sample_count": 19,
+                    "sim_sample_count": 410_133,
+                    "recommended_policy_candidate_count": 1,
+                }
+            },
+        )
+        == 19
+    )
+
+
+def test_score_recovery_probe_never_promotes_gross_only_counterfactual_ev():
+    source_metrics = {
+        "score60_74_candidates": 41,
+        "score60_74_avg_expected_ev_pct": 3.2,
+        "score60_74_avg_cost_adjusted_expected_ev_pct": None,
+        "full_samples": 41,
+        "partial_samples": 0,
+        "panic_state": "NORMAL",
+        "panic_detected": False,
+        "source_quality_blocked": False,
+    }
+
+    assert (
+        report_mod._score65_74_entry_unlock_probe_ready(
+            source_metrics,
+            sample_count=41,
+            sample_floor=20,
+        )
+        is False
+    )
+
+
+def test_score_recovery_drought_uses_rate_without_requiring_absolute_zero_submit():
+    source_metrics = {
+        "score60_74_candidates": 41,
+        "score60_74_avg_cost_adjusted_expected_ev_pct": 3.0,
+        "score60_74_avg_close_10m_pct": 1.8,
+        "score60_74_avg_mfe_10m_pct": 4.4,
+        "score60_74_cost_adjusted_sample_count": 41,
+        "score60_74_cost_contract_complete": True,
+        "submitted_to_budget_unique_pct": 5.0,
+        "order_bundle_submitted": 1,
+        "source_quality_blocked": False,
+    }
+
+    assert report_mod._score65_74_entry_unlock_probe_ready(
+        source_metrics,
+        sample_count=41,
+        sample_floor=20,
+    )
+
+    source_metrics["submitted_to_budget_unique_pct"] = 15.0
+    assert not report_mod._score65_74_entry_unlock_probe_ready(
+        source_metrics,
+        sample_count=41,
+        sample_floor=20,
+    )
+
+    source_metrics["submitted_to_budget_unique_pct"] = -1.0
+    assert not report_mod._score65_74_entry_unlock_probe_ready(
+        source_metrics,
+        sample_count=41,
+        sample_floor=20,
+    )
+
+
+def test_apply_candidate_list_excludes_hold_even_when_family_is_runtime_capable():
+    assert (
+        report_mod._build_apply_candidate_list(
+            [
+                {
+                    "family": "entry_split_order_plan",
+                    "stage": "entry",
+                    "priority": 1,
+                    "calibration_state": "hold",
+                    "apply_mode": "efficient_tradeoff_canary_candidate",
+                    "allowed_runtime_apply": True,
+                    "runtime_apply_capable": True,
+                    "runtime_apply_eligible_now": False,
+                }
+            ]
+        )
+        == []
+    )
+
+
+def test_clean_tuning_baseline_gate_keeps_historical_report_archive_only():
+    candidate = {
+        "family": "historical_candidate",
+        "stage": "entry",
+        "calibration_state": "adjust_up",
+        "apply_mode": "calibrated_apply_candidate",
+        "runtime_apply_eligible_now": True,
+    }
+    report = {
+        "date": "2026-06-04",
+        "meta": {},
+        "source_flags": {},
+        "calibration_candidates": [candidate],
+        "apply_candidate_list": [dict(candidate)],
+    }
+
+    report_mod._enforce_clean_tuning_baseline_gate(report)
+
+    assert report["meta"]["clean_tuning_decision_input_eligible"] is False
+    assert report["source_flags"]["pre_baseline_decision_input_forbidden"] is True
+    assert report["apply_candidate_list"] == []
+    assert candidate["runtime_apply_eligible_now"] is False
+    assert candidate["pre_baseline_archive_only"] is True
+    assert (
+        candidate["runtime_apply_blocker"] == "pre_clean_tuning_baseline_archive_only"
+    )
 
 
 def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
@@ -4498,7 +4807,7 @@ def test_ofi_ai_smoothing_requires_mature_counterfactual_ev_for_manifest_candida
 
     manifest_families = {
         item["family"]
-        for item in report["apply_candidate_list"]
+        for item in report["family_readiness_list"]
         if item["owner_rule"] == "manifest_only_no_runtime_mutation"
     }
     assert "entry_ofi_ai_smoothing" in manifest_families
@@ -5147,7 +5456,7 @@ def test_scale_in_price_guard_family_generates_manifest_only_candidate():
 
     manifest_families = {
         item["family"]
-        for item in report["apply_candidate_list"]
+        for item in report["family_readiness_list"]
         if item["owner_rule"] == "manifest_only_no_runtime_mutation"
     }
     assert "scale_in_price_guard" in manifest_families
@@ -6334,6 +6643,156 @@ def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(
     }
 
 
+def test_partitioned_loader_skips_unconsumed_high_volume_family(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    target_date = "2026-09-04"
+    rows = {
+        "bad_entry_block": {
+            "stage": "bad_entry_block_observed",
+            "fields": {"held_sec": "70"},
+        },
+        "rising_missed_tp1_selector": {
+            "stage": "rising_missed_tp1_candidate_deferred",
+            "fields": {"threshold_family": "rising_missed_tp1_selector"},
+        },
+    }
+    for family, payload in rows.items():
+        partition_dir = (
+            report_mod.THRESHOLD_CYCLE_DIR / f"date={target_date}" / f"family={family}"
+        )
+        partition_dir.mkdir(parents=True, exist_ok=True)
+        (partition_dir / "part-000001.jsonl").write_text(
+            json.dumps(
+                {
+                    "event_type": "threshold_cycle_event",
+                    "family": family,
+                    **payload,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    result = report_mod._default_pipeline_load_result(target_date)
+
+    assert [row["stage"] for row in result.rows] == ["bad_entry_block_observed"]
+    assert result.meta["available_partition_count"] == 2
+    assert result.meta["partition_count"] == 1
+    assert result.meta["skipped_unconsumed_partition_count"] == 1
+    assert "rising_missed_tp1_selector" not in result.meta["event_family_projection"]
+
+
+def test_partitioned_loader_surfaces_selected_partition_read_failure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    target_date = "2026-09-04"
+    partition_dir = (
+        report_mod.THRESHOLD_CYCLE_DIR
+        / f"date={target_date}"
+        / "family=bad_entry_block"
+    )
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    partition_path = partition_dir / "part-000001.jsonl"
+    partition_path.write_text("{}\n", encoding="utf-8")
+
+    def fail_read(*args, **kwargs):
+        raise OSError("forced partition read failure")
+
+    monkeypatch.setattr(report_mod, "_read_threshold_jsonl", fail_read)
+
+    result = report_mod._default_pipeline_load_result(target_date)
+
+    assert result.meta["projection_read_complete"] is False
+    assert result.meta["projection_read_failures"][0]["path"] == str(partition_path)
+    assert "forced partition read failure" in result.meta["warnings"][0]
+
+
+def test_oversized_raw_fallback_is_source_quality_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(report_mod, "RAW_PIPELINE_FALLBACK_MAX_BYTES", 1)
+    target_date = "2026-09-04"
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True)
+    raw_path = raw_dir / f"pipeline_events_{target_date}.jsonl"
+    raw_path.write_text("{}\n", encoding="utf-8")
+
+    result = report_mod._default_pipeline_load_result(target_date)
+
+    assert result.rows == []
+    assert result.meta["data_source"] == "none"
+    assert result.meta["projection_read_complete"] is False
+    assert result.meta["projection_read_failures"][0]["path"] == str(raw_path)
+
+
+def test_pipeline_projection_read_failure_blocks_runtime_apply_candidates():
+    candidate = {
+        "family": "bad_entry_block",
+        "runtime_apply_eligible_now": True,
+    }
+    report = {
+        "meta": {
+            "pipeline_load": {
+                "2026-09-04": {
+                    "projection_read_complete": False,
+                    "projection_read_failures": [
+                        {"path": "broken.jsonl", "error": "read failed"}
+                    ],
+                }
+            }
+        },
+        "source_flags": {},
+        "calibration_candidates": [candidate],
+        "apply_candidate_list": [{"family": "bad_entry_block"}],
+    }
+
+    report_mod._enforce_pipeline_projection_source_gate(report)
+
+    assert report["source_flags"]["pipeline_projection_read_complete"] is False
+    assert report["apply_candidate_list"] == []
+    assert candidate["runtime_apply_eligible_now"] is False
+    assert (
+        "threshold_pipeline_projection_read_incomplete"
+        in candidate["runtime_apply_blockers"]
+    )
+
+
+def test_cumulative_partition_projection_keeps_only_economic_terminal_stages(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    target_date = "2026-09-04"
+    partition_dir = (
+        report_mod.THRESHOLD_CYCLE_DIR
+        / f"date={target_date}"
+        / "family=statistical_action_weight"
+    )
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    with (partition_dir / "part-000001.jsonl").open("w", encoding="utf-8") as handle:
+        for stage in ("stat_action_decision_snapshot", "sell_completed"):
+            handle.write(
+                json.dumps(
+                    {
+                        "event_type": "threshold_cycle_event",
+                        "family": "statistical_action_weight",
+                        "stage": stage,
+                        "fields": {"profit_rate": "0.5"},
+                    }
+                )
+                + "\n"
+            )
+
+    result = report_mod._default_pipeline_load_result(
+        target_date, cumulative_projection=True
+    )
+
+    assert [row["stage"] for row in result.rows] == ["sell_completed"]
+
+
 def test_partitioned_loader_audits_smoothing_raw_written_partition_counts(
     tmp_path, monkeypatch
 ):
@@ -6743,8 +7202,8 @@ def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(
 
 def test_cumulative_threshold_cycle_report_splits_windows_and_cohorts():
     pipeline_rows = {
-        "2026-04-29": [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
-        "2026-04-30": [
+        "2026-06-29": [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
+        "2026-06-30": [
             {
                 "stage": "bad_entry_block_observed",
                 "fields": {"held_sec": "70", "profit_rate": "-0.8"},
@@ -6762,37 +7221,37 @@ def test_cumulative_threshold_cycle_report_splits_windows_and_cohorts():
     }
     completed_rows = [
         {
-            "rec_date": "2026-04-28",
+            "rec_date": "2026-06-28",
             "profit_rate": 0.4,
             "strategy": "SCALPING",
             "buy_price": 9000,
         },
         {
-            "rec_date": "2026-04-29",
+            "rec_date": "2026-06-29",
             "profit_rate": -0.6,
             "strategy": "fallback_single",
             "buy_price": 9000,
         },
         {
-            "rec_date": "2026-04-30",
+            "rec_date": "2026-06-30",
             "profit_rate": 1.2,
             "strategy": "SCALPING",
             "pyramid_count": 1,
             "last_add_type": "PYRAMID",
         },
         {
-            "rec_date": "2026-04-30",
+            "rec_date": "2026-06-30",
             "profit_rate": -0.9,
             "strategy": "SCALPING",
             "avg_down_count": 1,
             "last_add_type": "REVERSAL_ADD",
         },
-        {"rec_date": "2026-04-30", "profit_rate": None, "strategy": "SCALPING"},
+        {"rec_date": "2026-06-30", "profit_rate": None, "strategy": "SCALPING"},
     ]
 
     report = report_mod.build_cumulative_threshold_cycle_report(
-        "2026-04-30",
-        start_date="2026-04-28",
+        "2026-06-30",
+        start_date="2026-06-28",
         rolling_days=(2,),
         pipeline_loader=lambda target_date: pipeline_rows.get(target_date, []),
         completed_rows_loader=lambda start_date, end_date: completed_rows,
@@ -6833,15 +7292,15 @@ def test_cumulative_threshold_cycle_report_artifacts_render_markdown(
         tmp_path / "threshold_cycle_cumulative",
     )
     report = report_mod.build_cumulative_threshold_cycle_report(
-        "2026-04-30",
-        start_date="2026-04-30",
+        "2026-06-30",
+        start_date="2026-06-30",
         rolling_days=(1,),
         pipeline_loader=lambda target_date: [
             {"stage": "budget_pass", "fields": {"signal_score": "72"}}
         ],
         completed_rows_loader=lambda start_date, end_date: [
             {
-                "rec_date": "2026-04-30",
+                "rec_date": "2026-06-30",
                 "profit_rate": 0.5,
                 "strategy": "SCALPING",
                 "buy_price": 9000,
@@ -6865,8 +7324,8 @@ def test_cumulative_threshold_cycle_report_artifacts_render_markdown(
 
 def test_cumulative_threshold_cycle_report_renders_family_specific_denominator():
     report = report_mod.build_cumulative_threshold_cycle_report(
-        "2026-04-30",
-        start_date="2026-04-30",
+        "2026-06-30",
+        start_date="2026-06-30",
         rolling_days=(1,),
         pipeline_loader=lambda target_date: [
             {"stage": "budget_pass", "fields": {"signal_score": "72"}}
@@ -6880,6 +7339,105 @@ def test_cumulative_threshold_cycle_report_renders_family_specific_denominator()
         "| cumulative | score65_74_recovery_probe | entry | 0 | False | report_only_reference |"
         in markdown
     )
+
+
+def test_cumulative_threshold_cycle_loads_each_date_once_across_overlapping_windows():
+    pipeline_calls = Counter()
+    source_calls = Counter()
+
+    report_mod.build_cumulative_threshold_cycle_report(
+        "2026-06-10",
+        start_date="2026-06-05",
+        rolling_days=(5, 10),
+        pipeline_loader=lambda target_date: (
+            pipeline_calls.update([target_date]) or []
+        ),
+        report_source_loader=lambda target_date: (
+            source_calls.update([target_date])
+            or {"sources": {}, "source_metrics": {}, "warnings": []}
+        ),
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    assert set(pipeline_calls.values()) == {1}
+    assert set(source_calls.values()) == {1}
+    assert set(pipeline_calls) == set(source_calls)
+
+
+def test_cumulative_source_diagnostic_lists_are_bounded_with_audit_hash():
+    compact = report_mod._compact_cumulative_source_lists(
+        {"examples": [{"id": index} for index in range(80)]}
+    )
+
+    assert len(compact["examples"]) == report_mod.CUMULATIVE_SOURCE_LIST_ITEM_LIMIT
+    assert compact["examples"][0] == {"id": 30}
+    meta = compact["_cumulative_list_compaction"]["examples"]
+    assert meta["original_count"] == 80
+    assert meta["unique_count"] == 80
+    assert meta["included_count"] == report_mod.CUMULATIVE_SOURCE_LIST_ITEM_LIMIT
+    assert len(meta["full_hash"]) == 64
+
+
+def test_cumulative_score_ev_is_sample_weighted_and_missing_cost_fails_closed():
+    contexts = [
+        {
+            "sources": {},
+            "warnings": [],
+            "source_metrics": {
+                "buy_score60_74": {
+                    "score60_74_candidates": 10,
+                    "score60_74_cost_adjusted_sample_count": 10,
+                    "score60_74_avg_cost_adjusted_expected_ev_pct": 1.0,
+                    "score60_74_cost_contract_complete": True,
+                }
+            },
+        },
+        {
+            "sources": {},
+            "warnings": [],
+            "source_metrics": {
+                "buy_score60_74": {
+                    "score60_74_candidates": 30,
+                    "score60_74_cost_adjusted_sample_count": 30,
+                    "score60_74_avg_cost_adjusted_expected_ev_pct": 3.0,
+                    "score60_74_cost_contract_complete": True,
+                }
+            },
+        },
+    ]
+
+    aggregated = report_mod._aggregate_calibration_source_contexts(
+        contexts,
+        target_date="2026-09-04",
+        window_label="rolling_5d",
+    )["source_metrics"]["buy_score60_74"]
+    assert aggregated["score60_74_avg_cost_adjusted_expected_ev_pct"] == 2.5
+    assert aggregated["score60_74_cost_adjusted_sample_count"] == 40
+    assert aggregated["score60_74_cost_contract_complete"] is True
+
+    contexts[1]["source_metrics"]["buy_score60_74"][
+        "score60_74_avg_cost_adjusted_expected_ev_pct"
+    ] = None
+    contexts[1]["source_metrics"]["buy_score60_74"][
+        "score60_74_cost_contract_complete"
+    ] = False
+    incomplete = report_mod._aggregate_calibration_source_contexts(
+        contexts,
+        target_date="2026-09-04",
+        window_label="rolling_5d",
+    )["source_metrics"]["buy_score60_74"]
+    assert incomplete["score60_74_avg_cost_adjusted_expected_ev_pct"] is None
+    assert incomplete["score60_74_cost_contract_complete"] is False
+
+    contexts[1]["source_metrics"]["buy_score60_74"].pop(
+        "score60_74_cost_contract_complete"
+    )
+    missing_contract_flag = report_mod._aggregate_calibration_source_contexts(
+        contexts,
+        target_date="2026-09-04",
+        window_label="rolling_5d",
+    )["source_metrics"]["buy_score60_74"]
+    assert missing_contract_flag["score60_74_cost_contract_complete"] is False
 
 
 def test_window_policy_audit_uses_registered_denominators_for_position_sizing():
@@ -8113,3 +8671,99 @@ def test_enrich_sim_same_eval_via_both_record_id_and_candidate_id_not_duplicated
     assert enriched["post_sell_joined_count"] == 1
     assert enriched["post_sell_join_pending_count"] == 0
     assert enriched["missed_upside"] == 100.0
+
+
+def test_cumulative_compaction_preserves_complete_smoothing_phase_census():
+    rows = [
+        {"journal_arm_id": f"a{i}", "observation_phase": "holding"} for i in range(335)
+    ]
+    journal = {
+        "schema": "smoothing_source_only_path_journal_v3",
+        "rows": rows,
+        "observation_phase_summary": {"holding": {"horizon_count": len(rows)}},
+    }
+    compact = report_mod._compact_cumulative_source_lists(
+        {"journal": journal, "examples": list(range(100))}
+    )
+    assert compact["journal"]["rows"] == rows
+    assert (
+        len(compact["journal"]["rows"])
+        == compact["journal"]["observation_phase_summary"]["holding"]["horizon_count"]
+    )
+    assert len(compact["examples"]) == report_mod.CUMULATIVE_SOURCE_LIST_ITEM_LIMIT
+
+
+def test_force_exit_quarantine_preserves_valid_rows_and_exact_exclusion(monkeypatch):
+    bad = {
+        "stage": "holding_flow_override_force_exit",
+        "emitted_at": "2026-09-07T11:43:52",
+        "fields": {"force_reason": "holding_context_cannot_defer"},
+    }
+    good = {
+        "stage": "holding_flow_override_force_exit",
+        "emitted_at": "2026-09-07T12:00:00",
+        "fields": {
+            "ofi_force_exit_phase": "source_quality_guard",
+            "ofi_force_exit_terminal_reason": "parse_fail",
+        },
+    }
+    original = report_mod.PipelineLoadResult(
+        rows=[bad, good],
+        meta={
+            "line_count": 2,
+            "smoothing_source_only_ingestion": {
+                "status": "fail",
+                "issues": ["smoothing_field_projection_contract_failed"],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        report_mod, "_unfiltered_pipeline_load_result", lambda *a, **k: original
+    )
+    result = report_mod._default_pipeline_load_result("2026-09-07")
+    assert result.rows == [good]
+    assert original.rows == [bad, good]
+    receipt = result.meta["smoothing_force_exit_row_exclusion"]
+    assert receipt["source_row_count"] == 2
+    assert receipt["included_row_count"] == receipt["excluded_row_count"] == 1
+    assert receipt["excluded_rows"][0]["projected_row"] == bad
+    assert "ofi_force_exit_phase" not in bad["fields"]
+    assert result.meta["smoothing_source_only_ingestion"]["status"] == "pass"
+    from src.engine.verify_threshold_cycle_postclose_chain import (
+        _smoothing_force_exit_exclusion_issues,
+    )
+
+    assert _smoothing_force_exit_exclusion_issues(receipt, "2026-09-07") == []
+    tampered = {**receipt, "included_row_count": 2}
+    assert _smoothing_force_exit_exclusion_issues(tampered, "2026-09-07")
+    assert _smoothing_force_exit_exclusion_issues(receipt, "2026-09-08")
+    bad_receipt = {**receipt, "excluded_rows_sha256": "0" * 64}
+    assert _smoothing_force_exit_exclusion_issues(bad_receipt, "2026-09-07")
+
+
+def test_force_exit_quarantine_does_not_clear_unrelated_ingestion_failure(monkeypatch):
+    bad = {
+        "stage": "holding_flow_override_force_exit",
+        "emitted_at": "2026-09-07T11:43:52",
+        "fields": {},
+    }
+    original = report_mod.PipelineLoadResult(
+        rows=[bad],
+        meta={
+            "smoothing_source_only_ingestion": {
+                "status": "fail",
+                "issues": [
+                    "checkpoint_source_missing",
+                    "smoothing_field_projection_contract_failed",
+                ],
+            }
+        },
+    )
+    monkeypatch.setattr(
+        report_mod, "_unfiltered_pipeline_load_result", lambda *a, **k: original
+    )
+    result = report_mod._default_pipeline_load_result("2026-09-07")
+    assert result.meta["smoothing_source_only_ingestion"]["status"] == "fail"
+    assert result.meta["smoothing_source_only_ingestion"]["issues"] == [
+        "checkpoint_source_missing"
+    ]

@@ -1,6 +1,6 @@
 # Report Directory Operations
 
-작성 기준: `2026-08-20 KST`
+작성 기준: `2026-09-07 KST`
 
 `data/report/`는 장중·장후 producer가 생성한 운영, source-quality, attribution,
 calibration 산출물을 저장한다. JSON/JSONL이 canonical data이고 Markdown은
@@ -14,6 +14,11 @@ producer, consumer 또는 runtime authority가 있다고 판단하지 않는다.
 현재 active/open 판단은
 [Plan Rebase](../../docs/plan-korStockScanPerformanceOptimization.rebase.md)와
 당일 Stage2 checklist가 소유한다.
+
+상세검토 진행은 [장후작업 목록](../../docs/audit-reports/2026-09-05-postclose-work-inventory.md),
+명시적으로 호출된 모니터링·복구·추천 구현은 [장후 지시문](../../docs/postclose-tuning-result-review-task-instructions.md)을 따른다.
+문서 현행화는 이 절차의 실행 요청이 아니다. 코드 검토 완료, 자연 산출물, 정책 선택,
+PID 소비와 비용 차감 EV를 구분하고, 완료한 #8/#9 등은 새 결함 없이 다시 열지 않는다.
 
 ## 데이터와 권한 기준
 
@@ -35,8 +40,8 @@ producer, consumer 또는 runtime authority가 있다고 판단하지 않는다.
 | --- | --- | --- |
 | 운영 상태 | `threshold_cycle_preopen_status`, `threshold_cycle_postclose_status`, `postclose_done_controller` | wrapper 시작·완료·실패, artifact 순서와 controller `DONE` 확인 |
 | source quality | `observation_source_quality_audit`, `intraday_ws_freshness_monitor`, BUY/HOLD-EXIT sentinel | 결손 row/window 제외, stale/BBO/venue/provider provenance 분리 |
-| lifecycle | `lifecycle_decision_matrix`, entry/holding/scale-in bucket attribution, `rising_missed_intraday_feedback`, `scalping_pyramid_intraday_feedback` | selection부터 exit까지 실제·미진입·반사실 흐름 재구성 |
-| AI 품질 | exact payload/control/outcome 및 main AI quality R0~R3 계열 | 호출·입력·판단 품질과 same-payload replay 후보 검증 |
+| lifecycle | raw candidate/submit/fill/terminal lineage, `rising_missed_intraday_feedback`, `scalping_pyramid_intraday_feedback`, dedicated AVG_DOWN/Samsung replay | 실제·미진입·반사실을 분리; ADM/LDM/bucket은 retired라 소비·복구하지 않음 |
+| AI 품질 | exact payload/control/outcome, R0~R3, #76→#82 v5→#78 offline optimizer 및 terminal follower consumer | 지속적 prompt/input 개선; #81 legacy live OFF와 별도 KRX entry_setup_live_policy를 구분 |
 | 위젯 | widget signal/runtime/calibration 및 microstructure attribution | 종목별 독립 owner의 signal, fill, target, terminal 결과 검증 |
 | 에피소드 | Samsung/low-price tuning, expanded research, microstructure attribution | exact-date profile, two-leg fill·비용·미청산 custody와 다음 PREOPEN 후보 검증 |
 | 자동화 handoff | `threshold_cycle_ev`, `runtime_approval_summary`, `runtime_apply_gap_audit`, `code_improvement_workorder`, `threshold_cycle_postclose_verification` | bounded apply 후보, 차단 사유, 구현 작업, 최종 verify 연결 |
@@ -45,6 +50,10 @@ producer, consumer 또는 runtime authority가 있다고 판단하지 않는다.
 스캘핑 체인의 실패로 세지 않는다. 과거 panic-buying, opening rotation,
 previous-limit-up rotation, quote consistency standalone report처럼 제거된 계열은
 historical artifact가 남아 있어도 재기동 경로가 아니다.
+전용 institutional aggregate와 ADM/LDM·greenfield도 retired다. 비-LDM scalp-sim
+control tower/prior는 별도 surviving source-only owner이며 sim 성과 튜닝은 현재 우선순위가 아니다.
+#11 source-quality 감사가 예약 stage 전 아직 없으면 `not_yet_due`다. 수동 재생성은
+자연 증거가 아니며, 실제 결손의 row/window 격리와 소비자별 tuning 차단을 구분한다.
 
 ## Full monitor snapshot
 

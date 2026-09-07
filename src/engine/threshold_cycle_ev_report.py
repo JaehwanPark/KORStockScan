@@ -361,11 +361,22 @@ def _wait6579_counterfactual_summary(
             "score65_74_probe_candidates": _safe_int(
                 metrics.get("score65_74_probe_candidates"), 0
             ),
+            "score60_74_raw_probe_candidates": _safe_int(
+                metrics.get("score65_74_probe_candidates"), 0
+            ),
             "avg_expected_ev_pct": round(
                 _safe_float(metrics.get("avg_expected_ev_pct"), 0.0), 4
             ),
+            "avg_gross_counterfactual_expected_ev_pct": round(
+                _safe_float(metrics.get("avg_expected_ev_pct"), 0.0), 4
+            ),
+            "avg_cost_adjusted_expected_ev_pct": None,
+            "score60_74_avg_cost_adjusted_expected_ev_pct": None,
+            "score60_74_cost_contract_complete": False,
             "expected_ev_krw_sum": _safe_int(metrics.get("expected_ev_krw_sum"), 0),
             "source_authority": "observe_only_threshold_relaxation_input",
+            "primary_decision_metric": "cost_adjusted_expected_ev_pct",
+            "gross_ev_runtime_authority": "forbidden",
             "real_execution_quality_source": "none",
         }
     summary = dict(summary)
@@ -3091,10 +3102,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         "",
         "## Missed Probe Counterfactual",
         f"- book: `{missed_probe.get('book') or '-'}` / role: `{missed_probe.get('role') or '-'}`",
-        f"- total/score65_74: `{missed_probe.get('total_candidates')}` / `{missed_probe.get('score65_74_probe_candidates')}`",
-        f"- avg_expected_ev: `{missed_probe.get('avg_expected_ev_pct')}`% / score65_74_avg_expected_ev: `{missed_probe.get('score65_74_avg_expected_ev_pct')}`%",
+        f"- total/raw_score60_74/economic_eligible_score60_74: `{missed_probe.get('total_candidates')}` / `{missed_probe.get('score60_74_raw_probe_candidates')}` / `{missed_probe.get('score60_74_probe_candidates', missed_probe.get('score65_74_probe_candidates'))}`",
+        f"- avg_gross_counterfactual_ev: `{missed_probe.get('avg_gross_counterfactual_expected_ev_pct', missed_probe.get('avg_expected_ev_pct'))}`% / avg_cost_adjusted_counterfactual_ev: `{missed_probe.get('avg_cost_adjusted_expected_ev_pct')}`%",
+        f"- score60_74_cost_adjusted_ev: `{missed_probe.get('score60_74_avg_cost_adjusted_expected_ev_pct')}`% / cost_contract_complete: `{missed_probe.get('score60_74_cost_contract_complete')}` / source_quality_or_cost_excluded: `{missed_probe.get('score60_74_source_quality_or_cost_excluded_count')}`",
         f"- actual_order_submitted: `{missed_probe.get('actual_order_submitted')}` / broker_order_forbidden: `{missed_probe.get('broker_order_forbidden')}`",
-        f"- authority: `{missed_probe.get('calibration_authority') or '-'}`",
+        f"- authority: `{missed_probe.get('calibration_authority') or '-'}` / gross_runtime_authority: `{missed_probe.get('gross_ev_runtime_authority') or 'forbidden'}`",
         "",
         "## Scalp Entry ADM",
         f"- artifact: `{scalp_entry_adm.get('artifact') or '-'}`",

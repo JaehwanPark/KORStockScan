@@ -92,13 +92,11 @@ from src.engine.scalping.micro_reversion.replay_ablation_contract import (
     LEGACY_DESIGN_VERSION,
     PROVIDER_ABLATION_FLOOR_SOURCE_CONTRACT_ACTIVATION_DATE,
     PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS,
-    PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS,
-    PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS,
-    PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS,
     PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA,
     SOURCE_ONLY_AUTHORITY_CONTRACT as ABLATION_SOURCE_ONLY_AUTHORITY,
     arm_set_for_design,
     comparison_roles_for_design,
+    provider_ablation_floor_requirements,
     resolve_replay_ablation_design_version,
     validate_exact_one_design_per_parent,
     validate_source_only_authority,
@@ -14619,7 +14617,7 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
     artifact_loader: Callable[[Path], dict[str, Any]] = _load_exact_p2_json,
     validation_cache: MicroReversionProviderFloorValidationCache | None = None,
 ) -> dict[str, Any]:
-    """Revalidate the cycle-owned 5d/20-parent/10-symbol Provider gate.
+    """Revalidate the effective-dated, cycle-owned research admission gate.
 
     The receipt is not trusted merely because it is self-hashed. Every
     current-design materialized generation in the bounded canonical window is
@@ -14687,6 +14685,9 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
         raise ValueError("provider_ablation_floor_materialized_after_floor_target")
     if not is_krx_trading_day(target) or not is_krx_trading_day(materialized_target):
         raise ValueError("provider_ablation_floor_target_not_trading_day")
+    required_days, required_parents, required_symbols = (
+        provider_ablation_floor_requirements(expected_target_date)
+    )
     if (
         floor.get("schema") != PROVIDER_ABLATION_SAMPLE_FLOOR_SCHEMA
         or floor.get("target_date") != expected_target_date
@@ -14696,12 +14697,9 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
         or floor.get("lookback_calendar_days")
         != PROVIDER_ABLATION_FLOOR_LOOKBACK_CALENDAR_DAYS
         or floor.get("ablation_design_version") != CURRENT_DESIGN_VERSION
-        or floor.get("required_trading_days")
-        != PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS
-        or floor.get("required_common_parent_count")
-        != PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS
-        or floor.get("required_unique_symbol_count")
-        != PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS
+        or floor.get("required_trading_days") != required_days
+        or floor.get("required_common_parent_count") != required_parents
+        or floor.get("required_unique_symbol_count") != required_symbols
         or floor.get("pass") is not True
         or floor.get("status") != "pass_provider_ablation_floor_met"
         or floor.get("contract_findings") != []
@@ -14885,9 +14883,9 @@ def validate_micro_reversion_provider_ablation_floor_artifact(
     trading_dates = sorted({value[0] for value in parent_symbols.values()})
     symbols = sorted({value[1] for value in parent_symbols.values()})
     if (
-        len(trading_dates) < PROVIDER_ABLATION_FLOOR_REQUIRED_TRADING_DAYS
-        or len(parent_ids) < PROVIDER_ABLATION_FLOOR_REQUIRED_COMMON_PARENTS
-        or len(symbols) < PROVIDER_ABLATION_FLOOR_REQUIRED_UNIQUE_SYMBOLS
+        len(trading_dates) < required_days
+        or len(parent_ids) < required_parents
+        or len(symbols) < required_symbols
         or floor.get("observed_trading_days") != len(trading_dates)
         or floor.get("observed_common_parent_count") != len(parent_ids)
         or floor.get("observed_unique_symbol_count") != len(symbols)

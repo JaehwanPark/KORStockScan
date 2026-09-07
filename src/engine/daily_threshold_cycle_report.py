@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import resource
 import sys
 import time
 from collections import Counter, defaultdict
@@ -37,6 +38,11 @@ from src.engine.scalping.position_sizing_allocator import (
     resolve_scalping_allocation,
 )
 from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
+from src.engine.scalping.score_recovery_observation import (
+    condition_feasibility,
+    observation_cohort_valid,
+    score_recovery_cohort_member,
+)
 from src.utils.constants import (
     CONFIG_PATH,
     DATA_DIR,
@@ -44,10 +50,12 @@ from src.utils.constants import (
     POSTGRES_URL,
     TRADING_RULES,
 )
+from src.utils.market_day import is_krx_trading_day
 from src.utils.threshold_cycle_registry import (
     SMOOTHING_SOURCE_ONLY_FAMILIES,
     SMOOTHING_SOURCE_ONLY_PATH_STAGES,
     is_threshold_cycle_stage,
+    threshold_family_for_stage,
 )
 
 REPORT_DIR = DATA_DIR / "report"
@@ -73,7 +81,67 @@ THRESHOLD_APPLY_PLAN_DIR = THRESHOLD_CYCLE_DIR / "apply_plans"
 ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
 SCALE_IN_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "scale_in_split_order_policy"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
-CUMULATIVE_BASELINE_START_DATE = "2026-04-21"
+CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
+CUMULATIVE_BASELINE_START_DATE = CLEAN_TUNING_BASELINE_DATE
+CUMULATIVE_SOURCE_LIST_ITEM_LIMIT = 50
+THRESHOLD_REPORT_EVENT_FAMILIES = frozenset(
+    {
+        "adverse_fill_detector",
+        "bad_entry_block",
+        "dynamic_entry_price_resolver",
+        "entry_cancel_wait_attribution",
+        "entry_mechanical_momentum",
+        "entry_ofi_ai_smoothing",
+        "entry_price_execution_quality",
+        "holding_flow_ofi_smoothing",
+        "liquidity_pre_submit_guard_p1",
+        "overbought_pullback_guard_p1",
+        "position_sizing_dynamic_formula",
+        "pre_submit_price_guard",
+        "protect_trailing_smoothing",
+        "reversal_add",
+        "scale_in_counterfactual",
+        "scale_in_price_guard",
+        "scalp_trailing_continuation_recheck",
+        "scalp_trailing_take_profit",
+        "score65_74_recovery_probe",
+        "shallow_avg_down_source_gap_recheck",
+        "soft_stop_expert_defense",
+        "soft_stop_micro_grace",
+        "soft_stop_whipsaw_confirmation",
+        "statistical_action_weight",
+        "strength_momentum_soft_gate_p1",
+    }
+)
+CUMULATIVE_THRESHOLD_EVENT_FAMILIES = frozenset(
+    {
+        "holding_flow_ofi_smoothing",
+        "protect_trailing_smoothing",
+        "scalp_trailing_continuation_recheck",
+        "scalp_trailing_take_profit",
+        "score65_74_recovery_probe",
+        "soft_stop_expert_defense",
+        "soft_stop_micro_grace",
+        "soft_stop_whipsaw_confirmation",
+        "statistical_action_weight",
+    }
+)
+CUMULATIVE_THRESHOLD_STAGE_ALLOWLIST_BY_FAMILY = {
+    "statistical_action_weight": frozenset(
+        {
+            "exit_signal",
+            "scalp_sim_sell_order_assumed_filled",
+            "sell_completed",
+        }
+    )
+}
+THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES = frozenset(
+    {
+        "entry_split_order_plan",
+        "scale_in_split_order_plan",
+        "post_probe_winner_recovery",
+    }
+)
 THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS = {
     "schema_version",
     "event_type",
@@ -548,11 +616,7 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "기존 requested_qty는 position_sizing_dynamic_formula에 맡기고, 총 수량을 보존한 planned_orders leg 분해 policy만 다음 PREOPEN bounded env로 연결한다.",
             "daily_only_allowed": False,
         },
-        "sample_denominator_keys": [
-            "real_sample_count",
-            "sim_sample_count",
-            "recommended_policy_candidate_count",
-        ],
+        "sample_denominator_keys": ["real_sample_count"],
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "allowed_runtime_apply": True,
     },
@@ -626,14 +690,16 @@ CALIBRATION_FAMILY_METADATA = {
         "sample_window": "rolling_5d_with_daily_trigger",
         "window_policy": {
             "primary": "rolling_5d",
-            "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
-            "use": "BUY drought/score65~74는 당일 병목을 trigger로 쓰되, 회수축 부활과 EV/close 우위는 rolling/cumulative 전용 표본으로 확인한다.",
+            "secondary": ["daily_intraday", "cumulative_since_2026-06-05"],
+            "use": "BUY drought/score60~74는 당일 병목을 trigger로 쓰되, 비용 차감 counterfactual EV와 close 우위는 clean-baseline rolling/cumulative 전용 표본으로 확인한다.",
             "daily_only_allowed": False,
         },
         "sample_denominator_keys": [
-            "wait65_79_score65_74_candidate",
-            "blocked_score65_74",
+            "wait65_79_score60_74_candidate",
+            "blocked_score60_74",
         ],
+        "primary_decision_metric": "cost_adjusted_counterfactual_expected_ev_pct",
+        "primary_decision_metric_scope": "bounded_exploration_seed_not_real_execution_quality",
         "allowed_runtime_apply": True,
     },
     "liquidity_gate_refined_candidate": {
@@ -1049,6 +1115,21 @@ def _date_range_between(start_date: str, end_date: str) -> list[str]:
     return values
 
 
+def _trading_date_range(target_date: str, days: int) -> list[str]:
+    """Bounded KRX-session window; daily operational windows stay calendar based."""
+    current = datetime.strptime(target_date, "%Y-%m-%d").date()
+    values: list[str] = []
+    for _ in range(max(0, days) * 4 + 31):
+        if len(values) >= max(0, days):
+            break
+        if is_krx_trading_day(current):
+            values.append(current.isoformat())
+        current -= timedelta(days=1)
+    if len(values) != max(0, days):
+        raise ValueError("trading_window_calendar_incomplete")
+    return list(reversed(values))
+
+
 def report_path_for_date(target_date: str) -> Path:
     return REPORT_DIR / f"threshold_cycle_{target_date}.json"
 
@@ -1212,7 +1293,12 @@ def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]
         ]
 
 
-def _read_threshold_jsonl(path: Path) -> list[dict]:
+def _read_threshold_jsonl(
+    path: Path,
+    *,
+    family_allowlist: frozenset[str] | None = None,
+    stage_allowlist_by_family: dict[str, frozenset[str]] | None = None,
+) -> list[dict]:
     rows: list[dict] = []
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
@@ -1233,6 +1319,22 @@ def _read_threshold_jsonl(path: Path) -> list[dict]:
                     if isinstance(payload.get("fields"), dict)
                     else None
                 ),
+            ):
+                continue
+            fields = (
+                payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+            )
+            family = str(payload.get("family") or "").strip()
+            if not family:
+                family = threshold_family_for_stage(
+                    str(payload.get("stage") or ""), fields
+                )
+            if family_allowlist is not None and family not in family_allowlist:
+                continue
+            family_stage_allowlist = (stage_allowlist_by_family or {}).get(family)
+            if (
+                family_stage_allowlist is not None
+                and str(payload.get("stage") or "") not in family_stage_allowlist
             ):
                 continue
             rows.append(_compact_threshold_cycle_event(payload))
@@ -1535,16 +1637,42 @@ def _smoothing_partition_ingestion_audit(
     }
 
 
-def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | None:
-    paths = _partition_paths_for_date(target_date)
-    if not paths:
+def _load_partitioned_pipeline_events(
+    target_date: str,
+    *,
+    family_allowlist: frozenset[str] | None = None,
+    stage_allowlist_by_family: dict[str, frozenset[str]] | None = None,
+) -> PipelineLoadResult | None:
+    available_paths = _partition_paths_for_date(target_date)
+    paths = [
+        path
+        for path in available_paths
+        if family_allowlist is None
+        or path.parent.name.removeprefix("family=") in family_allowlist
+    ]
+    if not available_paths:
         return None
     rows: list[dict] = []
     read_bytes = 0
+    read_failures: list[dict[str, str]] = []
     for path in paths:
         try:
             read_bytes += path.stat().st_size
-            rows.extend(_read_threshold_jsonl(path))
+            rows.extend(
+                _read_threshold_jsonl(
+                    path,
+                    family_allowlist=family_allowlist,
+                    stage_allowlist_by_family=stage_allowlist_by_family,
+                )
+            )
+        except (OSError, EOFError, UnicodeError, ValueError) as exc:
+            read_failures.append({"path": str(path), "error": str(exc)})
+            continue
+    skipped_paths = [path for path in available_paths if path not in paths]
+    skipped_bytes = 0
+    for path in skipped_paths:
+        try:
+            skipped_bytes += path.stat().st_size
         except OSError:
             continue
     checkpoint = _checkpoint_for_date(target_date)
@@ -1557,12 +1685,20 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
             "target_date": target_date,
             "data_source": "partitioned_compact",
             "partition_count": len(paths),
+            "available_partition_count": len(available_paths),
+            "skipped_unconsumed_partition_count": len(skipped_paths),
+            "skipped_unconsumed_read_bytes_estimate": skipped_bytes,
+            "event_family_projection": (
+                sorted(family_allowlist) if family_allowlist is not None else None
+            ),
             "line_count": len(rows),
             "checkpoint_completed": (
                 bool(checkpoint.get("completed")) if checkpoint else None
             ),
             "paused_reason": checkpoint.get("paused_reason") if checkpoint else None,
             "read_bytes_estimate": read_bytes,
+            "projection_read_complete": not read_failures,
+            "projection_read_failures": read_failures,
             "smoothing_source_only_ingestion": smoothing_ingestion_audit,
             "source_read_contract": {
                 "read_mode": "partitioned_field_projection_canonicalized",
@@ -1571,7 +1707,10 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
                 "interned_categorical_values": True,
                 "runtime_effect": False,
             },
-            "warnings": [],
+            "warnings": [
+                f"threshold partition read failed: {item['path']}: {item['error']}"
+                for item in read_failures
+            ],
         },
     )
 
@@ -2249,16 +2388,32 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(wait6579_ev.get("approval_gate"), dict)
         else {}
     )
+    wait_counterfactual = (
+        wait6579_ev.get("counterfactual_summary")
+        if isinstance(wait6579_ev.get("counterfactual_summary"), dict)
+        else {}
+    )
     wait_rows = (
         wait6579_ev.get("rows") if isinstance(wait6579_ev.get("rows"), list) else []
     )
     score_rows = [
         row
         for row in wait_rows
-        if 65 <= int(_safe_float((row or {}).get("ai_score"), 0.0) or 0.0) <= 74
+        if isinstance(row, dict)
+        and 60 <= (_safe_float(row.get("ai_score"), 0.0) or 0.0) <= 74
+        and score_recovery_cohort_member(row)
+        and row.get("minute_candle_source_quality_gate") == "pass"
     ]
-    score_ev = [
-        _safe_float(row.get("expected_ev_pct"), None)
+    score_cost_adjusted_ev = [
+        _safe_float(row.get("cost_adjusted_expected_ev_pct"), None)
+        for row in score_rows
+        if isinstance(row, dict)
+    ]
+    score_gross_ev = [
+        _safe_float(
+            row.get("gross_counterfactual_expected_ev_pct", row.get("expected_ev_pct")),
+            None,
+        )
         for row in score_rows
         if isinstance(row, dict)
     ]
@@ -2272,7 +2427,10 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         for row in score_rows
         if isinstance(row, dict)
     ]
-    score_ev = [value for value in score_ev if value is not None]
+    score_cost_adjusted_ev = [
+        value for value in score_cost_adjusted_ev if value is not None
+    ]
+    score_gross_ev = [value for value in score_gross_ev if value is not None]
     score_close = [value for value in score_close if value is not None]
     score_mfe = [value for value in score_mfe if value is not None]
     missed_metrics = (
@@ -2565,21 +2723,98 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "wait6579_avg_close_10m_pct": _safe_float(
                 wait_metrics.get("avg_close_10m_pct"), None
             ),
-            "score65_74_candidates": len(score_rows),
+            "score60_74_candidates": _safe_int(
+                wait_counterfactual.get("score60_74_probe_candidates"),
+                len(score_rows),
+            )
+            or 0,
+            "score60_74_observation_policy_hashes": wait_counterfactual.get(
+                "score60_74_observation_policy_hashes"
+            )
+            or [],
+            "score60_74_unapplied_observation_candidates": wait_counterfactual.get(
+                "score60_74_unapplied_observation_candidates", 0
+            ),
+            "score65_74_candidates": _safe_int(
+                wait_counterfactual.get(
+                    "score60_74_probe_candidates",
+                    wait_counterfactual.get("score65_74_probe_candidates"),
+                ),
+                len(score_rows),
+            )
+            or 0,
+            "score60_74_avg_cost_adjusted_expected_ev_pct": (
+                _safe_float(
+                    wait_counterfactual.get(
+                        "score60_74_avg_cost_adjusted_expected_ev_pct"
+                    ),
+                    None,
+                )
+                if wait_counterfactual.get(
+                    "score60_74_avg_cost_adjusted_expected_ev_pct"
+                )
+                is not None
+                else (
+                    round(_avg(score_cost_adjusted_ev) or 0.0, 4)
+                    if score_cost_adjusted_ev
+                    else None
+                )
+            ),
+            "score60_74_avg_gross_counterfactual_expected_ev_pct": (
+                round(_avg(score_gross_ev) or 0.0, 4) if score_gross_ev else None
+            ),
+            "score60_74_cost_adjusted_sample_count": _safe_int(
+                wait_counterfactual.get("score60_74_cost_adjusted_sample_count"),
+                len(score_cost_adjusted_ev),
+            )
+            or 0,
+            "score60_74_gross_counterfactual_sample_count": _safe_int(
+                wait_counterfactual.get("score60_74_gross_counterfactual_sample_count"),
+                len(score_gross_ev),
+            )
+            or 0,
+            "score60_74_cost_contract_complete": bool(
+                wait_counterfactual.get("score60_74_cost_contract_complete")
+                if "score60_74_cost_contract_complete" in wait_counterfactual
+                else (score_rows and len(score_cost_adjusted_ev) == len(score_rows))
+            ),
             "score65_74_avg_expected_ev_pct": (
-                round(_avg(score_ev) or 0.0, 4) if score_ev else None
+                round(_avg(score_gross_ev) or 0.0, 4) if score_gross_ev else None
+            ),
+            "score60_74_avg_close_10m_pct": (
+                _safe_float(
+                    wait_counterfactual.get("score60_74_avg_close_10m_pct"), None
+                )
+                if wait_counterfactual.get("score60_74_avg_close_10m_pct") is not None
+                else (round(_avg(score_close) or 0.0, 4) if score_close else None)
+            ),
+            "score60_74_avg_mfe_10m_pct": (
+                _safe_float(wait_counterfactual.get("score60_74_avg_mfe_10m_pct"), None)
+                if wait_counterfactual.get("score60_74_avg_mfe_10m_pct") is not None
+                else (round(_avg(score_mfe) or 0.0, 4) if score_mfe else None)
             ),
             "score65_74_avg_close_10m_pct": (
-                round(_avg(score_close) or 0.0, 4) if score_close else None
+                _safe_float(
+                    wait_counterfactual.get("score60_74_avg_close_10m_pct"), None
+                )
+                if wait_counterfactual.get("score60_74_avg_close_10m_pct") is not None
+                else (round(_avg(score_close) or 0.0, 4) if score_close else None)
             ),
             "score65_74_avg_mfe_10m_pct": (
-                round(_avg(score_mfe) or 0.0, 4) if score_mfe else None
+                _safe_float(wait_counterfactual.get("score60_74_avg_mfe_10m_pct"), None)
+                if wait_counterfactual.get("score60_74_avg_mfe_10m_pct") is not None
+                else (round(_avg(score_mfe) or 0.0, 4) if score_mfe else None)
             ),
             "full_samples": _safe_int(wait_approval.get("full_samples"), 0) or 0,
             "partial_samples": _safe_int(wait_approval.get("partial_samples"), 0) or 0,
             "threshold_relaxation_approved": bool(
                 wait_approval.get("threshold_relaxation_approved")
             ),
+            "cost_contract_complete": bool(wait_approval.get("cost_contract_complete")),
+            "counterfactual_economic_authority": (
+                "bounded_exploration_seed_only_not_real_execution_quality"
+            ),
+            "gross_ev_runtime_authority": "forbidden",
             "partial_sample_zero_is_calibration_target": (
                 _safe_int(wait_approval.get("partial_samples"), 0) or 0
             )
@@ -3732,10 +3967,70 @@ def _aggregate_numeric_metric(key: str, values: list[Any], parents: list[dict]) 
     return numeric[-1]
 
 
+_SCORE60_WEIGHTED_AVERAGE_KEYS = {
+    "score60_74_avg_cost_adjusted_expected_ev_pct",
+    "score60_74_avg_gross_counterfactual_expected_ev_pct",
+    "score60_74_avg_close_10m_pct",
+    "score60_74_avg_mfe_10m_pct",
+    "score65_74_avg_expected_ev_pct",
+    "score65_74_avg_close_10m_pct",
+    "score65_74_avg_mfe_10m_pct",
+}
+
+
+def _aggregate_score60_weighted_average(key: str, parents: list[dict]) -> Any:
+    eligible_parents = [
+        parent
+        for parent in parents
+        if max(
+            _safe_int(parent.get("score60_74_candidates"), 0) or 0,
+            _safe_int(parent.get("score65_74_candidates"), 0) or 0,
+        )
+        > 0
+    ]
+    if not eligible_parents:
+        return None
+    if key == "score60_74_avg_cost_adjusted_expected_ev_pct" and any(
+        _safe_float(parent.get(key), None) is None for parent in eligible_parents
+    ):
+        return None
+    weighted: list[tuple[float, float]] = []
+    for parent in eligible_parents:
+        value = _safe_float(parent.get(key), None)
+        if value is None:
+            continue
+        if key == "score60_74_avg_cost_adjusted_expected_ev_pct":
+            weight = _safe_float(
+                parent.get("score60_74_cost_adjusted_sample_count"), None
+            )
+        else:
+            weight = None
+        if weight is None or weight <= 0:
+            weight = float(
+                max(
+                    _safe_int(parent.get("score60_74_candidates"), 0) or 0,
+                    _safe_int(parent.get("score65_74_candidates"), 0) or 0,
+                )
+            )
+        weighted.append((value, weight))
+    if len(weighted) != len(eligible_parents):
+        return None
+    total_weight = sum(weight for _, weight in weighted)
+    if total_weight <= 0:
+        return None
+    return round(
+        sum(value * weight for value, weight in weighted) / total_weight,
+        4,
+    )
+
+
 def _aggregate_metric_dicts(dicts: list[dict]) -> dict:
     result: dict[str, Any] = {}
     keys = sorted({key for item in dicts if isinstance(item, dict) for key in item})
     for key in keys:
+        if key in _SCORE60_WEIGHTED_AVERAGE_KEYS:
+            result[key] = _aggregate_score60_weighted_average(key, dicts)
+            continue
         values = [
             item.get(key) for item in dicts if isinstance(item, dict) and key in item
         ]
@@ -3754,19 +4049,46 @@ def _aggregate_metric_dicts(dicts: list[dict]) -> dict:
             continue
         bool_values = [value for value in values if isinstance(value, bool)]
         if bool_values and len(bool_values) == len(values):
-            result[key] = any(bool_values)
+            result[key] = (
+                all(bool_values)
+                if key
+                in {
+                    "cost_contract_complete",
+                    "score60_74_cost_contract_complete",
+                }
+                else any(bool_values)
+            )
             continue
         numeric_values = [
             value for value in values if _safe_float(value, None) is not None
         ]
         if numeric_values and len(numeric_values) == len(values):
-            result[key] = _aggregate_numeric_metric(key, values, dicts)
+            value_parents = [
+                item for item in dicts if isinstance(item, dict) and key in item
+            ]
+            result[key] = _aggregate_numeric_metric(key, values, value_parents)
             continue
         text_values = [
             str(value) for value in values if value not in (None, "", "-", "None")
         ]
         if text_values:
             result[key] = text_values[-1]
+    score_eligible_parents = [
+        item
+        for item in dicts
+        if isinstance(item, dict)
+        and max(
+            _safe_int(item.get("score60_74_candidates"), 0) or 0,
+            _safe_int(item.get("score65_74_candidates"), 0) or 0,
+            _safe_int(item.get("score60_74_cost_adjusted_sample_count"), 0) or 0,
+        )
+        > 0
+    ]
+    if score_eligible_parents:
+        result["score60_74_cost_contract_complete"] = all(
+            item.get("score60_74_cost_contract_complete") is True
+            for item in score_eligible_parents
+        )
     return result
 
 
@@ -3794,26 +4116,160 @@ def _aggregate_calibration_source_contexts(
                 source_exists[str(name)] += 1
         for warning in context.get("warnings") or []:
             warnings.append(str(warning))
-    return {
-        "schema_version": 1,
+    return _compact_cumulative_source_lists(
+        {
+            "schema_version": 1,
+            "target_date": target_date,
+            "window": window_label,
+            "purpose": "rolling_calibration_source_bundle",
+            "sources": {
+                name: {"exists_count": count, "window_date_count": len(contexts)}
+                for name, count in sorted(source_exists.items())
+            },
+            "source_metrics": {
+                name: _aggregate_metric_dicts(payloads)
+                for name, payloads in sorted(metrics_by_name.items())
+            },
+            "warnings": warnings,
+            "new_observation_axis_created": False,
+        }
+    )
+
+
+def _compact_cumulative_source_lists(value: Any) -> Any:
+    """Bound repeated diagnostic lists while preserving scalar decision metrics."""
+
+    if isinstance(value, dict):
+        if value.get("schema") == "smoothing_force_exit_row_exclusion_v1":
+            return value
+        compact: dict[str, Any] = {}
+        list_meta: dict[str, dict[str, Any]] = {}
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            if not isinstance(item, list):
+                compact[key] = _compact_cumulative_source_lists(item)
+                continue
+            if (
+                key == "rows"
+                and value.get("schema") == "smoothing_source_only_path_journal_v3"
+            ):
+                # The verifier recomputes phase counts from this complete census.
+                compact[key] = item
+                continue
+            if len(item) <= CUMULATIVE_SOURCE_LIST_ITEM_LIMIT:
+                compact[key] = [
+                    _compact_cumulative_source_lists(entry) for entry in item
+                ]
+                continue
+            unique_items: list[Any] = []
+            seen_hashes: set[str] = set()
+            for entry in item:
+                entry_hash = _json_sha256(entry)
+                if entry_hash in seen_hashes:
+                    continue
+                seen_hashes.add(entry_hash)
+                unique_items.append(entry)
+            selected_items = unique_items[-CUMULATIVE_SOURCE_LIST_ITEM_LIMIT:]
+            compact[key] = [
+                _compact_cumulative_source_lists(entry) for entry in selected_items
+            ]
+            list_meta[key] = {
+                "original_count": len(item),
+                "unique_count": len(unique_items),
+                "included_count": len(selected_items),
+                "selection": "latest_unique_tail",
+                "full_hash": _json_sha256(item),
+                "decision_authority": "diagnostic_list_only_scalar_metrics_preserved",
+            }
+        if list_meta:
+            compact["_cumulative_list_compaction"] = list_meta
+        return compact
+    if isinstance(value, list):
+        return [_compact_cumulative_source_lists(item) for item in value]
+    return value
+
+
+def _default_pipeline_load_result(
+    target_date: str, *, cumulative_projection: bool = False
+) -> PipelineLoadResult:
+    result = _unfiltered_pipeline_load_result(
+        target_date, cumulative_projection=cumulative_projection
+    )
+    if target_date < SMOOTHING_FIELD_PROJECTION_CONTRACT_START_DATE:
+        return result
+    kept: list[dict] = []
+    excluded: list[dict] = []
+    for row in result.rows:
+        if row.get("stage") == "holding_flow_override_force_exit":
+            audit = _smoothing_field_projection_audit([row], target_date=target_date)
+            if audit["status"] == "fail":
+                excluded.append(
+                    {
+                        "projected_row": row,
+                        "projected_row_sha256": _json_sha256(row),
+                        "missing_field_counts": audit["missing_field_counts"],
+                        "invalid_value_counts": audit["invalid_value_counts"],
+                    }
+                )
+                continue
+        kept.append(row)
+    if not excluded:
+        return result
+    meta = dict(result.meta)
+    meta["smoothing_force_exit_row_exclusion"] = {
+        "schema": "smoothing_force_exit_row_exclusion_v1",
         "target_date": target_date,
-        "window": window_label,
-        "purpose": "rolling_calibration_source_bundle",
-        "sources": {
-            name: {"exists_count": count, "window_date_count": len(contexts)}
-            for name, count in sorted(source_exists.items())
-        },
-        "source_metrics": {
-            name: _aggregate_metric_dicts(payloads)
-            for name, payloads in sorted(metrics_by_name.items())
-        },
-        "warnings": warnings,
-        "new_observation_axis_created": False,
+        "decision_authority": "source_quality_row_exclusion_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "source_row_count": len(result.rows),
+        "included_row_count": len(kept),
+        "excluded_row_count": len(excluded),
+        "excluded_rows": excluded,
+        "excluded_rows_sha256": _json_sha256(excluded),
+        "raw_source_mutated": False,
+        "row_hash_scope": "canonical_projected_event_not_full_raw_envelope",
     }
+    meta["line_count"] = len(kept)
+    meta["warnings"] = [
+        *(meta.get("warnings") or []),
+        f"smoothing_force_exit_contract_rows_excluded={len(excluded)}",
+    ]
+    ingestion = meta.get("smoothing_source_only_ingestion")
+    if isinstance(ingestion, dict):
+        ingestion = dict(ingestion)
+        projection = _smoothing_field_projection_audit(kept, target_date=target_date)
+        ingestion["field_projection"] = projection
+        if projection["status"] == "pass":
+            ingestion["issues"] = [
+                issue
+                for issue in ingestion.get("issues", [])
+                if issue != "smoothing_field_projection_contract_failed"
+            ]
+            if ingestion.get("status") == "fail" and not ingestion["issues"]:
+                ingestion["status"] = "pass"
+        meta["smoothing_source_only_ingestion"] = ingestion
+    return PipelineLoadResult(rows=kept, meta=meta)
 
 
-def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
-    partitioned = _load_partitioned_pipeline_events(target_date)
+def _unfiltered_pipeline_load_result(
+    target_date: str, *, cumulative_projection: bool = False
+) -> PipelineLoadResult:
+    family_allowlist = (
+        CUMULATIVE_THRESHOLD_EVENT_FAMILIES
+        if cumulative_projection
+        else THRESHOLD_REPORT_EVENT_FAMILIES
+    )
+    stage_allowlist_by_family = (
+        CUMULATIVE_THRESHOLD_STAGE_ALLOWLIST_BY_FAMILY
+        if cumulative_projection
+        else None
+    )
+    partitioned = _load_partitioned_pipeline_events(
+        target_date,
+        family_allowlist=family_allowlist,
+        stage_allowlist_by_family=stage_allowlist_by_family,
+    )
     if partitioned is not None:
         return partitioned
 
@@ -3821,7 +4277,11 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
     if not compact_path.exists() and Path(f"{compact_path}.gz").exists():
         compact_path = Path(f"{compact_path}.gz")
     if compact_path.exists():
-        rows = _read_threshold_jsonl(compact_path)
+        rows = _read_threshold_jsonl(
+            compact_path,
+            family_allowlist=family_allowlist,
+            stage_allowlist_by_family=stage_allowlist_by_family,
+        )
         return PipelineLoadResult(
             rows=rows,
             meta={
@@ -3844,7 +4304,11 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
         and jsonl_path.stat().st_size <= RAW_PIPELINE_FALLBACK_MAX_BYTES
     ):
         rows: list[dict] = []
-        for payload in _read_threshold_jsonl(jsonl_path):
+        for payload in _read_threshold_jsonl(
+            jsonl_path,
+            family_allowlist=family_allowlist,
+            stage_allowlist_by_family=stage_allowlist_by_family,
+        ):
             if not isinstance(payload, dict):
                 continue
             if not is_threshold_cycle_stage(
@@ -3873,10 +4337,11 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
             },
         )
     warnings = []
+    projection_read_failures: list[dict[str, str]] = []
     if jsonl_path.exists():
-        warnings.append(
-            f"raw fallback skipped: file exceeds {RAW_PIPELINE_FALLBACK_MAX_BYTES} bytes"
-        )
+        error = f"raw fallback skipped: file exceeds {RAW_PIPELINE_FALLBACK_MAX_BYTES} bytes"
+        warnings.append(error)
+        projection_read_failures.append({"path": str(jsonl_path), "error": error})
     return PipelineLoadResult(
         rows=[],
         meta={
@@ -3887,6 +4352,8 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
             "checkpoint_completed": None,
             "paused_reason": None,
             "read_bytes_estimate": 0,
+            "projection_read_complete": not projection_read_failures,
+            "projection_read_failures": projection_read_failures,
             "warnings": warnings,
         },
     )
@@ -11782,7 +12249,7 @@ def _build_lifecycle_decision_matrix_runtime_family(target_date: str | None) -> 
     }
 
 
-def _build_apply_candidate_list(families: list[dict]) -> list[dict]:
+def _build_family_readiness_list(families: list[dict]) -> list[dict]:
     candidates: list[dict] = []
     manifest_candidates = [
         family
@@ -11823,6 +12290,297 @@ def _build_apply_candidate_list(families: list[dict]) -> list[dict]:
                 }
             )
     return candidates
+
+
+def _build_apply_candidate_list(calibration_candidates: list[dict]) -> list[dict]:
+    """Return only candidates that can be selected by the next PREOPEN pass now."""
+
+    eligible = [
+        candidate
+        for candidate in calibration_candidates
+        if isinstance(candidate, dict)
+        and candidate.get("pre_baseline_archive_only") is not True
+        and candidate.get("runtime_apply_eligible_now") is True
+        and str(candidate.get("calibration_state") or "")
+        in {"adjust_up", "adjust_down"}
+        and str(candidate.get("apply_mode") or "")
+        not in {"report_only_calibration", "manifest_only"}
+    ]
+    selected: list[dict] = []
+    selected_stages: set[str] = set()
+    for candidate in sorted(
+        eligible,
+        key=lambda item: (
+            int(_safe_int(item.get("priority"), 999) or 999),
+            str(item.get("family") or ""),
+        ),
+    ):
+        stage = str(candidate.get("stage") or "unknown")
+        if stage in selected_stages:
+            continue
+        selected_stages.add(stage)
+        selected.append(
+            {
+                "family": candidate.get("family"),
+                "stage": candidate.get("stage"),
+                "calibration_state": candidate.get("calibration_state"),
+                "apply_mode": candidate.get("apply_mode"),
+                "runtime_apply_eligible_now": True,
+                "owner_rule": "single_axis_canary",
+            }
+        )
+    return selected
+
+
+def _enforce_clean_tuning_baseline_gate(report: dict) -> dict:
+    """Keep pre-baseline reports available for audit without runtime authority."""
+
+    target_date = str(report.get("date") or "")
+    decision_input_eligible = bool(target_date >= CLEAN_TUNING_BASELINE_DATE)
+    meta = report.setdefault("meta", {})
+    if isinstance(meta, dict):
+        meta["clean_tuning_baseline_date"] = CLEAN_TUNING_BASELINE_DATE
+        meta["clean_tuning_decision_input_eligible"] = decision_input_eligible
+    source_flags = report.setdefault("source_flags", {})
+    if isinstance(source_flags, dict):
+        source_flags["clean_tuning_baseline_date"] = CLEAN_TUNING_BASELINE_DATE
+        source_flags["pre_baseline_decision_input_forbidden"] = True
+        source_flags["clean_tuning_decision_input_eligible"] = decision_input_eligible
+    candidates = report.get("calibration_candidates")
+    if decision_input_eligible:
+        if isinstance(candidates, list):
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate.pop("pre_baseline_archive_only", None)
+                if (
+                    candidate.get("runtime_apply_blocker")
+                    == "pre_clean_tuning_baseline_archive_only"
+                ):
+                    candidate.pop("runtime_apply_blocker", None)
+        return report
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            candidate["runtime_apply_eligible_now"] = False
+            candidate["pre_baseline_archive_only"] = True
+            candidate["runtime_apply_blocker"] = (
+                "pre_clean_tuning_baseline_archive_only"
+            )
+    report["apply_candidate_list"] = []
+    return report
+
+
+def _pipeline_projection_read_failures(report: dict) -> list[dict[str, str]]:
+    meta = report.get("meta") if isinstance(report.get("meta"), dict) else {}
+    pipeline_load = (
+        meta.get("pipeline_load") if isinstance(meta.get("pipeline_load"), dict) else {}
+    )
+    failures: list[dict[str, str]] = []
+    for event_date, load_meta in pipeline_load.items():
+        if not isinstance(load_meta, dict):
+            continue
+        if load_meta.get("projection_read_complete") is not False:
+            continue
+        raw_failures = load_meta.get("projection_read_failures")
+        previous_failure_count = len(failures)
+        if isinstance(raw_failures, list) and raw_failures:
+            for item in raw_failures:
+                if not isinstance(item, dict):
+                    continue
+                failures.append(
+                    {
+                        "date": str(event_date),
+                        "path": str(item.get("path") or ""),
+                        "error": str(item.get("error") or "partition_read_failed"),
+                    }
+                )
+        if len(failures) == previous_failure_count:
+            failures.append(
+                {
+                    "date": str(event_date),
+                    "path": "",
+                    "error": "projection_read_incomplete_without_detail",
+                }
+            )
+    return failures
+
+
+def _enforce_pipeline_projection_source_gate(
+    report: dict, cumulative_report: dict | None = None
+) -> dict:
+    """Quarantine identifiable loss at the consuming family/window boundary."""
+
+    failures = _pipeline_projection_read_failures(report)
+    if isinstance(cumulative_report, dict):
+        failures.extend(_pipeline_projection_read_failures(cumulative_report))
+    source_flags = report.setdefault("source_flags", {})
+    if isinstance(source_flags, dict):
+        source_flags["pipeline_projection_read_complete"] = not failures
+        source_flags["pipeline_projection_read_failures"] = failures
+    if not failures:
+        return report
+    candidates = report.get("calibration_candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            relevant_failures = [
+                failure
+                for failure in failures
+                if _candidate_consumes_pipeline_failure(
+                    candidate, failure, report, cumulative_report
+                )
+            ]
+            candidate["pipeline_projection_excluded_failures"] = [
+                failure for failure in failures if failure not in relevant_failures
+            ]
+            if not relevant_failures:
+                continue
+            candidate["pipeline_projection_read_failures"] = relevant_failures
+            candidate["runtime_apply_eligible_now"] = False
+            raw_blockers = candidate.get("runtime_apply_blockers")
+            blockers = list(raw_blockers) if isinstance(raw_blockers, list) else []
+            if "threshold_pipeline_projection_read_incomplete" not in blockers:
+                blockers.append("threshold_pipeline_projection_read_incomplete")
+            candidate["runtime_apply_blockers"] = blockers
+            candidate.setdefault(
+                "runtime_apply_blocker",
+                "threshold_pipeline_projection_read_incomplete",
+            )
+    report["apply_candidate_list"] = _build_apply_candidate_list(
+        candidates if isinstance(candidates, list) else []
+    )
+    return report
+
+
+def _candidate_consumes_pipeline_failure(
+    candidate: dict, failure: dict, report: dict, cumulative_report: dict | None
+) -> bool:
+    # Only reviewed dependency sets may prove independence. Unknown consumers,
+    # raw files and unidentifiable loss still fail closed.
+    dependencies = {
+        "dynamic_entry_price_resolver": {
+            "dynamic_entry_price_resolver",
+            "entry_mechanical_momentum",
+            "pre_submit_price_guard",
+            "entry_ofi_ai_smoothing",
+            "entry_price_execution_quality",
+            "adverse_fill_detector",
+        },
+        "entry_price_execution_quality": {
+            "dynamic_entry_price_resolver",
+            "entry_price_execution_quality",
+            "entry_cancel_wait_attribution",
+            "adverse_fill_detector",
+        },
+        "pre_submit_price_guard": {
+            "pre_submit_price_guard",
+            "dynamic_entry_price_resolver",
+        },
+        "strength_momentum_soft_gate_p1": {"strength_momentum_soft_gate_p1"},
+        "liquidity_pre_submit_guard_p1": {
+            "liquidity_pre_submit_guard_p1",
+            "dynamic_entry_price_resolver",
+        },
+        "liquidity_gate_refined_candidate": {
+            "liquidity_pre_submit_guard_p1",
+            "dynamic_entry_price_resolver",
+        },
+        "overbought_pullback_guard_p1": {
+            "overbought_pullback_guard_p1",
+            "dynamic_entry_price_resolver",
+        },
+        "overbought_gate_refined_candidate": {
+            "overbought_pullback_guard_p1",
+            "dynamic_entry_price_resolver",
+        },
+        "bad_entry_refined_canary": {
+            "bad_entry_block",
+            "statistical_action_weight",
+            "scalp_trailing_take_profit",
+            "soft_stop_micro_grace",
+        },
+        "scale_in_price_guard": {
+            "scale_in_price_guard",
+            "statistical_action_weight",
+            "reversal_add",
+            "scale_in_counterfactual",
+        },
+        "scale_in_split_order_plan": {
+            "scale_in_price_guard",
+            "statistical_action_weight",
+            "reversal_add",
+            "dynamic_entry_price_resolver",
+        },
+        "position_sizing_dynamic_formula": {
+            "position_sizing_dynamic_formula",
+            "entry_mechanical_momentum",
+            "statistical_action_weight",
+            "dynamic_entry_price_resolver",
+        },
+        # Dedicated producers own the source-quality/replay contract of these
+        # merged candidates; they do not consume this reader's pipeline rows.
+        "scalping_avg_down_recovery_quality_gate": set(),
+        "scalping_pyramid_quality_gate": set(),
+        "entry_split_order_plan": {
+            "dynamic_entry_price_resolver",
+            "entry_price_execution_quality",
+            "entry_mechanical_momentum",
+            "pre_submit_price_guard",
+        },
+        "holding_flow_ofi_smoothing": {
+            "holding_flow_ofi_smoothing",
+            "statistical_action_weight",
+        },
+        "soft_stop_whipsaw_confirmation": {
+            "soft_stop_whipsaw_confirmation",
+            "soft_stop_micro_grace",
+            "soft_stop_expert_defense",
+            "statistical_action_weight",
+        },
+        "protect_trailing_smoothing": {
+            "protect_trailing_smoothing",
+            "scalp_trailing_take_profit",
+            "scalp_trailing_continuation_recheck",
+            "statistical_action_weight",
+        },
+        "trailing_continuation": {
+            "scalp_trailing_take_profit",
+            "scalp_trailing_continuation_recheck",
+            "statistical_action_weight",
+        },
+        "score65_74_recovery_probe": {
+            "score65_74_recovery_probe",
+            "entry_mechanical_momentum",
+            "dynamic_entry_price_resolver",
+        },
+    }
+    consumed = dependencies.get(str(candidate.get("family") or ""))
+    partition_families = [
+        part.removeprefix("family=")
+        for part in Path(str(failure.get("path") or "")).parts
+        if part.startswith("family=")
+    ]
+    if consumed is None or len(partition_families) != 1:
+        return True
+    if partition_families[0] not in THRESHOLD_REPORT_EVENT_FAMILIES:
+        return True
+    if partition_families[0] not in consumed:
+        return False
+    resolution = candidate.get("window_policy_resolution")
+    primary = resolution.get("primary") if isinstance(resolution, dict) else None
+    windows = (cumulative_report or {}).get("windows") or {}
+    dates = windows.get(primary)
+    daily_dates = ((report.get("meta") or {}).get("pipeline_load") or {}).keys()
+    try:
+        datetime.strptime(str(failure.get("date") or ""), "%Y-%m-%d")
+    except ValueError:
+        return True
+    if isinstance(dates, list) and dates and failure.get("date"):
+        return str(failure["date"]) in set(dates) | set(daily_dates)
+    return True
 
 
 def _build_rollback_guard_pack(families: list[dict]) -> list[dict]:
@@ -11993,8 +12751,6 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
         return max(
             _safe_int(source_metrics.get("score60_74_candidates"), 0) or 0,
             _safe_int(source_metrics.get("score65_74_candidates"), 0) or 0,
-            _safe_int(source_metrics.get("wait6579_total_candidates"), 0) or 0,
-            _safe_int(source_metrics.get("blocked_ai_score_evaluated"), 0) or 0,
         )
     if output_family == "pre_submit_price_guard":
         return max(
@@ -12012,11 +12768,7 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("sim_candidate_observations"), 0) or 0,
         )
     if output_family == "entry_split_order_plan":
-        return max(
-            _safe_int(source_metrics.get("real_sample_count"), 0) or 0,
-            _safe_int(source_metrics.get("sim_sample_count"), 0) or 0,
-            _safe_int(source_metrics.get("recommended_policy_candidate_count"), 0) or 0,
-        )
+        return _safe_int(source_metrics.get("real_sample_count"), 0) or 0
     if output_family == "scale_in_split_order_plan":
         return _safe_int(source_metrics.get("paired_economic_sample_count"), 0) or 0
     if output_family == "entry_price_execution_quality":
@@ -12117,12 +12869,15 @@ def _score65_74_entry_unlock_probe_ready(
     """Return True when the bounded low-score entry probe should open to collect applied samples."""
     if sample_count < sample_floor:
         return False
+    if not observation_cohort_valid(source_metrics):
+        return False
+    cost_adjusted_sample_count = (
+        _safe_int(source_metrics.get("score60_74_cost_adjusted_sample_count"), 0) or 0
+    )
+    if cost_adjusted_sample_count < sample_floor:
+        return False
     avg_ev = _safe_float(
-        (
-            source_metrics.get("score60_74_avg_expected_ev_pct")
-            if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
-            else source_metrics.get("score65_74_avg_expected_ev_pct")
-        ),
+        source_metrics.get("score60_74_avg_cost_adjusted_expected_ev_pct"),
         None,
     )
     avg_close = _safe_float(
@@ -12148,7 +12903,16 @@ def _score65_74_entry_unlock_probe_ready(
         source_metrics.get("order_bundle_submitted"), None
     )
     risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
-    if risk_gate == "confirmed_panic":
+    source_quality_blocked = source_metrics.get("source_quality_blocked") is True
+    if (
+        source_quality_blocked
+        or source_metrics.get("score60_74_cost_contract_complete") is not True
+        or risk_gate == "confirmed_panic"
+        or any(
+            marker in risk_gate
+            for marker in ("source_quality_blocked", "invalid", "fail")
+        )
+    ):
         return False
     if avg_ev is None or avg_ev < 2.0:
         return False
@@ -12156,9 +12920,10 @@ def _score65_74_entry_unlock_probe_ready(
         return False
     if avg_mfe is not None and avg_mfe < 2.0:
         return False
-    if submitted_to_budget is not None and submitted_to_budget > 10.0:
-        return False
-    if order_bundle_submitted is not None and order_bundle_submitted > 0:
+    if submitted_to_budget is not None:
+        if submitted_to_budget < 0.0 or submitted_to_budget > 10.0:
+            return False
+    elif order_bundle_submitted is None or order_bundle_submitted != 0:
         return False
     return True
 
@@ -12268,11 +13033,7 @@ def _calibration_state_for_family(
         )
         effective_range = str(family_sample.get("effective_score_range") or "60-74")
         avg_ev = _safe_float(
-            (
-                source_metrics.get("score60_74_avg_expected_ev_pct")
-                if source_metrics.get("score60_74_avg_expected_ev_pct") is not None
-                else source_metrics.get("score65_74_avg_expected_ev_pct")
-            ),
+            source_metrics.get("score60_74_avg_cost_adjusted_expected_ev_pct"),
             None,
         )
         avg_close = _safe_float(
@@ -12284,9 +13045,20 @@ def _calibration_state_for_family(
             None,
         )
         risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
+        score_source_quality_blocked = source_metrics.get(
+            "source_quality_blocked"
+        ) is True or any(
+            marker in risk_gate
+            for marker in ("source_quality_blocked", "invalid", "fail")
+        )
         submitted_to_budget = _safe_float(
             source_metrics.get("submitted_to_budget_unique_pct"), None
         )
+        if score_source_quality_blocked:
+            return (
+                "source_quality_blocked",
+                f"score{effective_range} risk/source-quality contract is blocked; isolate invalid rows/windows before economic calibration.",
+            )
         if sample_count >= sample_floor and (
             (avg_ev is not None and avg_ev < 2.0)
             or (avg_close is not None and avg_close < 1.0)
@@ -12317,8 +13089,8 @@ def _calibration_state_for_family(
             )
         if sample_count >= sample_floor and ready:
             return (
-                "adjust_up",
-                "partial_samples=0은 전면 금지가 아니라 post-apply calibration target; 기본 신규 BUY sizing bounded canary 후보",
+                "hold_sample",
+                f"score{effective_range} 표본은 준비됐지만 비용 차감 counterfactual EV 또는 source-quality guard가 미완성이다. gross EV만으로 runtime 후보를 열지 않는다.",
             )
         if (
             _safe_int(family_sample.get("wait65_79_score60_74_candidate"), 0)
@@ -13438,6 +14210,9 @@ def _build_calibration_candidates(
             )
         if output_family == "score65_74_recovery_probe":
             score_min = _safe_int(current.get("min_score"), 60) or 60
+            source_metrics["condition_feasibility"] = condition_feasibility(
+                source_metrics, sample_floor
+            )
             score_max = _safe_int(current.get("max_score"), 74) or 74
             source_metrics.setdefault("effective_score_min", score_min)
             source_metrics.setdefault("effective_score_max", score_max)
@@ -13661,14 +14436,10 @@ def _build_calibration_candidates(
             sample_ready
             and bool(metadata.get("allowed_runtime_apply"))
             and output_family not in source_only_smoothing_families
-            and calibration_state
-            not in {
-                "freeze",
-                "hold_sample",
-                "hold_no_edge",
-                "hold_real_outcome_pending",
-                "source_quality_blocked",
-            }
+            and calibration_state in {"adjust_up", "adjust_down"}
+        )
+        runtime_apply_capable = bool(metadata.get("allowed_runtime_apply")) and (
+            output_family not in source_only_smoothing_families
         )
         observed_families = (
             runtime_apply_observation.get("families")
@@ -13756,6 +14527,8 @@ def _build_calibration_candidates(
             ),
             "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply"))
             and output_family not in source_only_smoothing_families,
+            "runtime_apply_capable": runtime_apply_capable,
+            "runtime_apply_eligible_now": runtime_apply_candidate,
             "runtime_apply_block_reason": metadata.get("runtime_apply_block_reason"),
             "human_approval_required": bool(metadata.get("human_approval_required"))
             or calibration_state == "approval_required",
@@ -13764,8 +14537,7 @@ def _build_calibration_candidates(
             "runtime_handoff_contract": {
                 "decision_authority": (
                     "next_preopen_bounded_candidate_only"
-                    if bool(metadata.get("allowed_runtime_apply"))
-                    and output_family not in source_only_smoothing_families
+                    if runtime_apply_capable
                     else "report_only_no_runtime_apply"
                 ),
                 "runtime_effect": False,
@@ -13924,6 +14696,7 @@ def _normalize_ai_sample_window(value: Any) -> str | None:
         "rolling5": "rolling_5d",
         "rolling_5": "rolling_5d",
         "cumulative_since_2026-04-21": "cumulative",
+        "cumulative_since_2026-06-05": "cumulative",
     }
     return aliases.get(text, text)
 
@@ -14052,6 +14825,8 @@ def _sample_floor_status_for_candidate_state(
         return "minimum_edge_missing"
     if state == "approval_required":
         return "manual_approval_required"
+    if state == "source_quality_blocked":
+        return "source_quality_blocked"
     if state == "hold_sample":
         return "hold_sample"
     return "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
@@ -14063,7 +14838,7 @@ def _runtime_apply_candidate_for_state(
     return (
         bool(sample_ready)
         and bool(candidate.get("allowed_runtime_apply"))
-        and state not in {"freeze", "hold_sample", "hold_no_edge", "approval_required"}
+        and state in {"adjust_up", "adjust_down"}
     )
 
 
@@ -14178,6 +14953,10 @@ def _refresh_candidate_from_primary_window(
             "calibration_reason": f"window_policy primary={primary_window} 기준 재평가: {reason}",
             "sample_floor_status": sample_floor_status,
             "apply_mode": apply_mode,
+            "runtime_apply_capable": bool(candidate.get("allowed_runtime_apply")),
+            "runtime_apply_eligible_now": _runtime_apply_candidate_for_state(
+                candidate, state, primary_ready
+            ),
             "threshold_version": f"{family}:{apply_mode}:{sample_floor_status}",
             "window_policy_primary_applied": True,
             "decision_sample_window": primary_window,
@@ -14387,7 +15166,31 @@ def apply_window_policy_registry_to_report(
                     primary_ready=primary_ready,
                     primary_window=str(primary),
                 )
+        effective_state = str(candidate.get("calibration_state") or "")
+        candidate["runtime_apply_capable"] = bool(
+            candidate.get("allowed_runtime_apply")
+        )
+        candidate["runtime_apply_eligible_now"] = _runtime_apply_candidate_for_state(
+            candidate,
+            effective_state,
+            str(candidate.get("sample_floor_status") or "")
+            not in {
+                "hold_sample",
+                "window_policy_hold_sample",
+                "hold_real_outcome_pending",
+                "minimum_edge_missing",
+                "direction_conflict_or_live_risk",
+            },
+        )
+        if candidate.get("family") == "score65_74_recovery_probe":
+            candidate["condition_feasibility"] = condition_feasibility(
+                candidate.get("source_metrics") or {},
+                int(candidate.get("sample_floor") or 20),
+            )
+    _enforce_clean_tuning_baseline_gate(report)
+    _enforce_pipeline_projection_source_gate(report, cumulative_report)
     report["window_policy_audit"] = _build_window_policy_audit(candidates)
+    report["apply_candidate_list"] = _build_apply_candidate_list(candidates)
     report["post_apply_attribution"] = _build_post_apply_attribution(candidates)
     report["safety_guard_pack"] = _build_safety_guard_pack(candidates)
     report["calibration_trigger_pack"] = _build_calibration_trigger_pack(candidates)
@@ -14721,6 +15524,7 @@ def _ai_correction_family_coverage(
     )
     return {
         "status": "complete" if complete else "incomplete",
+        "expected_families": expected_families,
         "expected_family_count": len(expected_families),
         "reviewed_unique_family_count": len(reviewed_families),
         "missing_family_count": len(missing_families),
@@ -14776,8 +15580,7 @@ def _build_ai_correction_repair_context(
         "required_response_count": len(families),
         "authority": "proposal_only_no_runtime_change",
     }
-    _refresh_ai_context_budget_counts(context, hard_cap_applied=False)
-    return context
+    return _finalize_ai_input_context_budget(context)
 
 
 def _repair_ai_correction_family_coverage(
@@ -14788,6 +15591,8 @@ def _repair_ai_correction_family_coverage(
     provider: str,
     run_phase: str,
 ) -> tuple[Any, dict]:
+    if (ai_provider_status or {}).get("status") == "blocked_context_budget":
+        return ai_raw_response, dict(ai_provider_status)
     ai_status, proposals, initial_parse_warnings = _parse_ai_correction_response(
         ai_raw_response
     )
@@ -15069,8 +15874,24 @@ def _stable_json(value: Any) -> str:
     )
 
 
+def _provider_json_text(value: Any) -> str:
+    """Serialize exactly as provider input so context budgets are enforceable."""
+
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _provider_json_sha256(value: Any) -> str:
+    return hashlib.sha256(_provider_json_text(value).encode("utf-8")).hexdigest()
+
+
 def _json_chars(value: Any) -> int:
-    return len(json.dumps(value, ensure_ascii=False, default=str))
+    return len(_provider_json_text(value))
 
 
 def _json_sha256(value: Any) -> str:
@@ -15332,13 +16153,20 @@ def _cumulative_family_window_context(
         for window_name, bundle in bundles.items():
             if not isinstance(bundle, dict):
                 continue
-            source_metric_context[str(window_name)] = {
-                "sources": _source_availability_summary(bundle.get("sources")),
-                "source_metrics": _compact_json_value(
-                    bundle.get("source_metrics") or {},
-                    max_chars=5_000,
+            source_metrics_by_candidate_family = {
+                family: _compact_json_value(
+                    _source_metrics_for_family(family, bundle),
+                    max_chars=2_500,
                     max_dict_keys=AI_CORRECTION_SOURCE_METRIC_TOP_N,
                     max_list_items=6,
+                )
+                for family in sorted(families)
+                if _source_metrics_for_family(family, bundle)
+            }
+            source_metric_context[str(window_name)] = {
+                "sources": _source_availability_summary(bundle.get("sources")),
+                "source_metrics_by_candidate_family": (
+                    source_metrics_by_candidate_family
                 ),
                 "warnings": list(bundle.get("warnings") or [])[:10],
             }
@@ -15358,7 +16186,8 @@ def _finalize_ai_input_context_budget(context: dict) -> dict:
     total_chars = _json_chars(context)
     if total_chars <= AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
         _refresh_ai_context_budget_counts(context, hard_cap_applied=False)
-        return context
+        if _json_chars(context) <= AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+            return context
 
     for section_name in (
         "threshold_cycle_cumulative",
@@ -15383,6 +16212,42 @@ def _finalize_ai_input_context_budget(context: dict) -> dict:
         }
         total_chars = _json_chars(context)
 
+    _refresh_ai_context_budget_counts(context, hard_cap_applied=True)
+    if _json_chars(context) > AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+        for section_name in (
+            "recent_anomaly_report",
+            "threshold_cycle_cumulative",
+            "trade_lifecycle_attribution",
+            "calibration_source_bundle",
+        ):
+            context[section_name] = {
+                "_truncated": True,
+                "section": section_name,
+                "reason": "provider_serialization_total_context_hard_cap",
+                "full_hash": _json_sha256(context.get(section_name)),
+            }
+            _refresh_ai_context_budget_counts(context, hard_cap_applied=True)
+            if _json_chars(context) <= AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+                break
+    if _json_chars(context) > AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+        # Keep every candidate's identity and decision fields. Long prose is
+        # referenced, never used to silently drop required review families.
+        for candidate in context.get("calibration_candidates") or []:
+            if not isinstance(candidate, dict):
+                continue
+            reason = candidate.get("calibration_reason")
+            candidate["calibration_reason"] = {
+                "preview": str(reason or "")[:80],
+                "full_hash": _json_sha256(reason),
+            }
+            candidate["source_metrics_summary"] = {
+                "full_hash": candidate.get("source_metrics_full_hash"),
+                "reason": "total_context_hard_cap",
+            }
+        _refresh_ai_context_budget_counts(context, hard_cap_applied=True)
+    context["_context_budget"]["provider_call_allowed"] = (
+        _json_chars(context) + 40 <= AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT
+    )
     _refresh_ai_context_budget_counts(context, hard_cap_applied=True)
     return context
 
@@ -15421,8 +16286,14 @@ def _build_ai_correction_input_context(
     source_calibration_report_path: str | None = None,
 ) -> dict:
     candidates = calibration_report.get("calibration_candidates") or []
+    candidates = candidates if isinstance(candidates, list) else []
+    review_candidates = [
+        candidate
+        for candidate in candidates
+        if _candidate_requires_threshold_ai_review(candidate)
+    ]
     candidate_context = []
-    for candidate in candidates if isinstance(candidates, list) else []:
+    for candidate in review_candidates:
         if not isinstance(candidate, dict):
             continue
         candidate_item = {
@@ -15489,7 +16360,7 @@ def _build_ai_correction_input_context(
         candidate_context.append(candidate_item)
     candidate_families = {
         str(candidate.get("family") or "")
-        for candidate in candidates
+        for candidate in review_candidates
         if isinstance(candidate, dict)
     }
     cumulative_summary = {}
@@ -15729,6 +16600,24 @@ def _build_ai_correction_input_context(
     return _finalize_ai_input_context_budget(context)
 
 
+def _candidate_requires_threshold_ai_review(candidate: Any) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    family = str(candidate.get("family") or "")
+    if not family or family in THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES:
+        return False
+    if "runtime_apply_eligible_now" not in candidate:
+        # Transitional compatibility for pre-contract artifacts and direct
+        # validation fixtures. Current reports always emit this field.
+        return True
+    return bool(
+        candidate.get("runtime_apply_eligible_now") is True
+        and candidate.get("allowed_runtime_apply") is True
+        and str(candidate.get("calibration_state") or "")
+        in {"adjust_up", "adjust_down"}
+    )
+
+
 def _gemini_key_sort_key(name: str) -> tuple[int, str]:
     suffix = name.replace("GEMINI_API_KEY", "", 1).lstrip("_")
     if suffix == "":
@@ -15850,7 +16739,7 @@ def _build_ai_correction_prompt(input_context: dict) -> str:
         "  ]\n"
         "}\n\n"
         "Input context:\n"
-        f"{json.dumps(input_context, ensure_ascii=True, indent=2)}"
+        f"{_provider_json_text(input_context)}"
     )
 
 
@@ -15950,32 +16839,39 @@ def _threshold_ai_estimated_cost(
 ) -> tuple[float | None, str]:
     input_contract = os.getenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD")
     output_contract = os.getenv("KORSTOCKSCAN_THRESHOLD_AI_OUTPUT_COST_PER_1M_USD")
-    if (input_contract is None) != (output_contract is None):
+    if input_contract is None or output_contract is None:
         return None, "missing_price_contract"
-    input_rate = _safe_float(
-        input_contract if input_contract is not None else "0", None
-    )
-    output_rate = _safe_float(
-        output_contract if output_contract is not None else "0", None
-    )
+    input_rate = _safe_float(input_contract, None)
+    output_rate = _safe_float(output_contract, None)
     if input_tokens is None or output_tokens is None:
         return None, "missing_token_usage"
-    if input_rate is None or output_rate is None:
+    if (
+        input_rate is None
+        or output_rate is None
+        or not math.isfinite(input_rate)
+        or not math.isfinite(output_rate)
+        or input_rate < 0
+        or output_rate < 0
+    ):
         return None, "missing_price_contract"
+    if input_tokens < 0 or output_tokens < 0:
+        return None, "missing_token_usage"
     estimated = (
         (input_tokens * input_rate) + (output_tokens * output_rate)
     ) / 1_000_000
-    status = (
-        "estimated_from_env_price_contract"
-        if input_contract is not None and output_contract is not None
-        else "operator_zero_cost_default"
-    )
-    return round(float(estimated), 8), status
+    return round(float(estimated), 8), "estimated_from_env_price_contract"
 
 
 def _call_openai_threshold_ai_correction(
     input_context: dict, *, run_phase: str
 ) -> tuple[str | None, dict]:
+    if _json_chars(input_context) > AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+        return None, {
+            "provider": "openai",
+            "status": "blocked_context_budget",
+            "new_provider_call": False,
+            "input_context_chars": _json_chars(input_context),
+        }
     try:
         from openai import OpenAI, RateLimitError
     except Exception as exc:
@@ -15986,18 +16882,11 @@ def _call_openai_threshold_ai_correction(
         }
 
     api_keys = _load_threshold_ai_openai_keys()
-    if not api_keys:
-        return None, {
-            "provider": "openai",
-            "status": "unavailable",
-            "reason": "OPENAI_API_KEY not configured",
-        }
-
     model_sequence = _threshold_ai_openai_model_sequence()
     reasoning_effort = "medium" if str(run_phase) == "intraday" else "high"
-    user_input = json.dumps(input_context, ensure_ascii=True, indent=2, default=str)
+    user_input = _provider_json_text(input_context)
     instructions = _build_openai_ai_correction_instructions(run_phase)
-    input_context_hash = _json_sha256(input_context)
+    input_context_hash = _provider_json_sha256(input_context)
     input_context_chars = len(user_input)
     prompt_chars = len(instructions) + input_context_chars
     errors: list[dict] = []
@@ -16081,7 +16970,7 @@ def _call_openai_threshold_ai_correction(
     return None, {
         "provider": "openai",
         "status": "failed",
-        "new_provider_call": True,
+        "new_provider_call": bool(attempted_key_names),
         "configured_key_count": len(api_keys),
         "attempted_key_count": len(attempted_key_names),
         "attempted_keys": len(attempted_key_names),
@@ -16109,6 +16998,13 @@ def _call_openai_threshold_ai_correction(
 def _call_gemini_threshold_ai_correction(
     input_context: dict,
 ) -> tuple[str | None, dict]:
+    if _json_chars(input_context) > AI_CORRECTION_CONTEXT_TOTAL_CHAR_LIMIT:
+        return None, {
+            "provider": "gemini",
+            "status": "blocked_context_budget",
+            "new_provider_call": False,
+            "input_context_chars": _json_chars(input_context),
+        }
     try:
         from google import genai
         from google.genai import types
@@ -16129,7 +17025,7 @@ def _call_gemini_threshold_ai_correction(
 
     model_name = "models/gemini-3.1-pro-preview-customtools"
     prompt = _build_ai_correction_prompt(input_context)
-    input_context_hash = _json_sha256(input_context)
+    input_context_hash = _provider_json_sha256(input_context)
     input_context_chars = _json_chars(input_context)
     prompt_chars = len(prompt)
     errors: list[dict] = []
@@ -16224,12 +17120,17 @@ def build_threshold_cycle_ai_correction_report(
     )
     candidates = calibration_report.get("calibration_candidates") or []
     candidates = candidates if isinstance(candidates, list) else []
+    review_candidates = [
+        candidate
+        for candidate in candidates
+        if _candidate_requires_threshold_ai_review(candidate)
+    ]
     input_context = ai_input_context or _build_ai_correction_input_context(
         calibration_report,
         cumulative_report,
         source_calibration_report_path=source_calibration_report_path,
     )
-    input_context_hash = _json_sha256(input_context)
+    input_context_hash = _provider_json_sha256(input_context)
     input_context_chars = _json_chars(input_context)
     provider_status = dict(
         ai_provider_status or {"provider": "none", "status": "not_requested"}
@@ -16249,14 +17150,8 @@ def build_threshold_cycle_ai_correction_report(
     ai_status, proposals, parse_warnings = _parse_ai_correction_response(
         ai_raw_response
     )
-    coverage_context = dict(input_context)
-    coverage_context["required_family_manifest"] = [
-        str(candidate.get("family") or "")
-        for candidate in candidates
-        if isinstance(candidate, dict) and str(candidate.get("family") or "")
-    ]
     coverage = _ai_correction_family_coverage(
-        coverage_context, proposals, ai_status=ai_status
+        input_context, proposals, ai_status=ai_status
     )
     coverage["repair"] = (
         provider_status.get("coverage_repair")
@@ -16265,7 +17160,7 @@ def build_threshold_cycle_ai_correction_report(
     )
     expected_families = {
         str(candidate.get("family") or "")
-        for candidate in candidates
+        for candidate in review_candidates
         if isinstance(candidate, dict) and str(candidate.get("family") or "")
     }
     proposals_by_family: dict[str, list[dict]] = defaultdict(list)
@@ -16275,7 +17170,7 @@ def build_threshold_cycle_ai_correction_report(
             proposals_by_family[family].append(proposal)
 
     items: list[dict] = []
-    for candidate in candidates:
+    for candidate in review_candidates:
         if not isinstance(candidate, dict):
             continue
         family = str(candidate.get("family") or "")
@@ -16423,6 +17318,7 @@ def build_threshold_cycle_ai_correction_report(
             ),
         },
         "candidate_count": len(candidates),
+        "review_required_candidate_count": len(review_candidates),
         "reviewed_candidate_count": coverage["reviewed_unique_family_count"],
         "missing_candidate_count": coverage["missing_family_count"],
         "items": items,
@@ -17317,6 +18213,7 @@ def _threshold_snapshot_from_families(
         }
         if report_only:
             payload["daily_family_apply_mode"] = family.get("apply_mode")
+            payload = _compact_cumulative_source_lists(payload)
         snapshot[family["family"]] = payload
     return snapshot
 
@@ -17510,7 +18407,12 @@ def build_cumulative_threshold_cycle_report(
     skip_completed_rows: bool = False,
 ) -> dict:
     target_date = str(target_date).strip()
-    start_date = str(start_date).strip()
+    requested_start_date = str(start_date).strip()
+    target_dt = datetime.strptime(target_date, "%Y-%m-%d").date()
+    clean_baseline_dt = datetime.strptime(CLEAN_TUNING_BASELINE_DATE, "%Y-%m-%d").date()
+    requested_start_dt = datetime.strptime(requested_start_date, "%Y-%m-%d").date()
+    effective_start_dt = max(requested_start_dt, clean_baseline_dt)
+    start_date = effective_start_dt.isoformat()
     ctx = ThresholdCycleContext(warnings=[])
     custom_pipeline_loader = pipeline_loader
     completed_rows_loader = completed_rows_loader or _default_completed_rows_loader
@@ -17518,52 +18420,66 @@ def build_cumulative_threshold_cycle_report(
     window_dates: dict[str, list[str]] = {
         "cumulative": _date_range_between(start_date, target_date)
     }
-    start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+    start_dt = effective_start_dt
     for days in rolling_days:
         window_dates[f"rolling_{days}d"] = [
             value
-            for value in _date_range(target_date, days)
+            for value in _trading_date_range(target_date, days)
             if datetime.strptime(value, "%Y-%m-%d").date() >= start_dt
         ]
 
     pipeline_meta_by_date: dict[str, dict] = {}
+    events_by_date: dict[str, list[dict]] = {}
 
     def load_events_for_window(label: str, dates: list[str]) -> list[dict]:
         rows: list[dict] = []
         for event_date in dates:
+            if event_date in events_by_date:
+                rows.extend(events_by_date[event_date])
+                continue
             try:
                 if custom_pipeline_loader is None:
-                    load_result = _default_pipeline_load_result(event_date)
-                    rows.extend(load_result.rows)
+                    load_result = _default_pipeline_load_result(
+                        event_date, cumulative_projection=True
+                    )
+                    loaded_rows = list(load_result.rows)
                     pipeline_meta_by_date.setdefault(event_date, load_result.meta)
                     for warning in load_result.meta.get("warnings", []):
                         ctx.warnings.append(
-                            f"pipeline event 로드 경고({label}/{event_date}): {warning}"
+                            f"pipeline event 로드 경고({event_date}): {warning}"
                         )
                 else:
-                    rows.extend(custom_pipeline_loader(event_date))
+                    loaded_rows = list(custom_pipeline_loader(event_date))
+                events_by_date[event_date] = loaded_rows
+                rows.extend(loaded_rows)
             except Exception as exc:
-                ctx.warnings.append(
-                    f"pipeline event 로드 실패({label}/{event_date}): {exc}"
-                )
+                events_by_date[event_date] = []
+                ctx.warnings.append(f"pipeline event 로드 실패({event_date}): {exc}")
         return rows
 
     report_sources_by_window: dict[str, dict] = {}
+    report_source_by_date: dict[str, dict] = {}
     if report_source_loader is not None:
         for label, dates in window_dates.items():
             contexts: list[dict] = []
             for event_date in dates:
+                if event_date in report_source_by_date:
+                    contexts.append(report_source_by_date[event_date])
+                    continue
                 try:
                     context = report_source_loader(event_date)
                     if isinstance(context, dict):
+                        report_source_by_date[event_date] = context
                         contexts.append(context)
                     else:
+                        report_source_by_date[event_date] = {}
                         ctx.warnings.append(
-                            f"calibration source loader non-dict({label}/{event_date})"
+                            f"calibration source loader non-dict({event_date})"
                         )
                 except Exception as exc:
+                    report_source_by_date[event_date] = {}
                     ctx.warnings.append(
-                        f"calibration source 로드 실패({label}/{event_date}): {exc}"
+                        f"calibration source 로드 실패({event_date}): {exc}"
                     )
             report_sources_by_window[label] = _aggregate_calibration_source_contexts(
                 contexts,
@@ -17572,13 +18488,15 @@ def build_cumulative_threshold_cycle_report(
             )
 
     completed_rows: list[dict] = []
-    if not skip_completed_rows:
+    if not skip_completed_rows and target_dt >= effective_start_dt:
         try:
             completed_rows = completed_rows_loader(start_date, target_date)
         except Exception as exc:
             ctx.warnings.append(f"completed trade 로드 실패: {exc}")
     else:
-        ctx.warnings.append("completed trade 로드는 skip-db 옵션으로 생략됨")
+        ctx.warnings.append(
+            "completed trade 로드는 skip-db 옵션 또는 pre-baseline target으로 생략됨"
+        )
 
     real_completed_by_window: dict[str, list[dict]] = {}
     sim_completed_by_window: dict[str, list[dict]] = {}
@@ -17635,6 +18553,8 @@ def build_cumulative_threshold_cycle_report(
     }
     source_flags = {
         "profit_basis": "real COMPLETED + valid profit_rate; scalp_sim completed rows are split into completed_by_source/scalp_simulator only",
+        "clean_tuning_baseline_date": CLEAN_TUNING_BASELINE_DATE,
+        "pre_baseline_decision_input_forbidden": True,
         "scalp_sim_calibration_authority": "equal_weight",
         "combined_source_authority": "diagnostic_only_not_family_candidate_input",
         "runtime_change": False,
@@ -17647,11 +18567,18 @@ def build_cumulative_threshold_cycle_report(
     return {
         "date": target_date,
         "start_date": start_date,
+        "requested_start_date": requested_start_date,
         "meta": {
             "schema_version": THRESHOLD_CYCLE_SCHEMA_VERSION,
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "report_path": str(cumulative_threshold_report_paths(target_date)[0]),
             "pipeline_load": pipeline_meta_by_date,
+            "clean_tuning_baseline_date": CLEAN_TUNING_BASELINE_DATE,
+            "start_date_clamped_to_clean_baseline": (
+                requested_start_dt < clean_baseline_dt
+            ),
+            "per_date_source_load_cache": True,
+            "rolling_window_calendar": "krx_trading_sessions",
         },
         "windows": window_dates,
         "summary": {
@@ -18171,7 +19098,8 @@ def build_daily_threshold_cycle_report(
         "threshold_diff_report": threshold_diff_report,
         "trade_lifecycle_attribution": trade_lifecycle_attribution,
         "calibration_source_bundle": report_source_context,
-        "apply_candidate_list": _build_apply_candidate_list(families),
+        "family_readiness_list": _build_family_readiness_list(families),
+        "apply_candidate_list": _build_apply_candidate_list(calibration_candidates),
         "calibration_candidates": calibration_candidates,
         "post_apply_attribution": _build_post_apply_attribution(calibration_candidates),
         "safety_guard_pack": _build_safety_guard_pack(calibration_candidates),
@@ -18181,7 +19109,8 @@ def build_daily_threshold_cycle_report(
         "rollback_guard_pack": _build_rollback_guard_pack(families),
         "warnings": ctx.warnings,
     }
-    return report
+    _enforce_clean_tuning_baseline_gate(report)
+    return _enforce_pipeline_projection_source_gate(report)
 
 
 def _merge_direct_scale_in_calibration_candidate(
@@ -18256,6 +19185,16 @@ def _merge_direct_scale_in_calibration_candidate(
             normalized["source_report_paths"] = list(normalized["source_reports"])
         source_reports[report_type] = str(path)
         normalized["source_reports"] = source_reports
+        normalized["runtime_apply_capable"] = bool(
+            normalized.get("allowed_runtime_apply")
+        )
+        normalized["runtime_apply_eligible_now"] = bool(
+            normalized.get("allowed_runtime_apply")
+            and str(normalized.get("calibration_state") or "")
+            in {"adjust_up", "adjust_down"}
+            and str(normalized.get("apply_mode") or "")
+            not in {"report_only_calibration", "manifest_only"}
+        )
         report_candidates.append(normalized)
         existing_families.add(family)
         merged_count += 1
@@ -18272,7 +19211,9 @@ def _merge_direct_scale_in_calibration_candidate(
     report["calibration_trigger_pack"] = _build_calibration_trigger_pack(
         report_candidates
     )
-    return report
+    report["apply_candidate_list"] = _build_apply_candidate_list(report_candidates)
+    _enforce_clean_tuning_baseline_gate(report)
+    return _enforce_pipeline_projection_source_gate(report)
 
 
 def merge_scalping_avg_down_recovery_calibration_candidate(
@@ -18351,8 +19292,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Reuse an existing parsed AI review when date, phase, schema, and input context hash match.",
     )
+    parser.add_argument(
+        "--benchmark-inputs-only",
+        action="store_true",
+        help="Read-only measurement of the exact CLI input path; no report writes or provider calls.",
+    )
     args = parser.parse_args(argv)
 
+    benchmark_started = time.monotonic()
     report = build_daily_threshold_cycle_report(
         args.target_date,
         skip_completed_rows=args.skip_db,
@@ -18366,22 +19313,76 @@ def main(argv: list[str] | None = None) -> int:
         skip_completed_rows=args.skip_db,
     )
     apply_window_policy_registry_to_report(report, cumulative_report)
-    calibration_path = save_threshold_calibration_report(
-        report, run_phase=args.calibration_run_phase
+    calibration_path = calibration_report_path_for_date(
+        args.target_date, args.calibration_run_phase
     )
     ai_input_context = _build_ai_correction_input_context(
         report,
         cumulative_report,
         source_calibration_report_path=str(calibration_path),
     )
-    ai_input_context_hash = _json_sha256(ai_input_context)
+    if args.benchmark_inputs_only:
+        print(
+            json.dumps(
+                {
+                    "schema": "threshold_cli_inputs_benchmark_v1",
+                    "target_date": args.target_date,
+                    "elapsed_sec": round(time.monotonic() - benchmark_started, 3),
+                    "process_max_rss_mib": round(
+                        resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 2
+                    ),
+                    "skip_db": args.skip_db,
+                    "cumulative_report_source_loader": "_summarize_holding_exit_report_sources",
+                    "source_windows": list(
+                        (
+                            cumulative_report.get("calibration_source_bundle_by_window")
+                            or {}
+                        ).keys()
+                    ),
+                    "apply_candidate_count": len(
+                        report.get("apply_candidate_list") or []
+                    ),
+                    "ai_review_candidate_count": len(
+                        ai_input_context.get("required_family_manifest") or []
+                    ),
+                    "ai_context_chars": _json_chars(ai_input_context),
+                    "report_write_count": 0,
+                    "provider_call_count": 0,
+                    "runtime_effect": False,
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    calibration_path = save_threshold_calibration_report(
+        report, run_phase=args.calibration_run_phase
+    )
+    ai_input_context_hash = _provider_json_sha256(ai_input_context)
     ai_raw_response = None
     ai_provider_status = {"provider": "none", "status": "not_requested"}
     ai_correction_report = None
+    ai_review_required = bool(ai_input_context.get("required_family_manifest"))
     existing_ai_review_path = threshold_ai_review_paths(
         args.target_date, args.calibration_run_phase
     )[0]
-    if (
+    if not ai_review_required:
+        ai_raw_response = json.dumps(
+            {
+                "schema_version": THRESHOLD_AI_CORRECTION_SCHEMA_VERSION,
+                "corrections": [],
+            }
+        )
+        ai_provider_status = {
+            "provider": args.ai_correction_provider,
+            "status": "skipped_no_review_candidates",
+            "new_provider_call": False,
+            "input_context_hash": ai_input_context_hash,
+            "input_context_chars": _json_chars(ai_input_context),
+            "estimated_cost": 0.0,
+            "estimated_cost_usd": 0.0,
+            "cost_estimate_status": "no_provider_call",
+        }
+    elif (
         args.reuse_ai_review_if_valid
         and not args.ai_correction_response_json
         and args.ai_correction_provider != "none"
@@ -18390,7 +19391,9 @@ def main(argv: list[str] | None = None) -> int:
             existing_ai_review_path,
             input_context_hash=ai_input_context_hash,
         )
-    if args.ai_correction_response_json:
+    if not ai_review_required:
+        pass
+    elif args.ai_correction_response_json:
         ai_raw_response = Path(args.ai_correction_response_json).read_text(
             encoding="utf-8"
         )
