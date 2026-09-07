@@ -60,3 +60,13 @@
 | main_ai_net_economic_20260907 | pending scheduled source-only consumer | 다음 정상 local outcome/label 생성에서 결손 horizon 제외 및 source-rebuild hash 확인. 신규 source-quality-valid mature 표본이 동일 corrected path를 통과하기 전 resolved로 표시하지 않음 |
 
 실행·재확인 owner는 당일 체크리스트 `Intraday2to5SourceAcceptance0907`이다. 유효 표본 유입률·rolling 만료·maturity가 닫히지 않아 finite ETA는 만들지 않는다.
+
+## 10:59 병합·재기동 후속 evidence
+
+위 구현 완료 시점의 미기동 기록 이후 사용자 `커밋&푸시&main 병합, 필요시 우아한 재기동` 지시를 받아 진행했다. 기능 커밋 `886f8cbe`, main merge `cc86f4da`를 원격에 push했다. 관련 12개 pytest 파일 1,074 PASS, 반복 리뷰 finding 0과 diff/parser PASS 후 표준 `restart.sh`로 PID `46656 → 195755`를 교체했다.
+
+- 신규 PID 실행 코드 `cc86f4da`, source dirty=false, exact-date runtime verify pass, mismatch/missing=0/0, runtime/dated policy fail=0/0, 퇴역 canonical env 15개 explicit OFF다. launcher commit은 기존 `327e8722`이지만 SHA256 `648b3cd86264d72d46b9c7ee8e8d175072a3f646ebe70425f73afc95b919cf1b`가 현재 파일과 동일하여 supervisor 교체는 하지 않았다.
+- Samsung 오전 서비스는 inactive이며 기존 custody guard가 unresolved custody 없음으로 판정하여 prepare/commit 모두 `not_required`다. 별도 machine authority나 policy는 발행하지 않았다.
+- 전시장 broker snapshot(10:57:46/10:59:26) hash는 `9d8db7db131e997278cc964061d77a49949555f7e4b9c04dd62149b3da5f0a24`로 동일했다. 005930 40주(위젯 20주 및 기존 미확정 잔여 20주), 010140 episode 10주, 042660 episode 20주와 매도 미체결 0003725/0021509/0027015/0027165/0028708을 보존했다. 요청에서 제외된 1항 잔여 custody owner 확정은 수행하지 않았다.
+- 10:59:09 WS LOGIN ACK, 10:59:22 이후 첫 체결 0B/호가 0D, main/scanner/sniper heartbeat를 확인했다. 원천 evidence: `tmp/intraday_merge_restart_20260907.log`, `tmp/intraday_merge_restart_before_20260907.json`, `tmp/intraday_merge_restart_after_20260907.json`, `tmp/intraday_merge_restart_acceptance_20260907.json`.
+- AI 계측은 신규 코드 기동 확인으로 상태를 갱신하되, 자연 호출의 metadata/transport trace receipt·정규 census/label 소비·EV 개선은 아직 별도 acceptance다. 위 표의 `implemented_not_loaded`는 재기동 전 기록이며 현재 natural receipt 확인 owner는 `Intraday2to5SourceAcceptance0907`이다. 실행 중 생성되는 data cache/report/runtime artifact는 소스 커밋에서 제외했다.

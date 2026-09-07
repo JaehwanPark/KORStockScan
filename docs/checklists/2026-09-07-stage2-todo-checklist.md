@@ -18,10 +18,16 @@
 
 ## 수동 보강 체크리스트
 
+- [x] `[Intraday2to5MergeRestartAcceptance0907] 보완 코드 main 병합·push 및 우아한 재기동 acceptance` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 10:50~11:10`, `Track: RuntimeStability`)
+  - 사용자 `커밋&푸시&main 병합, 필요시 우아한 재기동` 지시로 구현 `886f8cbe`를 원격 기능 브랜치에 push하고 merge `cc86f4da`를 원격 main에 반영했다. 관련 12개 테스트 파일 1,074 PASS, 재리뷰 finding 0, diff/parser 검증 PASS 후 표준 `restart.sh`를 실행했다.
+  - PID `46656` 자체 종료 후 `195755`가 실행 코드 `cc86f4da`, source dirty=false로 기동했다. exact-date env verify pass, mismatch/missing=0/0, runtime/dated policy fail=0/0, 퇴역 canonical env 15개 OFF다. 기존 launcher commit `327e8722`의 파일 hash는 현재 파일과 동일하여 supervisor 교체는 불필요했다. Samsung 오전 handoff는 inactive/no unresolved custody에 따른 `not_required`다.
+  - 10:57:46/10:59:26 전시장 broker snapshot hash `9d8db7db131e997278cc964061d77a49949555f7e4b9c04dd62149b3da5f0a24` 동일: 005930 40주, 010140 10주, 042660 20주 및 SELL 0003725/0021509/0027015/0027165/0028708 유지. widget/episode custody는 원래 owner에 남고 1항 삼성 잔여20주/0003725의 exact owner 확정은 수행하지 않았다.
+  - 10:59:09 WS LOGIN ACK, 10:59:22 이후 첫 0B/0D, 신규 PID main/scanner/sniper heartbeat 확인. Source: [병합·재기동 후속 evidence](../audit-reports/2026-09-07-intraday-2to5-defect-repair.md). 자연 AI trace·정규 report·경제성 acceptance는 `Intraday2to5SourceAcceptance0907`에 남긴다.
+
 - [x] `[Intraday2to5DefectRepair0907] 1항 제외 scanner·AI 입력/timeout·micro outcome 결함 보완 및 반복리뷰` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 10:20~11:00`, `Track: RuntimeStability`)
   - Source: [2~5항 구현·재리뷰 및 원천 재검증](../audit-reports/2026-09-07-intraday-2to5-defect-repair.md). scanner 세션별 cadence/미예정 시간창/정상 오판/분모, AI source timing·parse/timeout 계측, micro 호가 결손 horizon 제외를 수정했다. 관련 853 PASS 및 마지막 scanner 54 PASS, 코드 재리뷰 finding 0. 1항 custody와 bot/runtime/provider/threshold/order 변경은 제외했다.
 - [ ] `[Intraday2to5SourceAcceptance0907] scanner 정규 산출물·AI 자연 trace·micro corrected outcome source acceptance` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:20`, `Track: RuntimeStability`)
-  - Source: [잔여 source acceptance](../audit-reports/2026-09-07-intraday-2to5-defect-repair.md). `scanner_recall_krx_20260907`의 official master/cadence/SLA/BBO floor와 새 venue/session 필드를 정규 report에서 확인한다. `ai_input_timing_20260907`은 별도 허용된 정상 기동 후 natural metadata→trace receipt가 닫힐 때까지 implemented_not_loaded로 유지한다. 이 항목은 재기동 권한이 아니다.
+  - Source: [잔여 source acceptance](../audit-reports/2026-09-07-intraday-2to5-defect-repair.md). `scanner_recall_krx_20260907`의 official master/cadence/SLA/BBO floor와 새 venue/session 필드를 정규 report에서 확인한다. `ai_input_timing_20260907`은 `Intraday2to5MergeRestartAcceptance0907`에서 신규 PID 코드 반영을 확인했으며 natural metadata→trace receipt는 별도 확인한다. 이 항목 자체는 추가 재기동 권한이 아니다.
   - 장후 handoff: `main_ai_net_economic_20260907`의 기존 정규 local outcome/label producer에서 missing/stale quote·timestamp-regression 행을 포함한 horizon 제외와 source-rebuild hash를 확인한다. historical invalid row의 0EV 보간·날짜 전체 무조건 폐기·Provider replay gate 우회는 금지하며 현재 corrected path의 신규 유효 표본 전 resolved로 표시하지 않는다.
 
 
