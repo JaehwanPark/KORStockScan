@@ -25,6 +25,7 @@ from src.trading.widget_auto_trade.notifications import (
     WidgetAutoTradeEntryTelegramNotifier,
 )
 from src.trading.widget_auto_trade.policy import WIDGET_AUTO_TRADE_LEG_QUANTITY
+from src.trading.widget_auto_trade.runtime_verification import publish_startup_receipt
 
 LEGACY_DEFAULT_SYMBOLS = frozenset({"005930", "034020", "042660"})
 
@@ -131,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         dynamic_spec_catalog=CALIBRATED_WIDGET_SPECS,
         entry_action_notifier=WidgetAutoTradeEntryTelegramNotifier(),
     )
+    publish_startup_receipt(trader, interval_sec=args.interval_sec, once=args.once)
     if args.once:
         trader.run_once()
         return 0
