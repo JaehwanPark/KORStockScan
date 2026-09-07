@@ -1159,11 +1159,13 @@ def _ai_decision_action_outcome_calibration_status(
             or handoff.get("broker_order_forbidden") is not True
         ):
             errors.append("optimizer_handoff_contract_invalid")
-        if handoff.get("selected_review_candidate") != selected or (
-            handoff.get("review_ready_candidates") != report_review_ready
-        ) or (
-            handoff.get("thin_positive_review_candidates")
-            != report.get("thin_positive_review_candidates")
+        if (
+            handoff.get("selected_review_candidate") != selected
+            or (handoff.get("review_ready_candidates") != report_review_ready)
+            or (
+                handoff.get("thin_positive_review_candidates")
+                != report.get("thin_positive_review_candidates")
+            )
         ):
             errors.append("optimizer_handoff_candidate_reference_mismatch")
     return {

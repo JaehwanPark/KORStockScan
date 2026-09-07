@@ -209,9 +209,8 @@ def test_collector_reuses_stable_episode_and_clips_horizon_at_session_end() -> N
     assert second["scanner_prune_observer_schedule_status"] == (
         "existing_episode_reused"
     )
-    assert (
-        second["scanner_prune_observer_episode_id"]
-        == (first["scanner_prune_observer_episode_id"])
+    assert second["scanner_prune_observer_episode_id"] == (
+        first["scanner_prune_observer_episode_id"]
     )
 
 
@@ -365,9 +364,8 @@ def test_collector_rotates_episode_only_after_observation_absence() -> None:
     assert rotated["scanner_prune_observer_schedule_status"] == (
         "new_episode_scheduled"
     )
-    assert (
-        rotated["scanner_prune_observer_episode_id"]
-        != (first["scanner_prune_observer_episode_id"])
+    assert rotated["scanner_prune_observer_episode_id"] != (
+        first["scanner_prune_observer_episode_id"]
     )
 
 
@@ -422,9 +420,8 @@ def test_deferred_episode_retries_with_same_id_when_capacity_frees() -> None:
     assert retried["scanner_prune_observer_schedule_status"] == (
         "new_episode_scheduled"
     )
-    assert (
-        retried["scanner_prune_observer_episode_id"]
-        == (deferred["scanner_prune_observer_episode_id"])
+    assert retried["scanner_prune_observer_episode_id"] == (
+        deferred["scanner_prune_observer_episode_id"]
     )
     assert retried["scanner_prune_observer_anchor_generation_id"] == "SCANGEN-1"
     assert (
@@ -487,9 +484,8 @@ def test_deferred_episode_does_not_spend_budget_after_anchor_latency_ceiling() -
     assert retried["scanner_prune_observer_schedule_status"] == (
         "anchor_schedule_latency_exceeded"
     )
-    assert (
-        retried["scanner_prune_observer_episode_id"]
-        == (deferred["scanner_prune_observer_episode_id"])
+    assert retried["scanner_prune_observer_episode_id"] == (
+        deferred["scanner_prune_observer_episode_id"]
     )
     assert retried["scanner_prune_observer_scheduled_sample_count"] == 0
     assert retried["scanner_prune_observer_process_daily_scheduled_request_count"] == 2
@@ -535,9 +531,8 @@ def test_collector_preserves_explicit_nxt_route_and_fails_closed_on_capacity() -
         "active_episode_capacity_rejected"
     )
     assert rejected["scanner_prune_observer_episode_id"].startswith("PRUNEBBO-")
-    assert (
-        rejected_again["scanner_prune_observer_episode_id"]
-        == (rejected["scanner_prune_observer_episode_id"])
+    assert rejected_again["scanner_prune_observer_episode_id"] == (
+        rejected["scanner_prune_observer_episode_id"]
     )
     assert rejected["runtime_effect"] is False
 

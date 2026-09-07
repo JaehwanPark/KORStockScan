@@ -345,9 +345,7 @@ def test_condition_reactivation_replaces_expired_scanner_generation(monkeypatch)
         market_session_bucket="krx_like_premarket",
         scanner_promotion_id="SCANPROM-001450-old",
         scanner_promotion_reason="price_jump_start_acceleration",
-        scanner_promotion_emitted_epoch=datetime(
-            2026, 8, 14, 8, 8, 43
-        ).timestamp(),
+        scanner_promotion_emitted_epoch=datetime(2026, 8, 14, 8, 8, 43).timestamp(),
         scanner_source_signature="HIGH_PROXIMITY_CONFIRMATION,PRICE_JUMP_START",
         scanner_watch_budget_owner="opening_rotation",
         scanner_price_delta_since_first_seen_pct=1.2,
@@ -403,9 +401,7 @@ def test_condition_reactivation_replaces_expired_scanner_generation(monkeypatch)
     assert expired.market_session_bucket == "krx_regular"
     assert expired.venue_resolution == "condition_session_clock:krx_regular"
     assert expired.scanner_promotion_id == f"CONDPROM-001450-{int(now_ts * 1000)}"
-    assert expired.scanner_source_signature == (
-        "CONDITION_MATCHED,SCALP_UNDERPRESS_01"
-    )
+    assert expired.scanner_source_signature == ("CONDITION_MATCHED,SCALP_UNDERPRESS_01")
     assert expired.scanner_watch_budget_owner is None
     assert expired.scanner_price_delta_since_first_seen_pct is None
     assert expired.scanner_comparable_flu_delta_since_first_seen is None

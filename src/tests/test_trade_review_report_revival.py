@@ -444,8 +444,9 @@ def test_trade_review_reconciles_completed_economics_without_losing_raw_event(
     assert sell_completed["fields"]["trade_review_raw_event_profit_rate"] == "-1.02"
     assert sell_completed["fields"]["trade_review_raw_event_realized_pnl_krw"] == "-52"
     assert (
-        sell_completed["fields"]
-        ["trade_review_raw_event_main_lifecycle_realized_net_pnl_krw"]
+        sell_completed["fields"][
+            "trade_review_raw_event_main_lifecycle_realized_net_pnl_krw"
+        ]
         == "-52"
     )
     assert sell_completed["fields"]["trade_review_economics_reconciled"] == "True"

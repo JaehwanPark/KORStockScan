@@ -2071,9 +2071,7 @@ def _valid_depth_row(
     if legacy_route_conservation:
         route_totals = row.get("route_totals")
         combined = (
-            route_totals.get("combined")
-            if isinstance(route_totals, Mapping)
-            else None
+            route_totals.get("combined") if isinstance(route_totals, Mapping) else None
         )
         components = (
             [
@@ -4495,9 +4493,7 @@ def _entry_pipeline_allocator_provenance(
                 return
             previous = orders.get(normalized_order_no)
             if previous is not None and previous != normalized_quantity:
-                raise ValueError(
-                    "entry_pipeline_allocator_broker_order_qty_conflict"
-                )
+                raise ValueError("entry_pipeline_allocator_broker_order_qty_conflict")
             orders[normalized_order_no] = normalized_quantity
 
         order_qty_list = str(fields.get("broker_order_qty_list") or "").strip()
@@ -4539,9 +4535,7 @@ def _entry_pipeline_allocator_provenance(
                 direct_qty,
             )
             if not orders:
-                raise ValueError(
-                    "entry_pipeline_allocator_broker_order_qty_missing"
-                )
+                raise ValueError("entry_pipeline_allocator_broker_order_qty_missing")
         elif not orders and _nonnegative_int(fields.get("submitted_leg_count")) == 1:
             add(
                 fields.get("broker_order_no")
@@ -4692,9 +4686,7 @@ def _entry_pipeline_allocator_provenance(
         for order_no, submitted_qty in row_submitted_orders.items():
             previous = joined["submitted_order_quantities"].get(order_no)
             if previous is not None and previous != submitted_qty:
-                raise ValueError(
-                    "entry_pipeline_allocator_broker_order_qty_conflict"
-                )
+                raise ValueError("entry_pipeline_allocator_broker_order_qty_conflict")
             joined["submitted_order_quantities"][order_no] = submitted_qty
         if row_submitted_orders:
             broker_bound_semantic_keys.add(key)
@@ -4779,9 +4771,7 @@ def _entry_pipeline_allocator_provenance(
                 if not sole_planned_qty or sole_submitted_qty is None
                 else round(sole_submitted_qty / sole_planned_qty * 100.0, 6)
             ),
-            "fully_submitted_semantic_count": len(
-                fully_submitted_semantic_keys
-            ),
+            "fully_submitted_semantic_count": len(fully_submitted_semantic_keys),
         }
     joined = semantic_events[selected_key]
     semantic = joined["semantic"]
@@ -4840,16 +4830,14 @@ def build_tactical_evidence(
         raise ValueError("micro_context_bridge_producer_version_invalid")
     selected_config = config or BridgeConfig()
     try:
-        exact_source_contract_active = (
-            _parse_timestamp(trace.get("decision_ts")).astimezone(KST).date()
-            >= date.fromisoformat(CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE)
+        exact_source_contract_active = _parse_timestamp(
+            trace.get("decision_ts")
+        ).astimezone(KST).date() >= date.fromisoformat(
+            CURRENT_EXACT_SOURCE_ELIGIBILITY_ACTIVATION_DATE
         )
     except (TypeError, ValueError):
         exact_source_contract_active = False
-    if (
-        exact_source_contract_active
-        and producer_version != BRIDGE_PRODUCER_VERSION
-    ):
+    if exact_source_contract_active and producer_version != BRIDGE_PRODUCER_VERSION:
         raise ValueError("micro_context_bridge_producer_version_invalid")
     watermark, blockers = exact_snapshot_watermark(trace, payload)
     blocker_list = list(blockers)
@@ -8507,7 +8495,9 @@ def attach_micro_context_to_replay_request(
     if _bridge_config_contract(
         config,
         producer_version=evidence_producer_version,
-    )["config_sha256"] != evidence.get("bridge_config_sha256"):
+    )[
+        "config_sha256"
+    ] != evidence.get("bridge_config_sha256"):
         raise ValueError("micro_context_bridge_config_mismatch")
     rebuilt_evidence = build_tactical_evidence(
         trace=source_trace,
@@ -10568,9 +10558,7 @@ def build_bridge_report(
                 ask_depletion_sidecar_status = str(exc).split(":", 1)[0]
             else:
                 ask_depletion_sidecar = candidate_sidecar
-                ask_depletion_sidecar_status = (
-                    "eligible_source_only_feature_ablation"
-                )
+                ask_depletion_sidecar_status = "eligible_source_only_feature_ablation"
         wave_id = str((evidence.get("event") or {}).get("parent_wave_id") or "")
         wave_key = (
             normalize_symbol(evidence.get("stock_code")),

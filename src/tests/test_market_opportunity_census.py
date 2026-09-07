@@ -464,17 +464,17 @@ def test_capture_collects_bounded_exact_route_external_bbo():
     observation = records[0]["rows"][0]["executable_bbo_observation"]
     assert bbo_calls == [
         (
-                "secret-token",
-                "005930_NX",
-                {
-                    "explicit_request_code": True,
-                    "max_retries": 1,
-                    "request_owner": "market_opportunity_census.external_bbo",
-                    "request_class": "source_only",
-                    "read_rate_max_wait_sec": 1.25,
-                    "return_meta": True,
-                },
-            )
+            "secret-token",
+            "005930_NX",
+            {
+                "explicit_request_code": True,
+                "max_retries": 1,
+                "request_owner": "market_opportunity_census.external_bbo",
+                "request_class": "source_only",
+                "read_rate_max_wait_sec": 1.25,
+                "return_meta": True,
+            },
+        )
     ]
     assert observation["status"] == "captured"
     assert observation["best_bid_qty"] == 12
@@ -876,9 +876,12 @@ def test_duplicate_snapshot_reservation_ordinal_fails_capture_contract(tmp_path)
     assert source["external_census_reservation_conservation_delta"] == 0
     assert source["external_census_reservation_conservation_status"] == "fail"
     assert source["external_census_capture_contract_reflected"] is False
-    assert source["gap_reason_counts"][
-        "external_census_daily_budget_reservation_ordinal_duplicate"
-    ] == 1
+    assert (
+        source["gap_reason_counts"][
+            "external_census_daily_budget_reservation_ordinal_duplicate"
+        ]
+        == 1
+    )
 
 
 def test_snapshot_source_hash_detects_normalized_row_tampering():
@@ -2140,9 +2143,9 @@ def test_external_snapshot_bbo_validates_exact_scope():
     assert observation["session"] == "KRX_REGULAR"
     assert observation["best_ask_qty"] == 10
 
-    row["executable_bbo_observation"]["daily_budget_reservation"]["attempt_ordinal"] = (
-        "malformed"
-    )
+    row["executable_bbo_observation"]["daily_budget_reservation"][
+        "attempt_ordinal"
+    ] = "malformed"
     invalid_observation, invalid_reason = census._external_snapshot_bbo_observation(
         snapshot,
         row,
@@ -2443,7 +2446,12 @@ def test_cadence_cannot_borrow_a_previous_sessions_floor(tmp_path):
     assert cadence["sessions"]["NXT_PREMARKET"]["cadence_floor_met"] is True
     assert cadence["sessions"]["NXT_REGULAR_OVERLAP"]["cadence_floor_met"] is False
     assert cadence["cadence_floor_met"] is False
-    assert "PREMARKET_KRX_LIKE" not in report["source_quality"]["observed_capture_cadence_by_venue_panel"]["KRX|all"]["sessions"]
+    assert (
+        "PREMARKET_KRX_LIKE"
+        not in report["source_quality"]["observed_capture_cadence_by_venue_panel"][
+            "KRX|all"
+        ]["sessions"]
+    )
     # A completely absent current NXT session is also a gap, even when another
     # venue continues to provide the target-date capture watermark.
     for row in snapshots:

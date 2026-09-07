@@ -1222,10 +1222,7 @@ def _recovery_actions(
         if issue != runtime_gap_stale_issue
         and issue not in DONE_ACCEPTABLE_WARNING_ISSUES
     }
-    if (
-        runtime_gap_stale_issue in issues
-        and not runtime_gap_other_actionable_issues
-    ):
+    if runtime_gap_stale_issue in issues and not runtime_gap_other_actionable_issues:
         actions.extend(
             [
                 _build_runtime_apply_gap_audit_action(target_date, verification),

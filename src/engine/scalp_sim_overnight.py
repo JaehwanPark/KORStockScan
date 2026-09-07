@@ -513,11 +513,7 @@ def run_sim_overnight(
     emit_events: bool = True,
     allow_retired_offline_replay: bool = False,
 ) -> dict[str, Any]:
-    if (
-        not allow_retired_offline_replay
-        or mutate_state
-        or emit_events
-    ):
+    if not allow_retired_offline_replay or mutate_state or emit_events:
         return {
             **retired_status("scalp_sim_overnight"),
             "target_date": target_date,
@@ -919,8 +915,7 @@ def build_report(target_date: str, state_path: Path = STATE_PATH) -> dict[str, A
     overnight_events = [
         event
         for event in iter_jsonl(events_path, errors="ignore")
-        if _is_overnight_report_event(event)
-        and not is_synthetic_scalp_sim(event)
+        if _is_overnight_report_event(event) and not is_synthetic_scalp_sim(event)
     ]
     stage_counts = Counter(str(event.get("stage") or "-") for event in overnight_events)
     action_counts = Counter(

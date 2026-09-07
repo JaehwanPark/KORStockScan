@@ -79,11 +79,13 @@ def test_same_session_terminal_exit_uses_last_executable_venue_window(monkeypatc
         "_holding_sell_nxt_enabled_status",
         lambda *_args: (True, "test.nxt"),
     )
-    before_nxt_close = sniper_state_handlers._scalping_same_session_terminal_exit_fields(
-        stock,
-        "005930",
-        strategy="SCALPING",
-        now_t=datetime_time(15, 15),
+    before_nxt_close = (
+        sniper_state_handlers._scalping_same_session_terminal_exit_fields(
+            stock,
+            "005930",
+            strategy="SCALPING",
+            now_t=datetime_time(15, 15),
+        )
     )
     nxt_close = sniper_state_handlers._scalping_same_session_terminal_exit_fields(
         stock,

@@ -302,8 +302,11 @@ def find_running_trading_processes() -> list[dict[str, Any]]:
             pid = int(proc_dir.name)
             if pid == current_pid:
                 continue
-            command = (proc_dir / "cmdline").read_bytes().replace(b"\0", b" ").decode(
-                "utf-8", errors="replace"
+            command = (
+                (proc_dir / "cmdline")
+                .read_bytes()
+                .replace(b"\0", b" ")
+                .decode("utf-8", errors="replace")
             )
         except (OSError, ValueError):
             continue
@@ -375,14 +378,16 @@ def collect_broker_snapshot(
         }
     )
     for symbol, order_date in receipt_groups:
-        rows, receipt_meta = kiwoom_utils.get_order_reference_snapshot_kt00007_with_meta(
-            token,
-            ord_dt=order_date.replace("-", ""),
-            qry_tp="4",
-            stk_bond_tp="1",
-            sell_tp="2",
-            stk_cd=symbol,
-            dmst_stex_tp="%",
+        rows, receipt_meta = (
+            kiwoom_utils.get_order_reference_snapshot_kt00007_with_meta(
+                token,
+                ord_dt=order_date.replace("-", ""),
+                qry_tp="4",
+                stk_bond_tp="1",
+                sell_tp="2",
+                stk_cd=symbol,
+                dmst_stex_tp="%",
+            )
         )
         if not (
             receipt_meta.get("request_succeeded") is True
@@ -420,9 +425,7 @@ def collect_broker_snapshot(
                 "filled_quantity": int(match.get("filled_qty") or 0),
                 "remaining_quantity": int(match.get("remaining_qty") or 0),
                 "execution_price": int(match.get("execution_price") or 0),
-                "route": _canonical_route(
-                    match.get("stex_tp"), match.get("sor_yn")
-                ),
+                "route": _canonical_route(match.get("stex_tp"), match.get("sor_yn")),
             }
             migration_receipts.append(
                 {
@@ -480,8 +483,7 @@ def validate_broker_snapshot_contract(
         )
     try:
         inventory_invalid = any(
-            not (str(symbol).isdigit() and len(str(symbol)) == 6)
-            or int(quantity) < 0
+            not (str(symbol).isdigit() and len(str(symbol)) == 6) or int(quantity) < 0
             for symbol, quantity in canonical["inventory"].items()
         )
     except (TypeError, ValueError) as exc:
@@ -514,8 +516,7 @@ def validate_broker_snapshot_contract(
             or not (order_no.isdigit() and len(order_no) == 7)
             or key in order_keys
             or not str(row.get("side") or "").strip()
-            or str(row.get("route") or "").strip().upper()
-            not in {"KRX", "NXT", "SOR"}
+            or str(row.get("route") or "").strip().upper() not in {"KRX", "NXT", "SOR"}
             or quantity <= 0
             or min(filled_quantity, remaining_quantity) < 0
             or filled_quantity > quantity
@@ -557,8 +558,7 @@ def _validate_broker_snapshot(
             if (
                 receipt.get("side") != "매수"
                 or int(receipt.get("remaining_quantity") or 0) != 0
-                or int(receipt.get("quantity") or 0)
-                != int(migration.get("quantity"))
+                or int(receipt.get("quantity") or 0) != int(migration.get("quantity"))
                 or int(receipt.get("filled_quantity") or 0)
                 != int(migration.get("quantity"))
                 or int(receipt.get("execution_price") or 0)
@@ -592,11 +592,14 @@ def _register_requested_migrations(
     entries: dict[str, dict[str, Any]],
 ) -> None:
     for symbol, entry in entries.items():
-        if registry.policy_activation_record(
-            active_date=active_date,
-            policy_id=policy_id,
-            symbol=symbol,
-        ) is not None:
+        if (
+            registry.policy_activation_record(
+                active_date=active_date,
+                policy_id=policy_id,
+                symbol=symbol,
+            )
+            is not None
+        ):
             continue
         for row in entry["migrated_positions"]:
             registry.register_migrated_position(
@@ -651,8 +654,7 @@ def _build_activated_entries(
                 existing.get("mode") != requested["mode"]
                 or tuple(existing.get("allowed_owners") or ())
                 != tuple(requested["allowed_owners"])
-                or existing.get("broker_snapshot_sha256")
-                != snapshot["snapshot_sha256"]
+                or existing.get("broker_snapshot_sha256") != snapshot["snapshot_sha256"]
                 or existing.get("entry_authority_hash") != entry_hash
             ):
                 raise SymbolOwnerPolicyApplyError(
@@ -726,7 +728,9 @@ def apply_symbol_owner_policy(
     apply: bool = False,
     confirmation: str = "",
     now: datetime | None = None,
-    process_scanner: Callable[[], list[dict[str, Any]]] = find_running_trading_processes,
+    process_scanner: Callable[
+        [], list[dict[str, Any]]
+    ] = find_running_trading_processes,
     snapshot_fetcher: Callable[
         [str, set[str], tuple[dict[str, Any], ...]], dict[str, Any]
     ] = collect_broker_snapshot,
@@ -780,14 +784,10 @@ def apply_symbol_owner_policy(
         apply_window = standing_apply_window(standing_authority)
     expected_confirmation = f"APPLY SAME SYMBOL OWNER POLICY {active_date.isoformat()}"
     if apply and confirmation != expected_confirmation:
-        raise SymbolOwnerPolicyApplyError(
-            "symbol_owner_apply_confirmation_mismatch"
-        )
+        raise SymbolOwnerPolicyApplyError("symbol_owner_apply_confirmation_mismatch")
     local_time = observed_at.astimezone(KST).time().replace(tzinfo=None)
     if apply and not (apply_window[0] <= local_time <= apply_window[1]):
-        raise SymbolOwnerPolicyApplyError(
-            "symbol_owner_apply_outside_preopen_window"
-        )
+        raise SymbolOwnerPolicyApplyError("symbol_owner_apply_outside_preopen_window")
     if apply and pwd.getpwuid(os.geteuid()).pw_name != "ubuntu":
         raise SymbolOwnerPolicyApplyError(
             "symbol_owner_apply_effective_user_must_match_runtime_user:ubuntu"
@@ -800,8 +800,7 @@ def apply_symbol_owner_policy(
     output_path = (
         Path(output_policy_path)
         if output_policy_path is not None
-        else DEFAULT_POLICY_DIR
-        / f"symbol_owner_policy_{active_date.isoformat()}.json"
+        else DEFAULT_POLICY_DIR / f"symbol_owner_policy_{active_date.isoformat()}.json"
     )
     if not target_registry.path.is_absolute() or not output_path.is_absolute():
         raise SymbolOwnerPolicyApplyError(
@@ -839,29 +838,26 @@ def apply_symbol_owner_policy(
             symbol=symbol,
             broker_quantity=entry["expected_broker_quantity"],
         )
-        activation_exists = target_registry.policy_activation_record(
-            active_date=active_date,
-            policy_id=policy_id,
-            symbol=symbol,
-        ) is not None
+        activation_exists = (
+            target_registry.policy_activation_record(
+                active_date=active_date,
+                policy_id=policy_id,
+                symbol=symbol,
+            )
+            is not None
+        )
         new_migration_quantity = 0
         if not activation_exists:
             for migration in entry["migrated_positions"]:
-                already_registered = (
-                    target_registry.matched_migrated_position_quantity(
-                        context=_migration_context(migration),
-                        symbol=symbol,
-                        quantity=int(migration.get("quantity")),
-                        average_price=int(migration.get("average_price")),
-                        route=str(migration.get("route") or "").strip().upper(),
-                        order_date=str(migration.get("order_date") or "").strip(),
-                        broker_order_no=str(
-                            migration.get("broker_order_no") or ""
-                        ).strip(),
-                        evidence_sha256=str(
-                            migration.get("evidence_sha256") or ""
-                        ).strip(),
-                    )
+                already_registered = target_registry.matched_migrated_position_quantity(
+                    context=_migration_context(migration),
+                    symbol=symbol,
+                    quantity=int(migration.get("quantity")),
+                    average_price=int(migration.get("average_price")),
+                    route=str(migration.get("route") or "").strip().upper(),
+                    order_date=str(migration.get("order_date") or "").strip(),
+                    broker_order_no=str(migration.get("broker_order_no") or "").strip(),
+                    evidence_sha256=str(migration.get("evidence_sha256") or "").strip(),
                 )
                 new_migration_quantity += int(migration.get("quantity")) - int(
                     already_registered
@@ -870,8 +866,7 @@ def apply_symbol_owner_policy(
             current["registered_owner_quantity"] + new_migration_quantity
         )
         if (
-            projected_registered
-            + entry["expected_external_manual_remainder"]
+            projected_registered + entry["expected_external_manual_remainder"]
             != entry["expected_broker_quantity"]
         ):
             raise SymbolOwnerPolicyApplyError(

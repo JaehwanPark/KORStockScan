@@ -83,35 +83,46 @@ def test_notify_from_report_realerts_after_incident_resolves(tmp_path, monkeypat
         lambda token, admin_id, message: sent.append(message),
     )
 
-    assert notifier.notify_from_report(
-        report,
-        mode="full",
-        log_file="logs/run_error_detection.log",
-        state_file=state,
-        now_ts=1000.0,
-    ) == "sent"
+    assert (
+        notifier.notify_from_report(
+            report,
+            mode="full",
+            log_file="logs/run_error_detection.log",
+            state_file=state,
+            now_ts=1000.0,
+        )
+        == "sent"
+    )
 
     _write_report(report, severity="pass", summary="All cron jobs passed")
-    assert notifier.notify_from_report(
-        report,
-        mode="full",
-        log_file="logs/run_error_detection.log",
-        state_file=state,
-        now_ts=1100.0,
-    ) == "no_alert"
+    assert (
+        notifier.notify_from_report(
+            report,
+            mode="full",
+            log_file="logs/run_error_detection.log",
+            state_file=state,
+            now_ts=1100.0,
+        )
+        == "no_alert"
+    )
 
     _write_report(report)
-    assert notifier.notify_from_report(
-        report,
-        mode="full",
-        log_file="logs/run_error_detection.log",
-        state_file=state,
-        now_ts=1200.0,
-    ) == "sent"
+    assert (
+        notifier.notify_from_report(
+            report,
+            mode="full",
+            log_file="logs/run_error_detection.log",
+            state_file=state,
+            now_ts=1200.0,
+        )
+        == "sent"
+    )
     assert len(sent) == 2
 
 
-def test_notify_from_report_sends_only_new_incident_in_active_set(tmp_path, monkeypatch):
+def test_notify_from_report_sends_only_new_incident_in_active_set(
+    tmp_path, monkeypatch
+):
     report = tmp_path / "report.json"
     state = tmp_path / "state.json"
     _write_report(report)
@@ -123,13 +134,16 @@ def test_notify_from_report_sends_only_new_incident_in_active_set(tmp_path, monk
         lambda token, admin_id, message: sent.append(message),
     )
 
-    assert notifier.notify_from_report(
-        report,
-        mode="full",
-        log_file="logs/run_error_detection.log",
-        state_file=state,
-        now_ts=1000.0,
-    ) == "sent"
+    assert (
+        notifier.notify_from_report(
+            report,
+            mode="full",
+            log_file="logs/run_error_detection.log",
+            state_file=state,
+            now_ts=1000.0,
+        )
+        == "sent"
+    )
     payload = json.loads(report.read_text(encoding="utf-8"))
     payload["results"].append(
         {
@@ -141,19 +155,24 @@ def test_notify_from_report_sends_only_new_incident_in_active_set(tmp_path, monk
     )
     report.write_text(json.dumps(payload), encoding="utf-8")
 
-    assert notifier.notify_from_report(
-        report,
-        mode="full",
-        log_file="logs/run_error_detection.log",
-        state_file=state,
-        now_ts=1100.0,
-    ) == "sent"
+    assert (
+        notifier.notify_from_report(
+            report,
+            mode="full",
+            log_file="logs/run_error_detection.log",
+            state_file=state,
+            now_ts=1100.0,
+        )
+        == "sent"
+    )
     assert len(sent) == 2
     assert "resource_usage [fail]" in sent[1]
     assert "cron_completion [fail]" not in sent[1]
 
 
-def test_notify_from_report_normalizes_dynamic_numbers_in_incident(tmp_path, monkeypatch):
+def test_notify_from_report_normalizes_dynamic_numbers_in_incident(
+    tmp_path, monkeypatch
+):
     report = tmp_path / "report.json"
     state = tmp_path / "state.json"
     sent = []

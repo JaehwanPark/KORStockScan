@@ -3359,9 +3359,7 @@ def test_bridge_producer_version_is_effective_dated_for_immutable_history() -> N
     evidence, _sidecar, _feature = _complete_ask_depletion_feature_fixture()
     historical = deepcopy(evidence)
     historical["trace_decision_ts"] = "2026-08-27T09:00:17.000+09:00"
-    historical["bridge_producer_version"] = (
-        bridge_module.LEGACY_BRIDGE_PRODUCER_VERSION
-    )
+    historical["bridge_producer_version"] = bridge_module.LEGACY_BRIDGE_PRODUCER_VERSION
     bridge_module._validate_tactical_evidence_shape(historical)
 
     current = deepcopy(historical)
@@ -3497,9 +3495,10 @@ def test_current_manifest_requires_same_trace_paired_and_economic_intersection(
     assert historical["current_exact_contract_active"] is False
     assert historical["current_ablation_source_eligible"] is False
     assert historical["paired_replay_materialization_eligible"] is True
-    assert "net_economic_evaluation_ineligible" not in historical[
-        "materialization_blockers"
-    ]
+    assert (
+        "net_economic_evaluation_ineligible"
+        not in historical["materialization_blockers"]
+    )
 
 
 def test_current_manifest_rejects_partial_ask_depletion_horizon_census() -> None:

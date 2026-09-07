@@ -243,9 +243,7 @@ def _condition_runtime_handoff_fields(
         "entry_armed_at_epoch": float(now_ts),
         "current_price_observed": price if price > 0 else None,
         "condition_price_anchor_state": (
-            "captured_from_explicit_fresh_source"
-            if price > 0
-            else "pending_fresh_ws"
+            "captured_from_explicit_fresh_source" if price > 0 else "pending_fresh_ws"
         ),
         "condition_name": normalized_condition,
         "condition_target_generation_owner": "condition_search_match",
@@ -261,9 +259,7 @@ def _persist_condition_runtime_handoff(record, fields, *, observed_price=0):
     record.venue_resolution = str(fields.get("venue_resolution") or "")
     record.market_session_bucket = str(fields.get("market_session_bucket") or "")
     record.scanner_promotion_id = str(fields.get("scanner_promotion_id") or "")
-    record.scanner_promotion_reason = str(
-        fields.get("scanner_promotion_reason") or ""
-    )
+    record.scanner_promotion_reason = str(fields.get("scanner_promotion_reason") or "")
     record.scanner_promotion_emitted_epoch = float(
         fields.get("scanner_promotion_emitted_epoch") or 0.0
     )

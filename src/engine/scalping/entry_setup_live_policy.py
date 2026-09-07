@@ -99,6 +99,7 @@ def _expected_composer_version(prompt_version: Any) -> str:
         else ENTRY_DECISION_COMPOSER_VERSION
     )
 
+
 _CACHE_LOCK = threading.Lock()
 _ACTIVATION_CACHE: dict[str, Any] = {}
 _EXPLORATION_CAP_LOCK = threading.Lock()
@@ -343,9 +344,7 @@ def _next_krx_trading_date(source_date: str) -> str:
     raise RuntimeError(f"next_krx_trading_date_unresolved:{source_date}")
 
 
-def _candidate_effective_date(
-    *, source_date: str, generated_at: datetime | str
-) -> str:
+def _candidate_effective_date(*, source_date: str, generated_at: datetime | str) -> str:
     source = date.fromisoformat(source_date)
     if isinstance(generated_at, str):
         current = datetime.fromisoformat(generated_at)
@@ -823,9 +822,7 @@ def _exploration_continuation_gate(
     blocking_reasons: list[str] = []
     if floor_reached:
         if primary_ev is None or primary_ev <= 0.0:
-            blocking_reasons.append(
-                "exploration_continuation_primary_ev_not_positive"
-            )
+            blocking_reasons.append("exploration_continuation_primary_ev_not_positive")
         if cost_adjusted_ev is None or cost_adjusted_ev <= 0.0:
             blocking_reasons.append(
                 "exploration_continuation_cost_adjusted_ev_not_positive"
@@ -853,9 +850,11 @@ def _exploration_continuation_gate(
         "action": (
             "continue_bounded_collection"
             if not floor_reached
-            else "continue_positive_edge_canary"
-            if not blocking_reasons
-            else "stop_and_fallback_at_next_preopen"
+            else (
+                "continue_positive_edge_canary"
+                if not blocking_reasons
+                else "stop_and_fallback_at_next_preopen"
+            )
         ),
         "negative_ev_is_calibration_stop_not_hard_safety_relaxation": True,
     }
@@ -888,8 +887,7 @@ def build_live_candidate(
     if not detailed_sha256:
         errors.append("detailed_report_file_unreadable")
     performance_ready = bool(
-        not errors
-        and candidate_prompt_version not in EXPLORATION_ONLY_PROMPT_VERSIONS
+        not errors and candidate_prompt_version not in EXPLORATION_ONLY_PROMPT_VERSIONS
     )
     if not errors and candidate_prompt_version in EXPLORATION_ONLY_PROMPT_VERSIONS:
         errors.append("bounded_recovery_prompt_requires_one_share_exploration_mode")
@@ -931,9 +929,7 @@ def build_live_candidate(
         "canary_mode": canary_mode,
         "blocking_reasons": exploration_errors if not ready else [],
         "performance_promotion_blocking_reasons": errors,
-        "selected_prompt_version": (
-            candidate_prompt_version
-        ),
+        "selected_prompt_version": (candidate_prompt_version),
         "rollback_prompt_version": (
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         ),
@@ -1595,9 +1591,7 @@ def resolve_live_prompt_policy(
         {
             "enabled": True,
             "status": "active_bounded_krx_canary",
-            "selected_prompt_version": (
-                activation.get("selected_prompt_version")
-            ),
+            "selected_prompt_version": (activation.get("selected_prompt_version")),
             "source_date": activation.get("source_date"),
             "candidate_contract_sha256": activation.get("candidate_contract_sha256"),
             "entry_setup_evidence_version": activation.get(

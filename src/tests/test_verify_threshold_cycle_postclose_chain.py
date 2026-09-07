@@ -1458,10 +1458,7 @@ def test_ai_decision_action_outcome_calibration_status_rejects_rehashed_handoff_
     status = mod._ai_decision_action_outcome_calibration_status(report)
 
     assert status["status"] == "fail"
-    assert (
-        "optimizer_handoff_candidate_reference_mismatch"
-        in status["contract_errors"]
-    )
+    assert "optimizer_handoff_candidate_reference_mismatch" in status["contract_errors"]
 
 
 def test_source_quality_hard_block_status_detects_bridge_selected_alias_without_handoff():

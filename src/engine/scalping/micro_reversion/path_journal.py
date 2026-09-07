@@ -461,7 +461,9 @@ class MarketDepthPoint:
                 if any(value is None for value in component_values):
                     raise ValueError("integrated route depth components are required")
                 if sum(component_values) != combined_totals.get(side):
-                    raise ValueError("integrated route depth components do not reconcile")
+                    raise ValueError(
+                        "integrated route depth components do not reconcile"
+                    )
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "venue", venue)
 

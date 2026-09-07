@@ -231,9 +231,7 @@ def test_write_ws_snapshot_persists_exact_date_registration_receipt(
     snapshot_path = tmp_path / "latest.json"
     receipt_dir = tmp_path / "registration-receipts"
     monkeypatch.setattr(mod, "WS_SNAPSHOT_PATH", snapshot_path)
-    monkeypatch.setattr(
-        mod, "MICRO_REVERSION_REGISTRATION_RECEIPT_DIR", receipt_dir
-    )
+    monkeypatch.setattr(mod, "MICRO_REVERSION_REGISTRATION_RECEIPT_DIR", receipt_dir)
     receipt = {
         "schema": "scalp_micro_reversion_registration_receipt_v1",
         "effective_date": "2026-09-04",
@@ -252,11 +250,17 @@ def test_write_ws_snapshot_persists_exact_date_registration_receipt(
     )
 
     assert written == snapshot_path
-    assert json.loads(snapshot_path.read_text(encoding="utf-8"))[
-        "micro_reversion_registration_receipt"
-    ] == receipt
-    assert json.loads(
-        mod.micro_reversion_registration_receipt_path("2026-09-04").read_text(
-            encoding="utf-8"
+    assert (
+        json.loads(snapshot_path.read_text(encoding="utf-8"))[
+            "micro_reversion_registration_receipt"
+        ]
+        == receipt
+    )
+    assert (
+        json.loads(
+            mod.micro_reversion_registration_receipt_path("2026-09-04").read_text(
+                encoding="utf-8"
+            )
         )
-    ) == receipt
+        == receipt
+    )

@@ -1126,15 +1126,11 @@ def write_ws_snapshot(
             except ValueError:
                 effective_date = ""
             if effective_date:
-                receipt_path = micro_reversion_registration_receipt_path(
-                    effective_date
-                )
+                receipt_path = micro_reversion_registration_receipt_path(effective_date)
                 receipt_path.parent.mkdir(parents=True, exist_ok=True)
                 receipt_tmp = receipt_path.with_suffix(".json.tmp")
                 receipt_tmp.write_text(
-                    json.dumps(
-                        receipt, ensure_ascii=False, separators=(",", ":")
-                    ),
+                    json.dumps(receipt, ensure_ascii=False, separators=(",", ":")),
                     encoding="utf-8",
                 )
                 receipt_tmp.replace(receipt_path)

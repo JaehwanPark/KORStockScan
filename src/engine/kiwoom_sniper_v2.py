@@ -12226,8 +12226,7 @@ def run_sniper(is_test_mode=False):
                     terminal_reason=terminal_reason,
                     unresolved_scalping_count=len(unresolved_scalping),
                     unresolved_scalping_codes="|".join(
-                        str(item.get("code") or "-")
-                        for item in unresolved_scalping
+                        str(item.get("code") or "-") for item in unresolved_scalping
                     ),
                 )
                 break

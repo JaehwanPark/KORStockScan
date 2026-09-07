@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 _GENERIC_TEST_NAMES = frozenset({"TEST", "DUMMY", "MOCK"})
 _KNOWN_TEST_IDENTITIES = frozenset(
     {
@@ -45,13 +44,17 @@ def synthetic_scalp_sim_reason(value: Any) -> str | None:
         or value.get("code")
         or ""
     ).strip()[:6]
-    name = str(
-        fields.get("stock_name")
-        or fields.get("name")
-        or value.get("stock_name")
-        or value.get("name")
-        or ""
-    ).strip().upper()
+    name = (
+        str(
+            fields.get("stock_name")
+            or fields.get("name")
+            or value.get("stock_name")
+            or value.get("name")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     if name in _GENERIC_TEST_NAMES or any(
         name.startswith(f"{prefix}_") or name.startswith(f"{prefix}-")
         for prefix in _GENERIC_TEST_NAMES

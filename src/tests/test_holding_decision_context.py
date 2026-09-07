@@ -43,12 +43,15 @@ def _enable(monkeypatch) -> None:
 def test_overnight_context_is_permanently_retired(monkeypatch):
     _enable(monkeypatch)
 
-    assert holding_decision_context_enabled(
-        venue="KRX",
-        session="krx_regular",
-        decision_kind="overnight",
-        now_ts=datetime(2026, 7, 23, 15, 10, tzinfo=KST),
-    ) is False
+    assert (
+        holding_decision_context_enabled(
+            venue="KRX",
+            session="krx_regular",
+            decision_kind="overnight",
+            now_ts=datetime(2026, 7, 23, 15, 10, tzinfo=KST),
+        )
+        is False
+    )
 
 
 def test_holding_snapshot_collects_null_aware_investor_source(monkeypatch):

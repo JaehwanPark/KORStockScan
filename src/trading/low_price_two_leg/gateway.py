@@ -689,9 +689,7 @@ class KiwoomLowPriceTwoLegGateway:
         for row in rows:
             row_order_no = _clean(row.get("ord_no"))
             row_original_order_no = _clean(row.get("orig_ord_no"))
-            row_symbol = kiwoom_utils.normalize_stock_code(
-                str(row.get("stk_cd") or "")
-            )
+            row_symbol = kiwoom_utils.normalize_stock_code(str(row.get("stk_cd") or ""))
             remaining_qty = _strict_nonnegative_int(row.get("oso_qty"))
             if (
                 not row_order_no.isdigit()

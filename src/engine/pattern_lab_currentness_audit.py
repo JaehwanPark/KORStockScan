@@ -44,9 +44,7 @@ RETIRED_PATTERN_LABS = {
     }
 }
 
-SCALPING_REENTRY_TERMS = (
-    "threshold_cycle_ev",
-)
+SCALPING_REENTRY_TERMS = ("threshold_cycle_ev",)
 SWING_REENTRY_TERMS = (
     "threshold_cycle_ev",
     "swing_lifecycle_decision_matrix",

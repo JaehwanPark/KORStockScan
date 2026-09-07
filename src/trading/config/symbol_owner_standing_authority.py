@@ -120,9 +120,7 @@ def build_standing_authority(
     start = _clock(preopen_start, error="symbol_owner_standing_window_invalid")
     end = _clock(preopen_end, error="symbol_owner_standing_window_invalid")
     if start != STANDING_PREOPEN_START or end != STANDING_PREOPEN_END:
-        raise SymbolOwnerStandingAuthorityError(
-            "symbol_owner_standing_window_invalid"
-        )
+        raise SymbolOwnerStandingAuthorityError("symbol_owner_standing_window_invalid")
     account_key = str(broker_account_key or "").strip()
     if not ACCOUNT_KEY_RE.fullmatch(account_key) or account_key.lower() == "default":
         raise SymbolOwnerStandingAuthorityError(
@@ -232,12 +230,8 @@ def load_standing_authority(
         effective_from=str(payload.get("effective_from") or ""),
         expires_after=str(payload.get("expires_after") or ""),
         broker_account_key=str(payload.get("broker_account_key") or ""),
-        preopen_start=str(
-            (payload.get("preopen_window") or {}).get("start_kst") or ""
-        ),
-        preopen_end=str(
-            (payload.get("preopen_window") or {}).get("end_kst") or ""
-        ),
+        preopen_start=str((payload.get("preopen_window") or {}).get("start_kst") or ""),
+        preopen_end=str((payload.get("preopen_window") or {}).get("end_kst") or ""),
         symbols={
             str(symbol): list(entry.get("allowed_owners") or [])
             for symbol, entry in raw_symbols.items()
@@ -260,9 +254,7 @@ def load_standing_authority(
 def standing_apply_window(authority: Mapping[str, Any]) -> tuple[time, time]:
     window = authority.get("preopen_window")
     if not isinstance(window, Mapping):
-        raise SymbolOwnerStandingAuthorityError(
-            "symbol_owner_standing_window_invalid"
-        )
+        raise SymbolOwnerStandingAuthorityError("symbol_owner_standing_window_invalid")
     return (
         _clock(window.get("start_kst"), error="symbol_owner_standing_window_invalid"),
         _clock(window.get("end_kst"), error="symbol_owner_standing_window_invalid"),

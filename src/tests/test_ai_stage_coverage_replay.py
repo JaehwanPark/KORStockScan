@@ -477,9 +477,7 @@ def test_budgeted_bedrock_executor_rejects_output_limit_above_reservation(monkey
         provider_created = True
         raise AssertionError("provider must not be created before output-limit gate")
 
-    monkeypatch.setattr(
-        replay, "qwen3_32b_profile_from_env", lambda: oversized_profile
-    )
+    monkeypatch.setattr(replay, "qwen3_32b_profile_from_env", lambda: oversized_profile)
     monkeypatch.setattr(replay, "BedrockNovaProvider", provider_factory)
     request = {
         "exact_payload": {"price": 100},

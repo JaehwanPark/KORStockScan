@@ -1139,9 +1139,7 @@ def test_tp1_net_label_keeps_fixed_comparison_cost_separate_from_broker_receipt(
     assert label["net_label"] == "net_target_confirmed"
     assert label["actual_cost_pct"] == 0.4
     assert label["actual_cost_net_label"] == "net_target_not_met"
-    assert label["net_label_cost_basis"] == (
-        "effective_dated_comparison_cost_contract"
-    )
+    assert label["net_label_cost_basis"] == ("effective_dated_comparison_cost_contract")
     assert report["summary"]["rising_missed_tp1_net_label_cost_basis"] == (
         "effective_dated_comparison_cost_contract"
     )
@@ -1705,9 +1703,7 @@ def test_tp1_first_hit_label_marks_adverse_first_and_can_confirm_net_with_costs(
 
     assert labels["000702"]["gross_first_hit_label"] == "adverse_stop_first"
     assert labels["000702"]["net_label"] == "net_target_not_met"
-    assert labels["000702"]["actual_cost_net_label"] == (
-        "unavailable_fee_tax_missing"
-    )
+    assert labels["000702"]["actual_cost_net_label"] == ("unavailable_fee_tax_missing")
     assert labels["000703"]["gross_first_hit_label"] == "gross_target_first"
     assert labels["000703"]["actual_cost_pct"] == 0.2
     assert labels["000703"]["actual_cost_net_label"] == "net_target_confirmed"

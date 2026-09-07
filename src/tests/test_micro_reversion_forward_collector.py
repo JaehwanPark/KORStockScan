@@ -198,9 +198,10 @@ def test_missing_receive_time_is_not_reported_as_epoch_zero_latency(tmp_path):
     snapshot = _snapshot()
     snapshot["last_trade_tick"]["received_at_ms"] = None
     try:
-        assert collector.observe_kiwoom_0b(
-            "000001", snapshot, realtime_type="0B"
-        ) == ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+        assert (
+            collector.observe_kiwoom_0b("000001", snapshot, realtime_type="0B")
+            == ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+        )
         row = collector.runtime_snapshot().timestamp_rejection_samples[-1]
         assert row["received_at_ms"] is None
         assert row["exchange_to_receive_lag_ms"] is None
@@ -419,9 +420,8 @@ def test_0d_callback_latency_does_not_poison_frozen_0b_canary_metric(
         "source_quality_gate",
         "forbidden_uses",
     } <= set(depth_contract)
-    assert (
-        "satisfy_or_bypass_0b_callback_latency_canary"
-        in (depth_contract["forbidden_uses"])
+    assert "satisfy_or_bypass_0b_callback_latency_canary" in (
+        depth_contract["forbidden_uses"]
     )
     assert {
         "metric_role",

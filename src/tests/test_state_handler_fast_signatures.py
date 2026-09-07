@@ -1036,8 +1036,7 @@ def test_entry_adm_snapshot_marks_transport_timeout_not_evaluated(monkeypatch):
     )
 
     assert (
-        captured["ai_decision_evaluation_status"]
-        == "not_evaluated_transport_timeout"
+        captured["ai_decision_evaluation_status"] == "not_evaluated_transport_timeout"
     )
     assert captured["actual_order_submitted"] is False
     assert captured["broker_order_forbidden"] is True

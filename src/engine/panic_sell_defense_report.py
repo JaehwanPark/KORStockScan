@@ -486,8 +486,7 @@ def _summarize_exit_metrics(
     unproven_exits = [
         row
         for row in non_real_exits
-        if not _has_real_exit_provenance(row)
-        and not _is_non_real_observation(row)
+        if not _has_real_exit_provenance(row) and not _is_non_real_observation(row)
     ]
     stop_loss_real = [row for row in real_exits if _is_stop_loss_exit(row)]
     profits = [
@@ -1091,9 +1090,7 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
             "market_weakness_observation": (
                 market_breadth.get("market_weakness_observation")
                 if isinstance(market_breadth, dict)
-                and isinstance(
-                    market_breadth.get("market_weakness_observation"), dict
-                )
+                and isinstance(market_breadth.get("market_weakness_observation"), dict)
                 else {}
             ),
         },
@@ -1201,9 +1198,7 @@ def _microstructure_market_context(
         "market_panic_breadth_industry_breadth": market_breadth.get("industry_breadth")
         or {},
         "market_panic_breadth_indices": market_breadth.get("market_indices") or {},
-        "market_weakness_observation": market_breadth.get(
-            "market_weakness_observation"
-        )
+        "market_weakness_observation": market_breadth.get("market_weakness_observation")
         or {},
         "evaluated_symbol_count": evaluated_count,
         "risk_off_advisory_count": risk_off_count,

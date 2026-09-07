@@ -272,9 +272,11 @@ def test_postclose_done_controller_refreshes_recoverable_sources(monkeypatch, tm
         for item in report["actions"]
     )
     action_names = [item["action"] for item in report["actions"]]
-    assert action_names.index("refresh_threshold_cycle_ev") < action_names.index(
-        "refresh_code_improvement_workorder"
-    ) < action_names.index("refresh_runtime_approval_summary")
+    assert (
+        action_names.index("refresh_threshold_cycle_ev")
+        < action_names.index("refresh_code_improvement_workorder")
+        < action_names.index("refresh_runtime_approval_summary")
+    )
 
 
 def test_generic_fingerprint_repair_refreshes_ev_before_final_workorder():
@@ -2455,9 +2457,7 @@ def test_machine_structural_action_preserves_allowlisted_repair_action():
         },
     )
 
-    assert actions == [
-        "repair_exact_entry_anchor_market_join_and_rerun"
-    ]
+    assert actions == ["repair_exact_entry_anchor_market_join_and_rerun"]
 
 
 def test_postclose_done_controller_closes_immutable_receipt_quarantine(

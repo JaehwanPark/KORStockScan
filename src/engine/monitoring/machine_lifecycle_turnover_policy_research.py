@@ -1198,16 +1198,12 @@ def _research_row(
             remaining_paired_lifecycles = max(
                 required_paired_lifecycles - paired_lifecycles, 0
             )
-            remaining_source_report_days = max(
-                window_days - source_report_day_count, 0
-            )
+            remaining_source_report_days = max(window_days - source_report_day_count, 0)
             classification_window_complete = remaining_source_report_days == 0
             earliest_review_date = (
                 target_day
                 if classification_window_complete
-                else _advance_krx_trading_days(
-                    target_day, remaining_source_report_days
-                )
+                else _advance_krx_trading_days(target_day, remaining_source_report_days)
             )
             if (
                 sample_state == "natural_sample_wait"

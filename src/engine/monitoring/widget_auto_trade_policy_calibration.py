@@ -551,14 +551,16 @@ def _load_rows(
                             else None
                         ),
                         "entry_event_at": (
-                            datetime.fromisoformat(str(entry_event["observed_at"]))
-                            .astimezone(KST)
+                            datetime.fromisoformat(
+                                str(entry_event["observed_at"])
+                            ).astimezone(KST)
                             if isinstance(entry_event, dict)
                             else None
                         ),
                         "exit_event_at": (
-                            datetime.fromisoformat(str(exit_event["observed_at"]))
-                            .astimezone(KST)
+                            datetime.fromisoformat(
+                                str(exit_event["observed_at"])
+                            ).astimezone(KST)
                             if isinstance(exit_event, dict)
                             else None
                         ),

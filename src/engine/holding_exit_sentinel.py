@@ -350,18 +350,19 @@ def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
         return None
     if session is None:
         session = _session_for_venue(venue, event.emitted_at)
-    elif venue == "NXT" and session == "NXT_REGULAR" and (
-        event.emitted_at.time() < time(9, 0)
-        or event.emitted_at.time() > time(15, 30)
+    elif (
+        venue == "NXT"
+        and session == "NXT_REGULAR"
+        and (
+            event.emitted_at.time() < time(9, 0)
+            or event.emitted_at.time() > time(15, 30)
+        )
     ):
         session = _session_for_venue(venue, event.emitted_at)
     if (
         (venue == "NXT" and not session.startswith("NXT_"))
         or (venue == "KRX" and session != "KRX_REGULAR")
-        or (
-            venue == "PREMARKET_KRX_LIKE"
-            and session != "PREMARKET_KRX_LIKE"
-        )
+        or (venue == "PREMARKET_KRX_LIKE" and session != "PREMARKET_KRX_LIKE")
     ):
         return "CONFLICT", "CONFLICT", "conflict"
     return venue, session, "pass"
@@ -370,9 +371,9 @@ def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
 def _partition_events_by_venue_session(
     events: list[PipelineEvent],
 ) -> tuple[dict[str, list[PipelineEvent]], dict[str, int]]:
-    explicit_by_attempt: dict[
-        str, list[tuple[datetime, tuple[str, str]]]
-    ] = defaultdict(list)
+    explicit_by_attempt: dict[str, list[tuple[datetime, tuple[str, str]]]] = (
+        defaultdict(list)
+    )
     for event in events:
         scope = _explicit_event_scope(event)
         exact_key = _exact_attempt_key(event)
@@ -853,9 +854,7 @@ def _classify(
     latest = _parse_iso_datetime(_safe_str(summary.get("latest_event_at")))
     stale_sec = int((as_of - latest).total_seconds()) if latest else None
     if _safe_str(scope_key).startswith("NXT|"):
-        during_sentinel_hours = (
-            NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
-        )
+        during_sentinel_hours = NXT_SENTINEL_START <= as_of.time() <= NXT_SENTINEL_END
     else:
         during_sentinel_hours = SESSION_START <= as_of.time() <= SENTINEL_END
 
@@ -1143,14 +1142,10 @@ def build_holding_exit_sentinel_report(
             "baseline_same_time_summary": scope_baseline,
             "classification": scope_classification,
         }
-    classification = _select_scope_classification(
-        scope_reports, global_classification
-    )
-    if (
-        classification.get("primary") == "NORMAL"
-        and global_classification.get("primary")
-        in {"SOFT_STOP_WHIPSAW", "TRAILING_EARLY_EXIT"}
-    ):
+    classification = _select_scope_classification(scope_reports, global_classification)
+    if classification.get("primary") == "NORMAL" and global_classification.get(
+        "primary"
+    ) in {"SOFT_STOP_WHIPSAW", "TRAILING_EARLY_EXIT"}:
         classification = dict(global_classification)
         classification["classification_basis"] = (
             "cross_venue_observation_diagnostic_without_scope_denominator"
