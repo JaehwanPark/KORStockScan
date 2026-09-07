@@ -1917,6 +1917,8 @@ def _entry_recheck_drought_candidate_contract_error(candidate: dict[str, Any]) -
     ):
         return "drought_policy_history_contract_invalid"
     # Recompute denominator/causal checks inside each scope, never trust flags.
+    from src.engine.automation.submit_drought_contract import validate_scope_evidence
+
     normalized = []
     for day in history:
         rows = day.get("eligible_scopes")
@@ -1924,6 +1926,17 @@ def _entry_recheck_drought_candidate_contract_error(candidate: dict[str, Any]) -
             return "drought_scope_contract_invalid"
         if not all(isinstance(row.get("scope"), str) for row in rows):
             return "drought_scope_contract_invalid"
+        for row in rows:
+            evidence = row.get("sentinel_evidence")
+            if not validate_scope_evidence(
+                evidence, source_date=day.get("source_date", ""), scope=row["scope"]
+            ):
+                return "drought_sentinel_exact_contract_invalid"
+            expected_row = scope_summary(
+                row["scope"], {**evidence["contract"], "sentinel_evidence": evidence}
+            )
+            if row != expected_row:
+                return "drought_sentinel_scope_binding_mismatch"
         rebuilt = [
             scope_summary(
                 row.get("scope", ""),

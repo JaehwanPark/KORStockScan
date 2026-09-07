@@ -1753,6 +1753,7 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
         / "buy_funnel_sentinel"
         / f"buy_funnel_sentinel_{target}.json",
         {
+            "schema_version": 4,
             "classification": {
                 "primary": "SUBMIT_DROUGHT_CRITICAL",
                 "matches": ["SUBMIT_DROUGHT_CRITICAL"],
@@ -1775,31 +1776,109 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
                 },
             },
             "entry_submit_drought_contract": {
+                "core_handoff_axes": [
+                    "UPSTREAM_GATE",
+                    "LATENCY_PRE_SUBMIT",
+                    "ENTRY_AI_AUTHORITY_REVALIDATION",
+                    "PRICE_REVALIDATION",
+                    "BROKER_RECEIPT",
+                ],
+                "exact_attempt_contract": {
+                    "identity_field": "record_id",
+                    "identity_fallback_allowed": False,
+                    "status": "pass",
+                    "exclusion_applied": True,
+                    "terminal_causal_partition_disjoint": True,
+                    "core_handoff_axes": [
+                        "UPSTREAM_GATE",
+                        "LATENCY_PRE_SUBMIT",
+                        "ENTRY_AI_AUTHORITY_REVALIDATION",
+                        "PRICE_REVALIDATION",
+                        "BROKER_RECEIPT",
+                    ],
+                },
                 "causal_bottleneck_axes": [
                     "LATENCY_PRE_SUBMIT",
                     "BUDGET_PASS_COLLAPSE",
                 ],
                 "observation_only_axes": ["SIM_REAL_AUTHORITY"],
                 "no_current_signal_axes": ["BROKER_RECEIPT"],
+                "observation_breakdown": {
+                    "exact_attempt_contract": {
+                        "identity_field": "record_id",
+                        "identity_fallback_allowed": False,
+                        "status": "pass",
+                        "exclusion_applied": True,
+                        "terminal_causal_partition_disjoint": True,
+                        "core_handoff_axes": [
+                            "UPSTREAM_GATE",
+                            "LATENCY_PRE_SUBMIT",
+                            "ENTRY_AI_AUTHORITY_REVALIDATION",
+                            "PRICE_REVALIDATION",
+                            "BROKER_RECEIPT",
+                        ],
+                    },
+                    "axes": {
+                        "LATENCY_PRE_SUBMIT": {
+                            "status": "observed",
+                            "observed_count": 7,
+                            "exact_join_valid": True,
+                        }
+                    },
+                },
             },
         },
     )
 
+    from datetime import datetime, timedelta
+    from src.engine.buy_funnel_sentinel import PipelineEvent
+    from src.tests.submit_drought_fixtures import make_report
+
+    rows = []
+    for i in range(7):
+        for offset, stage in enumerate(("budget_pass", "latency_block")):
+            rows.append(
+                PipelineEvent(
+                    datetime.fromisoformat(f"{target}T10:00:00")
+                    + timedelta(seconds=2 * i + offset),
+                    "ENTRY_PIPELINE",
+                    stage,
+                    "fixture",
+                    "000001",
+                    str(i + 1),
+                    {"reason": "latency_state_danger"},
+                )
+            )
+    path = (
+        tmp_path
+        / "report"
+        / "buy_funnel_sentinel"
+        / f"buy_funnel_sentinel_{target}.json"
+    )
+    payload = json.loads(path.read_text())
+    source = make_report(target, events=rows)
+    payload.update(
+        schema_version=5,
+        target_date=target,
+        as_of=source["as_of"],
+        entry_submit_drought_contract=source["entry_submit_drought_contract"],
+    )
+    _write(path, payload)
     report = lane.build_conversion_lane(target)
 
     assert report["summary"]["submit_drought_split_complete"] is True
-    assert report["summary"]["submit_drought_closure_axis_count"] == 2
+    assert report["summary"]["submit_drought_closure_axis_count"] == 1
     assert report["summary"]["submit_drought_causal_bottleneck_axes"] == [
         "LATENCY_PRE_SUBMIT",
-        "BUDGET_PASS_COLLAPSE",
     ]
     assert report["summary"]["submit_drought_observation_only_axes"] == [
-        "SIM_REAL_AUTHORITY"
+        "BUDGET_PASS_COLLAPSE",
+        "SIM_REAL_AUTHORITY",
     ]
-    assert report["summary"]["submit_drought_no_current_signal_axes"] == [
-        "BROKER_RECEIPT"
-    ]
-    assert report["summary"]["submit_funnel_blocker_count"] == 2
+    assert (
+        "BROKER_RECEIPT" in report["summary"]["submit_drought_no_current_signal_axes"]
+    )
+    assert report["summary"]["submit_funnel_blocker_count"] == 1
     assert report["summary"]["submit_drought_is_ldm_bucket_blocker"] is False
     assert report["summary"]["buy_funnel_source_present"] is True
     assert (
@@ -1847,7 +1926,6 @@ def test_conversion_lane_submit_drought_blockers_have_split_axes(monkeypatch, tm
     ]
     assert {item["blocker_axis"] for item in submit_blockers} == {
         "LATENCY_PRE_SUBMIT",
-        "BUDGET_PASS_COLLAPSE",
     }
     latency_blocker = next(
         item for item in submit_blockers if item["blocker_axis"] == "LATENCY_PRE_SUBMIT"
@@ -1923,10 +2001,49 @@ def test_conversion_lane_preserves_price_revalidation_axis_contract(
 
     assert blocker["axis_observed_count"] == 14
     assert blocker["axis_evidence"]["price_guard_unique"] == 14
-    assert "executable BBO" in blocker["acceptance_test"]
-    assert "one-share bounded candidate" in blocker["acceptance_test"]
+    assert "nonblocking fallback" in blocker["acceptance_test"]
+    assert "standalone runtime authority" in blocker["acceptance_test"]
     assert blocker["blocker_runtime_effect"] is False
     assert blocker["blocker_allowed_runtime_apply"] is False
+
+
+def test_conversion_lane_requires_exact_valid_core_axis_for_new_reports():
+    buy_funnel = {
+        "schema_version": 4,
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+        },
+        "entry_submit_drought_contract": {
+            "exact_attempt_contract": {"status": "source_quality_gap_excluded"},
+            "causal_bottleneck_axes": ["PRICE_REVALIDATION"],
+            "observation_breakdown": {
+                "axes": {
+                    "PRICE_REVALIDATION": {
+                        "status": "observed",
+                        "observed_count": 3,
+                        "exact_join_valid": False,
+                    }
+                }
+            },
+        },
+    }
+
+    assert lane._submit_drought_causal_axes(buy_funnel) == []
+    assert lane._submit_drought_blockers(buy_funnel) == []
+
+
+def test_conversion_lane_does_not_manufacture_legacy_critical_axes():
+    buy_funnel = {
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+        },
+        "entry_submit_drought_contract": {},
+    }
+
+    assert lane._submit_drought_causal_axes(buy_funnel) == []
+    assert lane._submit_drought_blockers(buy_funnel) == []
 
 
 def test_conversion_lane_preserves_entry_ai_authority_axis_contract(
@@ -1974,7 +2091,7 @@ def test_conversion_lane_preserves_entry_ai_authority_axis_contract(
 
     assert blocker["axis_observed_count"] == 14
     assert "exact payload lineage" in blocker["acceptance_test"]
-    assert "one-share bounded candidate" in blocker["acceptance_test"]
+    assert "does not depend on positive EV samples" in blocker["acceptance_test"]
     assert blocker["blocker_runtime_effect"] is False
 
 

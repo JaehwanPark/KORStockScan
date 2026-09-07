@@ -63,6 +63,23 @@ DEFAULT_OUTPUT_ROOT = (
 FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v9"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 PRODUCER_CALLBACK_LATENCY_SCOPE = "kiwoom_0b_trade_callback_only"
+TIMESTAMP_REJECTION_SAMPLE_LIMIT = 64
+TIMESTAMP_REJECTION_METRIC_CONTRACT = {
+    "metric_role": "source_quality_diagnostic",
+    "decision_authority": "source_observation_only",
+    "window_policy": "current_process_counters_and_last_64_rejections_across_local_observer_epochs",
+    "sample_floor": "per_observation_contract_no_economic_promotion",
+    "primary_decision_metric": "timestamp_rejection_sample_total",
+    "source_quality_gate": "existing_timestamp_guard_rejection_before_observer_enqueue",
+    "forbidden_uses": (
+        "complete_rejected_population_reconstruction",
+        "cross_epoch_market_path_join",
+        "stale_guard_relaxation",
+        "broker_order_submission",
+        "threshold_provider_bot_quantity_or_cap_mutation",
+        "economic_edge_claim",
+    ),
+}
 FORWARD_COLLECTOR_METRIC_CONTRACT = {
     "metric_role": "source_quality_and_forward_collector_health",
     "decision_authority": FORWARD_COLLECTOR_AUTHORITY,
@@ -395,6 +412,8 @@ class ForwardCollectorSnapshot:
     stale_sequence_epoch_envelope_count: int
     detector_clock_adjustment_count: int
     detector_clock_adjustment_max_ms: int
+    timestamp_rejection_sample_total: int = 0
+    timestamp_rejection_samples: tuple[dict[str, Any], ...] = ()
     p2_real_data_discovery_run: bool = False
     research_policy_selected: bool = False
     selection_authority: bool = False
@@ -422,6 +441,7 @@ class ForwardCollectorSnapshot:
                 "low_disk_capacity_warning": (
                     LOW_DISK_CAPACITY_WARNING_METRIC_CONTRACT
                 ),
+                "timestamp_rejection": TIMESTAMP_REJECTION_METRIC_CONTRACT,
             },
         }
 
@@ -498,6 +518,10 @@ class ForwardObservationCollector:
         self._crossed_bbo_sanitized = 0
         self._future_timestamp_adjustments = 0
         self._stale_timestamp_blocks = 0
+        self._timestamp_rejection_sample_total = 0
+        self._timestamp_rejection_samples: deque[dict[str, Any]] = deque(
+            maxlen=TIMESTAMP_REJECTION_SAMPLE_LIMIT
+        )
         self._quote_age_missing = 0
         self._bbo_complete = 0
         self._exchange_9081_observed = 0
@@ -813,11 +837,29 @@ class ForwardObservationCollector:
             )
             if timestamp_result is None:
                 self._increment("_timestamp_blocks")
+                self._record_timestamp_rejection(
+                    symbol,
+                    item,
+                    venue,
+                    "0B",
+                    trade.get("exchange_time_raw"),
+                    received_at_ms,
+                    timestamp_result,
+                )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             exchange_timestamp, future_adjusted, stale = timestamp_result
             if stale:
                 self._increment("_timestamp_blocks")
                 self._increment("_stale_timestamp_blocks")
+                self._record_timestamp_rejection(
+                    symbol,
+                    item,
+                    venue,
+                    "0B",
+                    trade.get("exchange_time_raw"),
+                    received_at_ms,
+                    timestamp_result,
+                )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             if future_adjusted:
                 self._increment("_future_timestamp_adjustments")
@@ -944,10 +986,28 @@ class ForwardObservationCollector:
             )
             if timestamp_result is None:
                 self._increment("_depth_timestamp_blocks")
+                self._record_timestamp_rejection(
+                    symbol,
+                    item,
+                    venue,
+                    "0D",
+                    depth.get("orderbook_time_raw"),
+                    received_at_ms,
+                    timestamp_result,
+                )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             exchange_timestamp, _future_adjusted, stale = timestamp_result
             if stale:
                 self._increment("_depth_timestamp_blocks")
+                self._record_timestamp_rejection(
+                    symbol,
+                    item,
+                    venue,
+                    "0D",
+                    depth.get("orderbook_time_raw"),
+                    received_at_ms,
+                    timestamp_result,
+                )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             try:
                 asks = _normalize_depth_levels(depth.get("ask_levels"), side="ask")
@@ -1028,6 +1088,64 @@ class ForwardObservationCollector:
                 if self._active_callbacks == 0:
                     self._callback_condition.notify_all()
 
+    def _record_timestamp_rejection(
+        self,
+        symbol: str,
+        item: str,
+        venue: str,
+        realtime_type: str,
+        raw_time: Any,
+        received_at_ms: int | None,
+        parsed: tuple[datetime, bool, bool] | None,
+    ) -> None:
+        # No I/O or unbounded per-symbol maps on the producer callback. This
+        # tail is diagnostic only; it cannot reconstruct all rejected rows.
+        checked_at_ms = time.time_ns() // 1_000_000
+        received_at_ms = received_at_ms if received_at_ms and received_at_ms > 0 else None
+        raw_text = str(raw_time or "")
+        exchange_at_ms = int(parsed[0].timestamp() * 1_000) if parsed else None
+        with self._state_lock:
+            local_observer_epoch = self._sequence_epoch
+        sample = {
+            "process_pid": os.getpid(),
+            "symbol": normalize_symbol(symbol),
+            "item": item,
+            "venue": venue,
+            "realtime_type": realtime_type,
+            "local_observer_epoch": local_observer_epoch,
+            "session_bucket": (
+                _session_bucket(venue, parsed[0].timetz()) if parsed else None
+            ),
+            "session_basis": (
+                "validated_exchange_timestamp" if parsed else "unresolved_timestamp"
+            ),
+            "raw_exchange_time": (
+                raw_text
+                if raw_text.isascii() and raw_text.isdigit() and len(raw_text) <= 16
+                else None
+            ),
+            "received_at_ms": received_at_ms,
+            "checked_at_ms": checked_at_ms,
+            "exchange_at_ms": exchange_at_ms,
+            "exchange_to_receive_lag_ms": (
+                received_at_ms - exchange_at_ms
+                if received_at_ms is not None and exchange_at_ms is not None
+                else None
+            ),
+            "receive_to_rejection_check_ms": (
+                checked_at_ms - received_at_ms if received_at_ms is not None else None
+            ),
+            "maximum_exchange_to_receive_lag_ms": self.config.maximum_exchange_to_receive_lag_ms,
+            "reason": (
+                "stale_exchange_timestamp" if parsed else "invalid_or_future_timestamp"
+            ),
+            "rejection_stage": "before_observer_enqueue",
+        }
+        with self._metrics_lock:
+            self._timestamp_rejection_sample_total += 1
+            sample["rejection_index"] = self._timestamp_rejection_sample_total
+            self._timestamp_rejection_samples.append(sample)
+
     def runtime_snapshot(self) -> ForwardCollectorSnapshot:
         adapter = self._adapter.runtime_snapshot()
         with self._state_lock:
@@ -1072,6 +1190,10 @@ class ForwardObservationCollector:
         with self._metrics_lock:
             return ForwardCollectorSnapshot(
                 schema=FORWARD_COLLECTOR_SCHEMA,
+                timestamp_rejection_sample_total=self._timestamp_rejection_sample_total,
+                timestamp_rejection_samples=tuple(
+                    dict(sample) for sample in self._timestamp_rejection_samples
+                ),
                 observer_runtime_loaded=True,
                 producer_observation_connected=connected,
                 observer_runtime_effect=bool(thread is not None and thread.is_alive()),

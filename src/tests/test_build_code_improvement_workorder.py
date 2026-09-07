@@ -5102,6 +5102,16 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
+    from src.tests.submit_drought_fixtures import make_report
+
+    source_path = sentinel_dir / f"buy_funnel_sentinel_{target_date}.json"
+    legacy_fixture = json.loads(source_path.read_text())
+    source = make_report(target_date)
+    source["classification"]["submit_drought_root_cause"] = legacy_fixture[
+        "classification"
+    ]["submit_drought_root_cause"]
+    source_path.write_text(json.dumps(source))
+
     report = mod.build_code_improvement_workorder(target_date, max_orders=1)
 
     order = next(
@@ -5127,9 +5137,68 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
         == "submit_drought_attribution_only"
     )
     assert order["implementation_provenance"]["observation_axis_status"] == {
-        "BROKER_RECEIPT": "observed",
-        "LATENCY_PRE_SUBMIT": "observed",
+        axis: row["status"]
+        for axis, row in source["entry_submit_drought_contract"][
+            "observation_breakdown"
+        ]["axes"].items()
     }
+
+
+def test_submit_drought_marker_keeps_exact_source_quality_gap_open():
+    from datetime import datetime
+    from src.engine.buy_funnel_sentinel import PipelineEvent
+    from src.tests.submit_drought_fixtures import make_report
+
+    events = [
+        PipelineEvent(
+            datetime(2026, 9, 7, 10),
+            "ENTRY_PIPELINE",
+            "budget_pass",
+            "fixture",
+            "000001",
+            "",
+            {},
+        )
+    ]
+    report = make_report(events=events)
+    marker = mod._entry_submit_drought_implementation_marker(
+        report, report["entry_submit_drought_contract"]
+    )
+
+    assert marker["implementation_status"] == "implemented_source_quality_gap_open"
+    assert (
+        marker["implementation_provenance"]["root_cause_closure_status_hint"]
+        == "source_quality_blocked"
+    )
+    assert (
+        marker["implementation_provenance"]["exact_attempt_source_quality_open"] is True
+    )
+
+
+def test_submit_drought_marker_rejects_missing_v4_exact_contract():
+    marker = mod._entry_submit_drought_implementation_marker(
+        {
+            "schema_version": 4,
+            "classification": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        },
+        {
+            "required_downstream": [
+                "code_improvement_workorder",
+                "threshold_cycle_ev_report",
+                "runtime_approval_summary",
+                "postclose_verifier",
+            ],
+            "observation_breakdown": {},
+        },
+    )
+
+    provenance = marker["implementation_provenance"]
+    assert marker["implementation_status"] == "implemented_source_quality_gap_open"
+    assert provenance["root_cause_closure_status_hint"] == (
+        "artifact_regeneration_required"
+    )
+    assert provenance["exact_attempt_contract_invalid"] is True
+    assert provenance["artifact_regeneration_required"] is True
 
 
 def test_buy_funnel_submit_drought_workorder_uses_matches_when_primary_runtime_ops():

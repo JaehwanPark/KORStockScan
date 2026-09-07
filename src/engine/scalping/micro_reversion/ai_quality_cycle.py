@@ -7179,7 +7179,19 @@ def _observer_canary_diagnostic(
         )
     )
     stop_required = guard.get("stop_required") is True
-    row_exclusion_required = guard.get("raw_row_exclusion_required") is True
+    # Old canary writers could report healthy despite pre-enqueue timestamp
+    # loss. Revalidate the same hashed collector snapshot, not only its label.
+    from .canary_monitor import timestamp_source_quality_census
+
+    timestamp_quality = timestamp_source_quality_census(dict(collector))
+    normalized_row_exclusions = (
+        [item for item in row_exclusions if isinstance(item, str)]
+        if isinstance(row_exclusions, (list, tuple))
+        else []
+    )
+    row_exclusion_required = guard.get("raw_row_exclusion_required") is True or bool(
+        timestamp_quality["issues"]
+    )
     status = (
         "invalid_exact_date_canary_contract"
         if not guard_contract_valid
@@ -7218,7 +7230,10 @@ def _observer_canary_diagnostic(
         "stop_required": stop_required,
         "stop_reasons": list(stop_reasons or []),
         "raw_row_exclusion_required": row_exclusion_required,
-        "source_quality_row_exclusions": list(row_exclusions or []),
+        "source_quality_row_exclusions": list(
+            dict.fromkeys([*normalized_row_exclusions, *timestamp_quality["issues"]])
+        ),
+        "timestamp_source_quality": timestamp_quality,
         "queue_loss_census": queue_loss_census,
         "collector_lifecycle": collector_lifecycle,
     }

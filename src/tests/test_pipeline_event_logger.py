@@ -982,7 +982,7 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
         "ENTRY_PIPELINE",
         "테스트종목",
         "123456",
-        "blocked_overbought",
+        "strength_momentum_observed",
         record_id=1,
         fields={"reason": "near_day_high"},
     )
@@ -992,7 +992,7 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
         "123456",
         "blocked_overbought",
         record_id=2,
-        fields={"reason": "near_day_high", "actual_order_submitted": "true"},
+        fields={"reason": "near_day_high"},
     )
     logger_mod.flush_pipeline_event_producer_summary(preserved["emitted_date"])
 

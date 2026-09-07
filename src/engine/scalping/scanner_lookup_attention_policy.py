@@ -28,6 +28,8 @@ REPORT_TYPE = "scanner_lookup_attention_auto_promotion_policy"
 SCHEMA_VERSION = 2
 TUNING_REPORT_SCHEMA_VERSION = 2
 POLICY_VERSION = "scanner_lookup_attention_weight_v2"
+DECISION_CONTRACT_VERSION = "scanner_lookup_attention_row_exclusion_v3"
+RESOURCE_PAIR_CONTRACT_VERSION = "scanner_lookup_attention_resource_pair_v1"
 DECISION_AUTHORITY = "user_directed_bounded_scanner_weight_auto_apply"
 ACTIVATION_MODE = "latest_valid_prior_trading_date_policy_auto_loaded"
 USER_AUTHORITY = "user_directed_lookup_attention_auto_promotion_2026_09_02"
@@ -255,6 +257,7 @@ def _validate_payload(payload: Any, *, source_date: date) -> list[str]:
         "report_type": REPORT_TYPE,
         "target_date": source_date.isoformat(),
         "status": "live_auto_apply_ready",
+        "decision_contract_version": DECISION_CONTRACT_VERSION,
         "decision_authority": DECISION_AUTHORITY,
         "activation_mode": ACTIVATION_MODE,
         "user_authority": USER_AUTHORITY,
@@ -412,6 +415,7 @@ def _source_report_valid(
         and report.get("report_type") == "scanner_lookup_attention_tuning"
         and report.get("target_date") == source_date.isoformat()
         and report.get("status") == "live_auto_apply_ready"
+        and report.get("decision_contract_version") == DECISION_CONTRACT_VERSION
         and report.get("decision_authority") == DECISION_AUTHORITY
         and report.get("user_authority") == USER_AUTHORITY
         and source_quality.get("status") == "pass"
@@ -563,6 +567,29 @@ def clear_policy_cache() -> None:
     _load_active_cached.cache_clear()
 
 
+def _formula_bonus(
+    lookup_attention_score: Any, *, minimum: float, maximum_bonus: float
+) -> float:
+    score = _finite_number(lookup_attention_score)
+    if score is None or not 0.0 <= score <= 1.0 or score <= minimum:
+        return 0.0
+    denominator = max(1e-9, 1.0 - minimum)
+    return round(
+        min(maximum_bonus, maximum_bonus * (score - minimum) / denominator),
+        6,
+    )
+
+
+def bonus_points_for_score(lookup_attention_score: Any) -> float:
+    """Return the bounded policy formula without granting runtime authority."""
+
+    return _formula_bonus(
+        lookup_attention_score,
+        minimum=MIN_SCORE,
+        maximum_bonus=MAX_BONUS_POINTS,
+    )
+
+
 def bounded_bonus(
     lookup_attention_score: Any, policy_state: dict[str, Any]
 ) -> dict[str, Any]:
@@ -586,8 +613,11 @@ def bounded_bonus(
             "state": "loaded_below_threshold",
             "reason": "lookup_attention_score_below_policy_minimum",
         }
-    denominator = max(1e-9, 1.0 - minimum)
-    bonus = min(maximum_bonus, maximum_bonus * (score - minimum) / denominator)
+    bonus = _formula_bonus(
+        score,
+        minimum=minimum,
+        maximum_bonus=maximum_bonus,
+    )
     return {
         **base,
         "bonus_points": round(max(0.0, bonus), 6),
@@ -601,6 +631,7 @@ def bounded_bonus(
 __all__ = [
     "ACTIVATION_MODE",
     "DECISION_AUTHORITY",
+    "DECISION_CONTRACT_VERSION",
     "ELIGIBLE_SESSION_BUCKETS",
     "ELIGIBLE_VENUES",
     "MAX_BONUS_POINTS",
@@ -617,10 +648,12 @@ __all__ = [
     "POLICY_DIR",
     "POLICY_VERSION",
     "REPORT_TYPE",
+    "RESOURCE_PAIR_CONTRACT_VERSION",
     "SCHEMA_VERSION",
     "SOURCE_REPORT_DIR",
     "TUNING_REPORT_SCHEMA_VERSION",
     "USER_AUTHORITY",
+    "bonus_points_for_score",
     "bounded_bonus",
     "canonical_sha256",
     "clear_policy_cache",

@@ -12,6 +12,48 @@ import pytest
 
 
 @pytest.mark.parametrize(
+    "failure,expected_code",
+    [("none", 0), ("capture", 7), ("report", 8), ("capture_log", 9), ("report_log", 9)],
+)
+def test_market_census_wrapper_preserves_pipeline_failure(tmp_path, failure, expected_code):
+    root = Path.cwd()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_python = tmp_path / ".venv/bin/python"
+    fake_python.parent.mkdir(parents=True)
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ " $* " == *" --capture-only "* ]]; then phase=capture; else phase=report; fi\n'
+        'echo "TEST_PHASE=$phase"\n'
+        'echo "$phase" >> "$PROJECT_DIR/calls"\n'
+        'if [[ "$TEST_FAILURE" == "$phase" ]]; then\n'
+        '  if [[ "$phase" == capture ]]; then exit 7; else exit 8; fi\n'
+        'fi\n'
+    )
+    fake_python.chmod(0o700)
+    scripts = {
+        "date": '#!/usr/bin/env bash\nif [[ "$*" == *"%H%M"* ]]; then echo 1200; else /bin/date "$@"; fi\n',
+        "tee": '#!/usr/bin/env bash\npayload=$(cat)\nprintf "%s\\n" "$payload" | /usr/bin/tee "$@"\nif [[ "$payload" == "TEST_PHASE=${TEST_FAILURE%_log}" && "$TEST_FAILURE" == *_log ]]; then exit 9; fi\n',
+    }
+    for name, body in scripts.items():
+        path = fake_bin / name
+        path.write_text(body)
+        path.chmod(0o700)
+    result = subprocess.run(
+        ["bash", str(root / "deploy/run_market_opportunity_census_intraday.sh"), "2026-09-07"],
+        env={**os.environ, "PROJECT_DIR": str(tmp_path), "PATH": f"{fake_bin}:{os.environ['PATH']}", "TEST_FAILURE": failure, "MARKET_OPPORTUNITY_CENSUS_REFRESH_REPORT": "true"},
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == expected_code, result.stdout + result.stderr
+    assert ("[DONE]" in result.stdout) == (expected_code == 0)
+    if expected_code:
+        assert f"exit_code={expected_code}" in result.stdout
+        assert "[FAIL]" in result.stdout
+    calls = (tmp_path / "calls").read_text().splitlines()
+    assert calls == (["capture"] if failure.startswith("capture") else ["capture", "report"])
+
+
+@pytest.mark.parametrize(
     "mode", ["missing", "stale", "wrong_date", "invalid_source", "fresh", "dry_run"]
 )
 def test_panic_wrapper_requires_fresh_valid_report_before_done(tmp_path, mode):

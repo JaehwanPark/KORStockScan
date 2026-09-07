@@ -13,6 +13,7 @@
 - **2026-09-06 전체 재통합 리뷰**: dirty 전체 범위를 재검토했고, 최종 리뷰에서 #45의 source-only 비교비용이 exact-date 적용 후보와 결속되지 않은 live 권한 경계 1건을 발견해 다음 거래일 비용 값·날짜·SHA-256을 candidate/evidence/runtime에 고정했다. 수정 후 변경범위 20개 test module **1,562 PASS**, rebound 단독 **34 PASS**, Python 47개 Black/Ruff/compile, wrapper 3개 `bash -n`, parser 42개 OPEN, diff check를 통과했다. 생산 report/policy/env·봇 상태·실주문은 변경하지 않았다.
 - **main 통합 완료**: 누적 장후 runtime 계약 보완을 전용 브랜치에 커밋·푸시한 뒤 명시적 merge commit으로 main에 병합했다. 병합 전 수정·신규 테스트 전체 2,928건, 포맷 보완 후 receipt·수익 귀속 관련 1,184건, Entry/Institutional/Microstructure 관련 1,260건을 각각 PASS했다. Python 97개 변경 파일 Black/compile, wrapper 3개 `bash -n`, 신규 systemd unit verify, checklist parser와 diff check도 PASS했다.
 - #15~16, #21, #23, #26~27까지 상세검토·보완 결과를 반영했다. 현재 완료 범위는 저가 2-leg/확장 추천의 source-only 경제성, one-share 기회 진단과 일일 drought controller, Institutional 전용 aggregate 폐기, Microstructure freshness/delivery v3/finite outcome 진단이다. 다음 자연 PID·PREOPEN·장후 성과 확인은 각 checklist OPEN owner가 소유한다.
+- #119 BUY Funnel Sentinel→submit drought handoff의 **R1~R5 코드 보완·재리뷰를 종결**, 자연 적용/성과는 OPEN이다. schema5/exact2 source binding, 실제 broker/upstream stage, retry cycle, 비차단 fallback 분리, 분모/schema/downstream generation 대사를 구현하고 raw suppression·확장 upstream의 recheck 권한 누출을 추가 보완했다. 통합 **1,061 PASS**, [현행 리뷰 §11](2026-09-07-buy-funnel-submit-drought-handoff-review.md#11-r1r5-보완-구현과-최종-재리뷰). 완료 증거는 `BuyFunnelFinalContractReviewRepair0907`, 자연 후속 owner는 `EntryRecheckNaturalAttribution0907`이다. 새 exact history·다음 PREOPEN/PID 소비가 확인되기 전 실적용·수익 개선으로 해석하지 않는다.
 - Entry AI gate 누적 backtest는 `on_demand only`이고 20:10 정기 wrapper producer가 아니다. 병합 전 gate에서 이를 반대로 요구하던 stale retirement 회귀를 정정해 일일 controller 유지와 누적 backtest 미호출을 함께 고정했다.
 - #23 R1→R5 구현·재리뷰: **코드 보완 종결, 자연 적용/성과 확인 OPEN**. 새 평가/과거 arm 분리, 잔량 확장 full-position 경제성, 시장·세션별 stop/재심, 기존 총량 내 durable submit 예약, 누적 진단 정기 실행 제외를 구현했다. 최종 통합 회귀 **2,088 PASS**, 관련 파일의 검증 전후 해시 동일, 검토 범위 미해결 finding 0건이다. 실제 env/PID·보고서는 이번에 덮어쓰지 않았으며 새 schema 산출물과 자연 비용 차감 EV는 별도 확인이다. 현재 판정은 [리뷰 §10](2026-09-06-one-share-drought-final-review.md#10-r1r5-구현수정재리뷰), 완료 증거는 `EntryRecheckFeasibilityRepairReview0907`, OPEN owner는 `EntryRecheckNaturalAttribution0907`이다.
 - 9월 6일 ADM/LDM 정리: #22, #29~42, #52~53의 scalping matrix·context·bucket·bridge 실행/승인 경로를 폐기했다. #28은 LDM 전용 단독 실행만 제거하고 #13 AVG_DOWN의 증분 CF·full-policy replay helper는 유지한다. raw candidate/order/fill/terminal lineage, Samsung·Entry AI gate·AVG_DOWN·PYRAMID 및 hard safety는 폐기 대상이 아니다.
@@ -58,6 +59,7 @@
 
 | 시각 | 작업/owner | 목적·목표 | 기대효과 | 운영상태 | 이번 상세검토 상태 | 연결 lock |
 | --- | --- | --- | --- | --- | --- | --- |
+| `09:05~19:20` | BUY Funnel Sentinel → submit drought handoff (#119) | KRX/NXT BUY→submit 병목을 exact attempt 기준으로 분리해 장후 workorder에 전달 | broad threshold 완화 없이 실제 병목 owner를 식별하고 submit·후속 EV 분모 회복 | producer ON / source-only handoff ON | **계약 수리·재리뷰 종결, 자연 적용 대기**; [#119 현행 리뷰 §11](2026-09-07-buy-funnel-submit-drought-handoff-review.md#11-r1r5-보완-구현과-최종-재리뷰) | E3; 당일 장후 E2 미확인 |
 | `20:05` | EOD KOSPI update | NXT 종료 뒤 일봉 DB·추천 원천 갱신 | 장후 producer의 최신 시장자료 확보 | ON | 상세검토 대기 | 없음 |
 | `20:10` | Main threshold-cycle wrapper | bot stop 뒤 tuning/source-quality/AI/approval/verifier 체인 실행 | 다음 PREOPEN 후보와 결손 workorder 생성 | ON, stop-only | 1~13 이전 종결; #22/#29~42/#52~53 폐기 검토, 나머지는 각 행 기준 | E1, E2, E3/E4/E6, P14~P18 |
 | `20:10` | Widget evaluation systemd | advisory·auto-trade calibration과 다음-session widget policy 생성 | widget 독립 정책의 당일 source-date 일치 | ON | 상세검토 대기 | E7 |
@@ -133,7 +135,7 @@
 | 46 | Panic-sell defense report | panic regime 종결 | recovery 상태 귀속 | exit 안정화 | ON | 상세검토 대기 | E2 |
 | 47 | Scale-in split plan | AVG_DOWN 총수량 보존 2-leg 정책 | 유효한 paired 증분 경제성을 policy·PREOPEN에 연결 | 체결 참여율·순이익 개선 기대, 실제 효과 미검증 | PRODUCER ON / v3 보완 완료 / 9월 7일 env 비선택 | [보완 §6](2026-09-06-scale-in-split-order-plan-final-review.md#6-f1f7-구현-및-반복-리뷰): F1~F7 및 재리뷰 결함 수정. BUY/SELL lifecycle join·공유 TTL 10/20초·fixed control·버전별 R6·결측 이월·paired>=3/2일·lineage 일치. 시장가 runtime 제외·3-leg 진단 전용. 943 PASS, 검토 범위 미해결0. v1/v2 승격 금지, 실제 cancel delta는 미계측 진단 | 구현 완료 기록 `ScaleInSplitFinalReviewRepair0907`; 자연 실행·실효성 확인 OPEN owner `ScaleInSplitNaturalEvidence0907`. 현재 표본 부재를 강제 수량/조건 완화로 해결하지 않음 |
 | 48 | Strategy-position fact sync | 완료 거래 fact 갱신 | 실제 체결·PnL 확정 | EV 정확성 향상 | ON | 상세검토 대기 | DB writer lock |
-| 49 | Scanner lookup-attention tuning | 조회자원 배분 조정 | 정책 생성 후 verify | API 효율 개선 | ON, DB 필요 | 상세검토 대기 | E2 |
+| 49 | Scanner lookup-attention tuning | `ka00198` 조회집중도를 기존 동일 tier 안의 후보 우선순위에 반영 | 적용된 raw-row exclusion 후 유효행 EV·독립 holdout과 실제 promoted/capacity-pruned top-set 변화를 검증해 다음 PREOPEN 정책 생성 | 유효한 상승 관심 종목의 제한된 감시자원 배분·순EV 개선 기대; 미검증 | ON, DB 필요; decision contract v3 보완 종결, 자연 증거 대기 | [최종 구현·리뷰](2026-09-07-scanner-lookup-attention-final-review.md): 전체일자 과잉차단 제거, funnel·generation pair·campaign continuity·자동 live gate 결속. code-level finding 0; 신규 PID/report/PREOPEN 효과는 `ScannerLookupAttentionNaturalEvidence0908` OPEN | E2; 신규 operator lock 없음 |
 | 50 | Daily threshold report | 일별·누적 후보 통합 | calibration·AI review 생성 | PREOPEN 근거 통합 | ON | 상세검토 대기 | E2 |
 | 51 | Threshold AI correction | deterministic 후보 2차 검토 | parsed review 확보 | 잘못된 자동후보 차단 | ON, OpenAI | 상세검토 대기 | provider budget lock |
 | 52 | Statistical action weight | 행동별 통계 가중치 | report-only 진단 | ADM 해석 개선 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
@@ -213,6 +215,14 @@
 | 116 | Verifier final | DONE 포함 최종검증 | exact-date terminal 계약 | 성공 오판 방지 | ON | 상세검토 대기 | E2 |
 | 117 | Tuning performance control tower | EV/runtime 결과 요약 | 유지·중단·수정 후보 분류 | 불필요 작업 식별 | ON | 상세검토 대기 | E2 |
 | 118 | Bot restart | 완료 후 runtime 재개 | 명시 승인 시에만 재시작 | 무인 운영 | OFF, stop-only | 상세검토 대기 | 없음 |
+
+### 4.5 Main wrapper 외 핵심 선행 입력
+
+실행 시각은 번호 순서와 다르다. 아래 번호는 기존 review index를 보존하면서 누락 단위를 독립 추적하기 위해 끝에 추가했다.
+
+| # | 작업 | 목적 | 목표 | 기대효과 | 운영상태 | 상세검토 상태 | 연결 lock |
+| ---: | --- | --- | --- | --- | --- | --- | --- |
+| 119 | BUY Funnel Sentinel → submit drought handoff | BUY 후보가 submit에 이르지 못한 원인을 단계별로 분리 | 다섯 core axis의 exact attempt·terminal을 분리해 실제 causal owner에 전달 | 무차별 threshold 완화 없이 submit 병목 수리와 후속 비용 차감 EV 표본 회복 | 5분 producer/장후 handoff ON; 직접 runtime 권한 없음, 간접 recheck PREOPEN 경로 있음 | [보완·재리뷰 §11](2026-09-07-buy-funnel-submit-drought-handoff-review.md#11-r1r5-보완-구현과-최종-재리뷰): **1,061 PASS**, R1~R5 및 raw 보존/권한 경계 보완. 탐지 floor 유지, 진단 수리와 EV 승격 조건 분리. 구 history 대체·다음 PREOPEN/PID의 새 계약 소비는 미확인 | E3; 코드 종결=`BuyFunnelFinalContractReviewRepair0907`, 자연 후속 OPEN=`EntryRecheckNaturalAttribution0907` |
 
 ## 5. 다음 자연 실행에서 분리해 확인할 것
 

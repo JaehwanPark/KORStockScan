@@ -4,6 +4,8 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from src.engine.scalping.micro_reversion.canary_monitor import (
     CANARY_GUARD_SCHEMA,
     CANARY_MONITOR_SCHEMA,
@@ -58,6 +60,9 @@ def _healthy_snapshot(**overrides):
             "isolated_error_type": None,
             "canary_auto_stop_reason": None,
             "path_exchange_timestamp_regression_exceeded_count": 0,
+            "invalid_exchange_timestamp_count": 0,
+            "stale_exchange_timestamp_block_count": 0,
+            "invalid_depth_timestamp_count": 0,
         }
     )
     snapshot.update(overrides)
@@ -187,6 +192,48 @@ def test_guard_keeps_collector_running_for_bounded_ingress_queue_loss() -> None:
     assert evaluation["stop_required"] is False
     assert evaluation["raw_row_exclusion_required"] is True
     assert evaluation["stop_reasons"] == ()
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "invalid_exchange_timestamp_count",
+        "stale_exchange_timestamp_block_count",
+        "invalid_depth_timestamp_count",
+    ],
+)
+def test_timestamp_rejections_require_source_exclusion_without_auto_stop(field):
+    snapshot = _healthy_snapshot(**{field: 33})
+    if field == "invalid_depth_timestamp_count":
+        snapshot.update({key: 0 for key in _DEPTH_ZERO_STOP_COUNTERS})
+        snapshot.update({key: 0 for key in _DEPTH_ROW_EXCLUSION_COUNTERS})
+        snapshot.update(
+            depth_capture_requested=True,
+            depth_capture_active=True,
+            depth_writer_count=0,
+            depth_writer_alive_count=0,
+        )
+    result = evaluate_canary_snapshot(snapshot, _guard())
+    assert result["stop_required"] is False
+    assert result["raw_row_exclusion_required"] is True
+    assert result["status"] == "healthy_observer_canary_with_source_row_exclusions"
+    assert (
+        f"timestamp_source_rejected_before_enqueue:{field}=33"
+        in result["source_quality_row_exclusions"]
+    )
+    assert (
+        result["timestamp_source_quality"]["exact_rejected_row_exclusion_proven"]
+        is False
+    )
+
+
+@pytest.mark.parametrize("value", [None, -1, True, "bad", 0.5, float("inf")])
+def test_missing_timestamp_census_is_not_healthy_source_evidence(value):
+    result = evaluate_canary_snapshot(
+        _healthy_snapshot(invalid_exchange_timestamp_count=value), _guard()
+    )
+    assert result["stop_required"] is False
+    assert result["raw_row_exclusion_required"] is True
 
 
 def test_guard_quarantines_timestamp_regression_without_stopping_collector() -> None:

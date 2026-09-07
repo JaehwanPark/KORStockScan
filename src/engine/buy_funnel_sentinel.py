@@ -24,6 +24,9 @@ from src.engine.pipeline_event_summary import (
     update_and_load_pipeline_event_summaries,
 )
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
+from src.engine.automation.submit_drought_contract import (
+    UPSTREAM_TERMINAL_STAGES as UPSTREAM_BLOCK_STAGES,
+)
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 
 MANUAL_EXCLUDED_STOCKS = {
@@ -39,12 +42,6 @@ ENTRY_STAGES = {
 }
 HOLDING_STAGES = {"holding_started"}
 SOURCE_HANDOFF_STAGES = {"prev_close_gainer_entry_ai_handoff"}
-UPSTREAM_BLOCK_STAGES = {
-    "blocked_ai_score",
-    "ai_score_50_buy_hold_override",
-    "wait65_79_ev_candidate",
-    "first_ai_wait",
-}
 AI_TERMINAL_ATTRIBUTION_STAGES = {
     "ai_confirmed_terminal_no_budget",
 }
@@ -65,11 +62,15 @@ PRICE_GUARD_STAGES = {
     "entry_ai_price_canary_fallback",
     "scale_in_price_guard_block",
 }
-ENTRY_PRICE_GUARD_STAGES = PRICE_GUARD_STAGES - {"scale_in_price_guard_block"}
+ENTRY_PRICE_GUARD_STAGES = PRICE_GUARD_STAGES - {
+    "scale_in_price_guard_block",
+    "entry_ai_price_canary_fallback",
+}
 ENTRY_AI_AUTHORITY_GUARD_STAGES = {
     "pre_submit_entry_ai_authority_guard_block",
 }
 BROKER_SUBMIT_FAILURE_STAGES = {
+    "order_bundle_failed",
     "broker_submit_failed",
     "buy_order_failed",
     "submit_order_failed",
@@ -112,8 +113,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 7
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 9
+EVENT_CACHE_SCHEMA_VERSION = 8
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 10
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -130,17 +131,29 @@ PRE_SUBMIT_REFRESH_NOOP_REASONS = {
     "latest_ws_snapshot_fresh",
     "latest_snapshot_fresh",
 }
-SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER = (
+SUBMIT_DROUGHT_CORE_AXIS_ORDER = (
     "UPSTREAM_GATE",
-    "BUDGET_PASS_COLLAPSE",
     "LATENCY_PRE_SUBMIT",
-    "PRICE_REVALIDATION",
     "ENTRY_AI_AUTHORITY_REVALIDATION",
+    "PRICE_REVALIDATION",
     "BROKER_RECEIPT",
+)
+SUBMIT_DROUGHT_SUPPORTING_AXIS_ORDER = (
+    "BUDGET_PASS_COLLAPSE",
     "ECONOMIC_PARTICIPATION",
     "SIM_REAL_AUTHORITY",
     "SOURCE_TAXONOMY_LEAKAGE",
 )
+SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER = (
+    *SUBMIT_DROUGHT_CORE_AXIS_ORDER,
+    *SUBMIT_DROUGHT_SUPPORTING_AXIS_ORDER,
+)
+EXACT_SUBMIT_FUNNEL_STAGES = {
+    "ai_confirmed",
+    "budget_pass",
+    "latency_pass",
+    "order_bundle_submitted",
+}
 PROBE_BUNDLE_LIFECYCLE_STAGES = {
     "probe_submitted",
     "probe_filled",
@@ -322,6 +335,7 @@ def _payload_to_cache_row(
     if (
         exclude_summary_stages
         and stage in SUMMARY_STAGES
+        and stage not in UPSTREAM_BLOCK_STAGES
         and not _payload_requires_lossless_cache(payload, raw_field_dict)
     ):
         return None
@@ -436,6 +450,7 @@ def load_pipeline_events(
         if (
             exclude_summary_stages
             and _safe_str(payload.get("stage")) in SUMMARY_STAGES
+            and _safe_str(payload.get("stage")) not in UPSTREAM_BLOCK_STAGES
             and not _payload_requires_lossless_cache(payload, raw_field_dict)
         ):
             continue
@@ -498,6 +513,20 @@ def _load_event_sources(
         use_cache=use_cache,
         exclude_summary_stages=exclude_summary_stages,
     )
+    # The producer can suppress raw high-volume rows. A raw-derived summary
+    # alone cannot reveal that loss. Read terminal producer totals even in the
+    # raw-only mode; they are exclusion evidence, never reconstructed attempts.
+    producer_path = existing_or_gzip_path(
+        _event_summary_dir() / f"pipeline_event_producer_summary_{target_date}.jsonl"
+    )
+    if producer_path.exists():
+        summary_rows.extend(
+            {**row, "_summary_source": "producer"}
+            for row in iter_jsonl(producer_path)
+            if row.get("pipeline") == "ENTRY_PIPELINE"
+            and row.get("stage") in UPSTREAM_BLOCK_STAGES
+            and not _is_ignored_event(row)
+        )
     return (
         events,
         summary_rows,
@@ -740,9 +769,333 @@ def _select_scope_classification(
 
 def _exact_attempt_key(event: PipelineEvent) -> str | None:
     record_id = _safe_str(event.record_id).strip()
-    if not record_id or record_id.lower() in {"0", "none", "null", "-"}:
+    if not record_id or record_id.lower() in {
+        "0",
+        "0.0",
+        "none",
+        "null",
+        "-",
+        "unknown",
+        "nan",
+        "nat",
+        "false",
+        "true",
+    }:
         return None
     return f"id:{record_id}"
+
+
+def _submit_drought_axis_for_event(event: PipelineEvent) -> str | None:
+    if event.stage == "order_bundle_failed":
+        try:
+            attempts = int(event.fields.get("broker_submit_attempt_count", ""))
+            responses = int(
+                event.fields.get("broker_submit_success_response_count", "")
+            )
+        except (ValueError, TypeError):
+            return None
+        if attempts < 0 or not 0 <= responses <= attempts:
+            return None
+        mode = event.fields.get("order_bundle_failure_mode")
+        expected = (
+            "pre_broker_blocked"
+            if attempts == 0
+            else (
+                "broker_acknowledged_order_identity_missing"
+                if responses
+                else "broker_submit_failed_or_unacknowledged"
+            )
+        )
+        if mode != expected:
+            return None
+        return "BROKER_RECEIPT" if attempts else "UPSTREAM_GATE"
+    if event.stage in UPSTREAM_BLOCK_STAGES:
+        return "UPSTREAM_GATE"
+    if event.stage == "latency_block" and (
+        _field_first(event.fields, ("reason", "latency_danger_reasons", "decision"))
+        in {"latency_state_danger", "REJECT_DANGER"}
+        or _contains_text_token(event.fields, "latency_state_danger")
+    ):
+        return "LATENCY_PRE_SUBMIT"
+    if event.stage in ENTRY_AI_AUTHORITY_GUARD_STAGES:
+        return "ENTRY_AI_AUTHORITY_REVALIDATION"
+    if event.stage in ENTRY_PRICE_GUARD_STAGES:
+        return "PRICE_REVALIDATION"
+    if event.stage in BROKER_SUBMIT_FAILURE_STAGES:
+        return "BROKER_RECEIPT"
+    return None
+
+
+def _exact_submit_drought_axis_summary(
+    events: list[PipelineEvent],
+) -> dict[str, Any]:
+    """Reconstruct execution attempts, never symbol-fallback or borrowed passes.
+
+    A producer attempt ID partitions a record when available. Without one, a
+    repeated entry evaluation after a terminal result starts an ordered cycle.
+    A retry preserves the old failure; it is not successful gate recovery.
+    """
+    relevant = (
+        EXACT_SUBMIT_FUNNEL_STAGES
+        | UPSTREAM_BLOCK_STAGES
+        | {
+            "latency_block",
+            "order_bundle_failed",
+        }
+        | ENTRY_AI_AUTHORITY_GUARD_STAGES
+        | ENTRY_PRICE_GUARD_STAGES
+        | BROKER_SUBMIT_FAILURE_STAGES
+    )
+    grouped: dict[str, list[PipelineEvent]] = defaultdict(list)
+    missing_den: Counter[str] = Counter()
+    missing_axis: Counter[str] = Counter()
+    axis_events: Counter[str] = Counter()
+    unknown_missing = 0
+    for event in events:
+        if event.pipeline != "ENTRY_PIPELINE" or _is_swing_blocker_label(event.stage):
+            continue
+        if event.stage not in relevant and not event.stage.startswith("blocked_"):
+            continue
+        axis = _submit_drought_axis_for_event(event)
+        key = _exact_attempt_key(event)
+        if axis:
+            axis_events[axis] += 1
+            if not key:
+                missing_axis[axis] += 1
+        if event.stage in EXACT_SUBMIT_FUNNEL_STAGES and not key:
+            missing_den[event.stage] += 1
+        if not key:
+            if axis is None and event.stage not in EXACT_SUBMIT_FUNNEL_STAGES:
+                unknown_missing += 1
+            continue
+        grouped[key].append(event)
+
+    denominator_order: Counter[str] = Counter()
+    axis_order: Counter[str] = Counter()
+    axis_keys = {axis: set() for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER}
+    recovered = {axis: set() for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER}
+    superseded = {axis: set() for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER}
+    ledger: list[dict[str, Any]] = []
+    retry_count = 0
+    recovery_stages = {
+        "UPSTREAM_GATE": {"budget_pass", "latency_pass", "order_bundle_submitted"},
+        "LATENCY_PRE_SUBMIT": {"latency_pass", "order_bundle_submitted"},
+        "ENTRY_AI_AUTHORITY_REVALIDATION": {"order_bundle_submitted"},
+        "PRICE_REVALIDATION": {"order_bundle_submitted"},
+        "BROKER_RECEIPT": {"order_bundle_submitted"},
+    }
+
+    for record_key, record_events in sorted(grouped.items()):
+        current: dict[str, Any] | None = None
+        explicit_id = ""
+        explicit_states: dict[str, dict[str, Any]] = {}
+        cycle = 0
+        seen_rows: set[tuple[Any, ...]] = set()
+        for event in sorted(record_events, key=lambda e: e.emitted_at):
+            # Duplicate source rows must not create another evaluation cycle.
+            signature = (
+                event.emitted_at,
+                event.stage,
+                tuple(sorted(event.fields.items())),
+            )
+            if signature in seen_rows:
+                continue
+            seen_rows.add(signature)
+            producer_id = _safe_str(event.fields.get("main_lifecycle_attempt_id"))
+            if producer_id.lower() in {"none", "null", "unknown", "-", "0"}:
+                producer_id = ""
+            resumed_explicit = producer_id in explicit_states
+            if resumed_explicit:
+                current = explicit_states[producer_id]
+                explicit_id = producer_id
+            axis = _submit_drought_axis_for_event(event)
+            progress = event.stage in EXACT_SUBMIT_FUNNEL_STAGES
+            new_cycle = bool(
+                current
+                and (
+                    (
+                        not resumed_explicit
+                        and producer_id
+                        and explicit_id
+                        and producer_id != explicit_id
+                    )
+                    or (current["state"] == "submitted")
+                    or (
+                        progress
+                        and current["state"] in {"blocked", "unclassified"}
+                        and event.stage in {"budget_pass", "ai_confirmed"}
+                        and event.stage in current["stages"]
+                    )
+                )
+            )
+            if current is None or new_cycle:
+                if new_cycle:
+                    retry_count += 1
+                cycle += 1
+                explicit_id = producer_id
+                current = {
+                    "attempt_key": f"{record_key}:cycle:{cycle}",
+                    "record_id": record_key.removeprefix("id:"),
+                    "producer_attempt_id": producer_id,
+                    "started_at": event.emitted_at.isoformat(),
+                    "stages": [],
+                    "terminal_axis": "",
+                    "terminal_stage": "",
+                    "state": "pending",
+                }
+                ledger.append(current)
+            elif producer_id and not explicit_id:
+                explicit_id = producer_id
+                current["producer_attempt_id"] = producer_id
+            if producer_id:
+                explicit_states[producer_id] = current
+            current["last_event_at"] = event.emitted_at.isoformat()
+            current["last_stage"] = event.stage
+            attempt_key = current["attempt_key"]
+            stages = current["stages"]
+            if axis:
+                axis_keys[axis].add(attempt_key)
+            if progress:
+                ordered = (
+                    event.stage != "latency_pass" or "budget_pass" in stages
+                ) and (
+                    event.stage != "order_bundle_submitted"
+                    or {"budget_pass", "latency_pass"} <= set(stages)
+                )
+                if not ordered:
+                    denominator_order[event.stage] += 1
+                    continue
+                if event.stage not in stages:
+                    stages.append(event.stage)
+                terminal = current["terminal_axis"]
+                if terminal and event.stage in recovery_stages[terminal]:
+                    recovered[terminal].add(attempt_key)
+                    current.update(terminal_axis="", terminal_stage="", state="pending")
+                if event.stage == "order_bundle_submitted":
+                    current.update(
+                        terminal_axis="", terminal_stage="", state="submitted"
+                    )
+                continue
+            if axis is None:
+                current.update(
+                    terminal_axis="", terminal_stage=event.stage, state="unclassified"
+                )
+                continue
+            ordered = (
+                (axis != "LATENCY_PRE_SUBMIT" or "budget_pass" in stages)
+                and (
+                    axis != "ENTRY_AI_AUTHORITY_REVALIDATION"
+                    or "ai_confirmed" in stages
+                )
+                and (axis != "PRICE_REVALIDATION" or "budget_pass" in stages)
+                and (
+                    axis != "BROKER_RECEIPT"
+                    or {"budget_pass", "latency_pass"} <= set(stages)
+                )
+            )
+            if not ordered:
+                axis_order[axis] += 1
+                continue
+            prior = current["terminal_axis"]
+            if prior and prior != axis:
+                superseded[prior].add(attempt_key)
+            current.update(
+                terminal_axis=axis, terminal_stage=event.stage, state="blocked"
+            )
+
+    terminal_counts = Counter(
+        row["terminal_axis"] for row in ledger if row["state"] == "blocked"
+    )
+    states = Counter(row["state"] for row in ledger)
+    denominator_counts = {
+        stage: sum(stage in row["stages"] for row in ledger)
+        for stage in sorted(EXACT_SUBMIT_FUNNEL_STAGES)
+    }
+    missing = sum(missing_den.values()) + sum(missing_axis.values())
+    violations = sum(denominator_order.values()) + sum(axis_order.values())
+    # Unidentifiable unknown terminal rows are explicit excluded ledger entries;
+    # they carry no denominator/causal count and cannot support activation.
+    for index in range(unknown_missing):
+        ledger.append(
+            {
+                "attempt_key": f"unidentified_terminal:{index}",
+                "record_id": "",
+                "producer_attempt_id": "",
+                "stages": [],
+                "terminal_axis": "",
+                "state": "unclassified",
+            }
+        )
+    states["unclassified"] += unknown_missing
+    return {
+        "schema_version": 2,
+        "identity_field": "record_id",
+        "identity_fallback_allowed": False,
+        "attempt_partition_policy": "record_explicit_attempt_or_ordered_retry_v2",
+        "status": (
+            "source_quality_gap_excluded"
+            if missing or violations or states["unclassified"]
+            else "pass"
+        ),
+        "exclusion_applied": True,
+        "core_handoff_axes": list(SUBMIT_DROUGHT_CORE_AXIS_ORDER),
+        "denominator_stages": sorted(EXACT_SUBMIT_FUNNEL_STAGES),
+        "denominator_exact_attempt_counts": denominator_counts,
+        "denominator_missing_exact_attempt_key_events": {
+            stage: missing_den[stage] for stage in sorted(EXACT_SUBMIT_FUNNEL_STAGES)
+        },
+        "denominator_stage_order_violation_events": {
+            stage: denominator_order[stage]
+            for stage in sorted(EXACT_SUBMIT_FUNNEL_STAGES)
+        },
+        "axis_missing_exact_attempt_key_events": {
+            axis: missing_axis[axis] for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
+        },
+        "axis_stage_order_violation_events": {
+            axis: axis_order[axis] for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
+        },
+        "axis_event_counts": {
+            axis: axis_events[axis] for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
+        },
+        "axis_exact_attempt_event_counts": {
+            axis: len(axis_keys[axis]) for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
+        },
+        "axis_terminal_causal_attempt_counts": {
+            axis: terminal_counts[axis] for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
+        },
+        "axis_later_progress_attempt_counts": {
+            axis: len(recovered[axis]) for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
+        },
+        "axis_superseded_attempt_counts": {
+            axis: len(superseded[axis]) for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
+        },
+        "terminal_causal_attempt_count": states["blocked"],
+        "terminal_causal_partition_disjoint": True,
+        "missing_exact_attempt_key_event_count": missing,
+        "stage_order_violation_event_count": violations,
+        "attempt_ledger": ledger,
+        "attempt_count": len(ledger),
+        "submitted_attempt_count": states["submitted"],
+        "pending_attempt_count": states["pending"],
+        "unclassified_terminal_attempt_count": states["unclassified"],
+        "retry_attempt_count": retry_count,
+        "metric_role": "funnel_count",
+        "decision_authority": "submit_drought_attribution_only",
+        "window_policy": "same_day_venue_session_ordered_attempt_cycles",
+        "sample_floor": "one_valid_record_attempt_per_causal_axis",
+        "primary_decision_metric": "terminal_causal_attempt_count",
+        "source_quality_gate": "exact_record_identity_ordered_stages_excluded_invalid_rows",
+        "forbidden_uses": [
+            "standalone_runtime_apply",
+            "broker_order_submit",
+            "guard_relaxation",
+            "provider_change",
+            "bot_restart",
+            "standalone_ev_approval",
+        ],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def _stage_unique_key(event: PipelineEvent) -> str:
@@ -1505,6 +1858,62 @@ def _summary_row_count_in_range(
         return 0, None
 
 
+def _terminal_summary_gaps(events, summary_rows, *, start_at, end_at):
+    """Identify compacted terminal windows without inventing attempt IDs."""
+    raw = Counter(
+        (
+            e.stock_code,
+            e.stage,
+            e.emitted_at.replace(second=0, microsecond=0).isoformat(),
+            _blocker_label(e),
+        )
+        for e in events
+        if e.pipeline == "ENTRY_PIPELINE" and e.stage in UPSTREAM_BLOCK_STAGES
+    )
+    by_source = defaultdict(Counter)
+    for row in summary_rows or []:
+        if (
+            row.get("stage") not in UPSTREAM_BLOCK_STAGES
+            or row.get("pipeline") != "ENTRY_PIPELINE"
+        ):
+            continue
+        count, _ = _summary_row_count_in_range(row, start_at=start_at, end_at=end_at)
+        bucket = _parse_iso_datetime(_safe_str(row.get("bucket_start")))
+        if count > 0 and bucket:
+            by_source[row.get("_summary_source", "raw")][
+                (
+                    _safe_str(row.get("stock_code")),
+                    row["stage"],
+                    bucket.isoformat(),
+                    _safe_str(row.get("reason_label")),
+                )
+            ] += count
+    # Producer and raw-derived summaries describe overlapping events.
+    totals = Counter()
+    for counts in by_source.values():
+        totals |= counts
+    return [
+        {
+            "stock_code": key[0],
+            "stage": key[1],
+            "bucket_start": key[2],
+            "reason_label": key[3],
+            "missing_event_count": count - raw[key],
+        }
+        for key, count in sorted(totals.items())
+        if count > raw[key]
+    ]
+
+
+def _apply_terminal_summary_gaps(exact, gaps):
+    count = sum(row["missing_event_count"] for row in gaps)
+    exact["summary_terminal_identity_gap_events"] = count
+    if count:
+        exact["axis_missing_exact_attempt_key_events"]["UPSTREAM_GATE"] += count
+        exact["missing_exact_attempt_key_event_count"] += count
+        exact["status"] = "source_quality_gap_excluded"
+
+
 def _summarize_events(
     events: list[PipelineEvent],
     *,
@@ -1518,13 +1927,25 @@ def _summarize_events(
         if start_at <= event.emitted_at <= end_at
         and not _is_early_accel_recheck_retry_event(event)
     ]
-    has_summary_rows = bool(summary_rows)
+    has_summary_rows = any(
+        row.get("_summary_source") != "producer" for row in summary_rows or []
+    )
     lossless_scoped = [
         event
         for event in scoped
-        if not (has_summary_rows and event.stage in SUMMARY_STAGES)
+        if not (
+            has_summary_rows
+            and event.stage in SUMMARY_STAGES
+            and event.stage not in UPSTREAM_BLOCK_STAGES
+        )
     ]
     stage_event_counts = Counter(event.stage for event in lossless_scoped)
+    terminal_summary_gaps = _terminal_summary_gaps(
+        [event for event in events if start_at <= event.emitted_at <= end_at],
+        summary_rows,
+        start_at=start_at,
+        end_at=end_at,
+    )
     summary_event_count = 0
     summary_latest_candidates: list[datetime] = []
     summary_blocker_counter: Counter[str] = Counter()
@@ -1536,6 +1957,10 @@ def _summarize_events(
         if count <= 0:
             continue
         stage = _safe_str(row.get("stage"))
+        # These terminal stages now retain exact lossless rows. Do not count
+        # their diagnostic summary a second time.
+        if stage in UPSTREAM_BLOCK_STAGES:
+            continue
         label = _safe_str(row.get("reason_label")) or f"{stage}:-"
         stage_event_counts[stage] += count
         summary_event_count += count
@@ -1546,16 +1971,25 @@ def _summarize_events(
                 summary_swing_blocker_counter[label] += count
             else:
                 summary_blocker_counter[label] += count
-    stage_unique_counts = {
-        stage: len(
-            {
-                _stage_unique_key(event)
-                for event in lossless_scoped
-                if event.stage == stage
-            }
-        )
-        for stage in sorted(set(stage_event_counts) | ENTRY_STAGES | HOLDING_STAGES)
-    }
+    stage_unique_counts: dict[str, int] = {}
+    for gap in terminal_summary_gaps:
+        stage_event_counts[gap["stage"]] += gap["missing_event_count"]
+        summary_blocker_counter[gap["reason_label"]] += gap["missing_event_count"]
+        summary_event_count += gap["missing_event_count"]
+    for stage in sorted(set(stage_event_counts) | ENTRY_STAGES | HOLDING_STAGES):
+        stage_events = [event for event in lossless_scoped if event.stage == stage]
+        if stage in EXACT_SUBMIT_FUNNEL_STAGES:
+            stage_unique_counts[stage] = len(
+                {
+                    key
+                    for event in stage_events
+                    if (key := _exact_attempt_key(event)) is not None
+                }
+            )
+        else:
+            stage_unique_counts[stage] = len(
+                {_stage_unique_key(event) for event in stage_events}
+            )
     raw_blocker_labels = [
         _blocker_label(event)
         for event in lossless_scoped
@@ -1608,7 +2042,11 @@ def _summarize_events(
         previous = budget_pass_first_at.get(key)
         if previous is None or event.emitted_at < previous:
             budget_pass_first_at[key] = event.emitted_at
-    latency_danger_attempt_keys = {_attempt_key(event) for event in latency_blocks}
+    latency_danger_attempt_keys = {
+        key
+        for event in latency_blocks
+        if (key := _exact_attempt_key(event)) is not None
+    }
     latency_blocked_budget_events = [
         event
         for event in latency_blocks
@@ -1645,7 +2083,9 @@ def _summarize_events(
             _field_first(event.fields, ("action", "ai_action", "decision"))
             or "NOT_REPORTED"
         )
-        ai_action_unique.setdefault(action, set()).add(_ai_trace_key(event))
+        exact_key = _exact_attempt_key(event)
+        if exact_key is not None:
+            ai_action_unique.setdefault(action, set()).add(exact_key)
     latency_danger_reason_counts = Counter(
         label
         for event in latency_blocks
@@ -1664,44 +2104,52 @@ def _summarize_events(
         and event.emitted_at >= budget_pass_first_at[key]
     ]
     refresh_attempt_keys = {
-        _attempt_key(event)
+        key
         for event in refresh_scope_events
+        if (key := _exact_attempt_key(event)) is not None
         if _event_refresh_attempted(event)
     }
     refresh_applied_keys = {
-        _attempt_key(event)
+        key
         for event in refresh_scope_events
+        if (key := _exact_attempt_key(event)) is not None
         if _event_refresh_applied(event)
     }
     refresh_blocked_after_attempt_keys = {
-        _attempt_key(event)
+        key
         for event in refresh_scope_events
+        if (key := _exact_attempt_key(event)) is not None
         if event.stage == "latency_block"
         and _event_refresh_attempted(event)
         and not _event_refresh_applied(event)
     }
     refresh_latency_pass_count = len(
         {
-            _attempt_key(event)
+            key
             for event in refresh_scope_events
+            if (key := _exact_attempt_key(event)) is not None
             if event.stage == "latency_pass" and _event_refresh_applied(event)
         }
     )
     refresh_latency_pass_keys = {
-        _attempt_key(event)
+        key
         for event in refresh_scope_events
+        if (key := _exact_attempt_key(event)) is not None
         if event.stage == "latency_pass" and _event_refresh_applied(event)
     }
     refresh_order_bundle_submitted_count = len(
         {
-            _attempt_key(event)
+            key
             for event in refresh_scope_events
+            if (key := _exact_attempt_key(event)) is not None
             if event.stage == "order_bundle_submitted" and _event_refresh_applied(event)
         }
     )
     events_by_key: dict[str, list[PipelineEvent]] = {}
     for event in lossless_scoped:
-        events_by_key.setdefault(_attempt_key(event), []).append(event)
+        exact_key = _exact_attempt_key(event)
+        if exact_key is not None:
+            events_by_key.setdefault(exact_key, []).append(event)
     post_refresh_downstream_counter: Counter[str] = Counter()
     post_refresh_downstream_stage_counter: Counter[str] = Counter()
     for key in refresh_latency_pass_keys:
@@ -1728,6 +2176,12 @@ def _summarize_events(
         post_refresh_downstream_counter[bucket] += 1
         if next_event is not None:
             post_refresh_downstream_stage_counter[next_event.stage] += 1
+    exact_attempt_contract = _exact_submit_drought_axis_summary(lossless_scoped)
+    _apply_terminal_summary_gaps(exact_attempt_contract, terminal_summary_gaps)
+    for stage, count in exact_attempt_contract[
+        "denominator_exact_attempt_counts"
+    ].items():
+        stage_unique_counts[stage] = int(count)
     ai_unique = stage_unique_counts.get("ai_confirmed", 0)
     budget_unique = stage_unique_counts.get("budget_pass", 0)
     latency_unique = stage_unique_counts.get("latency_pass", 0)
@@ -1742,6 +2196,7 @@ def _summarize_events(
     economic_participation = _economic_submit_participation(lossless_scoped)
     market_gainer_handoff = _market_gainer_handoff_summary(lossless_scoped)
     budget_ai_lineage = _budget_ai_lineage_summary(lossless_scoped)
+    terminal_axis_counts = exact_attempt_contract["axis_terminal_causal_attempt_counts"]
 
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
@@ -1749,6 +2204,7 @@ def _summarize_events(
         "event_count": len(lossless_scoped) + summary_event_count,
         "lossless_event_count": len(lossless_scoped),
         "summary_event_count": summary_event_count,
+        "terminal_summary_gap_windows": terminal_summary_gaps,
         "latest_event_at": latest_event_at,
         "economic_participation": economic_participation,
         "market_gainer_handoff": market_gainer_handoff,
@@ -1797,10 +2253,17 @@ def _summarize_events(
             action: len(keys) for action, keys in sorted(ai_action_unique.items())
         },
         "budget_ai_lineage": budget_ai_lineage,
+        "exact_attempt_contract": exact_attempt_contract,
+        "stage_missing_exact_attempt_key_events": {
+            stage: int(
+                exact_attempt_contract[
+                    "denominator_missing_exact_attempt_key_events"
+                ].get(stage, 0)
+            )
+            for stage in sorted(EXACT_SUBMIT_FUNNEL_STAGES)
+        },
         "upstream_block_events": len(upstream_events),
-        "upstream_block_unique": len(
-            {_ai_trace_key(event) for event in upstream_events}
-        ),
+        "upstream_block_unique": int(terminal_axis_counts["UPSTREAM_GATE"]),
         "latency_state_danger_events": len(latency_blocks),
         "latency_state_danger_unique": len(latency_danger_attempt_keys),
         "budget_pass_missing_exact_attempt_key_events": sum(
@@ -1813,17 +2276,17 @@ def _summarize_events(
         ),
         "latency_blocked_budget_events": len(latency_blocked_budget_events),
         "latency_blocked_budget_unique": len(latency_blocked_budget_attempt_keys),
+        "latency_terminal_causal_unique": int(
+            terminal_axis_counts["LATENCY_PRE_SUBMIT"]
+        ),
         "price_guard_events": len(price_guard_events),
-        "price_guard_unique": len(
-            {_attempt_key(event) for event in price_guard_events}
-        ),
+        "price_guard_unique": int(terminal_axis_counts["PRICE_REVALIDATION"]),
         "entry_ai_authority_guard_events": len(entry_ai_authority_guard_events),
-        "entry_ai_authority_guard_unique": len(
-            {_attempt_key(event) for event in entry_ai_authority_guard_events}
+        "entry_ai_authority_guard_unique": int(
+            terminal_axis_counts["ENTRY_AI_AUTHORITY_REVALIDATION"]
         ),
-        "broker_submit_failure_unique": len(
-            {_attempt_key(event) for event in broker_submit_failure_events}
-        ),
+        "broker_submit_failure_events": len(broker_submit_failure_events),
+        "broker_submit_failure_unique": int(terminal_axis_counts["BROKER_RECEIPT"]),
         "quote_freshness_refresh_attempted_count": len(refresh_attempt_keys),
         "quote_freshness_refresh_applied_count": len(refresh_applied_keys),
         "quote_freshness_still_latency_blocked_after_refresh_count": len(
@@ -2163,16 +2626,20 @@ def _classify(
         matches.append("RUNTIME_OPS")
         reasons.append("pipeline event stream is empty or stale during sentinel hours")
 
-    price_guard = current["price_guard_events"] >= 3 and (
-        submitted_unique == 0 or current["price_guard_events"] >= max(3, latency_unique)
+    price_guard_unique = int(current.get("price_guard_unique", 0) or 0)
+    price_guard = price_guard_unique >= 3 and (
+        submitted_unique == 0 or price_guard_unique >= max(3, latency_unique)
     )
     if price_guard:
         matches.append("PRICE_GUARD_DROUGHT")
         reasons.append("price guard blocks dominate the downstream submit path")
 
-    entry_ai_authority_guard = current["entry_ai_authority_guard_events"] >= 3 and (
+    entry_ai_authority_guard_unique = int(
+        current.get("entry_ai_authority_guard_unique", 0) or 0
+    )
+    entry_ai_authority_guard = entry_ai_authority_guard_unique >= 3 and (
         submitted_unique == 0
-        or current["entry_ai_authority_guard_events"] >= max(3, latency_unique)
+        or entry_ai_authority_guard_unique >= max(3, latency_unique)
     )
     if entry_ai_authority_guard:
         matches.append("ENTRY_AI_AUTHORITY_DROUGHT")
@@ -2181,17 +2648,17 @@ def _classify(
         )
 
     latency_danger_events = int(current.get("latency_state_danger_events", 0) or 0)
-    latency_blocked_budget_unique = int(
-        current.get("latency_blocked_budget_unique", 0) or 0
+    latency_terminal_causal_unique = int(
+        current.get("latency_terminal_causal_unique", 0) or 0
     )
     latency_drought = (
         budget_unique >= 3
         and latency_danger_events > 0
-        and latency_blocked_budget_unique > 0
+        and latency_terminal_causal_unique > 0
         and (
             submitted_unique == 0
             or ratios["latency_to_budget_unique_pct"] < 25.0
-            or latency_blocked_budget_unique
+            or latency_terminal_causal_unique
             >= max(3, submitted_unique + latency_unique)
         )
     )
@@ -2200,14 +2667,14 @@ def _classify(
         reasons.append("budget_pass exists but latency/submitted conversion is weak")
 
     budget_to_ai = float(ratios.get("budget_to_ai_unique_pct", 0.0) or 0.0)
-    upstream_block_events = int(current.get("upstream_block_events", 0) or 0)
+    upstream_block_unique = int(current.get("upstream_block_unique", 0) or 0)
     upstream_collapse = ai_unique >= 10 and budget_to_ai < 35.0
     if baseline_budget_to_ai is not None and baseline_budget_to_ai > 0:
         upstream_collapse = (
             upstream_collapse and budget_to_ai <= baseline_budget_to_ai * 0.6
         )
     upstream_threshold = upstream_collapse or (
-        ai_unique >= 10 and upstream_block_events >= max(5, budget_unique)
+        ai_unique >= 10 and upstream_block_unique >= max(5, budget_unique)
     )
     if upstream_threshold:
         matches.append("UPSTREAM_AI_THRESHOLD")
@@ -2308,7 +2775,7 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
     if primary == "SUBMIT_DROUGHT_CRITICAL":
         return [
             "Auto-route ai_confirmed -> budget_pass -> latency_pass -> order_bundle_submitted drought into postclose code-improvement workorder handoff.",
-            "Split root cause into upstream gate, budget pass, latency/pre-submit guard, and broker receipt buckets before tuning thresholds.",
+            "Split root cause into exact-attempt upstream, latency/pre-submit, Entry-AI-authority revalidation, price revalidation, and broker-receipt axes before tuning thresholds.",
             "Do not require operator approval for submitted drought surfacing or downstream workorder generation.",
         ]
     if primary == "UPSTREAM_AI_THRESHOLD":
@@ -2491,6 +2958,11 @@ def _entry_submit_drought_contract(
         "economic_participation": economic_participation,
         "thresholds": classification.get("submit_drought_thresholds") or {},
         "weak_contract_matches": weak_contract_matches,
+        "core_handoff_axes": observation_breakdown["core_handoff_axes"],
+        "supporting_diagnostic_axes": observation_breakdown[
+            "supporting_diagnostic_axes"
+        ],
+        "exact_attempt_contract": observation_breakdown["exact_attempt_contract"],
         "causal_bottleneck_axes": observation_breakdown["causal_bottleneck_axes"],
         "observation_only_axes": observation_breakdown["observation_only_axes"],
         "no_current_signal_axes": observation_breakdown["no_current_signal_axes"],
@@ -2538,6 +3010,9 @@ def _entry_submit_drought_observation_breakdown(
     latency_blocked_budget_unique = int(
         session_summary.get("latency_blocked_budget_unique", 0) or 0
     )
+    latency_terminal_causal_unique = int(
+        session_summary.get("latency_terminal_causal_unique", 0) or 0
+    )
     latency_root_cause_counts = (
         root_cause.get("latency_root_cause_counts")
         if isinstance(root_cause.get("latency_root_cause_counts"), dict)
@@ -2564,12 +3039,67 @@ def _entry_submit_drought_observation_breakdown(
     linked_budget_block_count = int(
         budget_ai_lineage.get("linked_budget_block_trace_count", 0) or 0
     )
+    exact_attempt_contract = (
+        session_summary.get("exact_attempt_contract")
+        if isinstance(session_summary.get("exact_attempt_contract"), dict)
+        else {}
+    )
+    exact_missing_by_axis = (
+        exact_attempt_contract.get("axis_missing_exact_attempt_key_events")
+        if isinstance(
+            exact_attempt_contract.get("axis_missing_exact_attempt_key_events"), dict
+        )
+        else {}
+    )
+    exact_order_gaps_by_axis = (
+        exact_attempt_contract.get("axis_stage_order_violation_events")
+        if isinstance(
+            exact_attempt_contract.get("axis_stage_order_violation_events"), dict
+        )
+        else {}
+    )
+    exact_event_attempts_by_axis = (
+        exact_attempt_contract.get("axis_exact_attempt_event_counts")
+        if isinstance(
+            exact_attempt_contract.get("axis_exact_attempt_event_counts"), dict
+        )
+        else {}
+    )
+    later_progress_by_axis = (
+        exact_attempt_contract.get("axis_later_progress_attempt_counts")
+        if isinstance(
+            exact_attempt_contract.get("axis_later_progress_attempt_counts"), dict
+        )
+        else {}
+    )
+
+    def exact_axis_contract(axis: str, observed_count: int) -> dict[str, Any]:
+        missing_count = int(exact_missing_by_axis.get(axis, 0) or 0)
+        order_gap_count = int(exact_order_gaps_by_axis.get(axis, 0) or 0)
+        return {
+            "identity_field": "record_id",
+            "identity_fallback_allowed": False,
+            "exact_join_valid": observed_count > 0,
+            "source_quality_status": (
+                "pass"
+                if missing_count == 0 and order_gap_count == 0
+                else "source_quality_gap_excluded"
+            ),
+            "missing_exact_attempt_key_events": missing_count,
+            "stage_order_violation_events": order_gap_count,
+            "exact_attempt_event_count": int(
+                exact_event_attempts_by_axis.get(axis, 0) or 0
+            ),
+            "later_progress_attempt_count": int(
+                later_progress_by_axis.get(axis, 0) or 0
+            ),
+        }
 
     axes = {
         "UPSTREAM_GATE": {
             "status": (
                 "observed"
-                if "UPSTREAM_GATE" in weak_contract_matches
+                if int(session_summary.get("upstream_block_unique", 0) or 0) > 0
                 else "no_current_signal"
             ),
             "observed_count": int(session_summary.get("upstream_block_unique", 0) or 0),
@@ -2590,6 +3120,10 @@ def _entry_submit_drought_observation_breakdown(
             "next_repair_action": (
                 "join upstream action/reason cohorts to executable BBO and "
                 "first-hit outcomes; AI semantic tuning remains separately owned"
+            ),
+            **exact_axis_contract(
+                "UPSTREAM_GATE",
+                int(session_summary.get("upstream_block_unique", 0) or 0),
             ),
         },
         "BUDGET_PASS_COLLAPSE": {
@@ -2621,10 +3155,10 @@ def _entry_submit_drought_observation_breakdown(
         "LATENCY_PRE_SUBMIT": {
             "status": (
                 "observed"
-                if "LATENCY_PRE_SUBMIT" in weak_contract_matches
+                if latency_terminal_causal_unique > 0
                 else "no_current_signal"
             ),
-            "observed_count": latency_blocked_budget_unique,
+            "observed_count": latency_terminal_causal_unique,
             "evidence": {
                 "latency_state_danger_events": int(
                     session_summary.get("latency_state_danger_events", 0) or 0
@@ -2636,6 +3170,7 @@ def _entry_submit_drought_observation_breakdown(
                     session_summary.get("latency_blocked_budget_events", 0) or 0
                 ),
                 "latency_blocked_budget_unique": latency_blocked_budget_unique,
+                "latency_terminal_causal_unique": latency_terminal_causal_unique,
                 "budget_pass_missing_exact_attempt_key_events": int(
                     session_summary.get(
                         "budget_pass_missing_exact_attempt_key_events", 0
@@ -2661,14 +3196,10 @@ def _entry_submit_drought_observation_breakdown(
                 "quote_freshness_attribution": quote_freshness,
             },
             "next_repair_action": "close unknown latency labels or route quote freshness gaps to Sentinel attribution",
+            **exact_axis_contract("LATENCY_PRE_SUBMIT", latency_terminal_causal_unique),
         },
         "PRICE_REVALIDATION": {
-            "status": (
-                "observed"
-                if "PRICE_REVALIDATION" in weak_contract_matches
-                and price_guard_unique > 0
-                else "no_current_signal"
-            ),
+            "status": "observed" if price_guard_unique > 0 else "no_current_signal",
             "observed_count": price_guard_unique,
             "evidence": {
                 "price_guard_unique": price_guard_unique,
@@ -2687,12 +3218,12 @@ def _entry_submit_drought_observation_breakdown(
                 "join executable BBO and target/adverse first-hit outcomes to "
                 "price revalidation blocks before proposing bounded exploration"
             ),
+            **exact_axis_contract("PRICE_REVALIDATION", price_guard_unique),
         },
         "ENTRY_AI_AUTHORITY_REVALIDATION": {
             "status": (
                 "observed"
-                if "ENTRY_AI_AUTHORITY_REVALIDATION" in weak_contract_matches
-                and entry_ai_authority_guard_unique > 0
+                if entry_ai_authority_guard_unique > 0
                 else "no_current_signal"
             ),
             "observed_count": entry_ai_authority_guard_unique,
@@ -2715,13 +3246,14 @@ def _entry_submit_drought_observation_breakdown(
                 "join exact AI authority reason, executable BBO, and target/adverse "
                 "first-hit outcomes before proposing a bounded one-share probe"
             ),
+            **exact_axis_contract(
+                "ENTRY_AI_AUTHORITY_REVALIDATION",
+                entry_ai_authority_guard_unique,
+            ),
         },
         "BROKER_RECEIPT": {
             "status": (
-                "observed"
-                if "BROKER_RECEIPT" in weak_contract_matches
-                and broker_submit_failure_unique > 0
-                else "no_current_signal"
+                "observed" if broker_submit_failure_unique > 0 else "no_current_signal"
             ),
             "observed_count": broker_submit_failure_unique,
             "evidence": {
@@ -2736,6 +3268,7 @@ def _entry_submit_drought_observation_breakdown(
                 "join post-submit broker receipt and fill provenance only when "
                 "a broker submission or explicit submit failure exists"
             ),
+            **exact_axis_contract("BROKER_RECEIPT", broker_submit_failure_unique),
         },
         "ECONOMIC_PARTICIPATION": {
             "status": (
@@ -2790,10 +3323,10 @@ def _entry_submit_drought_observation_breakdown(
     }
     causal_axes = [
         axis
-        for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER
+        for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER
         if axes[axis]["status"] == "observed"
         and int(axes[axis].get("observed_count") or 0) > 0
-        and axis != "SIM_REAL_AUTHORITY"
+        and axes[axis].get("exact_join_valid") is True
     ]
     no_signal_axes = [
         axis
@@ -2815,6 +3348,9 @@ def _entry_submit_drought_observation_breakdown(
         "sample_floor": "one_explicit_attempt_per_axis",
         "primary_decision_metric": "causal_bottleneck_axis_observed_count",
         "source_quality_gate": "lossless_attempt_key_and_explicit_stage_provenance",
+        "core_handoff_axes": list(SUBMIT_DROUGHT_CORE_AXIS_ORDER),
+        "supporting_diagnostic_axes": list(SUBMIT_DROUGHT_SUPPORTING_AXIS_ORDER),
+        "exact_attempt_contract": exact_attempt_contract,
         "axis_order": list(SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER),
         "axes": {axis: axes[axis] for axis in SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER},
         "causal_bottleneck_axes": causal_axes,
@@ -2896,11 +3432,18 @@ def build_buy_funnel_sentinel_report(
         baseline_events if baseline_date else []
     )
     scope_reports: dict[str, dict[str, Any]] = {}
+    # Old compacted rows have no exact attempt/venue binding. Symbol/time
+    # proximity cannot prove a scope. Exclude all potentially affected scopes
+    # only for this unisolatable loss, not for ordinary identified bad rows.
+    unscoped_summary_gaps = session_summary.get("terminal_summary_gap_windows", [])
     for scope_key, source_events in sorted(scoped_events.items()):
         scope_summary = _summarize_events(
             source_events,
             start_at=session_start,
             end_at=as_of,
+        )
+        _apply_terminal_summary_gaps(
+            scope_summary["exact_attempt_contract"], unscoped_summary_gaps
         )
         scope_baseline = None
         if baseline_date and scope_key in scoped_baseline_events:
@@ -2969,7 +3512,7 @@ def build_buy_funnel_sentinel_report(
     )
 
     return {
-        "schema_version": 3,
+        "schema_version": 5,
         "report_type": "buy_funnel_sentinel",
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
@@ -3053,6 +3596,16 @@ def build_markdown(report: dict[str, Any]) -> str:
         if isinstance(session.get("economic_participation"), dict)
         else {}
     )
+    exact_attempt_contract = (
+        (report.get("entry_submit_drought_contract") or {}).get(
+            "exact_attempt_contract"
+        )
+        if isinstance(report.get("entry_submit_drought_contract"), dict)
+        else {}
+    )
+    exact_attempt_contract = (
+        exact_attempt_contract if isinstance(exact_attempt_contract, dict) else {}
+    )
     lines = [
         f"# BUY Funnel Sentinel {report['target_date']}",
         "",
@@ -3097,6 +3650,13 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- critical submit thresholds: `submitted/ai < {SUBMIT_TO_AI_CRITICAL_PCT}%` "
         f"or `submitted/budget <= {SUBMIT_TO_BUDGET_CRITICAL_PCT}%` "
         f"(floors: ai>={SUBMIT_DROUGHT_MIN_AI_UNIQUE}, budget>={SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE})",
+        f"- exact attempt contract: `status={exact_attempt_contract.get('status', '-')}, "
+        f"identity={exact_attempt_contract.get('identity_field', '-')}, "
+        f"fallback_allowed={exact_attempt_contract.get('identity_fallback_allowed')}, "
+        f"missing={exact_attempt_contract.get('missing_exact_attempt_key_event_count', 0)}, "
+        f"order_violation={exact_attempt_contract.get('stage_order_violation_event_count', 0)}, "
+        f"terminal_causal={exact_attempt_contract.get('terminal_causal_attempt_count', 0)}`",
+        f"- submit drought core axes: `{', '.join((report.get('entry_submit_drought_contract') or {}).get('core_handoff_axes') or []) or '-'}`",
         f"- top blockers: `{_format_top_blockers(session['blocker_top'])}`",
         f"- swing blockers: `{_format_top_blockers(session.get('swing_blocker_top') or [])}`",
         f"- upstream blockers: `{_format_top_blockers(session['upstream_blocker_top'])}`",

@@ -212,6 +212,19 @@ ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS = [
     "order_entry_telegram_post_submit_contract_gap_review",
     "order_entry_source_taxonomy_contract_gap_review",
 ]
+ENTRY_SUBMIT_DROUGHT_CORE_AXES = (
+    "UPSTREAM_GATE",
+    "LATENCY_PRE_SUBMIT",
+    "ENTRY_AI_AUTHORITY_REVALIDATION",
+    "PRICE_REVALIDATION",
+    "BROKER_RECEIPT",
+)
+ENTRY_SUBMIT_DROUGHT_SUPPORTING_AXES = (
+    "BUDGET_PASS_COLLAPSE",
+    "ECONOMIC_PARTICIPATION",
+    "SIM_REAL_AUTHORITY",
+    "SOURCE_TAXONOMY_LEAKAGE",
+)
 
 
 def verification_report_paths(target_date: str) -> tuple[Path, Path]:
@@ -3245,6 +3258,16 @@ def _microstructure_diagnostic_handoff_status(source, ev, runtime, workorder, da
     }
 
 
+def _buy_funnel_submit_drought_exact_contract_status(
+    buy_funnel: dict[str, Any], contract: dict[str, Any]
+) -> dict[str, Any]:
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    return validate_submit_drought_contract(buy_funnel, contract)
+
+
 def _buy_funnel_submit_drought_handoff_status(
     buy_funnel: dict[str, Any],
     ldm_report: dict[str, Any],
@@ -3285,6 +3308,13 @@ def _buy_funnel_submit_drought_handoff_status(
         buy_funnel.get("followup")
         if isinstance(buy_funnel.get("followup"), dict)
         else {}
+    )
+    exact_contract_status = _buy_funnel_submit_drought_exact_contract_status(
+        buy_funnel, contract
+    )
+    exact_contract_invalid = exact_contract_status.get("status") == "invalid"
+    exact_contract_source_quality_gap = bool(
+        exact_contract_status.get("source_quality_gap")
     )
     handoff_present = bool(
         critical
@@ -3328,6 +3358,11 @@ def _buy_funnel_submit_drought_handoff_status(
     )
     missing: list[str] = []
     if critical:
+        if exact_contract_invalid:
+            missing.extend(
+                f"buy_funnel_exact_attempt_contract_invalid:{issue}"
+                for issue in exact_contract_status.get("structural_issues") or []
+            )
         missing_order_ids = sorted(
             set(ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS) - actual_order_ids
         )
@@ -3341,6 +3376,13 @@ def _buy_funnel_submit_drought_handoff_status(
             missing.append("threshold_cycle_ev_entry_submit_drought_handoff_missing")
         if runtime_buy.get("primary") != "SUBMIT_DROUGHT_CRITICAL":
             missing.append("runtime_approval_summary_buy_funnel_sentinel_missing")
+        if _safe_int(buy_funnel.get("schema_version"), 0) >= 5:
+            for owner, summary in (
+                ("threshold_cycle_ev", ev_buy),
+                ("runtime_approval_summary", runtime_buy),
+            ):
+                if summary.get("entry_submit_drought_contract") != contract:
+                    missing.append(f"{owner}_sentinel_contract_generation_mismatch")
         if not runtime_summary_section.get("entry_submit_drought_handoff_selected"):
             missing.append(
                 "runtime_approval_summary_entry_submit_drought_handoff_missing"
@@ -3360,14 +3402,25 @@ def _buy_funnel_submit_drought_handoff_status(
         or refresh_applied_count > refresh_attempted_count
     )
     root_cause_open_reasons: list[str] = []
+    generation_mismatch = any(
+        "sentinel_contract_generation_mismatch" in issue for issue in missing
+    )
+    if generation_mismatch:
+        root_cause_open_reasons.append("downstream_sentinel_generation_mismatch")
     if _safe_int(root_cause.get("unknown_latency_reason_count"), 0) > 0:
         root_cause_open_reasons.append("unknown_latency_reason_present")
     if bool(root_cause.get("unknown_latency_workorder_required")):
         root_cause_open_reasons.append("unknown_latency_workorder_required")
     if quote_freshness_attribution_inconsistent:
         root_cause_open_reasons.append("quote_freshness_attribution_inconsistent")
-    if quote_freshness_attribution_inconsistent:
+    if exact_contract_invalid:
+        root_cause_open_reasons.append("exact_attempt_contract_invalid")
+    elif exact_contract_source_quality_gap:
+        root_cause_open_reasons.append("exact_attempt_source_quality_gap")
+    if quote_freshness_attribution_inconsistent or generation_mismatch:
         root_cause_closure_status = "artifact_regeneration_required"
+    elif exact_contract_invalid or exact_contract_source_quality_gap:
+        root_cause_closure_status = "source_quality_blocked"
     elif root_cause_open_reasons:
         root_cause_closure_status = "open"
     elif critical:
@@ -3376,9 +3429,15 @@ def _buy_funnel_submit_drought_handoff_status(
         root_cause_closure_status = "not_applicable"
     return {
         "status": (
-            "warning"
-            if missing and handoff_present
-            else ("fail" if missing else ("pass" if critical else "not_applicable"))
+            "fail"
+            if exact_contract_invalid
+            else (
+                "warning"
+                if missing
+                and handoff_present
+                and _safe_int(buy_funnel.get("schema_version"), 0) < 5
+                else ("fail" if missing else ("pass" if critical else "not_applicable"))
+            )
         ),
         "critical": critical,
         "primary": classification.get("primary"),
@@ -3390,14 +3449,27 @@ def _buy_funnel_submit_drought_handoff_status(
             "fail" if missing else ("pass" if critical else "not_applicable")
         ),
         "root_cause_closure_status": root_cause_closure_status,
-        "artifact_regeneration_required": quote_freshness_attribution_inconsistent,
+        "artifact_regeneration_required": (
+            quote_freshness_attribution_inconsistent
+            or exact_contract_invalid
+            or generation_mismatch
+        ),
         "root_cause_open_reasons": root_cause_open_reasons,
         "quote_freshness_attribution_inconsistent": quote_freshness_attribution_inconsistent,
         "unresolved_root_cause_present": bool(
             root_cause.get("unknown_latency_workorder_required")
             or root_cause.get("unknown_latency_reason_count")
             or quote_freshness_attribution_inconsistent
+            or exact_contract_invalid
+            or exact_contract_source_quality_gap
+            or generation_mismatch
         ),
+        "exact_attempt_contract_status": exact_contract_status.get("status"),
+        "exact_attempt_contract_structural_issues": exact_contract_status.get(
+            "structural_issues"
+        )
+        or [],
+        "exact_attempt_source_quality_gap": exact_contract_source_quality_gap,
         "submit_drought_root_cause_counts": root_cause.get("latency_root_cause_counts")
         or {},
         "submit_drought_quote_freshness_attribution": quote_freshness_attribution,
@@ -6023,7 +6095,7 @@ def build_threshold_cycle_postclose_verification(
     ):
         log_issues.append("ldm_exit_bucket_handoff_missing")
     buy_funnel_submit_drought_handoff = _buy_funnel_submit_drought_handoff_status(
-        buy_funnel_report,
+        {**buy_funnel_report, "_decision_date": target_date},
         ldm_report,
         ev_report,
         runtime_summary,

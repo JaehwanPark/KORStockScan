@@ -40,6 +40,8 @@ from src.engine.scalping.scanner_lookup_attention_policy import (
     MAX_FUTURE_SKEW_SEC as LOOKUP_ATTENTION_WEIGHT_MAX_FUTURE_SKEW_SEC,
     MAX_SOURCE_AGE_SEC as LOOKUP_ATTENTION_WEIGHT_MAX_SOURCE_AGE_SEC,
     POLICY_VERSION as LOOKUP_ATTENTION_WEIGHT_POLICY_VERSION,
+    RESOURCE_PAIR_CONTRACT_VERSION as LOOKUP_ATTENTION_RESOURCE_PAIR_CONTRACT_VERSION,
+    bonus_points_for_score as lookup_attention_formula_bonus,
     bounded_bonus as lookup_attention_bounded_bonus,
     load_active_policy as load_lookup_attention_weight_policy,
 )
@@ -2114,14 +2116,50 @@ def _scanner_priority_profile(target, previous=None):
         ),
         lookup_policy_for_candidate,
     )
-    score = (
-        base_score
-        + _freshness_score(target)
-        + float(lookup_bonus.get("bonus_points") or 0.0)
+    lookup_resource_pair_eligible = bool(
+        tiering_enabled
+        and lookup_observation.get("lookup_attention_state") == "observed_source_only"
+        and lookup_source_fresh
+        and lookup_venue.get("effective_venue")
+        in LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_VENUES
+        and lookup_venue.get("market_session_bucket")
+        in LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_SESSIONS
+    )
+    lookup_counterfactual_bonus = (
+        lookup_attention_formula_bonus(
+            lookup_observation.get("lookup_attention_snapshot_score")
+        )
+        if lookup_resource_pair_eligible
+        else 0.0
+    )
+    score_without_lookup_attention = base_score + _freshness_score(target)
+    score = score_without_lookup_attention + float(
+        lookup_bonus.get("bonus_points") or 0.0
     )
     return {
         "scanner_priority_tier": tier,
         "scanner_priority_score": score,
+        "scanner_priority_score_without_lookup_attention": (
+            score_without_lookup_attention
+        ),
+        "scanner_priority_score_with_lookup_attention": (
+            score_without_lookup_attention + lookup_counterfactual_bonus
+        ),
+        "scanner_priority_rank_partition": _under_10000_runtime_priority_rank(target),
+        "scanner_priority_source_rank": _source_priority(target.get("Source")),
+        "scanner_priority_flu_rate": _safe_float(target.get("FluRate")),
+        "scanner_priority_market_gainer_partition": (
+            MARKET_GAINER_SOURCE in source_set
+        ),
+        "scanner_priority_reserved_partition": (
+            "limit_down"
+            if LIMIT_DOWN_LIVE_UNLOCK_SOURCE in source_set
+            else (
+                "low_rebound"
+                if LOW_REBOUND_RISING_MISSED_SOURCE in source_set
+                else "general"
+            )
+        ),
         "scanner_priority_reason": reason,
         "scanner_demoted_reason": demoted_reason,
         "scanner_promotion_policy_version": SCANNER_PROMOTION_POLICY_VERSION,
@@ -2155,6 +2193,16 @@ def _scanner_priority_profile(target, previous=None):
         ),
         "lookup_attention_weight_bonus_points": float(
             lookup_bonus.get("bonus_points") or 0.0
+        ),
+        "lookup_attention_counterfactual_bonus_points": (lookup_counterfactual_bonus),
+        "lookup_attention_resource_pair_eligible": lookup_resource_pair_eligible,
+        "lookup_attention_resource_pair_contract_version": (
+            LOOKUP_ATTENTION_RESOURCE_PAIR_CONTRACT_VERSION
+        ),
+        "lookup_attention_resource_snapshot_score": (
+            lookup_observation.get("lookup_attention_snapshot_score")
+            if lookup_resource_pair_eligible
+            else None
         ),
         "lookup_attention_weight_policy_applied": bool(lookup_bonus.get("applied")),
         "lookup_attention_weight_runtime_effect": bool(
@@ -2855,6 +2903,7 @@ def rank_candidates(candidate_pool):
 
         def _rank_key(item):
             priority_profile = _scanner_priority_profile(item)
+            item["_ScannerRankPriorityProfile"] = dict(priority_profile)
             return (
                 _under_10000_runtime_priority_rank(item),
                 tier_rank.get(priority_profile.get("scanner_priority_tier"), 8),
@@ -2864,6 +2913,8 @@ def rank_candidates(candidate_pool):
             )
 
         return sorted(candidate_pool.values(), key=_rank_key)
+    for item in candidate_pool.values():
+        item.pop("_ScannerRankPriorityProfile", None)
     return sorted(
         candidate_pool.values(),
         key=lambda item: (
@@ -3732,11 +3783,17 @@ def _scanner_event_fields(target, source_guard=None):
     )
     current_flu = source_guard.get("current_flu_rate") or f"{current_flu_value:.2f}"
     priority_profile = _scanner_priority_profile(target)
+    rank_priority_profile = target.get("_ScannerRankPriorityProfile")
+    if not isinstance(rank_priority_profile, dict):
+        rank_priority_profile = priority_profile
 
     def priority_value(key):
         return (
             source_guard.get(key) if key in source_guard else priority_profile.get(key)
         )
+
+    def rank_priority_value(key):
+        return rank_priority_profile.get(key)
 
     guard_reason = str(source_guard.get("reason") or "")
     last_promoted_at = source_guard.get("last_promoted_at")
@@ -4025,6 +4082,45 @@ def _scanner_event_fields(target, source_guard=None):
             if source_guard.get("scanner_priority_score") is not None
             else priority_profile.get("scanner_priority_score")
         ),
+        "scanner_priority_score_without_lookup_attention": priority_value(
+            "scanner_priority_score_without_lookup_attention"
+        ),
+        "scanner_priority_score_with_lookup_attention": priority_value(
+            "scanner_priority_score_with_lookup_attention"
+        ),
+        "scanner_priority_rank_partition": priority_value(
+            "scanner_priority_rank_partition"
+        ),
+        "scanner_priority_source_rank": priority_value("scanner_priority_source_rank"),
+        "scanner_priority_flu_rate": priority_value("scanner_priority_flu_rate"),
+        "scanner_priority_market_gainer_partition": priority_value(
+            "scanner_priority_market_gainer_partition"
+        ),
+        "scanner_priority_reserved_partition": priority_value(
+            "scanner_priority_reserved_partition"
+        ),
+        "scanner_rank_priority_tier": rank_priority_value("scanner_priority_tier"),
+        "scanner_rank_priority_score_without_lookup_attention": rank_priority_value(
+            "scanner_priority_score_without_lookup_attention"
+        ),
+        "scanner_rank_priority_score_with_lookup_attention": rank_priority_value(
+            "scanner_priority_score_with_lookup_attention"
+        ),
+        "scanner_rank_priority_rank_partition": rank_priority_value(
+            "scanner_priority_rank_partition"
+        ),
+        "scanner_rank_priority_source_rank": rank_priority_value(
+            "scanner_priority_source_rank"
+        ),
+        "scanner_rank_priority_flu_rate": rank_priority_value(
+            "scanner_priority_flu_rate"
+        ),
+        "scanner_rank_priority_market_gainer_partition": rank_priority_value(
+            "scanner_priority_market_gainer_partition"
+        ),
+        "scanner_rank_priority_reserved_partition": rank_priority_value(
+            "scanner_priority_reserved_partition"
+        ),
         "scanner_priority_reason": source_guard.get("scanner_priority_reason")
         or priority_profile.get("scanner_priority_reason"),
         "scanner_demoted_reason": source_guard.get("scanner_demoted_reason")
@@ -4077,6 +4173,21 @@ def _scanner_event_fields(target, source_guard=None):
         ),
         "lookup_attention_weight_bonus_points": priority_value(
             "lookup_attention_weight_bonus_points"
+        ),
+        "lookup_attention_counterfactual_bonus_points": priority_value(
+            "lookup_attention_counterfactual_bonus_points"
+        ),
+        "lookup_attention_resource_pair_eligible": rank_priority_value(
+            "lookup_attention_resource_pair_eligible"
+        ),
+        "lookup_attention_resource_pair_contract_version": rank_priority_value(
+            "lookup_attention_resource_pair_contract_version"
+        ),
+        "lookup_attention_resource_snapshot_score": rank_priority_value(
+            "lookup_attention_resource_snapshot_score"
+        ),
+        "lookup_attention_resource_counterfactual_bonus_points": rank_priority_value(
+            "lookup_attention_counterfactual_bonus_points"
         ),
         "lookup_attention_weight_policy_applied": priority_value(
             "lookup_attention_weight_policy_applied"
@@ -5538,22 +5649,19 @@ def promote_candidates(
             runtime_target_payload["scanner_market_gainer_active_count"] = len(
                 active_market_gainer_codes
             )
-        if bool(
-            getattr(TRADING_RULES, "SCALP_SCANNER_REAL_SOURCE_GUARD_ENABLED", False)
-        ):
-            _log_scanner_candidate_event(
-                "scalping_scanner_candidate_promoted",
-                target,
-                source_guard,
-                venue_fields={
-                    key: runtime_target_payload.get(key)
-                    for key in (
-                        "effective_venue",
-                        "venue_resolution",
-                        "market_session_bucket",
-                    )
-                },
-            )
+        _log_scanner_candidate_event(
+            "scalping_scanner_candidate_promoted",
+            target,
+            source_guard,
+            venue_fields={
+                key: runtime_target_payload.get(key)
+                for key in (
+                    "effective_venue",
+                    "venue_resolution",
+                    "market_session_bucket",
+                )
+            },
+        )
         _remember_pick(recent_picks, target, now_ts)
         new_codes_found.append(code)
         if replacement_code_used:

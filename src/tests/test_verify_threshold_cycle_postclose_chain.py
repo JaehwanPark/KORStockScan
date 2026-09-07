@@ -3797,6 +3797,185 @@ def test_code_improvement_workorder_contract_status_requires_new_declaration():
     ]
 
 
+def _exact_submit_drought_contract(*, source_quality_gap: bool = False) -> dict:
+    core_axes = [
+        "UPSTREAM_GATE",
+        "LATENCY_PRE_SUBMIT",
+        "ENTRY_AI_AUTHORITY_REVALIDATION",
+        "PRICE_REVALIDATION",
+        "BROKER_RECEIPT",
+    ]
+    supporting_axes = [
+        "BUDGET_PASS_COLLAPSE",
+        "ECONOMIC_PARTICIPATION",
+        "SIM_REAL_AUTHORITY",
+        "SOURCE_TAXONOMY_LEAKAGE",
+    ]
+    denominator_missing = {
+        "ai_confirmed": 0,
+        "budget_pass": 1 if source_quality_gap else 0,
+        "latency_pass": 0,
+        "order_bundle_submitted": 0,
+    }
+    denominator_counts = {
+        "ai_confirmed": 5,
+        "budget_pass": 5,
+        "latency_pass": 5,
+        "order_bundle_submitted": 0,
+    }
+    denominator_order = {stage: 0 for stage in denominator_missing}
+    zero_by_axis = {axis: 0 for axis in core_axes}
+    exact_event_counts = {axis: 1 for axis in core_axes}
+    terminal_counts = {axis: 1 for axis in core_axes}
+    exact = {
+        "schema_version": 1,
+        "identity_field": "record_id",
+        "identity_fallback_allowed": False,
+        "status": ("source_quality_gap_excluded" if source_quality_gap else "pass"),
+        "exclusion_applied": True,
+        "core_handoff_axes": core_axes,
+        "denominator_stages": sorted(denominator_missing),
+        "denominator_exact_attempt_counts": denominator_counts,
+        "denominator_missing_exact_attempt_key_events": denominator_missing,
+        "denominator_stage_order_violation_events": denominator_order,
+        "axis_missing_exact_attempt_key_events": zero_by_axis,
+        "axis_stage_order_violation_events": zero_by_axis,
+        "axis_exact_attempt_event_counts": exact_event_counts,
+        "axis_later_progress_attempt_counts": zero_by_axis,
+        "axis_terminal_causal_attempt_counts": terminal_counts,
+        "terminal_causal_attempt_count": 5,
+        "terminal_causal_partition_disjoint": True,
+        "missing_exact_attempt_key_event_count": 1 if source_quality_gap else 0,
+        "stage_order_violation_event_count": 0,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    axes = {
+        axis: {
+            "status": "observed",
+            "observed_count": 1,
+            "exact_join_valid": True,
+            "identity_field": "record_id",
+            "identity_fallback_allowed": False,
+            "source_quality_status": "pass",
+            "missing_exact_attempt_key_events": 0,
+            "stage_order_violation_events": 0,
+            "exact_attempt_event_count": 1,
+            "later_progress_attempt_count": 0,
+        }
+        for axis in core_axes
+    }
+    axes.update(
+        {
+            axis: {
+                "status": "no_current_signal",
+                "observed_count": 0,
+            }
+            for axis in supporting_axes
+        }
+    )
+    return {
+        "critical": True,
+        "core_handoff_axes": core_axes,
+        "supporting_diagnostic_axes": supporting_axes,
+        "exact_attempt_contract": exact,
+        "causal_bottleneck_axes": core_axes,
+        "observation_only_axes": [],
+        "no_current_signal_axes": supporting_axes,
+        "observation_breakdown": {
+            "core_handoff_axes": core_axes,
+            "supporting_diagnostic_axes": supporting_axes,
+            "exact_attempt_contract": exact,
+            "axis_order": [*core_axes, *supporting_axes],
+            "axes": axes,
+            "causal_bottleneck_axes": core_axes,
+            "observation_only_axes": [],
+            "no_current_signal_axes": supporting_axes,
+        },
+    }
+
+
+def test_buy_funnel_exact_attempt_contract_validates_complete_partition():
+    contract = _exact_submit_drought_contract()
+
+    result = mod._buy_funnel_submit_drought_exact_contract_status(
+        {"schema_version": 4}, contract
+    )
+
+    assert result["status"] == "pass"
+    assert result["structural_issues"] == []
+    assert result["source_quality_gap"] is False
+
+
+def test_buy_funnel_exact_attempt_contract_rejects_causal_count_drift():
+    contract = _exact_submit_drought_contract()
+    contract["observation_breakdown"]["axes"]["PRICE_REVALIDATION"][
+        "observed_count"
+    ] = 2
+
+    result = mod._buy_funnel_submit_drought_exact_contract_status(
+        {"schema_version": 4}, contract
+    )
+
+    assert result["status"] == "invalid"
+    assert (
+        "core_axis_observed_count_mismatch:PRICE_REVALIDATION"
+        in result["structural_issues"]
+    )
+
+
+def test_buy_funnel_exact_attempt_contract_rejects_no_signal_partition_drift():
+    contract = _exact_submit_drought_contract()
+    contract["no_current_signal_axes"].append("BROKER_RECEIPT")
+    contract["observation_breakdown"]["no_current_signal_axes"].append("BROKER_RECEIPT")
+
+    result = mod._buy_funnel_submit_drought_exact_contract_status(
+        {"schema_version": 4}, contract
+    )
+
+    assert result["status"] == "invalid"
+    assert "observation_axis_partition_not_disjoint" in result["structural_issues"]
+    assert "no_signal_core_axis_partition_invalid" in result["structural_issues"]
+
+
+def test_buy_funnel_submit_drought_handoff_source_blocks_excluded_identity_gap():
+    contract = _exact_submit_drought_contract(source_quality_gap=True)
+    buy = {
+        "schema_version": 4,
+        "classification": {
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "matches": ["SUBMIT_DROUGHT_CRITICAL"],
+            "submit_drought_root_cause": {},
+        },
+        "entry_submit_drought_contract": contract,
+        "followup": {"route": "entry_submit_drought_auto_workorder"},
+    }
+    ev_report = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "entry_funnel": {"entry_submit_drought_handoff_selected": True},
+    }
+    runtime_summary = {
+        "buy_funnel_sentinel": {"primary": "SUBMIT_DROUGHT_CRITICAL"},
+        "summary": {"entry_submit_drought_handoff_selected": True},
+    }
+    workorder = {
+        "orders": [
+            {"order_id": order_id}
+            for order_id in mod.ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS
+        ]
+    }
+
+    report = mod._buy_funnel_submit_drought_handoff_status(
+        buy, {}, ev_report, runtime_summary, workorder
+    )
+
+    assert report["status"] == "pass"
+    assert report["exact_attempt_contract_status"] == "source_quality_blocked"
+    assert report["root_cause_closure_status"] == "source_quality_blocked"
+    assert report["root_cause_open_reasons"] == ["exact_attempt_source_quality_gap"]
+    assert report["unresolved_root_cause_present"] is True
+
+
 def test_buy_funnel_submit_drought_handoff_closes_when_root_cause_is_fully_decomposed():
     buy = {
         "classification": {

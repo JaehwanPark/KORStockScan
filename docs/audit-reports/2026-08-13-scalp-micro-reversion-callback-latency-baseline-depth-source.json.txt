@@ -120,8 +120,8 @@
     "producer_callback_latency_p99_max_ms": 2.0,
     "snapshot_stale_after_sec": 30.0
   },
-  "benchmark_module_sha256": "095e0a33a2caf8efad7521ffc18e1558177f5ba9cdd691c64c255f3288ede281",
-  "forward_collector_sha256": "55378408875248b952b04b641d5f88782496b9e3913d9ea62b4d1426a63b29bf",
+  "benchmark_module_sha256": "3c703102ac68ab70315377b907f584dff4efb399d8818ebe84f6b6ba9f26cfd7",
+  "forward_collector_sha256": "a72fa0a24bbdd902553c48d7cb42dca8947d35a55eb0042c135289c700973fd8",
   "observation_adapter_sha256": "86e834cf6685f039f2e4c3ce292df43c3cb52106acf13dbde6929f97e8d78618",
   "path_journal_sha256": "3db2a7183b9e291dc31de743e6715dcd95f7259d230687ae58bd2119c99b0274",
   "path_capture_sha256": "9bfe3b27b7cf529bc5c6f6d3fc71c7a729948a545b6674c81312af437969cd53",
@@ -243,6 +243,26 @@
       "previous": "1b976bdc86a1184793ae772715679866aed30fadca6245555d213157592d3a50,db0a562fd2146a04558e102a8bbdf375e134f5183309650f84197816b66bae17",
       "current": "3db2a7183b9e291dc31de743e6715dcd95f7259d230687ae58bd2119c99b0274,d5b457b28ca69dc35888dcaba79557a0803c7d32fe61d635fb008726c2a18663",
       "reason": "current_exact_route_path_journal_source_rebound_and_source_only_0B_0D_registration_receipt_instrumentation;_same_5000x5_0b_callback_preflight_zero_drop_zero_worker_error_external_p95_0.028085ms_external_p99_0.039957ms_internal_p95_0.026208ms_internal_p99_0.040022ms_frozen_limits_unchanged",
+      "runtime_effect": false
+    },
+    {
+      "updated_at_kst": "2026-09-07T11:42:23.382916+09:00",
+      "field": "benchmark_module_sha256",
+      "previous": "095e0a33a2caf8efad7521ffc18e1558177f5ba9cdd691c64c255f3288ede281",
+      "current": "3c703102ac68ab70315377b907f584dff4efb399d8818ebe84f6b6ba9f26cfd7",
+      "reason": "bounded_pre_enqueue_timestamp_rejection_diagnostics_and_source_only_consumer_hold;_5000x5_valid_callback_preflight_zero_drop_zero_worker_error;_frozen_limits_and_original_measurements_unchanged",
+      "validation_artifact": "docs/audit-reports/2026-09-07-micro-timestamp-source-repair-preflight.json.txt",
+      "validation_artifact_sha256": "17de841a2be8a89378e8ec34216380c9de20371f82f24ef2b072de2efecfcd41",
+      "runtime_effect": false
+    },
+    {
+      "updated_at_kst": "2026-09-07T11:42:23.382916+09:00",
+      "field": "forward_collector_sha256",
+      "previous": "55378408875248b952b04b641d5f88782496b9e3913d9ea62b4d1426a63b29bf",
+      "current": "a72fa0a24bbdd902553c48d7cb42dca8947d35a55eb0042c135289c700973fd8",
+      "reason": "bounded_pre_enqueue_timestamp_rejection_diagnostics_and_source_only_consumer_hold;_5000x5_valid_callback_preflight_zero_drop_zero_worker_error;_frozen_limits_and_original_measurements_unchanged",
+      "validation_artifact": "docs/audit-reports/2026-09-07-micro-timestamp-source-repair-preflight.json.txt",
+      "validation_artifact_sha256": "17de841a2be8a89378e8ec34216380c9de20371f82f24ef2b072de2efecfcd41",
       "runtime_effect": false
     }
   ],

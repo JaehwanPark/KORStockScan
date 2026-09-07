@@ -46,6 +46,8 @@ def _valid_scale_in_split_runtime_bucket():
 
 
 def _valid_entry_recheck_candidate():
+    from src.engine.automation.submit_drought_contract import make_scope_evidence
+    from src.tests.submit_drought_fixtures import make_report
     from src.engine.scalping import entry_ai_gate_backtest as producer
     from src.engine.scalping.entry_recheck_policy import (
         POLICY_VERSION,
@@ -79,6 +81,14 @@ def _valid_entry_recheck_candidate():
         }
         for day in ("2026-09-02", "2026-09-03", "2026-09-04")
     ]
+    for day in history:
+        report = make_report(day["source_date"], samples=100)
+        contract = report["entry_submit_drought_contract"]["by_venue_session"][
+            "KRX|KRX_REGULAR"
+        ]
+        day["eligible_scopes"][0]["sentinel_evidence"] = make_scope_evidence(
+            report, "KRX|KRX_REGULAR", contract
+        )
     decision = controller_decision(
         history=history,
         exact={},
@@ -1766,6 +1776,13 @@ def test_drought_entry_recheck_candidate_is_deterministic_non_owner_and_can_turn
     policy = candidate["source_metrics"]["drought_conditional_policy"]
     policy["policy_version"] = POLICY_VERSION
     for day in policy["history"]:
+        from src.engine.automation.submit_drought_contract import make_scope_evidence
+        from src.tests.submit_drought_fixtures import make_report
+
+        source = make_report(day["source_date"], samples=30, submitted=10)
+        source_contract = source["entry_submit_drought_contract"]["by_venue_session"][
+            "KRX|KRX_REGULAR"
+        ]
         day["eligible_scopes"] = [
             scope_summary(
                 "KRX|KRX_REGULAR",
@@ -1777,6 +1794,9 @@ def test_drought_entry_recheck_candidate_is_deterministic_non_owner_and_can_turn
                     },
                     "critical": False,
                     "causal_bottleneck_axes": ["UPSTREAM_GATE"],
+                    "sentinel_evidence": make_scope_evidence(
+                        source, "KRX|KRX_REGULAR", source_contract
+                    ),
                 },
             )
         ]
