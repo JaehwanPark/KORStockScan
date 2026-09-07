@@ -875,6 +875,12 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - GitHub Actions의 `Black` workflow는 모든 push와 pull request에서 Python 3.11 및 `black==26.5.1`로 `black --check .`을 실행한다.
 - 포맷 커밋에는 runtime report/cache, 주문·provider·threshold·bot 상태 변경을 포함하지 않는다. 대형 실시간 주문 모듈은 AST 동등성, compile, 대응 producer/consumer 테스트, `git diff --check`까지 통과한 뒤 독립 커밋으로 닫는다.
 
+## Git main 직접 병합
+
+- 2026-09-07 사용자 명시 지시로 `main`의 PR 필수 승인 규칙을 제거했다. 사용자에게 승인받은 커밋·푸시·main 병합 작업은 별도 PR 없이 수행할 수 있다. [보호 설정 변경 영수증](./audit-reports/2026-09-07-main-pr-rule-removal.json)에 변경 전후 계약을 보존한다.
+- 제거 대상은 `required_pull_request_reviews`뿐이다. force-push·branch 삭제 금지와 다른 보호 설정, 코드 review/fix/re-review, targeted validation 및 Black CI는 유지한다. 실패한 검증을 생략하거나 검증되지 않은 코드를 배포하는 권한이 아니다.
+- 원격 main을 fetch하여 분기·충돌과 검증 소스 세대를 확인하고 일반 merge/push를 사용한다. PR 승인 제거는 bot 재기동·주문·runtime policy 변경의 상시 권한이 아니며, 재기동은 별도 사용자 지시와 위 graceful restart 계약을 따른다.
+
 ## 실주문 SCALPING AI 입력 preflight
 
 - 2026-07-24부터 enhanced AI 입력은 `ai_market_snapshot_v1`과 `ai_input_preflight_v1`을 사용한다. provider·model·threshold·P1 가격·중앙 수량 owner는 기존 값을 유지한다.

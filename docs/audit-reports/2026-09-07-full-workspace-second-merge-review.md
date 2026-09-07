@@ -6,7 +6,7 @@
 
 사용자 지시: 전체 커밋·푸시·main 병합 후 우아한 재기동. 전체 `src/`, `deploy/`, `docs/`의 기존 변경과 통합 검증 보완을 포함한다. 운영 중 생성되는 `data/cache/`, `data/runtime/`, `data/report/`는 보존하며 소스 커밋에 포함하지 않는다. 수동목록, 당일 policy/env, broker 주문·취소와 owner 원장은 이번 배포 검토에서 변경하지 않았다.
 
-코드·문서 검증 범위의 미해결 finding은 0이다. 다만 GitHub main 보호 규칙에 PR 승인 1건이 필요하므로 **승인 전 main 병합과 그 뒤 재기동은 OPEN**이다. `enforce_admins=false` 또는 과거 bypass push 성공은 이번 승인 생략 근거가 아니다. 승인 규칙·보호 설정을 바꾸거나 직접 main push로 우회하지 않는다.
+16:35 검토 시점에는 코드·문서 검증 범위의 미해결 finding이 0이었으나 GitHub main PR 승인 1건 때문에 병합·재기동을 보류했다. **16:41 이후 사용자 명시 지시로 PR 필수 규칙을 제거했으며 현재 계약은 아래 추가 실행 기록을 따른다.** 이전 권한에서 승인 규칙을 임의로 우회한 것으로 해석하지 않는다. 이후 확정된 Black CI 실패는 별도 검증 결함으로 보완한다.
 
 ## 포함한 변경
 
@@ -50,3 +50,19 @@
 - 로컬/원격 main은 모두 `e7d3886a15deb5ca9bbc953735cccc3140dddbf1`로 유지됐다. main 병합·push는 실행하지 않았다.
 - 최종 읽기 전용 확인에서 main/widget PID와 시작 시각, 수동 제외목록 hash는 위 기록과 동일하다. source worktree는 clean이며 생성 데이터 10개 status 항목은 그대로 보존됐다.
 - 다음 액션: PR 승인 1건과 최신 head의 검증 상태를 확인한 뒤 main 병합 및 허용된 graceful restart를 이어간다. 승인이나 CI 결과를 가정해 미리 재기동하지 않는다. 이 문서 receipt를 추가하는 후속 commit은 문서 전용이다.
+
+## PR 의무 제거와 직접 병합 실행 (16:41 KST 이후)
+
+- 사용자 추가 지시: `PR 원칙을 제거하라. PR 없이 병합하라`. 이는 이전 PR 승인 대기 절차를 대체하는 명시적 권한이다.
+- `DELETE /repos/JaehwanPark/KORStockScan/branches/main/protection/required_pull_request_reviews` HTTP204. 전후 전체 protection 응답에서 해당 필드만 제외한 값은 동일했다. 강제 push·브랜치 삭제 금지는 계속 false(불허), 다른 보호 설정도 유지한다. [원본/결과·rollback 근거 JSON](2026-09-07-main-pr-rule-removal.json)을 보존했다.
+- 원격 Black26.5.1 CI는 71개 파일 포맷 불일치로 실패했다. 같은 버전의 로컬 cached 검사는 67개만 탐지했으므로 나머지 4개와 최종 전체 검사는 `--no-cache`로 고정한다. 포맷 변경 71개 모두 `ast.dump(..., include_attributes=False)`가 HEAD 전후 완전히 동일하며 API·주문·가격·수량·provider 판단을 변경하지 않는다. 기존 review된 기능 변경과 이 formatting-only 보완은 구분한다.
+- 확대 61-file 회귀와 캐시 없는 전체 Black 검사, compile/shell/diff/parser 검증이 완료된 뒤에만 직접 main merge/push 및 별도 승인된 graceful restart를 진행한다. 검증 결과와 실제 merge/PID/broker 연속성은 아래에 추가한다.
+
+### 직접 병합 전 최종 gate (16:57 KST)
+
+- 확대 회귀 첫 실행은 `137 failed, 4496 passed, 18 skipped`였다. 실패는 모두 `test_sniper_scale_in.py`에서 운영 exact-date owner policy/registry를 읽는 test isolation 결손이었다. 과거 시각/가상 종목 시험이 host policy의 날짜·account guard에 차단되는 원인을 분리하고, fixture에 임시 policy/registry 경로만 설정했다. production resolver·manual veto·broker/order guard는 그대로 실행한다.
+- 수정한 파일 단독 `1037 passed`, 동일 61-file 통합 재검증 **4633 passed, 18 skipped, 1 warning, 162.99초**. 출력: `/tmp/prless_merge_0907_tests_final.log`. 18 skipped는 검증 완료 표본으로 세지 않으며 warning은 위 외부 pandas deprecation이다.
+- `black --no-cache --check --workers 2 .`: **869 files unchanged**. 71개 formatting 파일 AST 동일, 추가 fixture 10행만 test input isolation 변경이다. 72개 Python compile, shell syntax, 문서/parser print-only, `git diff --check` PASS. 변경과 연결된 producer/consumer, fail-closed 유지, fixture env key와 teardown을 재리뷰했으며 이 coverage 내 미해결 코드 finding0이다.
+- 읽기 전용 runtime verify: main PID356899 `pass`, findings `[]`. 16:47 KRX/NXT broker snapshot은 `249420=1`, `304100=1`, 미체결0이었다. DB active SCALPING rows40942/40904가 각각 15460/16280원 1주로 일치하여 이 두 종목을 manual/기계 custody로 오인하지 않는다. 실제 재기동 직전에는 새 snapshot을 다시 받는다.
+- 위젯 PID9704의 `/proc/9704/environ`은 permission denied로 확인 불가다. unit/state만으로 PID 환경 검증 성공을 주장하지 않으며 위젯 재기동은 보류한다. inactive인 삼성/저가주 episode 서비스를 임의 기동하지 않는다.
+- 별도 운영 warning: 16:46:20 observer canary는 0B callback p99 `2.360669ms > 2ms` 3회로 `stop_required`, 이후 snapshot stale이다. 이는 source-only capture/Provider replay readiness blocker로 유지하며 재기동으로 과거 source 결손이 복구됐다고 주장하지 않는다. canary 임계치나 stop 판정은 변경하지 않는다.
