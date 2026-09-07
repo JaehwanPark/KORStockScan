@@ -22,6 +22,7 @@
   - Source: [두 번째 전체 소스 배포 검토](../audit-reports/2026-09-07-full-workspace-second-merge-review.md). 사용자의 전체 커밋·푸시·main 병합 후 재기동 지시를 대상으로 수동 veto/공존, scanner lookup, AI calibration/consumer 및 관련 문서·wrapper를 통합 검증했다. 운영 cache/runtime/report는 소스 commit 제외·보존한다.
   - 검증: 통합 회귀의 test isolation 결함 2건을 수정하고 같은 30-file 범위 3012 PASS, compile/shell/diff 검증을 완료했다. 신규 lint finding0이며 기존 runtime bootstrap lint 91건은 base와 동일하다. 상세 component gate와 잔여 자연 acceptance는 Source 참조.
   - blocker: main 보호 규칙의 PR 승인 1건이 필요하다. branch commit/push와 PR 생성은 진행하되 승인 gate 우회·보호 규칙 변경·직접 main push는 하지 않는다. 승인 전 main 병합·재기동·목록 초기화는 미완료이며 과거 13:08 배포 완료 기록으로 대체하지 않는다.
+  - 원격 receipt: 소스 `47b2779e`를 기능 브랜치에 push했고 [PR #58](https://github.com/JaehwanPark/KORStockScan/pull/58)을 생성했다. 16:35 KST 조회는 `REVIEW_REQUIRED/BLOCKED`, Black CI 진행 중이다. main은 `e7d3886a` 유지, main/widget PID 및 수동목록 hash 불변이다. 문서 receipt 후속 commit은 소스 동작을 바꾸지 않는다.
   - 완료 조건: 승인된 PR의 검증 generation을 main에 병합·push한 뒤 fresh broker/owner 대사, 표준 graceful restart, 새 PID commit/env/WS·singleton·잔고/미체결 연속성을 확인한다. 목록 전환은 `ManualVetoCoexistenceDeployment0907`, 다음-session 적용은 `SameSymbolMachineScopePreopenAcceptance0908`에서 따로 판정한다. 이 항목은 승인 대기 중 자동 재기동 예약이 아니다.
 
 - [x] `[ManualVetoCoexistenceFinalReview0907] 사용자 veto 영속·주문 직전 재검사 최종 보완` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 15:59~16:30`, `Track: RuntimeStability`)

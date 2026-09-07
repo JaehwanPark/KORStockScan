@@ -43,4 +43,10 @@
 - 병합 뒤에만 최신 process·runtime verify·broker KRX/NXT 미체결/잔고·owner registry를 다시 읽고 기존 graceful restart 계약으로 배포한다. 새 PID commit/env·WS first-data·canary·singleton과 owner별 잔고/미체결 연속성을 확인한다. 옛 broker snapshot을 재기동 직전 근거로 재사용하지 않는다.
 - main 승인·병합·재기동 owner는 `FullWorkspaceSecondMergeRestart0907`, 목록 전환은 `ManualVetoCoexistenceDeployment0907`, 다음 exact-date 실제 적용은 `SameSymbolMachineScopePreopenAcceptance0908`이다. 승인 대기나 이 기록은 자동 재기동 예약이 아니다.
 
-PR URL과 원격 commit 확인은 아래 배포 receipt에 추가한다.
+## 배포 receipt (16:35 KST)
+
+- 소스 commit: `47b2779ee0455fa2baf0e39e2c55c59e47961338`, 49 files, 7656 insertions/1116 deletions. 기능 브랜치 원격 push를 확인했다.
+- [PR #58](https://github.com/JaehwanPark/KORStockScan/pull/58): base `main`, 상태 `OPEN`, `reviewDecision=REVIEW_REQUIRED`, `mergeStateStatus=BLOCKED`. 이 확인 시점의 Black CI는 진행 중이다. 로컬 검증 PASS를 CI 완료로 대신하지 않는다.
+- 로컬/원격 main은 모두 `e7d3886a15deb5ca9bbc953735cccc3140dddbf1`로 유지됐다. main 병합·push는 실행하지 않았다.
+- 최종 읽기 전용 확인에서 main/widget PID와 시작 시각, 수동 제외목록 hash는 위 기록과 동일하다. source worktree는 clean이며 생성 데이터 10개 status 항목은 그대로 보존됐다.
+- 다음 액션: PR 승인 1건과 최신 head의 검증 상태를 확인한 뒤 main 병합 및 허용된 graceful restart를 이어간다. 승인이나 CI 결과를 가정해 미리 재기동하지 않는다. 이 문서 receipt를 추가하는 후속 commit은 문서 전용이다.
