@@ -68,10 +68,12 @@ IMPLEMENTED_STATUSES = {
     "implemented_submit_contract_verified",
     "implemented_source_quality_contract_available",
     "implemented_source_quality_contract_waiting_sample",
+    "implemented_source_quality_gap_open",
 }
 ROOT_CAUSE_CLOSURE_STATUSES = {
     "implementation_done",
     "artifact_regeneration_required",
+    "source_quality_blocked",
     "handoff_closed_root_cause_open",
     "root_cause_closed",
     "needs_followup_workorder",
@@ -83,6 +85,13 @@ TERMINAL_NON_IMPLEMENT_STATUSES = {
     "terminal_not_applicable_evidence",
     "terminal_rejected",
 }
+ENTRY_SUBMIT_DROUGHT_CORE_AXES = (
+    "UPSTREAM_GATE",
+    "LATENCY_PRE_SUBMIT",
+    "ENTRY_AI_AUTHORITY_REVALIDATION",
+    "PRICE_REVALIDATION",
+    "BROKER_RECEIPT",
+)
 
 KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS = {
     "venue",
@@ -2039,6 +2048,7 @@ def _root_cause_followup_contract(
 ) -> dict[str, Any] | None:
     if status not in {
         "artifact_regeneration_required",
+        "source_quality_blocked",
         "handoff_closed_root_cause_open",
         "needs_followup_workorder",
     }:
@@ -2105,6 +2115,7 @@ def _root_cause_open_top(
         status = str(order.get("root_cause_closure_status") or "").strip()
         if status not in {
             "artifact_regeneration_required",
+            "source_quality_blocked",
             "handoff_closed_root_cause_open",
             "needs_followup_workorder",
         }:
@@ -2183,6 +2194,17 @@ def _entry_submit_drought_implementation_marker(
         if isinstance(observation_breakdown.get("axes"), dict)
         else {}
     )
+    exact_attempt_contract = (
+        contract.get("exact_attempt_contract")
+        if isinstance(contract.get("exact_attempt_contract"), dict)
+        else {}
+    )
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    exact_validation = validate_submit_drought_contract(report, contract)
+    exact_attempt_contract_invalid = exact_validation["status"] == "invalid"
     refresh_attempted_count = _safe_int(
         quote_freshness.get("refresh_attempted_count"), 0
     )
@@ -2204,14 +2226,23 @@ def _entry_submit_drought_implementation_marker(
         or bool(root_cause.get("unknown_latency_workorder_required"))
         or (refresh_attempted_count > 0 and not ldm_quote_freshness_present)
     )
-    if quote_freshness_inconsistent:
+    exact_attempt_source_quality_open = bool(
+        exact_attempt_contract and exact_attempt_contract.get("status") != "pass"
+    )
+    if quote_freshness_inconsistent or exact_attempt_contract_invalid:
         root_cause_closure_status = "artifact_regeneration_required"
+    elif exact_attempt_source_quality_open:
+        root_cause_closure_status = "source_quality_blocked"
     elif root_cause_open:
         root_cause_closure_status = "handoff_closed_root_cause_open"
     else:
         root_cause_closure_status = "root_cause_closed"
     return {
-        "implementation_status": "implemented",
+        "implementation_status": (
+            "implemented_source_quality_gap_open"
+            if exact_attempt_source_quality_open or exact_attempt_contract_invalid
+            else "implemented"
+        ),
         "implementation_checks": [
             "buy_funnel_sentinel emits entry_submit_drought_contract",
             "code_improvement_workorder selects drought and weak-contract follow-ups",
@@ -2225,6 +2256,8 @@ def _entry_submit_drought_implementation_marker(
             "required_downstream": required,
             "weak_contract_matches": contract.get("weak_contract_matches") or [],
             "observation_breakdown": observation_breakdown,
+            "core_handoff_axes": contract.get("core_handoff_axes") or [],
+            "exact_attempt_contract": exact_attempt_contract,
             "observation_axis_status": {
                 str(axis): (
                     axis_payload.get("status")
@@ -2241,7 +2274,11 @@ def _entry_submit_drought_implementation_marker(
             "quote_freshness_latency_pass_recovered_count": latency_pass_recovered_count,
             "quote_freshness_attribution_inconsistent": quote_freshness_inconsistent,
             "ldm_quote_freshness_attribution_present": ldm_quote_freshness_present,
-            "artifact_regeneration_required": quote_freshness_inconsistent,
+            "artifact_regeneration_required": (
+                quote_freshness_inconsistent or exact_attempt_contract_invalid
+            ),
+            "exact_attempt_contract_invalid": exact_attempt_contract_invalid,
+            "exact_attempt_source_quality_open": exact_attempt_source_quality_open,
             "runtime_effect": contract.get("runtime_effect"),
             "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
             "broker_order_submit_allowed": contract.get("broker_order_submit_allowed"),
@@ -5277,7 +5314,7 @@ def _buy_funnel_sentinel_followup_orders(
             "expected_ev_effect": "restore submitted coverage before evaluating EV edge",
             "intent": (
                 "When submitted/ai is below the critical threshold, automatically create a Codex source-only workorder "
-                "handoff so upstream gate, budget pass, latency/pre-submit, and broker receipt blockers are fixed "
+                "handoff so exact-attempt upstream, latency, Entry-AI authority, price revalidation, and broker receipt blockers are fixed "
                 "or routed without operator approval."
             ),
             "evidence": evidence,
@@ -5300,6 +5337,8 @@ def _buy_funnel_sentinel_followup_orders(
                 "src/engine/buy_funnel_sentinel.py",
                 "src/engine/build_code_improvement_workorder.py",
                 "src/engine/threshold_cycle_ev_report.py",
+                "src/engine/automation/conversion_lane.py",
+                "src/engine/verify_threshold_cycle_postclose_chain.py",
             ],
             "acceptance_tests": [
                 "PYTHONPATH=. .venv/bin/python -m pytest -q "
@@ -6553,6 +6592,8 @@ def build_code_improvement_workorder(
     buy_funnel_sentinel = _load_source_json(
         buy_funnel_sentinel_path, isolated_source_mode=isolated_source_mode
     )
+    if buy_funnel_sentinel:
+        buy_funnel_sentinel = {**buy_funnel_sentinel, "_decision_date": target_date}
     conversion_lane_path = conversion_lane_report_path(target_date)
     conversion_lane = _load_source_json(
         conversion_lane_path, isolated_source_mode=isolated_source_mode
@@ -7344,6 +7385,7 @@ def build_code_improvement_workorder(
         if str(order.get("root_cause_closure_status") or "").strip()
         in {
             "artifact_regeneration_required",
+            "source_quality_blocked",
             "handoff_closed_root_cause_open",
             "needs_followup_workorder",
         }
@@ -7388,8 +7430,14 @@ def build_code_improvement_workorder(
         "existing_family_attribution_count": existing_family_attribution_count,
         "visibility_only_count": visibility_only_count,
         "other_selected_count": other_selected_count,
-        "root_cause_open_count": root_cause_closure_status_counts.get(
-            "handoff_closed_root_cause_open", 0
+        "root_cause_open_count": sum(
+            root_cause_closure_status_counts.get(status, 0)
+            for status in (
+                "artifact_regeneration_required",
+                "source_quality_blocked",
+                "handoff_closed_root_cause_open",
+                "needs_followup_workorder",
+            )
         ),
         "selected_total_count": len(selected),
         "category_count_reconciled": (
@@ -7652,6 +7700,9 @@ def build_code_improvement_workorder(
             "artifact_regeneration_required_count": root_cause_closure_status_counts.get(
                 "artifact_regeneration_required", 0
             ),
+            "source_quality_blocked_count": root_cause_closure_status_counts.get(
+                "source_quality_blocked", 0
+            ),
             "handoff_closed_root_cause_open_count": root_cause_closure_status_counts.get(
                 "handoff_closed_root_cause_open", 0
             ),
@@ -7909,6 +7960,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- root_cause_closure_status_counts: `{summary.get('root_cause_closure_status_counts')}`",
         f"- implementation_done_count: `{summary.get('implementation_done_count')}`",
         f"- artifact_regeneration_required_count: `{summary.get('artifact_regeneration_required_count')}`",
+        f"- source_quality_blocked_count: `{summary.get('source_quality_blocked_count')}`",
         f"- handoff_closed_root_cause_open_count: `{summary.get('handoff_closed_root_cause_open_count')}`",
         f"- root_cause_closed_count: `{summary.get('root_cause_closed_count')}`",
         f"- needs_followup_workorder_count: `{summary.get('needs_followup_workorder_count')}`",

@@ -2655,6 +2655,34 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
     has_sla_contract = any(
         row.get("scanner_detection_sla_met") is not None for row in rows
     )
+    upstream_recall_stages = {
+        "source_seen",
+        "candidate_evaluated",
+        "scanner_guard_observed",
+        "watch_admitted",
+    }
+
+    def recall_reached(row: dict[str, Any], stage: str) -> bool:
+        if not row["stage_reached"].get(stage):
+            return False
+        if not has_sla_contract:
+            return True  # Retrospective diagnostics are explicitly non-causal.
+        if stage in upstream_recall_stages:
+            lag = _safe_float(
+                (row.get("stage_latency_from_benchmark_sec") or {}).get(stage)
+            )
+            return lag is not None and 0 <= lag <= SCANNER_DETECTION_SLA_SEC
+        # Downstream consumption can complete within opportunity validity,
+        # but a discovery outside its SLA cannot become a recall success.
+        return row.get("scanner_detection_sla_met") is True
+
+    recall_counts = {
+        stage: sum(recall_reached(row, stage) for row in rows) for stage in STAGE_ORDER
+    }
+    recall_rates = {
+        stage: round(count / total * 100.0, 2) if total else 0.0
+        for stage, count in recall_counts.items()
+    }
     provider_reached_within_sla_count = sum(
         bool(row["stage_reached"].get("entry_ai_provider_called"))
         and (row.get("scanner_detection_sla_met") is True if has_sla_contract else True)
@@ -2725,6 +2753,22 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "denominator_unique_opportunity_episode_count": total,
         "stage_counts": counts,
         "stage_rates_pct": rates,
+        "stage_recall_counts": recall_counts,
+        "recall_metric_contract": {
+            "mode": (
+                "forward_exact_detection_sla"
+                if has_sla_contract
+                else "retrospective_diagnostic_only"
+            ),
+            "denominator_field": "denominator_unique_opportunity_episode_count",
+            "numerator_field": "stage_recall_counts",
+            "formula": "stage_recall_counts[stage] / denominator_unique_opportunity_episode_count * 100",
+            "upstream_stage_window_sec": SCANNER_DETECTION_SLA_SEC,
+            "downstream_window": "same_lineage_inside_opportunity_validity_after_sla_valid_detection",
+            "opportunity_validity_sec": OPPORTUNITY_VALIDITY_SEC,
+            "candidate_recall_scope": "scanner_candidate_pool_not_final_buy_candidate",
+            "stage_counts_and_rates_role": "observed_within_validity_including_late_discovery",
+        },
         "scanner_detection_sla_met_count": scanner_detection_sla_met_count,
         "entry_ai_provider_reached_within_sla_count": (
             provider_reached_within_sla_count
@@ -2735,20 +2779,20 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
             if total and has_sla_contract
             else rates["scanner_promoted"]
         ),
-        "fast_precheck_recall_pct": rates["fast_precheck"],
-        "heavy_eval_recall_pct": rates["heavy_eval"],
+        "fast_precheck_recall_pct": recall_rates["fast_precheck"],
+        "heavy_eval_recall_pct": recall_rates["heavy_eval"],
         "entry_ai_provider_reach_rate_pct": (
             round(provider_reached_within_sla_count / total * 100.0, 2)
             if total
             else 0.0
         ),
-        "submitted_recall_pct": rates["submitted"],
-        "source_seen_recall_pct": rates["source_seen"],
-        "watch_admission_recall_pct": rates["watch_admitted"],
-        "runtime_watch_attach_recall_pct": rates["runtime_watch_attached"],
-        "candidate_recall_pct": rates["candidate_evaluated"],
-        "entry_authority_decision_recall_pct": rates["entry_authority_decided"],
-        "submit_safety_check_recall_pct": rates["submit_safety_checked"],
+        "submitted_recall_pct": recall_rates["submitted"],
+        "source_seen_recall_pct": recall_rates["source_seen"],
+        "watch_admission_recall_pct": recall_rates["watch_admitted"],
+        "runtime_watch_attach_recall_pct": recall_rates["runtime_watch_attached"],
+        "candidate_recall_pct": recall_rates["candidate_evaluated"],
+        "entry_authority_decision_recall_pct": recall_rates["entry_authority_decided"],
+        "submit_safety_check_recall_pct": recall_rates["submit_safety_checked"],
         "terminal_coverage_reason_counts": dict(
             sorted(Counter(row["terminal_coverage_reason"] for row in rows).items())
         ),

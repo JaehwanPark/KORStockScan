@@ -172,6 +172,11 @@ def _date_from_path(path: Path) -> str:
 
 
 def _drought_day_summary(path: Path) -> dict[str, Any]:
+    from src.engine.automation.submit_drought_contract import (
+        make_scope_evidence,
+        validate_scope_evidence,
+    )
+
     payload = _load_json(path)
     source_date = _date_from_path(path)
     preflight = load_source_quality_preflight(source_date)
@@ -184,15 +189,22 @@ def _drought_day_summary(path: Path) -> dict[str, Any]:
         contract = {}
         quality = False
     by_scope = contract.get("by_venue_session") or {}
-    scopes = (
-        [
-            scope_summary(key, raw)
-            for key, raw in by_scope.items()
-            if isinstance(key, str) and isinstance(raw, dict)
-        ]
-        if isinstance(by_scope, dict)
-        else []
-    )
+    scopes = []
+    excluded_scopes = []
+    for key, raw in (by_scope.items() if isinstance(by_scope, dict) else []):
+        if not isinstance(key, str) or not isinstance(raw, dict):
+            quality = False
+            continue
+        try:
+            evidence = make_scope_evidence(payload, key, raw)
+        except (TypeError, ValueError, OverflowError):
+            excluded_scopes.append(key)
+            continue
+        if not validate_scope_evidence(evidence, source_date=source_date, scope=key):
+            excluded_scopes.append(key)
+            continue
+        scopes.append(scope_summary(key, {**raw, "sentinel_evidence": evidence}))
+    quality = quality and bool(scopes)
     eligible = [row for row in scopes if row["denominator_floor_passed"]]
     return {
         "source_date": source_date,
@@ -200,6 +212,7 @@ def _drought_day_summary(path: Path) -> dict[str, Any]:
         "report_loaded": bool(payload),
         "source_quality_pass": quality,
         "source_quality_preflight": preflight,
+        "excluded_sentinel_scopes": excluded_scopes,
         "denominator_floor_passed": bool(eligible),
         "critical": any(row["critical"] for row in eligible),
         "addressable": any(row["addressable"] for row in eligible),

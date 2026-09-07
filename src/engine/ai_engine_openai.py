@@ -8327,6 +8327,18 @@ class GPTSniperEngine:
             }
         parent_lineage_fields = {}
         if isinstance(metadata_extra, dict):
+            # Early preflight/cache paths never reach request capture. Keep
+            # caller identity in trace-only fields on those paths as well.
+            for source_key, trace_key in (
+                ("record_id", "ai_trace_record_id"),
+                ("stock_code", "ai_trace_stock_code"),
+                ("source_event_stage", "source_event_stage"),
+                ("sim_record_id", "sim_record_id"),
+                ("sim_parent_record_id", "sim_parent_record_id"),
+            ):
+                value = metadata_extra.get(source_key)
+                if value not in (None, ""):
+                    parent_lineage_fields[trace_key] = value
             parent_trace_id = str(
                 metadata_extra.get("ai_decision_parent_trace_id")
                 or metadata_extra.get("parent_decision_trace_id")

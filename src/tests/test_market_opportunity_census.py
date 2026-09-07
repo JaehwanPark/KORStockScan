@@ -1017,6 +1017,7 @@ def test_named_primary_metric_exists_and_missing_contracts_fail_closed(tmp_path)
         == "entry_ai_provider_reach_rate_pct"
     )
     assert summary["entry_ai_provider_reach_rate_pct"] == 0.0
+
     assert summary["denominator_unique_opportunity_episode_count"] == 1
     assert report["schema_version"] == census.REPORT_SCHEMA_VERSION
     assert report["primary_decision"]["metric"] == ("entry_ai_provider_reach_rate_pct")
@@ -1865,6 +1866,10 @@ def test_primary_provider_rate_excludes_provider_reach_after_detection_sla():
     assert summary["entry_ai_provider_reached_within_sla_count"] == 0
     assert summary["entry_ai_provider_reach_rate_pct"] == 0.0
 
+    assert summary["stage_counts"]["fast_precheck"] == 1
+    assert summary["fast_precheck_recall_pct"] == 0.0
+    assert summary["stage_recall_counts"]["fast_precheck"] == 0
+
 
 def test_forward_lineage_does_not_join_next_promotion_ai_result():
     first_promotion_at = datetime.fromisoformat("2026-07-30T10:00:00+09:00")
@@ -2574,4 +2579,33 @@ def test_missing_session_remains_in_diagnostic_denominator():
             "denominator_unique_opportunity_episode_count"
         ]
         == 1
+    )
+
+
+def test_recall_separates_discovery_sla_from_validity_consumption():
+    def row(detected, source_lag):
+        return {
+            "scanner_detection_sla_met": detected,
+            "stage_reached": dict.fromkeys(census.STAGE_ORDER, True),
+            "stage_latency_from_benchmark_sec": {
+                "source_seen": source_lag,
+                "candidate_evaluated": source_lag,
+                "watch_admitted": source_lag,
+                "fast_precheck": 250,
+                "heavy_eval": 280,
+            },
+            "terminal_coverage_reason": "submitted",
+        }
+
+    summary = census._summarize_rows_base([row(True, 120), row(False, 121)])
+    assert summary["stage_rates_pct"]["heavy_eval"] == 100
+    assert summary["heavy_eval_recall_pct"] == 50
+    assert summary["source_seen_recall_pct"] == 50
+    assert summary["watch_admission_recall_pct"] == 50
+    assert summary["candidate_recall_pct"] == 50
+    assert summary["submitted_recall_pct"] == 50
+    assert summary["entry_ai_provider_reach_rate_pct"] == 50
+    assert (
+        summary["recall_metric_contract"]["candidate_recall_scope"]
+        == "scanner_candidate_pool_not_final_buy_candidate"
     )

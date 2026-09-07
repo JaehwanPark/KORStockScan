@@ -5638,6 +5638,48 @@ def test_observer_provider_gate_blocks_unscoped_loss_but_not_clean_canary():
         )
         is None
     )
+
+
+@pytest.mark.parametrize("value", [33, None, -1, True, 0.5])
+def test_legacy_healthy_canary_cannot_hide_timestamp_source_loss(tmp_path, value):
+    path = tmp_path / "latest.json"
+    payload = {
+        "schema": "scalp_micro_reversion_canary_monitor_v1",
+        "generated_at": "2026-09-07T11:20:10+09:00",
+        "canary_guard": {
+            "status": "healthy_observer_canary",
+            "stop_required": False,
+            "stop_reasons": [],
+            "raw_row_exclusion_required": False,
+            "source_quality_row_exclusions": [],
+        },
+        "collector_snapshot": {
+            "collector_lifecycle": "running",
+            "selection_authority": False,
+            "trading_runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "invalid_exchange_timestamp_count": value,
+            "stale_exchange_timestamp_block_count": 0,
+        },
+    }
+    path.write_text(json.dumps(payload))
+    result = cycle._observer_canary_diagnostic(
+        target_date="2026-09-07",
+        latest_path=path,
+        daily_path=tmp_path / "absent.json",
+    )
+    assert result["status"] == "row_exclusion_required"
+    assert result["stop_required"] is False
+    assert result["timestamp_source_quality"]["issues"]
+    assert (
+        cycle._observer_provider_gate_blocker(result)
+        == "micro_observer_canary_row_exclusion_required"
+    )
+    gate = cycle._observer_source_only_stage_gate(result)
+    assert gate["observer_blocks_action_neutral_label_generation"] is False
+    assert gate["observer_blocks_provider_floor_materialization"] is False
+    assert gate["observer_blocks_provider_replay"] is True
     assert (
         cycle._observer_provider_gate_blocker(
             {"source_path": "/tmp/canary.json", "status": "warming_up"}
@@ -5685,6 +5727,8 @@ def test_observer_canary_requires_running_or_reconciled_closed_lifecycle(
             "source_quality_row_exclusions": [],
         },
         "collector_snapshot": {
+            "invalid_exchange_timestamp_count": 0,
+            "stale_exchange_timestamp_block_count": 0,
             "collector_lifecycle": "closed",
             "reference_reconciliation_completed": False,
             "selection_authority": False,
@@ -5732,6 +5776,8 @@ def test_observer_canary_parses_and_hashes_one_raw_snapshot(
                 "source_quality_row_exclusions": [],
             },
             "collector_snapshot": {
+                "invalid_exchange_timestamp_count": 0,
+                "stale_exchange_timestamp_block_count": 0,
                 "collector_lifecycle": "running",
                 "selection_authority": False,
                 "trading_runtime_effect": False,

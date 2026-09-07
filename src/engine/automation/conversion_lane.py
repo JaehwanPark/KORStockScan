@@ -36,14 +36,11 @@ BLOCKER_CLASSES = {
     "lifecycle_stage_underproduction",
 }
 SUBMIT_DROUGHT_CLOSURE_AXES = (
-    "LATENCY_PRE_SUBMIT",
-    "PRICE_REVALIDATION",
-    "ENTRY_AI_AUTHORITY_REVALIDATION",
-    "BROKER_RECEIPT",
-    "BUDGET_PASS_COLLAPSE",
-    "SIM_REAL_AUTHORITY",
-    "SOURCE_TAXONOMY_LEAKAGE",
     "UPSTREAM_GATE",
+    "LATENCY_PRE_SUBMIT",
+    "ENTRY_AI_AUTHORITY_REVALIDATION",
+    "PRICE_REVALIDATION",
+    "BROKER_RECEIPT",
 )
 SUBMIT_DROUGHT_QUOTE_FRESHNESS_SUBACTIONS = (
     "close_ws_snapshot_refresh_stale_source",
@@ -529,7 +526,7 @@ def _acceptance_test(blocker_class: str) -> str:
     mapping = {
         "source_quality": "source-quality audit excludes/fixes defective rows and candidate source_quality_state becomes pass",
         "sample_floor": "candidate reaches configured parent sample floor or remains sim_priority_only",
-        "submit_drought": "submit drought ledger splits LATENCY_PRE_SUBMIT/PRICE_REVALIDATION/ENTRY_AI_AUTHORITY_REVALIDATION/BROKER_RECEIPT/BUDGET_PASS_COLLAPSE/SIM_REAL_AUTHORITY/SOURCE_TAXONOMY_LEAKAGE/UPSTREAM_GATE",
+        "submit_drought": "submit drought ledger partitions exact attempts into UPSTREAM_GATE/LATENCY_PRE_SUBMIT/ENTRY_AI_AUTHORITY_REVALIDATION/PRICE_REVALIDATION/BROKER_RECEIPT and excludes invalid identity or stage order",
         "runtime_hook": "runtime event emits the candidate key and postclose can observe it",
         "env_mapping": "next PREOPEN policy/env contains the same candidate key",
         "post_apply_attribution": "post-apply attribution joins runtime-applied candidate result",
@@ -548,18 +545,63 @@ def _submit_drought_contract(buy_funnel: dict[str, Any]) -> dict[str, Any]:
     return contract if isinstance(contract, dict) else {}
 
 
+def _submit_drought_exact_contract_ready(buy_funnel: dict[str, Any]) -> bool:
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    return validate_submit_drought_contract(
+        buy_funnel, _submit_drought_contract(buy_funnel)
+    )["status"] in {"pass", "source_quality_blocked"}
+
+
 def _submit_drought_causal_axes(buy_funnel: dict[str, Any]) -> list[str]:
     contract = _submit_drought_contract(buy_funnel)
     causal_axes = contract.get("causal_bottleneck_axes")
     if isinstance(causal_axes, list):
-        return [
-            str(item)
-            for item in causal_axes
-            if str(item) in SUBMIT_DROUGHT_CLOSURE_AXES
-        ]
-    # Backward compatibility for historical reports that predate causal
-    # axis provenance. New reports always carry the explicit list.
-    return list(SUBMIT_DROUGHT_CLOSURE_AXES)
+        breakdown = (
+            contract.get("observation_breakdown")
+            if isinstance(contract.get("observation_breakdown"), dict)
+            else {}
+        )
+        axis_rows = (
+            breakdown.get("axes") if isinstance(breakdown.get("axes"), dict) else {}
+        )
+        exact_contract = (
+            contract.get("exact_attempt_contract")
+            if isinstance(contract.get("exact_attempt_contract"), dict)
+            else {}
+        )
+        report_requires_exact = (
+            _safe_int(buy_funnel.get("schema_version"), 0) >= 4
+            or str(buy_funnel.get("target_date") or "") >= "2026-09-07"
+            or str(buy_funnel.get("_decision_date") or "") >= "2026-09-07"
+        )
+        require_exact_axis = report_requires_exact or bool(exact_contract)
+        exact_contract_ready = _submit_drought_exact_contract_ready(buy_funnel)
+        if require_exact_axis and not exact_contract_ready:
+            return []
+        selected: list[str] = []
+        for item in causal_axes:
+            axis = str(item)
+            if axis not in SUBMIT_DROUGHT_CLOSURE_AXES:
+                continue
+            axis_row = (
+                axis_rows.get(axis) if isinstance(axis_rows.get(axis), dict) else {}
+            )
+            if require_exact_axis and not (
+                axis_row.get("status") == "observed"
+                and axis_row.get("exact_join_valid") is True
+                and _safe_int(axis_row.get("observed_count")) > 0
+            ):
+                continue
+            if axis in selected:
+                continue
+            selected.append(axis)
+        return selected
+    # Historical reports without explicit causal provenance are archive input.
+    # Do not manufacture every closure axis as an actionable blocker.
+    return []
 
 
 def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]:
@@ -602,6 +644,8 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
             {
                 "axis_status": str(axis_row.get("status") or "observed"),
                 "axis_observed_count": observed_count,
+                "axis_exact_join_valid": axis_row.get("exact_join_valid"),
+                "axis_source_quality_status": axis_row.get("source_quality_status"),
                 "axis_evidence": axis_row.get("evidence") or {},
                 "next_repair_action": str(
                     axis_row.get("next_repair_action")
@@ -626,30 +670,31 @@ def _submit_drought_blockers(buy_funnel: dict[str, Any]) -> list[dict[str, Any]]
 
 
 def _submit_drought_axis_acceptance_test(axis: str) -> str:
+    # This is repair acceptance, not approval to relax a trading decision.
+    # Economic replay and bounded promotion remain with the existing owners.
     mapping = {
         "UPSTREAM_GATE": (
-            "blocked candidates join executable BBO plus 1/3/5/10/20/30/60m "
-            "MFE/MAE and target/adverse first-hit; bounded exploration remains "
-            "source-only until positive EV and downstream protection are proven"
+            "exact attempts preserve canonical upstream terminal reasons and retry "
+            "boundaries; raw/cache/consumer counts reconcile without unknown loss; "
+            "repair does not require economic replay or grant runtime authority"
         ),
         "BUDGET_PASS_COLLAPSE": (
             "each ai-confirmed to budget-pass drop has an explicit account/order/"
             "quantity/cooldown or eligibility reason; no hard guard is relaxed"
         ),
         "LATENCY_PRE_SUBMIT": (
-            "latency rows carry fresh executable BBO and target/adverse first-hit; "
-            "only false-negative DANGER attribution may become a bounded candidate"
+            "the same attempt joins budget to latency block/pass and terminal; "
+            "an earlier-stage retry is not recovery and DANGER safety is unchanged"
         ),
         "PRICE_REVALIDATION": (
-            "price-revalidation blocks join executable BBO and target/adverse "
-            "first-hit, then positive source-quality-adjusted EV may emit a "
-            "one-share bounded candidate without stale or broker guard bypass"
+            "explicit final price blocks are separated from nonblocking fallback; "
+            "exact lineage and downstream consumer counts reconcile without "
+            "stale or broker guard bypass or standalone runtime authority"
         ),
         "ENTRY_AI_AUTHORITY_REVALIDATION": (
-            "entry-AI-authority blocks preserve canonical authority reason, exact "
-            "payload lineage, executable BBO, and target/adverse first-hit; only a "
-            "positive source-quality-adjusted EV cohort may emit a one-share bounded "
-            "candidate without changing AI semantics or bypassing submit guards"
+            "entry-AI-authority blocks preserve canonical reason and exact payload "
+            "lineage through consumer validation; repair leaves AI semantics and "
+            "submit guards unchanged and does not depend on positive EV samples"
         ),
         "BROKER_RECEIPT": (
             "a broker submission or explicit submit failure exists and receipt/fill "
@@ -924,6 +969,8 @@ def build_conversion_lane(
         / "buy_funnel_sentinel"
         / f"buy_funnel_sentinel_{target_date}.json"
     )
+    if buy_funnel:
+        buy_funnel = {**buy_funnel, "_decision_date": target_date}
 
     candidates = _candidates_from_lifecycle(lifecycle, "scalp")
     if include_swing:
@@ -1396,8 +1443,17 @@ def build_conversion_lane(
         "blocker_axis_counts": dict(blocker_axis_counts),
         "submit_drought_closure_axis_count": len(submit_drought_axes),
         "submit_drought_closure_axes": submit_drought_axes,
-        "submit_drought_split_complete": set(submit_drought_axes)
-        == set(_submit_drought_causal_axes(buy_funnel)),
+        "submit_drought_split_complete": (
+            buy_funnel_provenance.get("submit_drought_blocker_source_state")
+            == "submit_drought_critical"
+            and bool(buy_funnel_provenance["submit_drought_causal_bottleneck_axes"])
+            and (
+                _safe_int(buy_funnel.get("schema_version"), 0) < 4
+                or _submit_drought_exact_contract_ready(buy_funnel)
+            )
+            and set(submit_drought_axes)
+            == set(buy_funnel_provenance["submit_drought_causal_bottleneck_axes"])
+        ),
         **buy_funnel_provenance,
     }
     return {

@@ -1,0 +1,311 @@
+{
+  "recorded_at": "2026-09-07T11:52:15.132282+09:00",
+  "scope": "same_valid_synthetic_0b_5000x5_and_rejected_0b_5000_source_only_no_broker",
+  "callback_preflight": {
+    "schema": "scalp_micro_reversion_callback_baseline_v1",
+    "baseline_id": "main_server_synthetic_0b_20260907T115215+0900",
+    "generated_at": "2026-09-07T11:52:15+09:00",
+    "host": {
+      "hostname": "ip-172-31-34-105",
+      "machine": "aarch64",
+      "python": "3.13.12",
+      "platform": "Linux-7.0.0-1012-aws-aarch64-with-glibc2.39"
+    },
+    "workload": {
+      "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+      "observer_off_then_on": true,
+      "path_capture_enabled_on": true,
+      "discovery_enabled_on": false,
+      "iterations_per_repeat": 5000,
+      "warmup_per_repeat": 500,
+      "repeat_count": 5
+    },
+    "observer_off_runs": [
+      {
+        "p50_ms": 0.00012,
+        "p95_ms": 0.000126,
+        "p99_ms": 0.00014,
+        "max_ms": 0.004606,
+        "mean_ms": 0.0001222664
+      },
+      {
+        "p50_ms": 0.000121,
+        "p95_ms": 0.000127,
+        "p99_ms": 0.000143,
+        "max_ms": 0.007248,
+        "mean_ms": 0.0001234242
+      },
+      {
+        "p50_ms": 0.000121,
+        "p95_ms": 0.000128,
+        "p99_ms": 0.000143,
+        "max_ms": 0.005675,
+        "mean_ms": 0.00012303219999999998
+      },
+      {
+        "p50_ms": 0.000121,
+        "p95_ms": 0.000128,
+        "p99_ms": 0.000142,
+        "max_ms": 0.007542,
+        "mean_ms": 0.0001235958
+      },
+      {
+        "p50_ms": 0.000121,
+        "p95_ms": 0.000128,
+        "p99_ms": 0.000144,
+        "max_ms": 0.0158,
+        "mean_ms": 0.0001253054
+      }
+    ],
+    "observer_on_runs": [
+      {
+        "p50_ms": 0.022491,
+        "p95_ms": 0.028485,
+        "p99_ms": 0.05,
+        "max_ms": 10.305554,
+        "mean_ms": 0.0470216562,
+        "collector_internal_p95_ms": 0.02638,
+        "collector_internal_p99_ms": 0.037856,
+        "queue_drop_count": 0.0,
+        "worker_error_count": 0.0
+      },
+      {
+        "p50_ms": 0.022865,
+        "p95_ms": 0.026606,
+        "p99_ms": 0.048735,
+        "max_ms": 20.1725,
+        "mean_ms": 0.0588955382,
+        "collector_internal_p95_ms": 0.024605,
+        "collector_internal_p99_ms": 0.045442,
+        "queue_drop_count": 0.0,
+        "worker_error_count": 0.0
+      },
+      {
+        "p50_ms": 0.022931,
+        "p95_ms": 0.028472,
+        "p99_ms": 0.053794,
+        "max_ms": 15.474694,
+        "mean_ms": 0.05194542259999999,
+        "collector_internal_p95_ms": 0.026488,
+        "collector_internal_p99_ms": 0.045926,
+        "queue_drop_count": 0.0,
+        "worker_error_count": 0.0
+      },
+      {
+        "p50_ms": 0.022996,
+        "p95_ms": 0.024873,
+        "p99_ms": 0.038001,
+        "max_ms": 15.843492,
+        "mean_ms": 0.0534021248,
+        "collector_internal_p95_ms": 0.023387,
+        "collector_internal_p99_ms": 0.036313,
+        "queue_drop_count": 0.0,
+        "worker_error_count": 0.0
+      },
+      {
+        "p50_ms": 0.022872,
+        "p95_ms": 0.025843,
+        "p99_ms": 0.036596,
+        "max_ms": 10.319718,
+        "mean_ms": 0.0459863836,
+        "collector_internal_p95_ms": 0.024344,
+        "collector_internal_p99_ms": 0.035305,
+        "queue_drop_count": 0.0,
+        "worker_error_count": 0.0
+      }
+    ],
+    "summary": {
+      "observer_off_p95_ms_max": 0.000128,
+      "observer_off_p99_ms_max": 0.000144,
+      "observer_on_external_p95_ms_max": 0.028485,
+      "observer_on_external_p99_ms_max": 0.053794,
+      "observer_on_internal_p95_ms_max": 0.026488,
+      "observer_on_internal_p99_ms_max": 0.045926,
+      "queue_drop_count": 0,
+      "worker_error_count": 0
+    },
+    "frozen_limits": {
+      "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+      "minimum_callback_samples": 1000,
+      "producer_callback_latency_p95_max_ms": 1.0,
+      "producer_callback_latency_p99_max_ms": 2.0,
+      "snapshot_stale_after_sec": 30.0
+    },
+    "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+    "decision_authority": "observer_canary_stop_only_no_trading_authority",
+    "window_policy": "current_process_cumulative_with_periodic_snapshot",
+    "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+    "primary_decision_metric": "stop_required",
+    "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config;_bounded_ingress_queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_successful_write_below_preventive_low_disk_watermark_is_operational_warning_only;_worker_writer_actual_capture_loss_storage_self_disable_or_authority_failure_is_immediate_stop",
+    "forbidden_uses": [
+      "broker_order_submission",
+      "broker_order_cancel",
+      "buy_wait_drop_or_entry_exit_decision",
+      "simulated_or_real_position_creation",
+      "threshold_provider_bot_quantity_or_cap_mutation",
+      "p2_policy_selection_or_economic_edge_claim"
+    ]
+  },
+  "fixed_source_replay": {
+    "rejected_callback_preflight": {
+      "samples": 5000,
+      "retained": 64,
+      "p95_ms": 0.010737,
+      "p99_ms": 0.016138,
+      "enqueued": 0
+    },
+    "micro_before": {
+      "status": "healthy_observer_canary",
+      "stop_required": false,
+      "stop_reasons": [],
+      "source_quality_row_exclusions": [],
+      "operational_capacity_warnings": [],
+      "raw_row_exclusion_required": false,
+      "latency_guard_armed": true,
+      "callback_sample_count": 65850,
+      "observed_latency_p95_ms": 0.126659,
+      "observed_latency_p99_ms": 0.850927,
+      "latency_p95_max_ms": 1.0,
+      "latency_p99_max_ms": 2.0,
+      "latency_breach_confirmation_snapshots": 3,
+      "latency_breach_immediate_multiplier": 2.0,
+      "minimum_callback_samples": 1000,
+      "snapshot_stale_after_sec": 30.0
+    },
+    "micro_after": {
+      "status": "healthy_observer_canary_with_source_row_exclusions",
+      "stop_required": false,
+      "stop_reasons": [],
+      "source_quality_row_exclusions": [
+        "timestamp_source_rejected_before_enqueue:invalid_exchange_timestamp_count=33171",
+        "timestamp_source_rejected_before_enqueue:stale_exchange_timestamp_block_count=33171",
+        "timestamp_source_rejected_before_enqueue:invalid_depth_timestamp_count=21433"
+      ],
+      "timestamp_source_quality": {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_only_provider_replay_hold_no_collector_stop",
+        "window_policy": "same_hashed_snapshot_current_process_counters",
+        "sample_floor": "per_observation_timestamp_contract",
+        "primary_decision_metric": "issues",
+        "source_quality_gate": "nonnegative_integer_counters_required_and_rejected_input_excluded",
+        "forbidden_uses": [
+          "collector_auto_stop",
+          "trading_authority",
+          "zero_ev_imputation"
+        ],
+        "counts": {
+          "invalid_exchange_timestamp_count": 33171,
+          "stale_exchange_timestamp_block_count": 33171,
+          "invalid_depth_timestamp_count": 21433
+        },
+        "issues": [
+          "timestamp_source_rejected_before_enqueue:invalid_exchange_timestamp_count=33171",
+          "timestamp_source_rejected_before_enqueue:stale_exchange_timestamp_block_count=33171",
+          "timestamp_source_rejected_before_enqueue:invalid_depth_timestamp_count=21433"
+        ],
+        "rejection_stage": "before_observer_enqueue",
+        "exact_rejected_row_exclusion_proven": false
+      },
+      "operational_capacity_warnings": [],
+      "raw_row_exclusion_required": true,
+      "latency_guard_armed": true,
+      "callback_sample_count": 65850,
+      "observed_latency_p95_ms": 0.126659,
+      "observed_latency_p99_ms": 0.850927,
+      "latency_p95_max_ms": 1.0,
+      "latency_p99_max_ms": 2.0,
+      "latency_breach_confirmation_snapshots": 3,
+      "latency_breach_immediate_multiplier": 2.0,
+      "minimum_callback_samples": 1000,
+      "snapshot_stale_after_sec": 30.0
+    },
+    "main_ai_consumer": {
+      "status": "row_exclusion_required",
+      "stop_required": false,
+      "source_quality_row_exclusions": [
+        "timestamp_source_rejected_before_enqueue:invalid_exchange_timestamp_count=33171",
+        "timestamp_source_rejected_before_enqueue:stale_exchange_timestamp_block_count=33171",
+        "timestamp_source_rejected_before_enqueue:invalid_depth_timestamp_count=21433"
+      ],
+      "timestamp_source_quality": {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_only_provider_replay_hold_no_collector_stop",
+        "window_policy": "same_hashed_snapshot_current_process_counters",
+        "sample_floor": "per_observation_timestamp_contract",
+        "primary_decision_metric": "issues",
+        "source_quality_gate": "nonnegative_integer_counters_required_and_rejected_input_excluded",
+        "forbidden_uses": [
+          "collector_auto_stop",
+          "trading_authority",
+          "zero_ev_imputation"
+        ],
+        "counts": {
+          "invalid_exchange_timestamp_count": 33171,
+          "stale_exchange_timestamp_block_count": 33171,
+          "invalid_depth_timestamp_count": 21433
+        },
+        "issues": [
+          "timestamp_source_rejected_before_enqueue:invalid_exchange_timestamp_count=33171",
+          "timestamp_source_rejected_before_enqueue:stale_exchange_timestamp_block_count=33171",
+          "timestamp_source_rejected_before_enqueue:invalid_depth_timestamp_count=21433"
+        ],
+        "rejection_stage": "before_observer_enqueue",
+        "exact_rejected_row_exclusion_proven": false
+      }
+    },
+    "main_ai_stage_gate": {
+      "schema": "main_ai_quality_observer_source_only_stage_gate_v1",
+      "observer_blocks_action_neutral_label_generation": false,
+      "observer_blocks_provider_floor_materialization": false,
+      "observer_blocks_provider_replay": true,
+      "observer_blocks_r3_promotion": true,
+      "blocker_code": "micro_observer_canary_row_exclusion_required",
+      "decision_authority": "postclose_source_only_ai_quality_research",
+      "runtime_effect": false,
+      "runtime_authority": false,
+      "order_authority": false,
+      "provider_authority": false,
+      "allowed_runtime_apply": false,
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true
+    },
+    "scanner_before": {
+      "denominator_unique_opportunity_episode_count": 104,
+      "source_seen_recall_pct": 94.23,
+      "promotion_recall_pct": 13.46,
+      "fast_precheck_recall_pct": 19.23,
+      "heavy_eval_recall_pct": 19.23,
+      "watch_admission_recall_pct": 21.15,
+      "candidate_recall_pct": 94.23,
+      "entry_ai_provider_reach_rate_pct": 0.0
+    },
+    "scanner_after": {
+      "denominator_unique_opportunity_episode_count": 104,
+      "source_seen_recall_pct": 61.54,
+      "promotion_recall_pct": 13.46,
+      "fast_precheck_recall_pct": 11.54,
+      "heavy_eval_recall_pct": 11.54,
+      "watch_admission_recall_pct": 13.46,
+      "candidate_recall_pct": 61.54,
+      "entry_ai_provider_reach_rate_pct": 0.0
+    },
+    "scanner_after_contract": {
+      "mode": "forward_exact_detection_sla",
+      "denominator_field": "denominator_unique_opportunity_episode_count",
+      "numerator_field": "stage_recall_counts",
+      "formula": "stage_recall_counts[stage] / denominator_unique_opportunity_episode_count * 100",
+      "upstream_stage_window_sec": 120,
+      "downstream_window": "same_lineage_inside_opportunity_validity_after_sla_valid_detection",
+      "opportunity_validity_sec": 300,
+      "candidate_recall_scope": "scanner_candidate_pool_not_final_buy_candidate",
+      "stage_counts_and_rates_role": "observed_within_validity_including_late_discovery"
+    }
+  },
+  "source_sha256": {
+    "benchmark_module_sha256": "3c703102ac68ab70315377b907f584dff4efb399d8818ebe84f6b6ba9f26cfd7",
+    "forward_collector_sha256": "a72fa0a24bbdd902553c48d7cb42dca8947d35a55eb0042c135289c700973fd8"
+  },
+  "runtime_effect": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true
+}

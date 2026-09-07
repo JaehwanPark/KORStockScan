@@ -6117,6 +6117,36 @@ def test_decision_quality_v2_7_does_not_guess_ambiguous_non_buy_conflict():
     assert result["decision_quality_contract_repair_applied"] is False
 
 
+@pytest.mark.parametrize("early_path", ["preflight", "cache"])
+def test_analyze_target_early_trace_preserves_current_caller_identity(monkeypatch, early_path):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module, "TRADING_RULES",
+        replace(openai_module.TRADING_RULES, OPENAI_ANALYZE_TARGET_PROMPT_VERSION="decision_quality_v2_7"),
+    )
+    if early_path == "cache":
+        monkeypatch.setattr(openai_module, "ai_input_preflight", lambda _: {"allowed": True})
+        monkeypatch.setattr(engine, "_cache_get", lambda *a: {"action": "WAIT", "score": 60, "ai_trace_record_id": 111, "ai_decision_trace_id": "old-trace"})
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **kw: pytest.fail("unexpected provider call"))
+    captured = []
+    def record(result, **kwargs):
+        captured.append({**result, **(kwargs.get("input_contract_fields") or {})})
+        return {"ai_decision_trace_id": "new-trace"}
+    monkeypatch.setattr(openai_module, "record_ai_decision_trace", record)
+    metadata = {"record_id": 222, "stock_code": "005930", "source_event_stage": "scanner_heavy_eval", "sim_record_id": "SIM-222"}
+    result = engine.analyze_target(
+        "Test", _sample_ws_data(), _sample_ticks(), _sample_candles(),
+        strategy="SCALPING", prompt_profile="watching", metadata_extra=metadata,
+    )
+    assert len(captured) == 1
+    assert captured[0]["ai_trace_record_id"] == 222
+    assert captured[0]["ai_trace_stock_code"] == "005930"
+    assert captured[0]["source_event_stage"] == "scanner_heavy_eval"
+    assert captured[0]["sim_record_id"] == "SIM-222"
+    assert result["action"] == ("DROP" if early_path == "preflight" else "WAIT")
+    assert metadata["record_id"] == 222
+
+
 def test_decision_quality_v2_7_requires_exact_preflight_even_if_global_gate_off(
     monkeypatch,
 ):

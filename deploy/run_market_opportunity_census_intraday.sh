@@ -51,17 +51,21 @@ capture_cmd=(
   --limit 200
 )
 
-if ! "${capture_cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
-  exit_code=${PIPESTATUS[0]}
+if "${capture_cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+  :
+else
+  exit_code=$?
   finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
   echo "[FAIL] market opportunity census target_date=${TARGET_DATE} phase=capture exit_code=${exit_code} finished_at=${finished_at}" | tee -a "$LOG_FILE"
   exit "$exit_code"
 fi
 
 if [[ "$REFRESH_REPORT" == "1" || "$REFRESH_REPORT" == "true" || "$REFRESH_REPORT" == "yes" || "$REFRESH_REPORT" == "on" ]]; then
-  if ! ionice -c2 -n7 nice -n 15 env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.market_opportunity_census \
+  if ionice -c2 -n7 nice -n 15 env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.market_opportunity_census \
     --target-date "$TARGET_DATE" --write --print-summary 2>&1 | tee -a "$LOG_FILE"; then
-    exit_code=${PIPESTATUS[0]}
+    :
+  else
+    exit_code=$?
     finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
     echo "[FAIL] market opportunity census target_date=${TARGET_DATE} phase=report exit_code=${exit_code} finished_at=${finished_at}" | tee -a "$LOG_FILE"
     exit "$exit_code"

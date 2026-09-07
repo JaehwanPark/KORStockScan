@@ -358,13 +358,17 @@ def test_bad_source_cannot_record_recovery_or_renew_same_cause():
 
 
 def test_omitted_env_profile_recovers_and_preopen_rechecks_pairs(isolated):
+    from src.tests.submit_drought_fixtures import bind_history
+
     isolated.setattr(
         report,
         "_load_json_with_status",
         lambda path: ({"env_overrides": {}}, {"status": "loaded", "path": str(path)}),
     )
     isolated.setattr(
-        report, "_buy_funnel_drought_history", lambda *args, **kwargs: history()
+        report,
+        "_buy_funnel_drought_history",
+        lambda *args, **kwargs: bind_history(history()),
     )
     isolated.setattr(
         report, "_entry_recheck_exact_attribution", lambda **kwargs: exact(paired=1)
@@ -389,7 +393,10 @@ def test_omitted_env_profile_recovers_and_preopen_rechecks_pairs(isolated):
 
 
 def test_scope_stop_survives_producer_preopen_contract_without_global_off(isolated):
+    from src.tests.submit_drought_fixtures import bind_history
+
     hist, evidence = two_scope_case()
+    bind_history(hist)
     isolated.setattr(
         report,
         "_load_json_with_status",

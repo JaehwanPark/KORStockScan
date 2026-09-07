@@ -45,7 +45,7 @@ def test_submit_drought_is_classified_without_cross_venue_denominator(
                 "2026-05-06",
                 f"10:{idx:02d}:00",
                 "ai_confirmed",
-                record_id=idx,
+                record_id=idx + 1,
             )
         )
         rows.append(
@@ -76,6 +76,18 @@ def test_submit_drought_is_classified_without_cross_venue_denominator(
             _event(
                 "2026-05-06",
                 f"17:{idx:02d}:20",
+                "latency_pass",
+                record_id=100 + idx,
+                fields={
+                    "effective_venue": "NXT",
+                    "market_session_bucket": "nxt_aftermarket",
+                },
+            )
+        )
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"17:{idx:02d}:30",
                 "order_bundle_submitted",
                 record_id=100 + idx,
                 fields={
@@ -250,11 +262,11 @@ def test_upstream_ai_threshold_classification_uses_previous_day_baseline(
     baseline_rows = []
     for idx in range(10):
         baseline_rows.append(
-            _event("2026-05-04", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-04", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx + 1)
         )
     for idx in range(8):
         baseline_rows.append(
-            _event("2026-05-04", f"10:{idx:02d}:10", "budget_pass", record_id=idx)
+            _event("2026-05-04", f"10:{idx:02d}:10", "budget_pass", record_id=idx + 1)
         )
     for idx in range(4):
         baseline_rows.append(
@@ -262,7 +274,7 @@ def test_upstream_ai_threshold_classification_uses_previous_day_baseline(
                 "2026-05-04",
                 f"10:{idx:02d}:20",
                 "order_bundle_submitted",
-                record_id=idx,
+                record_id=idx + 1,
             )
         )
     _write_events(tmp_path, "2026-05-04", baseline_rows)
@@ -270,7 +282,7 @@ def test_upstream_ai_threshold_classification_uses_previous_day_baseline(
     current_rows = []
     for idx in range(10):
         current_rows.append(
-            _event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx + 1)
         )
     current_rows.append(_event("2026-05-06", "10:01:10", "budget_pass", record_id=1))
     current_rows.extend(
@@ -322,7 +334,7 @@ def test_ai_confirmed_terminal_no_budget_is_split_by_terminal_reason(
     rows = []
     for idx in range(10):
         rows.append(
-            _event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx + 1)
         )
     for idx in range(3):
         rows.append(
@@ -442,11 +454,11 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     assert breakdown["broker_order_submit_allowed"] is False
     assert breakdown["axis_order"] == [
         "UPSTREAM_GATE",
-        "BUDGET_PASS_COLLAPSE",
         "LATENCY_PRE_SUBMIT",
-        "PRICE_REVALIDATION",
         "ENTRY_AI_AUTHORITY_REVALIDATION",
+        "PRICE_REVALIDATION",
         "BROKER_RECEIPT",
+        "BUDGET_PASS_COLLAPSE",
         "ECONOMIC_PARTICIPATION",
         "SIM_REAL_AUTHORITY",
         "SOURCE_TAXONOMY_LEAKAGE",
@@ -497,9 +509,11 @@ def test_submit_drought_without_latency_block_does_not_claim_latency_drought(
     rows = []
     for idx in range(3):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
     _write_events(tmp_path, "2026-05-06", rows)
 
     report = sentinel.build_buy_funnel_sentinel_report(
@@ -524,9 +538,11 @@ def test_unrelated_latency_block_does_not_claim_budget_pass_latency_drought(
     rows = []
     for idx in range(3):
         rows.append(
-            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1)
         )
-        rows.append(_event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx))
+        rows.append(
+            _event("2026-05-06", f"10:0{idx}:10", "budget_pass", record_id=idx + 1)
+        )
     rows.append(
         _event(
             "2026-05-06",
@@ -672,6 +688,254 @@ def test_missing_record_id_cannot_create_latency_causal_join(monkeypatch, tmp_pa
     assert session["latency_blocked_budget_unique"] == 0
 
 
+def test_submit_drought_core_axes_use_disjoint_terminal_exact_attempts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-06"
+    rows = [
+        _event(
+            target_date,
+            f"10:{idx:02d}:00",
+            "ai_confirmed",
+            record_id=idx + 1,
+        )
+        for idx in range(20)
+    ]
+    rows.extend(
+        [
+            _event(target_date, "10:00:01", "blocked_ai_score", record_id=1),
+            _event(target_date, "10:01:01", "budget_pass", record_id=2),
+            _event(
+                target_date,
+                "10:01:02",
+                "latency_block",
+                record_id=2,
+                fields={"reason": "latency_state_danger"},
+            ),
+            _event(
+                target_date,
+                "10:02:01",
+                "pre_submit_entry_ai_authority_guard_block",
+                record_id=3,
+            ),
+            _event(target_date, "10:03:01", "budget_pass", record_id=4),
+            _event(
+                target_date,
+                "10:03:02",
+                "pre_submit_price_guard_block",
+                record_id=4,
+            ),
+            _event(target_date, "10:04:01", "budget_pass", record_id=5),
+            _event(target_date, "10:04:02", "latency_pass", record_id=5),
+            _event(target_date, "10:04:03", "broker_submit_failed", record_id=5),
+            _event(target_date, "10:05:01", "budget_pass", record_id=6),
+        ]
+    )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    contract = report["entry_submit_drought_contract"]
+    exact = contract["exact_attempt_contract"]
+
+    assert contract["core_handoff_axes"] == [
+        "UPSTREAM_GATE",
+        "LATENCY_PRE_SUBMIT",
+        "ENTRY_AI_AUTHORITY_REVALIDATION",
+        "PRICE_REVALIDATION",
+        "BROKER_RECEIPT",
+    ]
+    assert contract["causal_bottleneck_axes"] == contract["core_handoff_axes"]
+    assert exact["status"] == "pass"
+    assert exact["identity_field"] == "record_id"
+    assert exact["identity_fallback_allowed"] is False
+    assert exact["terminal_causal_partition_disjoint"] is True
+    assert exact["terminal_causal_attempt_count"] == 5
+    assert set(contract["observation_only_axes"]) >= {
+        "BUDGET_PASS_COLLAPSE",
+        "SIM_REAL_AUTHORITY",
+    }
+
+
+def test_submit_drought_excludes_missing_exact_identity_without_symbol_fallback(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-06"
+    rows = [
+        _event(
+            target_date,
+            f"10:{idx:02d}:00",
+            "ai_confirmed",
+            record_id=idx + 1,
+        )
+        for idx in range(20)
+    ]
+    rows.extend(
+        [
+            _event(target_date, "10:20:01", "budget_pass", record_id=0),
+            _event(
+                target_date,
+                "10:20:02",
+                "pre_submit_price_guard_block",
+                record_id=0,
+            ),
+        ]
+    )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    session = report["current"]["session"]
+    contract = report["entry_submit_drought_contract"]
+    exact = contract["exact_attempt_contract"]
+    price_axis = contract["observation_breakdown"]["axes"]["PRICE_REVALIDATION"]
+
+    assert session["stage_unique"]["budget_pass"] == 0
+    assert exact["status"] == "source_quality_gap_excluded"
+    assert exact["missing_exact_attempt_key_event_count"] == 2
+    assert exact["denominator_missing_exact_attempt_key_events"]["budget_pass"] == 1
+    assert exact["axis_missing_exact_attempt_key_events"]["PRICE_REVALIDATION"] == 1
+    assert price_axis["status"] == "no_current_signal"
+    assert price_axis["observed_count"] == 0
+    assert price_axis["identity_fallback_allowed"] is False
+    assert "PRICE_REVALIDATION" not in contract["causal_bottleneck_axes"]
+
+
+def test_duplicate_price_events_and_later_submit_do_not_inflate_causal_attempts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-06"
+    rows = [
+        _event(
+            target_date,
+            f"10:{idx:02d}:00",
+            "ai_confirmed",
+            record_id=idx + 1,
+            code="000001",
+        )
+        for idx in range(20)
+    ]
+    for second in range(1, 4):
+        rows.append(
+            _event(target_date, f"10:20:0{second}", "budget_pass", record_id=second)
+        )
+    rows.extend(
+        _event(
+            target_date,
+            f"10:21:0{idx}",
+            "pre_submit_price_guard_block",
+            record_id=1,
+            code="000001",
+        )
+        for idx in range(3)
+    )
+    rows.extend(
+        [
+            _event(
+                target_date,
+                "10:21:04",
+                "latency_pass",
+                record_id=1,
+                code="000001",
+            ),
+            _event(
+                target_date,
+                "10:22:01",
+                "order_bundle_submitted",
+                record_id=1,
+                code="000001",
+            ),
+            _event(
+                target_date,
+                "10:22:02",
+                "pre_submit_price_guard_block",
+                record_id=2,
+                code="000001",
+            ),
+            _event(
+                target_date,
+                "10:22:03",
+                "pre_submit_price_guard_block",
+                record_id=3,
+                code="000001",
+            ),
+        ]
+    )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    contract = report["entry_submit_drought_contract"]
+    exact = contract["exact_attempt_contract"]
+    price_axis = contract["observation_breakdown"]["axes"]["PRICE_REVALIDATION"]
+
+    assert report["classification"]["primary"] == "SUBMIT_DROUGHT_CRITICAL"
+    assert "PRICE_GUARD_DROUGHT" not in report["classification"]["matches"]
+    assert exact["axis_event_counts"]["PRICE_REVALIDATION"] == 5
+    assert exact["axis_exact_attempt_event_counts"]["PRICE_REVALIDATION"] == 3
+    assert exact["axis_terminal_causal_attempt_counts"]["PRICE_REVALIDATION"] == 2
+    assert exact["axis_later_progress_attempt_counts"]["PRICE_REVALIDATION"] == 1
+    assert price_axis["observed_count"] == 2
+
+
+def test_submit_drought_excludes_out_of_order_denominator_stages(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    target_date = "2026-05-06"
+    rows = [
+        _event(
+            target_date,
+            f"10:{idx:02d}:00",
+            "ai_confirmed",
+            record_id=idx + 1,
+        )
+        for idx in range(20)
+    ]
+    rows.extend(
+        [
+            _event(target_date, "10:20:01", "budget_pass", record_id=1),
+            _event(target_date, "10:20:02", "order_bundle_submitted", record_id=1),
+            _event(target_date, "10:20:03", "latency_pass", record_id=2),
+            _event(target_date, "10:20:04", "budget_pass", record_id=3),
+            _event(target_date, "10:20:05", "latency_pass", record_id=3),
+            _event(target_date, "10:20:06", "order_bundle_submitted", record_id=3),
+        ]
+    )
+    _write_events(tmp_path, target_date, rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        target_date,
+        as_of=sentinel._parse_as_of(target_date, "10:30:00"),
+    )
+    session = report["current"]["session"]
+    exact = report["entry_submit_drought_contract"]["exact_attempt_contract"]
+
+    assert session["stage_unique"]["budget_pass"] == 2
+    assert session["stage_unique"]["latency_pass"] == 1
+    assert session["stage_unique"]["order_bundle_submitted"] == 1
+    assert exact["denominator_exact_attempt_counts"] == {
+        "ai_confirmed": 20,
+        "budget_pass": 2,
+        "latency_pass": 1,
+        "order_bundle_submitted": 1,
+    }
+    assert exact["denominator_stage_order_violation_events"] == {
+        "ai_confirmed": 0,
+        "budget_pass": 0,
+        "latency_pass": 1,
+        "order_bundle_submitted": 1,
+    }
+    assert exact["status"] == "source_quality_gap_excluded"
+
+
 def test_budget_census_gap_is_observation_only_without_explicit_ai_lineage(
     monkeypatch, tmp_path
 ):
@@ -682,13 +946,13 @@ def test_budget_census_gap_is_observation_only_without_explicit_ai_lineage(
             target_date,
             f"10:{idx:02d}:00",
             "ai_confirmed",
-            record_id=idx,
+            record_id=idx + 1,
             fields={"ai_decision_trace_id": f"trace-{idx}", "action": "WAIT"},
         )
         for idx in range(20)
     ]
     rows.extend(
-        _event(target_date, f"10:{idx:02d}:05", "budget_pass", record_id=idx)
+        _event(target_date, f"10:{idx:02d}:05", "budget_pass", record_id=idx + 1)
         for idx in range(3)
     )
     _write_events(tmp_path, target_date, rows)
@@ -853,7 +1117,7 @@ def test_budget_block_is_causal_only_when_parent_ai_trace_joins(monkeypatch, tmp
                 target_date,
                 f"10:{idx:02d}:00",
                 "ai_confirmed",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={"ai_decision_trace_id": trace_id, "action": "WAIT"},
             )
         )
@@ -863,7 +1127,7 @@ def test_budget_block_is_causal_only_when_parent_ai_trace_joins(monkeypatch, tmp
                     target_date,
                     f"10:{idx:02d}:05",
                     "blocked_zero_qty" if idx == 0 else "budget_pass",
-                    record_id=idx,
+                    record_id=idx + 1,
                     fields={
                         "pre_submit_parent_ai_decision_trace_id": trace_id,
                         "pre_submit_parent_ai_attempt_trace_id": trace_id,
@@ -891,7 +1155,8 @@ def test_budget_block_is_causal_only_when_parent_ai_trace_joins(monkeypatch, tmp
     assert lineage["linked_budget_pass_trace_count"] == 2
     assert lineage["lineage_exact_trusted_count"] == 3
     assert lineage["raw_ai_budget_census_is_causal"] is False
-    assert "BUDGET_PASS_COLLAPSE" in breakdown["causal_bottleneck_axes"]
+    assert "BUDGET_PASS_COLLAPSE" not in breakdown["causal_bottleneck_axes"]
+    assert "BUDGET_PASS_COLLAPSE" in breakdown["observation_only_axes"]
 
 
 def test_budget_block_rejects_untrusted_or_stale_parent_ai_trace(monkeypatch, tmp_path):
@@ -905,7 +1170,7 @@ def test_budget_block_rejects_untrusted_or_stale_parent_ai_trace(monkeypatch, tm
                 target_date,
                 f"10:{idx:02d}:00",
                 "ai_confirmed",
-                record_id=idx,
+                record_id=idx + 1,
                 fields={"ai_decision_trace_id": trace_id, "action": "WAIT"},
             )
         )
@@ -914,7 +1179,7 @@ def test_budget_block_rejects_untrusted_or_stale_parent_ai_trace(monkeypatch, tm
             target_date,
             "10:00:05",
             "blocked_zero_qty",
-            record_id=0,
+            record_id=1,
             fields={
                 "pre_submit_parent_ai_decision_trace_id": "trace-0",
                 "pre_submit_parent_ai_attempt_trace_id": "trace-0",
@@ -1084,14 +1349,14 @@ def test_submit_drought_separates_price_revalidation_from_broker_receipt(
     for idx in range(5):
         rows.extend(
             [
-                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx),
-                _event(target_date, f"10:0{idx}:05", "budget_pass", record_id=idx),
-                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx),
+                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1),
+                _event(target_date, f"10:0{idx}:05", "budget_pass", record_id=idx + 1),
+                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx + 1),
                 _event(
                     target_date,
                     f"10:0{idx}:15",
                     "pre_submit_price_guard_block",
-                    record_id=idx,
+                    record_id=idx + 1,
                     fields={"reason": "price_revalidation_failed"},
                 ),
             ]
@@ -1123,14 +1388,14 @@ def test_submit_drought_separates_entry_ai_authority_from_price_and_broker(
     for idx in range(5):
         rows.extend(
             [
-                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx),
-                _event(target_date, f"10:0{idx}:05", "budget_pass", record_id=idx),
-                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx),
+                _event(target_date, f"10:0{idx}:00", "ai_confirmed", record_id=idx + 1),
+                _event(target_date, f"10:0{idx}:05", "budget_pass", record_id=idx + 1),
+                _event(target_date, f"10:0{idx}:10", "latency_pass", record_id=idx + 1),
                 _event(
                     target_date,
                     f"10:0{idx}:15",
                     "pre_submit_entry_ai_authority_guard_block",
-                    record_id=idx,
+                    record_id=idx + 1,
                     fields={"reason": "entry_ai_result_stale_or_untrusted"},
                 ),
             ]
@@ -2372,7 +2637,7 @@ def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_p
     rows = []
     for idx in range(10):
         rows.append(
-            _event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx)
+            _event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx + 1)
         )
     for idx in range(10, 20):
         rows.append(
@@ -2391,7 +2656,7 @@ def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_p
         as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
     )
 
-    assert report["schema_version"] == 3
+    assert report["schema_version"] == 5
     assert report["classification"]["primary"] == "UPSTREAM_AI_THRESHOLD"
     assert report["followup"]["route"] == "score65_74_counterfactual_review"
     assert report["followup"]["operator_action_required"] is False
@@ -2608,7 +2873,8 @@ def test_use_summary_counts_high_volume_blockers_and_keeps_lossless_cache_slim(
     )
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     assert meta["schema_version"] == sentinel.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION
-    assert meta["cache_event_count"] == 1
+    # Exact upstream terminal rows must survive summary compaction.
+    assert meta["cache_event_count"] == 3
 
 
 def test_summary_window_counts_bucket_boundary_by_second(monkeypatch, tmp_path):

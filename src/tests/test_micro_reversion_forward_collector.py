@@ -137,6 +137,78 @@ def test_factory_is_default_off_and_creates_no_output(tmp_path, monkeypatch) -> 
     assert list(tmp_path.iterdir()) == []
 
 
+def test_timestamp_rejection_tail_is_bounded_and_keeps_route_epoch(tmp_path) -> None:
+    collector = _collector(tmp_path, depth_capture_enabled=True)
+    received = int(
+        datetime.fromisoformat("2026-08-08T09:00:20+09:00").timestamp() * 1000
+    )
+    try:
+        for _ in range(70):
+            assert (
+                collector.observe_kiwoom_0b(
+                    "000001", _snapshot(received_at_ms=received), realtime_type="0B"
+                )
+                == ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+            )
+        old_epoch = collector.runtime_snapshot().sequence_epoch
+        new_epoch = collector.begin_transport_epoch()
+        assert (
+            collector.observe_kiwoom_0d(
+                "000001",
+                _depth_snapshot(item="000001_NX", venue="NXT", received_at_ms=received),
+                realtime_type="0D",
+            )
+            == ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+        )
+        assert (
+            collector.observe_kiwoom_0b(
+                "000001", _snapshot(exchange_time="invalid"), realtime_type="0B"
+            )
+            == ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+        )
+        snapshot = collector.runtime_snapshot().as_dict()
+        rows = snapshot["timestamp_rejection_samples"]
+        assert snapshot["timestamp_rejection_sample_total"] == 72
+        assert len(rows) == 64
+        assert rows[0]["rejection_index"] == 9
+        assert rows[0]["local_observer_epoch"] == old_epoch
+        assert rows[-2]["local_observer_epoch"] == new_epoch
+        assert rows[-2]["realtime_type"] == "0D"
+        assert rows[-2]["item"] == "000001_NX"
+        assert rows[-2]["venue"] == "NXT"
+        assert rows[-2]["session_bucket"] == "NXT_REGULAR_OVERLAP"
+        assert rows[-2]["process_pid"] > 0
+        assert rows[-2]["exchange_to_receive_lag_ms"] == 20_000
+        assert rows[-2]["maximum_exchange_to_receive_lag_ms"] == 10_000
+        assert rows[-1]["raw_exchange_time"] is None
+        assert rows[-1]["reason"] == "invalid_or_future_timestamp"
+        assert rows[-1]["session_bucket"] is None
+        assert snapshot["enqueued_count"] == snapshot["depth_enqueued_count"] == 0
+        assert snapshot["actual_order_submitted"] is False
+        assert (
+            snapshot["metric_contracts"]["timestamp_rejection"]["decision_authority"]
+            == "source_observation_only"
+        )
+    finally:
+        collector.close()
+
+
+def test_missing_receive_time_is_not_reported_as_epoch_zero_latency(tmp_path):
+    collector = _collector(tmp_path)
+    snapshot = _snapshot()
+    snapshot["last_trade_tick"]["received_at_ms"] = None
+    try:
+        assert collector.observe_kiwoom_0b(
+            "000001", snapshot, realtime_type="0B"
+        ) == ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+        row = collector.runtime_snapshot().timestamp_rejection_samples[-1]
+        assert row["received_at_ms"] is None
+        assert row["exchange_to_receive_lag_ms"] is None
+        assert row["receive_to_rejection_check_ms"] is None
+    finally:
+        collector.close()
+
+
 def test_factory_resolves_default_output_from_repository_not_process_cwd(
     tmp_path, monkeypatch
 ) -> None:

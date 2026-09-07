@@ -181,6 +181,44 @@ def load_canary_guard(path: Path | str = DEFAULT_GUARD_PATH) -> CanaryGuard:
     )
 
 
+def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Keep pre-enqueue timestamp loss separate from collector stop authority."""
+    fields = [
+        "invalid_exchange_timestamp_count",
+        "stale_exchange_timestamp_block_count",
+    ]
+    if snapshot.get("depth_capture_requested") is True:
+        fields.append("invalid_depth_timestamp_count")
+    counts = {
+        field: value if type(value) is int and value >= 0 else None
+        for field in fields
+        for value in (snapshot.get(field),)
+    }
+    issues = []
+    for field, count in counts.items():
+        if count is None:
+            issues.append(f"timestamp_source_metric_missing_or_invalid:{field}")
+        elif count > 0:
+            issues.append(f"timestamp_source_rejected_before_enqueue:{field}={count}")
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_only_provider_replay_hold_no_collector_stop",
+        "window_policy": "same_hashed_snapshot_current_process_counters",
+        "sample_floor": "per_observation_timestamp_contract",
+        "primary_decision_metric": "issues",
+        "source_quality_gate": "nonnegative_integer_counters_required_and_rejected_input_excluded",
+        "forbidden_uses": [
+            "collector_auto_stop",
+            "trading_authority",
+            "zero_ev_imputation",
+        ],
+        "counts": counts,
+        "issues": issues,
+        "rejection_stage": "before_observer_enqueue",
+        "exact_rejected_row_exclusion_proven": False,
+    }
+
+
 def evaluate_canary_snapshot(
     collector_snapshot: dict[str, Any],
     guard: CanaryGuard,
@@ -292,7 +330,8 @@ def evaluate_canary_snapshot(
                 f"{p99_ms:.6f}>{guard.producer_callback_latency_p99_max_ms:.6f}"
             )
 
-    source_quality_row_exclusions = []
+    timestamp_quality = timestamp_source_quality_census(snapshot)
+    source_quality_row_exclusions = list(timestamp_quality["issues"])
     for field in _ROW_EXCLUSION_COUNTERS:
         value = _nonnegative_int(snapshot.get(field))
         if value is None:
@@ -346,6 +385,7 @@ def evaluate_canary_snapshot(
         "stop_required": bool(unique_reasons),
         "stop_reasons": unique_reasons,
         "source_quality_row_exclusions": tuple(source_quality_row_exclusions),
+        "timestamp_source_quality": timestamp_quality,
         "operational_capacity_warnings": tuple(operational_capacity_warnings),
         "raw_row_exclusion_required": bool(source_quality_row_exclusions),
         "latency_guard_armed": latency_guard_armed,

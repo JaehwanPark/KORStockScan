@@ -45,6 +45,7 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
         "report_type": "scanner_lookup_attention_tuning",
         "target_date": source_date.isoformat(),
         "status": "live_auto_apply_ready",
+        "decision_contract_version": policy.DECISION_CONTRACT_VERSION,
         "metric_role": "primary_ev",
         "decision_authority": policy.DECISION_AUTHORITY,
         "window_policy": "rolling_90_calendar_days_clean_post_rollout",
@@ -57,6 +58,69 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
         "source_quality": {"status": "pass"},
         "official_symbol_master": {"status": "pass"},
         "runtime_policy_provenance_status": "pass",
+        "lineage": {
+            "valid_observation_count": 40,
+            "invalid_observation_count": 0,
+            "invalid_fill_contract_count": 0,
+            "invalid_runtime_policy_provenance_count": 0,
+            "malformed_json_line_count": 0,
+            "non_object_json_line_count": 0,
+            "full_fill_observation_count": 40,
+            "partial_fill_observation_count": 0,
+            "fill_contract_invalid_observation_count": 0,
+            "fill_receipt_missing_count": 0,
+            "invalid_resource_pair_count": 0,
+            "resource_pair_row_count": 40,
+        },
+        "lineage_row_exclusion": {
+            "status": "applied",
+            "excluded_invalid_observation_count": 0,
+            "included_valid_observation_count": 40,
+            "whole_window_blocked": False,
+            "policy": "exclude_exact_invalid_lookup_observation_rows",
+        },
+        "cohort_funnel": {
+            "all": {
+                "valid_observation_count": 40,
+                "trading_date_count": 5,
+                "full_fill_observation_count": 40,
+                "partial_fill_observation_count": 0,
+                "fill_contract_invalid_count": 0,
+                "fill_receipt_missing_count": 0,
+                "completed_outcome_count": 40,
+            },
+            "candidate": {
+                "valid_observation_count": 20,
+                "trading_date_count": 5,
+                "full_fill_observation_count": 20,
+                "partial_fill_observation_count": 0,
+                "fill_contract_invalid_count": 0,
+                "fill_receipt_missing_count": 0,
+                "completed_outcome_count": 20,
+            },
+            "control": {
+                "valid_observation_count": 20,
+                "trading_date_count": 5,
+                "full_fill_observation_count": 20,
+                "partial_fill_observation_count": 0,
+                "fill_contract_invalid_count": 0,
+                "fill_receipt_missing_count": 0,
+                "completed_outcome_count": 20,
+            },
+        },
+        "resource_allocation_pair": {
+            "status": "ready",
+            "ready_for_live_gate": True,
+            "invalid_row_count": 0,
+            "paired_generation_count": 20,
+            "trading_date_count": 5,
+            "paired_candidate_observation_count": 20,
+            "paired_control_observation_count": 20,
+            "reordered_generation_count": 20,
+            "counterfactual_moved_in_count": 20,
+            "counterfactual_moved_out_count": 20,
+            "unpaired_or_guard_pruned_row_count": 0,
+        },
         "policy_evidence_sha256": policy.canonical_sha256(payload["evidence"]),
         "allowed_runtime_apply": True,
         "runtime_effect": False,
@@ -79,6 +143,7 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
             "rollback_triggered": False,
             "book": post_apply_book,
         },
+        "outcome_count": 40,
     }
     report["artifact_sha256"] = policy.canonical_sha256(report)
     payload["source_report_artifact_sha256"] = report["artifact_sha256"]
@@ -91,6 +156,34 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
     (policy_dir / f"scanner_lookup_attention_policy_{source_date}.json").write_text(
         json.dumps(payload), encoding="utf-8"
     )
+    return report, payload
+
+
+def _write_source_quality_blocked_bridge(
+    root, source_date: date, *, holdout_since: date
+) -> tuple[dict, dict]:
+    report, payload = _write_live_pair(root, source_date)
+    report["status"] = "source_quality_blocked"
+    report["allowed_runtime_apply"] = False
+    report["source_quality"] = {"status": "source_quality_blocked"}
+    report["holdout_armed_since"] = holdout_since.isoformat()
+    payload["status"] = "source_quality_blocked"
+    payload["allowed_runtime_apply"] = False
+    payload["source_quality_status"] = "blocked"
+    payload["holdout_armed_since"] = holdout_since.isoformat()
+    report["artifact_sha256"] = policy.canonical_sha256(
+        {key: value for key, value in report.items() if key != "artifact_sha256"}
+    )
+    payload["source_report_artifact_sha256"] = report["artifact_sha256"]
+    payload["artifact_sha256"] = policy.canonical_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+    (
+        root / "reports" / f"scanner_lookup_attention_tuning_{source_date}.json"
+    ).write_text(json.dumps(report), encoding="utf-8")
+    (
+        root / "policies" / f"scanner_lookup_attention_policy_{source_date}.json"
+    ).write_text(json.dumps(payload), encoding="utf-8")
     return report, payload
 
 
@@ -148,6 +241,47 @@ def _receipt_event(
     }
 
 
+def _resource_event(*, promoted: bool, code: str, score: float) -> dict:
+    bonus = policy.bonus_points_for_score(score)
+    return {
+        "stage": (
+            "scalping_scanner_candidate_promoted"
+            if promoted
+            else "scalping_scanner_candidate_pruned"
+        ),
+        "stock_code": code,
+        "emitted_date": "2026-09-02",
+        "emitted_at": "2026-09-02T09:31:00+09:00",
+        "fields": {
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "lookup_attention_resource_pair_eligible": True,
+            "lookup_attention_resource_pair_contract_version": (
+                policy.RESOURCE_PAIR_CONTRACT_VERSION
+            ),
+            "lookup_attention_resource_snapshot_score": score,
+            "lookup_attention_resource_counterfactual_bonus_points": bonus,
+            "scanner_rank_priority_score_without_lookup_attention": (
+                100.0 if promoted else 90.0
+            ),
+            "scanner_rank_priority_score_with_lookup_attention": (
+                100.0 if promoted else 90.0 + bonus
+            ),
+            "scanner_scan_generation_id": "SCANGEN-1",
+            "scanner_scan_rank": 1 if promoted else 2,
+            "scanner_ranked_candidate_count": 2,
+            "scanner_rank_priority_rank_partition": 0,
+            "scanner_rank_priority_source_rank": 1,
+            "scanner_rank_priority_flu_rate": 1.0,
+            "scanner_rank_priority_tier": "tier_b_price_jump_candidate",
+            "scanner_watch_budget_owner": "GENERAL_SCALPING",
+            "scanner_rank_priority_market_gainer_partition": False,
+            "scanner_rank_priority_reserved_partition": "general",
+            "scanner_prune_reason": "max_new_codes_reached" if not promoted else "",
+        },
+    }
+
+
 def test_promotion_requires_independent_forward_holdout_sample():
     target = date(2026, 9, 8)
     base_rows = _passing_rows(date(2026, 9, 2))
@@ -195,6 +329,128 @@ def test_promotion_fails_closed_on_source_quality():
 
     assert decision["status"] == "source_quality_blocked"
     assert decision["forward_holdout_pass"] is False
+
+
+def test_resource_gate_blocks_live_apply_without_resetting_holdout_campaign():
+    holdout_since = date(2026, 9, 8)
+    base_rows = _passing_rows(date(2026, 9, 2))
+    holdout_rows = _passing_rows(date(2026, 9, 9), id_start=1_000)
+    rows = base_rows + holdout_rows
+
+    decision = tuning.decide_promotion(
+        date(2026, 9, 15),
+        tuning._cohort_book(base_rows),
+        rows,
+        source_quality_pass=True,
+        prior_policy={
+            "status": "forward_holdout_armed",
+            "holdout_armed_since": holdout_since.isoformat(),
+        },
+        resource_allocation_ready=False,
+        resource_allocation_status="hold_sample",
+    )
+
+    assert decision["status"] == "forward_holdout_armed"
+    assert decision["holdout_armed_since"] == holdout_since.isoformat()
+    assert decision["forward_holdout_pass"] is True
+    assert decision["forward_holdout_reasons"] == [
+        "resource_allocation_gate:hold_sample"
+    ]
+
+
+def _resource_row(
+    *, day: date, generation: int, code: str, score: float, base: float, terminal: str
+) -> dict:
+    bonus = policy.bonus_points_for_score(score)
+    return {
+        "observation_date": day.isoformat(),
+        "scan_generation_id": f"SCANGEN-{generation}",
+        "stock_code": code,
+        "scan_rank": 1 if terminal == "promoted" else 2,
+        "ranked_candidate_count": 2,
+        "rank_partition": 0,
+        "source_priority": 1,
+        "flu_rate": 1.0,
+        "priority_tier": "tier_b_price_jump_candidate",
+        "watch_budget_owner": "GENERAL_SCALPING",
+        "market_gainer_partition": False,
+        "reserved_partition": "general",
+        "lookup_attention_snapshot_score": score,
+        "base_priority_score": base,
+        "candidate_priority_score": base + bonus,
+        "counterfactual_bonus_points": bonus,
+        "terminal": terminal,
+        "prune_reason": "max_new_codes_reached" if terminal != "promoted" else "",
+    }
+
+
+def test_resource_allocation_pair_requires_real_top_set_reordering():
+    trading_days = []
+    cursor = date(2026, 9, 1)
+    while len(trading_days) < 5:
+        if tuning.is_krx_trading_day(cursor):
+            trading_days.append(cursor)
+        cursor += timedelta(days=1)
+    rows = []
+    for generation in range(20):
+        day = trading_days[generation % len(trading_days)]
+        rows.extend(
+            [
+                _resource_row(
+                    day=day,
+                    generation=generation,
+                    code=f"1{generation:05d}",
+                    score=0.2,
+                    base=100.0,
+                    terminal="promoted",
+                ),
+                _resource_row(
+                    day=day,
+                    generation=generation,
+                    code=f"2{generation:05d}",
+                    score=0.9,
+                    base=90.0,
+                    terminal="capacity_pruned",
+                ),
+            ]
+        )
+
+    book = tuning._resource_allocation_pair_book(rows)
+
+    assert book["status"] == "ready"
+    assert book["ready_for_live_gate"] is True
+    assert book["paired_generation_count"] == 20
+    assert book["trading_date_count"] == 5
+    assert book["reordered_generation_count"] == 20
+    assert book["counterfactual_moved_in_count"] == 20
+    assert book["counterfactual_moved_out_count"] == 20
+
+
+def test_resource_allocation_pair_fails_closed_on_invalid_rows():
+    rows = [
+        _resource_row(
+            day=date(2026, 9, 1),
+            generation=1,
+            code="100001",
+            score=0.2,
+            base=100.0,
+            terminal="promoted",
+        ),
+        _resource_row(
+            day=date(2026, 9, 1),
+            generation=1,
+            code="200001",
+            score=0.9,
+            base=90.0,
+            terminal="capacity_pruned",
+        ),
+    ]
+
+    book = tuning._resource_allocation_pair_book(rows, invalid_row_count=1)
+
+    assert book["status"] == "contract_invalid"
+    assert book["ready_for_live_gate"] is False
+    assert book["invalid_row_count"] == 1
 
 
 def test_post_apply_mature_negative_edge_rolls_back_to_zero_bonus():
@@ -439,6 +695,92 @@ def test_source_quality_rejects_fractional_hard_gap_count(monkeypatch, tmp_path)
     assert quality["audits"][0]["hard_blocking_contract_gap_count"] is None
 
 
+def test_source_quality_accepts_fully_applied_exact_row_exclusion(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(tuning, "SOURCE_AUDIT_DIR", tmp_path)
+    audit_date = date(2026, 9, 4)
+    payload = {
+        "report_type": "observation_source_quality_audit",
+        "target_date": audit_date.isoformat(),
+        "status": "pass",
+        "summary": {
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+            "hard_blocking_excluded_row_count": 31,
+            "current_scan_hard_blocking_excluded_row_count": 0,
+            "post_exclusion_hard_blocking_excluded_row_count": 0,
+            "raw_row_exclusion_applied": True,
+            "raw_row_exclusion_revalidation_required": False,
+            "raw_row_exclusion_deferred_writer_active": False,
+            "raw_row_exclusion_manifest": "/audit/manifest.json",
+            "blocked_reason": None,
+            "review_warning_count": 0,
+        },
+    }
+    (tmp_path / f"observation_source_quality_audit_{audit_date}.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+    quality = tuning._source_quality(audit_date)
+
+    assert quality["status"] == "pass"
+    assert quality["audits"][0]["row_exclusion_resolved"] is True
+
+
+def test_source_quality_rejects_deferred_or_unrevalidated_row_exclusion(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(tuning, "SOURCE_AUDIT_DIR", tmp_path)
+    audit_date = date(2026, 9, 4)
+    payload = {
+        "report_type": "observation_source_quality_audit",
+        "target_date": audit_date.isoformat(),
+        "status": "pass",
+        "summary": {
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+            "hard_blocking_excluded_row_count": 1,
+            "current_scan_hard_blocking_excluded_row_count": 0,
+            "post_exclusion_hard_blocking_excluded_row_count": 0,
+            "raw_row_exclusion_applied": True,
+            "raw_row_exclusion_revalidation_required": True,
+            "raw_row_exclusion_deferred_writer_active": False,
+            "raw_row_exclusion_manifest": "/audit/manifest.json",
+            "blocked_reason": None,
+            "review_warning_count": 0,
+        },
+    }
+    path = tmp_path / f"observation_source_quality_audit_{audit_date}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    quality = tuning._source_quality(audit_date)
+    assert quality["status"] == "source_quality_blocked"
+    assert quality["audits"][0]["row_exclusion_resolved"] is False
+
+    payload["summary"]["raw_row_exclusion_revalidation_required"] = False
+    payload["summary"]["raw_row_exclusion_deferred_writer_active"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    quality = tuning._source_quality(audit_date)
+    assert quality["status"] == "source_quality_blocked"
+    assert quality["audits"][0]["row_exclusion_resolved"] is False
+
+
+def test_lineage_contract_excludes_isolated_bad_observations_without_hiding_join_gaps():
+    lineage = {
+        "invalid_observation_count": 17,
+        "invalid_fill_contract_count": 0,
+        "invalid_runtime_policy_provenance_count": 0,
+        "malformed_json_line_count": 0,
+        "non_object_json_line_count": 0,
+    }
+
+    assert tuning._lineage_contract_pass(lineage) is True
+
+    lineage["invalid_fill_contract_count"] = 1
+    assert tuning._lineage_contract_pass(lineage) is False
+
+
 def test_symbol_master_rejects_fractional_census_count(monkeypatch, tmp_path):
     monkeypatch.setattr(tuning, "SYMBOL_MASTER_DIR", tmp_path)
     source_date = date(2026, 9, 1)
@@ -542,6 +884,46 @@ def test_lineage_does_not_truncate_fractional_fill_quantity(monkeypatch, tmp_pat
 
     assert lineage["invalid_fill_contract_count"] == 1
     assert rows[0]["fill_class"] == "fill_contract_invalid"
+
+
+def test_lineage_collects_exact_promoted_capacity_pruned_resource_pair(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(tuning, "EVENT_DIR", tmp_path)
+    event_path = tmp_path / "pipeline_events_2026-09-02.jsonl"
+    events = [
+        _resource_event(promoted=True, code="005930", score=0.2),
+        _resource_event(promoted=False, code="000660", score=0.9),
+    ]
+    event_path.write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    observations, lineage = tuning.collect_lineage(date(2026, 9, 2))
+
+    assert observations == []
+    assert lineage["invalid_resource_pair_count"] == 0
+    assert lineage["resource_pair_row_count"] == 2
+    resource = tuning._resource_allocation_pair_book(lineage["_resource_pair_rows"])
+    assert resource["paired_generation_count"] == 1
+    assert resource["reordered_generation_count"] == 1
+    assert resource["status"] == "hold_sample"
+
+
+def test_lineage_rejects_malformed_versioned_resource_pair_event(monkeypatch, tmp_path):
+    monkeypatch.setattr(tuning, "EVENT_DIR", tmp_path)
+    event = _resource_event(promoted=True, code="005930", score=0.8)
+    event["fields"]["lookup_attention_resource_pair_contract_version"] = "bad"
+    (tmp_path / "pipeline_events_2026-09-02.jsonl").write_text(
+        json.dumps(event) + "\n", encoding="utf-8"
+    )
+
+    observations, lineage = tuning.collect_lineage(date(2026, 9, 2))
+
+    assert observations == []
+    assert lineage["invalid_resource_pair_count"] == 1
+    assert lineage["resource_pair_row_count"] == 0
 
 
 def test_lineage_blocks_missing_runtime_hook_when_prior_policy_requires_live_use(
@@ -733,6 +1115,14 @@ def test_lookup_source_timestamp_requires_bounded_freshness():
     assert tuning._source_timestamp_valid(stale, fields) is False
 
 
+def test_counterfactual_bonus_formula_is_bounded_and_has_zero_floor():
+    assert policy.bonus_points_for_score(None) == 0.0
+    assert policy.bonus_points_for_score(0.60) == 0.0
+    assert policy.bonus_points_for_score(0.80) == 100.0
+    assert policy.bonus_points_for_score(1.00) == 200.0
+    assert policy.bonus_points_for_score(1.01) == 0.0
+
+
 def _valid_live_policy(source_date: date) -> dict:
     evidence = tuning._evidence(
         tuning._cohort_book(_passing_rows(source_date)),
@@ -745,6 +1135,7 @@ def _valid_live_policy(source_date: date) -> dict:
         "report_type": policy.REPORT_TYPE,
         "target_date": source_date.isoformat(),
         "status": "live_auto_apply_ready",
+        "decision_contract_version": policy.DECISION_CONTRACT_VERSION,
         "decision_authority": policy.DECISION_AUTHORITY,
         "activation_mode": policy.ACTIVATION_MODE,
         "user_authority": policy.USER_AUTHORITY,
@@ -1013,6 +1404,42 @@ def test_runtime_loader_ignores_nontrading_day_artifact_for_latest_prior_policy(
     assert loaded["policy_source_date"] == friday.isoformat()
 
 
+def test_prior_campaign_survives_contiguous_source_quality_blocked_day(
+    monkeypatch, tmp_path
+):
+    armed_date = date(2026, 9, 1)
+    blocked_date = date(2026, 9, 2)
+    target = date(2026, 9, 3)
+    _write_live_pair(tmp_path, armed_date)
+    _write_source_quality_blocked_bridge(
+        tmp_path, blocked_date, holdout_since=armed_date
+    )
+    monkeypatch.setattr(tuning, "POLICY_DIR", tmp_path / "policies")
+    monkeypatch.setattr(tuning, "REPORT_DIR", tmp_path / "reports")
+
+    prior = tuning._latest_prior_policy(target)
+
+    assert prior["status"] == "live_auto_apply_ready"
+    assert prior["holdout_armed_since"] == armed_date.isoformat()
+    assert prior["campaign_continuity_bridge_dates"] == [blocked_date.isoformat()]
+
+
+def test_prior_campaign_rejects_changed_holdout_in_blocked_bridge(
+    monkeypatch, tmp_path
+):
+    armed_date = date(2026, 9, 1)
+    blocked_date = date(2026, 9, 2)
+    target = date(2026, 9, 3)
+    _write_live_pair(tmp_path, armed_date)
+    _write_source_quality_blocked_bridge(
+        tmp_path, blocked_date, holdout_since=blocked_date
+    )
+    monkeypatch.setattr(tuning, "POLICY_DIR", tmp_path / "policies")
+    monkeypatch.setattr(tuning, "REPORT_DIR", tmp_path / "reports")
+
+    assert tuning._latest_prior_policy(target) == {}
+
+
 def test_artifact_validator_rejects_hash_consistent_evidence_not_derived_from_books(
     tmp_path,
 ):
@@ -1070,6 +1497,43 @@ def test_artifact_validator_requires_boolean_post_apply_state(tmp_path):
     issues = tuning.validate_artifact_pair(report, payload, target=source_date)
 
     assert "post_apply_mature_not_boolean" in issues
+
+
+def test_artifact_validator_rejects_malformed_resource_counts_without_crashing(
+    tmp_path,
+):
+    source_date = date(2026, 9, 1)
+    report, payload = _write_live_pair(tmp_path, source_date)
+    report["resource_allocation_pair"]["paired_generation_count"] = "20"
+    report["artifact_sha256"] = policy.canonical_sha256(
+        {key: value for key, value in report.items() if key != "artifact_sha256"}
+    )
+    payload["source_report_artifact_sha256"] = report["artifact_sha256"]
+    payload["artifact_sha256"] = policy.canonical_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+
+    issues = tuning.validate_artifact_pair(report, payload, target=source_date)
+
+    assert "resource_allocation_pair_count_contract_invalid" in issues
+    assert "live_policy_resource_allocation_pair_not_ready" in issues
+
+
+def test_artifact_validator_rejects_forged_lineage_pass_state(tmp_path):
+    source_date = date(2026, 9, 1)
+    report, payload = _write_live_pair(tmp_path, source_date)
+    report["lineage"]["invalid_fill_contract_count"] = 1
+    report["artifact_sha256"] = policy.canonical_sha256(
+        {key: value for key, value in report.items() if key != "artifact_sha256"}
+    )
+    payload["source_report_artifact_sha256"] = report["artifact_sha256"]
+    payload["artifact_sha256"] = policy.canonical_sha256(
+        {key: value for key, value in payload.items() if key != "artifact_sha256"}
+    )
+
+    issues = tuning.validate_artifact_pair(report, payload, target=source_date)
+
+    assert "lineage_runtime_status_mismatch" in issues
 
 
 def test_artifact_validator_fails_closed_instead_of_crashing_on_malformed_books():

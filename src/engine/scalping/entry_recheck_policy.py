@@ -150,6 +150,32 @@ def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw_axes, list)
         else []
     )
+    exact = raw.get("exact_attempt_contract")
+    if isinstance(exact, dict) and exact.get("schema_version") == 2:
+        # Wider diagnostics must not widen this family's recheck authority.
+        ledger = exact.get("attempt_ledger") or []
+        addressable_stages = {
+            "UPSTREAM_GATE": {
+                "blocked_ai_score",
+                "ai_score_50_buy_hold_override",
+                "wait65_79_ev_candidate",
+                "first_ai_wait",
+            },
+            "ENTRY_AI_AUTHORITY_REVALIDATION": {
+                "pre_submit_entry_ai_authority_guard_block"
+            },
+        }
+        axes = [
+            axis
+            for axis in axes
+            if any(
+                row.get("state") == "blocked"
+                and row.get("terminal_axis") == axis
+                and row.get("terminal_stage") in addressable_stages[axis]
+                for row in ledger
+                if isinstance(row, dict)
+            )
+        ]
     critical = bool(
         branches
         and raw.get("critical") is True
@@ -157,6 +183,11 @@ def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "scope": scope,
+        **(
+            {"sentinel_evidence": raw["sentinel_evidence"]}
+            if "sentinel_evidence" in raw
+            else {}
+        ),
         "stage_unique": {
             "ai_confirmed": ai,
             "budget_pass": budget,
@@ -530,6 +561,10 @@ def controller_decision(
             hist.append(
                 {
                     **day,
+                    "source_quality_pass": (
+                        day.get("source_quality_pass") is True
+                        and scope not in (day.get("excluded_sentinel_scopes") or [])
+                    ),
                     "eligible_scopes": rows,
                     "denominator_floor_passed": any(
                         r.get("denominator_floor_passed") for r in rows

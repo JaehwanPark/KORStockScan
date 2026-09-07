@@ -3680,6 +3680,25 @@ def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkey
         scalping_scanner, "load_lookup_attention_weight_policy", lambda _date: inactive
     )
     baseline = scalping_scanner._scanner_priority_profile(target)
+    assert baseline["lookup_attention_weight_bonus_points"] == 0.0
+    assert baseline["lookup_attention_counterfactual_bonus_points"] == 30.0
+    assert baseline["lookup_attention_resource_pair_eligible"] is True
+    assert baseline["scanner_priority_score_without_lookup_attention"] == (
+        baseline["scanner_priority_score"]
+    )
+    assert baseline["scanner_priority_score_with_lookup_attention"] == (
+        baseline["scanner_priority_score"] + 30.0
+    )
+    assert baseline["scanner_priority_rank_partition"] == 0
+    assert baseline["scanner_priority_reserved_partition"] == "general"
+    scalping_scanner.rank_candidates({"005930": target})
+    rank_fields = scalping_scanner._scanner_event_fields(target)
+    assert rank_fields["lookup_attention_resource_snapshot_score"] == 0.66
+    assert (
+        rank_fields["scanner_rank_priority_score_with_lookup_attention"]
+        == baseline["scanner_priority_score_with_lookup_attention"]
+    )
+    assert rank_fields["lookup_attention_resource_pair_eligible"] is True
     monkeypatch.setattr(
         scalping_scanner, "load_lookup_attention_weight_policy", lambda _date: active
     )
@@ -3693,6 +3712,9 @@ def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkey
     assert promoted["lookup_attention_weight_policy_applied"] is True
     assert promoted["lookup_attention_weight_runtime_effect"] is True
     assert promoted["lookup_attention_weight_same_priority_tier_only"] is True
+    assert promoted["scanner_priority_score"] == (
+        promoted["scanner_priority_score_with_lookup_attention"]
+    )
 
     monkeypatch.setattr(
         scalping_scanner,
@@ -3705,6 +3727,8 @@ def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkey
     out_of_scope = scalping_scanner._scanner_priority_profile(target)
     assert out_of_scope["lookup_attention_weight_bonus_points"] == 0.0
     assert out_of_scope["lookup_attention_weight_runtime_effect"] is False
+    assert out_of_scope["lookup_attention_resource_pair_eligible"] is False
+    assert out_of_scope["lookup_attention_counterfactual_bonus_points"] == 0.0
     assert out_of_scope["lookup_attention_weight_policy_reason"] == (
         "venue_or_session_out_of_policy_scope"
     )
@@ -3723,6 +3747,8 @@ def test_promoted_lookup_attention_weight_is_bounded_inside_existing_tier(monkey
     stale = scalping_scanner._scanner_priority_profile(target)
     assert stale["lookup_attention_weight_bonus_points"] == 0.0
     assert stale["lookup_attention_weight_runtime_effect"] is False
+    assert stale["lookup_attention_resource_pair_eligible"] is False
+    assert stale["lookup_attention_counterfactual_bonus_points"] == 0.0
     assert stale["lookup_attention_weight_policy_reason"] == (
         "lookup_attention_source_stale_or_invalid"
     )

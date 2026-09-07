@@ -581,6 +581,12 @@ def payload_has_lossless_authority(
     payload: dict[str, Any], threshold_family: str | None = None
 ) -> bool:
     stage = _safe_str(payload.get("stage")).lower()
+    from src.engine.automation.submit_drought_contract import UPSTREAM_TERMINAL_STAGES
+
+    # Terminal BUY blockers are exact-attempt inputs, even without a threshold
+    # family. Summary-only compaction would destroy their identity and ordering.
+    if stage in UPSTREAM_TERMINAL_STAGES:
+        return True
     fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
     if threshold_family:
         return True
