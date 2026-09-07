@@ -196,6 +196,13 @@ if ! PYTHONPATH=. "$VENV_PY" \
 fi
 
 args=(--date "$TARGET_DATE" --apply-mode "$APPLY_MODE")
+if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ] && [[ "$TARGET_DATE" > "2026-09-07" ]]; then
+  if ! PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scanner_lookup_attention_policy \
+    --target-date "$TARGET_DATE" --write; then
+    echo "[FAIL] scanner lookup-attention immutable PREOPEN selection target_date=$TARGET_DATE"
+    mark_preopen_failed 1
+  fi
+fi
 if [ -n "$SOURCE_DATE" ]; then
   args+=(--source-date "$SOURCE_DATE")
 fi

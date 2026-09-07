@@ -719,12 +719,8 @@ def build_market_data_enrichment(
         "market_data_effective_best_bid": effective_levels.get("best_bid", 0) or "-",
         "market_data_effective_best_ask_qty": effective_ask_qty,
         "market_data_effective_best_bid_qty": effective_bid_qty,
-        "market_data_effective_best_ask_qty_source_valid": (
-            effective_ask_qty_valid
-        ),
-        "market_data_effective_best_bid_qty_source_valid": (
-            effective_bid_qty_valid
-        ),
+        "market_data_effective_best_ask_qty_source_valid": (effective_ask_qty_valid),
+        "market_data_effective_best_bid_qty_source_valid": (effective_bid_qty_valid),
         "market_data_effective_best_quantity_basis": effective_qty_basis,
         "market_data_effective_quote_level_basis": effective_level_basis,
         "market_data_effective_age_basis": (

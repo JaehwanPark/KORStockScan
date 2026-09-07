@@ -237,9 +237,7 @@ def test_shared_read_budget_defer_is_not_logged_as_request_failure(
     assert "scope_digest=" in info_logs[0]
 
 
-def test_malformed_shared_read_admission_remains_a_typed_error(
-    monkeypatch, tmp_path
-):
+def test_malformed_shared_read_admission_remains_a_typed_error(monkeypatch, tmp_path):
     error_logs = []
     info_logs = []
     coordinator = KiwoomReadRequestCoordinator(state_dir=tmp_path)

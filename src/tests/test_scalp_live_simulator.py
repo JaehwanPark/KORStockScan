@@ -373,8 +373,7 @@ def test_default_runtime_restore_rejects_cross_session_and_normalizes_legacy_car
     assert [row["sim_record_id"] for row in targets] == ["SIM-CURRENT"]
     assert "scalp_sim_overnight_status" not in targets[0]
     assert not any(
-        event["stage"] == "scalp_sim_overnight_carry_restored"
-        for event in _reset_state
+        event["stage"] == "scalp_sim_overnight_carry_restored" for event in _reset_state
     )
 
 
@@ -5107,7 +5106,7 @@ def test_daily_threshold_cycle_report_keeps_scalp_sim_completed_rows_diagnostic_
                 "pipeline": "HOLDING_PIPELINE",
                 "stage": "scalp_sim_sell_order_assumed_filled",
                 "stock_name": "SIM",
-                    "stock_code": "000002",
+                "stock_code": "000002",
                 "record_id": None,
                 "emitted_date": target_date,
                 "fields": {

@@ -859,21 +859,320 @@ def _ai_decision_action_outcome_calibration_status(
             "allowed_runtime_apply": False,
         }
     errors: list[str] = []
-    if report.get("schema") != "ai_decision_action_outcome_calibration_v1":
+    if report.get("schema") != "ai_decision_action_outcome_calibration_v2":
         errors.append("schema_invalid")
+    if report.get("policy_version") != (
+        "exact_decision_trace_cumulative_action_outcome_v5"
+    ):
+        errors.append("policy_version_invalid")
+    try:
+        date.fromisoformat(str(report.get("target_date") or ""))
+    except ValueError:
+        errors.append("target_date_invalid")
+    if report.get("clean_tuning_baseline_date") != "2026-06-05":
+        errors.append("clean_tuning_baseline_date_invalid")
     for key, expected in (
         ("runtime_effect", False),
+        ("runtime_authority", False),
+        ("order_authority", False),
+        ("provider_authority", False),
         ("allowed_runtime_apply", False),
         ("actual_order_submitted", False),
         ("broker_order_forbidden", True),
     ):
         if report.get(key) is not expected:
             errors.append(f"{key}_contract_invalid")
+    declared_hash = str(report.get("artifact_content_sha256") or "")
+    report_body = {
+        key: value for key, value in report.items() if key != "artifact_content_sha256"
+    }
+    expected_hash = hashlib.sha256(
+        json.dumps(
+            report_body,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    if not re.fullmatch(r"[0-9a-f]{64}", declared_hash) or declared_hash != (
+        expected_hash
+    ):
+        errors.append("artifact_content_sha256_invalid")
+    candidates = report.get("candidate_summaries")
+    if not isinstance(candidates, list):
+        errors.append("candidate_summaries_invalid")
+        candidates = []
+    if report.get("candidate_count") != len(candidates):
+        errors.append("candidate_count_mismatch")
+    review_ready_candidates = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and candidate.get("review_ready_for_prompt_candidate") is True
+    ]
+    thin_positive_candidates = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, dict)
+        and candidate.get("review_classification") == "thin_positive_review"
+    ]
+    if report.get("review_candidate_count") != len(review_ready_candidates):
+        errors.append("review_candidate_count_mismatch")
+    report_review_ready = report.get("review_ready_candidates")
+    if not isinstance(report_review_ready, list) or len(report_review_ready) != len(
+        review_ready_candidates
+    ):
+        errors.append("review_ready_candidates_mismatch")
+    if report.get("thin_positive_review_candidate_count") != len(
+        thin_positive_candidates
+    ):
+        errors.append("thin_positive_review_candidate_count_mismatch")
+    review_policy = report.get("prompt_review_gate_policy")
+    if not isinstance(review_policy, dict) or any(
+        review_policy.get(key) != expected
+        for key, expected in (
+            ("diagnostic_minimum_candidate_exposure_rate_pct", 2.0),
+            ("maximum_loss_budget_breach_rate_pct", 20.0),
+            ("maximum_severe_tail_rate_pct", 20.0),
+            ("catastrophic_loss_threshold_pct", -5.0),
+        )
+    ):
+        errors.append("prompt_review_gate_policy_invalid")
+    elif "minimum_candidate_exposure_rate_pct" in review_policy:
+        errors.append("prompt_review_gate_restored_absolute_exposure_rate_veto")
+    identities: set[tuple[str, str, str, str, str, str]] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            errors.append("candidate_summary_not_object")
+            continue
+        identity = tuple(
+            str(candidate.get(field) or "")
+            for field in (
+                "candidate_prompt_version",
+                "candidate_prompt_sha256",
+                "candidate_contract_sha256",
+                "stage",
+                "effective_venue",
+                "session_bucket",
+            )
+        )
+        if not all(identity) or candidate.get("cohort_isolated") is not True:
+            errors.append("candidate_identity_or_cohort_invalid")
+        elif identity in identities:
+            errors.append("candidate_identity_duplicate")
+        identities.add(identity)
+        if candidate.get("runtime_apply_authority") is not False:
+            errors.append("candidate_runtime_authority_invalid")
+
+    def summarized_identity(value: Any) -> tuple[str, str, str, str, str, str] | None:
+        if not isinstance(value, dict):
+            return None
+        identity = tuple(
+            str(value.get(field) or "")
+            for field in (
+                "candidate_prompt_version",
+                "candidate_prompt_sha256",
+                "candidate_contract_sha256",
+                "stage",
+                "effective_venue",
+                "session_bucket",
+            )
+        )
+        return identity if all(identity) else None
+
+    expected_ready_identities = {
+        summarized_identity(candidate) for candidate in review_ready_candidates
+    }
+    reported_ready_identities = {
+        summarized_identity(candidate)
+        for candidate in (
+            report_review_ready if isinstance(report_review_ready, list) else []
+        )
+    }
+    if (
+        None in reported_ready_identities
+        or reported_ready_identities != expected_ready_identities
+        or any(
+            not isinstance(candidate, dict)
+            or candidate.get("review_classification") != "review_ready"
+            or candidate.get("runtime_apply_authority") is not False
+            for candidate in (
+                report_review_ready if isinstance(report_review_ready, list) else []
+            )
+        )
+    ):
+        errors.append("review_ready_candidate_identity_mismatch")
+    report_thin_positive = report.get("thin_positive_review_candidates")
+    expected_thin_identities = {
+        summarized_identity(candidate) for candidate in thin_positive_candidates
+    }
+    reported_thin_identities = {
+        summarized_identity(candidate)
+        for candidate in (
+            report_thin_positive if isinstance(report_thin_positive, list) else []
+        )
+    }
+    if (
+        not isinstance(report_thin_positive, list)
+        or len(report_thin_positive) != len(thin_positive_candidates)
+        or None in reported_thin_identities
+        or reported_thin_identities != expected_thin_identities
+        or any(
+            not isinstance(candidate, dict)
+            or candidate.get("review_classification") != "thin_positive_review"
+            or candidate.get("runtime_apply_authority") is not False
+            for candidate in report_thin_positive
+        )
+    ):
+        errors.append("thin_positive_candidate_identity_mismatch")
+    source_contract = report.get("source_contract_summary")
+    if not isinstance(source_contract, dict):
+        errors.append("source_contract_summary_invalid")
+        source_contract = {}
+    for key, expected in (
+        ("cross_cohort_aggregation_forbidden", True),
+        ("invalid_sources_excluded_before_calibration", True),
+        ("candidate_selection_requires_verified_source_hash", True),
+        ("conflicting_duplicate_traces_excluded", True),
+        ("cross_cohort_outcome_conflicts_excluded", True),
+    ):
+        if source_contract.get(key) is not expected:
+            errors.append(f"source_contract_{key}_invalid")
+    for key in (
+        "conflicting_duplicate_trace_count",
+        "cross_cohort_outcome_conflict_count",
+        "current_date_rejected_report_count",
+        "current_date_row_exclusion_count",
+        "current_date_conflicting_duplicate_trace_count",
+    ):
+        value = source_contract.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            errors.append(f"source_contract_{key}_invalid")
+    current_result_count = report.get("new_current_result_count")
+    if (
+        isinstance(current_result_count, bool)
+        or not isinstance(current_result_count, int)
+        or current_result_count < 0
+    ):
+        errors.append("new_current_result_count_invalid")
+        current_result_count = 0
+    current_exclusion_count = sum(
+        value
+        for key in (
+            "current_date_rejected_report_count",
+            "current_date_row_exclusion_count",
+            "current_date_conflicting_duplicate_trace_count",
+        )
+        if isinstance((value := source_contract.get(key)), int)
+        and not isinstance(value, bool)
+        and value >= 0
+    )
+    expected_status = (
+        "cumulative_action_outcome_calibration_updated"
+        if current_result_count
+        else (
+            "current_input_excluded_cumulative_unchanged"
+            if current_exclusion_count
+            else (
+                "cumulative_unchanged_no_new_exact_results"
+                if candidates
+                else "sample_floor_keep_collecting"
+            )
+        )
+    )
+    if report.get("status") != expected_status:
+        errors.append("calibration_status_inconsistent_with_current_delta")
+    selected = report.get("selected_review_candidate")
+    if selected is not None:
+        if len(review_ready_candidates) != 1:
+            errors.append("cross_cohort_review_candidate_selected")
+        if not isinstance(selected, dict):
+            errors.append("selected_review_candidate_invalid")
+        else:
+            selected_identity = tuple(
+                str(selected.get(field) or "")
+                for field in (
+                    "candidate_prompt_version",
+                    "candidate_prompt_sha256",
+                    "candidate_contract_sha256",
+                    "stage",
+                    "effective_venue",
+                    "session_bucket",
+                )
+            )
+            matched = [
+                candidate
+                for candidate in candidates
+                if isinstance(candidate, dict)
+                and tuple(
+                    str(candidate.get(field) or "")
+                    for field in (
+                        "candidate_prompt_version",
+                        "candidate_prompt_sha256",
+                        "candidate_contract_sha256",
+                        "stage",
+                        "effective_venue",
+                        "session_bucket",
+                    )
+                )
+                == selected_identity
+                and candidate.get("review_ready_for_prompt_candidate") is True
+            ]
+            if (
+                len(matched) != 1
+                or selected.get("review_classification") != "review_ready"
+                or selected.get("runtime_apply_authority") is not False
+            ):
+                errors.append("selected_review_candidate_not_uniquely_ready")
+    elif len(review_ready_candidates) == 1:
+        errors.append("review_ready_candidate_not_selected")
+    handoff = report.get("optimizer_handoff")
+    if not isinstance(handoff, dict):
+        errors.append("optimizer_handoff_invalid")
+    else:
+        handoff_hash = str(handoff.get("handoff_content_sha256") or "")
+        handoff_body = {
+            key: value
+            for key, value in handoff.items()
+            if key != "handoff_content_sha256"
+        }
+        expected_handoff_hash = hashlib.sha256(
+            json.dumps(
+                handoff_body,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        if (
+            handoff.get("schema") != "ai_action_outcome_optimizer_handoff_v1"
+            or handoff_hash != expected_handoff_hash
+            or handoff.get("target_date") != report.get("target_date")
+            or handoff.get("source_contract_pass") is not True
+            or handoff.get("decision_authority")
+            != "optimizer_source_only_advisory_no_runtime_selection"
+            or handoff.get("runtime_effect") is not False
+            or handoff.get("allowed_runtime_apply") is not False
+            or handoff.get("actual_order_submitted") is not False
+            or handoff.get("broker_order_forbidden") is not True
+        ):
+            errors.append("optimizer_handoff_contract_invalid")
+        if (
+            handoff.get("selected_review_candidate") != selected
+            or (handoff.get("review_ready_candidates") != report_review_ready)
+            or (
+                handoff.get("thin_positive_review_candidates")
+                != report.get("thin_positive_review_candidates")
+            )
+        ):
+            errors.append("optimizer_handoff_candidate_reference_mismatch")
     return {
         "status": "fail" if errors else "pass",
         "contract_errors": errors,
         "calibration_status": report.get("status"),
-        "candidate_count": len(report.get("candidate_summaries") or []),
+        "candidate_count": len(candidates),
         "selected_review_candidate": report.get("selected_review_candidate"),
         "ofi_calibration_status": (
             (report.get("ofi_action_outcome_calibration") or {}).get("status")

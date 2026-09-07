@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
 from src.trading.order.regular_two_leg_machine import (
@@ -35,6 +35,10 @@ SAFE_PRECONDITION_BLOCK_REASONS = frozenset(
         "first_episode_completion_provenance_missing",
     }
 )
+
+
+def _episode_ownership_source(code: object) -> str:
+    return independent_machine_ownership_source(code, owner="episode")
 
 
 def _first_episode_payload_complete(payload: object, target_date: date) -> bool:
@@ -182,9 +186,7 @@ class SamsungMorningSORReentryMachine(SamsungRegularTwoLegMachine):
         first_episode_state_path: Path = DEFAULT_FIRST_EPISODE_STATE_PATH,
         policy: MorningReentryPolicy = DEFAULT_REENTRY_POLICY,
         live_enabled: bool = False,
-        ownership_source: Callable[
-            [object], str
-        ] = manual_control_operator_exclusion_source,
+        ownership_source: Callable[[object], str] = _episode_ownership_source,
     ) -> None:
         self.first_episode_state_path = Path(first_episode_state_path)
         self._eligible_after: datetime | None = None

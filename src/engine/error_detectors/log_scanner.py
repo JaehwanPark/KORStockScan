@@ -48,9 +48,7 @@ _register_pattern(
     r"(?:db|database|sqlalchemy|psycopg|connection.*refused|query.*fail|db.*error)",
 )
 _register_pattern("READ_TR_RATE_LIMIT", r"kiwoom_read_tr_rate_limit")
-_register_pattern(
-    "READ_TR_ADMISSION_ERROR", r"kiwoom_read_tr_admission_failed"
-)
+_register_pattern("READ_TR_ADMISSION_ERROR", r"kiwoom_read_tr_admission_failed")
 _register_pattern(
     "READ_TR_TRANSPORT_ERROR",
     r"kiwoom_read_tr_(?:http_failed|timeout|connection_failed|request_failed|exception)",

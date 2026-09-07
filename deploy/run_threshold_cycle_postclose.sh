@@ -2028,6 +2028,16 @@ if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_R0_R3" =
     emit_postclose_marker "[WARN] main-ai-quality-r0-r3 target_date=$TARGET_DATE rc=$main_ai_quality_rc reason=$main_ai_quality_failure_reason runtime_effect=false actual_order_submitted=false"
   fi
 fi
+if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
+  wait_for_postclose_resources "ai_decision_action_outcome_calibration"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+    --target-date "$TARGET_DATE" \
+    --write \
+    --print-summary
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json" \
+    "ai_decision_action_outcome_calibration"
+fi
 if [ "$RUN_MAIN_AI_PROMPT_OPTIMIZER" = "true" ] || [ "$RUN_MAIN_AI_PROMPT_OPTIMIZER" = "1" ]; then
   main_ai_prompt_optimizer_rc=0
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
@@ -2081,16 +2091,6 @@ if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ] || [ "$RUN_MAIN_AI_QUALITY
   if [ "$main_ai_quality_family_rc" -ne 0 ]; then
     emit_postclose_marker "[WARN] main-ai-quality-runtime-family target_date=$TARGET_DATE rc=$main_ai_quality_family_rc status=blocked_fail_closed runtime_effect=false actual_order_submitted=false"
   fi
-fi
-if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
-  wait_for_postclose_resources "ai_decision_action_outcome_calibration"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" \
-    --write \
-    --print-summary
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json" \
-    "ai_decision_action_outcome_calibration"
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then
   automation_trigger_decision "codebase_performance_workorder"

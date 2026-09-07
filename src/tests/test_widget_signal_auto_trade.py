@@ -345,8 +345,8 @@ def _trader(tmp_path, monkeypatch, payload_box, *, qty=1):
     )
     monkeypatch.setattr(
         engine,
-        "manual_control_operator_exclusion_source",
-        lambda code: "manual_operator",
+        "_widget_order_ownership_source",
+        lambda code, *, target_date: "machine_owner_scope",
     )
     monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
     trader = WidgetSignalAutoTrader(
@@ -420,8 +420,8 @@ def _dated_policy_trader(tmp_path, monkeypatch, payload_box, *, policy=None):
     )
     monkeypatch.setattr(
         engine,
-        "manual_control_operator_exclusion_source",
-        lambda code: "manual_operator",
+        "_widget_order_ownership_source",
+        lambda code, *, target_date: "machine_owner_scope",
     )
     monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
     loader = FakeDatedPolicyLoader(
@@ -461,8 +461,8 @@ def _samsung_policy_trader(
     )
     monkeypatch.setattr(
         engine,
-        "manual_control_operator_exclusion_source",
-        lambda code: "manual_operator",
+        "_widget_order_ownership_source",
+        lambda code, *, target_date: "machine_owner_scope",
     )
     monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
     trader = WidgetSignalAutoTrader(
@@ -1027,8 +1027,8 @@ def test_low_symbol_snapshot_time_contract_keeps_scale_in_loop_alive(
     )
     monkeypatch.setattr(
         engine,
-        "manual_control_operator_exclusion_source",
-        lambda code: "manual_operator",
+        "_widget_order_ownership_source",
+        lambda code, *, target_date: "machine_owner_scope",
     )
     monkeypatch.setattr(engine, "is_buy_side_paused", lambda: False)
     trader = WidgetSignalAutoTrader(
@@ -1506,7 +1506,7 @@ def test_samsung_equal_share_policy_rechecks_manual_ownership_before_add(
         lambda code: SimpleNamespace(excluded=False, source="none"),
     )
     monkeypatch.setattr(
-        engine, "manual_control_operator_exclusion_source", lambda code: None
+        engine, "_widget_order_ownership_source", lambda code, *, target_date: ""
     )
     box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
     trader.run_once(now.replace(second=1))
@@ -2115,7 +2115,7 @@ def test_automatic_exclusion_does_not_transfer_real_order_ownership(
     box = {"payload": _payload(now, entry_id="ENTRY-1")}
     trader, gateway, recorder = _trader(tmp_path, monkeypatch, box)
     monkeypatch.setattr(
-        engine, "manual_control_operator_exclusion_source", lambda code: ""
+        engine, "_widget_order_ownership_source", lambda code, *, target_date: ""
     )
 
     trader.run_once(now)
@@ -2479,8 +2479,8 @@ def test_samsung_structural_block_is_observable_and_does_not_consume_episode(
     )
     monkeypatch.setattr(
         engine,
-        "manual_control_operator_exclusion_source",
-        lambda code: "manual_operator",
+        "_widget_order_ownership_source",
+        lambda code, *, target_date: "machine_owner_scope",
     )
     trader = WidgetSignalAutoTrader(
         gateway=gateway,

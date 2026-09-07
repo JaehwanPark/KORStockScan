@@ -286,6 +286,16 @@ def test_holding_elapsed_prefers_first_fill_over_residual_order_time():
 
 @pytest.fixture(autouse=True)
 def _clear_scalp_loss_reentry_state(request, monkeypatch, tmp_path):
+    # Historical synthetic symbols must not inherit the live exact-date policy
+    # or custody registry. Exercise the real guards against isolated inputs.
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
+        str(tmp_path / "symbol_owner_policy.not_selected.json"),
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH",
+        str(tmp_path / "order_owner_registry.jsonl"),
+    )
     manual_control_exclusion_file = (
         tmp_path / "manual_control_excluded_codes.default.txt"
     )

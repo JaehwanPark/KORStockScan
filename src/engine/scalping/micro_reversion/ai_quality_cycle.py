@@ -7852,9 +7852,7 @@ def _source_only_gap_diagnostics(
         ),
         "lifecycle_exact_join_missing_count": lifecycle_exact_join_missing_count,
         "lifecycle_exact_join_missing_dates": lifecycle_exact_join_missing_dates,
-        "terminal_historical_exclusion_count": (
-            terminal_historical_exclusion_count
-        ),
+        "terminal_historical_exclusion_count": (terminal_historical_exclusion_count),
         "natural_entry_non_order_lifecycle_not_applicable_count": (
             natural_entry_non_order_lifecycle_not_applicable_count
         ),
@@ -9031,8 +9029,7 @@ def _load_provider_bound_r0_generation(
             if key != "report_content_sha256"
         }
         if (
-            execution.get("schema")
-            != quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
+            execution.get("schema") != quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
             or execution.get("target_date") != target_date
             or execution.get("report_content_sha256") != _sha256(execution_content)
         ):
@@ -9080,18 +9077,17 @@ def _load_provider_bound_r0_generation(
                     raise ValueError("provider_bound_checkpoint_result_census_invalid")
                 if any(
                     not str(result.get("outcome_join_key") or "")
-                    or not _valid_sha256(
-                        result.get("outcome_label_content_sha256")
-                    )
+                    or not _valid_sha256(result.get("outcome_label_content_sha256"))
                     for result in raw_results
                 ):
                     raise ValueError(
                         "provider_bound_checkpoint_outcome_binding_invalid"
                     )
                 checkpoint_results = list(raw_results)
-                if checkpoint_results and checkpoint.get(
-                    "provider_call_performed"
-                ) is not True:
+                if (
+                    checkpoint_results
+                    and checkpoint.get("provider_call_performed") is not True
+                ):
                     raise ValueError("provider_bound_checkpoint_call_census_invalid")
     if not execution_committed and not checkpoint_results:
         return None
@@ -9134,7 +9130,10 @@ def _load_provider_bound_r0_generation(
                     execution.get("materialized_artifact_path"),
                     selected_paths["materialized"],
                 ),
-                (execution.get("outcome_label_artifact_path"), selected_paths["labels"]),
+                (
+                    execution.get("outcome_label_artifact_path"),
+                    selected_paths["labels"],
+                ),
             )
         )
     if any(
@@ -9149,8 +9148,7 @@ def _load_provider_bound_r0_generation(
     if not isinstance(source_commitment, Mapping) or (
         source_commitment.get("bridge_report_content_sha256")
         != bridge.get("artifact_content_sha256")
-        or source_commitment.get("bridge_report_artifact_sha256")
-        != _sha256(bridge)
+        or source_commitment.get("bridge_report_artifact_sha256") != _sha256(bridge)
     ):
         raise ValueError("provider_bound_bridge_companion_mismatch")
     if prepared.get("source_paired_report_content_sha256") != _sha256(paired):
@@ -9170,9 +9168,8 @@ def _load_provider_bound_r0_generation(
         for result in checkpoint_results:
             join_key = str(result.get("outcome_join_key") or "")
             proof = label_by_id.get(join_key)
-            if (
-                proof is None
-                or result.get("outcome_label_content_sha256") != _sha256(proof)
+            if proof is None or result.get("outcome_label_content_sha256") != _sha256(
+                proof
             ):
                 raise ValueError("provider_bound_checkpoint_outcome_mismatch")
 
@@ -9362,8 +9359,7 @@ def run_cycle(
     ) as exc:
         provider_bound_r0_locked = True
         blockers.append(
-            "provider_bound_r0_generation_invalid:"
-            f"{type(exc).__name__}:{exc}"
+            "provider_bound_r0_generation_invalid:" f"{type(exc).__name__}:{exc}"
         )
 
     owner_command = [

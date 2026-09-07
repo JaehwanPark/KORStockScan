@@ -1101,7 +1101,9 @@ class ForwardObservationCollector:
         # No I/O or unbounded per-symbol maps on the producer callback. This
         # tail is diagnostic only; it cannot reconstruct all rejected rows.
         checked_at_ms = time.time_ns() // 1_000_000
-        received_at_ms = received_at_ms if received_at_ms and received_at_ms > 0 else None
+        received_at_ms = (
+            received_at_ms if received_at_ms and received_at_ms > 0 else None
+        )
         raw_text = str(raw_time or "")
         exchange_at_ms = int(parsed[0].timestamp() * 1_000) if parsed else None
         with self._state_lock:

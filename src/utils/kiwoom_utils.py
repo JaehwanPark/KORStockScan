@@ -3524,12 +3524,8 @@ def get_stock_orderbook_ka10004(
             "request_pid": source_meta.get("request_pid"),
             "request_code": source_meta.get("request_code"),
             "request_attempt_count": source_meta.get("request_attempt_count"),
-            "read_rate_control_status": source_meta.get(
-                "read_rate_control_status"
-            ),
-            "read_rate_control_reason": source_meta.get(
-                "read_rate_control_reason"
-            ),
+            "read_rate_control_status": source_meta.get("read_rate_control_status"),
+            "read_rate_control_reason": source_meta.get("read_rate_control_reason"),
             "read_rate_control_waited_sec": source_meta.get(
                 "read_rate_control_waited_sec"
             ),
@@ -3540,12 +3536,8 @@ def get_stock_orderbook_ka10004(
             "rate_limit_http_status_code": source_meta.get(
                 "rate_limit_http_status_code"
             ),
-            "rate_limit_response_code": source_meta.get(
-                "rate_limit_response_code"
-            ),
-            "rate_limit_retry_exhausted": source_meta.get(
-                "rate_limit_retry_exhausted"
-            ),
+            "rate_limit_response_code": source_meta.get("rate_limit_response_code"),
+            "rate_limit_retry_exhausted": source_meta.get("rate_limit_retry_exhausted"),
         },
         "orderbook": {
             "asks": asks,
@@ -4707,10 +4699,7 @@ def fetch_kiwoom_api_continuous(
                     f"scope_digest={admission.scope_digest} "
                     f"reason={admission_terminal_reason or 'reason_missing'}"
                 )
-                if (
-                    admission_terminal_reason
-                    in _KIWOOM_READ_TR_EXPECTED_DEFER_REASONS
-                ):
+                if admission_terminal_reason in _KIWOOM_READ_TR_EXPECTED_DEFER_REASONS:
                     log_info(
                         "[KIWOOM_READ_TR_DEFERRED] "
                         f"deferred_attempt_sent=false {admission_message}"
@@ -4741,9 +4730,9 @@ def fetch_kiwoom_api_continuous(
                         else request_timeout
                     ),
                 )
-                meta["request_attempt_count"] = int(
-                    meta.get("request_attempt_count") or 0
-                ) + 1
+                meta["request_attempt_count"] = (
+                    int(meta.get("request_attempt_count") or 0) + 1
+                )
                 meta["last_http_status_code"] = response.status_code
 
                 if response.status_code == 200:

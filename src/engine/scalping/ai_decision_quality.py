@@ -1268,6 +1268,24 @@ def _sha256(value: Any) -> str:
     ).hexdigest()
 
 
+def _with_artifact_content_sha256(value: dict[str, Any]) -> dict[str, Any]:
+    content = {
+        key: item for key, item in value.items() if key != "artifact_content_sha256"
+    }
+    learning = content.get("calibration_source_contract")
+    pairs = content.get("paired_comparisons")
+    if isinstance(learning, dict) and isinstance(pairs, list):
+        content["calibration_source_contract"] = {
+            **learning,
+            "global_integrity_pass": (
+                learning.get("global_integrity_pass") is True
+                and learning.get("retained_pair_count") == len(pairs)
+            ),
+            "retained_pairs_sha256": _sha256(pairs),
+        }
+    return {**content, "artifact_content_sha256": _sha256(content)}
+
+
 def _is_sha256(value: Any) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
@@ -1377,9 +1395,7 @@ def _provider_execution_companion_freeze_report(
         return None
     report = _load_exact_p2_json(execution_path)
     report_body = {
-        key: value
-        for key, value in report.items()
-        if key != "report_content_sha256"
+        key: value for key, value in report.items() if key != "report_content_sha256"
     }
     if (
         report.get("schema") != MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
@@ -1507,8 +1523,7 @@ def _frozen_provider_materialized_companion(
     if (
         execution.get("materialized_report_content_sha256")
         != materialized.get("report_content_sha256")
-        or execution.get("materialized_report_artifact_sha256")
-        != _sha256(materialized)
+        or execution.get("materialized_report_artifact_sha256") != _sha256(materialized)
         or execution.get("materialized_request_census_sha256")
         != _micro_reversion_materialized_request_census_sha256(materialized)
     ):
@@ -1543,9 +1558,7 @@ def _frozen_provider_outcome_companion(
         if not isinstance(labels, list) or any(
             not isinstance(label, Mapping) for label in labels
         ):
-            raise ValueError(
-                "micro_reversion_frozen_checkpoint_outcome_census_invalid"
-            )
+            raise ValueError("micro_reversion_frozen_checkpoint_outcome_census_invalid")
         label_by_id = {
             str(label.get("label_id") or ""): label
             for label in labels
@@ -1554,18 +1567,15 @@ def _frozen_provider_outcome_companion(
         for result in checkpoint["results"]:
             join_key = str(result.get("outcome_join_key") or "")
             proof = label_by_id.get(join_key)
-            if (
-                proof is None
-                or result.get("outcome_label_content_sha256") != _sha256(proof)
+            if proof is None or result.get("outcome_label_content_sha256") != _sha256(
+                proof
             ):
                 raise ValueError(
                     "micro_reversion_frozen_checkpoint_outcome_binding_mismatch"
                 )
         return outcome_path, outcome
     raw_path = str(execution.get("outcome_label_artifact_path") or "").strip()
-    expected_sha256 = str(
-        execution.get("outcome_label_artifact_sha256") or ""
-    ).strip()
+    expected_sha256 = str(execution.get("outcome_label_artifact_sha256") or "").strip()
     if not raw_path or not expected_sha256:
         raise ValueError("micro_reversion_frozen_outcome_companion_binding_missing")
     outcome_path = Path(raw_path)
@@ -25492,6 +25502,26 @@ def build_paired_replay_report(
         "candidate_dominant_action_ratio": dominant_candidate_action_ratio,
         "candidate_quality_gate_pass": quality_gate_pass,
         "promotion_report_integrity_pass": promotion_report_integrity_pass,
+        # Learning may retain exact successful pairs from a partial batch.
+        # This contract never relaxes the separate live-promotion contract.
+        "calibration_source_contract": {
+            "schema": "ai_paired_calibration_source_v1",
+            "global_integrity_pass": bool(
+                requests
+                and execution_selection_contract_pass
+                and candidate_contract_integrity_rejected_count == 0
+                and promotion_cohort_isolated
+                and promotion_contract_isolated
+                and len(comparable_rows) + rejected + missing_result_count
+                == len(requests)
+            ),
+            "request_count": len(requests),
+            "retained_pair_count": len(comparable_rows),
+            "excluded_request_count": rejected + missing_result_count,
+            "retained_pairs_sha256": _sha256(comparable_rows),
+            "decision_authority": "calibration_learning_only",
+            "runtime_apply_authority": False,
+        },
         "promotion_quality_gate_pass": promotion_quality_gate_pass,
         "promotion_quality_gate_basis": (
             "current_same_cohort_report"
@@ -28978,7 +29008,7 @@ def rematerialize_detailed_replay_attribution(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
-    return rebuilt, output_path
+    return _with_artifact_content_sha256(rebuilt), output_path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -29918,8 +29948,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         frozen_outcome = (
             _frozen_provider_outcome_companion(args.date)
-            if args.execute_candidate
-            and args.micro_reversion_outcome_labels is None
+            if args.execute_candidate and args.micro_reversion_outcome_labels is None
             else None
         )
         if frozen_outcome is not None:
@@ -30285,9 +30314,7 @@ def main(argv: list[str] | None = None) -> int:
                 locked_materialized_report = _load_exact_p2_json(
                     args.micro_reversion_materialized_requests
                 )
-                if _sha256(locked_materialized_report) != _sha256(
-                    materialized_report
-                ):
+                if _sha256(locked_materialized_report) != _sha256(materialized_report):
                     raise ValueError(
                         "micro_reversion_materialized_changed_before_execution_lock"
                     )
@@ -31310,6 +31337,8 @@ def main(argv: list[str] | None = None) -> int:
             "session_bucket": args.session_bucket,
             "runtime_effect": False,
         }
+    if report.get("schema") == DETAILED_PAIRED_SCHEMA:
+        report = _with_artifact_content_sha256(report)
     if args.write:
         _atomic_write_json(path, report)
     print(json.dumps(report, ensure_ascii=False))

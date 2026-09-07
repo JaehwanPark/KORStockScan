@@ -120,6 +120,13 @@ class TestProcessHealthDetector:
             "manual_control_auto_exclusion_source",
             lambda code: "",
         )
+        monkeypatch.setattr(
+            process_health_module,
+            "evaluate_main_bot_control_exclusion",
+            lambda code, **_kwargs: type(
+                "Decision", (), {"excluded": True, "reason": "test"}
+            )(),
+        )
         pipeline_dir = process_health_module.PIPELINE_EVENTS_DIR
         pipeline_dir.mkdir(parents=True, exist_ok=True)
         pipeline_path = pipeline_dir / f"pipeline_events_{now.date().isoformat()}.jsonl"
@@ -155,6 +162,56 @@ class TestProcessHealthDetector:
         )
         assert "Sample Holding(249420)" in result.summary
         assert "do not bypass quantity" in result.recommended_action
+
+    def test_detector_ignores_stale_block_after_main_policy_releases_holding(
+        self, monkeypatch
+    ):
+        now = datetime.now().astimezone().replace(microsecond=0)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_operator_exclusion_source",
+            lambda code: "",
+        )
+        monkeypatch.setattr(
+            process_health_module,
+            "manual_control_auto_exclusion_source",
+            lambda code: "",
+        )
+        monkeypatch.setattr(
+            process_health_module,
+            "evaluate_main_bot_control_exclusion",
+            lambda code, **_kwargs: type(
+                "Decision", (), {"excluded": False, "reason": "policy_allows"}
+            )(),
+        )
+        pipeline_dir = process_health_module.PIPELINE_EVENTS_DIR
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        pipeline_path = pipeline_dir / f"pipeline_events_{now.date().isoformat()}.jsonl"
+        pipeline_path.write_text(
+            json.dumps(
+                {
+                    "stage": "manual_control_fast_exit_monitor_blocked",
+                    "stock_name": "Released Holding",
+                    "stock_code": "005930",
+                    "record_id": 102,
+                    "emitted_at": now.isoformat(),
+                    "fields": {
+                        "target_status": "HOLDING",
+                        "target_strategy": "SCALPING",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["manual_control_holding_guard"]["active_block_count"] == 0
 
     def test_detector_accepts_recent_explicit_operator_holding_exclusion(
         self, monkeypatch

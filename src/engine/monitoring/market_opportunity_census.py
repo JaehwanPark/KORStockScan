@@ -635,11 +635,7 @@ def _capture_external_bbo_observation(
             read_rate_max_wait_sec=1.25,
             return_meta=True,
         )
-        if (
-            isinstance(raw, tuple)
-            and len(raw) == 2
-            and isinstance(raw[1], dict)
-        ):
+        if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
             raw_snapshot, request_meta = raw
         else:
             raw_snapshot = raw
@@ -875,8 +871,7 @@ def capture_market_snapshots(
                 source_error = type(exc).__name__
 
             if source_request_meta.get("rate_limit_retry_exhausted") is True or (
-                source_request_meta.get("rate_limit_detected") is True
-                and not fetched
+                source_request_meta.get("rate_limit_detected") is True and not fetched
             ):
                 source_error = "ka10027_rate_limited"
             elif source_request_meta.get("read_rate_control_status") == "deferred":
@@ -1009,13 +1004,9 @@ def capture_market_snapshots(
                         ),
                         "credential_fields_stored": [],
                         "request_control": {
-                            "request_owner": source_request_meta.get(
-                                "request_owner"
-                            ),
+                            "request_owner": source_request_meta.get("request_owner"),
                             "request_pid": source_request_meta.get("request_pid"),
-                            "request_class": source_request_meta.get(
-                                "request_class"
-                            ),
+                            "request_class": source_request_meta.get("request_class"),
                             "request_attempt_count": source_request_meta.get(
                                 "request_attempt_count"
                             ),
@@ -1104,7 +1095,10 @@ def _strict_nonnegative_int(value: Any) -> int | None:
 
 
 def _external_bbo_reservation_ordinal(observation: Any) -> int | None:
-    if not isinstance(observation, dict) or observation.get("request_attempted") is not True:
+    if (
+        not isinstance(observation, dict)
+        or observation.get("request_attempted") is not True
+    ):
         return None
     reservation = observation.get("daily_budget_reservation")
     if not isinstance(reservation, dict):
@@ -1260,9 +1254,7 @@ def _load_external_bbo_budget_contract(
     try:
         receipt = read_json_object_strict_receipt(path)
         payload = receipt.payload
-        reserved_count = _strict_nonnegative_int(
-            payload.get("reserved_request_count")
-        )
+        reserved_count = _strict_nonnegative_int(payload.get("reserved_request_count"))
         daily_cap = _strict_nonnegative_int(payload.get("daily_request_cap"))
     except (FileNotFoundError, OSError, OverflowError, TypeError, ValueError):
         return {
@@ -1865,7 +1857,9 @@ def _load_stage_index(
                         observation["stock_code"], {}
                     ).setdefault(observation["venue"], {}).setdefault(
                         observation["session"], []
-                    ).append(observation)
+                    ).append(
+                        observation
+                    )
             if executable_bbo_gap_counts is not None:
                 executable_bbo_gap_counts.update(gap_reasons)
         if (

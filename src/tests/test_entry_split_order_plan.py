@@ -398,10 +398,10 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     assert immutable_report_path.is_file()
     assert immutable_policy_path.is_file()
     assert json.loads(immutable_policy_path.read_text(encoding="utf-8")) == policy
-    monkeypatch.setattr(daily_report, "ENTRY_SPLIT_ORDER_PLAN_DIR", split_plan.REPORT_DIR)
-    family = daily_report._build_entry_split_order_plan_family(
-        target_date=target_date
+    monkeypatch.setattr(
+        daily_report, "ENTRY_SPLIT_ORDER_PLAN_DIR", split_plan.REPORT_DIR
     )
+    family = daily_report._build_entry_split_order_plan_family(target_date=target_date)
     assert family["recommended"]["policy_file"] == str(immutable_policy_path)
     split_plan.report_paths(target_date)[0].write_text("{}", encoding="utf-8")
     assert split_plan.policy_report_generation_contract_status(policy) == (
@@ -415,9 +415,7 @@ def test_split_candidate_freezes_after_mature_negative_early_ev():
         {"balanced_normal": {"real_sample_count": 20}},
         {},
         {},
-        {
-            ("balanced_normal", split_plan.BASELINE_SPLIT_VARIANT_ID): [-0.2] * 10
-        },
+        {("balanced_normal", split_plan.BASELINE_SPLIT_VARIANT_ID): [-0.2] * 10},
     )
 
     candidate = grid[0]
@@ -441,13 +439,9 @@ def test_split_candidate_holds_observation_before_real_submit_floor():
     candidate = grid[0]
     assert candidate["candidate_passed"] is False
     assert candidate["sample_floor_status"] == "hold_sample"
-    assert candidate["post_apply_continuation_gate"]["action"] == (
-        "hold_observation"
-    )
+    assert candidate["post_apply_continuation_gate"]["action"] == ("hold_observation")
     assert candidate["post_apply_continuation_gate"]["pass"] is False
-    assert (
-        candidate["post_apply_continuation_gate"]["economic_evidence_pass"] is True
-    )
+    assert candidate["post_apply_continuation_gate"]["economic_evidence_pass"] is True
     assert candidate["post_apply_continuation_gate"]["reason"] == (
         "real_submit_sample_floor_not_reached"
     )
@@ -495,17 +489,18 @@ def test_split_candidate_does_not_seed_against_mature_parent_tail_evidence():
 
     candidate = grid[0]
     assert candidate["candidate_passed"] is False
-    assert candidate["post_apply_continuation_gate"][
-        "mature_parent_evidence_contradictory"
-    ] is True
+    assert (
+        candidate["post_apply_continuation_gate"][
+            "mature_parent_evidence_contradictory"
+        ]
+        is True
+    )
     assert candidate["sample_floor_status"] == (
         "hold_mature_parent_split_edge_contradicted"
     )
 
 
-def test_runtime_loader_rejects_preopen_policy_version_mismatch(
-    monkeypatch, tmp_path
-):
+def test_runtime_loader_rejects_preopen_policy_version_mismatch(monkeypatch, tmp_path):
     _patch_dirs(monkeypatch, tmp_path)
     target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     path = split_plan.policy_path(target_date)

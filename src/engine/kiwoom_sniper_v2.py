@@ -271,6 +271,7 @@ SCANNER_LOOKUP_ATTENTION_CONTEXT_KEYS = (
     "lookup_attention_weight_policy_version",
     "lookup_attention_weight_policy_source_date",
     "lookup_attention_weight_policy_artifact_sha256",
+    "lookup_attention_weight_preopen_artifact_sha256",
     "lookup_attention_weight_decision_authority",
     "lookup_attention_weight_same_priority_tier_only",
     "lookup_attention_weight_eligible_venues",
@@ -2566,6 +2567,9 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         ),
         "lookup_attention_weight_policy_artifact_sha256": payload.get(
             "lookup_attention_weight_policy_artifact_sha256", ""
+        ),
+        "lookup_attention_weight_preopen_artifact_sha256": payload.get(
+            "lookup_attention_weight_preopen_artifact_sha256", ""
         ),
         "lookup_attention_weight_decision_authority": payload.get(
             "lookup_attention_weight_decision_authority", "not_applicable"
@@ -12222,8 +12226,7 @@ def run_sniper(is_test_mode=False):
                     terminal_reason=terminal_reason,
                     unresolved_scalping_count=len(unresolved_scalping),
                     unresolved_scalping_codes="|".join(
-                        str(item.get("code") or "-")
-                        for item in unresolved_scalping
+                        str(item.get("code") or "-") for item in unresolved_scalping
                     ),
                 )
                 break

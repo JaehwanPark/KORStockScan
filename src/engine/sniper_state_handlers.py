@@ -274,7 +274,6 @@ from src.engine.risk.manual_control_exclusion import (
     evaluate_main_bot_control_exclusion,
     evaluate_manual_control_exclusion,
     manual_control_auto_exclusion_source,
-    manual_control_operator_exclusion_source,
     remove_auto_manual_control_exclusion_code,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
@@ -1250,9 +1249,7 @@ _LOW_PROFIT_STAGNATION_STATE_FIELDS = (
 )
 SCALP_SIMULATION_BOOK = "scalp_ai_buy_all"
 SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
-DEFAULT_SCALP_SIM_STATE_PATH = (
-    DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
-)
+DEFAULT_SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
 SCALP_SIM_STATE_PATH = DEFAULT_SCALP_SIM_STATE_PATH
 _SCALP_SIM_STATE_LAST_SEEN_MTIME_NS: int | None = None
 SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
@@ -77161,7 +77158,11 @@ def _scalping_same_session_terminal_exit_fields(
             "terminal_venue": "SIM",
             "terminal_start": _SCALPING_NXT_TERMINAL_EXIT_START.isoformat(),
             "venue_source": "simulator_same_session",
-            "reason": "simulator_terminal_window" if due else "before_simulator_terminal_window",
+            "reason": (
+                "simulator_terminal_window"
+                if due
+                else "before_simulator_terminal_window"
+            ),
         }
 
     is_nxt_enabled, venue_source = _holding_sell_nxt_enabled_status(stock, code)
@@ -81354,22 +81355,28 @@ def _retire_unowned_scale_in_qty_manual_control_handoff(
 ) -> ManualControlExclusionDecision:
     """Remove legacy scale-in guard handoffs that never acquired an operator owner."""
 
-    decision = evaluate_manual_control_exclusion(code)
+    raw_decision = evaluate_manual_control_exclusion(code)
+    decision = evaluate_main_bot_control_exclusion(
+        code, new_entry=(pipeline != "holding")
+    )
     stale_in_memory = bool(
         (stock or {}).get("manual_control_auto_scale_in_qty_blocked")
     )
-    retirement_check_signature = f"{int(bool(decision.excluded))}:{decision.source}"
+    auto_source = manual_control_auto_exclusion_source(code)
+    retirement_check_signature = (
+        f"{int(bool(raw_decision.excluded))}:{raw_decision.source}:"
+        f"{auto_source or '-'}"
+    )
     checked_signature = str(
         (stock or {}).get("_legacy_scale_in_qty_handoff_retirement_check_signature")
         or ""
     )
     if checked_signature == retirement_check_signature or (
-        not stale_in_memory and not decision.excluded
+        not stale_in_memory and not raw_decision.excluded
     ):
         return decision
-    auto_source = manual_control_auto_exclusion_source(code)
     if auto_source != "auto_scale_in_qty_guard_block" and not (
-        stale_in_memory and not decision.excluded
+        stale_in_memory and not raw_decision.excluded
     ):
         _mutate_stock_state(
             stock,
@@ -81386,8 +81393,11 @@ def _retire_unowned_scale_in_qty_manual_control_handoff(
         removal = remove_auto_manual_control_exclusion_code(
             code,
             reason="legacy_unowned_scale_in_qty_guard_handoff_retired",
+            sources={"auto_scale_in_qty_guard_block"},
         )
-        decision = evaluate_manual_control_exclusion(code)
+        decision = evaluate_main_bot_control_exclusion(
+            code, new_entry=(pipeline != "holding")
+        )
         if not removal.removed and str(removal.reason).startswith(
             "manual_control_exclusion_remove_failed:"
         ):
@@ -81397,6 +81407,16 @@ def _retire_unowned_scale_in_qty_manual_control_handoff(
                 f"legacy_scale_in_qty_handoff_retirement_blocked:{removal.reason}",
                 str(removal.source or "manual_control_exclusion_storage"),
             )
+        if removal.removed:
+            _mutate_stock_state(
+                stock,
+                pop_fields=(
+                    "manual_control_auto_scale_in_qty_blocked",
+                    "manual_control_auto_exclusion_source_stage",
+                    "_legacy_scale_in_qty_handoff_retirement_check_signature",
+                ),
+            )
+            stale_in_memory = False
     if decision.excluded:
         return decision
 
@@ -81465,15 +81485,15 @@ def _manual_control_exclusion_blocked(
         pipeline=pipeline,
         now_ts=now_value,
     )
-    owner_decision = evaluate_main_bot_control_exclusion(
-        code,
-        new_entry=(pipeline != "holding" if new_entry is None else bool(new_entry)),
+    requested_new_entry = (
+        pipeline != "holding" if new_entry is None else bool(new_entry)
     )
-    if not decision.excluded or manual_control_operator_exclusion_source(code):
-        # Exact-date owner policy may replace only the explicit operator
-        # symbol handoff. Synthetic storage failures and hard/automatic vetoes
-        # remain fail-closed even when coexistence is selected.
-        decision = owner_decision
+    if requested_new_entry != (pipeline != "holding") and not str(
+        decision.reason
+    ).startswith("legacy_scale_in_qty_handoff_retirement_blocked:"):
+        decision = evaluate_main_bot_control_exclusion(
+            code, new_entry=requested_new_entry
+        )
     if not decision.excluded and (
         bool((stock or {}).get("manual_control_auto_open_loss_blocked"))
         or bool((stock or {}).get("manual_control_auto_hard_stop_blocked"))
@@ -81585,7 +81605,7 @@ def _maybe_release_auto_manual_control_at_average_price(
             f"current={current_price} average={average_price:.2f}"
         ),
     )
-    remaining = evaluate_manual_control_exclusion(code)
+    remaining = evaluate_main_bot_control_exclusion(code, new_entry=False)
     released = bool(removal.removed and not remaining.excluded)
     fields = {
         "manual_control_auto_release_attempted": True,
@@ -84737,9 +84757,7 @@ def handle_holding_state(
             "🌙 스캘핑 당일 포지션 종결 "
             f"({same_session_terminal_exit.get('terminal_venue')} final window)"
         )
-        terminal_log_key = (
-            f"{now_dt.date().isoformat()}:{same_session_terminal_exit.get('terminal_venue')}"
-        )
+        terminal_log_key = f"{now_dt.date().isoformat()}:{same_session_terminal_exit.get('terminal_venue')}"
         if stock.get("_same_session_terminal_exit_log_key") != terminal_log_key:
             stock["_same_session_terminal_exit_log_key"] = terminal_log_key
             _log_holding_pipeline(
@@ -86322,11 +86340,7 @@ def handle_holding_state(
             reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
             exit_rule = "protect_trailing_stop"
 
-    elif (
-        strategy == "SCALPING"
-        and not opening_rotation_active
-        and not is_sell_signal
-    ):
+    elif strategy == "SCALPING" and not opening_rotation_active and not is_sell_signal:
         base_stop_pct = _rule_float("SCALP_STOP", -1.5)
         hard_stop_pct = _rule_float("SCALP_HARD_STOP", -2.5)
         safe_profit_pct = _rule_float("SCALP_SAFE_PROFIT", 0.5)

@@ -19,9 +19,67 @@ def _source_only() -> dict[str, bool]:
     }
 
 
-def _optimizer_report(
-    target_date: str, *, source_bindings: dict | None = None
-) -> dict:
+def test_exhausted_entry_registry_is_terminal_source_only_patch_handoff(monkeypatch):
+    day = "2026-09-07"
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    cohort = {
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "candidate_prompt_version": version,
+        "selected_challenger": {"prompt_version": version},
+        "status": "hold_candidate_registry_exhausted",
+    }
+    report = {
+        "artifact_content_sha256": "a" * 64,
+        "stage_optimizers": {"entry": {"cohort_optimizers": [cohort]}},
+    }
+    batch_report = {
+        "schema": consumer.entry_batch.BATCH_SCHEMA,
+        "target_date": day,
+        "status": "completed_offline_only",
+        "cohorts": [cohort],
+        "candidate_prompt_versions_by_cohort": {"KRX/KRX_REGULAR": version},
+        "candidate_prompt_selection_source": {
+            "artifact_content_sha256": "a" * 64,
+            "status": "optimizer_candidate_plan_applied_offline_only",
+        },
+        **_source_only(),
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda _: batch_report)
+    paths, _ = consumer._entry_base_paths(day, optimizer_report=report)
+    assert paths[0]["blocking_reason"] == "hold_candidate_registry_exhausted"
+    assert paths[0]["owner"] == "MainAIPromptOptimizer"
+    assert paths[0]["terminality"] == "terminal_source_observation"
+    assert "new supported offline prompt" in paths[0]["acceptance_test"]
+
+
+def test_consumer_rejects_replaced_calibration_generation(monkeypatch, tmp_path):
+    day = "2026-09-07"
+    path = tmp_path / "optimizer.json"
+    payload = _optimizer_report(
+        day,
+        source_bindings={
+            "action_outcome_calibration_artifact_content_sha256": "a" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        optimizer, "report_paths", lambda _: (path, tmp_path / "optimizer.md")
+    )
+    monkeypatch.setattr(consumer, "_read_json", lambda p: payload if p == path else {})
+    monkeypatch.setattr(
+        optimizer,
+        "_latest_action_outcome_calibration",
+        lambda _: ({}, None, ["source_generation_changed"]),
+    )
+    report = consumer.build_report(day)
+    assert (
+        "optimizer_action_outcome_calibration_hash_binding_mismatch"
+        in report["blockers"]
+    )
+    assert report["runtime_effect"] is False
+
+
+def _optimizer_report(target_date: str, *, source_bindings: dict | None = None) -> dict:
     body = {
         "schema": optimizer.SCHEMA,
         "target_date": target_date,
@@ -548,7 +606,5 @@ def test_consumer_isolates_optional_micro_contract_from_base_paths(
     optional_path = report["request_paths"]["optional_micro_enriched_2x2"]
     assert optional_path["path_status"] == consumer.BLOCKED
     assert optional_path["cell_count"] == 1
-    assert optional_path["cells"][0]["owner"] == (
-        "MainAIMicroReversionSourceContract"
-    )
+    assert optional_path["cells"][0]["owner"] == ("MainAIMicroReversionSourceContract")
     assert report["runtime_effect"] is False

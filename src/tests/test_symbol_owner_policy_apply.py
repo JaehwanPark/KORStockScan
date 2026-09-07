@@ -259,9 +259,7 @@ def test_apply_publishes_only_after_exact_registry_activation(tmp_path, monkeypa
     assert f"KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE={policy}" in (
         owner_env.read_text(encoding="utf-8")
     )
-    assert (
-        receipt_dir / "symbol_owner_policy_apply_2026-09-03.json"
-    ).exists()
+    assert (receipt_dir / "symbol_owner_policy_apply_2026-09-03.json").exists()
 
 
 def test_apply_migrates_exact_existing_machine_custody_before_activation(
@@ -309,9 +307,9 @@ def test_apply_migrates_exact_existing_machine_custody_before_activation(
         ).encode("utf-8")
     ).hexdigest()
     request_payload = json.loads(request_path.read_text(encoding="utf-8"))
-    request_payload["symbols"][SYMBOL]["migrated_positions"][0][
-        "evidence_sha256"
-    ] = canonical_receipt["evidence_sha256"]
+    request_payload["symbols"][SYMBOL]["migrated_positions"][0]["evidence_sha256"] = (
+        canonical_receipt["evidence_sha256"]
+    )
     request_path.write_text(json.dumps(request_payload), encoding="utf-8")
     snapshot = _snapshot(quantity=10, migration_receipts=[canonical_receipt])
 
@@ -332,9 +330,9 @@ def test_apply_migrates_exact_existing_machine_custody_before_activation(
 
     decision = resolve_symbol_owner_policy(SYMBOL, target_date="2026-09-03")
     assert registry.decision_activation_matches(decision) is True
-    assert registry.owner_position_qty(
-        "episode:samsung_morning:leg1", symbol=SYMBOL
-    ) == 10
+    assert (
+        registry.owner_position_qty("episode:samsung_morning:leg1", symbol=SYMBOL) == 10
+    )
 
     # A process failure after registry activation can safely resume without
     # registering the migration twice or producing a different policy.
@@ -354,9 +352,9 @@ def test_apply_migrates_exact_existing_machine_custody_before_activation(
         output_policy_path=policy,
     )
     assert policy.read_bytes() == first_policy
-    assert registry.owner_position_qty(
-        "episode:samsung_morning:leg1", symbol=SYMBOL
-    ) == 10
+    assert (
+        registry.owner_position_qty("episode:samsung_morning:leg1", symbol=SYMBOL) == 10
+    )
 
 
 def test_apply_resumes_after_migration_append_before_activation(tmp_path, monkeypatch):
@@ -403,13 +401,16 @@ def test_apply_resumes_after_migration_append_before_activation(tmp_path, monkey
 
     assert result["status"] == "applied"
     assert registry.owner_position_qty(migration["position_id"], symbol=SYMBOL) == 10
-    assert len(
-        [
-            row
-            for row in registry.path.read_text(encoding="utf-8").splitlines()
-            if '"event":"MIGRATED_POSITION_REGISTERED"' in row
-        ]
-    ) == 1
+    assert (
+        len(
+            [
+                row
+                for row in registry.path.read_text(encoding="utf-8").splitlines()
+                if '"event":"MIGRATED_POSITION_REGISTERED"' in row
+            ]
+        )
+        == 1
+    )
 
 
 def test_apply_rejects_migration_owner_outside_policy_owner_set(tmp_path):
@@ -525,9 +526,8 @@ def test_live_apply_requires_same_effective_user_as_services(tmp_path, monkeypat
             registry=OrderOwnerRegistry(tmp_path / "registry.jsonl"),
         )
 
-def test_apply_fails_before_mutation_when_broker_snapshot_drifts(
-    tmp_path, monkeypatch
-):
+
+def test_apply_fails_before_mutation_when_broker_snapshot_drifts(tmp_path, monkeypatch):
     request_path = _request(tmp_path / "request.json")
     registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
     monkeypatch.setenv(

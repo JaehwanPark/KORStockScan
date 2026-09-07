@@ -148,20 +148,14 @@ def test_pre_ai_scout_stage_is_pending_not_provenance_incomplete() -> None:
         actual_order_submitted=True,
     )
 
-    assert pending["scout_ai_attribution_status"] == (
-        "parent_ai_not_evaluated_yet"
-    )
+    assert pending["scout_ai_attribution_status"] == ("parent_ai_not_evaluated_yet")
     assert invalid_submit["scout_ai_attribution_status"] == (
         "parent_provenance_incomplete"
     )
     summary = feedback._one_share_summary(
         [
             {"scout_ai_attribution_status": pending["scout_ai_attribution_status"]},
-            {
-                "scout_ai_attribution_status": (
-                    "linked_parent_pending_probe_bundle"
-                )
-            },
+            {"scout_ai_attribution_status": ("linked_parent_pending_probe_bundle")},
             {
                 "scout_ai_attribution_status": invalid_submit[
                     "scout_ai_attribution_status"
@@ -232,8 +226,7 @@ def test_receipt_snapshot_preserves_frozen_scout_parent() -> None:
         in receipts._SELL_COMPLETE_RESET_KEYS
     )
     assert (
-        "rising_missed_scout_position_cycle_active"
-        in receipts._SELL_REVIVE_RESET_KEYS
+        "rising_missed_scout_position_cycle_active" in receipts._SELL_REVIVE_RESET_KEYS
     )
 
 

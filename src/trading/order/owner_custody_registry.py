@@ -1359,25 +1359,26 @@ class OrderOwnerRegistry:
             )
 
         account_key = broker_account_key(require_explicit=True)
-        migration_tail = str(
-            migration_receipt.get("registry_tail_hash") or ""
-        ).strip().lower()
-        snapshot_hash = str(
-            migration_receipt.get("broker_snapshot_sha256") or ""
-        ).strip().lower()
+        migration_tail = (
+            str(migration_receipt.get("registry_tail_hash") or "").strip().lower()
+        )
+        snapshot_hash = (
+            str(migration_receipt.get("broker_snapshot_sha256") or "").strip().lower()
+        )
         broker_orders = sorted(
-            {str(value or "").strip() for value in migration_receipt.get(
-                "broker_open_order_nos", []
-            )}
+            {
+                str(value or "").strip()
+                for value in migration_receipt.get("broker_open_order_nos", [])
+            }
         )
         registered_orders = sorted(
-            {str(value or "").strip() for value in migration_receipt.get(
-                "registered_open_order_nos", []
-            )}
+            {
+                str(value or "").strip()
+                for value in migration_receipt.get("registered_open_order_nos", [])
+            }
         )
         if (
-            migration_receipt.get("schema")
-            != "owner_custody_migration_receipt_v1"
+            migration_receipt.get("schema") != "owner_custody_migration_receipt_v1"
             or migration_receipt.get("validated") is not True
             or migration_receipt.get("active_date") != clean_date
             or migration_receipt.get("symbol") != clean_symbol
@@ -1438,13 +1439,9 @@ class OrderOwnerRegistry:
                     "activation_event_hash": activation["event_hash"],
                 }
             if existing:
-                raise OwnerRegistryConflict(
-                    "owner_registry_policy_activation_conflict"
-                )
+                raise OwnerRegistryConflict("owner_registry_policy_activation_conflict")
 
-            current_tail = (
-                str(events[-1].get("event_hash")) if events else "0" * 64
-            )
+            current_tail = str(events[-1].get("event_hash")) if events else "0" * 64
             if current_tail != migration_tail:
                 raise OwnerRegistryConflict(
                     "owner_registry_policy_activation_stale_migration_tail"
@@ -1455,11 +1452,10 @@ class OrderOwnerRegistry:
                 symbol=clean_symbol,
                 broker_quantity=int(migration_receipt.get("broker_quantity")),
             )
-            if (
-                reconciliation["registered_owner_quantity"]
-                != int(migration_receipt.get("registered_owner_quantity"))
-                or reconciliation["external_manual_remainder"]
-                != int(migration_receipt.get("external_manual_remainder"))
+            if reconciliation["registered_owner_quantity"] != int(
+                migration_receipt.get("registered_owner_quantity")
+            ) or reconciliation["external_manual_remainder"] != int(
+                migration_receipt.get("external_manual_remainder")
             ):
                 raise OwnerRegistryConflict(
                     "owner_registry_policy_activation_quantity_drift"
@@ -1473,8 +1469,7 @@ class OrderOwnerRegistry:
                     and row.get("symbol") == clean_symbol
                     and row.get("action") == "NEW"
                     and row.get("state") == "ORDER_BOUND"
-                    and int(row.get("filled_qty") or 0)
-                    < int(row.get("quantity") or 0)
+                    and int(row.get("filled_qty") or 0) < int(row.get("quantity") or 0)
                     and str(row.get("broker_order_no") or "").strip()
                 }
             )
@@ -1551,8 +1546,7 @@ class OrderOwnerRegistry:
                 for row in self._read_locked()
                 if row.get("event") == "POLICY_ACTIVATED"
                 and row.get("state") == "POLICY_ACTIVE"
-                and row.get("account_key")
-                == broker_account_key(require_explicit=True)
+                and row.get("account_key") == broker_account_key(require_explicit=True)
                 and row.get("order_date") == clean_date
                 and row.get("symbol") == clean_symbol
                 and row.get("policy_id") == clean_policy_id
@@ -1602,8 +1596,7 @@ class OrderOwnerRegistry:
             return bool(
                 row.get("event") == "POLICY_ACTIVATED"
                 and row.get("state") == "POLICY_ACTIVE"
-                and row.get("account_key")
-                == broker_account_key(require_explicit=True)
+                and row.get("account_key") == broker_account_key(require_explicit=True)
                 and row.get("order_date") == clean_date
                 and row.get("symbol") == clean_symbol
                 and row.get("policy_id") == str(policy_id or "").strip()
@@ -1635,9 +1628,7 @@ class OrderOwnerRegistry:
             migration_registry_tail_hash=getattr(
                 decision, "migration_registry_tail_hash", ""
             ),
-            broker_snapshot_sha256=getattr(
-                decision, "broker_snapshot_sha256", ""
-            ),
+            broker_snapshot_sha256=getattr(decision, "broker_snapshot_sha256", ""),
             entry_authority_hash=getattr(decision, "entry_authority_hash", ""),
         )
 

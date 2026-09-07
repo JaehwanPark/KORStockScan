@@ -251,9 +251,7 @@ def test_depth_writer_enforces_sor_components_but_accepts_plain_route_zeros() ->
         },
     }
     with pytest.raises(ValueError, match="components are required"):
-        MarketDepthPoint(
-            **{name: missing_component[name] for name in writer_fields}
-        )
+        MarketDepthPoint(**{name: missing_component[name] for name in writer_fields})
 
     mismatch = {
         **sor_row,

@@ -12,9 +12,6 @@ from src.engine.automation.low_price_two_leg_policy_apply import (
     build_applied_policy,
     main as policy_apply_main,
 )
-from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
-)
 from src.engine.risk.market_weakness_entry_guard import (
     MarketWeaknessEntryDecision,
 )
@@ -38,6 +35,9 @@ from src.trading.low_price_two_leg.gateway import (
     KiwoomLowPriceTwoLegGateway,
     MinuteBarsSnapshot,
     SubmitResult,
+)
+from src.trading.order.symbol_owner_policy_auto_apply import (
+    expected_machine_symbol_owners,
 )
 from src.trading.low_price_two_leg.machine import LowPriceTwoLegMachine
 from src.trading.order.entry_liquidity_guard import (
@@ -159,6 +159,18 @@ def _isolate_market_weakness_counterfactual_writer(monkeypatch):
             "observation_id": "test-market-weakness-block",
             "path": "test-only",
         },
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_symbol_owner_policy(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
+        str(tmp_path / "missing-symbol-owner-policy.json"),
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH",
+        str(tmp_path / "order-owner-registry.jsonl"),
     )
 
 
@@ -719,7 +731,7 @@ def test_expanded_profile_timers_bind_exact_instance_and_start_time(
     assert f"Unit=korstockscan-low-price-two-leg@{profile_id}.service" in service
 
 
-def test_current_and_install_time_profile_symbols_have_explicit_manual_ownership():
+def test_current_and_install_time_profile_symbols_have_machine_owner_scope():
     install_script = (
         Path(__file__).resolve().parents[2]
         / "deploy"
@@ -739,8 +751,9 @@ def test_current_and_install_time_profile_symbols_have_explicit_manual_ownership
     }
     for symbol in install_time_symbols:
         assert f'"{symbol}":' in install_script
+    owner_scope = expected_machine_symbol_owners(date(2026, 9, 7))
     for symbol in {profile.symbol for profile in PROFILES.values()}:
-        assert manual_control_operator_exclusion_source(symbol) == "manual_operator"
+        assert "episode" in owner_scope[symbol]
 
 
 @pytest.mark.parametrize("profile_id", sorted(PROFILES))

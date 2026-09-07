@@ -76,9 +76,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lock-path", type=Path, default=None)
     args = parser.parse_args(argv)
     runtime_date = datetime.now(tz=KST).date()
-    profile = get_profile(
-        args.profile, target_date=runtime_date if args.live else None
-    )
+    profile = get_profile(args.profile, target_date=runtime_date if args.live else None)
     live_enabled = bool(
         args.live
         and _env_enabled(profile.enable_env)

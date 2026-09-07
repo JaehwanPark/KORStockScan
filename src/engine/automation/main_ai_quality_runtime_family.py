@@ -229,9 +229,12 @@ def _postclose_write_time_valid(*, target_day: date, current: datetime) -> bool:
         raise ValueError("runtime_family_now_must_be_timezone_aware")
     current_kst = current.astimezone(KST)
     window_start = datetime.combine(target_day, datetime.min.time(), tzinfo=KST)
-    window_end = datetime.combine(
-        target_day + timedelta(days=1), datetime.min.time(), tzinfo=KST
-    ) + POSTCLOSE_ROLLOVER_MAX_AGE
+    window_end = (
+        datetime.combine(
+            target_day + timedelta(days=1), datetime.min.time(), tzinfo=KST
+        )
+        + POSTCLOSE_ROLLOVER_MAX_AGE
+    )
     return window_start <= current_kst < window_end
 
 

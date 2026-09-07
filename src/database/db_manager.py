@@ -280,8 +280,7 @@ class DBManager:
                         "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"
                     )
                 )
-                conn.execute(
-                    text("""
+                conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS holding_add_history (
                         id SERIAL PRIMARY KEY,
                         recommendation_id INTEGER NOT NULL,
@@ -304,10 +303,8 @@ class DBManager:
                         reason TEXT,
                         note TEXT
                     );
-                """)
-                )
-                conn.execute(
-                    text("""
+                """))
+                conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS trade_performance_facts (
                         recommendation_id INTEGER PRIMARY KEY,
                         rec_date DATE NOT NULL,
@@ -334,10 +331,8 @@ class DBManager:
                         gatekeeper_allow_entry BOOLEAN,
                         synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
-                """)
-                )
-                conn.execute(
-                    text("""
+                """))
+                conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS strategy_position_performance_daily (
                         rec_date DATE NOT NULL,
                         strategy TEXT NOT NULL,
@@ -360,8 +355,7 @@ class DBManager:
                         synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (rec_date, strategy, position_tag)
                     );
-                """)
-                )
+                """))
         except Exception as e:
             print(f"⚠️ 컬럼 추가 확인 중 에러 (최초 생성 시 무시 가능): {e}")
 

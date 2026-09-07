@@ -203,7 +203,9 @@ def notify_from_report(
         return "no_alert"
 
     sig = _signature(report, fail_results)
-    fingerprinted_results = [(_incident_fingerprint(item), item) for item in fail_results]
+    fingerprinted_results = [
+        (_incident_fingerprint(item), item) for item in fail_results
+    ]
     current_fingerprints = [fingerprint for fingerprint, _ in fingerprinted_results]
     previous_fingerprints = {
         str(value)

@@ -140,6 +140,7 @@ def _optimizer_candidate_plan(
     entry = (report.get("stage_optimizers") or {}).get("entry") or {}
     rows = entry.get("cohort_optimizers") or []
     selected: dict[tuple[str, str], str] = {}
+    research_only_cohorts: list[str] = []
     for venue, session in DEFAULT_COHORTS:
         matches = [
             row
@@ -156,6 +157,10 @@ def _optimizer_candidate_plan(
         version = str(
             (matches[0].get("selected_challenger") or {}).get("prompt_version") or ""
         )
+        if (matches[0].get("selected_challenger") or {}).get("action") == (
+            "candidate_registry_exhausted_generate_new_prompt_patch"
+        ):
+            research_only_cohorts.append(f"{venue}/{session}")
         selected[(venue, session)] = (
             version
             if version in optimizer.ENTRY_CANDIDATE_ORDER
@@ -172,6 +177,7 @@ def _optimizer_candidate_plan(
         "reason": "stage_venue_session_isolated_selection",
         "artifact_content_sha256": artifact_hash,
         "fallback_or_v2_14_cohorts": fallback_cohorts,
+        "research_only_cohorts": research_only_cohorts,
     }
 
 
@@ -396,6 +402,7 @@ def _cohort_result(
         "candidate_prompt_version": candidate_prompt_version,
         "control_path": str(control_path),
         "report_path": str(report_path),
+        "detailed_artifact_content_sha256": report.get("artifact_content_sha256"),
         "entry_control_sample_count": sum(
             int(row.get("sample_count") or 0) for row in entry_controls
         ),
@@ -502,7 +509,12 @@ def run_batch(
             if write:
                 _atomic_write_json(path, report)
             return report
-    if not quality._offline_openai_api_keys():
+    needs_provider = any(
+        f"{venue}/{session}"
+        not in candidate_plan_source.get("research_only_cohorts", [])
+        for venue, session in DEFAULT_COHORTS
+    )
+    if needs_provider and not quality._offline_openai_api_keys():
         report["status"] = "failed_openai_key_unavailable"
         report["provider"] = "openai"
         report["provider_none"] = False
@@ -513,6 +525,21 @@ def run_batch(
 
     try:
         for venue, session_bucket in DEFAULT_COHORTS:
+            if f"{venue}/{session_bucket}" in candidate_plan_source.get(
+                "research_only_cohorts", []
+            ):
+                report["cohorts"].append(
+                    {
+                        "effective_venue": venue,
+                        "session_bucket": session_bucket,
+                        "candidate_prompt_version": candidate_plan[
+                            (venue, session_bucket)
+                        ],
+                        "status": "hold_candidate_registry_exhausted",
+                        "next_action": "source_only_prompt_patch_required_no_default_replay",
+                    }
+                )
+                continue
             try:
                 cohort = _cohort_result(
                     target_date=target_date,
@@ -546,7 +573,14 @@ def run_batch(
             if cohort_failure_count == 0
             else "completed_offline_only_with_cohort_failures"
         )
-        if krx_candidate in live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
+        if "KRX/KRX_REGULAR" in candidate_plan_source.get("research_only_cohorts", []):
+            report["krx_bounded_live_candidate"] = _publish_prompt_blocker(
+                source_date=target_date,
+                candidate_prompt_version=krx_candidate,
+                write=write,
+                blocking_reason="candidate_registry_exhausted_source_only",
+            )
+        elif krx_candidate in live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
             report["krx_bounded_live_candidate"] = publish_live_candidate(
                 source_date=target_date,
                 batch_report=report,
@@ -565,6 +599,59 @@ def run_batch(
     return report
 
 
+def refresh_optimizer_binding(*, target_date: str, write: bool) -> dict[str, Any]:
+    """Rebind terminal metadata only; never replay or republish live authority."""
+    frozen = optimizer._frozen_entry_batch_selection(target_date)
+    plan, source = _optimizer_candidate_plan(target_date)
+    if source.get(
+        "status"
+    ) != "optimizer_candidate_plan_applied_offline_only" or plan != {
+        key: value["prompt_version"] for key, value in frozen.items()
+    }:
+        raise ValueError("optimizer_refresh_changed_executed_candidate")
+    expected_research_only = sorted(
+        f"{venue}/{session}"
+        for (venue, session), value in frozen.items()
+        if value["action"] == "candidate_registry_exhausted_generate_new_prompt_patch"
+    )
+    if sorted(source.get("research_only_cohorts", [])) != expected_research_only:
+        raise ValueError("optimizer_refresh_changed_research_only_contract")
+    path = batch_status_path(target_date)
+    report = _read_json(path)
+    for row in report.get("cohorts") or []:
+        if row.get("status") in {
+            "hold_no_exact_entry_control",
+            "hold_candidate_registry_exhausted",
+        }:
+            continue
+        expected_path = quality.detailed_paired_path(
+            target_date,
+            candidate_prompt_version=row["candidate_prompt_version"],
+            effective_venue=row["effective_venue"],
+            session_bucket=row["session_bucket"],
+        )
+        detailed = _read_json(expected_path)
+        if (
+            row.get("report_path") != str(expected_path)
+            or not optimizer.calibration_source._artifact_content_sha256_valid(detailed)
+            or detailed.get("artifact_content_sha256")
+            != row.get("detailed_artifact_content_sha256")
+        ):
+            raise ValueError("entry_batch_detailed_generation_changed")
+    original_evidence = live_policy._batch_evidence(report)
+    report = {
+        **report,
+        "candidate_prompt_selection_source": source,
+        "optimizer_binding_refreshed_at": datetime.now(quality.KST).isoformat(),
+        "optimizer_binding_refresh_provider_calls": 0,
+    }
+    if live_policy._batch_evidence(report) != original_evidence:
+        raise ValueError("optimizer_refresh_changed_runtime_owner_evidence")
+    if write:
+        _atomic_write_json(path, report)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run full-day cohort-isolated entry prompt replay offline."
@@ -578,7 +665,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--predecessor-interval-sec", type=int, default=30)
     parser.add_argument("--no-require-predecessor", action="store_true")
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--refresh-optimizer-binding-only", action="store_true")
     args = parser.parse_args(argv)
+    if args.refresh_optimizer_binding_only:
+        report = refresh_optimizer_binding(target_date=args.date, write=args.write)
+        print(json.dumps(report, ensure_ascii=False))
+        return 0
     if args.max_new_requests_per_cohort <= 0:
         parser.error("--max-new-requests-per-cohort must be positive")
     if not 1 <= args.candidate_workers <= 8:

@@ -14,7 +14,6 @@ from src.trading.samsung_morning_one_share.preflight import (
 )
 from src.trading.samsung_morning_one_share.machine import KST
 
-
 NOW = datetime(2026, 9, 3, 10, 15, tzinfo=KST)
 OLD_PID = 10101
 NEW_PID = 20202

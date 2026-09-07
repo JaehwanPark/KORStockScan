@@ -93,9 +93,7 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
 def _valid_optimizer_report(payload: Mapping[str, Any], target_date: str) -> bool:
     declared_hash = str(payload.get("artifact_content_sha256") or "")
     content = {
-        key: value
-        for key, value in payload.items()
-        if key != "artifact_content_sha256"
+        key: value for key, value in payload.items() if key != "artifact_content_sha256"
     }
     return bool(
         payload.get("schema") == optimizer.SCHEMA
@@ -226,8 +224,7 @@ def build_report(
     prepared_rows = [
         row
         for row in prepared.get("prepared_requests") or []
-        if isinstance(row, Mapping)
-        and str(row.get("stage") or "").lower() == "holding"
+        if isinstance(row, Mapping) and str(row.get("stage") or "").lower() == "holding"
     ]
     holding_optimizer = (
         (optimizer_report.get("stage_optimizers") or {}).get("holding") or {}

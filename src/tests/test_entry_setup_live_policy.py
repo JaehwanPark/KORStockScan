@@ -280,12 +280,10 @@ def test_v2_15_uses_registered_one_share_exploration_bridge(monkeypatch, tmp_pat
             "entry_decision_composer_version": ENTRY_DECISION_COMPOSER_V2_15_VERSION,
         }
     )
-    detailed["entry_decision_composer_version"] = (
-        ENTRY_DECISION_COMPOSER_V2_15_VERSION
-    )
-    detailed["cumulative_learning"]["candidate_prompt_version"] = (
-        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
-    )
+    detailed["entry_decision_composer_version"] = ENTRY_DECISION_COMPOSER_V2_15_VERSION
+    detailed["cumulative_learning"][
+        "candidate_prompt_version"
+    ] = DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
     detailed_path = policy.detailed_report_path(
         SOURCE_DATE, DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
     )
@@ -294,9 +292,9 @@ def test_v2_15_uses_registered_one_share_exploration_bridge(monkeypatch, tmp_pat
     batch["candidate_prompt_version"] = (
         DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
     )
-    batch["cohorts"][0]["candidate_prompt_version"] = (
-        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
-    )
+    batch["cohorts"][0][
+        "candidate_prompt_version"
+    ] = DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
     policy._atomic_write_json(policy.batch_report_path(SOURCE_DATE), batch)
 
     published = policy.publish_live_candidate(
@@ -379,15 +377,18 @@ def test_delayed_candidate_rolls_to_first_preopen_not_already_consumed(
     candidate = policy._read_json(policy.live_candidate_path(SOURCE_DATE))
     assert candidate["effective_date_policy"] == policy.EFFECTIVE_DATE_POLICY
     assert candidate["preopen_candidate_cutoff_kst"] == "07:35:00"
-    assert policy._validate_candidate_artifact(
-        candidate,
-        target_date="2026-08-10",
-        candidate_path=policy.live_candidate_path(SOURCE_DATE),
-        runtime_env={
-            **_valid_runtime_env(),
-            "KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE": "2026-08-10",
-        },
-    ) == []
+    assert (
+        policy._validate_candidate_artifact(
+            candidate,
+            target_date="2026-08-10",
+            candidate_path=policy.live_candidate_path(SOURCE_DATE),
+            runtime_env={
+                **_valid_runtime_env(),
+                "KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE": "2026-08-10",
+            },
+        )
+        == []
+    )
 
 
 def test_runtime_falls_back_when_probe_first_contract_is_missing(monkeypatch, tmp_path):
@@ -656,15 +657,18 @@ def test_mature_negative_exploration_stops_at_next_preopen(monkeypatch, tmp_path
 
     assert candidate["status"] == "blocked"
     assert candidate["allowed_runtime_apply"] is False
-    assert "exploration_continuation_primary_ev_not_positive" in candidate[
-        "blocking_reasons"
-    ]
-    assert "exploration_continuation_cost_adjusted_ev_not_positive" in candidate[
-        "blocking_reasons"
-    ]
-    assert candidate["promotion_metrics"]["exploration_continuation_gate"][
-        "action"
-    ] == "stop_and_fallback_at_next_preopen"
+    assert (
+        "exploration_continuation_primary_ev_not_positive"
+        in candidate["blocking_reasons"]
+    )
+    assert (
+        "exploration_continuation_cost_adjusted_ev_not_positive"
+        in candidate["blocking_reasons"]
+    )
+    assert (
+        candidate["promotion_metrics"]["exploration_continuation_gate"]["action"]
+        == "stop_and_fallback_at_next_preopen"
+    )
 
 
 def test_malformed_candidate_source_paths_fail_closed_without_exception(

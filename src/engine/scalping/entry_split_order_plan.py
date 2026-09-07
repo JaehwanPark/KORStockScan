@@ -1151,16 +1151,20 @@ def policy_path(target_date: str) -> Path:
 def generation_report_path(target_date: str, generation_id: str) -> Path:
     """Return the immutable report snapshot path for one bound generation."""
 
-    return REPORT_DIR / "generations" / (
-        f"{REPORT_TYPE}_{target_date}_{generation_id}.json"
+    return (
+        REPORT_DIR
+        / "generations"
+        / (f"{REPORT_TYPE}_{target_date}_{generation_id}.json")
     )
 
 
 def generation_policy_path(target_date: str, generation_id: str) -> Path:
     """Return the immutable policy snapshot path for one bound generation."""
 
-    return POLICY_DIR / "generations" / (
-        f"entry_split_order_policy_{target_date}_{generation_id}.json"
+    return (
+        POLICY_DIR
+        / "generations"
+        / (f"entry_split_order_policy_{target_date}_{generation_id}.json")
     )
 
 
@@ -1618,9 +1622,8 @@ def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
     }
     with open_text_auto(actual_path) as handle:
         for raw_line in handle:
-            if (
-                "scalp_sim_" not in raw_line
-                and not any(token in raw_line for token in stage_tokens)
+            if "scalp_sim_" not in raw_line and not any(
+                token in raw_line for token in stage_tokens
             ):
                 continue
             try:
@@ -2691,8 +2694,9 @@ def _build_candidate_grid(
     sim_ev_values: dict[str, list[float]],
     real_ev_values: dict[str, list[float]],
     real_split_variant_ev_values: dict[tuple[str, str], list[float]] | None = None,
-    real_split_child_variant_ev_values: dict[tuple[str, str], list[float]]
-    | None = None,
+    real_split_child_variant_ev_values: (
+        dict[tuple[str, str], list[float]] | None
+    ) = None,
     post_submit_low_tick_bands: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     grid: list[dict[str, Any]] = []
@@ -3010,9 +3014,7 @@ def _build_candidate_grid(
                     "exact_variant_sample_count": split_variant_outcome_count,
                     "exact_variant_equal_weight_avg_profit_pct": split_variant_ev,
                     "exact_variant_downside_p10_profit_rate": (
-                        round(float(downside), 4)
-                        if split_variant_ev_list
-                        else None
+                        round(float(downside), 4) if split_variant_ev_list else None
                     ),
                     "mature_parent_variant_count": len(mature_variant_quality),
                     "mature_parent_evidence_supportive": (
@@ -3655,9 +3657,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             or [],
             "runtime_apply_scope": policy.get("runtime_apply_scope") or [],
             "post_apply_attribution": policy.get("post_apply_attribution") or {},
-            "post_apply_continuation_gate": policy.get(
-                "post_apply_continuation_gate"
-            )
+            "post_apply_continuation_gate": policy.get("post_apply_continuation_gate")
             or {},
             "rollback_guard": policy.get("rollback_guard") or {},
             "baseline_runtime_defaults_enabled": policy.get(
@@ -3675,8 +3675,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     report, policy = bind_report_policy_generation(report, policy)
     if write:
         generation_id = str(
-            (report.get("artifact_generation_binding") or {}).get("generation_id")
-            or ""
+            (report.get("artifact_generation_binding") or {}).get("generation_id") or ""
         )
         immutable_report = generation_report_path(target_date, generation_id)
         immutable_policy = generation_policy_path(target_date, generation_id)

@@ -36,15 +36,22 @@ run_entry_batch() {
 }
 
 refresh_main_ai_consumer() {
-  # The optimizer consumes the first batch's new results. Re-publish the batch
-  # from its checkpoint so its selection-source hash binds that refreshed
-  # optimizer generation before the exact-hash consumer validates the chain.
+  # Finalize calibration from the terminal detailed generation. Keep today's
+  # executed candidates fixed and rebind metadata without provider replay or
+  # live-candidate republication; new choices belong to the next daily plan.
+  nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+    --target-date "$TARGET_DATE" --write --print-summary && \
   nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer \
     --target-date "$TARGET_DATE" \
     --write \
+    --preserve-entry-batch-selection \
+    --require-action-outcome-calibration \
     --print-summary && \
-  run_entry_batch && \
+  nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+    --date "$TARGET_DATE" --refresh-optimizer-binding-only --write && \
   nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.main_ai_holding_base_replay_batch \
     --date "$TARGET_DATE" \
@@ -81,6 +88,16 @@ for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
     sleep 15
   fi
 done
+
+# Preserve valid pairs from a terminal partial batch, but never turn an
+# exhausted retry into success or rebind an incomplete optimizer generation.
+if [ "$failure_stage" = "entry_batch" ]; then
+  if ! nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+    --target-date "$TARGET_DATE" --write --print-summary; then
+    echo "[WARN] partial-batch calibration refresh failed target_date=$TARGET_DATE"
+  fi
+fi
 
 echo "[ERROR] offline candidate batch exhausted attempts=$MAX_ATTEMPTS"
 exit 1

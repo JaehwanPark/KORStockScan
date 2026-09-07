@@ -1,6 +1,7 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +19,28 @@ from src.engine.trade_profit import (
     calculate_net_realized_pnl,
 )
 from src.utils.constants import TRADING_RULES as CONFIG
+
+
+@pytest.fixture(autouse=True)
+def _isolate_symbol_owner_runtime_files(monkeypatch, tmp_path):
+    """Keep unit tests independent of the host's exact-date live policy."""
+
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
+        str(tmp_path / "missing_symbol_owner_policy.json"),
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH",
+        str(tmp_path / "missing_order_owner_registry.jsonl"),
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE",
+        str(tmp_path / "missing_manual_control_exclusions.txt"),
+    )
+    monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES_FILE", raising=False)
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "unit-test-account")
 
 
 class _Bus:
@@ -4119,8 +4142,8 @@ def test_periodic_account_sync_does_not_recover_operator_excluded_inventory(
     sniper_sync.KIWOOM_TOKEN = "token"
     monkeypatch.setattr(
         sniper_sync,
-        "manual_control_operator_exclusion_source",
-        lambda code: "manual_control_excluded_codes.txt" if code == "042660" else None,
+        "evaluate_main_bot_control_exclusion",
+        lambda code, **_kwargs: SimpleNamespace(excluded=code == "042660"),
     )
     monkeypatch.setattr(
         sniper_sync.kiwoom_utils,
@@ -4988,6 +5011,7 @@ def test_holding_state_skips_scalping_loss_exit_for_legacy_broker_recovered(
         ws_data={"curr": 109500},
         admin_id=1,
         market_regime="BULL",
+        now_dt=datetime(2026, 4, 15, 10, 30),
         radar=None,
         ai_engine=None,
     )

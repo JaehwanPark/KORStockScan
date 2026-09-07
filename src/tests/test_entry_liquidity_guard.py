@@ -430,9 +430,10 @@ def test_execution_velocity_freshness_preserves_observation_milliseconds():
         exact_boundary, requested_quantity=20
     ).allowed
     assert just_stale.latest_print_age_ms == 5_001
-    assert evaluate_entry_execution_velocity(
-        just_stale, requested_quantity=20
-    ).reason == "entry_execution_velocity_latest_print_stale"
+    assert (
+        evaluate_entry_execution_velocity(just_stale, requested_quantity=20).reason
+        == "entry_execution_velocity_latest_print_stale"
+    )
 
 
 def test_execution_velocity_rejects_duplicate_accumulated_volume_rows():

@@ -4900,9 +4900,7 @@ class KiwoomWSManager:
                 "max_interarrival_gap_sec": round(
                     max(
                         (
-                            self._safe_float(
-                                value.get("max_interarrival_gap_sec"), 0.0
-                            )
+                            self._safe_float(value.get("max_interarrival_gap_sec"), 0.0)
                             for value in item_rows.values()
                         ),
                         default=0.0,
@@ -4969,9 +4967,7 @@ class KiwoomWSManager:
             "max_interarrival_gap_sec": round(
                 max(
                     (
-                        self._safe_float(
-                            value.get("max_interarrival_gap_sec"), 0.0
-                        )
+                        self._safe_float(value.get("max_interarrival_gap_sec"), 0.0)
                         for value in item_rows.values()
                         if isinstance(value, dict)
                     ),

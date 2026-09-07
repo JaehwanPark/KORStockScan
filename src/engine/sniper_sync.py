@@ -28,7 +28,7 @@ from src.engine.trade_profit import (
     calculate_net_realized_pnl,
 )
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    evaluate_main_bot_control_exclusion,
     remove_manual_control_exclusion_code,
 )
 from src.utils import kiwoom_utils
@@ -780,7 +780,7 @@ def _recover_missing_broker_holdings(session, real_codes):
                 policy_path().exists() or default_order_owner_registry().path.exists()
             )
         if (
-            manual_control_operator_exclusion_source(code)
+            evaluate_main_bot_control_exclusion(code, new_entry=False).excluded
             or coexistence_external_inventory
         ):
             # Operator-owned inventory (including widget auto-trade fills) must

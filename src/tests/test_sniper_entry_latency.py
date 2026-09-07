@@ -169,7 +169,9 @@ def test_rising_missed_risky_micro_episode_requires_strictly_positive_ofi():
     )
 
     assert result["risky_micro_episode_status"] == "recheck_required"
-    assert result["risky_micro_episode_reason"] == "positive_micro_support_not_confirmed"
+    assert (
+        result["risky_micro_episode_reason"] == "positive_micro_support_not_confirmed"
+    )
 
 
 def test_risky_micro_episode_reuses_fresh_trusted_tp1_tick_window_provenance():
@@ -261,9 +263,7 @@ def test_risky_micro_episode_does_not_relabel_complete_direct_zero_tick_context(
         "direct_entry_tick_context"
     )
     assert result["risky_micro_episode_tick_context_fallback_applied"] is False
-    assert (
-        result["risky_micro_episode_tick_acceleration_fallback_applied"] is False
-    )
+    assert result["risky_micro_episode_tick_acceleration_fallback_applied"] is False
     assert result["risky_micro_episode_tick_window_fallback_applied"] is False
 
 
@@ -380,24 +380,22 @@ def test_risky_micro_episode_observer_retains_and_emits_fresh_executable_bbo(
         ),
     )
 
-    registration = (
-        state_handlers.register_risky_micro_episode_executable_bbo_observer(
-            {
-                "id": 7,
-                "name": "TEST",
-                "code": "005930",
-                "strategy": "SCALPING",
-                "position_tag": "SCANNER",
-            },
-            "005930",
-            candidate_fields={
-                "risky_micro_episode_status": "source_only_candidate",
-                "effective_venue": "KRX",
-                "market_session_bucket": "krx_regular",
-                "rising_missed_ws_0d_route": "krx_regular",
-            },
-            now_ts=started_at,
-        )
+    registration = state_handlers.register_risky_micro_episode_executable_bbo_observer(
+        {
+            "id": 7,
+            "name": "TEST",
+            "code": "005930",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+        },
+        "005930",
+        candidate_fields={
+            "risky_micro_episode_status": "source_only_candidate",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "rising_missed_ws_0d_route": "krx_regular",
+        },
+        now_ts=started_at,
     )
     observed = state_handlers.observe_risky_micro_episode_executable_bbo_paths(
         now_ts=started_at + 1.0
@@ -408,8 +406,7 @@ def test_risky_micro_episode_observer_retains_and_emits_fresh_executable_bbo(
     assert retained == [
         (
             "005930",
-            started_at
-            + state_handlers._RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC,
+            started_at + state_handlers._RISKY_MICRO_EXECUTABLE_BBO_OBSERVER_SEC,
         )
     ]
     assert observed == {
@@ -495,9 +492,7 @@ def test_rising_missed_backoff_recovers_fresh_exact_ws_route(monkeypatch):
             (),
             {
                 "get_latest_data": lambda _self, _code: {
-                    "last_realtime_type_market_route": {
-                        "0D": "krx_nxt_integrated"
-                    },
+                    "last_realtime_type_market_route": {"0D": "krx_nxt_integrated"},
                     "last_realtime_type_ts": {"0D": started_at - 0.25},
                     "last_realtime_type_item": {"0D": "005930_AL"},
                     "last_realtime_type_effective_venue": {"0D": "SOR"},
@@ -522,9 +517,10 @@ def test_rising_missed_backoff_recovers_fresh_exact_ws_route(monkeypatch):
 
     assert registration["risky_micro_episode_horizon_observer_registered"] is True
     assert registration["risky_micro_episode_horizon_observer_status"] == "registered"
-    assert registration[
-        "risky_micro_episode_horizon_observer_route_provenance"
-    ] == "fresh_exact_ws_0d_snapshot"
+    assert (
+        registration["risky_micro_episode_horizon_observer_route_provenance"]
+        == "fresh_exact_ws_0d_snapshot"
+    )
     assert registration["risky_micro_episode_horizon_observer_route_item"] == (
         "005930_AL"
     )
@@ -625,7 +621,9 @@ def test_backoff_observer_capacity_does_not_starve_risky_micro_purpose(monkeypat
     )
 
     assert risky_registration["risky_micro_episode_horizon_observer_registered"] is True
-    assert backoff_registration["risky_micro_episode_horizon_observer_registered"] is False
+    assert (
+        backoff_registration["risky_micro_episode_horizon_observer_registered"] is False
+    )
     assert backoff_registration["risky_micro_episode_horizon_observer_status"] == (
         "purpose_capacity_rejected"
     )
@@ -675,18 +673,16 @@ def test_risky_micro_episode_observer_does_not_relabel_cross_venue_bbo(monkeypat
         ),
     )
 
-    registration = (
-        state_handlers.register_risky_micro_episode_executable_bbo_observer(
-            {"id": 10, "name": "TEST", "code": "005930"},
-            "005930",
-            candidate_fields={
-                "risky_micro_episode_status": "source_only_candidate",
-                "effective_venue": "KRX",
-                "market_session_bucket": "krx_regular",
-                "rising_missed_ws_0d_route": "krx_regular",
-            },
-            now_ts=started_at,
-        )
+    registration = state_handlers.register_risky_micro_episode_executable_bbo_observer(
+        {"id": 10, "name": "TEST", "code": "005930"},
+        "005930",
+        candidate_fields={
+            "risky_micro_episode_status": "source_only_candidate",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "rising_missed_ws_0d_route": "krx_regular",
+        },
+        now_ts=started_at,
     )
     observed = state_handlers.observe_risky_micro_episode_executable_bbo_paths(
         now_ts=started_at + 1.0
@@ -1446,8 +1442,7 @@ def test_risky_micro_episode_observer_rejects_integrated_sor_with_conflicting_ve
         == "exact_0d_route_snapshot_missing"
     )
     assert (
-        provenance["risky_micro_episode_horizon_observer_route_scope_eligible"]
-        is False
+        provenance["risky_micro_episode_horizon_observer_route_scope_eligible"] is False
     )
 
 
@@ -1586,9 +1581,7 @@ def test_risky_micro_episode_observer_rejects_integrated_bbo_without_exact_depth
 
 
 def test_risky_micro_episode_observer_rejects_route_snapshot_outside_session():
-    observed_at = datetime(
-        2026, 8, 14, 16, 0, tzinfo=state_handlers._KST
-    ).timestamp()
+    observed_at = datetime(2026, 8, 14, 16, 0, tzinfo=state_handlers._KST).timestamp()
     scoped, provenance = state_handlers._risky_micro_route_scoped_0d_bbo(
         {
             "realtime_type_snapshots_by_route": {

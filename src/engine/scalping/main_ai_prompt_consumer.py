@@ -126,9 +126,7 @@ def _valid_source_only(payload: Mapping[str, Any]) -> bool:
 def _valid_self_hash(payload: Mapping[str, Any]) -> bool:
     declared = str(payload.get("artifact_content_sha256") or "")
     content = {
-        key: value
-        for key, value in payload.items()
-        if key != "artifact_content_sha256"
+        key: value for key, value in payload.items() if key != "artifact_content_sha256"
     }
     return bool(declared and optimizer._canonical_sha256(content) == declared)
 
@@ -179,8 +177,7 @@ def _entry_base_paths(
     batch_source = batch.get("candidate_prompt_selection_source")
     batch_source = batch_source if isinstance(batch_source, Mapping) else {}
     source_bound = bool(
-        batch_source.get("status")
-        == "optimizer_candidate_plan_applied_offline_only"
+        batch_source.get("status") == "optimizer_candidate_plan_applied_offline_only"
         and batch_source.get("artifact_content_sha256") == optimizer_sha
     )
     batch_cohorts = {
@@ -192,9 +189,9 @@ def _entry_base_paths(
     declared_plan = declared_plan if isinstance(declared_plan, Mapping) else {}
     paths: list[dict[str, Any]] = []
     request_index: dict[tuple[str, str, str], dict[str, Any]] = {}
-    entry_optimizer = (
-        (optimizer_report.get("stage_optimizers") or {}).get("entry") or {}
-    )
+    entry_optimizer = (optimizer_report.get("stage_optimizers") or {}).get(
+        "entry"
+    ) or {}
     for cohort in entry_optimizer.get("cohort_optimizers") or []:
         if not isinstance(cohort, Mapping):
             continue
@@ -240,17 +237,28 @@ def _entry_base_paths(
         if (
             isinstance(batch_cohort, Mapping)
             and batch_cohort.get("status")
-            in {"hold_no_exact_entry_control", "hold_no_mature_exact_request"}
+            in {
+                "hold_no_exact_entry_control",
+                "hold_no_mature_exact_request",
+                "hold_candidate_registry_exhausted",
+            }
             and declared_version == version
             and str(batch_cohort.get("candidate_prompt_version") or "") == version
         ):
             row.update(
                 _blocked(
                     reason=str(batch_cohort.get("status")),
-                    owner="AIEntrySetupPairedReplayBatch",
+                    owner=(
+                        "MainAIPromptOptimizer"
+                        if batch_cohort.get("status")
+                        == "hold_candidate_registry_exhausted"
+                        else "AIEntrySetupPairedReplayBatch"
+                    ),
                     acceptance_test=(
-                        "retain the exact target-date no-sample observation and "
-                        "wait for a future natural cohort"
+                        "implement and review a new supported offline prompt candidate"
+                        if batch_cohort.get("status")
+                        == "hold_candidate_registry_exhausted"
+                        else "retain the exact target-date no-sample observation and wait for a future natural cohort"
                     ),
                     terminality="terminal_source_observation",
                 )
@@ -304,8 +312,9 @@ def _entry_base_paths(
             if isinstance(request, Mapping)
         ]
         observed_versions = {
-            str(((request.get("candidate") or {}).get("prompt_version") or ""))
-            .removesuffix("_entry")
+            str(
+                ((request.get("candidate") or {}).get("prompt_version") or "")
+            ).removesuffix("_entry")
             for request in requests
         }
         observed_hashes = {
@@ -349,7 +358,9 @@ def _entry_base_paths(
                 "detailed_report_path": str(detailed_path),
                 "request_count": len(requests),
                 "request_trace_ids_sha256": optimizer._canonical_sha256(
-                    sorted(str(request.get("decision_trace_id")) for request in requests)
+                    sorted(
+                        str(request.get("decision_trace_id")) for request in requests
+                    )
                 ),
             }
         )
@@ -385,9 +396,9 @@ def _holding_base_paths(
     }
     paths: list[dict[str, Any]] = []
     request_index: dict[tuple[str, str, str], dict[str, Any]] = {}
-    holding_optimizer = (
-        (optimizer_report.get("stage_optimizers") or {}).get("holding") or {}
-    )
+    holding_optimizer = (optimizer_report.get("stage_optimizers") or {}).get(
+        "holding"
+    ) or {}
     for cohort in holding_optimizer.get("cohort_optimizers") or []:
         if not isinstance(cohort, Mapping):
             continue
@@ -422,8 +433,7 @@ def _holding_base_paths(
                         or "holding_cohort_not_connected"
                     ),
                     owner=str(
-                        batch_cohort.get("owner")
-                        or "MainAIHoldingBaseReplayConsumer"
+                        batch_cohort.get("owner") or "MainAIHoldingBaseReplayConsumer"
                     ),
                     acceptance_test=str(
                         batch_cohort.get("acceptance_test")
@@ -538,9 +548,7 @@ def _factorial_cells(
     stage_optimizers = optimizer_report.get("stage_optimizers") or {}
     for stage in ("entry", "holding"):
         stage_optimizer = stage_optimizers.get(stage) or {}
-        base_index = (
-            entry_request_index if stage == "entry" else holding_request_index
-        )
+        base_index = entry_request_index if stage == "entry" else holding_request_index
         for cohort in stage_optimizer.get("cohort_optimizers") or []:
             if not isinstance(cohort, Mapping):
                 continue
@@ -696,7 +704,9 @@ def _factorial_cells(
                     )
                     continue
                 if stage == "entry":
-                    base_version, base_prompt_sha = _request_prompt_identity(base_request)
+                    base_version, base_prompt_sha = _request_prompt_identity(
+                        base_request
+                    )
                 else:
                     base_version = str(
                         base_request.get("candidate_prompt_version") or ""
@@ -806,9 +816,7 @@ def _path_summary(cohorts: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "path_status": BLOCKED if blocked_count else CONNECTED,
         "blocking_reason": (
-            "one_or_more_cohort_paths_intentionally_blocked"
-            if blocked_count
-            else None
+            "one_or_more_cohort_paths_intentionally_blocked" if blocked_count else None
         ),
         "owner": "MainAIPromptConsumer",
         "acceptance_test": (
@@ -868,6 +876,20 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     optimizer_sources = (
         optimizer_sources if isinstance(optimizer_sources, Mapping) else {}
     )
+    calibration_sha = optimizer_sources.get(
+        "action_outcome_calibration_artifact_content_sha256"
+    )
+    if calibration_sha:
+        calibration, _, calibration_errors = (
+            optimizer._latest_action_outcome_calibration(target_date)
+        )
+        if (
+            calibration_errors
+            or calibration.get("artifact_content_sha256") != calibration_sha
+        ):
+            blockers.append(
+                "optimizer_action_outcome_calibration_hash_binding_mismatch"
+            )
     if prepared and optimizer_sources.get("prepared_request_sha256") != (
         optimizer._canonical_sha256(prepared)
     ):
@@ -875,11 +897,10 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     if bridge and optimizer_sources.get("micro_bridge_sha256") != (
         optimizer._canonical_sha256(bridge)
     ):
-        optional_input_blockers.append(
-            "optimizer_micro_bridge_hash_binding_mismatch"
-        )
+        optional_input_blockers.append("optimizer_micro_bridge_hash_binding_mismatch")
     if materialized and not (
-        materialized.get("schema") == quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA
+        materialized.get("schema")
+        == quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA
         and materialized.get("target_date") == target_date
         and _valid_source_only(materialized)
         and materialized.get("provider_call_performed") is False
@@ -892,9 +913,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         try:
             quality._validate_micro_reversion_materialized_report(materialized)
         except (TypeError, ValueError):
-            optional_input_blockers.append(
-                "r0_r3_materialized_deep_contract_invalid"
-            )
+            optional_input_blockers.append("r0_r3_materialized_deep_contract_invalid")
     if execution and not (
         execution.get("schema") == quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
         and execution.get("target_date") == target_date
@@ -959,10 +978,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     terminal_contract_invalid_count = sum(
         not row.get("owner")
         or not row.get("acceptance_test")
-        or (
-            row.get("path_status") == BLOCKED
-            and not row.get("blocking_reason")
-        )
+        or (row.get("path_status") == BLOCKED and not row.get("blocking_reason"))
         for row in all_terminal_rows
     )
     if unclassified:
@@ -972,9 +988,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     cell_counts = Counter(str(row.get("path_status") or "") for row in cells)
     optimizer_feasibility = optimizer_report.get("result_feasibility") or {}
     profit_demonstrated = bool(
-        optimizer_feasibility.get(
-            "profit_improving_candidate_currently_demonstrated"
-        )
+        optimizer_feasibility.get("profit_improving_candidate_currently_demonstrated")
     )
     connected_entry_count = sum(
         row.get("path_status") == CONNECTED for row in entry_paths

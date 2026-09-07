@@ -399,9 +399,7 @@ def test_rolling_research_defers_shortage_class_until_declared_window_closes(
         report_dir=tmp_path,
     )
 
-    readiness = research["cohorts"][0]["alternatives"][0][
-        "window_sample_readiness"
-    ]
+    readiness = research["cohorts"][0]["alternatives"][0]["window_sample_readiness"]
     window = readiness["5d"]
     assert window["state"] == "pending_declared_window"
     assert window["shortage_classification_status"] == "pending_declared_window"
@@ -411,9 +409,7 @@ def test_rolling_research_defers_shortage_class_until_declared_window_closes(
     assert window["remaining_completed_due_trading_days_to_classification"] == 1
     assert window["earliest_review_date"] == "2026-08-31"
     assert window["projected_additional_trading_days_at_observed_yield"] is None
-    assert research["sample_floor_assessment"]["state"] == (
-        "pending_declared_window"
-    )
+    assert research["sample_floor_assessment"]["state"] == ("pending_declared_window")
     assert research["sample_floor_assessment"]["shortage_classification_status"] == (
         "pending_declared_window"
     )
@@ -434,8 +430,7 @@ def test_rolling_research_blocks_when_source_report_contract_is_excluded(
         "gap": "producer_contract_missing",
     }
     (
-        tmp_path
-        / f"machine_microstructure_attribution_{excluded_day.isoformat()}.json"
+        tmp_path / f"machine_microstructure_attribution_{excluded_day.isoformat()}.json"
     ).write_text(__import__("json").dumps(excluded), encoding="utf-8")
     current = _report(
         "2026-08-28",
@@ -448,9 +443,7 @@ def test_rolling_research_blocks_when_source_report_contract_is_excluded(
         report_dir=tmp_path,
     )
 
-    window = research["cohorts"][0]["alternatives"][0][
-        "window_sample_readiness"
-    ]["5d"]
+    window = research["cohorts"][0]["alternatives"][0]["window_sample_readiness"]["5d"]
     assert window["state"] == "source_report_contract_gap"
     assert window["source_report_contract_gap_day_count"] == 1
     assert window["shortage_classification_status"] == "blocked_missing_evidence"
@@ -460,9 +453,7 @@ def test_rolling_research_blocks_when_source_report_contract_is_excluded(
     assert window["projected_additional_trading_days_at_observed_yield"] is None
     assessment = research["sample_floor_assessment"]
     assert assessment["state"] == "source_report_contract_gap"
-    assert assessment["shortage_classification_status"] == (
-        "blocked_missing_evidence"
-    )
+    assert assessment["shortage_classification_status"] == ("blocked_missing_evidence")
     assert assessment["shortage_class"] is None
     assert assessment["next_action"] == (
         "repair_excluded_source_report_contracts_and_rerun"

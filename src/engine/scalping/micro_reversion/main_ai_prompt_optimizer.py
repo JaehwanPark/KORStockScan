@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import tempfile
 from collections import Counter, defaultdict
 from datetime import date, datetime
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
+from src.engine.scalping import ai_action_outcome_calibration as calibration_source
 from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
@@ -30,6 +32,12 @@ REPORT_DIR = DATA_DIR / "report" / "main_ai_prompt_optimizer"
 PREPARED_DIR = DATA_DIR / "report" / "main_ai_quality_r0_r3"
 BRIDGE_DIR = DATA_DIR / "report" / "micro_reversion_ai_quality_bridge"
 DETAILED_DIR = DATA_DIR / "report" / "ai_prompt_detailed_paired_replay"
+ENTRY_BATCH_DIR = DATA_DIR / "report" / "ai_entry_setup_paired_replay_batch"
+ACTION_OUTCOME_CALIBRATION_DIR = (
+    DATA_DIR / "report" / "ai_decision_action_outcome_calibration"
+)
+ACTION_OUTCOME_CALIBRATION_SCHEMA = "ai_decision_action_outcome_calibration_v2"
+ACTION_OUTCOME_OPTIMIZER_HANDOFF_SCHEMA = "ai_action_outcome_optimizer_handoff_v1"
 
 ENTRY_CANDIDATE_ORDER = (
     "decision_quality_v2_14_setup_risk_adjudicator",
@@ -106,6 +114,10 @@ def _embedded_content_sha256_valid(payload: Mapping[str, Any], field: str) -> bo
     return _canonical_sha256(content) == embedded
 
 
+def _is_sha256(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
 def _source_only_authority_valid(payload: Mapping[str, Any]) -> bool:
     return bool(
         payload.get("runtime_effect") is False
@@ -149,6 +161,241 @@ def _prepared_path(target_date: str) -> Path:
 
 def _bridge_path(target_date: str) -> Path:
     return BRIDGE_DIR / f"micro_reversion_ai_quality_bridge_{target_date}.json"
+
+
+def _latest_action_outcome_calibration(
+    target_date: str,
+) -> tuple[dict[str, Any], Path | None, list[str]]:
+    warnings: list[str] = []
+    path = (
+        ACTION_OUTCOME_CALIBRATION_DIR
+        / f"ai_decision_action_outcome_calibration_{target_date}.json"
+    )
+    payload = _read_json(path)
+    if not payload:
+        return {}, path, ["action_outcome_calibration_not_available_for_target_date"]
+    handoff = payload.get("optimizer_handoff")
+    handoff = handoff if isinstance(handoff, Mapping) else {}
+    handoff_hash = _bounded_string(handoff.get("handoff_content_sha256"))
+    handoff_body = {
+        key: value for key, value in handoff.items() if key != "handoff_content_sha256"
+    }
+    source_contract = payload.get("source_contract_summary")
+    source_contract = source_contract if isinstance(source_contract, Mapping) else {}
+    candidate_summaries = payload.get("candidate_summaries")
+    candidate_summaries = (
+        candidate_summaries if isinstance(candidate_summaries, list) else []
+    )
+    if payload.get("schema") != ACTION_OUTCOME_CALIBRATION_SCHEMA:
+        warnings.append("action_outcome_calibration_schema_invalid")
+    if payload.get("policy_version") != calibration_source.POLICY_VERSION:
+        warnings.append("action_outcome_calibration_policy_version_invalid")
+    if payload.get("clean_tuning_baseline_date") != CLEAN_BASELINE_DATE.isoformat():
+        warnings.append("action_outcome_calibration_clean_baseline_invalid")
+    if payload.get("target_date") != target_date or handoff.get("target_date") != (
+        target_date
+    ):
+        warnings.append("action_outcome_calibration_target_date_mismatch")
+    if not calibration_source._artifact_content_sha256_valid(payload):
+        warnings.append("action_outcome_calibration_content_hash_invalid")
+    for source in payload.get("source_reports") or []:
+        if (
+            not isinstance(source, Mapping)
+            or source.get("artifact_content_sha256_verified") is not True
+        ):
+            continue
+        source_path = Path(str(source.get("path") or ""))
+        if source_path.parent.resolve() != DETAILED_DIR.resolve():
+            warnings.append("action_outcome_calibration_source_path_invalid")
+            break
+        current_source = _read_json(source_path)
+        if not calibration_source._artifact_content_sha256_valid(
+            current_source
+        ) or current_source.get("artifact_content_sha256") != source.get(
+            "artifact_content_sha256"
+        ):
+            warnings.append("action_outcome_calibration_source_generation_changed")
+            break
+    if (
+        not _source_only_authority_valid(payload)
+        or payload.get("order_authority") is not False
+        or payload.get("provider_authority") is not False
+    ):
+        warnings.append("action_outcome_calibration_authority_contract_invalid")
+    if (
+        handoff.get("schema") != ACTION_OUTCOME_OPTIMIZER_HANDOFF_SCHEMA
+        or not handoff_hash
+        or calibration_source._canonical_sha256(handoff_body) != handoff_hash
+        or handoff.get("source_contract_pass") is not True
+    ):
+        warnings.append("action_outcome_calibration_handoff_invalid")
+    if (
+        source_contract.get("cross_cohort_aggregation_forbidden") is not True
+        or source_contract.get("invalid_sources_excluded_before_calibration")
+        is not True
+        or source_contract.get("candidate_selection_requires_verified_source_hash")
+        is not True
+        or source_contract.get("conflicting_duplicate_traces_excluded") is not True
+        or source_contract.get("cross_cohort_outcome_conflicts_excluded") is not True
+    ):
+        warnings.append("action_outcome_calibration_source_contract_invalid")
+    candidate_identities: set[tuple[str, str, str, str, str, str]] = set()
+    candidate_contract_valid = isinstance(
+        payload.get("candidate_summaries"), list
+    ) and _native_nonnegative_int(payload.get("candidate_count")) == len(
+        candidate_summaries
+    )
+    for row in candidate_summaries:
+        if not isinstance(row, Mapping):
+            candidate_contract_valid = False
+            continue
+        identity = tuple(
+            _bounded_string(row.get(field))
+            for field in (
+                "candidate_prompt_version",
+                "candidate_prompt_sha256",
+                "candidate_contract_sha256",
+                "stage",
+                "effective_venue",
+                "session_bucket",
+            )
+        )
+        if (
+            not all(identity)
+            or not _is_sha256(identity[1])
+            or not _is_sha256(identity[2])
+            or row.get("cohort_isolated") is not True
+            or row.get("runtime_apply_authority") is not False
+            or identity in candidate_identities
+        ):
+            candidate_contract_valid = False
+        candidate_identities.add(identity)
+    if not candidate_contract_valid:
+        warnings.append("action_outcome_calibration_candidate_contract_invalid")
+    report_ready_references = payload.get("review_ready_candidates")
+    report_thin_references = payload.get("thin_positive_review_candidates")
+    if (
+        not isinstance(report_ready_references, list)
+        or not isinstance(report_thin_references, list)
+        or _native_nonnegative_int(payload.get("review_candidate_count"))
+        != len(report_ready_references)
+        or _native_nonnegative_int(payload.get("thin_positive_review_candidate_count"))
+        != len(report_thin_references)
+        or handoff.get("selected_review_candidate")
+        != payload.get("selected_review_candidate")
+        or handoff.get("review_ready_candidates") != report_ready_references
+        or handoff.get("thin_positive_review_candidates") != report_thin_references
+    ):
+        warnings.append("action_outcome_calibration_handoff_candidate_invalid")
+    candidates_by_identity = {
+        tuple(
+            _bounded_string(row.get(field))
+            for field in (
+                "candidate_prompt_version",
+                "candidate_prompt_sha256",
+                "candidate_contract_sha256",
+                "stage",
+                "effective_venue",
+                "session_bucket",
+            )
+        ): row
+        for row in candidate_summaries
+        if isinstance(row, Mapping)
+    }
+    handoff_references: list[tuple[str, Mapping[str, Any]]] = []
+    selected_reference = handoff.get("selected_review_candidate")
+    if isinstance(selected_reference, Mapping):
+        handoff_references.append(("review_ready", selected_reference))
+    elif selected_reference is not None:
+        warnings.append("action_outcome_calibration_handoff_candidate_invalid")
+    ready_references = handoff.get("review_ready_candidates")
+    if not isinstance(ready_references, list):
+        warnings.append("action_outcome_calibration_handoff_candidate_invalid")
+        ready_references = []
+    for reference in ready_references:
+        if isinstance(reference, Mapping):
+            handoff_references.append(("review_ready", reference))
+        else:
+            warnings.append("action_outcome_calibration_handoff_candidate_invalid")
+    thin_references = handoff.get("thin_positive_review_candidates")
+    if not isinstance(thin_references, list):
+        warnings.append("action_outcome_calibration_handoff_candidate_invalid")
+        thin_references = []
+    for reference in thin_references:
+        if isinstance(reference, Mapping):
+            handoff_references.append(("thin_positive_review", reference))
+        else:
+            warnings.append("action_outcome_calibration_handoff_candidate_invalid")
+    for expected_classification, reference in handoff_references:
+        identity = tuple(
+            _bounded_string(reference.get(field))
+            for field in (
+                "candidate_prompt_version",
+                "candidate_prompt_sha256",
+                "candidate_contract_sha256",
+                "stage",
+                "effective_venue",
+                "session_bucket",
+            )
+        )
+        matched = candidates_by_identity.get(identity)
+        if (
+            matched is None
+            or matched.get("review_classification") != expected_classification
+            or reference.get("runtime_apply_authority") is not False
+        ):
+            warnings.append("action_outcome_calibration_handoff_candidate_invalid")
+            break
+    if warnings:
+        return {}, path, warnings
+    return payload, path, []
+
+
+def _action_outcome_advisory(
+    calibration: Mapping[str, Any],
+    *,
+    stage: str,
+    effective_venue: str,
+    session_bucket: str,
+    candidate_prompt_version: str,
+) -> dict[str, Any] | None:
+    matches = [
+        row
+        for row in calibration.get("candidate_summaries") or []
+        if isinstance(row, Mapping)
+        and (
+            _bounded_string(row.get("stage")).lower() == stage
+            and _bounded_string(row.get("effective_venue")).upper() == effective_venue
+            and _bounded_string(row.get("session_bucket")).upper() == session_bucket
+            and _bounded_string(row.get("candidate_prompt_version"))
+            == candidate_prompt_version
+        )
+    ]
+    if len(matches) != 1:
+        return None
+    row = matches[0]
+    return {
+        "candidate_prompt_sha256": row.get("candidate_prompt_sha256"),
+        "candidate_contract_sha256": row.get("candidate_contract_sha256"),
+        "review_classification": row.get("review_classification"),
+        "source_integrity_complete": row.get("source_integrity_complete"),
+        "candidate_primary_decision_ev_delta_pct": row.get(
+            "candidate_primary_decision_ev_delta_pct"
+        ),
+        "candidate_probe_cost_adjusted_ev_pct": row.get(
+            "candidate_probe_cost_adjusted_ev_pct"
+        ),
+        "r3_handoff_evidence_pass": (
+            (row.get("r3_handoff_evidence") or {}).get("pass")
+            if isinstance(row.get("r3_handoff_evidence"), Mapping)
+            else False
+        ),
+        "runtime_review_route": calibration_source.runtime_review_route(
+            candidate_prompt_version, stage, effective_venue, session_bucket
+        ),
+        "selection_authority": False,
+        "runtime_apply_authority": False,
+    }
 
 
 def _bounded_string(value: Any) -> str:
@@ -415,7 +662,9 @@ def _select_entry_challenger(
     *,
     effective_venue: str,
     session_bucket: str,
+    calibration: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    screened_out: list[str] = []
     by_version: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in detailed:
         if (
@@ -427,17 +676,77 @@ def _select_entry_challenger(
             by_version[str(row["candidate_prompt_version"])].append(row)
     for version in ENTRY_CANDIDATE_ORDER:
         evaluations = by_version.get(version) or []
+        matches = [
+            row
+            for row in (calibration or {}).get("candidate_summaries") or []
+            if row.get("stage") == "entry"
+            and row.get("effective_venue") == effective_venue
+            and row.get("session_bucket") == session_bucket
+            and row.get("candidate_prompt_version") == version
+            and row.get("candidate_prompt_sha256")
+            == _expected_entry_prompt_sha256(version)
+        ]
+        if len(matches) == 1:
+            evidence = matches[0]
+            contract_matches = not evaluations or all(
+                row.get("candidate_contract_sha256")
+                == evidence.get("candidate_contract_sha256")
+                for row in evaluations
+            )
+            checks = (evidence.get("prompt_review_gate") or {}).get("checks") or {}
+            sufficient = all(
+                checks.get(name) is True
+                for name in (
+                    "exact_trace_floor",
+                    "unique_symbol_floor",
+                    "independent_source_date_floor",
+                    "candidate_exposure_floor",
+                )
+            )
+            if contract_matches and evidence.get("source_integrity_complete") is True:
+                if evidence.get("review_classification") in {
+                    "review_ready",
+                    "thin_positive_review",
+                }:
+                    return {
+                        "prompt_version": version,
+                        "action": "continue_current_challenger_new_mature_parents_only",
+                        "reason": "calibration_positive_validate_on_new_exact_parents",
+                        "calibration_used_for_offline_selection": True,
+                        "calibration_screened_out_versions": list(screened_out),
+                    }
+                if (
+                    sufficient
+                    and evidence.get("probe_cost_contract_complete") is True
+                    and checks.get("paired_economic_values_complete") is True
+                    and (
+                        checks.get("positive_probe_cost_adjusted_ev") is False
+                        or checks.get("positive_ev_delta") is False
+                        or (
+                            checks.get("bounded_probe_risk_budget") is False
+                            and type(evidence.get("candidate_probe_risk_missing_count"))
+                            is int
+                            and evidence["candidate_probe_risk_missing_count"] == 0
+                        )
+                    )
+                ):
+                    # Advance only within the existing offline registry. The
+                    # live owner must independently review its exact evidence.
+                    screened_out.append(version)
+                    continue
         if not evaluations:
             return {
                 "prompt_version": version,
                 "action": "start_new_challenger_evaluation",
                 "reason": "first_untested_supported_challenger",
+                "calibration_screened_out_versions": list(screened_out),
             }
         if any(row.get("promotion_quality_gate_pass") is True for row in evaluations):
             return {
                 "prompt_version": version,
                 "action": "freeze_as_runtime_candidate_pending_r2_r3",
                 "reason": "at_least_one_isolated_cohort_passed_quality_gate",
+                "calibration_screened_out_versions": list(screened_out),
             }
         if any(
             not (row.get("promotion_evidence_floor") or {}).get("pass")
@@ -447,12 +756,58 @@ def _select_entry_challenger(
                 "prompt_version": version,
                 "action": "continue_current_challenger_new_mature_parents_only",
                 "reason": "promotion_sample_floor_not_complete",
+                "calibration_screened_out_versions": list(screened_out),
             }
     return {
         "prompt_version": legacy_challenger,
         "action": "candidate_registry_exhausted_generate_new_prompt_patch",
         "reason": "all_supported_challengers_evaluated_without_promotion",
+        "calibration_screened_out_versions": list(screened_out),
     }
+
+
+def _frozen_entry_batch_selection(
+    target_date: str,
+) -> dict[tuple[str, str], dict[str, str]]:
+    """Keep a terminal day's executed versions fixed during report refresh."""
+    batch = _read_json(
+        ENTRY_BATCH_DIR / f"ai_entry_setup_paired_replay_batch_{target_date}.json"
+    )
+    if not (
+        batch.get("schema") == "ai_entry_setup_paired_replay_batch_v1"
+        and batch.get("target_date") == target_date
+        and batch.get("status") == "completed_offline_only"
+        and batch.get("runtime_effect") is False
+        and batch.get("allowed_runtime_apply") is False
+        and batch.get("actual_order_submitted") is False
+        and batch.get("broker_order_forbidden") is True
+    ):
+        raise ValueError("terminal_entry_batch_required_for_selection_preservation")
+    result: dict[tuple[str, str], dict[str, str]] = {}
+    for cohort in batch.get("cohorts") or []:
+        if not isinstance(cohort, Mapping) or cohort.get("status") not in {
+            "completed_offline_only",
+            "hold_no_mature_exact_request",
+            "hold_no_exact_entry_control",
+            "hold_candidate_registry_exhausted",
+        }:
+            raise ValueError("entry_batch_cohort_not_terminal")
+        key = (cohort.get("effective_venue"), cohort.get("session_bucket"))
+        version = cohort.get("candidate_prompt_version")
+        if key in result or version not in ENTRY_CANDIDATE_ORDER:
+            raise ValueError("entry_batch_selection_invalid_or_duplicate")
+        result[key] = {
+            "prompt_version": version,
+            "action": (
+                "candidate_registry_exhausted_generate_new_prompt_patch"
+                if cohort.get("status") == "hold_candidate_registry_exhausted"
+                else "continue_current_challenger_new_mature_parents_only"
+            ),
+            "reason": "terminal_day_selection_frozen_no_provider_reexecution",
+        }
+    if set(result) != {("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET")}:
+        raise ValueError("entry_batch_selection_cohort_set_invalid")
+    return result
 
 
 def _prompt_pair_contract(
@@ -570,6 +925,8 @@ def build_report(
     prepared_path: Path | None = None,
     bridge_path: Path | None = None,
     write: bool = False,
+    preserve_entry_batch_selection: bool = False,
+    require_action_outcome_calibration: bool = False,
 ) -> dict[str, Any]:
     target_day = date.fromisoformat(target_date)
     if target_day < CLEAN_BASELINE_DATE:
@@ -578,10 +935,16 @@ def build_report(
     bridge_path = bridge_path or _bridge_path(target_date)
     prepared = _read_json(prepared_path)
     bridge = _read_json(bridge_path)
+    (
+        action_outcome_calibration,
+        action_outcome_calibration_path,
+        action_outcome_warnings,
+    ) = _latest_action_outcome_calibration(target_date)
     prepared_rows = prepared.get("prepared_requests")
     bridge_rows = bridge.get("rows")
     blockers: list[str] = []
-    input_warnings: list[str] = []
+    input_warnings: list[str] = list(action_outcome_warnings)
+    bridge_warnings: list[str] = []
     if prepared.get("schema") != "main_ai_quality_micro_prepared_requests_v1":
         blockers.append("prepared_request_artifact_missing_or_invalid")
         prepared_rows = []
@@ -597,10 +960,10 @@ def build_report(
         blockers.append("prepared_request_rows_missing")
         prepared_rows = []
     if bridge.get("schema") != "micro_reversion_ai_quality_bridge_v1":
-        input_warnings.append("optional_micro_bridge_artifact_missing_or_invalid")
+        bridge_warnings.append("optional_micro_bridge_artifact_missing_or_invalid")
         bridge_rows = []
     if bridge.get("target_date") != target_date:
-        input_warnings.append("optional_micro_bridge_target_date_mismatch")
+        bridge_warnings.append("optional_micro_bridge_target_date_mismatch")
     bridge_content_hash = _bounded_string(bridge.get("report_content_sha256"))
     if bridge and (
         not bridge_content_hash
@@ -613,19 +976,25 @@ def build_report(
         )
         != bridge_content_hash
     ):
-        input_warnings.append("optional_micro_bridge_content_hash_invalid")
+        bridge_warnings.append("optional_micro_bridge_content_hash_invalid")
     if bridge and not _source_only_authority_valid(bridge):
-        input_warnings.append("optional_micro_bridge_authority_contract_invalid")
+        bridge_warnings.append("optional_micro_bridge_authority_contract_invalid")
     if not isinstance(bridge_rows, list):
-        input_warnings.append("optional_micro_bridge_rows_missing")
+        bridge_warnings.append("optional_micro_bridge_rows_missing")
         bridge_rows = []
-    if input_warnings:
+    input_warnings.extend(bridge_warnings)
+    if bridge_warnings:
         bridge = {}
     stages = _stage_prompt_contracts(
         row for row in prepared_rows if isinstance(row, Mapping)
     )
     enriched = _enriched_trace_ids_by_stage(bridge)
     detailed = _detailed_reports(target_date)
+    frozen_selection = (
+        _frozen_entry_batch_selection(target_date)
+        if preserve_entry_batch_selection
+        else {}
+    )
     for stage, summary in stages.items():
         stage_rows = [
             row
@@ -661,6 +1030,7 @@ def build_report(
                     detailed,
                     effective_venue=venue,
                     session_bucket=session,
+                    calibration=action_outcome_calibration,
                 )
                 if stage == "entry"
                 else {
@@ -669,6 +1039,22 @@ def build_report(
                     "reason": "no_stage_specific_detailed_evaluator_result",
                 }
             )
+            next_session_selection = dict(selected_challenger)
+            if stage == "entry" and (venue, session) in frozen_selection:
+                selected_challenger = dict(frozen_selection[(venue, session)])
+            action_outcome_advisory = _action_outcome_advisory(
+                action_outcome_calibration,
+                stage=stage,
+                effective_venue=venue,
+                session_bucket=session,
+                candidate_prompt_version=_bounded_string(
+                    selected_challenger.get("prompt_version")
+                ),
+            )
+            if action_outcome_advisory is not None:
+                selected_challenger["action_outcome_calibration"] = (
+                    action_outcome_advisory
+                )
             cohort_trace_ids = {
                 _bounded_string(row.get("decision_trace_id"))
                 for row in cohort_rows
@@ -688,6 +1074,7 @@ def build_report(
                     ),
                     **cohort_prompt_contract,
                     "selected_challenger": selected_challenger,
+                    "next_session_evaluation_recommendation": next_session_selection,
                     "factorial_input_design": _factorial_design(
                         cohort_trace_ids, enriched.get(stage, set())
                     ),
@@ -816,6 +1203,10 @@ def build_report(
             else "candidate_generation_blocked"
         )
     )
+    if require_action_outcome_calibration and not action_outcome_calibration:
+        blockers.append("required_action_outcome_calibration_invalid_or_unavailable")
+        candidate_generation_feasible = False
+        evidence_assessment = "candidate_generation_blocked"
     body: dict[str, Any] = {
         "schema": SCHEMA,
         "target_date": target_date,
@@ -834,11 +1225,42 @@ def build_report(
             "micro_bridge_path": str(bridge_path),
             "micro_bridge_sha256": _canonical_sha256(bridge) if bridge else None,
             "detailed_report_paths": [row["path"] for row in detailed],
+            "action_outcome_calibration_path": (
+                str(action_outcome_calibration_path)
+                if action_outcome_calibration_path is not None
+                else None
+            ),
+            "action_outcome_calibration_artifact_content_sha256": (
+                action_outcome_calibration.get("artifact_content_sha256")
+                if action_outcome_calibration
+                else None
+            ),
         },
         "blockers": blockers,
         "optional_input_warnings": input_warnings,
         "stage_optimizers": stages,
         "evaluated_challengers": detailed,
+        "action_outcome_calibration_input": {
+            "status": (
+                "connected_validated_source_only"
+                if action_outcome_calibration
+                else "not_connected_invalid_or_unavailable"
+            ),
+            "source_target_date": (
+                action_outcome_calibration.get("target_date")
+                if action_outcome_calibration
+                else None
+            ),
+            "optimizer_handoff": (
+                action_outcome_calibration.get("optimizer_handoff")
+                if action_outcome_calibration
+                else None
+            ),
+            "selection_authority": False,
+            "offline_evaluation_selection_enabled": True,
+            "same_day_executed_selection_preserved": preserve_entry_batch_selection,
+            "runtime_apply_authority": False,
+        },
         "error_taxonomy": _error_taxonomy(detailed),
         "result_feasibility": {
             "candidate_generation_feasible": candidate_generation_feasible,
@@ -862,6 +1284,8 @@ def build_report(
             ),
             "runtime_bridge_ready": False,
             "runtime_bridge_status": {
+                "legacy_r3_family_runtime_enabled": False,
+                "registered_entry_runtime_owner": "entry_setup_live_policy",
                 "entry_krx_selected_candidate_registered": (
                     entry_krx_bridge_registered
                 ),
@@ -965,8 +1389,15 @@ def _main() -> int:
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--print-summary", action="store_true")
+    parser.add_argument("--preserve-entry-batch-selection", action="store_true")
+    parser.add_argument("--require-action-outcome-calibration", action="store_true")
     args = parser.parse_args()
-    report = build_report(args.target_date, write=args.write)
+    report = build_report(
+        args.target_date,
+        write=args.write,
+        preserve_entry_batch_selection=args.preserve_entry_batch_selection,
+        require_action_outcome_calibration=args.require_action_outcome_calibration,
+    )
     if args.print_summary:
         feasibility = report["result_feasibility"]
         print(

@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = REPO_ROOT / "deploy/run_postclose_finalization.sh"
 TARGET_DATE = "2026-09-02"
@@ -31,7 +30,9 @@ def _base_env(project: Path, cleanup: Path, detector: Path) -> dict[str, str]:
     }
 
 
-def _write_ready_predecessors(project: Path, *, final_threshold_marker: str = "DONE") -> None:
+def _write_ready_predecessors(
+    project: Path, *, final_threshold_marker: str = "DONE"
+) -> None:
     threshold_dir = project / "data/report/threshold_cycle_postclose_status"
     controller_dir = project / "data/report/postclose_done_controller"
     tuning_dir = project / "data/report/tuning_monitoring/status"
@@ -118,7 +119,11 @@ def _run(
         capture_output=True,
         check=False,
     )
-    order = order_path.read_text(encoding="utf-8").splitlines() if order_path.exists() else []
+    order = (
+        order_path.read_text(encoding="utf-8").splitlines()
+        if order_path.exists()
+        else []
+    )
     return result, order
 
 
@@ -189,9 +194,9 @@ def test_cleanup_failure_preserves_detector_handoff_but_not_success_marker(tmp_p
 def test_finalization_reserves_same_date_margin_before_midnight():
     script = WRAPPER.read_text(encoding="utf-8")
 
-    assert 'POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-5100' in script
-    assert 'POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-23:20' in script
-    assert 'POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600' in script
-    assert 'POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600' in script
+    assert "POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-5100" in script
+    assert "POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-23:20" in script
+    assert "POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600" in script
+    assert "POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600" in script
     assert script.count('timeout --foreground "${') == 2
     assert "reason=same_date_hard_deadline" in script

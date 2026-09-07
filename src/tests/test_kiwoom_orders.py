@@ -1,18 +1,27 @@
 import json
-import sys
 import types
 from dataclasses import replace
 
 import pytest
-
-sys.modules.setdefault("holidays", types.SimpleNamespace())
 
 import src.engine.kiwoom_orders as kiwoom_orders
 import src.engine.sniper_config as sniper_config
 
 
 @pytest.fixture(autouse=True)
-def reset_deposit_cache(monkeypatch):
+def reset_deposit_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("KIWOOM_TOKEN_CACHE_PATH", str(tmp_path / "token.json"))
+    monkeypatch.setenv("KIWOOM_TOKEN_LOCK_PATH", str(tmp_path / "token.lock"))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "policy.json")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE",
+        str(tmp_path / "excluded.txt"),
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "acquire_kiwoom_read_capacity",

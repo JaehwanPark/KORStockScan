@@ -15,6 +15,7 @@ from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import read_jsonl
 
+
 def _as_float(value, default=None):
     try:
         if value is None:
@@ -439,8 +440,7 @@ def build_report(target_date: str) -> dict:
         if (
             stage == "scalp_sim_sell_order_assumed_filled"
             and is_sim
-            and str(fields.get("exit_rule") or "")
-            != "scalp_sim_overnight_sell_today"
+            and str(fields.get("exit_rule") or "") != "scalp_sim_overnight_sell_today"
         ):
             completed.append(
                 {

@@ -15,7 +15,9 @@ import pytest
     "failure,expected_code",
     [("none", 0), ("capture", 7), ("report", 8), ("capture_log", 9), ("report_log", 9)],
 )
-def test_market_census_wrapper_preserves_pipeline_failure(tmp_path, failure, expected_code):
+def test_market_census_wrapper_preserves_pipeline_failure(
+    tmp_path, failure, expected_code
+):
     root = Path.cwd()
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -28,7 +30,7 @@ def test_market_census_wrapper_preserves_pipeline_failure(tmp_path, failure, exp
         'echo "$phase" >> "$PROJECT_DIR/calls"\n'
         'if [[ "$TEST_FAILURE" == "$phase" ]]; then\n'
         '  if [[ "$phase" == capture ]]; then exit 7; else exit 8; fi\n'
-        'fi\n'
+        "fi\n"
     )
     fake_python.chmod(0o700)
     scripts = {
@@ -40,9 +42,21 @@ def test_market_census_wrapper_preserves_pipeline_failure(tmp_path, failure, exp
         path.write_text(body)
         path.chmod(0o700)
     result = subprocess.run(
-        ["bash", str(root / "deploy/run_market_opportunity_census_intraday.sh"), "2026-09-07"],
-        env={**os.environ, "PROJECT_DIR": str(tmp_path), "PATH": f"{fake_bin}:{os.environ['PATH']}", "TEST_FAILURE": failure, "MARKET_OPPORTUNITY_CENSUS_REFRESH_REPORT": "true"},
-        capture_output=True, text=True, timeout=15,
+        [
+            "bash",
+            str(root / "deploy/run_market_opportunity_census_intraday.sh"),
+            "2026-09-07",
+        ],
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(tmp_path),
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "TEST_FAILURE": failure,
+            "MARKET_OPPORTUNITY_CENSUS_REFRESH_REPORT": "true",
+        },
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     assert result.returncode == expected_code, result.stdout + result.stderr
     assert ("[DONE]" in result.stdout) == (expected_code == 0)
@@ -50,7 +64,9 @@ def test_market_census_wrapper_preserves_pipeline_failure(tmp_path, failure, exp
         assert f"exit_code={expected_code}" in result.stdout
         assert "[FAIL]" in result.stdout
     calls = (tmp_path / "calls").read_text().splitlines()
-    assert calls == (["capture"] if failure.startswith("capture") else ["capture", "report"])
+    assert calls == (
+        ["capture"] if failure.startswith("capture") else ["capture", "report"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -196,6 +212,48 @@ def test_postclose_wrapper_closes_lookup_attention_auto_promotion_after_fact_syn
     assert block.index("--verify-only") < block.index(
         "SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED=true"
     )
+
+
+@pytest.mark.parametrize(
+    "auto,mode,should_call",
+    [
+        ("true", "auto_bounded_live", True),
+        ("1", "auto_bounded_live", True),
+        ("false", "auto_bounded_live", False),
+        ("true", "observe_only", False),
+    ],
+)
+def test_preopen_lookup_selection_runs_only_for_auto_live_and_preserves_failure(
+    auto, mode, should_call
+):
+    script = Path("deploy/run_threshold_cycle_preopen.sh").read_text()
+    marker = script.index("src.engine.scalping.scanner_lookup_attention_policy")
+    begin = script.rindex('if { [ "$AUTO_APPLY"', 0, marker)
+    end = script.index('if [ -n "$SOURCE_DATE" ]; then', marker)
+    block = script[begin:end]
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'fake_python() { echo "LOOKUP_CALL $*"; return 7; }; mark_preopen_failed() { exit "$1"; }; '
+            + block,
+        ],
+        env={
+            **os.environ,
+            "AUTO_APPLY": auto,
+            "APPLY_MODE": mode,
+            "VENV_PY": "fake_python",
+            "TARGET_DATE": "2026-09-08",
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert ("LOOKUP_CALL" in result.stdout) is should_call
+    assert result.returncode == (1 if should_call else 0)
+    if should_call:
+        assert "--target-date 2026-09-08 --write" in result.stdout
+        assert "[FAIL]" in result.stdout
 
 
 def test_postclose_wrapper_snapshot_is_removed_when_child_fails(tmp_path):
@@ -799,6 +857,9 @@ def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
     optimizer_index = script.index(
         "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
     )
+    action_outcome_index = script.index(
+        "-m src.engine.scalping.ai_action_outcome_calibration"
+    )
     holding_consumer_index = script.index(
         "-m src.engine.scalping.main_ai_holding_base_replay_batch"
     )
@@ -810,6 +871,7 @@ def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
     )
     assert (
         r0_index
+        < action_outcome_index
         < optimizer_index
         < holding_consumer_index
         < prompt_consumer_index
@@ -1915,12 +1977,26 @@ def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain(
     calibration_index = script.index(
         "-m src.engine.scalping.ai_action_outcome_calibration"
     )
-    assert exact_index < cycle_index < runtime_family_index < calibration_index
+    optimizer_index = script.index(
+        "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
+    )
+    assert (
+        exact_index
+        < cycle_index
+        < calibration_index
+        < optimizer_index
+        < runtime_family_index
+    )
     assert (
         'RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY:-true}"'
         in script
     )
-    runtime_family_block = script[runtime_family_index:calibration_index]
+    runtime_family_block = script[
+        runtime_family_index : script.index(
+            'if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ]',
+            runtime_family_index,
+        )
+    ]
     assert "--phase postclose" in runtime_family_block
     assert '--target-date "$TARGET_DATE"' in runtime_family_block
     assert "--write" in runtime_family_block
@@ -1971,7 +2047,9 @@ def test_postclose_wrapper_isolates_main_ai_quality_failures(
 ):
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     start = script.index('if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]')
-    end = script.index('if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ]', start)
+    end = script.index(
+        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]', start
+    )
     cycle_block = script[start:end]
     harness = "\n".join(
         [
@@ -2021,7 +2099,7 @@ def test_postclose_wrapper_isolates_bounded_runtime_family_failure() -> None:
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     start = script.index('if [ "$RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY" = "true" ]')
     end = script.index(
-        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]', start
+        'if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ]', start
     )
     family_block = script[start:end]
     harness = "\n".join(
@@ -2070,7 +2148,14 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     optimizer_refresh_index = runner.index(
         "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
     )
-    rebound_batch_index = runner.index("run_entry_batch", optimizer_refresh_index)
+    rebound_batch_index = runner.index(
+        "--refresh-optimizer-binding-only", optimizer_refresh_index
+    )
+    calibration_index = runner.index(
+        "-m src.engine.scalping.ai_action_outcome_calibration"
+    )
+    assert calibration_index < optimizer_refresh_index < rebound_batch_index
+    assert "--preserve-entry-batch-selection" in runner
     holding_manifest_index = runner.index(
         "-m src.engine.scalping.main_ai_holding_base_replay_batch"
     )
@@ -2137,6 +2222,39 @@ def test_entry_setup_runner_retries_consumer_nonterminal_without_mislabeling_pre
     assert count_path.read_text(encoding="utf-8").strip() == "2"
     assert "consumer refresh failed attempt=1" in result.stdout
     assert "predecessor bounded wait exhausted" not in result.stdout
+
+
+def test_entry_batch_failure_preserves_partial_learning_without_success(tmp_path):
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "$*" >> "$PROJECT_DIR/calls"\n'
+        'case " $* " in\n'
+        '  *" src.engine.scalping.entry_setup_paired_replay_batch "*) exit 1 ;;\n'
+        "esac\nexit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "deploy/run_ai_entry_setup_paired_replay_postclose.sh", "2026-09-07"],
+        cwd=Path.cwd(),
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(tmp_path),
+            "VENV_PY": str(fake_python),
+            "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS": "1",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    calls = (tmp_path / "calls").read_text()
+    assert calls.count("-m src.engine.scalping.ai_action_outcome_calibration") == 1
+    assert (
+        "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer" not in calls
+    )
+    assert "exhausted attempts=1" in result.stdout
 
 
 def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():

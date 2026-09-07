@@ -3388,9 +3388,8 @@ def test_current_r3_blocks_one_contract_invalid_lifecycle_day_in_21_day_census(
     assert blocked_manifest["status"] == "source_only_candidate_blocked_current_run"
     assert blocked_manifest["candidate_count"] == 0
     assert blocked_manifest["candidates"] == []
-    assert (
-        blocked_manifest["source_current_run_global_blockers_sha256"]
-        == (blocked_rolling["current_run_global_blockers_sha256"])
+    assert blocked_manifest["source_current_run_global_blockers_sha256"] == (
+        blocked_rolling["current_run_global_blockers_sha256"]
     )
 
 

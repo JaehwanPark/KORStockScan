@@ -202,14 +202,10 @@ def test_hold_defer_danger_is_classified(monkeypatch, tmp_path):
     )
 
     assert report["classification"]["primary"] == "HOLD_DEFER_DANGER"
-    assert report["current"]["session"]["holding_flow_scope"][
-        "real_defer_exit"
-    ] == 3
+    assert report["current"]["session"]["holding_flow_scope"]["real_defer_exit"] == 3
 
 
-def test_non_real_force_exit_does_not_trigger_hold_defer_danger(
-    monkeypatch, tmp_path
-):
+def test_non_real_force_exit_does_not_trigger_hold_defer_danger(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     _write_events(
         tmp_path,

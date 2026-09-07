@@ -678,9 +678,7 @@ def _reconcile_completed_trade_event_economics(
         # Broker receipt events expose the same economics under the lifecycle
         # attribution key.  Leaving it untouched would make one timeline item
         # claim both the canonical realized PnL and the stale pre-reconcile PnL.
-        "main_lifecycle_realized_net_pnl_krw": _safe_int(
-            trade.get("realized_pnl_krw")
-        ),
+        "main_lifecycle_realized_net_pnl_krw": _safe_int(trade.get("realized_pnl_krw")),
     }
     if canonical_values["buy_price"] <= 0 or canonical_values["sell_price"] <= 0:
         return events
@@ -708,9 +706,10 @@ def _reconcile_completed_trade_event_economics(
                 }:
                     differs = _safe_int(raw_value) != _safe_int(canonical_value)
                 else:
-                    differs = abs(
-                        _safe_float(raw_value) - _safe_float(canonical_value)
-                    ) > 1e-9
+                    differs = (
+                        abs(_safe_float(raw_value) - _safe_float(canonical_value))
+                        > 1e-9
+                    )
                 if differs:
                     fields[f"trade_review_raw_event_{key}"] = raw_value
                     mismatch = True

@@ -1,7 +1,17 @@
 from datetime import datetime
 
+import pytest
+
 from src.engine import sniper_state_handlers
 from src.engine.risk import manual_control_exclusion
+
+
+@pytest.fixture(autouse=True)
+def _isolate_symbol_owner_policy(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
+        str(tmp_path / "missing-symbol-owner-policy.json"),
+    )
 
 
 def test_manual_control_exclusion_matches_env_codes(monkeypatch):
@@ -151,6 +161,22 @@ def test_legacy_scale_in_qty_flag_cannot_override_explicit_manual_operator(
     assert logs[-1][0] == "manual_control_legacy_scale_in_qty_handoff_retired"
 
 
+def test_retiring_quantity_handoff_preserves_independent_hard_stop_veto(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "excluded.txt"
+    path.write_text("249420 # auto_scale_in_qty_guard_block legacy\n")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    manual_control_exclusion.add_manual_control_exclusion_code(
+        "249420", comment="auto_hard_stop_handoff current_loss"
+    )
+    stock = {"code": "249420", "status": "HOLDING", "strategy": "SCALPING"}
+    assert sniper_state_handlers._manual_control_exclusion_blocked(
+        stock, "249420", pipeline="holding", stage="test", now_ts=1000
+    )
+    assert path.read_text() == "249420 # auto_hard_stop_handoff current_loss\n"
+
+
 def test_stale_in_memory_scale_in_qty_handoff_does_not_recreate_exclusion(
     monkeypatch, tmp_path
 ):
@@ -220,7 +246,7 @@ def test_legacy_scale_in_qty_handoff_retirement_fails_closed_on_storage_error(
     monkeypatch.setattr(
         sniper_state_handlers,
         "remove_auto_manual_control_exclusion_code",
-        lambda code, reason: manual_control_exclusion.ManualControlExclusionRemoval(
+        lambda code, reason, **kwargs: manual_control_exclusion.ManualControlExclusionRemoval(
             False,
             "249420",
             "manual_control_exclusion_remove_failed:PermissionError",
@@ -243,9 +269,7 @@ def test_legacy_scale_in_qty_handoff_retirement_fails_closed_on_storage_error(
     )
 
     assert decision.excluded is True
-    assert decision.reason.startswith(
-        "legacy_scale_in_qty_handoff_retirement_blocked:"
-    )
+    assert decision.reason.startswith("legacy_scale_in_qty_handoff_retirement_blocked:")
     assert stock["manual_control_auto_scale_in_qty_blocked"] is True
 
 
@@ -258,7 +282,9 @@ def test_manual_control_exclusion_append_adds_code_once(monkeypatch, tmp_path):
         "5930",
         comment="auto_open_loss KRX_OPEN profit=-3.00% stop=-2.50%",
     )
-    second = manual_control_exclusion.add_manual_control_exclusion_code("005930")
+    second = manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment="auto_open_loss KRX_OPEN profit=-3.00% stop=-2.50%"
+    )
 
     assert first.excluded is True
     assert first.code == "005930"
@@ -268,6 +294,73 @@ def test_manual_control_exclusion_append_adds_code_once(monkeypatch, tmp_path):
         is True
     )
     assert path.read_text(encoding="utf-8").count("005930") == 1
+
+
+@pytest.mark.parametrize("comment", ["manual_operator explicit_user_veto", ""])
+@pytest.mark.parametrize("newline", ["", "\n"])
+def test_operator_registration_survives_existing_auto_veto_release(
+    monkeypatch, tmp_path, comment, newline
+):
+    path = tmp_path / "excluded.txt"
+    path.write_text("005930 # auto_open_loss loss=-3.0%" + newline)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    added = manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment=comment
+    )
+    assert added.excluded
+    manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment=comment
+    )
+    assert path.read_text().count("005930") == 2
+    assert manual_control_exclusion.remove_auto_manual_control_exclusion_code(
+        "005930"
+    ).removed
+    assert manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        "005930", new_entry=False
+    ).excluded
+
+
+def test_operator_registration_is_persisted_even_with_env_veto(monkeypatch, tmp_path):
+    path = tmp_path / "excluded.txt"
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_ENV, "005930")
+    assert manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment="manual_operator explicit_user_veto"
+    ).excluded
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV)
+    assert manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        "005930"
+    ).excluded
+
+
+def test_appending_veto_after_unterminated_machine_marker_keeps_both_rows(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "excluded.txt"
+    path.write_text("005930 # machine_owner_scope samsung_electronics")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    assert manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment="manual_operator explicit_user_veto"
+    ).excluded
+    assert manual_control_exclusion.machine_owner_scope_source("005930")
+    assert manual_control_exclusion.manual_control_operator_exclusion_source("005930")
+    assert len(path.read_text().splitlines()) == 2
+
+
+@pytest.mark.parametrize(
+    "comment",
+    ["machine_owner_scope samsung_electronics", "manual_operator samsung_electronics"],
+)
+def test_veto_registration_cannot_create_a_machine_authority_marker(
+    monkeypatch, tmp_path, comment
+):
+    path = tmp_path / "excluded.txt"
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    result = manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment=comment
+    )
+    assert result.reason == "manual_control_registration_requires_veto_source"
+    assert not path.exists()
 
 
 def test_manual_control_operator_source_requires_explicit_owner_marker(
@@ -294,6 +387,282 @@ def test_manual_control_operator_source_requires_explicit_owner_marker(
     assert (
         manual_control_exclusion.manual_control_operator_exclusion_source("042660")
         == ""
+    )
+
+
+def test_machine_owner_scope_is_separate_from_operator_veto(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # machine_owner_scope samsung_electronics\n"
+        "034020 # manual_operator explicit_user_veto\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    assert manual_control_exclusion.machine_owner_scope_source("005930") == (
+        "machine_owner_scope"
+    )
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("005930")
+        == ""
+    )
+    assert manual_control_exclusion.machine_owner_scope_source("034020") == ""
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("034020")
+        == "manual_operator"
+    )
+
+
+def test_machine_owner_scope_requires_exact_reviewed_symbol_label(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # machine_owner_scope wrong_episode\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    assert manual_control_exclusion.machine_owner_scope_source("005930") == ""
+    decision = manual_control_exclusion.evaluate_main_bot_control_exclusion("005930")
+    assert decision.excluded is True
+    assert decision.reason == "operator_manual_control_excluded_symbol"
+
+
+def test_machine_owner_scope_requires_one_symbol_per_marker_row(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930,000660 # machine_owner_scope samsung_electronics\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    assert manual_control_exclusion.machine_owner_scope_source("005930") == ""
+    assert manual_control_exclusion.legacy_machine_owner_scope_source("005930") == ""
+    assert manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        "005930"
+    ).excluded
+
+
+def test_auto_exclusion_appends_next_to_machine_scope_and_removes_independently(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # machine_owner_scope samsung_electronics\n", encoding="utf-8"
+    )
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    added = manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment="auto_hard_stop_handoff holding_loss"
+    )
+
+    assert added.excluded is True
+    assert path.read_text(encoding="utf-8").count("005930") == 2
+    assert manual_control_exclusion.manual_control_auto_exclusion_source("005930") == (
+        "auto_hard_stop_handoff"
+    )
+
+    removed = manual_control_exclusion.remove_auto_manual_control_exclusion_code(
+        "005930", reason="test_release"
+    )
+
+    assert removed.removed is True
+    assert path.read_text(encoding="utf-8") == (
+        "005930 # machine_owner_scope samsung_electronics\n"
+    )
+
+
+def test_auto_exclusion_appends_during_legacy_machine_scope_transition(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    label = manual_control_exclusion.LEGACY_MACHINE_OWNER_SCOPE_LABELS["005930"]
+    legacy_row = f"005930 # manual_operator {label}\n"
+    path.write_text(legacy_row, encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    assert manual_control_exclusion.legacy_machine_owner_scope_source("005930") == (
+        "legacy_machine_owner_scope"
+    )
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("005930")
+        == ""
+    )
+    assert (
+        manual_control_exclusion.independent_machine_ownership_source(
+            "005930", owner="episode"
+        )
+        == "legacy_machine_owner_scope"
+    )
+
+    added = manual_control_exclusion.add_manual_control_exclusion_code(
+        "005930", comment="auto_hard_stop_handoff holding_loss"
+    )
+
+    assert added.excluded is True
+    assert path.read_text(encoding="utf-8") == (
+        legacy_row + "005930 # auto_hard_stop_handoff holding_loss\n"
+    )
+
+
+def test_new_scale_in_auto_row_is_retired_after_machine_scope_was_cached(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    machine_row = "005930 # machine_owner_scope samsung_electronics\n"
+    path.write_text(machine_row, encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    stock = {
+        "id": 5930,
+        "code": "005930",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+    }
+
+    sniper_state_handlers._retire_unowned_scale_in_qty_manual_control_handoff(
+        stock, "005930", pipeline="holding", now_ts=1_000.0
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("005930 # auto_scale_in_qty_guard_block source=late_loss_retry\n")
+    manual_control_exclusion._invalidate_file_cache()
+    stock["manual_control_auto_scale_in_qty_blocked"] = True
+    stock["manual_control_auto_exclusion_source_stage"] = "late_loss_retry"
+
+    decision = (
+        sniper_state_handlers._retire_unowned_scale_in_qty_manual_control_handoff(
+            stock, "005930", pipeline="holding", now_ts=1_001.0
+        )
+    )
+
+    assert decision.excluded is True
+    assert path.read_text(encoding="utf-8") == machine_row
+    assert "manual_control_auto_scale_in_qty_blocked" not in stock
+    assert "manual_control_auto_exclusion_source_stage" not in stock
+
+
+def test_machine_scope_migration_changes_only_exact_legacy_rows(monkeypatch, tmp_path):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    path.write_text(
+        "005930 # manual_operator samsung_electronics\n"
+        "034020 # manual_operator explicit_user_veto\n"
+        "042660 # machine_owner_scope hanwha_widget_and_episode_independent_owners\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o664)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    receipt = manual_control_exclusion.migrate_legacy_machine_owner_scope_markers(
+        {
+            "005930": "samsung_electronics",
+            "034020": "doosan_widget_and_episode_independent_owners",
+            "042660": "hanwha_widget_and_episode_independent_owners",
+        }
+    )
+
+    assert receipt["migrated_symbols"] == ["005930"]
+    assert receipt["already_migrated_symbols"] == ["042660"]
+    assert receipt["preserved_operator_veto_symbols"] == ["034020"]
+    assert receipt["changed"] is True
+    assert path.read_text(encoding="utf-8") == (
+        "005930 # machine_owner_scope samsung_electronics\n"
+        "034020 # manual_operator explicit_user_veto\n"
+        "042660 # machine_owner_scope hanwha_widget_and_episode_independent_owners\n"
+    )
+    assert path.stat().st_mode & 0o777 == 0o664
+
+    retry = manual_control_exclusion.migrate_legacy_machine_owner_scope_markers(
+        {
+            "005930": "samsung_electronics",
+            "042660": "hanwha_widget_and_episode_independent_owners",
+        }
+    )
+    assert retry["migrated_symbols"] == []
+    assert retry["already_migrated_symbols"] == ["005930", "042660"]
+    assert retry["changed"] is False
+
+
+def test_machine_scope_migration_preserves_same_symbol_explicit_veto(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    label = manual_control_exclusion.LEGACY_MACHINE_OWNER_SCOPE_LABELS["005930"]
+    path.write_text(
+        f"005930 # manual_operator {label}\n"
+        "005930 # manual_operator explicit_user_veto\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    receipt = manual_control_exclusion.migrate_legacy_machine_owner_scope_markers(
+        {"005930": label}
+    )
+
+    assert receipt["migrated_symbols"] == ["005930"]
+    assert receipt["preserved_operator_veto_symbols"] == ["005930"]
+    assert path.read_text(encoding="utf-8") == (
+        f"005930 # machine_owner_scope {label}\n"
+        "005930 # manual_operator explicit_user_veto\n"
+    )
+
+
+def test_post_migration_manual_row_reusing_legacy_label_remains_a_veto(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "excluded.txt"
+    original = (
+        "005930 # machine_owner_scope samsung_electronics\n"
+        "005930 # manual_operator samsung_electronics\n"
+    )
+    path.write_text(original)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    result = manual_control_exclusion.migrate_legacy_machine_owner_scope_markers(
+        {"005930": "samsung_electronics"}
+    )
+    assert result["migrated_symbols"] == []
+    assert path.read_text() == original
+    assert (
+        manual_control_exclusion.manual_control_operator_exclusion_source("005930")
+        == "manual_operator"
+    )
+    assert not manual_control_exclusion.legacy_machine_owner_scope_source("005930")
+    assert manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        "005930"
+    ).excluded
+
+
+def test_machine_scope_migration_preserves_generic_and_auto_veto_rows(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    label = manual_control_exclusion.LEGACY_MACHINE_OWNER_SCOPE_LABELS["005930"]
+    path.write_text(
+        f"005930 # manual_operator {label}\n"
+        "005930 # temporary_operator_veto\n"
+        "005930 # auto_open_loss loss=-3.0%\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    manual_control_exclusion.migrate_legacy_machine_owner_scope_markers(
+        {"005930": label}
+    )
+
+    assert path.read_text(encoding="utf-8") == (
+        f"005930 # machine_owner_scope {label}\n"
+        "005930 # temporary_operator_veto\n"
+        "005930 # auto_open_loss loss=-3.0%\n"
+    )
+    assert manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        "005930"
+    ).excluded
+    assert manual_control_exclusion.manual_control_auto_exclusion_source("005930") == (
+        "auto_open_loss"
     )
 
 
@@ -358,7 +727,7 @@ def test_manual_control_exclusion_remove_preserves_manual_operator_row(
 ):
     path = tmp_path / "manual_control_excluded_codes.txt"
     original = (
-        "005930 # manual_operator samsung_electronics\n"
+        "005930 # manual_operator explicit_user_veto\n"
         "000660 # auto_open_loss KRX_OPEN\n"
     )
     path.write_text(original, encoding="utf-8")
@@ -377,6 +746,44 @@ def test_manual_control_exclusion_remove_preserves_manual_operator_row(
         manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
         is True
     )
+
+
+def test_manual_control_exclusion_remove_preserves_legacy_machine_scope_row(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    label = manual_control_exclusion.LEGACY_MACHINE_OWNER_SCOPE_LABELS["005930"]
+    original = f"005930 # manual_operator {label}\n"
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code("005930")
+
+    assert result.removed is False
+    assert result.reason == "manual_control_machine_owner_scope_protected"
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_generic_veto_can_be_removed_without_removing_machine_scope(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "manual_control_excluded_codes.txt"
+    original = (
+        "005930 # machine_owner_scope samsung_electronics\n"
+        "005930 # temporary_operator_veto\n"
+    )
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+
+    result = manual_control_exclusion.remove_manual_control_exclusion_code("005930")
+
+    assert result.removed is True
+    assert path.read_text(encoding="utf-8") == (
+        "005930 # machine_owner_scope samsung_electronics\n"
+    )
+    assert manual_control_exclusion.machine_owner_scope_source("005930")
 
 
 def test_manual_control_exclusion_generic_remove_preserves_auto_row(
@@ -410,7 +817,7 @@ def test_manual_control_exclusion_manual_operator_vetoes_duplicate_auto_row_remo
     path = tmp_path / "manual_control_excluded_codes.txt"
     original = (
         "005930 # auto_open_loss KRX_OPEN\n"
-        "005930 # manual_operator samsung_electronics\n"
+        "005930 # manual_operator explicit_user_veto\n"
     )
     path.write_text(original, encoding="utf-8")
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)

@@ -3449,9 +3449,7 @@ def test_preactivation_replaced_execution_companion_is_excluded_without_global_p
             "reason": expected_reason,
             "target_date": source_date,
             "repair_required": False,
-            "terminal_exclusion_reason": (
-                "pre_current_design_immutable_companion_gap"
-            ),
+            "terminal_exclusion_reason": ("pre_current_design_immutable_companion_gap"),
         }
     ]
     assert rolling["global_candidate_blockers"] == []
@@ -4036,8 +4034,7 @@ def test_provider_bound_r0_generation_reuses_exact_companion_set(
         "floor_content_sha256": cycle._sha256(floor_body),
     }
     floor_path = (
-        tmp_path
-        / f"micro_reversion_provider_ablation_sample_floor_{target_date}.json"
+        tmp_path / f"micro_reversion_provider_ablation_sample_floor_{target_date}.json"
     )
     for path, payload in (
         (paths["materialized"], materialized),
@@ -4060,9 +4057,7 @@ def test_provider_bound_r0_generation_reuses_exact_companion_set(
         "provider_ablation_sample_floor_content_sha256": provider_floor[
             "floor_content_sha256"
         ],
-        "provider_ablation_sample_floor_artifact_sha256": cycle._sha256(
-            provider_floor
-        ),
+        "provider_ablation_sample_floor_artifact_sha256": cycle._sha256(provider_floor),
     }
     paths["execution"].write_text(
         json.dumps(
@@ -4125,9 +4120,7 @@ def test_provider_bound_r0_generation_reuses_exact_companion_set(
     checkpoint = {
         "provider_call_performed": True,
         "materialized_report_content_sha256": (
-            quality._micro_reversion_materialized_request_census_sha256(
-                materialized
-            )
+            quality._micro_reversion_materialized_request_census_sha256(materialized)
         ),
         "results": [
             {
@@ -4147,9 +4140,7 @@ def test_provider_bound_r0_generation_reuses_exact_companion_set(
         json.dumps(
             {
                 **uncommitted_execution_body,
-                "report_content_sha256": cycle._sha256(
-                    uncommitted_execution_body
-                ),
+                "report_content_sha256": cycle._sha256(uncommitted_execution_body),
             }
         ),
         encoding="utf-8",
@@ -4176,9 +4167,10 @@ def test_provider_bound_r0_generation_reuses_exact_companion_set(
         "report_content_sha256": cycle._sha256(uncommitted_execution_body),
     }
     assert checkpoint_frozen["checkpoint"] == checkpoint
-    assert checkpoint_binding_calls[0][
-        "provider_ablation_sample_floor_content_sha256"
-    ] == provider_floor["floor_content_sha256"]
+    assert (
+        checkpoint_binding_calls[0]["provider_ablation_sample_floor_content_sha256"]
+        == provider_floor["floor_content_sha256"]
+    )
 
     checkpoint["results"][0]["outcome_label_content_sha256"] = ""
     with pytest.raises(
@@ -6064,9 +6056,7 @@ def test_source_gap_diagnostics_does_not_bind_historical_gap_to_healthy_current_
             "target_date": "2026-08-24",
             "reason": "execution_report_materialized_companion_binding_mismatch",
             "repair_required": False,
-            "terminal_exclusion_reason": (
-                "pre_current_design_immutable_companion_gap"
-            ),
+            "terminal_exclusion_reason": ("pre_current_design_immutable_companion_gap"),
         }
     ]
     exclusions.extend(
@@ -6088,13 +6078,12 @@ def test_source_gap_diagnostics_does_not_bind_historical_gap_to_healthy_current_
 
     assert diagnostics["lifecycle_exact_join_missing_count"] == 0
     assert diagnostics["natural_entry_non_order_lifecycle_not_applicable_count"] == 7
-    assert diagnostics[
-        "execution_report_materialized_companion_binding_mismatch_dates"
-    ] == []
     assert (
-        diagnostics[
-            "execution_report_materialized_companion_binding_mismatch_count"
-        ]
+        diagnostics["execution_report_materialized_companion_binding_mismatch_dates"]
+        == []
+    )
+    assert (
+        diagnostics["execution_report_materialized_companion_binding_mismatch_count"]
         == 0
     )
     assert diagnostics["terminal_historical_exclusion_count"] == 1

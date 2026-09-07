@@ -195,11 +195,15 @@ def test_repository_policy_is_effective_on_requested_start_date() -> None:
         * policy["provider_budget_basis"]["logical_requests_per_parent"]
         == policy["provider_budget_basis"]["maximum_logical_request_count"]
     )
-    assert 49.9 <= (
-        100
-        * policy["provider_budget_basis"]["daily_attempt_cap"]
-        / policy["provider_budget_basis"]["evaluated_call_median"]
-    ) <= 50.0
+    assert (
+        49.9
+        <= (
+            100
+            * policy["provider_budget_basis"]["daily_attempt_cap"]
+            / policy["provider_budget_basis"]["evaluated_call_median"]
+        )
+        <= 50.0
+    )
     assert len(policy["provider_budget_basis"]["source_artifacts"]) == 5
     assert raw == policy_path.read_bytes()
 

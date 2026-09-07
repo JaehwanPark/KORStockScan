@@ -27,8 +27,10 @@ from zoneinfo import ZoneInfo
 
 from src.engine.scalping.scanner_lookup_attention_policy import (
     ACTIVATION_MODE,
+    LEGACY_ACTIVATION_MODE,
     DECISION_AUTHORITY,
     DECISION_CONTRACT_VERSION,
+    LEGACY_DECISION_CONTRACT_VERSION,
     ELIGIBLE_SESSION_BUCKETS,
     ELIGIBLE_VENUES,
     MAX_FUTURE_SKEW_SEC,
@@ -43,17 +45,23 @@ from src.engine.scalping.scanner_lookup_attention_policy import (
     MIN_TRADING_DATES,
     MIN_WORST_NET_RETURN_PCT,
     POLICY_DIR,
+    PREOPEN_DIR,
     POLICY_VERSION,
     REPORT_TYPE as POLICY_REPORT_TYPE,
-    RESOURCE_PAIR_CONTRACT_VERSION,
     SCHEMA_VERSION as POLICY_SCHEMA_VERSION,
     USER_AUTHORITY,
     TUNING_REPORT_SCHEMA_VERSION,
-    bonus_points_for_score,
     canonical_sha256,
     validate_policy_payload,
+    load_active_policy,
 )
 from src.utils.market_day import count_krx_trading_days, is_krx_trading_day
+from src.engine.scalping.scanner_lookup_attention_resource import (
+    allocation_book,
+    compact_evidence_rows,
+    event_row as parse_resource_event,
+    valid_row as valid_resource_row,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 EVENT_DIR = PROJECT_ROOT / "data" / "pipeline_events"
@@ -86,8 +94,6 @@ FORBIDDEN_USES = [
     "order_price_quantity_cap_or_broker_guard_change",
     "stale_conflict_or_hard_safety_bypass",
 ]
-RESOURCE_PAIR_MIN_GENERATIONS = 20
-RESOURCE_PAIR_MIN_TRADING_DATES = 5
 RESOURCE_CAPACITY_PRUNE_REASONS = {
     "general_slot_limit",
     "market_gainer_reserved_full",
@@ -275,9 +281,22 @@ def _runtime_policy_artifact_matches(
 ) -> bool:
     """Rebind active runtime provenance to the exact immutable policy/report pair."""
 
+    receipt_path = (
+        PREOPEN_DIR / f"scanner_lookup_attention_preopen_{observation_date}.json"
+    )
+    if receipt_path.exists():
+        selected = load_active_policy(observation_date, applied_dir=PREOPEN_DIR)
+        return bool(
+            selected["active"]
+            and selected["policy_source_date"] == source_date.isoformat()
+            and selected["policy_artifact_sha256"] == artifact_sha256
+        )
+
     policy_payload = _load_json(
         POLICY_DIR / f"scanner_lookup_attention_policy_{source_date.isoformat()}.json"
     )
+    if policy_payload.get("decision_contract_version") == DECISION_CONTRACT_VERSION:
+        return False
     report_payload = _load_json(
         REPORT_DIR / f"scanner_lookup_attention_tuning_{source_date.isoformat()}.json"
     )
@@ -306,6 +325,26 @@ def _previous_krx_trading_date(value: date) -> date:
 
 def _runtime_policy_expectation(observation_date: date) -> dict[str, Any]:
     """Resolve whether the exact previous trading-day artifact required live use."""
+
+    receipt_path = (
+        PREOPEN_DIR / f"scanner_lookup_attention_preopen_{observation_date}.json"
+    )
+    if receipt_path.exists():
+        selected = load_active_policy(observation_date, applied_dir=PREOPEN_DIR)
+        return {
+            "state": (
+                "active"
+                if selected["active"]
+                else (
+                    "invalid"
+                    if selected["reason"] == "preopen_receipt_invalid"
+                    else "inactive"
+                )
+            ),
+            "source_date": selected.get("policy_source_date"),
+            "artifact_sha256": selected.get("policy_artifact_sha256"),
+            "preopen_artifact_sha256": selected.get("preopen_artifact_sha256"),
+        }
 
     try:
         source_date = _previous_krx_trading_date(observation_date)
@@ -339,6 +378,12 @@ def _runtime_policy_expectation(observation_date: date) -> dict[str, Any]:
             "source_date": source_date.isoformat(),
             "reason": "prior_policy_not_live",
         }
+    if policy_payload.get("decision_contract_version") == DECISION_CONTRACT_VERSION:
+        return {
+            "state": "invalid",
+            "reason": "preopen_receipt_missing",
+            "source_date": source_date.isoformat(),
+        }
     return {
         "state": "active",
         "source_date": source_date.isoformat(),
@@ -365,7 +410,9 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
     runtime_policy_expectation_cache: dict[date, dict[str, Any]] = {}
     resource_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
     conflicted_resource_keys: set[tuple[str, str, str]] = set()
-    invalid_resource_pair_count = 0
+    resource_evidence_rows: list[dict[str, Any]] = []
+    resource_capture_diagnostics: dict[str, Any] = {}
+    resource_start = _resource_window_start(target)
     event_file_count = 0
     cursor = start
     while cursor <= target:
@@ -374,173 +421,38 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
         cursor += timedelta(days=1)
         if path is None:
             continue
+        resource_rows = {}
+        conflicted_resource_keys = set()
         event_file_count += 1
         for event in _iter_events(path, parse_stats=parse_stats):
             fields = (
                 event.get("fields") if isinstance(event.get("fields"), dict) else {}
             )
             stage = str(event.get("stage") or "")
-            if stage in {
+            if event_file_date >= resource_start and stage in {
                 "scalping_scanner_candidate_promoted",
                 "scalping_scanner_candidate_pruned",
             }:
-                effective_venue = (
-                    str(fields.get("effective_venue") or fields.get("venue") or "")
-                    .strip()
-                    .upper()
-                )
-                session = str(fields.get("market_session_bucket") or "").strip()
-                resource_contract = str(
-                    fields.get("lookup_attention_resource_pair_contract_version") or ""
-                ).strip()
-                resource_eligible = _bool(
-                    fields.get("lookup_attention_resource_pair_eligible")
-                )
-                if resource_contract and (
-                    resource_contract != RESOURCE_PAIR_CONTRACT_VERSION
-                    or resource_eligible is None
-                    or (
-                        resource_eligible is True
-                        and (
-                            effective_venue not in ELIGIBLE_VENUES
-                            or session not in ELIGIBLE_SESSION_BUCKETS
-                        )
-                    )
-                ):
-                    invalid_resource_pair_count += 1
-                    continue
+                resource_row = parse_resource_event(event)
                 if (
-                    resource_contract == RESOURCE_PAIR_CONTRACT_VERSION
-                    and resource_eligible is True
-                    and effective_venue in ELIGIBLE_VENUES
-                    and session in ELIGIBLE_SESSION_BUCKETS
+                    resource_row is not None
+                    and resource_row["effective_venue"] == "KRX"
+                    and resource_row["market_session_bucket"] == "krx_regular"
                 ):
-                    generation_id = str(
-                        fields.get("scanner_scan_generation_id") or ""
-                    ).strip()
-                    code = str(event.get("stock_code") or "").strip()[:6]
-                    event_date_text = str(event.get("emitted_date") or "").strip()
-                    score = _finite(
-                        fields.get("lookup_attention_resource_snapshot_score")
+                    if resource_row["observation_date"] != event_file_date.isoformat():
+                        resource_row["eligible_source"] = False
+                    resource_key = (
+                        event_file_date.isoformat(),
+                        resource_row["scan_generation_id"],
+                        resource_row["stock_code"],
                     )
-                    base_priority_score = _finite(
-                        fields.get(
-                            "scanner_rank_priority_score_without_lookup_attention"
-                        )
-                    )
-                    candidate_priority_score = _finite(
-                        fields.get("scanner_rank_priority_score_with_lookup_attention")
-                    )
-                    formula_bonus = _finite(
-                        fields.get(
-                            "lookup_attention_resource_counterfactual_bonus_points"
-                        )
-                    )
-                    scan_rank = _strict_int(fields.get("scanner_scan_rank"))
-                    ranked_count = _strict_int(
-                        fields.get("scanner_ranked_candidate_count")
-                    )
-                    rank_partition = _strict_int(
-                        fields.get("scanner_rank_priority_rank_partition")
-                    )
-                    source_priority = _strict_int(
-                        fields.get("scanner_rank_priority_source_rank")
-                    )
-                    flu_rate = _finite(fields.get("scanner_rank_priority_flu_rate"))
-                    priority_tier = str(
-                        fields.get("scanner_rank_priority_tier") or ""
-                    ).strip()
-                    watch_budget_owner = str(
-                        fields.get("scanner_watch_budget_owner") or ""
-                    ).strip()
-                    market_gainer_partition = _bool(
-                        fields.get("scanner_rank_priority_market_gainer_partition")
-                    )
-                    reserved_partition = str(
-                        fields.get("scanner_rank_priority_reserved_partition") or ""
-                    ).strip()
-                    try:
-                        event_date = date.fromisoformat(event_date_text)
-                    except ValueError:
-                        event_date = None
-                    expected_bonus = bonus_points_for_score(score)
-                    valid_resource = bool(
-                        generation_id.startswith("SCANGEN-")
-                        and re.fullmatch(r"\d{6}", code) is not None
-                        and event_date is not None
-                        and event_date == event_file_date
-                        and is_krx_trading_day(event_date)
-                        and score is not None
-                        and 0.0 <= score <= 1.0
-                        and base_priority_score is not None
-                        and candidate_priority_score is not None
-                        and formula_bonus is not None
-                        and abs(formula_bonus - expected_bonus) <= 1e-6
-                        and abs(
-                            candidate_priority_score
-                            - base_priority_score
-                            - formula_bonus
-                        )
-                        <= 1e-6
-                        and scan_rank is not None
-                        and ranked_count is not None
-                        and 1 <= scan_rank <= ranked_count
-                        and rank_partition in {0, 1}
-                        and source_priority is not None
-                        and source_priority >= 0
-                        and flu_rate is not None
-                        and priority_tier.startswith("tier_")
-                        and watch_budget_owner
-                        and market_gainer_partition is not None
-                        and reserved_partition
-                    )
-                    if not valid_resource:
-                        invalid_resource_pair_count += 1
-                    else:
-                        resource_key = (event_date_text, generation_id, code)
-                        prune_reason = str(
-                            fields.get("scanner_prune_reason") or ""
-                        ).strip()
-                        terminal = (
-                            "promoted"
-                            if stage == "scalping_scanner_candidate_promoted"
-                            else (
-                                "capacity_pruned"
-                                if prune_reason in RESOURCE_CAPACITY_PRUNE_REASONS
-                                else "other_guard_pruned"
-                            )
-                        )
-                        resource_row = {
-                            "observation_date": event_date_text,
-                            "scan_generation_id": generation_id,
-                            "stock_code": code,
-                            "scan_rank": scan_rank,
-                            "ranked_candidate_count": ranked_count,
-                            "rank_partition": rank_partition,
-                            "source_priority": source_priority,
-                            "flu_rate": flu_rate,
-                            "priority_tier": priority_tier,
-                            "watch_budget_owner": watch_budget_owner,
-                            "market_gainer_partition": market_gainer_partition,
-                            "reserved_partition": reserved_partition,
-                            "lookup_attention_snapshot_score": score,
-                            "base_priority_score": base_priority_score,
-                            "candidate_priority_score": candidate_priority_score,
-                            "counterfactual_bonus_points": formula_bonus,
-                            "terminal": terminal,
-                            "prune_reason": prune_reason,
-                        }
-                        if resource_key not in conflicted_resource_keys:
-                            existing_resource = resource_rows.get(resource_key)
-                            if (
-                                existing_resource is not None
-                                and existing_resource != resource_row
-                            ):
-                                invalid_resource_pair_count += 1
-                                resource_rows.pop(resource_key, None)
-                                conflicted_resource_keys.add(resource_key)
-                            else:
-                                resource_rows[resource_key] = resource_row
+                    if resource_key in conflicted_resource_keys:
+                        continue
+                    existing = resource_rows.get(resource_key)
+                    if existing is not None and existing != resource_row:
+                        resource_row["eligible_source"] = False
+                        conflicted_resource_keys.add(resource_key)
+                    resource_rows[resource_key] = resource_row
             if stage == "scalping_scanner_runtime_target_attach":
                 if fields.get("lookup_attention_state") != "observed_source_only":
                     continue
@@ -606,7 +518,7 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                 if expectation is None:
                     expectation = _runtime_policy_expectation(event_date)
                     runtime_policy_expectation_cache[event_date] = expectation
-                if expectation.get("state") == "invalid":
+                if expectation.get("state") == "invalid" and event_in_policy_scope:
                     runtime_policy_provenance_invalid = True
                 elif (
                     expectation.get("state") == "active"
@@ -709,6 +621,13 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                             )
                             == 1
                             and artifact_valid
+                            and (
+                                not expectation.get("preopen_artifact_sha256")
+                                or fields.get(
+                                    "lookup_attention_weight_preopen_artifact_sha256"
+                                )
+                                == expectation["preopen_artifact_sha256"]
+                            )
                             and expectation.get("state") == "active"
                             and expectation.get("source_date") == policy_source_date
                             and expectation.get("artifact_sha256")
@@ -900,6 +819,14 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                 }
             )
 
+        if resource_rows:
+            retained, diagnostics = compact_evidence_rows(
+                list(resource_rows.values()),
+                capacity_reasons=RESOURCE_CAPACITY_PRUNE_REASONS,
+            )
+            resource_evidence_rows.extend(retained)
+            resource_capture_diagnostics[event_file_date.isoformat()] = diagnostics
+
     rows: list[dict[str, Any]] = []
     invalid_fill_contract_count = 0
     for key, observation in observations.items():
@@ -962,9 +889,13 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
         "fill_receipt_missing_count": sum(
             row["fill_class"] == "fill_receipt_missing" for row in rows
         ),
-        "invalid_resource_pair_count": invalid_resource_pair_count,
-        "resource_pair_row_count": len(resource_rows),
-        "_resource_pair_rows": list(resource_rows.values()),
+        "invalid_resource_pair_count": sum(
+            not valid_resource_row(row) for row in resource_evidence_rows
+        ),
+        "resource_pair_row_count": len(resource_evidence_rows),
+        "resource_capture_window_start": max(start, resource_start).isoformat(),
+        "resource_capture_diagnostics": resource_capture_diagnostics,
+        "_resource_pair_rows": resource_evidence_rows,
     }
 
 
@@ -1496,138 +1427,25 @@ def _cohort_funnel(
 def _resource_allocation_pair_book(
     rows: list[dict[str, Any]], *, invalid_row_count: int = 0
 ) -> dict[str, Any]:
-    """Compare baseline and proposed ordering inside immutable rank partitions."""
-
-    groups: defaultdict[
-        tuple[str, str, int, str, str, bool, str], list[dict[str, Any]]
-    ] = defaultdict(list)
-    for row in rows:
-        if row.get("terminal") not in {"promoted", "capacity_pruned"}:
-            continue
-        groups[
-            (
-                str(row.get("observation_date") or ""),
-                str(row.get("scan_generation_id") or ""),
-                int(row.get("rank_partition") or 0),
-                str(row.get("priority_tier") or ""),
-                str(row.get("watch_budget_owner") or ""),
-                bool(row.get("market_gainer_partition")),
-                str(row.get("reserved_partition") or ""),
-            )
-        ].append(row)
-
-    paired_generation_keys: set[tuple[str, str]] = set()
-    paired_dates: set[str] = set()
-    paired_rows: dict[tuple[str, str, str], dict[str, Any]] = {}
-    reordered_generation_keys: set[tuple[str, str]] = set()
-    moved_in_count = 0
-    moved_out_count = 0
-    for group_key, group_rows in groups.items():
-        promoted_count = sum(row.get("terminal") == "promoted" for row in group_rows)
-        pruned_count = sum(
-            row.get("terminal") == "capacity_pruned" for row in group_rows
-        )
-        if promoted_count <= 0 or pruned_count <= 0:
-            continue
-        (
-            observation_date,
-            generation_id,
-            _partition,
-            _tier,
-            _owner,
-            _market,
-            _reserved,
-        ) = group_key
-        generation_key = (observation_date, generation_id)
-        paired_generation_keys.add(generation_key)
-        paired_dates.add(observation_date)
-        for row in group_rows:
-            paired_rows[(observation_date, generation_id, row["stock_code"])] = row
-        baseline = sorted(
-            group_rows,
-            key=lambda row: (
-                -float(row["base_priority_score"]),
-                int(row["source_priority"]),
-                -float(row["flu_rate"]),
-                int(row["scan_rank"]),
-            ),
-        )
-        proposed = sorted(
-            group_rows,
-            key=lambda row: (
-                -float(row["candidate_priority_score"]),
-                int(row["source_priority"]),
-                -float(row["flu_rate"]),
-                int(row["scan_rank"]),
-            ),
-        )
-        baseline_top = {row["stock_code"] for row in baseline[:promoted_count]}
-        proposed_top = {row["stock_code"] for row in proposed[:promoted_count]}
-        moved_in = proposed_top - baseline_top
-        moved_out = baseline_top - proposed_top
-        if moved_in or moved_out:
-            reordered_generation_keys.add(generation_key)
-            moved_in_count += len(moved_in)
-            moved_out_count += len(moved_out)
-
-    paired_values = list(paired_rows.values())
-    candidate_count = sum(
-        float(row["lookup_attention_snapshot_score"]) > MIN_SCORE
-        for row in paired_values
-    )
-    control_count = len(paired_values) - candidate_count
-    paired_generation_count = len(paired_generation_keys)
-    trading_date_count = len(paired_dates)
-    floors_pass = bool(
-        paired_generation_count >= RESOURCE_PAIR_MIN_GENERATIONS
-        and trading_date_count >= RESOURCE_PAIR_MIN_TRADING_DATES
-        and candidate_count >= MIN_COHORT_COMPLETED
-        and control_count >= MIN_COHORT_COMPLETED
-    )
-    ready = bool(invalid_row_count == 0 and floors_pass and reordered_generation_keys)
-    status = (
-        "not_observed"
-        if not rows and invalid_row_count == 0
-        else (
-            "contract_invalid"
-            if invalid_row_count > 0
-            else (
-                "hold_sample"
-                if not floors_pass
-                else "hold_no_effect" if not reordered_generation_keys else "ready"
-            )
-        )
-    )
-    return {
-        "metric_role": "causal_runtime_hook_gate",
-        "decision_authority": "bounded_same_tier_ordering_gate_only",
-        "window_policy": f"rolling_{ROLLING_CALENDAR_DAYS}_calendar_days_clean_post_rollout",
-        "sample_floor": (
-            f"paired_generation_count>={RESOURCE_PAIR_MIN_GENERATIONS}_and_"
-            f"trading_date_count>={RESOURCE_PAIR_MIN_TRADING_DATES}_and_"
-            f"candidate_and_control_each>={MIN_COHORT_COMPLETED}"
+    return allocation_book(
+        rows,
+        invalid_row_count=invalid_row_count,
+        capacity_reasons=RESOURCE_CAPACITY_PRUNE_REASONS,
+        cost_bps=(
+            COST_CONTRACT["buy_fee_bps"],
+            COST_CONTRACT["sell_fee_bps"],
+            COST_CONTRACT["statutory_sell_tax_bps"],
         ),
-        "primary_decision_metric": "counterfactual_top_set_reorder_count",
-        "source_quality_gate": (
-            "exact_generation_code_rank_partition_tier_and_formula_scores"
-        ),
-        "forbidden_uses": FORBIDDEN_USES,
-        "status": status,
-        "ready_for_live_gate": ready,
-        "invalid_row_count": invalid_row_count,
-        "paired_generation_count": paired_generation_count,
-        "trading_date_count": trading_date_count,
-        "paired_candidate_observation_count": candidate_count,
-        "paired_control_observation_count": control_count,
-        "reordered_generation_count": len(reordered_generation_keys),
-        "counterfactual_moved_in_count": moved_in_count,
-        "counterfactual_moved_out_count": moved_out_count,
-        "unpaired_or_guard_pruned_row_count": max(0, len(rows) - len(paired_values)),
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
+    )
+
+
+def _resource_window_start(target: date) -> date:
+    start = target
+    dates = int(is_krx_trading_day(target))
+    while dates < 20:
+        start -= timedelta(days=1)
+        dates += int(is_krx_trading_day(start))
+    return max(ROLLOUT_DATE, start)
 
 
 def _book_passes(book: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -1675,29 +1493,80 @@ def _sample_floor_passes(book: dict[str, Any]) -> bool:
     )
 
 
+def _campaign_valid(campaign: Any, target: date) -> bool:
+    if (
+        not isinstance(campaign, dict)
+        or campaign.get("contract_version") != "scanner_lookup_frozen_base_v1"
+    ):
+        return False
+    try:
+        arm = date.fromisoformat(campaign["arm_date"])
+        rows = campaign["outcomes"]
+        return bool(
+            ROLLOUT_DATE <= arm <= target
+            and is_krx_trading_day(arm)
+            and rows
+            and all(
+                ROLLOUT_DATE <= date.fromisoformat(row["rec_date"]) <= arm
+                for row in rows
+            )
+            and len({row["recommendation_id"] for row in rows}) == len(rows)
+            and campaign["base_book"] == _cohort_book(rows)
+            and _book_passes(campaign["base_book"])[0]
+            and campaign["source_quality_at_arm"] == "pass"
+            and campaign["cost_contract_sha256"] == canonical_sha256(COST_CONTRACT)
+            and campaign["full_fill_contract"] == FULL_FILL_CONTRACT
+            and campaign["decision_contract_version"] == DECISION_CONTRACT_VERSION
+            and campaign["artifact_sha256"]
+            == canonical_sha256(
+                {k: v for k, v in campaign.items() if k != "artifact_sha256"}
+            )
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _freeze_base(rows, arm_date):
+    campaign = {
+        "contract_version": "scanner_lookup_frozen_base_v1",
+        "arm_date": arm_date,
+        "outcomes": rows,
+        "base_book": _cohort_book(rows),
+        "source_quality_at_arm": "pass",
+        "cost_contract_sha256": canonical_sha256(COST_CONTRACT),
+        "full_fill_contract": FULL_FILL_CONTRACT,
+        "decision_contract_version": DECISION_CONTRACT_VERSION,
+    }
+    campaign["artifact_sha256"] = canonical_sha256(campaign)
+    return campaign
+
+
 def _base_rows_for_prior(
     outcomes: list[dict[str, Any]], prior_policy: dict[str, Any]
 ) -> list[dict[str, Any]]:
+    campaign = prior_policy.get("campaign_base")
+    if isinstance(campaign, dict) and campaign:
+        return (
+            list(campaign["outcomes"])
+            if _campaign_valid(
+                campaign, date.fromisoformat(prior_policy["target_date"])
+            )
+            else []
+        )
     if prior_policy.get("status") not in {
         "forward_holdout_armed",
         "live_auto_apply_ready",
     }:
         return list(outcomes)
     try:
-        holdout_since = date.fromisoformat(
-            str(prior_policy.get("holdout_armed_since") or "")
-        )
+        since = date.fromisoformat(str(prior_policy.get("holdout_armed_since") or ""))
     except ValueError:
         return []
-    return [
-        row
-        for row in outcomes
-        if date.fromisoformat(str(row.get("rec_date") or "")) <= holdout_since
-    ]
+    return [row for row in outcomes if date.fromisoformat(row["rec_date"]) <= since]
 
 
 def _latest_prior_policy(target: date) -> dict[str, Any]:
-    candidates: list[tuple[date, Path]] = []
+    candidates = []
     for path in POLICY_DIR.glob("scanner_lookup_attention_policy_*.json"):
         try:
             source_date = date.fromisoformat(path.stem.rsplit("_", 1)[-1])
@@ -1707,48 +1576,36 @@ def _latest_prior_policy(target: date) -> dict[str, Any]:
             candidates.append((source_date, path))
     if not candidates:
         return {}
-    expected_next_date = target
-    blocked_bridge_dates: list[str] = []
-    blocked_bridge_holdout = ""
-    for source_date, path in sorted(candidates, key=lambda item: item[0], reverse=True):
-        if count_krx_trading_days(source_date, expected_next_date) != 1:
-            return {}
-        payload = _load_json(path)
-        report = _load_json(
-            REPORT_DIR
-            / f"scanner_lookup_attention_tuning_{source_date.isoformat()}.json"
-        )
-        if validate_artifact_pair(report, payload, target=source_date):
-            return {}
-        holdout_text = str(payload.get("holdout_armed_since") or "")
-        try:
-            holdout_date = date.fromisoformat(holdout_text)
-        except ValueError:
-            return {}
-        if not (
-            is_krx_trading_day(source_date)
-            and is_krx_trading_day(holdout_date)
-            and holdout_date <= source_date
-        ):
-            return {}
-        status = str(payload.get("status") or "")
-        if status in {"forward_holdout_armed", "live_auto_apply_ready"}:
-            if blocked_bridge_holdout and blocked_bridge_holdout != holdout_text:
-                return {}
-            return {
-                **payload,
-                "campaign_continuity_bridge_dates": list(
-                    reversed(blocked_bridge_dates)
-                ),
-            }
-        if status != "source_quality_blocked":
-            return {}
-        if blocked_bridge_holdout and blocked_bridge_holdout != holdout_text:
-            return {}
-        blocked_bridge_holdout = holdout_text
-        blocked_bridge_dates.append(source_date.isoformat())
-        expected_next_date = source_date
-    return {}
+    source_date, path = max(candidates)
+    payload = _load_json(path)
+    report = _load_json(
+        REPORT_DIR / f"scanner_lookup_attention_tuning_{source_date}.json"
+    )
+    if validate_artifact_pair(report, payload, target=source_date):
+        return {}
+    if payload.get("status") not in {
+        "forward_holdout_armed",
+        "live_auto_apply_ready",
+        "source_quality_blocked",
+    }:
+        return {}
+    if not _campaign_valid(payload.get("campaign_base"), source_date):
+        return {}
+    # Missing producer days cannot erase immutable evidence.  Explicit negative
+    # economic policy or invalid latest evidence still starts a new campaign.
+    return {
+        **payload,
+        "status": (
+            "forward_holdout_armed"
+            if payload["status"] == "source_quality_blocked"
+            else payload["status"]
+        ),
+        "campaign_continuity_bridge_dates": (
+            [source_date.isoformat()]
+            if payload["status"] == "source_quality_blocked"
+            else []
+        ),
+    }
 
 
 def decide_promotion(
@@ -1858,7 +1715,10 @@ def evaluate_post_apply(
     mature = _sample_floor_passes(book)
     passed, reasons = _book_passes(book)
     candidate_worst = book["candidate"]["worst_net_return_pct"]
-    live_predecessor = prior_policy.get("status") == "live_auto_apply_ready"
+    live_predecessor = (
+        prior_policy.get("status") == "live_auto_apply_ready"
+        or prior_policy.get("campaign_live_started") is True
+    )
     emergency_rollback = bool(
         live_predecessor
         and candidate_worst is not None
@@ -2008,7 +1868,11 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
     cohort_funnel = _cohort_funnel(observations, outcomes)
     quality = _source_quality(
         target,
-        {date.fromisoformat(str(row["rec_date"])) for row in outcomes},
+        {date.fromisoformat(str(row["rec_date"])) for row in outcomes + base_rows}
+        | {
+            date.fromisoformat(row["observation_date"])
+            for row in resource_allocation["pairs"]
+        },
     )
     lineage_contract_pass = _lineage_contract_pass(lineage)
     decision = decide_promotion(
@@ -2035,6 +1899,11 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
     post_apply_mature = post_apply_attribution["mature"]
     if post_apply_attribution["rollback_triggered"]:
         status = "hold_no_edge"
+    campaign = dict(prior_policy.get("campaign_base") or {})
+    if decision["holdout_armed_since"] and not campaign and decision["base_pass"]:
+        campaign = _freeze_base(base_rows, decision["holdout_armed_since"])
+    if not decision["holdout_armed_since"] or status == "hold_no_edge":
+        campaign = {}
     evidence = _evidence(
         base_book,
         decision["forward_holdout_book"],
@@ -2071,6 +1940,7 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
         },
         "cohort_funnel": cohort_funnel,
         "resource_allocation_pair": resource_allocation,
+        "resource_pair_rows": resource_pair_rows,
         "source_quality": quality,
         "official_symbol_master": master,
         "runtime_policy_provenance_status": (
@@ -2084,6 +1954,14 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
         "exclusions": exclusions,
         "base_book": base_book,
         "holdout_armed_since": decision["holdout_armed_since"],
+        "campaign_base": campaign,
+        "campaign_live_started": bool(
+            campaign
+            and (
+                prior_policy.get("campaign_live_started")
+                or status == "live_auto_apply_ready"
+            )
+        ),
         "base_gate": {
             "pass": decision["base_pass"],
             "reasons": decision["base_reasons"],
@@ -2122,6 +2000,8 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
             "pass" if combined_source_quality_pass else "blocked"
         ),
         "holdout_armed_since": decision["holdout_armed_since"],
+        "campaign_base": campaign,
+        "campaign_live_started": report["campaign_live_started"],
         "source_report_artifact_sha256": report["artifact_sha256"],
         "policy": {
             "policy_version": POLICY_VERSION,
@@ -2145,6 +2025,8 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
 def validate_artifact_pair(
     report: dict[str, Any], policy: dict[str, Any], *, target: date
 ) -> list[str]:
+    if not isinstance(report, dict) or not isinstance(policy, dict):
+        return ["report_or_policy_not_object"]
     issues: list[str] = []
     expected_report_scalar = {
         "schema_version": SCHEMA_VERSION,
@@ -2250,10 +2132,18 @@ def validate_artifact_pair(
     policy_decision_contract = str(
         policy.get("decision_contract_version") or ""
     ).strip()
+    if report_decision_contract != policy_decision_contract:
+        issues.append("policy_report_decision_contract_mismatch")
     if report_decision_contract or policy_decision_contract:
-        if report_decision_contract != DECISION_CONTRACT_VERSION:
+        if report_decision_contract != DECISION_CONTRACT_VERSION and not (
+            not expected_allowed
+            and report_decision_contract == LEGACY_DECISION_CONTRACT_VERSION
+        ):
             issues.append("report_decision_contract_version_invalid")
-        if policy_decision_contract != DECISION_CONTRACT_VERSION:
+        if policy_decision_contract != DECISION_CONTRACT_VERSION and not (
+            not expected_allowed
+            and policy_decision_contract == LEGACY_DECISION_CONTRACT_VERSION
+        ):
             issues.append("policy_decision_contract_version_invalid")
     elif expected_allowed:
         issues.append("live_policy_decision_contract_version_missing")
@@ -2267,7 +2157,11 @@ def validate_artifact_pair(
         "report_type": POLICY_REPORT_TYPE,
         "target_date": target.isoformat(),
         "decision_authority": DECISION_AUTHORITY,
-        "activation_mode": ACTIVATION_MODE,
+        "activation_mode": (
+            ACTIVATION_MODE
+            if policy_decision_contract == DECISION_CONTRACT_VERSION
+            else LEGACY_ACTIVATION_MODE
+        ),
         "user_authority": USER_AUTHORITY,
         "operator_approval_required": False,
         "runtime_effect": False,
@@ -2318,6 +2212,21 @@ def validate_artifact_pair(
         issues.append("holdout_armed_since_invalid")
 
     if report_decision_contract == DECISION_CONTRACT_VERSION:
+        campaign = report.get("campaign_base")
+        if campaign != policy.get("campaign_base"):
+            issues.append("campaign_base_report_policy_mismatch")
+        if report.get("campaign_live_started") != policy.get(
+            "campaign_live_started"
+        ) or not isinstance(report.get("campaign_live_started"), bool):
+            issues.append("campaign_live_state_invalid")
+        if campaign or status in {"forward_holdout_armed", "live_auto_apply_ready"}:
+            if not _campaign_valid(campaign, target):
+                issues.append("campaign_base_contract_invalid")
+            elif (
+                campaign["base_book"] != base_book
+                or campaign["arm_date"] != holdout_text
+            ):
+                issues.append("campaign_base_not_frozen")
         lineage = (
             report.get("lineage") if isinstance(report.get("lineage"), dict) else {}
         )
@@ -2429,93 +2338,42 @@ def validate_artifact_pair(
             for key, expected in expected_funnel_counts.items():
                 if all_book.get(key) != expected:
                     issues.append(f"cohort_funnel_lineage_mismatch:{key}")
-        resource_integer_keys = (
-            "paired_generation_count",
-            "trading_date_count",
-            "paired_candidate_observation_count",
-            "paired_control_observation_count",
-            "reordered_generation_count",
-            "counterfactual_moved_in_count",
-            "counterfactual_moved_out_count",
-            "unpaired_or_guard_pruned_row_count",
-            "invalid_row_count",
-        )
-        resource_counts_valid = not any(
-            not isinstance(resource_pair.get(key), int)
-            or isinstance(resource_pair.get(key), bool)
-            or int(resource_pair.get(key)) < 0
-            for key in resource_integer_keys
-        )
-        if not resource_counts_valid:
-            issues.append("resource_allocation_pair_count_contract_invalid")
-        resource_counts = {
-            key: int(resource_pair[key]) if resource_counts_valid else 0
-            for key in resource_integer_keys
-        }
-        if resource_pair.get("counterfactual_moved_in_count") != resource_pair.get(
-            "counterfactual_moved_out_count"
-        ):
-            issues.append("resource_allocation_pair_movement_unbalanced")
-        if lineage_counts_valid and (
-            resource_pair.get("invalid_row_count")
-            != lineage.get("invalid_resource_pair_count")
-        ):
-            issues.append("resource_allocation_pair_invalid_count_mismatch")
-        resource_total_rows = sum(
-            resource_counts[key]
-            for key in (
-                "paired_candidate_observation_count",
-                "paired_control_observation_count",
-                "unpaired_or_guard_pruned_row_count",
+        resource_rows = report.get("resource_pair_rows")
+        resource_start = _resource_window_start(target).isoformat()
+        if isinstance(resource_rows, list) and any(
+            not isinstance(row, dict)
+            or not (
+                resource_start
+                <= str(row.get("observation_date") or "")
+                <= target.isoformat()
             )
-        )
-        if lineage_counts_valid and (
-            resource_total_rows != lineage.get("resource_pair_row_count")
+            for row in resource_rows
+        ):
+            issues.append("resource_row_date_out_of_scope")
+        try:
+            expected_resource = (
+                _resource_allocation_pair_book(
+                    resource_rows,
+                    invalid_row_count=lineage["invalid_resource_pair_count"],
+                )
+                if isinstance(resource_rows, list)
+                else None
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            expected_resource = None
+        if expected_resource is None or resource_pair != expected_resource:
+            issues.append("resource_allocation_evidence_not_reproducible")
+        if isinstance(resource_rows, list) and len(resource_rows) != lineage.get(
+            "resource_pair_row_count"
         ):
             issues.append("resource_allocation_pair_row_count_mismatch")
-        resource_ready = bool(
-            resource_counts["paired_generation_count"] >= RESOURCE_PAIR_MIN_GENERATIONS
-            and resource_counts["trading_date_count"] >= RESOURCE_PAIR_MIN_TRADING_DATES
-            and resource_counts["paired_candidate_observation_count"]
-            >= MIN_COHORT_COMPLETED
-            and resource_counts["paired_control_observation_count"]
-            >= MIN_COHORT_COMPLETED
-            and resource_counts["reordered_generation_count"] > 0
-            and resource_counts["invalid_row_count"] == 0
-        )
-        if not isinstance(resource_pair.get("ready_for_live_gate"), bool):
-            issues.append("resource_allocation_pair_ready_type_invalid")
-        elif resource_pair.get("ready_for_live_gate") != resource_ready:
-            issues.append("resource_allocation_pair_ready_state_invalid")
-        expected_resource_status = (
-            "contract_invalid"
-            if resource_counts["invalid_row_count"] > 0
-            else (
-                "not_observed"
-                if resource_total_rows == 0
-                else (
-                    "hold_sample"
-                    if not (
-                        resource_counts["paired_generation_count"]
-                        >= RESOURCE_PAIR_MIN_GENERATIONS
-                        and resource_counts["trading_date_count"]
-                        >= RESOURCE_PAIR_MIN_TRADING_DATES
-                        and resource_counts["paired_candidate_observation_count"]
-                        >= MIN_COHORT_COMPLETED
-                        and resource_counts["paired_control_observation_count"]
-                        >= MIN_COHORT_COMPLETED
-                    )
-                    else (
-                        "hold_no_effect"
-                        if resource_counts["reordered_generation_count"] == 0
-                        else "ready"
-                    )
-                )
-            )
-        )
-        if resource_pair.get("status") != expected_resource_status:
-            issues.append("resource_allocation_pair_status_invalid")
-        if expected_allowed and not resource_ready:
+        if isinstance(resource_rows, list) and sum(
+            not valid_resource_row(row) for row in resource_rows
+        ) != lineage.get("invalid_resource_pair_count"):
+            issues.append("invalid_resource_pair_count_mismatch")
+        if expected_allowed and (
+            not expected_resource or not expected_resource["ready_for_live_gate"]
+        ):
             issues.append("live_policy_resource_allocation_pair_not_ready")
     source_quality = (
         report.get("source_quality")
@@ -2601,6 +2459,10 @@ def _markdown(report: dict[str, Any]) -> str:
             f"- candidate/control observations: `{candidate_funnel.get('valid_observation_count', 0)}/{control_funnel.get('valid_observation_count', 0)}`",
             f"- candidate/control full-fill: `{candidate_funnel.get('full_fill_observation_count', 0)}/{control_funnel.get('full_fill_observation_count', 0)}`",
             f"- resource allocation pair: `{resource_pair.get('status', 'not_observed')}` generations=`{resource_pair.get('paired_generation_count', 0)}` dates=`{resource_pair.get('trading_date_count', 0)}` reordered=`{resource_pair.get('reordered_generation_count', 0)}`",
+            f"- resolved marginal pairs/dates: `{resource_pair.get('resolved_pair_count', 0)}/{resource_pair.get('resolved_date_count', 0)}`; missing observed labels=`{resource_pair.get('unobserved_pair_count', 0)}`",
+            f"- marginal snapshot net uplift / incoming return: `{resource_pair.get('source_quality_adjusted_ev_pct')}` / `{resource_pair.get('incoming_snapshot_ev_pct')}` (source-only opportunity proxy, not real execution EV)",
+            f"- resource retention review: `{resource_pair.get('retention_review', 'collecting')}`; excluded partitions=`{resource_pair.get('excluded_partition_counts', {})}`",
+            f"- immutable base arm: `{(report.get('campaign_base') or {}).get('arm_date', 'not_armed')}`",
             f"- forward holdout completed/dates: `{holdout['all']['completed_outcome_count']}/{holdout['all']['trading_date_count']}`",
             f"- post-apply status: `{post_apply['status']}`",
             f"- post-apply completed/dates: `{post_apply['book']['all']['completed_outcome_count']}/{post_apply['book']['all']['trading_date_count']}`",
@@ -2608,6 +2470,7 @@ def _markdown(report: dict[str, Any]) -> str:
             f"- source quality/master: `{report['source_quality']['status']}` / `{report['official_symbol_master']['status']}`",
             f"- runtime handoff allowed: `{report['allowed_runtime_apply']}`",
             "- scope: same-priority-tier bounded score only; rollback bonus is 0.",
+            "- automation: validated candidate -> next PREOPEN immutable exact-date receipt -> runtime; no additional operator approval. No receipt means zero bonus.",
             "",
         ]
     )
@@ -2645,9 +2508,9 @@ def main() -> int:
         )
     else:
         report, policy = build_artifacts(target)
-        if args.write:
-            write_artifacts(report, policy)
     issues = validate_artifact_pair(report, policy, target=target)
+    if args.write and not args.verify_only and not issues:
+        write_artifacts(report, policy)
     print(
         json.dumps(
             {
