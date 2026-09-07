@@ -18,13 +18,15 @@
 
 ## 수동 보강 체크리스트
 
-- [ ] `[FullWorkspaceSecondMergeRestart0907] 전체 소스 직접 main 병합 후 우아한 재기동` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~20:00`, `Track: RuntimeStability`)
+- [x] `[FullWorkspaceSecondMergeRestart0907] 전체 소스 직접 main 병합 후 우아한 재기동` (`Due: 2026-09-07`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~20:00`, `Track: RuntimeStability`)
   - Source: [두 번째 전체 소스 배포 검토](../audit-reports/2026-09-07-full-workspace-second-merge-review.md). 사용자의 전체 커밋·푸시·main 병합 후 재기동 지시를 대상으로 수동 veto/공존, scanner lookup, AI calibration/consumer 및 관련 문서·wrapper를 통합 검증했다. 운영 cache/runtime/report는 소스 commit 제외·보존한다.
   - 검증: 통합 회귀의 test isolation 결함 2건을 수정하고 같은 30-file 범위 3012 PASS, compile/shell/diff 검증을 완료했다. 신규 lint finding0이며 기존 runtime bootstrap lint 91건은 base와 동일하다. 상세 component gate와 잔여 자연 acceptance는 Source 참조.
   - 이전 blocker(16:35 KST, 아래 사용자 지시로 해소): 당시 main 보호 규칙의 PR 승인 1건 때문에 main 병합·재기동·목록 초기화를 보류했다. 현재 병합 방식은 아래 16:41 권한 정정을 따른다. 과거 13:08 배포 완료 기록으로 이번 배포를 대체하지 않는다.
   - 원격 receipt: 소스 `47b2779e`를 기능 브랜치에 push했고 [PR #58](https://github.com/JaehwanPark/KORStockScan/pull/58)을 생성했다. 16:35 KST 조회는 `REVIEW_REQUIRED/BLOCKED`, Black CI 진행 중이다. main은 `e7d3886a` 유지, main/widget PID 및 수동목록 hash 불변이다. 문서 receipt 후속 commit은 소스 동작을 바꾸지 않는다.
   - 권한 정정(16:41 KST): 이후 사용자가 `PR 원칙을 제거하라. PR 없이 병합하라`고 명시하여 main의 `required_pull_request_reviews`만 제거했다(HTTP204). 나머지 보호 설정은 동일하며 이전 승인 대기 blocker는 해소됐다. 현재 방식은 검증 후 일반 직접 merge/push다. Black CI 71개 포맷 실패는 캐시 없는 전체 검사·AST 동등성·통합 회귀로 보완 후에만 배포한다.
   - 완료 조건: 검증 generation을 main에 직접 병합·push한 뒤 fresh broker/owner 대사, 표준 graceful restart, 새 PID commit/env/WS·singleton·잔고/미체결 연속성을 확인한다. 목록 전환은 `ManualVetoCoexistenceDeployment0907`, 다음-session 적용은 `SameSymbolMachineScopePreopenAcceptance0908`에서 따로 판정한다. PR 의무 제거는 상시 재기동 또는 runtime mutation 권한이 아니다.
+  - 완료 receipt(16:59 KST): AST 동일71파일 Black 포맷 및 test isolation 추가 보완 후 61-file 회귀4633 PASS/18 SKIP/외부 warning1, no-cache Black869/compile/shell/parser/diff PASS. main 직접 merge/push `81fac7da`, main PID356899→653712, runtime verify PASS/dirty=false, WS login·first0B/0D 및 KRX/NXT 잔고2종목각1주·미체결0 연속성을 확인했다. 위젯 환경 권한/수동목록 전환은 아래 OPEN owner, observer warm-up/과거 지연 결손은 `Intraday1120SourceAcceptance0907`에 남긴다.
+  - 최종17:02: 원격 main Black run34098154239 SUCCESS. 새 observer epoch은 healthy/0B1289/p99 0.511466ms/drop0/writer error0이며 과거 source gap은 복구로 세지 않는다.
 
 - [x] `[ManualVetoCoexistenceFinalReview0907] 사용자 veto 영속·주문 직전 재검사 최종 보완` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 15:59~16:30`, `Track: RuntimeStability`)
   - Source: [수동 veto·공존 최종 리뷰](../audit-reports/2026-09-07-manual-veto-coexistence-final-review.md). 이전 895 PASS는 최초 검증 기록이며 이번에 재현된 중복 source 영속·주문 전송 직전 재검사·legacy auto source별 제거·재migration의 사용자 행 보존 결함은 추가 보완했다.
@@ -35,6 +37,7 @@
   - Source: [최종 리뷰와 운영 blocker](../audit-reports/2026-09-07-manual-veto-coexistence-final-review.md). 사용자 조건부 초기화 의도는 명시적/auto veto 삭제가 아닌 legacy 기계 표식 분리다. 병행 미커밋 변경의 배포 범위를 확인하고 로컬 커밋·clean source 및 표준 graceful restart 계약을 먼저 닫는다. 이 기록 자체는 다른 변경의 일괄 커밋·배포나 재기동 승인이 아니다.
   - 완료 조건: 수정된 main/widget PID·runtime verify, trading process quiescence와 fresh broker/registry 대사, 적용 policy/activation·초기화 원본 및 결과 hash를 확인한 허용 절차에서만 알려진 기계 표식을 전환한다. 당일 미선택 종목은 계속 main 차단하고 manual/auto/generic/env veto는 보존한다. 부분 적용·old PID·권한 미확인이면 목록을 유지하고 직접 blocker를 기록한다.
   - 다음 거래일 연결: 장중 임의 PREOPEN 재실행·시각 조작 금지. 표준 다음 장전 handoff와 자연 소비는 `SameSymbolMachineScopePreopenAcceptance0908`이 소유하며 이번 체크박스로 대체하지 않는다.
+  - 16:59 보완 판정: main PID653712에 수정 source 배포·verify를 완료했다. 위젯 PID9704 환경 파일은 permission denied라 검증/재기동 보류(`user_authority|process_reflection`)이고 manual list hash는 불변이다. 접근 가능한 운영자에 의한 exact PID env 검증과 허용된 서비스 배포, PREOPEN quiescence·migration receipt가 남은 acceptance다.
 
 - [x] `[ManualControlMachineScopeVetoRepair0907] 메인·기계 동일종목 허용과 사용자/자동 veto 우선순위 분리` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 15:00~16:00`, `Track: RuntimeStability`)
   - Source: [owner 공존 traceability](../report-based-automation-traceability.md). 기존 기계 종목 표식을 `manual_operator`와 분리된 `machine_owner_scope`로 전환하되, 명시적 사용자·일반·legacy-watch env·`auto_*` veto는 exact-date 공존 정책보다 항상 먼저 메인 신규진입·보유 제어를 차단하도록 보완했다. 위젯·에피소드 주문 owner와 원장은 계속 독립이다.
@@ -93,6 +96,7 @@
 - [ ] `[Intraday1120SourceAcceptance0907] AI caller lineage·micro timestamp·prune bounded 경제성 source acceptance` (`Due: 2026-09-07`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:20`, `Track: RuntimeStability`)
   - Source: [11:20 부족 ledger](../audit-reports/2026-09-07-intraday-1120-monitoring.md). `ai_trace_record_lineage_20260907`은 다음 별도 허용된 fresh PID의 preflight/cache/live에서 caller가 준 exact record ID 전달을 확인한다. 이 항목은 추가 재기동 권한이 아니며 code-only 상태를 runtime resolved로 바꾸지 않는다.
   - 구현 후속: [반복리뷰 완료](../audit-reports/2026-09-07-intraday-source-repair-review.md)의 새 timestamp tail/canary→AI source gate와 scanner stage_recall_counts/recall_metric_contract를 다음 실제 consumer에서 확인한다. Prune floor는 기존 WS freshness report의 prune_observer_selected_venue_session_economics가 소유하며 consumer 부재로 분류하지 않는다.
+  - 17:00 follow-up: 16:46 0B callback p99 2.360669ms/한도2ms 3회로 source-only collector가 stop됐음을 [배포 검토](../audit-reports/2026-09-07-full-workspace-second-merge-review.md)에 기록했다. 승인된 main 재기동 후 새 epoch은 fresh warming_up이며 과거 결손은 보존한다. frozen sample floor·latency·writer/drop 및 후속 consumer source gate를 다시 만족해야 readiness를 인정한다. 지연 임계치 완화나 report 재생성으로 과거 gap을 덮지 않는다.
   - `micro_timestamp_source_20260907`: 11:12 새 WS epoch 이후 symbol/route별 raw exchange→receive→queue의 최초 지연과 timestamp rejection(0B33,171/65,850; depth21,433)을 대조한다. 원인을 확인한 source-only 계측·report 결함은 보완·재리뷰하고 stale guard·protocol을 추정으로 완화하지 않는다. 해당 row와 후행 label exclusion/consumer hash를 닫을 때만 source-quality 개선으로 판정한다.
   - `scanner_prune_bbo_krx_20260907`: selected8episode/80observation(captured34/gap46)을 full prune2,144와 분리하고 official master/exact route/maturity 기반 resolved20·episode coverage95%·right-censor20% floor를 산출한다. 부족 원인은 최초 고갈 stage와 연결하며 request cap 상향이나 전체 prune EV 외삽을 금지한다. Scanner 전체 recall은 기존 `Intraday2to5SourceAcceptance0907`이 소유하며, BUY Funnel 5축 코드 보완은 완료 기록 `BuyFunnelSubmitDroughtExactAttemptRepair0907`을 따른다.
 
