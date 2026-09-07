@@ -23,7 +23,7 @@ from src.engine.monitoring.widget_symbol_runtime_contract import (
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.risk.manual_control_exclusion import (
     evaluate_manual_control_exclusion,
-    manual_control_operator_exclusion_source,
+    independent_machine_ownership_source,
 )
 from src.engine.risk.market_weakness_entry_guard import (
     MarketWeaknessEntryDecision,
@@ -102,29 +102,14 @@ CUMULATIVE_RESEARCH_BLOCK_REASONS = frozenset(
 
 
 def _widget_order_ownership_source(code: str, *, target_date: date) -> str:
-    """Resolve exact coexistence first, then the legacy operator handoff."""
+    """Resolve exact coexistence before the non-veto machine-scope fallback."""
 
-    try:
-        owner_policy = resolve_symbol_owner_policy(code, target_date=target_date)
-    except (SymbolOwnerPolicyError, OSError, ValueError):
-        return ""
-    if owner_policy.symbol_selected:
-        if owner_policy.owner_allowed("widget_auto_trade", new_entry=True):
-            try:
-                if owner_policy.coexistence_enabled and not (
-                    default_order_owner_registry().decision_activation_matches(
-                        owner_policy
-                    )
-                ):
-                    return ""
-            except OwnerRegistryError:
-                return ""
-            return (
-                f"symbol_owner_policy:{owner_policy.policy_id}:"
-                f"{owner_policy.policy_hash}"
-            )
-        return ""
-    return manual_control_operator_exclusion_source(code)
+    return independent_machine_ownership_source(
+        code,
+        owner="widget_auto_trade",
+        target_date=target_date,
+        new_entry=True,
+    )
 
 
 SAMSUNG_DAILY_EQUAL_SHARE_POLICY_ID = "SAMSUNG_EQUAL_10_ADD0P5_ADD1P0_TP0P5_V2"
@@ -2534,7 +2519,7 @@ class WidgetSignalAutoTrader:
                 now=now,
                 exclusion_applied=exclusion.excluded,
                 exclusion_source=exclusion.source,
-                required_source="manual_operator_or_explicit_env",
+                required_source="exact_owner_policy_or_machine_owner_scope",
             )
             return
         if is_buy_side_paused():
@@ -3400,7 +3385,7 @@ class WidgetSignalAutoTrader:
                 now=now,
                 exclusion_applied=exclusion.excluded,
                 exclusion_source=exclusion.source,
-                required_source="manual_operator_or_explicit_env",
+                required_source="exact_owner_policy_or_machine_owner_scope",
             )
             return
         if is_buy_side_paused():

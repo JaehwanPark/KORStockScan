@@ -1,9 +1,137 @@
 import json
 from datetime import datetime
 
+import pytest
+
 from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping import entry_setup_paired_replay_batch as batch
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
+
+
+def test_refresh_rebinds_only_metadata_without_provider_or_runtime_evidence_change(
+    monkeypatch, tmp_path
+):
+    day = "2026-09-07"
+    monkeypatch.setattr(batch, "BATCH_DIR", tmp_path / "batch")
+    monkeypatch.setattr(optimizer, "ENTRY_BATCH_DIR", batch.BATCH_DIR)
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    plan = {cohort: version for cohort in batch.DEFAULT_COHORTS}
+    source = {
+        "status": "optimizer_candidate_plan_applied_offline_only",
+        "artifact_content_sha256": "f" * 64,
+    }
+    monkeypatch.setattr(batch, "_optimizer_candidate_plan", lambda _: (plan, source))
+    monkeypatch.setattr(
+        batch, "_run_quality_cli", lambda _: pytest.fail("provider replay forbidden")
+    )
+    monkeypatch.setattr(
+        batch,
+        "publish_live_candidate",
+        lambda **_: pytest.fail("runtime republication forbidden"),
+    )
+    detailed_path = tmp_path / "detailed.json"
+    detailed = quality._with_artifact_content_sha256(
+        {"schema": quality.DETAILED_PAIRED_SCHEMA, "target_date": day}
+    )
+    detailed_path.write_text(json.dumps(detailed))
+    monkeypatch.setattr(quality, "detailed_paired_path", lambda *_, **__: detailed_path)
+    original = {
+        "schema": batch.BATCH_SCHEMA,
+        "target_date": day,
+        "status": "completed_offline_only",
+        "candidate_prompt_version": version,
+        **batch.OFFLINE_BATCH_CONTRACT,
+        "cohorts": [
+            {
+                "effective_venue": v,
+                "session_bucket": s,
+                "candidate_prompt_version": version,
+                "status": "completed_offline_only",
+                "report_path": str(detailed_path),
+                "detailed_artifact_content_sha256": detailed["artifact_content_sha256"],
+            }
+            for v, s in batch.DEFAULT_COHORTS
+        ],
+    }
+    batch._atomic_write_json(batch.batch_status_path(day), original)
+    result = batch.refresh_optimizer_binding(target_date=day, write=True)
+    assert result["candidate_prompt_selection_source"] == source
+    assert result["optimizer_binding_refresh_provider_calls"] == 0
+    assert batch.live_policy._batch_evidence(
+        result
+    ) == batch.live_policy._batch_evidence(original)
+    detailed_path.write_text(json.dumps({**detailed, "changed": True}))
+    with pytest.raises(ValueError, match="detailed_generation_changed"):
+        batch.refresh_optimizer_binding(target_date=day, write=False)
+
+
+def test_binding_refresh_rejects_candidate_switch(monkeypatch):
+    monkeypatch.setattr(
+        optimizer,
+        "_frozen_entry_batch_selection",
+        lambda _: {
+            ("KRX", "KRX_REGULAR"): {
+                "prompt_version": optimizer.ENTRY_CANDIDATE_ORDER[0]
+            }
+        },
+    )
+    monkeypatch.setattr(
+        batch,
+        "_optimizer_candidate_plan",
+        lambda _: (
+            {("KRX", "KRX_REGULAR"): optimizer.ENTRY_CANDIDATE_ORDER[1]},
+            {"status": "optimizer_candidate_plan_applied_offline_only"},
+        ),
+    )
+    with pytest.raises(ValueError, match="changed_executed_candidate"):
+        batch.refresh_optimizer_binding(target_date="2026-09-07", write=False)
+
+
+def test_exhausted_registry_never_replays_default_candidate(monkeypatch):
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    monkeypatch.setattr(
+        batch,
+        "_optimizer_candidate_plan",
+        lambda _: (
+            {cohort: version for cohort in batch.DEFAULT_COHORTS},
+            {"research_only_cohorts": [f"{v}/{s}" for v, s in batch.DEFAULT_COHORTS]},
+        ),
+    )
+    monkeypatch.setattr(
+        quality,
+        "_offline_openai_api_keys",
+        lambda: pytest.fail("no provider credential access required"),
+    )
+    monkeypatch.setattr(
+        batch,
+        "_cohort_result",
+        lambda **_: pytest.fail("exhausted registry must not replay"),
+    )
+    monkeypatch.setattr(
+        batch,
+        "publish_live_candidate",
+        lambda **_: pytest.fail("exhausted registry must not publish live candidate"),
+    )
+    report = batch.run_batch(
+        target_date="2026-09-07",
+        as_of=datetime(2026, 9, 7, 22, tzinfo=quality.KST),
+        max_new_requests=30,
+        workers=2,
+        timeout_sec=45.0,
+        require_predecessor=False,
+        predecessor_wait_sec=0,
+        predecessor_interval_sec=1,
+        write=False,
+    )
+    assert report["status"] == "completed_offline_only"
+    assert all(
+        row["status"] == "hold_candidate_registry_exhausted"
+        for row in report["cohorts"]
+    )
+    assert (
+        report["krx_bounded_live_candidate"]["status"]
+        == "blocked_candidate_registry_exhausted_source_only"
+    )
 
 
 def test_optimizer_candidate_plan_is_hash_bound_and_cohort_isolated(
@@ -58,9 +186,9 @@ def test_optimizer_candidate_plan_is_hash_bound_and_cohort_isolated(
     }
     assert source["status"] == "optimizer_candidate_plan_applied_offline_only"
 
-    report["stage_optimizers"]["entry"]["cohort_optimizers"][0]["effective_venue"] = (
-        "NXT"
-    )
+    report["stage_optimizers"]["entry"]["cohort_optimizers"][0][
+        "effective_venue"
+    ] = "NXT"
     path.write_text(json.dumps(report), encoding="utf-8")
     fallback, source = batch._optimizer_candidate_plan(target_date)
     assert set(fallback.values()) == {batch.DEFAULT_CANDIDATE_PROMPT_VERSION}

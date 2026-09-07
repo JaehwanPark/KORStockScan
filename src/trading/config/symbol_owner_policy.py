@@ -1,10 +1,11 @@
 """Exact-date authority for same-symbol multi-owner trading.
 
-The legacy contract makes a ``manual_operator`` exclusion a symbol-wide main
-bot veto.  This module provides the only supported exception: an exact-date,
-hash-verifiable policy that explicitly names the owners allowed to coexist.
+An exact-date, hash-verifiable policy names the owners allowed to coexist.
+It can replace the separate machine-scope compatibility exclusion, never an
+explicit ``manual_operator`` or automatic safety veto on the main bot.
 Absence, staleness, malformed content, or an incomplete migration all retain
-the legacy exclusive behavior.
+the fail-closed ownership behavior. Main veto precedence is enforced by the
+manual-control resolver and rechecked before broker order intent reservation.
 """
 
 from __future__ import annotations
@@ -344,12 +345,12 @@ def _validate_symbol_entry(
             raise SymbolOwnerPolicyError(
                 "symbol_owner_policy_activation_receipt_missing"
             )
-        activation_event_hash = str(
-            activation.get("activation_event_hash") or ""
-        ).strip().lower()
-        entry_authority_hash = str(
-            activation.get("entry_authority_hash") or ""
-        ).strip().lower()
+        activation_event_hash = (
+            str(activation.get("activation_event_hash") or "").strip().lower()
+        )
+        entry_authority_hash = (
+            str(activation.get("entry_authority_hash") or "").strip().lower()
+        )
         expected_entry_hash = symbol_owner_entry_authority_hash(
             active_date=day,
             policy_id=policy_id,
@@ -363,8 +364,7 @@ def _validate_symbol_entry(
             or activation.get("policy_id") != policy_id
             or activation.get("broker_account_key")
             != _broker_account_key(require_explicit=True)
-            or activation.get("migration_registry_tail_hash")
-            != registry_tail_hash
+            or activation.get("migration_registry_tail_hash") != registry_tail_hash
             or activation.get("broker_snapshot_sha256") != broker_snapshot_hash
             or entry_authority_hash != expected_entry_hash
             or len(activation_event_hash) != 64

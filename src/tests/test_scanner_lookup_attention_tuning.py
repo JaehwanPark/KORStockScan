@@ -1,8 +1,10 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import json
+from zoneinfo import ZoneInfo
 
 from src.engine.monitoring import scanner_lookup_attention_tuning as tuning
 from src.engine.scalping import scanner_lookup_attention_policy as policy
+from src.tests.test_scanner_lookup_attention_resource import ready_resource_rows
 
 
 def _outcome(day: date, *, candidate: bool, index: int) -> dict:
@@ -37,8 +39,9 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
     policy_dir.mkdir(exist_ok=True)
     report_dir.mkdir(exist_ok=True)
     payload = _valid_live_policy(source_date)
-    base_book = tuning._cohort_book(_passing_rows(source_date))
-    holdout_book = tuning._cohort_book(_passing_rows(source_date, id_start=10_000))
+    base_rows = _passing_rows(date(2026, 9, 2))
+    base_book = tuning._cohort_book(base_rows)
+    holdout_book = tuning._cohort_book(_passing_rows(date(2026, 9, 9), id_start=10_000))
     post_apply_book = tuning._cohort_book([])
     report = {
         "schema_version": tuning.SCHEMA_VERSION,
@@ -145,6 +148,18 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
         },
         "outcome_count": 40,
     }
+    resource_rows = ready_resource_rows()
+    report["resource_pair_rows"] = resource_rows
+    report["resource_allocation_pair"] = tuning._resource_allocation_pair_book(
+        resource_rows
+    )
+    report["lineage"]["resource_pair_row_count"] = len(resource_rows)
+    report["holdout_armed_since"] = "2026-09-08"
+    report["campaign_base"] = tuning._freeze_base(base_rows, "2026-09-08")
+    report["campaign_live_started"] = True
+    payload["campaign_base"] = report["campaign_base"]
+    payload["campaign_live_started"] = True
+    payload["holdout_armed_since"] = report["holdout_armed_since"]
     report["artifact_sha256"] = policy.canonical_sha256(report)
     payload["source_report_artifact_sha256"] = report["artifact_sha256"]
     payload["artifact_sha256"] = policy.canonical_sha256(
@@ -155,6 +170,23 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
     )
     (policy_dir / f"scanner_lookup_attention_policy_{source_date}.json").write_text(
         json.dumps(payload), encoding="utf-8"
+    )
+    next_day = source_date + timedelta(days=1)
+    while not tuning.is_krx_trading_day(next_day):
+        next_day += timedelta(days=1)
+    policy.freeze_preopen_policy(
+        next_day,
+        write=True,
+        now=datetime(
+            next_day.year,
+            next_day.month,
+            next_day.day,
+            8,
+            tzinfo=ZoneInfo("Asia/Seoul"),
+        ),
+        policy_dir=policy_dir,
+        report_dir=report_dir,
+        applied_dir=root / "applied",
     )
     return report, payload
 
@@ -278,6 +310,15 @@ def _resource_event(*, promoted: bool, code: str, score: float) -> dict:
             "scanner_rank_priority_market_gainer_partition": False,
             "scanner_rank_priority_reserved_partition": "general",
             "scanner_prune_reason": "max_new_codes_reached" if not promoted else "",
+            "lookup_attention_resource_actual_score": 100.0 if promoted else 90.0,
+            "lookup_attention_resource_partition_count": 2,
+            "lookup_attention_resource_partition_codes_sha256": policy.canonical_sha256(
+                ["000660", "005930"]
+            ),
+            "lookup_attention_resource_eligibility_pass": True,
+            "lookup_attention_resource_eligibility_reason": "existing_guards_pass",
+            "lookup_attention_resource_simple_capacity": True,
+            "lookup_attention_resource_observed_epoch": 1788309060.0,
         },
     }
 
@@ -385,45 +426,11 @@ def _resource_row(
 
 
 def test_resource_allocation_pair_requires_real_top_set_reordering():
-    trading_days = []
-    cursor = date(2026, 9, 1)
-    while len(trading_days) < 5:
-        if tuning.is_krx_trading_day(cursor):
-            trading_days.append(cursor)
-        cursor += timedelta(days=1)
-    rows = []
-    for generation in range(20):
-        day = trading_days[generation % len(trading_days)]
-        rows.extend(
-            [
-                _resource_row(
-                    day=day,
-                    generation=generation,
-                    code=f"1{generation:05d}",
-                    score=0.2,
-                    base=100.0,
-                    terminal="promoted",
-                ),
-                _resource_row(
-                    day=day,
-                    generation=generation,
-                    code=f"2{generation:05d}",
-                    score=0.9,
-                    base=90.0,
-                    terminal="capacity_pruned",
-                ),
-            ]
-        )
-
-    book = tuning._resource_allocation_pair_book(rows)
-
-    assert book["status"] == "ready"
+    book = tuning._resource_allocation_pair_book(ready_resource_rows())
     assert book["ready_for_live_gate"] is True
-    assert book["paired_generation_count"] == 20
-    assert book["trading_date_count"] == 5
-    assert book["reordered_generation_count"] == 20
-    assert book["counterfactual_moved_in_count"] == 20
-    assert book["counterfactual_moved_out_count"] == 20
+    assert book["paired_generation_count"] == 3
+    assert book["resolved_pair_count"] == 3
+    assert book["source_quality_adjusted_ev_pct"] > 0
 
 
 def test_resource_allocation_pair_fails_closed_on_invalid_rows():
@@ -923,7 +930,7 @@ def test_lineage_rejects_malformed_versioned_resource_pair_event(monkeypatch, tm
 
     assert observations == []
     assert lineage["invalid_resource_pair_count"] == 1
-    assert lineage["resource_pair_row_count"] == 0
+    assert lineage["resource_pair_row_count"] == 1
 
 
 def test_lineage_blocks_missing_runtime_hook_when_prior_policy_requires_live_use(
@@ -931,16 +938,18 @@ def test_lineage_blocks_missing_runtime_hook_when_prior_policy_requires_live_use
 ):
     event_dir = tmp_path / "events"
     event_dir.mkdir()
-    _write_live_pair(tmp_path, date(2026, 9, 1))
+    _write_live_pair(tmp_path, date(2026, 9, 17))
     monkeypatch.setattr(tuning, "EVENT_DIR", event_dir)
     monkeypatch.setattr(tuning, "POLICY_DIR", tmp_path / "policies")
     monkeypatch.setattr(tuning, "REPORT_DIR", tmp_path / "reports")
-    (event_dir / "pipeline_events_2026-09-02.jsonl").write_text(
-        json.dumps(_observation_event(), ensure_ascii=False) + "\n",
+    monkeypatch.setattr(tuning, "PREOPEN_DIR", tmp_path / "applied")
+    (event_dir / "pipeline_events_2026-09-18.jsonl").write_text(
+        json.dumps(_observation_event(day=date(2026, 9, 18)), ensure_ascii=False)
+        + "\n",
         encoding="utf-8",
     )
 
-    rows, lineage = tuning.collect_lineage(date(2026, 9, 2))
+    rows, lineage = tuning.collect_lineage(date(2026, 9, 18))
 
     assert len(rows) == 1
     assert lineage["invalid_runtime_policy_provenance_count"] == 1
@@ -952,17 +961,27 @@ def test_lineage_accepts_exact_hash_bound_active_runtime_provenance(
 ):
     event_dir = tmp_path / "events"
     event_dir.mkdir()
-    _, live_policy = _write_live_pair(tmp_path, date(2026, 9, 1))
+    _, live_policy = _write_live_pair(tmp_path, date(2026, 9, 17))
     monkeypatch.setattr(tuning, "EVENT_DIR", event_dir)
     monkeypatch.setattr(tuning, "POLICY_DIR", tmp_path / "policies")
     monkeypatch.setattr(tuning, "REPORT_DIR", tmp_path / "reports")
-    observation = _observation_event()
+    monkeypatch.setattr(tuning, "PREOPEN_DIR", tmp_path / "applied")
+    observation = _observation_event(day=date(2026, 9, 18))
+    observation["fields"]["lookup_attention_weight_preopen_artifact_sha256"] = (
+        json.loads(
+            (
+                tmp_path
+                / "applied"
+                / "scanner_lookup_attention_preopen_2026-09-18.json"
+            ).read_text()
+        )["artifact_sha256"]
+    )
     observation["fields"].update(
         {
             "lookup_attention_weight_policy_state": "applied_same_priority_tier",
             "lookup_attention_weight_policy_reason": "bounded_linear_bonus",
             "lookup_attention_weight_policy_version": policy.POLICY_VERSION,
-            "lookup_attention_weight_policy_source_date": "2026-09-01",
+            "lookup_attention_weight_policy_source_date": "2026-09-17",
             "lookup_attention_weight_policy_artifact_sha256": live_policy[
                 "artifact_sha256"
             ],
@@ -985,11 +1004,11 @@ def test_lineage_accepts_exact_hash_bound_active_runtime_provenance(
             "lookup_attention_weight_forbidden_uses": ",".join(tuning.FORBIDDEN_USES),
         }
     )
-    (event_dir / "pipeline_events_2026-09-02.jsonl").write_text(
+    (event_dir / "pipeline_events_2026-09-18.jsonl").write_text(
         json.dumps(observation, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    rows, lineage = tuning.collect_lineage(date(2026, 9, 2))
+    rows, lineage = tuning.collect_lineage(date(2026, 9, 18))
 
     assert lineage["invalid_runtime_policy_provenance_count"] == 0
     assert rows[0]["lookup_attention_weight_runtime_policy_eligible"] is True
@@ -1000,19 +1019,20 @@ def test_lineage_does_not_require_krx_policy_hook_for_out_of_scope_nxt(
 ):
     event_dir = tmp_path / "events"
     event_dir.mkdir()
-    _write_live_pair(tmp_path, date(2026, 9, 1))
+    _write_live_pair(tmp_path, date(2026, 9, 17))
     monkeypatch.setattr(tuning, "EVENT_DIR", event_dir)
     monkeypatch.setattr(tuning, "POLICY_DIR", tmp_path / "policies")
     monkeypatch.setattr(tuning, "REPORT_DIR", tmp_path / "reports")
-    observation = _observation_event()
+    monkeypatch.setattr(tuning, "PREOPEN_DIR", tmp_path / "applied")
+    observation = _observation_event(day=date(2026, 9, 18))
     observation["fields"].update(
         {"effective_venue": "NXT", "market_session_bucket": "nxt_regular"}
     )
-    (event_dir / "pipeline_events_2026-09-02.jsonl").write_text(
+    (event_dir / "pipeline_events_2026-09-18.jsonl").write_text(
         json.dumps(observation, ensure_ascii=False) + "\n", encoding="utf-8"
     )
 
-    rows, lineage = tuning.collect_lineage(date(2026, 9, 2))
+    rows, lineage = tuning.collect_lineage(date(2026, 9, 18))
 
     assert len(rows) == 1
     assert lineage["invalid_runtime_policy_provenance_count"] == 0
@@ -1125,8 +1145,8 @@ def test_counterfactual_bonus_formula_is_bounded_and_has_zero_floor():
 
 def _valid_live_policy(source_date: date) -> dict:
     evidence = tuning._evidence(
-        tuning._cohort_book(_passing_rows(source_date)),
-        tuning._cohort_book(_passing_rows(source_date, id_start=10_000)),
+        tuning._cohort_book(_passing_rows(date(2026, 9, 2))),
+        tuning._cohort_book(_passing_rows(date(2026, 9, 9), id_start=10_000)),
         tuning._cohort_book([]),
         post_apply_mature=False,
     )
@@ -1173,7 +1193,7 @@ def _valid_live_policy(source_date: date) -> dict:
 
 
 def test_runtime_loader_uses_only_latest_prior_trading_day_and_bounded_bonus(tmp_path):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     policy_dir = tmp_path / "policies"
     report_dir = tmp_path / "reports"
@@ -1181,8 +1201,8 @@ def test_runtime_loader_uses_only_latest_prior_trading_day_and_bounded_bonus(tmp
     path = policy_dir / f"scanner_lookup_attention_policy_{source_date}.json"
     policy.clear_policy_cache()
 
-    loaded = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=policy_dir, report_dir=report_dir
+    loaded = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=policy_dir, report_dir=report_dir
     )
     bonus = policy.bounded_bonus(0.8, loaded)
 
@@ -1194,8 +1214,8 @@ def test_runtime_loader_uses_only_latest_prior_trading_day_and_bounded_bonus(tmp
     report["artifact_sha256"] = "0" * 64
     report_path.write_text(json.dumps(report), encoding="utf-8")
     policy.clear_policy_cache()
-    rejected_report = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=policy_dir, report_dir=report_dir
+    rejected_report = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=policy_dir, report_dir=report_dir
     )
     assert rejected_report["active"] is False
     assert rejected_report["reason"] == "prior_source_report_contract_invalid"
@@ -1207,8 +1227,8 @@ def test_runtime_loader_uses_only_latest_prior_trading_day_and_bounded_bonus(tmp
     payload["artifact_sha256"] = "0" * 64
     path.write_text(json.dumps(payload), encoding="utf-8")
     policy.clear_policy_cache()
-    rejected = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=policy_dir, report_dir=report_dir
+    rejected = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=policy_dir, report_dir=report_dir
     )
     assert rejected["active"] is False
     assert rejected["reason"] == "prior_policy_contract_invalid"
@@ -1217,7 +1237,7 @@ def test_runtime_loader_uses_only_latest_prior_trading_day_and_bounded_bonus(tmp
 def test_runtime_loader_rejects_hash_consistent_report_cost_contract_mismatch(
     tmp_path,
 ):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     report["cost_contract"]["buy_fee_bps"] = 0.0
     report["artifact_sha256"] = policy.canonical_sha256(
@@ -1237,8 +1257,8 @@ def test_runtime_loader_rejects_hash_consistent_report_cost_contract_mismatch(
     policy_path.write_text(json.dumps(payload), encoding="utf-8")
     policy.clear_policy_cache()
 
-    loaded = policy.load_active_policy(
-        date(2026, 9, 2),
+    loaded = policy.load_candidate_policy(
+        date(2026, 9, 18),
         policy_dir=tmp_path / "policies",
         report_dir=tmp_path / "reports",
     )
@@ -1248,7 +1268,7 @@ def test_runtime_loader_rejects_hash_consistent_report_cost_contract_mismatch(
 
 
 def test_runtime_loader_fails_closed_on_non_numeric_evidence(tmp_path):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     payload = _valid_live_policy(source_date)
     payload["evidence"]["completed_outcome_count"] = "not-a-count"
     payload["artifact_sha256"] = policy.canonical_sha256(
@@ -1285,8 +1305,8 @@ def test_runtime_loader_fails_closed_on_non_numeric_evidence(tmp_path):
     )
     policy.clear_policy_cache()
 
-    loaded = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=tmp_path, report_dir=report_dir
+    loaded = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=tmp_path, report_dir=report_dir
     )
 
     assert loaded["active"] is False
@@ -1295,7 +1315,7 @@ def test_runtime_loader_fails_closed_on_non_numeric_evidence(tmp_path):
 
 
 def test_runtime_loader_treats_valid_hold_policy_as_inactive_not_corrupt(tmp_path):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     payload = _valid_live_policy(source_date)
     payload["status"] = "forward_holdout_armed"
     payload["allowed_runtime_apply"] = False
@@ -1307,8 +1327,8 @@ def test_runtime_loader_treats_valid_hold_policy_as_inactive_not_corrupt(tmp_pat
     )
     policy.clear_policy_cache()
 
-    loaded = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=tmp_path, report_dir=tmp_path / "unused"
+    loaded = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=tmp_path, report_dir=tmp_path / "unused"
     )
 
     assert loaded["active"] is False
@@ -1317,7 +1337,7 @@ def test_runtime_loader_treats_valid_hold_policy_as_inactive_not_corrupt(tmp_pat
 
 
 def test_runtime_loader_rejects_report_policy_evidence_hash_mismatch(tmp_path):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     payload = _valid_live_policy(source_date)
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
@@ -1350,8 +1370,8 @@ def test_runtime_loader_rejects_report_policy_evidence_hash_mismatch(tmp_path):
     )
     policy.clear_policy_cache()
 
-    loaded = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=tmp_path, report_dir=report_dir
+    loaded = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=tmp_path, report_dir=report_dir
     )
 
     assert loaded["active"] is False
@@ -1361,21 +1381,21 @@ def test_runtime_loader_rejects_report_policy_evidence_hash_mismatch(tmp_path):
 def test_runtime_loader_recovers_when_prior_artifacts_appear_without_cache_clear(
     tmp_path,
 ):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     policy_dir = tmp_path / "policies"
     report_dir = tmp_path / "reports"
     policy_dir.mkdir()
     report_dir.mkdir()
     policy.clear_policy_cache()
 
-    missing = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=policy_dir, report_dir=report_dir
+    missing = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=policy_dir, report_dir=report_dir
     )
     assert missing["reason"] == "prior_policy_missing"
 
     _write_live_pair(tmp_path, source_date)
-    recovered = policy.load_active_policy(
-        date(2026, 9, 2), policy_dir=policy_dir, report_dir=report_dir
+    recovered = policy.load_candidate_policy(
+        date(2026, 9, 18), policy_dir=policy_dir, report_dir=report_dir
     )
 
     assert recovered["active"] is True
@@ -1385,16 +1405,16 @@ def test_runtime_loader_recovers_when_prior_artifacts_appear_without_cache_clear
 def test_runtime_loader_ignores_nontrading_day_artifact_for_latest_prior_policy(
     tmp_path,
 ):
-    friday = date(2026, 9, 4)
-    saturday = date(2026, 9, 5)
-    monday = date(2026, 9, 7)
+    friday = date(2026, 9, 18)
+    saturday = date(2026, 9, 19)
+    monday = date(2026, 9, 21)
     _write_live_pair(tmp_path, friday)
     (
         tmp_path / "policies" / f"scanner_lookup_attention_policy_{saturday}.json"
     ).write_text("{}", encoding="utf-8")
     policy.clear_policy_cache()
 
-    loaded = policy.load_active_policy(
+    loaded = policy.load_candidate_policy(
         monday,
         policy_dir=tmp_path / "policies",
         report_dir=tmp_path / "reports",
@@ -1407,29 +1427,29 @@ def test_runtime_loader_ignores_nontrading_day_artifact_for_latest_prior_policy(
 def test_prior_campaign_survives_contiguous_source_quality_blocked_day(
     monkeypatch, tmp_path
 ):
-    armed_date = date(2026, 9, 1)
-    blocked_date = date(2026, 9, 2)
-    target = date(2026, 9, 3)
+    armed_date = date(2026, 9, 17)
+    blocked_date = date(2026, 9, 18)
+    target = date(2026, 9, 21)
     _write_live_pair(tmp_path, armed_date)
     _write_source_quality_blocked_bridge(
-        tmp_path, blocked_date, holdout_since=armed_date
+        tmp_path, blocked_date, holdout_since=date(2026, 9, 8)
     )
     monkeypatch.setattr(tuning, "POLICY_DIR", tmp_path / "policies")
     monkeypatch.setattr(tuning, "REPORT_DIR", tmp_path / "reports")
 
     prior = tuning._latest_prior_policy(target)
 
-    assert prior["status"] == "live_auto_apply_ready"
-    assert prior["holdout_armed_since"] == armed_date.isoformat()
+    assert prior["status"] == "forward_holdout_armed"
+    assert prior["holdout_armed_since"] == "2026-09-08"
     assert prior["campaign_continuity_bridge_dates"] == [blocked_date.isoformat()]
 
 
 def test_prior_campaign_rejects_changed_holdout_in_blocked_bridge(
     monkeypatch, tmp_path
 ):
-    armed_date = date(2026, 9, 1)
-    blocked_date = date(2026, 9, 2)
-    target = date(2026, 9, 3)
+    armed_date = date(2026, 9, 17)
+    blocked_date = date(2026, 9, 18)
+    target = date(2026, 9, 21)
     _write_live_pair(tmp_path, armed_date)
     _write_source_quality_blocked_bridge(
         tmp_path, blocked_date, holdout_since=blocked_date
@@ -1443,7 +1463,7 @@ def test_prior_campaign_rejects_changed_holdout_in_blocked_bridge(
 def test_artifact_validator_rejects_hash_consistent_evidence_not_derived_from_books(
     tmp_path,
 ):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     payload["evidence"]["candidate_source_quality_adjusted_ev_pct"] = 0.75
     report["policy_evidence_sha256"] = policy.canonical_sha256(payload["evidence"])
@@ -1461,7 +1481,7 @@ def test_artifact_validator_rejects_hash_consistent_evidence_not_derived_from_bo
 
 
 def test_artifact_validator_rejects_forward_status_after_holdout_gate_pass(tmp_path):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     report["status"] = "forward_holdout_armed"
     report["allowed_runtime_apply"] = False
@@ -1483,7 +1503,7 @@ def test_artifact_validator_rejects_forward_status_after_holdout_gate_pass(tmp_p
 
 
 def test_artifact_validator_requires_boolean_post_apply_state(tmp_path):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     report["post_apply_attribution"]["mature"] = "false"
     report["artifact_sha256"] = policy.canonical_sha256(
@@ -1502,7 +1522,7 @@ def test_artifact_validator_requires_boolean_post_apply_state(tmp_path):
 def test_artifact_validator_rejects_malformed_resource_counts_without_crashing(
     tmp_path,
 ):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     report["resource_allocation_pair"]["paired_generation_count"] = "20"
     report["artifact_sha256"] = policy.canonical_sha256(
@@ -1515,12 +1535,11 @@ def test_artifact_validator_rejects_malformed_resource_counts_without_crashing(
 
     issues = tuning.validate_artifact_pair(report, payload, target=source_date)
 
-    assert "resource_allocation_pair_count_contract_invalid" in issues
-    assert "live_policy_resource_allocation_pair_not_ready" in issues
+    assert "resource_allocation_evidence_not_reproducible" in issues
 
 
 def test_artifact_validator_rejects_forged_lineage_pass_state(tmp_path):
-    source_date = date(2026, 9, 1)
+    source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     report["lineage"]["invalid_fill_contract_count"] = 1
     report["artifact_sha256"] = policy.canonical_sha256(

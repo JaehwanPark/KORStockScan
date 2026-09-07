@@ -3,12 +3,276 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.engine.scalping.ai_action_outcome_calibration import build_report
+import pytest
+
+from src.engine.scalping import ai_action_outcome_calibration as calibration
+
+build_report = calibration.build_report
+
+
+def _economic_row(index: int, ev: float = 0.4) -> dict:
+    return {
+        "decision_trace_id": f"economic-{index}",
+        "stock_code": f"{index % 10:06d}",
+        "control_action": "WAIT",
+        "candidate_action": "BUY",
+        "control_decision_value_pct": 0.0,
+        "candidate_primary_decision_value_pct": ev,
+        "delta_pct": ev,
+        "candidate_execution_cost_contract_applied": True,
+        "candidate_execution_cost_pct": 0.2,
+        "candidate_probe_worst_loss_pct": -0.2,
+        "outcome_return_pct": ev,
+    }
+
+
+def test_partial_batch_retains_exact_learning_without_live_promotion(tmp_path):
+    pairs = [_economic_row(i) for i in range(39)]
+    payload = _valid_detailed_payload(
+        {
+            "target_date": "2026-09-07",
+            "request_count": 40,
+            "provider_failed_count": 1,
+            "promotion_report_integrity_pass": False,
+            "promotion_quality_gate_pass": False,
+            "paired_comparisons": pairs,
+        }
+    )
+    payload["calibration_source_contract"] = {
+        "schema": "ai_paired_calibration_source_v1",
+        "global_integrity_pass": True,
+        "request_count": 40,
+        "retained_pair_count": 39,
+        "excluded_request_count": 1,
+        "retained_pairs_sha256": calibration._canonical_sha256(
+            payload["paired_comparisons"]
+        ),
+        "decision_authority": "calibration_learning_only",
+        "runtime_apply_authority": False,
+    }
+    path = (
+        tmp_path
+        / "report"
+        / calibration.PAIRED_SUBDIR
+        / "ai_prompt_detailed_paired_replay_2026-09-07_partial.json"
+    )
+    _write_json(path, payload)
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+    candidate = report["candidate_summaries"][0]
+    assert candidate["exact_trace_count"] == 39
+    assert (
+        candidate["diagnostic_checks_not_review_veto"]["provider_transport_clean"]
+        is False
+    )
+    assert report["runtime_effect"] is False
+    payload["calibration_source_contract"]["global_integrity_pass"] = False
+    _write_json(path, payload)
+    blocked = build_report(target_date="2026-09-07", data_root=tmp_path)
+    assert blocked["candidate_count"] == 0
+    assert blocked["source_contract_summary"]["rejection_reason_counts"] == {
+        "calibration_source_contract_invalid": 1
+    }
+
+
+def test_conflict_exclusion_does_not_poison_remaining_clean_cohort(tmp_path):
+    folder = tmp_path / "report" / calibration.PAIRED_SUBDIR
+    for day, offset in (("2026-09-04", 0), ("2026-09-07", 20)):
+        _write_json(
+            folder / f"ai_prompt_detailed_paired_replay_{day}_clean.json",
+            {
+                "target_date": day,
+                "paired_comparisons": [
+                    _economic_row(i) for i in range(offset, offset + 20)
+                ],
+            },
+        )
+    for suffix, ev in (("a", 0.4), ("b", -0.4)):
+        _write_json(
+            folder
+            / f"ai_prompt_detailed_paired_replay_2026-09-07_conflict_{suffix}.json",
+            {
+                "target_date": "2026-09-07",
+                "paired_comparisons": [_economic_row(100, ev)],
+            },
+        )
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+    candidate = report["candidate_summaries"][0]
+    assert candidate["exact_trace_count"] == 40
+    assert candidate["conflicting_duplicate_trace_count"] == 1
+    assert candidate["prompt_review_gate"]["blockers"] == []
+    assert candidate["review_ready_for_prompt_candidate"] is True
+
+
+def test_two_thin_candidates_pass_central_handoff_verification(tmp_path):
+    from src.engine.verify_threshold_cycle_postclose_chain import (
+        _ai_decision_action_outcome_calibration_status,
+    )
+
+    folder = tmp_path / "report" / calibration.PAIRED_SUBDIR
+    for i, ev in enumerate((0.1, 0.5)):
+        _write_json(
+            folder / f"ai_prompt_detailed_paired_replay_2026-09-07_v{i}.json",
+            {
+                "target_date": "2026-09-07",
+                "requests": [{"candidate": {"prompt_version": f"v{i}"}}],
+                "paired_comparisons": [_economic_row(i, ev)],
+            },
+        )
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+    assert report["thin_positive_review_candidate_count"] == 2
+    assert _ai_decision_action_outcome_calibration_status(report)["status"] == "pass"
+
+
+def test_runtime_review_route_never_reactivates_legacy_family():
+    registered = calibration.runtime_review_route(
+        "decision_quality_v2_14_setup_risk_adjudicator", "entry", "KRX", "KRX_REGULAR"
+    )
+    assert registered["owner"] == "entry_setup_live_policy"
+    assert registered["runtime_apply_authority"] is False
+    assert registered["legacy_main_ai_quality_family_available"] is False
+    assert (
+        calibration.runtime_review_route(
+            "decision_quality_v2_6", "entry", "KRX", "KRX_REGULAR"
+        )["status"]
+        == "source_only_no_registered_runtime_route"
+    )
+
+
+@pytest.mark.parametrize("field", ["delta_pct", "candidate_primary_decision_value_pct"])
+@pytest.mark.parametrize("invalid", [None, True, "NaN"])
+def test_incomplete_economic_values_cannot_be_thin_positive(tmp_path, field, invalid):
+    row = _economic_row(1)
+    row["candidate_decision_value_pct"] = 0.6
+    row[field] = invalid
+    _write_json(
+        tmp_path
+        / "report"
+        / calibration.PAIRED_SUBDIR
+        / "ai_prompt_detailed_paired_replay_2026-09-07_invalid.json",
+        {"target_date": "2026-09-07", "paired_comparisons": [row]},
+    )
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+    candidate = report["candidate_summaries"][0]
+    assert candidate["review_classification"] == "learning_only_or_rejected"
+    assert (
+        "paired_economic_values_complete" in candidate["prompt_review_gate"]["blockers"]
+    )
+
+
+@pytest.mark.parametrize("invalid", [None, True, "NaN", -0.1])
+def test_missing_or_invalid_cost_not_assumed_zero_for_review(tmp_path, invalid):
+    row = _economic_row(1)
+    row["candidate_execution_cost_pct"] = invalid
+    _write_json(
+        tmp_path
+        / "report"
+        / calibration.PAIRED_SUBDIR
+        / "ai_prompt_detailed_paired_replay_2026-09-07_cost.json",
+        {"target_date": "2026-09-07", "paired_comparisons": [row]},
+    )
+    candidate = build_report(target_date="2026-09-07", data_root=tmp_path)[
+        "candidate_summaries"
+    ][0]
+    assert candidate["probe_cost_contract_complete"] is False
+    assert candidate["review_classification"] == "learning_only_or_rejected"
+
+
+def test_calibration_rejects_target_before_clean_baseline(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="target_date_before_clean_baseline"):
+        build_report(target_date="2026-06-04", data_root=tmp_path)
 
 
 def _write_json(path: Path, payload: dict) -> None:
+    if path.name.startswith("ai_prompt_detailed_paired_replay_"):
+        payload = _valid_detailed_payload(payload)
+    elif path.name.startswith("ai_decision_action_outcome_calibration_"):
+        payload = _valid_prior_calibration_payload(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _valid_detailed_payload(payload: dict) -> dict:
+    value = json.loads(json.dumps(payload))
+    source_date = str(value.get("target_date") or "2026-07-29")
+    requests = value.setdefault(
+        "requests", [{"candidate": {"prompt_version": "candidate_v1"}}]
+    )
+    candidate = requests[0].setdefault("candidate", {})
+    candidate_version = str(candidate.get("prompt_version") or "candidate_v1")
+    candidate["prompt_version"] = candidate_version
+    candidate.setdefault("system_prompt_sha256", "a" * 64)
+    candidate.setdefault("contract_sha256", "b" * 64)
+    contract_sha256 = candidate["contract_sha256"]
+    rows = value.setdefault("paired_comparisons", [])
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row.setdefault("stage", "entry")
+        row.setdefault("effective_venue", "KRX")
+        row.setdefault("session_bucket", "KRX_REGULAR")
+        row.setdefault("decision_ts", f"{source_date}T10:00:00+09:00")
+        row.setdefault(
+            "outcome_return_pct", row.get("candidate_primary_decision_value_pct", 0.0)
+        )
+    value.setdefault("schema", calibration.DETAILED_PAIRED_SCHEMA)
+    value.setdefault("runtime_effect", False)
+    value.setdefault("allowed_runtime_apply", False)
+    value.setdefault("actual_order_submitted", False)
+    value.setdefault("broker_order_forbidden", True)
+    value.setdefault("promotion_report_integrity_pass", True)
+    value.setdefault("paired_comparable_count", len(rows))
+    value.setdefault("schema_rejected_count", 0)
+    value.setdefault("provider_failed_count", 0)
+    value.setdefault("candidate_provider_none_count", 0)
+    value.setdefault("candidate_contract_sha256", contract_sha256)
+    value.setdefault(
+        "promotion_cohort_scope",
+        {
+            "stages": ["entry"],
+            "effective_venues": ["KRX"],
+            "session_buckets": ["KRX_REGULAR"],
+            "isolated": True,
+            "candidate_contract_sha256": contract_sha256,
+            "candidate_contract_isolated": True,
+            "cross_cohort_promotion_forbidden": True,
+        },
+    )
+    value.setdefault(
+        "cohort_filter",
+        {
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "runtime_effect": False,
+        },
+    )
+    value.setdefault(
+        "cumulative_learning",
+        {
+            "candidate_prompt_version": candidate_version,
+            "candidate_contract_sha256": contract_sha256,
+            "as_of_date": source_date,
+            "clean_tuning_baseline_date": calibration.CLEAN_BASELINE_DATE,
+        },
+    )
+    value.pop("artifact_content_sha256", None)
+    return calibration._with_artifact_content_sha256(value)
+
+
+def _valid_prior_calibration_payload(payload: dict) -> dict:
+    value = json.loads(json.dumps(payload))
+    value.setdefault("schema", calibration.SCHEMA)
+    value.setdefault("policy_version", calibration.POLICY_VERSION)
+    value.setdefault("runtime_effect", False)
+    value.setdefault("runtime_authority", False)
+    value.setdefault("order_authority", False)
+    value.setdefault("provider_authority", False)
+    value.setdefault("allowed_runtime_apply", False)
+    value.setdefault("actual_order_submitted", False)
+    value.setdefault("broker_order_forbidden", True)
+    ledger = value.setdefault("ofi_action_outcome_calibration", {})
+    ledger.setdefault("schema", calibration.OFI_LEDGER_SCHEMA)
+    value.pop("artifact_content_sha256", None)
+    return calibration._with_artifact_content_sha256(value)
 
 
 def _write_pipeline(path: Path, rows: list[dict]) -> None:
@@ -88,6 +352,7 @@ def test_prompt_review_candidate_requires_multi_day_bounded_exploration(
                         0.4 if is_exposure else 0.01
                     ),
                     "candidate_execution_cost_contract_applied": is_exposure,
+                    "candidate_execution_cost_pct": 0.2 if is_exposure else 0.0,
                     "candidate_probe_worst_loss_pct": -0.2,
                     "delta_pct": 0.4 if is_exposure else 0.01,
                     "first_hit": "target",
@@ -116,7 +381,9 @@ def test_prompt_review_candidate_requires_multi_day_bounded_exploration(
     assert candidate["candidate_exposure_ev_pct"] == 0.4
     assert candidate["prompt_review_gate"]["blockers"] == []
     assert candidate["review_ready_for_prompt_candidate"] is True
-    assert report["selected_review_candidate"] == "candidate_v2"
+    assert report["selected_review_candidate"]["candidate_prompt_version"] == (
+        "candidate_v2"
+    )
 
 
 def test_bounded_recovery_exposure_is_not_blocked_by_raw_adverse_first_count(
@@ -140,6 +407,7 @@ def test_bounded_recovery_exposure_is_not_blocked_by_raw_adverse_first_count(
                         0.5 if is_exposure else 0.01
                     ),
                     "candidate_execution_cost_contract_applied": is_exposure,
+                    "candidate_execution_cost_pct": 0.2 if is_exposure else 0.0,
                     "delta_pct": 0.5 if is_exposure else 0.01,
                     "first_hit": "adverse" if is_recovery else "target",
                     "profit_opportunity_sequence": (
@@ -178,16 +446,15 @@ def test_bounded_recovery_exposure_is_not_blocked_by_raw_adverse_first_count(
     assert candidate["candidate_probe_loss_budget_breach_count"] == 0
     assert candidate["candidate_drawdown_recovery_capture_count"] == 1
     assert (
-        candidate["prompt_review_gate"]["checks"]["probe_loss_budget_within_cap"]
-        is True
+        candidate["prompt_review_gate"]["checks"]["bounded_probe_risk_budget"] is True
     )
     assert (
-        candidate["prompt_review_gate"]["checks"]["severe_tail_adverse_not_increased"]
-        is True
+        candidate["diagnostic_checks_not_review_veto"]["severe_tail_rate_not_increased"]
+        is None
     )
     assert (
-        candidate["prompt_review_gate"]["checks"][
-            "drawdown_recovery_capture_not_decreased"
+        candidate["diagnostic_checks_not_review_veto"][
+            "drawdown_recovery_capture_rate_not_decreased"
         ]
         is True
     )
@@ -255,6 +522,7 @@ def test_isolated_schema_reject_does_not_block_bounded_prompt_review(
                         0.4 if is_exposure else 0.01
                     ),
                     "candidate_execution_cost_contract_applied": is_exposure,
+                    "candidate_execution_cost_pct": 0.2 if is_exposure else 0.0,
                     "candidate_probe_worst_loss_pct": -0.2,
                     "delta_pct": 0.4 if is_exposure else 0.01,
                     "first_hit": "target",
@@ -618,4 +886,465 @@ def test_ofi_partial_action_without_quantity_is_mature_not_comparable(
     assert ledger["mature_not_comparable_outcome_row_count"] == 1
     assert ledger["mature_not_comparable_reason_counts"] == {
         "action_value_requires_exact_quantity_or_cashflow_contract": 1
+    }
+
+
+def test_same_prompt_isolated_krx_and_nxt_are_separate_candidates(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for venue, session, suffix in (
+        ("KRX", "KRX_REGULAR", "krx"),
+        ("NXT", "NXT_AFTERMARKET", "nxt"),
+    ):
+        payload = _valid_detailed_payload(
+            {
+                "target_date": "2026-09-07",
+                "requests": [{"candidate": {"prompt_version": "candidate_isolated"}}],
+                "paired_comparisons": [
+                    {
+                        "decision_trace_id": f"trace-{suffix}",
+                        "stock_code": "005930",
+                        "stage": "entry",
+                        "effective_venue": venue,
+                        "session_bucket": session,
+                        "decision_ts": "2026-09-07T10:00:00+09:00",
+                        "control_action": "WAIT",
+                        "candidate_action": "WAIT",
+                        "control_decision_value_pct": 0.0,
+                        "candidate_primary_decision_value_pct": 0.1,
+                        "delta_pct": 0.1,
+                        "outcome_return_pct": 0.1,
+                    }
+                ],
+            }
+        )
+        contract = payload["candidate_contract_sha256"]
+        payload["promotion_cohort_scope"] = {
+            "stages": ["entry"],
+            "effective_venues": [venue],
+            "session_buckets": [session],
+            "isolated": True,
+            "candidate_contract_sha256": contract,
+            "candidate_contract_isolated": True,
+            "cross_cohort_promotion_forbidden": True,
+        }
+        payload["cohort_filter"] = {
+            "effective_venue": venue,
+            "session_bucket": session,
+            "runtime_effect": False,
+        }
+        payload = calibration._with_artifact_content_sha256(payload)
+        path = paired_dir / f"ai_prompt_detailed_paired_replay_2026-09-07_{suffix}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    assert report["candidate_count"] == 2
+    assert {
+        (row["effective_venue"], row["session_bucket"])
+        for row in report["candidate_summaries"]
+    } == {("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET")}
+
+
+def test_multiple_ready_cohorts_are_not_ranked_into_one_global_selection(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    routes = (("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET"))
+    for venue, session in routes:
+        for day_index, source_date in enumerate(("2026-09-07", "2026-09-08")):
+            rows = []
+            for offset in range(20):
+                is_exposure = day_index == 0 and offset < 5
+                rows.append(
+                    {
+                        "decision_trace_id": f"ready-{venue}-{day_index}-{offset}",
+                        "stock_code": f"{offset % 10:06d}",
+                        "effective_venue": venue,
+                        "session_bucket": session,
+                        "control_action": "WAIT",
+                        "candidate_action": "BUY" if is_exposure else "WAIT",
+                        "control_decision_value_pct": 0.0,
+                        "candidate_primary_decision_value_pct": 0.2,
+                        "candidate_execution_cost_contract_applied": is_exposure,
+                        "candidate_execution_cost_pct": 0.2 if is_exposure else 0.0,
+                        "candidate_probe_worst_loss_pct": -0.1,
+                        "delta_pct": 0.2,
+                    }
+                )
+            payload = _valid_detailed_payload(
+                {
+                    "target_date": source_date,
+                    "requests": [{"candidate": {"prompt_version": "candidate_ready"}}],
+                    "paired_comparisons": rows,
+                }
+            )
+            payload["promotion_cohort_scope"]["effective_venues"] = [venue]
+            payload["promotion_cohort_scope"]["session_buckets"] = [session]
+            payload["cohort_filter"] = {
+                "effective_venue": venue,
+                "session_bucket": session,
+                "runtime_effect": False,
+            }
+            payload = calibration._with_artifact_content_sha256(payload)
+            path = paired_dir / (
+                "ai_prompt_detailed_paired_replay_"
+                f"{source_date}_{venue.lower()}_ready.json"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(target_date="2026-09-08", data_root=tmp_path)
+
+    assert report["review_candidate_count"] == 2
+    assert len(report["review_ready_candidates"]) == 2
+    assert report["selected_review_candidate"] is None
+    assert report["selection_status"] == (
+        "multiple_isolated_review_candidates_no_cross_cohort_selection"
+    )
+    assert report["optimizer_handoff"]["selected_review_candidate"] is None
+    assert len(report["optimizer_handoff"]["review_ready_candidates"]) == 2
+
+
+def test_conflicting_duplicate_trace_is_excluded_and_blocks_only_affected_cohort(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for suffix, outcome in (("a", 0.4), ("b", -0.4)):
+        _write_json(
+            paired_dir
+            / f"ai_prompt_detailed_paired_replay_2026-09-07_conflict_{suffix}.json",
+            {
+                "target_date": "2026-09-07",
+                "requests": [{"candidate": {"prompt_version": "candidate_conflict"}}],
+                "paired_comparisons": [
+                    {
+                        "decision_trace_id": "same-trace",
+                        "stock_code": "005930",
+                        "control_action": "WAIT",
+                        "candidate_action": "BUY",
+                        "control_decision_value_pct": 0.0,
+                        "candidate_primary_decision_value_pct": outcome,
+                        "candidate_execution_cost_contract_applied": True,
+                        "candidate_execution_cost_pct": 0.2,
+                        "candidate_probe_worst_loss_pct": -0.2,
+                        "delta_pct": outcome,
+                        "outcome_return_pct": outcome,
+                    }
+                ],
+            },
+        )
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    assert report["source_contract_summary"]["conflicting_duplicate_trace_count"] == 1
+    candidate = report["candidate_summaries"][0]
+    assert candidate["exact_trace_count"] == 0
+    assert candidate["source_integrity_complete"] is False
+    assert report["selected_review_candidate"] is None
+    assert report["optimizer_handoff"]["source_contract_pass"] is True
+
+
+def test_bounded_probe_budget_allows_one_twopercent_breach_in_five_exposures(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for day_index, source_date in enumerate(("2026-09-07", "2026-09-08")):
+        rows = []
+        for offset in range(20):
+            index = day_index * 20 + offset
+            is_exposure = index < 5
+            rows.append(
+                {
+                    "decision_trace_id": f"risk-{index}",
+                    "stock_code": f"{index % 10:06d}",
+                    "control_action": "WAIT",
+                    "candidate_action": "BUY" if is_exposure else "WAIT",
+                    "control_decision_value_pct": 0.0,
+                    "candidate_primary_decision_value_pct": 0.4,
+                    "candidate_execution_cost_contract_applied": is_exposure,
+                    "candidate_execution_cost_pct": 0.2 if is_exposure else 0.0,
+                    "candidate_probe_worst_loss_pct": (-2.5 if index == 0 else -0.2),
+                    "delta_pct": 0.4,
+                    "first_hit": "target",
+                    "candidate_error_taxonomy": [],
+                }
+            )
+        _write_json(
+            paired_dir / f"ai_prompt_detailed_paired_replay_{source_date}_risk.json",
+            {
+                "target_date": source_date,
+                "requests": [{"candidate": {"prompt_version": "candidate_risk"}}],
+                "paired_comparisons": rows,
+            },
+        )
+
+    candidate = build_report(target_date="2026-09-08", data_root=tmp_path)[
+        "candidate_summaries"
+    ][0]
+
+    assert candidate["candidate_probe_loss_budget_breach_count"] == 1
+    assert candidate["candidate_probe_loss_budget_breach_rate_pct"] == 20.0
+    assert candidate["candidate_probe_severe_tail_exposure_count"] == 1
+    assert candidate["candidate_probe_severe_tail_rate_pct"] == 20.0
+    assert candidate["candidate_probe_catastrophic_loss_count"] == 0
+    assert (
+        candidate["prompt_review_gate"]["checks"]["bounded_probe_risk_budget"] is True
+    )
+    assert candidate["review_ready_for_prompt_candidate"] is True
+
+
+def test_positive_selective_candidate_is_ranked_as_thin_review_not_discarded(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for day_index, source_date in enumerate(("2026-09-07", "2026-09-08")):
+        rows = []
+        for offset in range(15):
+            index = day_index * 15 + offset
+            is_exposure = index == 0
+            rows.append(
+                {
+                    "decision_trace_id": f"thin-{index}",
+                    "stock_code": f"{index % 10:06d}",
+                    "control_action": "WAIT",
+                    "candidate_action": "BUY" if is_exposure else "WAIT",
+                    "control_decision_value_pct": 0.0,
+                    "candidate_primary_decision_value_pct": 0.2,
+                    "candidate_execution_cost_contract_applied": is_exposure,
+                    "candidate_execution_cost_pct": 0.2 if is_exposure else 0.0,
+                    "candidate_probe_worst_loss_pct": -0.2,
+                    "delta_pct": 0.2,
+                }
+            )
+        _write_json(
+            paired_dir / f"ai_prompt_detailed_paired_replay_{source_date}_thin.json",
+            {
+                "target_date": source_date,
+                "requests": [{"candidate": {"prompt_version": "candidate_thin"}}],
+                "paired_comparisons": rows,
+            },
+        )
+
+    report = build_report(target_date="2026-09-08", data_root=tmp_path)
+    candidate = report["candidate_summaries"][0]
+
+    assert candidate["candidate_exposure_count"] == 1
+    assert candidate["review_classification"] == "thin_positive_review"
+    assert candidate["review_ready_for_prompt_candidate"] is False
+    assert report["thin_positive_review_candidate_count"] == 1
+    assert report["selected_review_candidate"] is None
+
+
+def test_status_distinguishes_cumulative_unchanged_from_current_update(
+    tmp_path: Path,
+) -> None:
+    paired_path = (
+        tmp_path
+        / "report"
+        / "ai_prompt_detailed_paired_replay"
+        / "ai_prompt_detailed_paired_replay_2026-09-07_candidate_v1.json"
+    )
+    _write_json(
+        paired_path,
+        {
+            "target_date": "2026-09-07",
+            "requests": [{"candidate": {"prompt_version": "candidate_v1"}}],
+            "paired_comparisons": [
+                {
+                    "decision_trace_id": "trace-1",
+                    "stock_code": "005930",
+                    "control_action": "WAIT",
+                    "candidate_action": "WAIT",
+                    "control_decision_value_pct": 0.0,
+                    "candidate_primary_decision_value_pct": 0.1,
+                    "delta_pct": 0.1,
+                }
+            ],
+        },
+    )
+
+    report = build_report(target_date="2026-09-08", data_root=tmp_path)
+
+    assert report["status"] == "cumulative_unchanged_no_new_exact_results"
+    assert report["new_current_result_count"] == 0
+
+
+def test_post_cutover_hashless_detailed_report_is_explicitly_rejected(
+    tmp_path: Path,
+) -> None:
+    path = (
+        tmp_path
+        / "report"
+        / "ai_prompt_detailed_paired_replay"
+        / "ai_prompt_detailed_paired_replay_2026-09-07_hashless.json"
+    )
+    payload = _valid_detailed_payload(
+        {
+            "target_date": "2026-09-07",
+            "requests": [{"candidate": {"prompt_version": "candidate_hashless"}}],
+            "paired_comparisons": [
+                {
+                    "decision_trace_id": "hashless-1",
+                    "stock_code": "005930",
+                    "control_action": "WAIT",
+                    "candidate_action": "WAIT",
+                    "candidate_primary_decision_value_pct": 0.1,
+                    "outcome_return_pct": 0.1,
+                    "delta_pct": 0.1,
+                }
+            ],
+        }
+    )
+    payload.pop("artifact_content_sha256")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    assert report["candidate_count"] == 0
+    assert report["status"] == "current_input_excluded_cumulative_unchanged"
+    assert report["source_contract_summary"]["rejection_reason_counts"] == {
+        "artifact_content_sha256_missing_after_cutover": 1
+    }
+
+
+def test_pre_cutover_hashless_rows_are_diagnostic_and_do_not_poison_new_candidate(
+    tmp_path: Path,
+) -> None:
+    paired_dir = tmp_path / "report" / "ai_prompt_detailed_paired_replay"
+    for source_date, trace_id in (
+        ("2026-09-06", "legacy-trace"),
+        ("2026-09-07", "verified-trace"),
+    ):
+        payload = _valid_detailed_payload(
+            {
+                "target_date": source_date,
+                "requests": [{"candidate": {"prompt_version": "candidate_continuity"}}],
+                "paired_comparisons": [
+                    {
+                        "decision_trace_id": trace_id,
+                        "stock_code": "005930",
+                        "control_action": "WAIT",
+                        "candidate_action": "WAIT",
+                        "control_decision_value_pct": 0.0,
+                        "candidate_primary_decision_value_pct": 0.1,
+                        "delta_pct": 0.1,
+                    }
+                ],
+            }
+        )
+        if source_date < calibration.DETAILED_SELF_HASH_CUTOVER_DATE:
+            payload.pop("artifact_content_sha256")
+        path = paired_dir / (
+            f"ai_prompt_detailed_paired_replay_{source_date}_continuity.json"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    candidate = report["candidate_summaries"][0]
+    assert candidate["exact_trace_count"] == 1
+    assert candidate["source_integrity_complete"] is True
+    assert candidate["source_report_count"] == 2
+    assert candidate["verified_source_report_count"] == 1
+    assert candidate["legacy_hashless_source_report_count"] == 1
+    assert (
+        report["source_contract_summary"]["legacy_hashless_diagnostic_row_count"] == 1
+    )
+
+
+def test_current_date_invalid_row_is_excluded_and_status_is_not_updated(
+    tmp_path: Path,
+) -> None:
+    _write_json(
+        tmp_path
+        / "report"
+        / "ai_prompt_detailed_paired_replay"
+        / "ai_prompt_detailed_paired_replay_2026-09-07_row_gap.json",
+        {
+            "target_date": "2026-09-07",
+            "requests": [{"candidate": {"prompt_version": "candidate_row_gap"}}],
+            "paired_comparisons": [
+                {
+                    "decision_trace_id": "wrong-stage",
+                    "stage": "holding",
+                    "stock_code": "005930",
+                    "control_action": "WAIT",
+                    "candidate_action": "WAIT",
+                    "candidate_primary_decision_value_pct": 0.1,
+                    "outcome_return_pct": 0.1,
+                    "delta_pct": 0.1,
+                }
+            ],
+        },
+    )
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    assert report["status"] == "current_input_excluded_cumulative_unchanged"
+    assert report["new_current_result_count"] == 0
+    assert report["source_contract_summary"]["current_date_row_exclusion_count"] == 1
+
+
+def test_non_native_source_count_is_rejected_before_calibration(
+    tmp_path: Path,
+) -> None:
+    _write_json(
+        tmp_path
+        / "report"
+        / "ai_prompt_detailed_paired_replay"
+        / "ai_prompt_detailed_paired_replay_2026-09-07_bad_count.json",
+        {
+            "target_date": "2026-09-07",
+            "schema_rejected_count": 0.5,
+            "requests": [{"candidate": {"prompt_version": "candidate_bad_count"}}],
+            "paired_comparisons": [],
+        },
+    )
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    assert report["candidate_count"] == 0
+    assert report["status"] == "current_input_excluded_cumulative_unchanged"
+    assert report["source_contract_summary"]["rejection_reason_counts"] == {
+        "schema_rejected_count_invalid": 1
+    }
+
+
+def test_naive_decision_timestamp_is_excluded_from_exact_date_calibration(
+    tmp_path: Path,
+) -> None:
+    _write_json(
+        tmp_path
+        / "report"
+        / "ai_prompt_detailed_paired_replay"
+        / "ai_prompt_detailed_paired_replay_2026-09-07_naive_time.json",
+        {
+            "target_date": "2026-09-07",
+            "requests": [{"candidate": {"prompt_version": "candidate_naive"}}],
+            "paired_comparisons": [
+                {
+                    "decision_trace_id": "naive-time",
+                    "decision_ts": "2026-09-07T10:00:00",
+                    "stock_code": "005930",
+                    "control_action": "WAIT",
+                    "candidate_action": "WAIT",
+                    "candidate_primary_decision_value_pct": 0.1,
+                    "outcome_return_pct": 0.1,
+                    "delta_pct": 0.1,
+                }
+            ],
+        },
+    )
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    assert report["status"] == "current_input_excluded_cumulative_unchanged"
+    assert report["source_contract_summary"]["current_date_row_exclusion_count"] == 1
+    assert report["source_reports"][0]["row_exclusion_reason_counts"] == {
+        "decision_timestamp_invalid_or_naive": 1
     }

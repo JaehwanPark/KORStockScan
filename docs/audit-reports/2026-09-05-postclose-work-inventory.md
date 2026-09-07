@@ -135,7 +135,7 @@
 | 46 | Panic-sell defense report | panic regime 종결 | recovery 상태 귀속 | exit 안정화 | ON | 상세검토 대기 | E2 |
 | 47 | Scale-in split plan | AVG_DOWN 총수량 보존 2-leg 정책 | 유효한 paired 증분 경제성을 policy·PREOPEN에 연결 | 체결 참여율·순이익 개선 기대, 실제 효과 미검증 | PRODUCER ON / v3 보완 완료 / 9월 7일 env 비선택 | [보완 §6](2026-09-06-scale-in-split-order-plan-final-review.md#6-f1f7-구현-및-반복-리뷰): F1~F7 및 재리뷰 결함 수정. BUY/SELL lifecycle join·공유 TTL 10/20초·fixed control·버전별 R6·결측 이월·paired>=3/2일·lineage 일치. 시장가 runtime 제외·3-leg 진단 전용. 943 PASS, 검토 범위 미해결0. v1/v2 승격 금지, 실제 cancel delta는 미계측 진단 | 구현 완료 기록 `ScaleInSplitFinalReviewRepair0907`; 자연 실행·실효성 확인 OPEN owner `ScaleInSplitNaturalEvidence0907`. 현재 표본 부재를 강제 수량/조건 완화로 해결하지 않음 |
 | 48 | Strategy-position fact sync | 완료 거래 fact 갱신 | 실제 체결·PnL 확정 | EV 정확성 향상 | ON | 상세검토 대기 | DB writer lock |
-| 49 | Scanner lookup-attention tuning | `ka00198` 조회집중도를 기존 동일 tier 안의 후보 우선순위에 반영 | 적용된 raw-row exclusion 후 유효행 EV·독립 holdout과 실제 promoted/capacity-pruned top-set 변화를 검증해 다음 PREOPEN 정책 생성 | 유효한 상승 관심 종목의 제한된 감시자원 배분·순EV 개선 기대; 미검증 | ON, DB 필요; decision contract v3 보완 종결, 자연 증거 대기 | [최종 구현·리뷰](2026-09-07-scanner-lookup-attention-final-review.md): 전체일자 과잉차단 제거, funnel·generation pair·campaign continuity·자동 live gate 결속. code-level finding 0; 신규 PID/report/PREOPEN 효과는 `ScannerLookupAttentionNaturalEvidence0908` OPEN | E2; 신규 operator lock 없음 |
+| 49 | Scanner lookup-attention tuning | `ka00198` 조회집중도로 기존 동일 tier의 감시자원을 재배분해 순EV 개선 | 고정 0.60/200점 공식의 실제 경제성·독립 holdout + 교체 pair의 비용 차감 증분 snapshot 평가 | 비조회순위 경쟁군·자격 재현, 불필요한 자원배분 계수 제거, base 보존·장전 고정 | 장후 ON; v4 구현/재리뷰 완료, 자연 v4 근거·실제 EV 개선은 미확인 | [R1~R5 구현·최종 검증](2026-09-07-scanner-lookup-attention-final-review.md#r1r5-보완-구현과-최종-재리뷰): immutable base, resource v2 완전한 경쟁 집합·관측 pair3/2일 및 독립 실체결 EV, 결손 국소 격리. exact-date PREOPEN receipt만 runtime 소비. 현재 PID/운영 정책 변경 없음; 자연 owner `ScannerLookupAttentionNaturalEvidence0908` | E2; 신규 operator lock/추가 사용자 승인 없음; 조건 통과 시 다음 장전 자동 고정·적용 |
 | 50 | Daily threshold report | 일별·누적 후보 통합 | calibration·AI review 생성 | PREOPEN 근거 통합 | ON | 상세검토 대기 | E2 |
 | 51 | Threshold AI correction | deterministic 후보 2차 검토 | parsed review 확보 | 잘못된 자동후보 차단 | ON, OpenAI | 상세검토 대기 | provider budget lock |
 | 52 | Statistical action weight | 행동별 통계 가중치 | report-only 진단 | ADM 해석 개선 | RETIRED (2026-09-06) | 폐기 계약 구현; 리뷰 보고서 참조 | 없음; 기존 E2 사용 종료 |
@@ -167,13 +167,13 @@
 | 73 | Pipeline verbosity | 중복·과다 event 분석 | producer별 비용 측정 | 저장량·runtime 절감 | ON, freshness reuse | 상세검토 대기 | E2 |
 | 74 | Source-quality final audit | 후속 산출물 포함 재감사 | 최종 tuning 허용상태 확정 | 중간 gap 포착 | ON, trigger-gated | 상세검토 대기 | E2 |
 | 75 | Entry split order plan | 최초진입 분할 정책 | 1·2차 가격·타이밍 후보 생성 | 체결률/slippage 개선 | ON | 상세검토 대기 | E2; operator lock 없음 |
-| 76 | AI decision-quality materialization | trace/outcome/replay 입력 준비 | exact cohort 생성 | prompt EV 측정 | ON | 상세검토 대기 | E2 |
+| 76 | AI decision-quality materialization | trace/outcome/replay 입력 준비 | exact cohort 생성 | prompt EV 측정 | ON; 자기해시·부분 성공 학습 계약 | [#76→#82 최종 리뷰](2026-09-07-ai-decision-action-outcome-calibration-final-review.md): 정상 paired 행을 학습에 보존하며 전역 무결성·별도 live promotion gate는 유지 | 코드 검증과 자연 산출물 증거 분리 |
 | 77 | Main AI R0–R3 | prompt 후보 수집·비교 | exact R3 manifest 생성 | 지속적 prompt 개선 | ON | 상세검토 대기 | E2, provider/storage locks |
-| 78 | Main AI prompt optimizer | prompt 후보 최적화 | 경제성 후보 탐색 | Main AI 성과 개선 가능성 | ON | 상세검토 대기 | E2 |
+| 78 | Main AI prompt optimizer | 기존 prompt 후보 평가 개선 | 격리된 누적 EV로 오프라인 평가 후보 유지·전진 | 무의미한 반복 평가 감소 | ON; #82 v5 source-generation 검증 및 offline 선택 소비 | [최종 재보완](2026-09-07-ai-decision-action-outcome-calibration-final-review.md): 당일 실행 후보 고정, 다음 세션 권고 분리, registry 고갈 시 기본 후보 재실행 금지 | runtime 권한 없음; V2.14/V2.15 KRX는 별도 entry_setup_live_policy owner |
 | 79 | Holding-base replay | holding control manifest | base path hash binding | 비교 기준 안정화 | ON | 상세검토 대기 | E2 |
 | 80 | Main AI prompt consumer | entry/holding path 연결 | 모든 request path 분류 | 소비경로 누락 제거 | ON | 상세검토 대기 | E2 |
-| 81 | Main AI runtime family | exact R3를 PREOPEN family로 변환 | candidate-ready만 적용 | 검증 prompt 자동반영 | ON, fail-closed | 상세검토 대기 | E2 |
-| 82 | AI action-outcome calibration | AI action과 사후결과 비교 | action quality 보정 | prompt 선택 개선 | ON | 상세검토 대기 | E2 |
+| 81 | Main AI runtime family | 기존 exact R3 runtime 설계 | 현재 실적용 권한 없음 | 자동반영 기대효과를 주장하지 않음 | DISABLED; LEGACY_RUNTIME_AUTHORITY_ENABLED=False | #82 표본 증가로 활성화되지 않음. 별도 V2.14/V2.15 entry owner와 혼동 금지 | 9/7 PREOPEN blocked_fail_closed; 이번 변경에서 재활성화하지 않음 |
+| 82 | AI action-outcome calibration | AI action과 사후결과 비교 | 정상 누적 경제성을 기존 오프라인 평가에 환류 | 평가 후보 선택 개선 가능성 | ON; schema v2/policy v5, 자연 근거 대기 | [최종 재보완](2026-09-07-ai-decision-action-outcome-calibration-final-review.md): 부분 성공·충돌 격리, 정상 후보 정렬/해시 검증, 21:05 상세 결과 후 재갱신·metadata-only 재결속 | `AIDecisionActionOutcomeNaturalEvidence0908` OPEN; 실수익/실적용 미검증 |
 | 83 | Codebase performance workorder | 코드 runtime 병목 분석 | 자동 성능 workorder 생성 | 장후시간 단축 | OFF | 상세검토 대기 | 없음 |
 | 84 | Time-window regime CF | 시간대별 정책 비교 | regime 후보 탐색 | 장중 적응 | OFF | 상세검토 대기 | 없음 |
 | 85 | Producer-gap bundle | 누락 producer 근거 수집 | gap 분석 입력 생성 | 원천 결손 해결 | OFF | 상세검토 대기 | 없음 |

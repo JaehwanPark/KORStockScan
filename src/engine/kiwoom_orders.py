@@ -13,6 +13,7 @@ from src.utils.constants import TRADING_RULES
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
+from src.engine.risk.manual_control_exclusion import evaluate_main_bot_control_exclusion
 from src.trading.config.symbol_owner_policy import (
     SymbolOwnerPolicyError,
     resolve_symbol_owner_policy,
@@ -106,6 +107,18 @@ def _reserve_owner_registry_intent(
     action="NEW",
     original_order_no="",
 ):
+    context = _owner_registry_context(owner_context)
+    is_new_entry = str(side).upper() == "BUY" and str(action).upper() == "NEW"
+    if context is None or context.owner_type == "main_scalping":
+        exclusion = evaluate_main_bot_control_exclusion(code, new_entry=is_new_entry)
+        if exclusion.excluded:
+            response = _owner_registry_block_response(
+                f"main_control_veto:{exclusion.reason}"
+            )
+            response.update(exclusion.as_log_fields())
+            if str(side).upper() == "SELL" and str(action).upper() == "NEW":
+                response["_local_sell_no_call_token"] = _LOCAL_SELL_NO_CALL_TOKEN
+            return None, None, response
     try:
         policy = resolve_symbol_owner_policy(code)
     except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
@@ -117,8 +130,6 @@ def _reserve_owner_registry_intent(
             ),
         )
     registry = default_order_owner_registry()
-    context = _owner_registry_context(owner_context)
-    is_new_entry = str(side).upper() == "BUY" and str(action).upper() == "NEW"
     if policy.symbol_selected:
         if context is None:
             return (

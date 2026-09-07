@@ -4,7 +4,8 @@ The runner consumes one reviewed standing-authority artifact, discovers the
 current widget/episode symbol universe, and applies only symbols whose broker
 quantity and open orders are already fully represented by the immutable owner
 registry.  Unmigrated custody is never inferred; affected symbols retain the
-legacy manual exclusion for that date.
+non-veto machine-owner scope marker but receive no same-date coexistence entry
+authority.
 """
 
 from __future__ import annotations
@@ -20,7 +21,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.engine.risk.manual_control_exclusion import (
-    manual_control_operator_exclusion_source,
+    LEGACY_MACHINE_OWNER_SCOPE_LABELS,
+    legacy_machine_owner_scope_source,
+    machine_owner_scope_source,
+    migrate_legacy_machine_owner_scope_markers,
 )
 from src.trading.config.symbol_owner_policy import (
     BROKER_ACCOUNT_KEY_ENV,
@@ -55,6 +59,18 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import get_krx_trading_day_status
 
 AUTO_RESULT_SCHEMA = "symbol_owner_policy_auto_apply_result_v1"
+POLICY_APPLIED_MARKER_MIGRATION_PENDING = "policy_applied_marker_migration_pending"
+_MIGRATION_TRANSIENT_FIELDS = frozenset(
+    {
+        "migration_blocked_at_kst",
+        "migration_block_reason",
+        "migration_blocking_processes",
+        "migration_error_type",
+        "migration_error",
+        "missing_current_machine_scope_symbols",
+        "remaining_legacy_machine_scope_symbols",
+    }
+)
 DEFAULT_AUTO_DIR = DATA_DIR / "runtime" / "symbol_owner_policy" / "auto_apply"
 OFFICIAL_KIWOOM_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
@@ -81,6 +97,47 @@ def _canonical_sha256(value: Any) -> str:
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _marker_migration_pending_result(
+    payload: dict[str, Any],
+    *,
+    observed_at: datetime,
+    reason: str,
+    blocking_processes: list[dict[str, Any]] | None = None,
+    error: Exception | None = None,
+    missing_current: list[str] | None = None,
+    remaining_legacy: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build one hash-valid pending receipt with only current diagnostics."""
+
+    pending = {
+        key: value
+        for key, value in payload.items()
+        if key
+        not in {
+            "result_content_sha256",
+            "idempotent_recheck_at_kst",
+            *_MIGRATION_TRANSIENT_FIELDS,
+        }
+    }
+    pending["status"] = POLICY_APPLIED_MARKER_MIGRATION_PENDING
+    pending["runtime_effect"] = False
+    pending["policy_runtime_effect"] = True
+    pending["main_machine_scope_transition_effect"] = False
+    pending["migration_blocked_at_kst"] = observed_at.isoformat()
+    pending["migration_block_reason"] = str(reason)
+    if blocking_processes is not None:
+        pending["migration_blocking_processes"] = blocking_processes
+    if error is not None:
+        pending["migration_error_type"] = type(error).__name__
+        pending["migration_error"] = str(error)
+    if missing_current is not None:
+        pending["missing_current_machine_scope_symbols"] = missing_current
+    if remaining_legacy is not None:
+        pending["remaining_legacy_machine_scope_symbols"] = remaining_legacy
+    pending["result_content_sha256"] = _canonical_sha256(pending)
+    return pending
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -140,16 +197,40 @@ def _validate_runtime_scope(
         if (
             not isinstance(entry, dict)
             or sorted(entry.get("allowed_owners") or []) != owners
-            or not manual_control_operator_exclusion_source(symbol)
+            or not (
+                machine_owner_scope_source(symbol)
+                or legacy_machine_owner_scope_source(symbol)
+            )
         ):
             raise SymbolOwnerPolicyAutoApplyError(
-                f"symbol_owner_auto_apply_owner_or_manual_scope_mismatch:{symbol}"
+                f"symbol_owner_auto_apply_owner_or_machine_scope_mismatch:{symbol}"
             )
     return expected
 
 
+def _machine_scope_transition_gaps(
+    expected_scope: dict[str, list[str]],
+) -> tuple[list[str], list[str]]:
+    """Return missing current markers and legacy markers left after migration."""
+
+    missing_current = [
+        symbol
+        for symbol in sorted(expected_scope)
+        if not machine_owner_scope_source(symbol)
+    ]
+    remaining_legacy = [
+        symbol
+        for symbol in sorted(expected_scope)
+        if legacy_machine_owner_scope_source(symbol)
+    ]
+    return missing_current, remaining_legacy
+
+
 def _result_path(target_date) -> Path:
-    return DEFAULT_AUTO_DIR / f"symbol_owner_policy_auto_apply_{target_date.isoformat()}.json"
+    return (
+        DEFAULT_AUTO_DIR
+        / f"symbol_owner_policy_auto_apply_{target_date.isoformat()}.json"
+    )
 
 
 def _request_path(target_date) -> Path:
@@ -171,7 +252,7 @@ def _load_idempotent_result(
     registry: OrderOwnerRegistry,
     observed_at: datetime,
 ) -> dict[str, Any] | None:
-    """Return a verified completed result; reject a forged or stale success."""
+    """Return a verified applied generation, including recoverable migration."""
 
     if not path.exists():
         return None
@@ -181,28 +262,27 @@ def _load_idempotent_result(
         raise SymbolOwnerPolicyAutoApplyError(
             "symbol_owner_auto_apply_existing_result_unreadable"
         ) from exc
-    if not isinstance(payload, dict) or payload.get("status") != "applied":
+    if not isinstance(payload, dict) or payload.get("status") not in {
+        "applied",
+        POLICY_APPLIED_MARKER_MIGRATION_PENDING,
+    }:
         return None
+    persisted_status = str(payload["status"])
     expected_hash = str(payload.get("result_content_sha256") or "")
     canonical = {
-        key: value
-        for key, value in payload.items()
-        if key != "result_content_sha256"
+        key: value for key, value in payload.items() if key != "result_content_sha256"
     }
     applied_symbols = set(payload.get("applied_symbols") or [])
     skipped_raw = payload.get("skipped_symbols")
     skipped_symbols = set(skipped_raw) if isinstance(skipped_raw, dict) else set()
     apply_receipt = payload.get("apply_receipt")
     request_file = Path(str(payload.get("request_path") or ""))
-    owner_env_file = Path(
-        str((apply_receipt or {}).get("owner_env_file") or "")
-    )
+    owner_env_file = Path(str((apply_receipt or {}).get("owner_env_file") or ""))
     if (
         payload.get("schema") != AUTO_RESULT_SCHEMA
         or expected_hash != _canonical_sha256(canonical)
         or payload.get("target_date") != target_date.isoformat()
-        or payload.get("standing_authorization_id")
-        != authority["authorization_id"]
+        or payload.get("standing_authorization_id") != authority["authorization_id"]
         or payload.get("standing_authorization_sha256")
         != authority["artifact_content_sha256"]
         or not isinstance(skipped_raw, dict)
@@ -222,12 +302,33 @@ def _load_idempotent_result(
         != authority["authorization_id"]
         or apply_receipt.get("standing_authorization_sha256")
         != authority["artifact_content_sha256"]
-        or Path(str(apply_receipt.get("registry_path") or ""))
-        != registry.path
+        or Path(str(apply_receipt.get("registry_path") or "")) != registry.path
         or not request_file.is_absolute()
         or not request_file.is_file()
         or not owner_env_file.is_absolute()
         or not owner_env_file.is_file()
+        or (
+            persisted_status == "applied"
+            and (
+                payload.get("runtime_effect") is not True
+                or (
+                    "policy_runtime_effect" in payload
+                    and payload.get("policy_runtime_effect") is not True
+                )
+                or (
+                    "main_machine_scope_transition_effect" in payload
+                    and payload.get("main_machine_scope_transition_effect") is not True
+                )
+            )
+        )
+        or (
+            persisted_status == POLICY_APPLIED_MARKER_MIGRATION_PENDING
+            and (
+                payload.get("runtime_effect") is not False
+                or payload.get("policy_runtime_effect") is not True
+                or payload.get("main_machine_scope_transition_effect") is not False
+            )
+        )
     ):
         raise SymbolOwnerPolicyAutoApplyError(
             "symbol_owner_auto_apply_existing_result_contract_invalid"
@@ -241,8 +342,7 @@ def _load_idempotent_result(
         ) from exc
     if (
         not isinstance(request_payload, dict)
-        or _canonical_sha256(request_payload)
-        != payload.get("request_content_sha256")
+        or _canonical_sha256(request_payload) != payload.get("request_content_sha256")
         or hashlib.sha256(request_bytes).hexdigest()
         != apply_receipt.get("request_sha256")
         or set((request_payload.get("symbols") or {}).keys()) != applied_symbols
@@ -301,8 +401,7 @@ def _load_idempotent_result(
                 or not registry.decision_activation_matches(decision)
             ):
                 raise SymbolOwnerPolicyAutoApplyError(
-                    "symbol_owner_auto_apply_existing_activation_invalid:"
-                    f"{symbol}"
+                    "symbol_owner_auto_apply_existing_activation_invalid:" f"{symbol}"
                 )
     finally:
         if previous_policy_file is None:
@@ -311,15 +410,15 @@ def _load_idempotent_result(
             os.environ[POLICY_FILE_ENV] = previous_policy_file
     checked = {
         **payload,
-        "status": "already_applied",
+        "status": (
+            "already_applied"
+            if persisted_status == "applied"
+            else POLICY_APPLIED_MARKER_MIGRATION_PENDING
+        ),
         "idempotent_recheck_at_kst": observed_at.isoformat(),
     }
     checked["result_content_sha256"] = _canonical_sha256(
-        {
-            key: value
-            for key, value in checked.items()
-            if key != "result_content_sha256"
-        }
+        {key: value for key, value in checked.items() if key != "result_content_sha256"}
     )
     return checked
 
@@ -329,7 +428,9 @@ def run_auto_apply(
     observed_at: datetime | None = None,
     authority_path: Path = DEFAULT_STANDING_AUTHORITY_PATH,
     token_loader: Callable[[], str | None] | None = None,
-    process_scanner: Callable[[], list[dict[str, Any]]] = find_running_trading_processes,
+    process_scanner: Callable[
+        [], list[dict[str, Any]]
+    ] = find_running_trading_processes,
     snapshot_fetcher: Callable[
         [str, set[str], tuple[dict[str, Any], ...]], dict[str, Any]
     ] = collect_broker_snapshot,
@@ -368,13 +469,6 @@ def run_auto_apply(
             "symbol_owner_auto_apply_outside_standing_window"
         )
     expected_scope = _validate_runtime_scope(authority, target_date=target_date)
-    running = process_scanner()
-    if running:
-        raise SymbolOwnerPolicyAutoApplyError(
-            "symbol_owner_auto_apply_trading_process_not_quiescent:"
-            + ",".join(str(row.get("pid")) for row in running)
-        )
-
     os.environ[BROKER_ACCOUNT_KEY_ENV] = str(authority["broker_account_key"])
     os.environ.setdefault(REGISTRY_PATH_ENV, str(DEFAULT_REGISTRY_PATH))
     target_registry = registry or OrderOwnerRegistry()
@@ -387,7 +481,103 @@ def run_auto_apply(
         observed_at=now,
     )
     if completed is not None:
-        return completed
+        legacy_scope = {
+            symbol: LEGACY_MACHINE_OWNER_SCOPE_LABELS[symbol]
+            for symbol in expected_scope
+            if symbol in LEGACY_MACHINE_OWNER_SCOPE_LABELS
+            and legacy_machine_owner_scope_source(symbol)
+        }
+        running = process_scanner()
+        if running:
+            if (
+                completed["status"] == POLICY_APPLIED_MARKER_MIGRATION_PENDING
+                or legacy_scope
+            ):
+                pending = _marker_migration_pending_result(
+                    completed,
+                    observed_at=now,
+                    reason="trading_process_not_quiescent",
+                    blocking_processes=running,
+                )
+                _atomic_json(output_result_path, pending)
+                return pending
+            return completed
+        try:
+            marker_recheck = (
+                migrate_legacy_machine_owner_scope_markers(legacy_scope)
+                if legacy_scope
+                else None
+            )
+        except Exception as exc:
+            pending = _marker_migration_pending_result(
+                completed,
+                observed_at=now,
+                reason="marker_migration_failed",
+                error=exc,
+            )
+            _atomic_json(output_result_path, pending)
+            return pending
+        existing_migration = completed.get("machine_owner_scope_marker_migration")
+        if marker_recheck is not None:
+            if not isinstance(existing_migration, dict):
+                completed["machine_owner_scope_marker_migration"] = marker_recheck
+            else:
+                completed["machine_owner_scope_marker_recheck"] = marker_recheck
+        missing_current, remaining_legacy = _machine_scope_transition_gaps(
+            expected_scope
+        )
+        if missing_current or remaining_legacy:
+            pending = _marker_migration_pending_result(
+                completed,
+                observed_at=now,
+                reason="marker_migration_incomplete",
+                missing_current=missing_current,
+                remaining_legacy=remaining_legacy,
+            )
+            _atomic_json(output_result_path, pending)
+            return pending
+        completed["result_content_sha256"] = _canonical_sha256(
+            {
+                key: value
+                for key, value in completed.items()
+                if key != "result_content_sha256"
+            }
+        )
+        persisted = {
+            key: value
+            for key, value in completed.items()
+            if key
+            not in {
+                "result_content_sha256",
+                "idempotent_recheck_at_kst",
+                *_MIGRATION_TRANSIENT_FIELDS,
+            }
+        }
+        persisted["status"] = "applied"
+        persisted["runtime_effect"] = True
+        persisted["policy_runtime_effect"] = True
+        persisted["main_machine_scope_transition_effect"] = True
+        persisted["result_content_sha256"] = _canonical_sha256(persisted)
+        _atomic_json(output_result_path, persisted)
+        checked = {
+            **persisted,
+            "status": "already_applied",
+            "idempotent_recheck_at_kst": now.isoformat(),
+        }
+        checked["result_content_sha256"] = _canonical_sha256(
+            {
+                key: value
+                for key, value in checked.items()
+                if key != "result_content_sha256"
+            }
+        )
+        return checked
+    running = process_scanner()
+    if running:
+        raise SymbolOwnerPolicyAutoApplyError(
+            "symbol_owner_auto_apply_trading_process_not_quiescent:"
+            + ",".join(str(row.get("pid")) for row in running)
+        )
     if token_loader is None:
         from src.utils import kiwoom_utils
 
@@ -441,18 +631,16 @@ def run_auto_apply(
                 "error_type": type(exc).__name__,
                 "broker_quantity": broker_quantity,
                 "broker_open_order_count": len(broker_orders),
-                "legacy_manual_exclusion_retained": True,
+                "machine_owner_scope_fallback_retained": True,
             }
             continue
         if int(unresolved["unresolved_intent_count"]) != 0:
             skipped[symbol] = {
                 "reason": "unresolved_owner_intent",
-                "unresolved_intent_count": int(
-                    unresolved["unresolved_intent_count"]
-                ),
+                "unresolved_intent_count": int(unresolved["unresolved_intent_count"]),
                 "states": unresolved["states"],
                 "sides": unresolved["sides"],
-                "legacy_manual_exclusion_retained": True,
+                "machine_owner_scope_fallback_retained": True,
             }
             continue
         if int(reconciliation["external_manual_remainder"]) != 0:
@@ -465,7 +653,7 @@ def run_auto_apply(
                 "external_manual_remainder": int(
                     reconciliation["external_manual_remainder"]
                 ),
-                "legacy_manual_exclusion_retained": True,
+                "machine_owner_scope_fallback_retained": True,
             }
             continue
         try:
@@ -482,7 +670,7 @@ def run_auto_apply(
                 "reason": "unregistered_or_ambiguous_open_order",
                 "error_type": type(exc).__name__,
                 "broker_open_order_count": len(broker_orders),
-                "legacy_manual_exclusion_retained": True,
+                "machine_owner_scope_fallback_retained": True,
             }
             continue
         eligible[symbol] = {
@@ -551,8 +739,10 @@ def run_auto_apply(
         )
     result = {
         "schema": AUTO_RESULT_SCHEMA,
-        "status": "applied",
-        "runtime_effect": True,
+        "status": POLICY_APPLIED_MARKER_MIGRATION_PENDING,
+        "runtime_effect": False,
+        "policy_runtime_effect": True,
+        "main_machine_scope_transition_effect": False,
         "target_date": target_date.isoformat(),
         "observed_at_kst": now.isoformat(),
         "standing_authorization_id": authority["authorization_id"],
@@ -569,6 +759,52 @@ def run_auto_apply(
         "apply_receipt": apply_result,
         "official_kiwoom_reference": OFFICIAL_KIWOOM_REFERENCE,
     }
+    result["result_content_sha256"] = _canonical_sha256(result)
+    _atomic_json(output_result_path, result)
+
+    running = process_scanner()
+    if running:
+        result = _marker_migration_pending_result(
+            result,
+            observed_at=now,
+            reason="trading_process_not_quiescent",
+            blocking_processes=running,
+        )
+        _atomic_json(output_result_path, result)
+        return result
+    try:
+        scope_marker_migration = migrate_legacy_machine_owner_scope_markers(
+            {
+                symbol: LEGACY_MACHINE_OWNER_SCOPE_LABELS[symbol]
+                for symbol in expected_scope
+                if symbol in LEGACY_MACHINE_OWNER_SCOPE_LABELS
+            }
+        )
+    except Exception as exc:
+        result = _marker_migration_pending_result(
+            result,
+            observed_at=now,
+            reason="marker_migration_failed",
+            error=exc,
+        )
+        _atomic_json(output_result_path, result)
+        return result
+    result["machine_owner_scope_marker_migration"] = scope_marker_migration
+    missing_current, remaining_legacy = _machine_scope_transition_gaps(expected_scope)
+    if missing_current or remaining_legacy:
+        result = _marker_migration_pending_result(
+            result,
+            observed_at=now,
+            reason="marker_migration_incomplete",
+            missing_current=missing_current,
+            remaining_legacy=remaining_legacy,
+        )
+        _atomic_json(output_result_path, result)
+        return result
+    result.pop("result_content_sha256", None)
+    result["status"] = "applied"
+    result["runtime_effect"] = True
+    result["main_machine_scope_transition_effect"] = True
     result["result_content_sha256"] = _canonical_sha256(result)
     _atomic_json(output_result_path, result)
     return result
@@ -600,7 +836,7 @@ def main(argv: list[str] | None = None) -> int:
             "observed_at_kst": now.isoformat(),
             "error_type": type(exc).__name__,
             "reason": str(exc),
-            "legacy_manual_exclusion_retained": True,
+            "machine_scope_main_bot_fail_closed": True,
             "official_kiwoom_reference": OFFICIAL_KIWOOM_REFERENCE,
         }
         result["result_content_sha256"] = _canonical_sha256(result)
@@ -608,6 +844,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    if result.get("status") == POLICY_APPLIED_MARKER_MIGRATION_PENDING:
+        return 2
     return 0
 
 

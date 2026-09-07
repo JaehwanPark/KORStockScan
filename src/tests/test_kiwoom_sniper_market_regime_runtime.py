@@ -808,6 +808,7 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
             ),
             "lookup_attention_weight_policy_source_date": "2026-09-01",
             "lookup_attention_weight_policy_artifact_sha256": "a" * 64,
+            "lookup_attention_weight_preopen_artifact_sha256": "b" * 64,
             "lookup_attention_weight_same_priority_tier_only": True,
             "lookup_attention_weight_effective_venue": "KRX",
             "lookup_attention_weight_market_session_bucket": "krx_regular",
@@ -827,6 +828,7 @@ def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     assert len(kiwoom_sniper_v2.ACTIVE_TARGETS) == 1
     attached_target = kiwoom_sniper_v2.ACTIVE_TARGETS[0]
     assert attached_target["id"] == 77
+    assert attached_target["lookup_attention_weight_preopen_artifact_sha256"] == "b" * 64
     assert attached_target["code"] == "005930"
     assert attached_target["status"] == "WATCHING"
     assert attached_target["buy_price"] == 70000

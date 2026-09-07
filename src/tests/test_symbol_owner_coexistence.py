@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from pathlib import Path
 
 import pytest
 
@@ -34,6 +35,10 @@ SYMBOL = "005930"
 
 @pytest.fixture(autouse=True)
 def _explicit_owner_account(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE",
+        str(tmp_path / "excluded.txt"),
+    )
     monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-account")
     monkeypatch.setenv(
         "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH",
@@ -114,13 +119,13 @@ def _context(owner_type: str, suffix: str) -> OwnerOrderContext:
     )
 
 
-def test_exact_date_policy_allows_main_and_machine_without_removing_manual_marker(
+def test_exact_date_policy_allows_main_and_machine_with_machine_scope_marker(
     tmp_path, monkeypatch
 ):
     policy_path = tmp_path / "policy.json"
     exclusion_path = tmp_path / "excluded.txt"
     _write_policy(policy_path)
-    exclusion_path.write_text(f"{SYMBOL} # manual_operator widget_episode\n")
+    exclusion_path.write_text(f"{SYMBOL} # machine_owner_scope samsung_electronics\n")
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv(
         "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
@@ -141,12 +146,183 @@ def test_exact_date_policy_allows_main_and_machine_without_removing_manual_marke
     assert machine_source.startswith("symbol_owner_policy:same_symbol_owner_")
 
 
+def test_machine_scope_without_exact_policy_keeps_main_blocked(tmp_path, monkeypatch):
+    exclusion_path = tmp_path / "excluded.txt"
+    missing_policy = tmp_path / "missing-policy.json"
+    exclusion_path.write_text(
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(missing_policy))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+    machine_source = manual_control_exclusion.independent_machine_ownership_source(
+        SYMBOL, owner="episode", target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+    assert machine_source == "machine_owner_scope"
+
+
+def test_legacy_machine_scope_stays_main_blocked_until_preopen_migration(
+    tmp_path, monkeypatch
+):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    label = manual_control_exclusion.LEGACY_MACHINE_OWNER_SCOPE_LABELS[SYMBOL]
+    exclusion_path.write_text(f"{SYMBOL} # manual_operator {label}\n", encoding="utf-8")
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+    machine_source = manual_control_exclusion.independent_machine_ownership_source(
+        SYMBOL, owner="episode", target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+    assert machine_source.startswith("symbol_owner_policy:same_symbol_owner_")
+
+
+def test_exact_date_policy_never_bypasses_explicit_operator_veto(tmp_path, monkeypatch):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    exclusion_path.write_text(
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n"
+        f"{SYMBOL} # manual_operator explicit_user_veto\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+    machine_source = manual_control_exclusion.independent_machine_ownership_source(
+        SYMBOL, owner="episode", target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+    assert main.reason == "operator_manual_control_excluded_symbol"
+    assert machine_source.startswith("symbol_owner_policy:same_symbol_owner_")
+
+
+def test_exact_date_policy_never_bypasses_operator_env_veto(tmp_path, monkeypatch):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    exclusion_path.write_text(
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", SYMBOL)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+    assert main.source == "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES"
+
+
+def test_exact_date_policy_never_bypasses_legacy_watch_env_veto(tmp_path, monkeypatch):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    exclusion_path.write_text(
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES", SYMBOL)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+
+
+def test_main_fails_closed_when_exclusion_file_cannot_be_read(tmp_path, monkeypatch):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    exclusion_path.write_text(
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    original_read_text = Path.read_text
+
+    def read_text(path, *args, **kwargs):
+        if path == exclusion_path:
+            raise PermissionError("test unreadable exclusion file")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+    assert main.reason == "manual_control_exclusion_file_fail_closed:PermissionError"
+
+
+def test_exact_date_policy_never_bypasses_generic_veto_next_to_machine_scope(
+    tmp_path, monkeypatch
+):
+    policy_path = tmp_path / "policy.json"
+    exclusion_path = tmp_path / "excluded.txt"
+    _write_policy(policy_path)
+    exclusion_path.write_text(
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n"
+        f"{SYMBOL} # explicit_user_veto\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
+    )
+    manual_control_exclusion._invalidate_file_cache()
+
+    main = manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        SYMBOL, target_date=TARGET_DATE
+    )
+
+    assert main.excluded is True
+    assert main.reason == "operator_manual_control_excluded_symbol"
+
+
 def test_coexistence_never_bypasses_automatic_safety_exclusion(tmp_path, monkeypatch):
     policy_path = tmp_path / "policy.json"
     exclusion_path = tmp_path / "excluded.txt"
     _write_policy(policy_path)
     exclusion_path.write_text(
-        f"{SYMBOL} # manual_operator widget_episode\n"
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n"
         f"{SYMBOL} # auto_hard_stop_handoff\n",
         encoding="utf-8",
     )
@@ -282,7 +458,7 @@ def test_preflight_ownership_sources_require_reachable_registry_tail(
     payload["policy_hash"] = policy_content_hash(payload)
     policy_path.write_text(json.dumps(payload), encoding="utf-8")
     exclusion_path = tmp_path / "excluded.txt"
-    exclusion_path.write_text(f"{SYMBOL} # manual_operator widget_episode\n")
+    exclusion_path.write_text(f"{SYMBOL} # machine_owner_scope samsung_electronics\n")
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv(
         "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
@@ -333,7 +509,7 @@ def test_exit_only_policy_cannot_fall_back_to_legacy_entry_authority(
     policy_path = tmp_path / "policy.json"
     exclusion_path = tmp_path / "excluded.txt"
     _write_policy(policy_path, mode=COEXIST_EXIT_ONLY)
-    exclusion_path.write_text(f"{SYMBOL} # manual_operator widget_episode\n")
+    exclusion_path.write_text(f"{SYMBOL} # machine_owner_scope samsung_electronics\n")
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv(
         "KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES_FILE", str(exclusion_path)
@@ -368,7 +544,7 @@ def test_exit_only_main_state_guard_blocks_entry_but_allows_existing_custody(
     policy_path = tmp_path / "policy.json"
     exclusion_path = tmp_path / "excluded.txt"
     _write_policy(policy_path, mode=COEXIST_EXIT_ONLY, active_date=runtime_date)
-    exclusion_path.write_text(f"{SYMBOL} # manual_operator widget_episode\n")
+    exclusion_path.write_text(f"{SYMBOL} # machine_owner_scope samsung_electronics\n")
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv(
         "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
@@ -1093,6 +1269,84 @@ def test_registry_owner_check_includes_owner_type(tmp_path):
             order_date=TARGET_DATE,
             broker_order_no="3434567",
         )
+
+
+@pytest.mark.parametrize("action", ["buy", "sell", "buy_cancel", "sell_cancel"])
+@pytest.mark.parametrize(
+    "veto",
+    [
+        "manual_operator explicit_user_veto",
+        "auto_open_loss loss=-3",
+        "auto_hard_stop_handoff",
+        "operator_veto",
+    ],
+)
+def test_main_order_transport_rechecks_veto_for_every_action(
+    tmp_path, monkeypatch, action, veto
+):
+    policy_path = tmp_path / "policy.json"
+    _write_policy(policy_path, active_date=datetime.now(kiwoom_orders.KST).date())
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    exclusion_path = tmp_path / "excluded.txt"
+    exclusion_path.write_text(
+        f"{SYMBOL} # machine_owner_scope samsung_electronics\n{SYMBOL} # {veto}\n"
+    )
+    before_registry = (tmp_path / "registry.jsonl").read_bytes()
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_sell_side_open_time_blocked", lambda **kw: False
+    )
+
+    def forbidden_transport(*args, **kwargs):
+        pytest.fail("main veto must block before broker transport")
+
+    monkeypatch.setattr(
+        kiwoom_orders, "_post_kiwoom_with_auth_retry", forbidden_transport
+    )
+    context = _context("main_scalping", "veto")
+    if action == "buy":
+        result = kiwoom_orders.send_buy_order_market(
+            SYMBOL, 10, "test", owner_context=context
+        )
+    elif action == "sell":
+        result = kiwoom_orders.send_sell_order_market(
+            SYMBOL, 10, "test", owner_context=context
+        )
+        assert (
+            result["_local_sell_no_call_token"]
+            is kiwoom_orders._LOCAL_SELL_NO_CALL_TOKEN
+        )
+    else:
+        result = kiwoom_orders.send_cancel_order(
+            SYMBOL, "1234567", "test", owner_context=context
+        )
+    assert result["return_code"] == "OWNER_REGISTRY_BLOCKED"
+    assert result["return_msg"].startswith("main_control_veto:")
+    assert result["broker_order_attempted"] is False
+    assert (tmp_path / "registry.jsonl").read_bytes() == before_registry
+
+
+@pytest.mark.parametrize("owner", ["widget_auto_trade", "episode"])
+def test_manual_main_veto_preserves_machine_order_authority(
+    tmp_path, monkeypatch, owner
+):
+    policy_path = tmp_path / "policy.json"
+    _write_policy(policy_path, active_date=datetime.now(kiwoom_orders.KST).date())
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
+    (tmp_path / "excluded.txt").write_text(
+        f"{SYMBOL} # manual_operator explicit_user_veto\n"
+    )
+    registry, intent, blocked = kiwoom_orders._reserve_owner_registry_intent(
+        code=SYMBOL,
+        side="BUY",
+        qty=10,
+        route="KRX",
+        owner_context=_context(owner, "owned"),
+    )
+    assert blocked is None
+    assert registry is not None and intent
 
 
 def test_kiwoom_order_surface_requires_context_only_for_selected_coexistence_symbol(

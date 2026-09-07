@@ -6066,9 +6066,7 @@ def test_provider_execution_freezes_exact_materialized_and_outcome_companions(
         bridge_source_bundle=source_bundle,
     )
     materialized_path = tmp_path / "materialized.json"
-    materialized_gzip_path = materialized_path.with_name(
-        f"{materialized_path.name}.gz"
-    )
+    materialized_gzip_path = materialized_path.with_name(f"{materialized_path.name}.gz")
     with gzip.open(materialized_gzip_path, "wt", encoding="utf-8") as handle:
         json.dump(materialized, handle)
     outcome_path = tmp_path / "outcome.json"
@@ -6082,14 +6080,10 @@ def test_provider_execution_freezes_exact_materialized_and_outcome_companions(
         "result_count": 1,
         "committed_parent_count": 1,
         "materialized_artifact_path": str(materialized_gzip_path),
-        "materialized_report_content_sha256": materialized[
-            "report_content_sha256"
-        ],
+        "materialized_report_content_sha256": materialized["report_content_sha256"],
         "materialized_report_artifact_sha256": quality._sha256(materialized),
         "materialized_request_census_sha256": (
-            quality._micro_reversion_materialized_request_census_sha256(
-                materialized
-            )
+            quality._micro_reversion_materialized_request_census_sha256(materialized)
         ),
         "outcome_label_artifact_path": str(outcome_path),
         "outcome_label_artifact_sha256": quality._sha256(outcome),
@@ -6118,9 +6112,7 @@ def test_provider_execution_freezes_exact_materialized_and_outcome_companions(
 
     mutated_outcome = {**outcome, "mutated": True}
     outcome_path.write_text(json.dumps(mutated_outcome), encoding="utf-8")
-    with pytest.raises(
-        ValueError, match="frozen_outcome_companion_binding_mismatch"
-    ):
+    with pytest.raises(ValueError, match="frozen_outcome_companion_binding_mismatch"):
         quality._frozen_provider_outcome_companion(target_date)
 
     outcome_path.write_text(json.dumps(outcome), encoding="utf-8")
@@ -6194,9 +6186,7 @@ def test_provider_checkpoint_results_freeze_materialized_companion(
         "schema": "micro_reversion_execution_checkpoint_v1",
         "provider_call_performed": True,
         "materialized_report_content_sha256": (
-            quality._micro_reversion_materialized_request_census_sha256(
-                materialized
-            )
+            quality._micro_reversion_materialized_request_census_sha256(materialized)
         ),
         "results": [
             {
@@ -6655,9 +6645,7 @@ def test_micro_reversion_materialize_cli_does_not_enter_provider_source_flow(
     assert frozen_printed["provider_execution_companion_frozen"] is True
 
     execution_path.unlink()
-    checkpoint_path = quality.micro_reversion_execution_checkpoint_path(
-        "2026-08-14"
-    )
+    checkpoint_path = quality.micro_reversion_execution_checkpoint_path("2026-08-14")
     checkpoint_path.write_text("{}", encoding="utf-8")
     checkpoint = {
         "provider_call_performed": True,
@@ -11485,6 +11473,99 @@ def test_paired_report_requires_diverse_candidate_exposure_sample():
     ]
 
 
+def test_partial_pair_contract_allows_learning_but_keeps_promotion_fail_closed(
+    monkeypatch,
+    tmp_path,
+):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+
+    monkeypatch.setattr(quality, "DETAILED_PAIRED_REPORT_DIR", tmp_path / "historical")
+    contract = {
+        "prompt_version": "candidate_entry",
+        "system_prompt_sha256": "a" * 64,
+        "exposure_semantics": "offline_counterfactual_passive_probe_only",
+    }
+    contract["contract_sha256"] = quality._candidate_contract_sha256(contract)
+    requests = [
+        {
+            "decision_trace_id": f"trace-{i}",
+            "paired_replay_id": f"pair-{i}",
+            "decision_ts": "2026-09-07T09:00:00+09:00",
+            "stock_code": "005930",
+            "candidate": contract,
+            "anticipatory_reversal_analysis": {
+                "execution_cost": {"conservative_execution_cost_pct": 0.2}
+            },
+        }
+        for i in range(2)
+    ]
+    report = quality.build_paired_replay_report(
+        target_date="2026-09-07",
+        requests=requests,
+        results=[
+            {
+                "decision_trace_id": "trace-0",
+                "paired_replay_id": "pair-0",
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "candidate_contract_sha256": contract["contract_sha256"],
+                "control_response": {"action": "DROP"},
+                "candidate_response": {"action": "BUY"},
+            },
+            {
+                "decision_trace_id": "trace-1",
+                "paired_replay_id": "pair-1",
+                "status": "provider_failed",
+            },
+        ],
+        labels=[
+            {
+                "decision_trace_id": "trace-0",
+                "source_quality_status": "pass",
+                "decision_stage": "entry",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 0.8,
+                        "mfe_pct": 1.0,
+                        "mae_pct": -0.3,
+                        "first_hit": "target",
+                    }
+                },
+            }
+        ],
+    )
+    learning = report["calibration_source_contract"]
+    assert learning["global_integrity_pass"] is True
+    assert learning["request_count"] == 2
+    assert learning["retained_pair_count"] == learning["excluded_request_count"] == 1
+    assert report["promotion_report_integrity_pass"] is False
+    assert report["promotion_quality_gate_pass"] is False
+    assert report["cumulative_learning"]["as_of_date"] == "2026-09-07"
+    # The CLI adds the detailed schema and cohort filter before final sealing.
+    report["schema"] = quality.DETAILED_PAIRED_SCHEMA
+    report["cohort_filter"] = {
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+    }
+    report["paired_comparisons"][0]["diagnostic_note"] = "late attribution"
+    sealed = quality._with_artifact_content_sha256(report)
+    assert sealed["calibration_source_contract"][
+        "retained_pairs_sha256"
+    ] == quality._sha256(sealed["paired_comparisons"])
+    identity, pairs, metadata = calibration._candidate_source_contract(
+        tmp_path / "ai_prompt_detailed_paired_replay_2026-09-07_partial.json",
+        sealed,
+        target_date="2026-09-07",
+    )
+    assert metadata["errors"] == []
+    assert identity is not None
+    assert len(pairs) == 1
+    assert pairs[0]["candidate_primary_decision_value_pct"] == pytest.approx(0.6)
+
+
 def test_paired_report_excludes_schema_rejected_candidate_from_ev():
     labels = [
         {
@@ -13519,6 +13600,13 @@ def test_rematerialize_detailed_replay_uses_stored_artifacts_without_api_calls(
     )
     assert report["reattribution_provenance"]["price_rest_request_performed"] is False
     assert report["reattribution_provenance"]["candidate_model_call_performed"] is False
+    assert report["artifact_content_sha256"] == quality._sha256(
+        {
+            key: value
+            for key, value in report.items()
+            if key != "artifact_content_sha256"
+        }
+    )
 
 
 def test_rematerialize_detailed_replay_rejects_current_request_identity_drift(

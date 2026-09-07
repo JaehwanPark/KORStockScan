@@ -84,6 +84,14 @@ def _event_payloads(event_bus, name):
 
 @pytest.fixture(autouse=True)
 def _isolate_manual_control_exclusion(monkeypatch, tmp_path):
+    # Exercise the real fail-closed resolver without loading this host's
+    # exact-date live policy or registry during unrelated scanner tests.
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "owner_policy.json")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner_registry.jsonl")
+    )
     empty_path = tmp_path / "manual_control_excluded_codes.empty.txt"
     empty_path.write_text("", encoding="utf-8")
     monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
@@ -147,6 +155,54 @@ def test_promote_candidates_prunes_manual_exclusion_before_db_and_ws(
     assert emitted[0]["fields"]["scanner_prune_first_blocker"] is True
     assert emitted[0]["fields"]["metric_role"] == "funnel_count"
     assert emitted[0]["fields"]["actual_order_submitted"] is False
+
+
+def test_promote_candidates_uses_main_owner_resolver_for_coexistence(
+    monkeypatch,
+):
+    monkeypatch.setenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", "005930")
+    monkeypatch.setattr(
+        scalping_scanner,
+        "evaluate_main_bot_control_exclusion",
+        lambda code: SimpleNamespace(excluded=False, source="exact-date-policy"),
+    )
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        scalping_scanner,
+        "_scanner_real_source_guard_decision",
+        lambda *args, **kwargs: {
+            "blocked": False,
+            "reason": "new_price_jump_start_source",
+            "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+        },
+    )
+    db = _DB()
+    db.get_latest_stock_name = lambda code: "삼성전자"
+    event_bus = _EventBus()
+
+    codes, _recent = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [
+            {
+                "Code": "005930",
+                "Name": "삼성전자",
+                "Price": 70_000,
+                "Source": "PRICE_JUMP_START",
+                "SourceSet": {"PRICE_JUMP_START", "VOLUME_SURGE_POSITIVE"},
+                "PriceJumpFluRate": 2.0,
+                "VolumeSurgeFluRate": 2.0,
+                "VolumeSurgeRate": 10.0,
+            }
+        ],
+        {},
+        max_new_codes=12,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=datetime(2026, 7, 24, 10, 0).timestamp(),
+    )
+
+    assert codes == ["005930"]
 
 
 def test_prune_receipt_schedules_source_only_bbo_for_eligible_reason(monkeypatch):

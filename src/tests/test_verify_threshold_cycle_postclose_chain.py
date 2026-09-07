@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from src.engine import verify_threshold_cycle_postclose_chain as mod
+from src.engine.scalping import ai_action_outcome_calibration as calibration
 
 
 def test_retired_latency_is_not_an_ai_candidate_or_an_exemption():
@@ -1353,21 +1354,114 @@ def test_source_quality_hard_block_status_fails_runtime_candidate_without_handof
 
 
 def test_ai_decision_action_outcome_calibration_status_accepts_current_contract():
+    handoff_body = {
+        "schema": "ai_action_outcome_optimizer_handoff_v1",
+        "target_date": "2026-09-07",
+        "selected_review_candidate": None,
+        "review_ready_candidates": [],
+        "thin_positive_review_candidates": [],
+        "source_contract_pass": True,
+        "decision_authority": "optimizer_source_only_advisory_no_runtime_selection",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    body = {
+        "schema": calibration.SCHEMA,
+        "policy_version": calibration.POLICY_VERSION,
+        "target_date": "2026-09-07",
+        "clean_tuning_baseline_date": calibration.CLEAN_BASELINE_DATE,
+        "status": "cumulative_unchanged_no_new_exact_results",
+        "runtime_effect": False,
+        "runtime_authority": False,
+        "order_authority": False,
+        "provider_authority": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "new_current_result_count": 0,
+        "candidate_count": 1,
+        "review_candidate_count": 0,
+        "thin_positive_review_candidate_count": 0,
+        "review_ready_candidates": [],
+        "thin_positive_review_candidates": [],
+        "prompt_review_gate_policy": calibration.PROMPT_REVIEW_GATE,
+        "candidate_summaries": [
+            {
+                "candidate_prompt_version": "candidate_v1",
+                "candidate_prompt_sha256": "a" * 64,
+                "candidate_contract_sha256": "b" * 64,
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "cohort_isolated": True,
+                "review_classification": "learning_only_or_rejected",
+                "review_ready_for_prompt_candidate": False,
+                "runtime_apply_authority": False,
+            }
+        ],
+        "selected_review_candidate": None,
+        "source_contract_summary": {
+            "cross_cohort_aggregation_forbidden": True,
+            "invalid_sources_excluded_before_calibration": True,
+            "candidate_selection_requires_verified_source_hash": True,
+            "conflicting_duplicate_traces_excluded": True,
+            "cross_cohort_outcome_conflicts_excluded": True,
+            "conflicting_duplicate_trace_count": 0,
+            "cross_cohort_outcome_conflict_count": 0,
+            "current_date_rejected_report_count": 0,
+            "current_date_row_exclusion_count": 0,
+            "current_date_conflicting_duplicate_trace_count": 0,
+        },
+        "optimizer_handoff": {
+            **handoff_body,
+            "handoff_content_sha256": calibration._canonical_sha256(handoff_body),
+        },
+    }
     status = mod._ai_decision_action_outcome_calibration_status(
-        {
-            "schema": "ai_decision_action_outcome_calibration_v1",
-            "status": "cumulative_action_outcome_calibration_updated",
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "candidate_summaries": [{"candidate_prompt_version": "candidate_v1"}],
-        }
+        calibration._with_artifact_content_sha256(body)
     )
 
     assert status["status"] == "pass"
     assert status["candidate_count"] == 1
     assert status["contract_errors"] == []
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_tampered_candidate(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    report["candidate_count"] += 1
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "artifact_content_sha256_invalid" in status["contract_errors"]
+    assert "candidate_count_mismatch" in status["contract_errors"]
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_rehashed_handoff_drift(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    handoff = dict(report["optimizer_handoff"])
+    handoff["selected_review_candidate"] = {
+        "candidate_prompt_version": "forged",
+        "runtime_apply_authority": False,
+    }
+    handoff.pop("handoff_content_sha256", None)
+    handoff["handoff_content_sha256"] = calibration._canonical_sha256(handoff)
+    report["optimizer_handoff"] = handoff
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert (
+        "optimizer_handoff_candidate_reference_mismatch"
+        in status["contract_errors"]
+    )
 
 
 def test_source_quality_hard_block_status_detects_bridge_selected_alias_without_handoff():

@@ -44,7 +44,9 @@ from src.engine.scalping.scanner_lookup_attention_policy import (
     bonus_points_for_score as lookup_attention_formula_bonus,
     bounded_bonus as lookup_attention_bounded_bonus,
     load_active_policy as load_lookup_attention_weight_policy,
+    canonical_sha256 as lookup_attention_sha256,
 )
+from src.engine.scalping.scanner_lookup_attention_resource import same_tier_key
 from src.engine.scalping.limit_down_watch import (  # noqa: E402
     LIMIT_DOWN_LIVE_UNLOCK_SOURCE,
     LimitDownWatchManager,
@@ -54,8 +56,8 @@ from src.engine.scalping.opening_rotation import (
     RETIRED as OPENING_ROTATION_RETIRED,
     load_active_runtime_policy as load_active_opening_rotation_runtime_policy,
 )
-from src.engine.risk.manual_control_exclusion import (
-    evaluate_manual_control_exclusion,
+from src.engine.risk.manual_control_exclusion import (  # noqa: E402
+    evaluate_main_bot_control_exclusion,
 )
 from src.engine.monitoring.pruned_candidate_bbo_collector import (  # noqa: E402
     configure_global_collector as configure_pruned_candidate_bbo_collector,
@@ -1146,7 +1148,7 @@ def _active_scalping_codes(db):
         return set()
 
 
-def _has_active_non_scanner_scalping_watching_code(db, code):
+def _has_active_non_scanner_scalping_watching_code(db, code, *, raise_on_error=False):
     norm_code = str(code or "").strip()[:6]
     if not norm_code:
         return False
@@ -1185,6 +1187,8 @@ def _has_active_non_scanner_scalping_watching_code(db, code):
         log_error(
             f"⚠️ [SCALPING 스캐너] active non-SCANNER 코드 확인 실패 ({norm_code}): {exc}"
         )
+        if raise_on_error:
+            raise
         return False
 
 
@@ -2118,8 +2122,14 @@ def _scanner_priority_profile(target, previous=None):
     )
     lookup_resource_pair_eligible = bool(
         tiering_enabled
-        and lookup_observation.get("lookup_attention_state") == "observed_source_only"
-        and lookup_source_fresh
+        and (
+            lookup_observation.get("lookup_attention_state") == "not_applicable"
+            or (
+                lookup_observation.get("lookup_attention_state")
+                == "observed_source_only"
+                and lookup_source_fresh
+            )
+        )
         and lookup_venue.get("effective_venue")
         in LOOKUP_ATTENTION_WEIGHT_ELIGIBLE_VENUES
         and lookup_venue.get("market_session_bucket")
@@ -2172,6 +2182,9 @@ def _scanner_priority_profile(target, previous=None):
         "lookup_attention_weight_policy_artifact_sha256": lookup_policy.get(
             "policy_artifact_sha256"
         ),
+        "lookup_attention_weight_preopen_artifact_sha256": lookup_policy.get(
+            "preopen_artifact_sha256", ""
+        ),
         "lookup_attention_weight_decision_authority": (
             LOOKUP_ATTENTION_WEIGHT_DECISION_AUTHORITY
         ),
@@ -2200,9 +2213,13 @@ def _scanner_priority_profile(target, previous=None):
             LOOKUP_ATTENTION_RESOURCE_PAIR_CONTRACT_VERSION
         ),
         "lookup_attention_resource_snapshot_score": (
-            lookup_observation.get("lookup_attention_snapshot_score")
-            if lookup_resource_pair_eligible
-            else None
+            0.0
+            if lookup_observation.get("lookup_attention_state") == "not_applicable"
+            else (
+                lookup_observation.get("lookup_attention_snapshot_score")
+                if lookup_resource_pair_eligible
+                else None
+            )
         ),
         "lookup_attention_weight_policy_applied": bool(lookup_bonus.get("applied")),
         "lookup_attention_weight_runtime_effect": bool(
@@ -2814,6 +2831,9 @@ def _merge_candidate(candidate_pool, raw_target, source):
     price = _safe_positive_int(raw_target.get("Price", raw_target.get("cur_prc")))
     if price > 0:
         current["Price"] = price
+        current["ScannerPriceObservedEpoch"] = raw_target.get(
+            "ScannerPriceObservedEpoch"
+        )
     if "OPEN_TOP" in current["SourceSet"]:
         open_price = _safe_positive_int(current.get("OpenPrice"))
         current_price = _safe_positive_int(current.get("Price"))
@@ -2907,9 +2927,11 @@ def rank_candidates(candidate_pool):
             return (
                 _under_10000_runtime_priority_rank(item),
                 tier_rank.get(priority_profile.get("scanner_priority_tier"), 8),
-                -priority_profile.get("scanner_priority_score", 0.0),
-                _source_priority(item.get("Source")),
-                -_safe_float(item.get("FluRate")),
+                *same_tier_key(
+                    priority_profile.get("scanner_priority_score", 0.0),
+                    _source_priority(item.get("Source")),
+                    _safe_float(item.get("FluRate")),
+                ),
             )
 
         return sorted(candidate_pool.values(), key=_rank_key)
@@ -4273,6 +4295,10 @@ def _scanner_event_fields(target, source_guard=None):
         **_scanner_zero_context_fields(
             target, source_guard, current_flu, source_guard_context
         ),
+        **dict(target.get("_LookupResourceEvidence") or {}),
+        "lookup_attention_weight_preopen_artifact_sha256": priority_value(
+            "lookup_attention_weight_preopen_artifact_sha256"
+        ),
     }
 
 
@@ -4553,6 +4579,9 @@ def _scanner_runtime_target_payload(
         "lookup_attention_weight_policy_artifact_sha256": fields.get(
             "lookup_attention_weight_policy_artifact_sha256"
         ),
+        "lookup_attention_weight_preopen_artifact_sha256": fields.get(
+            "lookup_attention_weight_preopen_artifact_sha256", ""
+        ),
         "lookup_attention_weight_decision_authority": fields.get(
             "lookup_attention_weight_decision_authority"
         ),
@@ -4739,6 +4768,103 @@ def _persist_scanner_promotion_provenance(record, payload):
     ).strip()
 
 
+def _prepare_lookup_resource_evidence(
+    db, targets, recent_picks, now_ts, cooldown, token
+):
+    """Snapshot the existing read-only admission checks before capacity shortcuts.
+
+    This cannot promote a target or mutate cooldown/owner state.  Runtime still
+    executes its existing guards at the original submission points.
+    """
+    partitions = {}
+    for target in targets:
+        profile = target.get("_ScannerRankPriorityProfile") or {}
+        key = (
+            profile.get("scanner_priority_rank_partition"),
+            profile.get("scanner_priority_tier"),
+            target.get("ScannerWatchBudgetOwner"),
+            profile.get("scanner_priority_market_gainer_partition"),
+            profile.get("scanner_priority_reserved_partition"),
+        )
+        partitions.setdefault(key, []).append(target)
+    for group in partitions.values():
+        digest = lookup_attention_sha256(
+            sorted(str(target.get("Code")) for target in group)
+        )
+        has_effect = any(
+            _safe_float(
+                (target.get("_ScannerRankPriorityProfile") or {}).get(
+                    "lookup_attention_counterfactual_bonus_points"
+                )
+            )
+            > 0
+            for target in group
+        )
+        for target in group:
+            profile = target.get("_ScannerRankPriorityProfile") or {}
+            if not profile:
+                target["_LookupResourceEvidence"] = {}
+                continue
+            code = str(target.get("Code") or "")
+            reason = "no_positive_bonus_in_partition" if not has_effect else ""
+            try:
+                if not reason:
+                    reason = _scanner_candidate_pre_filter_reason(target)
+                if not reason and _has_active_non_scanner_scalping_watching_code(
+                    db, code, raise_on_error=True
+                ):
+                    reason = "active_non_scanner_owner"
+                if not reason and not _should_promote_candidate(
+                    target, recent_picks, now_ts, cooldown
+                ):
+                    reason = "reentry_cooldown_no_material_upgrade"
+                if not reason:
+                    guard = _scanner_real_source_guard_decision(
+                        target, recent_picks, now_ts
+                    )
+                    if guard.get("blocked"):
+                        reason = guard.get("reason") or "source_guard_blocked"
+                if not reason and not kiwoom_utils.is_valid_stock(
+                    code,
+                    target.get("Name") or "",
+                    token=token,
+                    current_price=_safe_float(target.get("Price")),
+                ):
+                    reason = "invalid_stock_filter"
+                if not reason:
+                    identity = _scanner_candidate_identity_decision(db, target)
+                    if identity.get("blocked"):
+                        reason = "identity_guard_blocked"
+                    elif identity.get("reason") == "authoritative_name_lookup_failed":
+                        reason = "source_only_eligibility_check_failed"
+            except Exception:
+                reason = "source_only_eligibility_check_failed"
+            target["_LookupResourceEvidence"] = {
+                "lookup_attention_resource_metric_role": "causal_runtime_hook_source",
+                "lookup_attention_resource_decision_authority": "source_only_no_standalone_live_promotion",
+                "lookup_attention_resource_window_policy": "same_generation_complete_partition_then_observed_180_to_360s_snapshot",
+                "lookup_attention_resource_sample_floor": "resolved_pair3_dates2_plus_independent_real_ev_base_and_holdout",
+                "lookup_attention_resource_primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "lookup_attention_resource_source_quality_gate": "exact_complete_partition_existing_eligibility_observed_prices",
+                "lookup_attention_resource_forbidden_uses": "real_execution_quality,standalone_buy,guard_bypass,synthetic_returns",
+                "lookup_attention_resource_actual_score": profile.get(
+                    "scanner_priority_score"
+                ),
+                "lookup_attention_resource_partition_count": len(group),
+                "lookup_attention_resource_partition_codes_sha256": digest,
+                "lookup_attention_resource_eligibility_pass": not bool(reason),
+                "lookup_attention_resource_eligibility_reason": reason
+                or "existing_guards_pass",
+                "lookup_attention_resource_simple_capacity": True,
+                "lookup_attention_resource_observed_epoch": float(now_ts),
+                "lookup_attention_resource_price": _safe_float(target.get("Price")),
+                "lookup_attention_resource_price_observed_epoch": target.get(
+                    "ScannerPriceObservedEpoch"
+                ),
+                "lookup_attention_resource_price_role": "scanner_snapshot_not_executable_quote",
+            }
+
+
 def promote_candidates(
     db,
     event_bus,
@@ -4755,6 +4881,8 @@ def promote_candidates(
     candidate_venue_fields = scalping_session_venue_provenance(now_ts)
     scan_generation_id = f"SCANGEN-{os.getpid()}-{int(float(now_ts or 0.0) * 1000)}-{time.monotonic_ns()}"
     ranked_targets = list(ranked_targets or [])
+    for target in ranked_targets:
+        target.pop("_LookupResourceEvidence", None)
     ranked_candidate_count = len(ranked_targets)
     new_codes_found = []
     recent_picks = _filter_picks_within_cooldown(
@@ -4762,7 +4890,7 @@ def promote_candidates(
     )
     eligible_ranked_targets = []
     for scan_rank, target in enumerate(ranked_targets, start=1):
-        exclusion = evaluate_manual_control_exclusion(target.get("Code"))
+        exclusion = evaluate_main_bot_control_exclusion(target.get("Code"))
         if exclusion.excluded:
             _log_scanner_candidate_pruned(
                 target,
@@ -4813,6 +4941,9 @@ def promote_candidates(
             ),
         )
     max_active = _scalping_watching_max_active()
+    _prepare_lookup_resource_evidence(
+        db, ranked_targets, recent_picks, now_ts, reentry_cooldown_sec, token
+    )
     _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
     observation_slots = (
@@ -5109,6 +5240,14 @@ def promote_candidates(
     market_gainer_promoted_count = 0
     open_slot_promotions_remaining = open_slots
     processed_scan_ranks = set()
+    for target in ranked_targets:
+        target["_LookupResourceEvidence"][
+            "lookup_attention_resource_simple_capacity"
+        ] = bool(
+            not replacement_probe_mode
+            and not market_gainer_replacement_codes
+            and not source_upgrade_capacity
+        )
 
     for target in ranked_targets:
         processed_scan_ranks.add(target.get("ScannerScanRank"))
@@ -5734,7 +5873,12 @@ def promote_candidates(
 
 def _fetch_scan_source(source_name, fetcher, *args, **kwargs):
     try:
-        return fetcher(*args, **kwargs) or []
+        targets = fetcher(*args, **kwargs) or []
+        observed_epoch = time.time()
+        return [
+            {**target, "ScannerPriceObservedEpoch": observed_epoch}
+            for target in targets
+        ]
     except Exception as exc:
         log_error(f"🚨 [SCALPING 스캐너] {source_name} 조회 실패: {exc}")
         return []

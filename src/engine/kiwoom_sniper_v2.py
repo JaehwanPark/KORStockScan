@@ -271,6 +271,7 @@ SCANNER_LOOKUP_ATTENTION_CONTEXT_KEYS = (
     "lookup_attention_weight_policy_version",
     "lookup_attention_weight_policy_source_date",
     "lookup_attention_weight_policy_artifact_sha256",
+    "lookup_attention_weight_preopen_artifact_sha256",
     "lookup_attention_weight_decision_authority",
     "lookup_attention_weight_same_priority_tier_only",
     "lookup_attention_weight_eligible_venues",
@@ -2566,6 +2567,9 @@ def _scanner_runtime_target_event_fields(payload, *, outcome, reason, target=Non
         ),
         "lookup_attention_weight_policy_artifact_sha256": payload.get(
             "lookup_attention_weight_policy_artifact_sha256", ""
+        ),
+        "lookup_attention_weight_preopen_artifact_sha256": payload.get(
+            "lookup_attention_weight_preopen_artifact_sha256", ""
         ),
         "lookup_attention_weight_decision_authority": payload.get(
             "lookup_attention_weight_decision_authority", "not_applicable"

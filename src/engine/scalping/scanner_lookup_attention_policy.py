@@ -1,20 +1,25 @@
 """Fail-closed runtime loader for the scanner lookup-attention weight policy.
 
-The postclose producer owns evidence and policy creation.  This module only
-validates the latest prior-trading-day artifact and returns a bounded bonus for
-sorting candidates *inside* their existing scanner priority tier.  It never
+The postclose producer owns evidence and policy creation. PREOPEN freezes the
+validated prior-trading-day candidate into an immutable exact-date receipt.
+Runtime reads only that receipt and returns a bounded bonus for sorting
+candidates *inside* their existing scanner priority tier. It never
 changes source eligibility, watch-slot ownership, an order, or a safety guard.
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time
+from copy import deepcopy
 from functools import lru_cache
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
+import tempfile
+from zoneinfo import ZoneInfo
 from typing import Any
 
 from src.utils.market_day import count_krx_trading_days, is_krx_trading_day
@@ -24,14 +29,19 @@ POLICY_DIR = (
     PROJECT_ROOT / "data" / "threshold_cycle" / "scanner_lookup_attention_policy"
 )
 SOURCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "scanner_lookup_attention_tuning"
+PREOPEN_DIR = (
+    PROJECT_ROOT / "data" / "threshold_cycle" / "scanner_lookup_attention_preopen"
+)
 REPORT_TYPE = "scanner_lookup_attention_auto_promotion_policy"
 SCHEMA_VERSION = 2
 TUNING_REPORT_SCHEMA_VERSION = 2
 POLICY_VERSION = "scanner_lookup_attention_weight_v2"
-DECISION_CONTRACT_VERSION = "scanner_lookup_attention_row_exclusion_v3"
-RESOURCE_PAIR_CONTRACT_VERSION = "scanner_lookup_attention_resource_pair_v1"
+DECISION_CONTRACT_VERSION = "scanner_lookup_attention_marginal_preopen_v4"
+LEGACY_DECISION_CONTRACT_VERSION = "scanner_lookup_attention_row_exclusion_v3"
+RESOURCE_PAIR_CONTRACT_VERSION = "scanner_lookup_attention_resource_pair_v2"
 DECISION_AUTHORITY = "user_directed_bounded_scanner_weight_auto_apply"
-ACTIVATION_MODE = "latest_valid_prior_trading_date_policy_auto_loaded"
+ACTIVATION_MODE = "preopen_frozen_exact_date_policy_auto_loaded"
+LEGACY_ACTIVATION_MODE = "latest_valid_prior_trading_date_policy_auto_loaded"
 USER_AUTHORITY = "user_directed_lookup_attention_auto_promotion_2026_09_02"
 MIN_SCORE = 0.60
 MAX_BONUS_POINTS = 200.0
@@ -344,7 +354,11 @@ def _non_live_payload_valid(payload: Any, *, source_date: date) -> bool:
         "report_type": REPORT_TYPE,
         "target_date": source_date.isoformat(),
         "decision_authority": DECISION_AUTHORITY,
-        "activation_mode": ACTIVATION_MODE,
+        "activation_mode": (
+            ACTIVATION_MODE
+            if payload.get("decision_contract_version") == DECISION_CONTRACT_VERSION
+            else LEGACY_ACTIVATION_MODE
+        ),
         "user_authority": USER_AUTHORITY,
         "operator_approval_required": False,
         "runtime_effect": False,
@@ -478,6 +492,10 @@ def _load_active_cached(
             "prior_policy_unreadable",
             policy_source_date=source_date.isoformat(),
         )
+    if not isinstance(payload, dict):
+        return _inactive(
+            "prior_policy_contract_invalid", validation_errors=["policy_not_object"]
+        )
     if payload.get("status") != "live_auto_apply_ready":
         if _non_live_payload_valid(payload, source_date=source_date):
             return _inactive(
@@ -521,7 +539,7 @@ def _load_active_cached(
     }
 
 
-def load_active_policy(
+def load_candidate_policy(
     target_date: date | str,
     *,
     policy_dir: Path = POLICY_DIR,
@@ -565,6 +583,204 @@ def load_active_policy(
 
 def clear_policy_cache() -> None:
     _load_active_cached.cache_clear()
+    _load_preopen_cached.cache_clear()
+
+
+def _receipt_path(target, applied_dir):
+    return Path(applied_dir) / f"scanner_lookup_attention_preopen_{target}.json"
+
+
+def validate_preopen_receipt(receipt, target):
+    try:
+        if not isinstance(receipt, dict):
+            return False
+        selected = datetime.fromisoformat(receipt["selected_at"])
+        if selected.tzinfo is None:
+            return False
+        selected = selected.astimezone(ZoneInfo("Asia/Seoul"))
+        if not (
+            receipt["report_type"] == "scanner_lookup_attention_preopen"
+            and receipt["schema_version"] == 1
+            and receipt["target_date"] == target.isoformat()
+            and selected.date() == target
+            and selected.time() < time(9)
+            and is_krx_trading_day(target)
+            and isinstance(receipt["active"], bool)
+            and receipt.get("operator_approval_required") is False
+            and receipt["artifact_sha256"]
+            == canonical_sha256(
+                {k: v for k, v in receipt.items() if k != "artifact_sha256"}
+            )
+        ):
+            return False
+        if not receipt["active"]:
+            return True
+        from src.engine.monitoring.scanner_lookup_attention_tuning import (
+            validate_artifact_pair,
+        )
+
+        payload, report = receipt["source_policy"], receipt["source_report"]
+        if not isinstance(payload, dict) or not isinstance(report, dict):
+            return False
+        source_date = date.fromisoformat(payload["target_date"])
+        return bool(
+            source_date < target
+            and receipt["policy_source_date"] == source_date.isoformat()
+            and count_krx_trading_days(source_date, target) == 1
+            and payload["status"] == "live_auto_apply_ready"
+            and not validate_artifact_pair(report, payload, target=source_date)
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def freeze_preopen_policy(
+    target_date,
+    *,
+    write=False,
+    now=None,
+    policy_dir=POLICY_DIR,
+    report_dir=SOURCE_REPORT_DIR,
+    applied_dir=PREOPEN_DIR,
+):
+    """Create one immutable exact-date receipt; existing selections are never replaced."""
+    target = date.fromisoformat(str(target_date))
+    path = _receipt_path(target, applied_dir)
+    if path.exists():
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        if not validate_preopen_receipt(receipt, target):
+            raise ValueError("preopen_receipt_invalid")
+        return receipt
+    selected = (now or datetime.now(ZoneInfo("Asia/Seoul"))).astimezone(
+        ZoneInfo("Asia/Seoul")
+    )
+    if write and (
+        selected.date() != target
+        or selected.time() >= time(9)
+        or not is_krx_trading_day(target)
+    ):
+        raise ValueError("preopen_write_outside_target_date_window")
+    candidate = load_candidate_policy(
+        target, policy_dir=policy_dir, report_dir=report_dir
+    )
+    receipt = {
+        "schema_version": 1,
+        "report_type": "scanner_lookup_attention_preopen",
+        "target_date": target.isoformat(),
+        "selected_at": selected.isoformat(),
+        "active": candidate["active"],
+        "reason": candidate["reason"],
+        "policy_source_date": candidate["policy_source_date"],
+        "operator_approval_required": False,
+    }
+    if candidate["active"]:
+        source = candidate["policy_source_date"]
+        receipt["source_policy"] = json.loads(
+            (
+                Path(policy_dir) / f"scanner_lookup_attention_policy_{source}.json"
+            ).read_text(encoding="utf-8")
+        )
+        receipt["source_report"] = json.loads(
+            (
+                Path(report_dir) / f"scanner_lookup_attention_tuning_{source}.json"
+            ).read_text(encoding="utf-8")
+        )
+    receipt["artifact_sha256"] = canonical_sha256(receipt)
+    if write:
+        if not validate_preopen_receipt(receipt, target):
+            raise ValueError("preopen_source_changed_during_selection")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".lookup-preopen-", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(receipt, handle, ensure_ascii=False, allow_nan=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(name, path)
+            except FileExistsError:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if not validate_preopen_receipt(existing, target):
+                    raise ValueError("preopen_concurrent_receipt_invalid")
+                return existing
+        finally:
+            os.unlink(name)
+    return receipt
+
+
+@lru_cache(maxsize=16)
+def _load_preopen_cached(target_iso, path_text, mtime_ns, size):
+    del mtime_ns, size
+    target = date.fromisoformat(target_iso)
+    try:
+        receipt = json.loads(Path(path_text).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _inactive("preopen_receipt_unreadable")
+    if not validate_preopen_receipt(receipt, target):
+        return _inactive("preopen_receipt_invalid")
+    if not receipt["active"]:
+        return _inactive(
+            "preopen_policy_not_ready",
+            policy_source_date=receipt.get("policy_source_date", ""),
+            preopen_artifact_sha256=receipt["artifact_sha256"],
+        )
+    payload = receipt["source_policy"]
+    return {
+        "active": True,
+        "state": "live_auto_applied",
+        "reason": "immutable_preopen_policy_valid",
+        "policy_version": POLICY_VERSION,
+        "policy_source_date": payload["target_date"],
+        "policy_artifact_sha256": payload["artifact_sha256"],
+        "source_report_artifact_sha256": payload["source_report_artifact_sha256"],
+        "preopen_artifact_sha256": receipt["artifact_sha256"],
+        "preopen_target_date": target_iso,
+        "min_score": MIN_SCORE,
+        "max_bonus_points": MAX_BONUS_POINTS,
+        "max_source_age_sec": MAX_SOURCE_AGE_SEC,
+        "same_priority_tier_only": True,
+        "allowed_runtime_apply": True,
+    }
+
+
+def load_active_policy(target_date, *, applied_dir=PREOPEN_DIR):
+    try:
+        target = date.fromisoformat(str(target_date))
+        path = _receipt_path(target, applied_dir)
+        stat = path.stat()
+    except (ValueError, OSError):
+        return _inactive("preopen_receipt_missing_or_target_invalid")
+    return deepcopy(
+        _load_preopen_cached(
+            target.isoformat(), str(path.resolve()), stat.st_mtime_ns, stat.st_size
+        )
+    )
+
+
+def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Freeze the bounded scanner weight before KRX open."
+    )
+    parser.add_argument("--target-date", required=True)
+    parser.add_argument("--write", action="store_true")
+    args = parser.parse_args()
+    try:
+        receipt = freeze_preopen_policy(args.target_date, write=args.write)
+    except (OSError, ValueError) as exc:
+        print(json.dumps({"status": "failed", "reason": str(exc)}))
+        return 1
+    print(
+        json.dumps(
+            {
+                "status": "selected" if receipt["active"] else "baseline",
+                "target_date": args.target_date,
+                "artifact_sha256": receipt["artifact_sha256"],
+            }
+        )
+    )
+    return 0
 
 
 def _formula_bonus(
@@ -657,6 +873,13 @@ __all__ = [
     "bounded_bonus",
     "canonical_sha256",
     "clear_policy_cache",
+    "freeze_preopen_policy",
+    "load_candidate_policy",
     "load_active_policy",
+    "validate_preopen_receipt",
     "validate_policy_payload",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -17,6 +17,7 @@ from src.engine.error_detectors.base import (
     register_detector,
 )
 from src.engine.risk.manual_control_exclusion import (
+    evaluate_main_bot_control_exclusion,
     manual_control_auto_exclusion_source,
     manual_control_operator_exclusion_source,
 )
@@ -465,9 +466,9 @@ class ProcessHealthDetector(BaseDetector):
             details.setdefault("thread_alive", {})[tname] = talive
             terminal_reason = str(tdata.get("terminal_reason") or "").strip()
             if terminal_reason:
-                details.setdefault("thread_terminal_reason", {})[tname] = (
-                    terminal_reason
-                )
+                details.setdefault("thread_terminal_reason", {})[
+                    tname
+                ] = terminal_reason
             if not talive:
                 if _is_expected_thread_terminal(
                     tname,
@@ -637,8 +638,12 @@ def _recent_unowned_manual_control_holding_blocks(
         auto_source = manual_control_auto_exclusion_source(code)
         if operator_source:
             continue
+        main_decision = evaluate_main_bot_control_exclusion(code, new_entry=False)
+        if not main_decision.excluded:
+            continue
         row["current_operator_source"] = ""
         row["current_auto_source"] = auto_source
+        row["current_main_exclusion_reason"] = main_decision.reason
         row["classification"] = (
             "active_file_auto_exclusion"
             if auto_source

@@ -26,8 +26,11 @@ from src.trading.order.symbol_owner_policy_apply import (
     apply_symbol_owner_policy,
 )
 from src.trading.order.symbol_owner_policy_auto_apply import (
+    LEGACY_MACHINE_OWNER_SCOPE_LABELS,
+    POLICY_APPLIED_MARKER_MIGRATION_PENDING,
     SymbolOwnerPolicyAutoApplyError,
     expected_machine_symbol_owners,
+    main as auto_apply_main,
     run_auto_apply,
 )
 
@@ -66,8 +69,7 @@ def _snapshot(*, open_orders=None, quantities=None) -> dict:
     canonical = {
         "verified_exchanges": ["KRX", "NXT"],
         "inventory": {
-            symbol: int((quantities or {}).get(symbol, 0))
-            for symbol in sorted(OWNERS)
+            symbol: int((quantities or {}).get(symbol, 0)) for symbol in sorted(OWNERS)
         },
         "open_orders": open_orders or [],
         "migration_receipts": [],
@@ -116,7 +118,9 @@ class _Registry:
 
     def migration_receipt(self, *, symbol, **_kwargs):
         if symbol in self._open_order_conflicts:
-            raise OwnerRegistryConflict("owner_registry_migration_open_order_set_mismatch")
+            raise OwnerRegistryConflict(
+                "owner_registry_migration_open_order_set_mismatch"
+            )
         return {"validated": True}
 
 
@@ -129,8 +133,25 @@ def auto_scope(monkeypatch):
     )
     monkeypatch.setattr(
         "src.trading.order.symbol_owner_policy_auto_apply."
-        "manual_control_operator_exclusion_source",
-        lambda _symbol: "manual_operator",
+        "machine_owner_scope_source",
+        lambda _symbol: "machine_owner_scope",
+    )
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "legacy_machine_owner_scope_source",
+        lambda _symbol: "",
+    )
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "migrate_legacy_machine_owner_scope_markers",
+        lambda _labels: {
+            "schema": "machine_owner_scope_marker_migration_v1",
+            "migrated_symbols": [],
+            "already_migrated_symbols": sorted(OWNERS),
+            "preserved_operator_veto_symbols": [],
+            "changed": False,
+            "runtime_effect": False,
+        },
     )
     monkeypatch.setattr(
         "src.trading.order.symbol_owner_policy_auto_apply."
@@ -165,6 +186,7 @@ def test_expected_scope_covers_all_current_widget_and_episode_symbols():
     }
     assert all("main_scalping" in owners for owners in scope.values())
     assert all("manual_operator" in owners for owners in scope.values())
+    assert set(LEGACY_MACHINE_OWNER_SCOPE_LABELS) == set(scope)
 
 
 def test_auto_apply_skips_stale_registry_symbol_and_applies_safe_subset(
@@ -187,9 +209,7 @@ def test_auto_apply_skips_stale_registry_symbol_and_applies_safe_subset(
             "active_date": TARGET_DATE.isoformat(),
             "apply_authority": "standing_exact_scope",
             "standing_authorization_id": authority["authorization_id"],
-            "standing_authorization_sha256": authority[
-                "artifact_content_sha256"
-            ],
+            "standing_authorization_sha256": authority["artifact_content_sha256"],
             "symbols": [SYMBOL_B],
         }
 
@@ -210,10 +230,13 @@ def test_auto_apply_skips_stale_registry_symbol_and_applies_safe_subset(
     assert result["skipped_symbols"][SYMBOL_A]["reason"] == (
         "registry_or_broker_custody_conflict"
     )
-    assert captured["request"]["symbols"].keys() == {SYMBOL_B}
-    assert captured["request"]["generated_at_kst"] == (
-        "2026-09-07T07:32:00+09:00"
+    assert (
+        result["skipped_symbols"][SYMBOL_A]["machine_owner_scope_fallback_retained"]
+        is True
     )
+    assert result["machine_owner_scope_marker_migration"]["changed"] is False
+    assert captured["request"]["symbols"].keys() == {SYMBOL_B}
+    assert captured["request"]["generated_at_kst"] == ("2026-09-07T07:32:00+09:00")
     assert captured["request"]["standing_authorization"] == {
         "schema": STANDING_APPLY_BINDING_SCHEMA,
         "authorization_id": authority["authorization_id"],
@@ -229,9 +252,7 @@ def test_auto_apply_skips_unregistered_open_order_per_symbol(
 ):
     authority_path = tmp_path / "authority.json"
     authority = _write_authority(authority_path)
-    registry = _Registry(
-        tmp_path / "registry.jsonl", open_order_conflicts={SYMBOL_A}
-    )
+    registry = _Registry(tmp_path / "registry.jsonl", open_order_conflicts={SYMBOL_A})
     open_order = {
         "symbol": SYMBOL_A,
         "order_no": "1234567",
@@ -258,9 +279,7 @@ def test_auto_apply_skips_unregistered_open_order_per_symbol(
             "active_date": TARGET_DATE.isoformat(),
             "apply_authority": "standing_exact_scope",
             "standing_authorization_id": authority["authorization_id"],
-            "standing_authorization_sha256": authority[
-                "artifact_content_sha256"
-            ],
+            "standing_authorization_sha256": authority["artifact_content_sha256"],
             "symbols": [SYMBOL_B],
         },
     )
@@ -294,17 +313,13 @@ def test_auto_apply_skips_same_date_unresolved_owner_intent(
             "active_date": TARGET_DATE.isoformat(),
             "apply_authority": "standing_exact_scope",
             "standing_authorization_id": authority["authorization_id"],
-            "standing_authorization_sha256": authority[
-                "artifact_content_sha256"
-            ],
+            "standing_authorization_sha256": authority["artifact_content_sha256"],
             "symbols": [SYMBOL_B],
         },
     )
 
     assert result["applied_symbols"] == [SYMBOL_B]
-    assert result["skipped_symbols"][SYMBOL_A]["reason"] == (
-        "unresolved_owner_intent"
-    )
+    assert result["skipped_symbols"][SYMBOL_A]["reason"] == ("unresolved_owner_intent")
 
 
 def test_auto_apply_fails_before_token_when_order_process_is_active(
@@ -312,6 +327,11 @@ def test_auto_apply_fails_before_token_when_order_process_is_active(
 ):
     authority_path = tmp_path / "authority.json"
     _write_authority(authority_path)
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "migrate_legacy_machine_owner_scope_markers",
+        lambda _labels: pytest.fail("scope markers must not migrate while live"),
+    )
 
     with pytest.raises(SymbolOwnerPolicyAutoApplyError, match="not_quiescent"):
         run_auto_apply(
@@ -319,6 +339,336 @@ def test_auto_apply_fails_before_token_when_order_process_is_active(
             authority_path=authority_path,
             token_loader=lambda: pytest.fail("token must not be loaded"),
             process_scanner=lambda: [{"pid": 101, "command": "bot_main.py"}],
+            registry=_Registry(tmp_path / "registry.jsonl"),
+            result_path=tmp_path / "result.json",
+        )
+
+
+def test_auto_apply_migrates_scope_only_after_valid_policy_apply(
+    tmp_path, monkeypatch, auto_scope
+):
+    authority_path = tmp_path / "authority.json"
+    authority = _write_authority(authority_path)
+    events = []
+
+    def applied(*_args, **_kwargs):
+        events.append("policy_applied")
+        return {
+            "schema": APPLY_RECEIPT_SCHEMA,
+            "status": "applied",
+            "runtime_effect": True,
+            "active_date": TARGET_DATE.isoformat(),
+            "apply_authority": "standing_exact_scope",
+            "standing_authorization_id": authority["authorization_id"],
+            "standing_authorization_sha256": authority["artifact_content_sha256"],
+            "symbols": sorted(OWNERS),
+        }
+
+    def migrated(_labels):
+        events.append("scope_migrated")
+        return {
+            "schema": "machine_owner_scope_marker_migration_v1",
+            "migrated_symbols": sorted(OWNERS),
+            "already_migrated_symbols": [],
+            "preserved_operator_veto_symbols": [],
+            "changed": True,
+            "runtime_effect": False,
+        }
+
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "migrate_legacy_machine_owner_scope_markers",
+        migrated,
+    )
+
+    result = run_auto_apply(
+        observed_at=NOW,
+        authority_path=authority_path,
+        token_loader=lambda: "shared-token",
+        process_scanner=lambda: [],
+        snapshot_fetcher=lambda *_args: _snapshot(),
+        registry=_Registry(tmp_path / "registry.jsonl"),
+        request_path=tmp_path / "request.json",
+        result_path=tmp_path / "result.json",
+        apply_func=applied,
+    )
+
+    assert result["status"] == "applied"
+    assert events == ["policy_applied", "scope_migrated"]
+
+
+def test_auto_apply_keeps_main_effect_blocked_if_marker_migration_is_incomplete(
+    tmp_path, monkeypatch, auto_scope
+):
+    authority_path = tmp_path / "authority.json"
+    authority = _write_authority(authority_path)
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "machine_owner_scope_source",
+        lambda _symbol: "",
+    )
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "legacy_machine_owner_scope_source",
+        lambda _symbol: "legacy_machine_owner_scope",
+    )
+
+    result = run_auto_apply(
+        observed_at=NOW,
+        authority_path=authority_path,
+        token_loader=lambda: "shared-token",
+        process_scanner=lambda: [],
+        snapshot_fetcher=lambda *_args: _snapshot(),
+        registry=_Registry(tmp_path / "registry.jsonl"),
+        request_path=tmp_path / "request.json",
+        result_path=tmp_path / "result.json",
+        apply_func=lambda *_args, **_kwargs: {
+            "schema": APPLY_RECEIPT_SCHEMA,
+            "status": "applied",
+            "runtime_effect": True,
+            "active_date": TARGET_DATE.isoformat(),
+            "apply_authority": "standing_exact_scope",
+            "standing_authorization_id": authority["authorization_id"],
+            "standing_authorization_sha256": authority["artifact_content_sha256"],
+            "symbols": sorted(OWNERS),
+        },
+    )
+
+    assert result["status"] == POLICY_APPLIED_MARKER_MIGRATION_PENDING
+    assert result["runtime_effect"] is False
+    assert result["main_machine_scope_transition_effect"] is False
+    assert result["migration_block_reason"] == "marker_migration_incomplete"
+    assert result["missing_current_machine_scope_symbols"] == sorted(OWNERS)
+    assert result["remaining_legacy_machine_scope_symbols"] == sorted(OWNERS)
+
+
+def test_auto_apply_preserves_recoverable_receipt_if_process_starts_after_apply(
+    tmp_path, monkeypatch, auto_scope
+):
+    authority_path = tmp_path / "authority.json"
+    authority = _write_authority(authority_path)
+    scans = iter(([], [{"pid": 202, "command": "bot_main.py"}]))
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "migrate_legacy_machine_owner_scope_markers",
+        lambda _labels: pytest.fail("scope markers must remain fail-closed"),
+    )
+
+    result_path = tmp_path / "result.json"
+    result = run_auto_apply(
+        observed_at=NOW,
+        authority_path=authority_path,
+        token_loader=lambda: "shared-token",
+        process_scanner=lambda: next(scans),
+        snapshot_fetcher=lambda *_args: _snapshot(),
+        registry=_Registry(tmp_path / "registry.jsonl"),
+        request_path=tmp_path / "request.json",
+        result_path=result_path,
+        apply_func=lambda *_args, **_kwargs: {
+            "schema": APPLY_RECEIPT_SCHEMA,
+            "status": "applied",
+            "runtime_effect": True,
+            "active_date": TARGET_DATE.isoformat(),
+            "apply_authority": "standing_exact_scope",
+            "standing_authorization_id": authority["authorization_id"],
+            "standing_authorization_sha256": authority["artifact_content_sha256"],
+            "symbols": sorted(OWNERS),
+        },
+    )
+
+    assert result["status"] == POLICY_APPLIED_MARKER_MIGRATION_PENDING
+    assert result["runtime_effect"] is False
+    assert result["policy_runtime_effect"] is True
+    assert result["main_machine_scope_transition_effect"] is False
+    assert result["migration_block_reason"] == "trading_process_not_quiescent"
+    assert json.loads(result_path.read_text(encoding="utf-8")) == result
+
+
+def test_auto_apply_recovers_pending_marker_migration_without_reapplying_policy(
+    tmp_path, monkeypatch, auto_scope
+):
+    authority_path = tmp_path / "authority.json"
+    _write_authority(authority_path)
+    registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
+    request_path = tmp_path / "request.json"
+    result_path = tmp_path / "result.json"
+    policy_path = tmp_path / "policy.json"
+    scans = iter(
+        (
+            [],
+            [],
+            [],
+            [{"pid": 202, "command": "bot_main.py"}],
+        )
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry.path))
+
+    def apply_in_tmp(path, **kwargs):
+        return apply_symbol_owner_policy(
+            path,
+            receipt_dir=tmp_path / "receipts",
+            owner_env_file=tmp_path / "owner.env",
+            apply_lock_path=tmp_path / "apply.lock",
+            output_policy_path=policy_path,
+            **kwargs,
+        )
+
+    pending = run_auto_apply(
+        observed_at=NOW,
+        authority_path=authority_path,
+        token_loader=lambda: "shared-token",
+        process_scanner=lambda: next(scans),
+        snapshot_fetcher=lambda *_args: _snapshot(),
+        registry=registry,
+        request_path=request_path,
+        result_path=result_path,
+        apply_func=apply_in_tmp,
+    )
+    recovered = run_auto_apply(
+        observed_at=NOW.replace(minute=41),
+        authority_path=authority_path,
+        token_loader=lambda: pytest.fail("recovery must not load a token"),
+        process_scanner=lambda: [],
+        snapshot_fetcher=lambda *_args: pytest.fail(
+            "recovery must not query the broker"
+        ),
+        registry=registry,
+        request_path=request_path,
+        result_path=result_path,
+        apply_func=lambda *_args, **_kwargs: pytest.fail(
+            "recovery must not reapply the exact-date policy"
+        ),
+    )
+
+    assert pending["status"] == POLICY_APPLIED_MARKER_MIGRATION_PENDING
+    assert recovered["status"] == "already_applied"
+    assert recovered["runtime_effect"] is True
+    assert recovered["main_machine_scope_transition_effect"] is True
+    persisted = json.loads(result_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "applied"
+    assert persisted["apply_receipt"] == pending["apply_receipt"]
+    assert "migration_block_reason" not in persisted
+
+
+def test_auto_apply_keeps_pending_receipt_when_marker_retry_fails(
+    tmp_path, monkeypatch, auto_scope
+):
+    authority_path = tmp_path / "authority.json"
+    _write_authority(authority_path)
+    registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
+    request_path = tmp_path / "request.json"
+    result_path = tmp_path / "result.json"
+    policy_path = tmp_path / "policy.json"
+    scans = iter(
+        (
+            [],
+            [],
+            [],
+            [{"pid": 202, "command": "bot_main.py"}],
+        )
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry.path))
+
+    def apply_in_tmp(path, **kwargs):
+        return apply_symbol_owner_policy(
+            path,
+            receipt_dir=tmp_path / "receipts",
+            owner_env_file=tmp_path / "owner.env",
+            apply_lock_path=tmp_path / "apply.lock",
+            output_policy_path=policy_path,
+            **kwargs,
+        )
+
+    pending = run_auto_apply(
+        observed_at=NOW,
+        authority_path=authority_path,
+        token_loader=lambda: "shared-token",
+        process_scanner=lambda: next(scans),
+        snapshot_fetcher=lambda *_args: _snapshot(),
+        registry=registry,
+        request_path=request_path,
+        result_path=result_path,
+        apply_func=apply_in_tmp,
+    )
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "legacy_machine_owner_scope_source",
+        lambda _symbol: "legacy_machine_owner_scope",
+    )
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "migrate_legacy_machine_owner_scope_markers",
+        lambda _labels: (_ for _ in ()).throw(PermissionError("read-only")),
+    )
+
+    retried = run_auto_apply(
+        observed_at=NOW.replace(minute=41),
+        authority_path=authority_path,
+        token_loader=lambda: pytest.fail("retry must not load a token"),
+        process_scanner=lambda: [],
+        snapshot_fetcher=lambda *_args: pytest.fail("retry must not query broker"),
+        registry=registry,
+        request_path=request_path,
+        result_path=result_path,
+        apply_func=lambda *_args, **_kwargs: pytest.fail("must not reapply"),
+    )
+
+    assert pending["status"] == POLICY_APPLIED_MARKER_MIGRATION_PENDING
+    assert retried["status"] == POLICY_APPLIED_MARKER_MIGRATION_PENDING
+    assert retried["migration_block_reason"] == "marker_migration_failed"
+    assert retried["migration_error_type"] == "PermissionError"
+    assert "migration_blocking_processes" not in retried
+    assert retried["apply_receipt"] == pending["apply_receipt"]
+    assert json.loads(result_path.read_text(encoding="utf-8")) == retried
+
+
+def test_auto_apply_cli_returns_failure_until_marker_migration_completes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply.run_auto_apply",
+        lambda **_kwargs: {
+            "schema": "symbol_owner_policy_auto_apply_result_v1",
+            "status": POLICY_APPLIED_MARKER_MIGRATION_PENDING,
+            "runtime_effect": False,
+        },
+    )
+
+    assert (
+        auto_apply_main(
+            [
+                "--standing-authority",
+                str(tmp_path / "authority.json"),
+                "--result-path",
+                str(tmp_path / "result.json"),
+            ]
+        )
+        == 2
+    )
+
+
+def test_auto_apply_requires_machine_scope_not_explicit_veto_only(
+    tmp_path, monkeypatch, auto_scope
+):
+    authority_path = tmp_path / "authority.json"
+    _write_authority(authority_path)
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "machine_owner_scope_source",
+        lambda _symbol: "",
+    )
+    monkeypatch.setattr(
+        "src.trading.order.symbol_owner_policy_auto_apply."
+        "legacy_machine_owner_scope_source",
+        lambda _symbol: "",
+    )
+
+    with pytest.raises(SymbolOwnerPolicyAutoApplyError, match="machine_scope_mismatch"):
+        run_auto_apply(
+            observed_at=NOW,
+            authority_path=authority_path,
+            token_loader=lambda: pytest.fail("token must not be loaded"),
+            process_scanner=lambda: [],
             registry=_Registry(tmp_path / "registry.jsonl"),
             result_path=tmp_path / "result.json",
         )
@@ -387,9 +737,7 @@ def test_standing_authority_builder_rejects_a_different_apply_window():
         )
 
 
-def test_non_trading_day_result_has_verified_terminal_hash(
-    tmp_path, monkeypatch
-):
+def test_non_trading_day_result_has_verified_terminal_hash(tmp_path, monkeypatch):
     result_path = tmp_path / "result.json"
     monkeypatch.setattr(
         "src.trading.order.symbol_owner_policy_auto_apply."
@@ -406,17 +754,21 @@ def test_non_trading_day_result_has_verified_terminal_hash(
     )
 
     expected_hash = result.pop("result_content_sha256")
-    assert expected_hash == hashlib.sha256(
-        json.dumps(
-            result,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
-    assert json.loads(result_path.read_text(encoding="utf-8"))[
-        "result_content_sha256"
-    ] == expected_hash
+    assert (
+        expected_hash
+        == hashlib.sha256(
+            json.dumps(
+                result,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    assert (
+        json.loads(result_path.read_text(encoding="utf-8"))["result_content_sha256"]
+        == expected_hash
+    )
 
 
 def test_standing_authority_opens_only_its_early_exact_date_window(
@@ -436,9 +788,7 @@ def test_standing_authority_opens_only_its_early_exact_date_window(
                 "standing_authorization": {
                     "schema": STANDING_APPLY_BINDING_SCHEMA,
                     "authorization_id": authority["authorization_id"],
-                    "artifact_content_sha256": authority[
-                        "artifact_content_sha256"
-                    ],
+                    "artifact_content_sha256": authority["artifact_content_sha256"],
                     "active_date": TARGET_DATE.isoformat(),
                     "runner": "src.trading.order.symbol_owner_policy_auto_apply",
                 },
@@ -457,9 +807,7 @@ def test_standing_authority_opens_only_its_early_exact_date_window(
     )
     registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
     policy_path = tmp_path / "policy.json"
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry.path)
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry.path))
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     snapshot = _snapshot()
     snapshot["inventory"] = {SYMBOL_A: 0}
@@ -499,9 +847,9 @@ def test_standing_authority_opens_only_its_early_exact_date_window(
 
     assert result["status"] == "applied"
     assert result["apply_authority"] == "standing_exact_scope"
-    assert result["standing_authorization_sha256"] == authority[
-        "artifact_content_sha256"
-    ]
+    assert (
+        result["standing_authorization_sha256"] == authority["artifact_content_sha256"]
+    )
 
     with pytest.raises(SymbolOwnerPolicyApplyError, match="outside_preopen_window"):
         apply_symbol_owner_policy(
@@ -524,9 +872,7 @@ def test_auto_apply_retry_validates_and_reuses_exact_completed_generation(
     request_path = tmp_path / "request.json"
     result_path = tmp_path / "result.json"
     policy_path = tmp_path / "policy.json"
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry.path)
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry.path))
 
     def apply_in_tmp(path, **kwargs):
         return apply_symbol_owner_policy(
@@ -568,8 +914,45 @@ def test_auto_apply_retry_validates_and_reuses_exact_completed_generation(
     assert first["status"] == "applied"
     assert second["status"] == "already_applied"
     assert second["idempotent_recheck_at_kst"].startswith("2026-09-07T07:41:00")
-    assert json.loads(result_path.read_text(encoding="utf-8"))["status"] == "applied"
+    persisted = json.loads(result_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "applied"
+    assert "machine_owner_scope_marker_migration" in persisted
+    persisted_hash = persisted.pop("result_content_sha256")
+    assert (
+        persisted_hash
+        == hashlib.sha256(
+            json.dumps(
+                persisted,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     assert "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE" not in os.environ
+
+    persisted["runtime_effect"] = False
+    persisted["result_content_sha256"] = hashlib.sha256(
+        json.dumps(
+            persisted,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    result_path.write_text(json.dumps(persisted), encoding="utf-8")
+    with pytest.raises(
+        SymbolOwnerPolicyAutoApplyError,
+        match="existing_result_contract_invalid",
+    ):
+        run_auto_apply(
+            observed_at=NOW.replace(minute=42),
+            authority_path=authority_path,
+            token_loader=lambda: pytest.fail("invalid result must not load token"),
+            process_scanner=lambda: [],
+            registry=registry,
+            result_path=result_path,
+        )
 
 
 def test_deployment_orders_auto_apply_before_all_order_services():
