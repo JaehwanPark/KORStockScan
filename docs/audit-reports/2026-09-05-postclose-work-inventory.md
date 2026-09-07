@@ -216,18 +216,22 @@
 
 ## 5. 다음 자연 실행에서 분리해 확인할 것
 
-- ADM/LDM 폐기 후 PREOPEN OFF·실제 PID 무주입·장후 누락 FAIL 없음은 OPEN `AdmLdmRetirementNaturalEvidence0907`이 소유한다. 과거 report/lock 파일은 삭제하지 않았고, operator lock 일괄해제는 하지 않았다.
+판정 시점은 [2026-09-07 10:20 KST 정규 모니터링](2026-09-07-intraday-1020-monitoring.md)과 `10:30 KST` PYRAMID feedback이다. 장중 snapshot을 일중 전체 성과로 외삽하지 않으며, 아래 `부분 확인`은 runtime/원천 소비가 관측됐다는 뜻일 뿐 비용 차감 EV acceptance 완료가 아니다. 최종 owner는 당일 checklist의 같은 이름 OPEN 항목이다.
 
-1. `PYRAMID`: 새 schema의 exact-ready parent episode, KRX 근거, 비용 차감 next-step EV, same-ID AI 검토, 단일 scale-in owner PREOPEN 선택.
-2. `AVG_DOWN`: `avg_down_route_arbitration_observed`와 연속 `avg_down_exit_replay_frame_observed`, 격리 policy replay 결과, A/B/C 독립 terminal, source audit 허용, same-ID AI/PREOPEN/PID 소비.
-3. `Low-price`: 실제 applied two-leg carry, paired research의 자연 결과, HELD·partial/full fill 분리와 source-only 권한을 `LowPriceEconomicReplayNaturalEvidence0907`에서 확인한다.
-4. `One-share / Entry recheck`: 고정 KRX/NXT profile의 실제 PID 소비와 exact submit/fill/청산·비용차감 EV를 `EntryRecheckNaturalAttribution0907`에서 확인한다. 누적 backtest는 정기 실행하지 않는다.
-5. `Microstructure`: delivery v3의 computed/payload/confirmed sent/internal consumed/cache identity와 같은 attempt 결과 결합을 `ContextDeliveryNaturalEvidence0907`에서 확인한다. 20건은 진단 해석 기준이며 PREOPEN 승격 조건이 아니다.
-6. `Samsung`: 상승·반등 recipe의 자연 원천, exact PREOPEN/PID 소비와 broker 체결금액 EV를 `SamsungEntryRiseReboundNaturalEvidence0907`에서 확인한다.
-7. `Market weakness/rebound`: immutable hysteresis policy·observer health·0B/0D source yield와 비용 차감 paired EV를 `MarketWeaknessNaturalEvidence0907` 및 `MarketWeaknessReboundReentryRetention0911`에서 분리 확인한다.
-8. `Scale-in split`: qty>=2 자연 AVG_DOWN의 v3 policy/PREOPEN/R6 귀속을 `ScaleInSplitNaturalEvidence0907`에서 확인한다. 무표본을 음의 EV로 보거나 표본 확보를 위해 수량·허들을 완화하지 않는다.
-9. 구현 완료를 실현 수익 개선으로 표시하지 않는다. 자연 match 0은 경제성 실패가 아니며, source/adapter gap과 자연 희소성을 구분한다.
-10. bot 재기동, 수동 env 적용, operator lock 변경, 주문·수량·provider·hard-safety 변경은 이 목록 갱신 범위에 포함하지 않는다.
+| 영역 | 현재 판정 | 확인된 자연 실행 근거 | 남은 acceptance |
+| --- | --- | --- | --- |
+| ADM/LDM retirement | 부분 확인 | PREOPEN verify `pass`, PID `46656`, mismatch/missing `0/0`, canonical retirement env 15개 OFF. 현재 선택·실주문 권한 누출은 관측되지 않았다. | 장후 폐기 artifact 누락이 FAIL/workorder를 만들지 않고 Entry AI gate·Samsung·AVG_DOWN/PYRAMID handoff가 유지되는지 `AdmLdmRetirementNaturalEvidence0907`에서 종결한다. 과거 report/lock은 감사자료로 보존하며 operator lock을 일괄해제하지 않는다. |
+| PYRAMID | `not_observed` | 10:30 feedback의 pyramid/real scale-in/closed outcome이 모두 0이고 비용 차감 EV는 산출 불가다. report 생성 성공은 runtime 효과가 아니다. | exact-ready parent episode, KRX 근거, 비용 차감 next-step EV, same-ID AI 검토와 단일 scale-in owner 소비를 자연 표본에서 확인한다. |
+| AVG_DOWN | `not_observed` | 메인 신규 fill/terminal이 없어 route arbitration·exit replay·real scale-in 경제성 표본이 형성되지 않았다. | `avg_down_route_arbitration_observed`와 연속 `avg_down_exit_replay_frame_observed`, A/B/C 독립 terminal, source audit와 same-ID AI/PREOPEN/PID 소비를 확인한다. 허들을 낮춰 표본을 만들지 않는다. |
+| Low-price 독립 머신 | 부분 확인 | target-date applied policy는 53개 profile을 싣고 비용 재검증 비양수 3개 profile을 제외했다. 한화오션 late-morning은 10주 두 leg가 체결돼 `TARGET_OPEN`으로 자연 runtime 소비가 확인됐다. | HELD·partial/full fill·terminal·broker 비용 차감 paired EV를 `LowPriceEconomicReplayNaturalEvidence0907`에서 분리한다. open position은 realized EV에 넣지 않는다. |
+| One-share 관측 | source 관측, 실주문 미확인 | rising-missed/one-share source 관측과 Entry recheck runtime 적용은 별도 계약이다. 10:30 PYRAMID feedback의 `one_share_event_count/closed_count`는 0이다. | 고정 KRX/NXT profile의 exact submit/fill/terminal과 비용 차감 EV가 생길 때만 성과를 판정한다. 누적 backtest는 정기 실행하지 않는다. |
+| Entry recheck | 당일 PID 미적용 | 실제 9/7 PREOPEN verify는 구 controller v3를 현행 v4로 인정하지 않아 `entry_opportunity_recheck_runtime`과 `entry_split_order_plan`을 `disabled_or_removed` 처리했고 selected family는 22개다. 따라서 이전 격리 검증의 ON/23개를 현재 PID 적용 증거로 사용할 수 없다. | 다음 정상 장후 controller v4 생성→다음 거래일 PREOPEN 선택→PID 소비→exact attempt/submit/fill/terminal을 `EntryRecheckNaturalAttribution0907`에서 확인한다. 현재 PID에 수동 주입하지 않는다. |
+| Microstructure | 부분 확인 | context schema v2와 delivery telemetry v3의 computed 및 holding 내부 소비가 관측됐다. entry derived reaction의 payload 미포함은 현 계약상 정상이며 provider sent와 동일 의미가 아니다. | payload included/confirmed sent/internal consumed/cache identity를 같은 evaluation/attempt outcome과 결합하고 source coverage·timeout을 `ContextDeliveryNaturalEvidence0907`에서 판정한다. 20건은 진단 해석 기준이며 PREOPEN 승격 조건이 아니다. |
+| Samsung 독립 머신 | 부분 확인 | morning은 exact-date policy와 target-ticks override를 소비해 10주 두 주문을 냈으나 validity 종료까지 미체결되어 정상 `NO_FILL`로 끝났다. midday/afternoon은 snapshot 시점에 아직 예정 전이었다. | 상승·반등 recipe 자연 원천, 각 시간대 PREOPEN/PID 소비와 broker 체결금액 EV를 `SamsungEntryRiseReboundNaturalEvidence0907`에서 확인한다. NO_FILL을 손익 0으로 보간하지 않는다. |
+| Market weakness/rebound | 부분 확인 | 최신 source-quality는 허용 상태이고 latch는 회복/released 상태로 소비됐다. weak-context 차단의 비용 차감 paired EV는 아직 없다. | immutable hysteresis·observer health·0B/0D source yield는 `MarketWeaknessNaturalEvidence0907`, 재진입 보존성과 paired EV는 `MarketWeaknessReboundReentryRetention0911`에서 분리한다. |
+| Scale-in split | `not_observed` | 자연 AVG_DOWN/qty>=2 split apply와 R6 경제성 귀속이 없고 당일 selected runtime family도 아니다. | qty>=2 자연 AVG_DOWN의 v3 policy/PREOPEN/R6 귀속을 `ScaleInSplitNaturalEvidence0907`에서 확인한다. 무표본을 음의 EV로 보거나 수량·허들을 완화하지 않는다. |
+
+구현 완료를 실현 수익 개선으로 표시하지 않는다. 자연 match 0은 경제성 실패가 아니며 source/adapter gap과 자연 희소성을 구분한다. bot 재기동, 수동 env 적용, operator lock 변경, 주문·수량·provider·hard-safety 변경은 이 현행화 범위에 포함하지 않는다.
 
 ## 6. 다음 상세검토 우선순위
 

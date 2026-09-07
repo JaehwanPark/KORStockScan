@@ -2049,3 +2049,31 @@ def test_runtime_artifact_payload_is_cached_by_mtime(tmp_path, monkeypatch):
 
     assert first == second
     assert calls == 1
+
+
+def test_stale_source_timing_is_diagnostic_and_does_not_change_snapshot():
+    now = datetime(2026, 9, 7, 10, 0, tzinfo=KST).timestamp()
+    ws = _ws(now)
+    ws["last_realtime_type_ts"]["0B"] = now - 10
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code="005930",
+        decision_stage="entry_screen",
+        ws_data=ws,
+        effective_venue="KRX",
+        session_bucket="krx_regular",
+        candle_context=_candle(),
+        now_ts=now,
+    )
+    before = json.dumps(snapshot, sort_keys=True)
+    fields = mod.ai_market_snapshot_log_fields(snapshot)
+    timing = fields["ai_input_preflight_source_timing"]
+    assert timing["tape"]["age_ms"] == 10000.0
+    assert timing["tape"]["quality"] == "stale"
+    assert timing["bbo"]["quality"] == "fresh"
+    assert "value" not in timing["tape"]
+    assert (
+        fields["ai_input_preflight_external_delay_attribution"]
+        == "unproven_without_exchange_and_receive_clocks"
+    )
+    assert fields["ai_input_preflight_allowed"] is False
+    assert json.dumps(snapshot, sort_keys=True) == before
