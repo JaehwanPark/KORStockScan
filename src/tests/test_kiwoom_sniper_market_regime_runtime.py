@@ -416,6 +416,12 @@ def _disable_scanner_operator_runtime_overrides(monkeypatch, tmp_path):
 def _isolate_manual_control_exclusion(monkeypatch, tmp_path):
     empty_path = tmp_path / "manual_control_excluded_codes.empty.txt"
     empty_path.write_text("", encoding="utf-8")
+    # Keep the real resolver/guards, but never read the live exact-date owner
+    # policy or its activation receipts while testing scanner runtime behavior.
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE",
+        str(tmp_path / "symbol_owner_policy.not_selected.json"),
+    )
     monkeypatch.delenv("KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES", raising=False)
     monkeypatch.delenv("KORSTOCKSCAN_WATCH_EXCLUDED_CODES", raising=False)
     monkeypatch.setenv(
