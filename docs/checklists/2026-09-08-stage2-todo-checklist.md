@@ -42,6 +42,7 @@
 ## 장전 체크리스트 (07:45~09:00)
 
 - [ ] `[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908] micro observer 저장공간·연속수집 source gap 복구 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)
+  - 12:32 배포 확인: [전체 병합·재기동 기록](../audit-reports/2026-09-08-ws-quality-release-restart.md). 통합1,606 tests와 원격 CI 통과 후 b27a67dc main push, 표준 재기동1회로 PID682672/source_dirty=false 및 당일 runtime verify PASS. 새 micro trade/depth680/856→2400/3466, queue·worker·writer 오류0·healthy canary를 확인했다. 기존 보유·target·owner·policy hash는 동일하며 과거 ingress loss·Provider hold·through-close 경제성 수용은 계속 OPEN이다.
   - 11:28 보완: [WS ingress 수리 리뷰](../audit-reports/2026-09-08-ws-ingress-backlog-repair-review.md). 매 tick의 전체 history deepcopy 병목을 제거하고 raw 0B/0D 전수 관측과 coalesced 최신 full snapshot 전달을 분리했다. 305 tests PASS, 코드7077831a main push 완료. PID461794/f67a7ec7은 자연 재연결 후 유효21787/22806으로 회복했으나 새 코드 미반영이다. 동시 수정 중인 다른 src/deploy의 review·commit 확정 전에는 재기동하지 않고, 기존 승인 범위의 다음 안전한 재기동에서 PID/source/WS·broker 대사를 닫는다. 과거 loss·Provider hold·through-close는 OPEN 유지.
   - 10:57 관찰: [11:00 모니터링](../audit-reports/2026-09-08-intraday-monitoring-1100.md). 10:41 이후 유효 trade9263/depth7635 정체, writer/queue 오류0이나 timestamp rejection 증가와 main WS TCP Recv-Q backlog 확인. 정확한 내부 병목은 미확정이며 freshness 차단·Provider hold·through-close acceptance는 OPEN 유지.
   - 09:53 실행: [due 작업 실행·보완](../audit-reports/2026-09-08-intraday-due-work-execution.md). writer/queue 오류 0, 여유 약10.73GB, 유효 enqueue 5739/5246→7862/6611로 재개. timestamp loss의 64개 tail은 전수 exclusion receipt가 아니므로 through-close·Provider hold는 OPEN 유지. frozen 측정/guard를 바꾸지 않고 offline storage 수리의 정확한 hash/AST 호환 검사를 보완했다.
@@ -68,6 +69,7 @@
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0908] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+  - 12:32 재기동 수용: [실행 기록](../audit-reports/2026-09-08-ws-quality-release-restart.md). PID461794→682672, b27a67dc/source_dirty=false, 기존 selected20·env·policy 유지 및 missing/mismatch/finding0. KRX/NXT 보유각10주/target SELL2건·300행 owner registry 전후 동일. 새 WS LOGIN/0B/0D·heartbeat를 확인했으며 이 배포 사실을 submit drought 해소나 새 순이익으로 판정하지 않는다.
   - 10:03 후속 실행: 10:00 BUY Funnel을 기존 producer에 입력해 native followup6개를 메모리상 검증했다. runtime/apply false, workorder→EV→runtime summary→verifier 연결 유지. [재리뷰](../audit-reports/2026-09-08-intraday-due-work-execution.md#1003-재리뷰와-남은-작업-실행). 정식 장후 generation 발행이나 실체결 acceptance 완료는 아니다.
   - 09:53 실행: [원인 대사](../audit-reports/2026-09-08-intraday-due-work-execution.md). runtime/PID verify PASS이나 09:50 KRX submitted 0, exact attempt54=terminal48+pending6, 미분류 terminal0. spread/DANGER와 AI stale/WAIT/DROP veto를 분리했고 threshold·stale·AI guard는 유지했다. 이후 자연 전환과 장후 drought workorder/EntryRecheckNaturalAttribution0907 handoff까지 OPEN이다.
   - Source: [threshold_cycle_ev_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-07.json)
