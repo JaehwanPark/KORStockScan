@@ -27,4 +27,10 @@ Kiwoom 공식 repository main을9/8 11:16 전후 조회/clone하여 SHA `234560d
 
 검증한 변경만 commit/push/main 병합 후 `restart.sh`의 기존 Samsung owner handoff/종료/새 PID 경로를 사용한다. 시작 전후 KRX/NXT broker 잔고·미체결과 owner 원장을 비교하며 독립 위젯·에피소드 process는 유지한다. 새 PID source commit/dirty·runtime env verify·WS LOGIN/first-data·micro 수집 증가·queue/writer·중복주문을 확인한다. source/authority 검증 실패 시 임의 guard 완화·추가 restart를 하지 않고 직접 실패를 보존한다. rollback은 본 WS 변경 revert와 동일한 승인·broker 대사 절차이며 운영 정책값을 이전 값으로 덮어쓰지 않는다.
 
-배포 receipt는 재기동 검증 후 보충한다. 과거 rejected 원천을 복원하거나 Provider hold를 자동 해제하지 않는다.
+코드 `7077831a`를 `codex/ws-ingress-backlog-20260908`에 push하고 main fast-forward 및 origin/main push를 완료했다.
+
+11:26:08 재기동 전 broker 읽기 대사: widget005930/episode010140/episode181710 각10주, target0038063/0018672/0032762 각10주. 최신 intent 원장과 같은 owner·수량이고 주문번호 owner 충돌0. 삼성 위젯은 11:00 관찰 이후 자기 정책으로 새 episode를 연 상태이며 기존 완료분과 구분한다.
+
+실제 재기동은 **미실행**이다. 병합 중 별도 작업이 같은 작업트리의 `sniper_state_handlers.py`, `entry_recheck_policy.py`, submit-drought/source-quality producer, 신규 monitoring 모듈과 postclose wrapper를 수정하기 시작했다. 해당 변경을 임의 stash/삭제/commit하거나 미검증 상태로 새 PID에 함께 로드하지 않았다. 이 배포 보류는 승인 부족이 아니라 실행 코드 generation을 검증·고정할 수 없는 상태 때문이다. [review gate](/home/ubuntu/.codex/skills/korstockscan-review-gate/SKILL.md)의 “Do not restart trading processes ... until implementation, post-fix re-review and targeted validation pass” 조건에 따라 다른 변경의 검토가 닫힌 뒤 동일한 기존 승인 재기동 절차를 이어야 한다.
+
+기존 PID461794/f67a7ec7은 transport epoch1788834016998751407로 자연 재연결한 뒤, 유효 trade/depth가11:24 17777/16192 →11:27 20982/21308 →11:28 21787/22806으로 증가했다. timestamp rejection882087은 이 구간 동안 증가하지 않았고 worker/writer 오류0이다. 이는 **기존 코드의 자연 회복**으로 새 보완의 배포 효과가 아니다. 새 WS 코드의 PID 소비와 장마감 연속성은 OPEN. 과거 rejected 원천을 복원하거나 Provider hold를 자동 해제하지 않는다.

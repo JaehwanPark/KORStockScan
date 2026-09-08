@@ -42,6 +42,7 @@
 ## 장전 체크리스트 (07:45~09:00)
 
 - [ ] `[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908] micro observer 저장공간·연속수집 source gap 복구 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)
+  - 11:28 보완: [WS ingress 수리 리뷰](../audit-reports/2026-09-08-ws-ingress-backlog-repair-review.md). 매 tick의 전체 history deepcopy 병목을 제거하고 raw 0B/0D 전수 관측과 coalesced 최신 full snapshot 전달을 분리했다. 305 tests PASS, 코드7077831a main push 완료. PID461794/f67a7ec7은 자연 재연결 후 유효21787/22806으로 회복했으나 새 코드 미반영이다. 동시 수정 중인 다른 src/deploy의 review·commit 확정 전에는 재기동하지 않고, 기존 승인 범위의 다음 안전한 재기동에서 PID/source/WS·broker 대사를 닫는다. 과거 loss·Provider hold·through-close는 OPEN 유지.
   - 09:53 실행: [due 작업 실행·보완](../audit-reports/2026-09-08-intraday-due-work-execution.md). writer/queue 오류 0, 여유 약10.73GB, 유효 enqueue 5739/5246→7862/6611로 재개. timestamp loss의 64개 tail은 전수 exclusion receipt가 아니므로 through-close·Provider hold는 OPEN 유지. frozen 측정/guard를 바꾸지 않고 offline storage 수리의 정확한 hash/AST 호환 검사를 보완했다.
   - 9/8 08:40 관찰: [08:50 모니터링 리뷰](../audit-reports/2026-09-08-preopen-intraday-monitoring-0850.md). disk 약11.2GB > low watermark5GiB, trade writer2/2(SOR/KRX 별도 partition)·depth writer1/1, queue/drop/worker/writer/storage-stop 0. 마지막 timestamp rejection 08:18:37 이후 새 유효 수집은 증가했지만 과거 exact exclusion과 장마감 연속성·Provider hold acceptance는 아직 OPEN이다. 원본 결손을 복원하거나 완료로 체크하지 않았다.
   - Source: [main_ai_quality_r0_r3_cycle_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-09-07.json)
