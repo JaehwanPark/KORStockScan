@@ -414,7 +414,7 @@ def _validated_payload(
                     "market_venue": venue,
                     "allowed_entry_sessions": (session_name,),
                     "allowed_entry_venues": (venue,),
-                    "allowed_entry_states": tuple(SUPPORTED_ENTRY_STATES),
+                    "allowed_entry_states": tuple(sorted(SUPPORTED_ENTRY_STATES)),
                     "leg_quantity_each": WIDGET_AUTO_TRADE_LEG_QUANTITY,
                     "new_entry_runtime_eligible": False,
                     "new_entry_runtime_block_reason": reason_text,

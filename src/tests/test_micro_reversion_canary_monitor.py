@@ -498,7 +498,33 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
         ),
     }
     for field, path in evidence_files.items():
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == baseline[field]
+        expected = baseline[field]
+        if field == "storage_maintenance_sha256":
+            # Explicit post-measurement compatibility, not a new benchmark.
+            # See 2026-09-08-intraday-due-work-execution.md. Only the offline
+            # report-preservation function changed; keep the frozen receipt
+            # and every callback/guard source hash untouched. Future edits
+            # must fail this byte pin and receive their own review.
+            assert expected == (
+                "cc72b533aed4081283ed1cb4d48e50239b13215e3c828bc98139d3bcb7325f9f"
+            )
+            expected = (
+                "acbddd3e2e96bef5404142287b7cd15d20d11154de9693bb4f7a918723135816"
+            )
+            tree = ast.parse(path.read_bytes())
+            tree.body = [
+                node
+                for node in tree.body
+                if not (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "maintain_report_artifact_storage"
+                )
+            ]
+            unchanged_source = ast.dump(tree, include_attributes=False).encode()
+            assert hashlib.sha256(unchanged_source).hexdigest() == (
+                "9170ec9965725ede3f59c00d30877772cb738c1e50013ad3d55cdf35a8ac06d1"
+            )
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
 
 
 def test_canary_monitor_has_no_trading_authority_imports() -> None:

@@ -108,6 +108,32 @@ def test_without_expectations_is_not_a_pass(context):
     assert not result["passed"]
 
 
+def test_legacy_policy_list_order_is_not_silently_rehashed(context):
+    legacy_policy = {
+        "034020": {
+            "allowed_entry_states": ["ENTRY_READY", "ENTRY_CAUTION"],
+            "new_entry_runtime_eligible": False,
+        }
+    }
+    context.trader._dated_execution_policies = legacy_policy
+    assert verification.publish_startup_receipt(
+        context.trader, interval_sec=1, once=False
+    )
+    before = context.path.read_bytes()
+    legacy_hash = verification.content_hash(legacy_policy)
+    canonical_policy = json.loads(json.dumps(legacy_policy))
+    canonical_policy["034020"]["allowed_entry_states"].sort()
+    result = verify(
+        context, expected_policy_sha256=verification.content_hash(canonical_policy)
+    )
+    assert result["passed"] is False
+    assert result["mismatched_keys"] == ["loaded_execution_policies_sha256"]
+    historical = verify(context, expected_policy_sha256=legacy_hash)
+    assert historical["passed"] is True
+    assert historical["current_policy_consumption_verified"] is False
+    assert context.path.read_bytes() == before
+
+
 def test_mismatch_names_only_never_values(context):
     result = verify(
         context, expected_environment={verification.ENV_KEYS[0]: "secret-input"}

@@ -36,19 +36,22 @@
 ## 장전 체크리스트 (07:45~09:00)
 
 - [ ] `[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908] micro observer 저장공간·연속수집 source gap 복구 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)
+  - 09:53 실행: [due 작업 실행·보완](../audit-reports/2026-09-08-intraday-due-work-execution.md). writer/queue 오류 0, 여유 약10.73GB, 유효 enqueue 5739/5246→7862/6611로 재개. timestamp loss의 64개 tail은 전수 exclusion receipt가 아니므로 through-close·Provider hold는 OPEN 유지. frozen 측정/guard를 바꾸지 않고 offline storage 수리의 정확한 hash/AST 호환 검사를 보완했다.
   - 9/8 08:40 관찰: [08:50 모니터링 리뷰](../audit-reports/2026-09-08-preopen-intraday-monitoring-0850.md). disk 약11.2GB > low watermark5GiB, trade writer2/2(SOR/KRX 별도 partition)·depth writer1/1, queue/drop/worker/writer/storage-stop 0. 마지막 timestamp rejection 08:18:37 이후 새 유효 수집은 증가했지만 과거 exact exclusion과 장마감 연속성·Provider hold acceptance는 아직 OPEN이다. 원본 결손을 복원하거나 완료로 체크하지 않았다.
   - Source: [main_ai_quality_r0_r3_cycle_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_2026-09-07.json)
   - 판정 기준: workorder `main-ai-gap-ed4ddcd772f6b4eced07cf72`의 owner=`MicroReversionForwardCollectorContinuity`, reason_codes=`row_exclusion_required, past_market_row_missing=18`를 source-only producer 보완으로 닫는다. 장전 free bytes가 writer low-disk watermark를 충분히 상회하는지 확인하고, 부족하면 실주문과 무관한 closed-date verified compression만 실행한 뒤 observer canary를 재검증한다.
   - 완료 조건: exact-date canary remains pass or row-exclusion-only through close; later clean windows continue collecting; provider replay remains held until queue-loss scope has an exact exclusion receipt or the next clean date
   - 권한 경계: 이 항목은 source-quality/instrumentation 복구 전용이며 runtime env, 실주문·취소, threshold, provider/bot, quantity/cap, hard safety 또는 broker guard 변경 권한이 없다.
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0908] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0908] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+  - 09:53 완료 근거: [실행 리뷰](../audit-reports/2026-09-08-intraday-due-work-execution.md). 당일 07:35 apply/20 selected family와 PID461794의 read-only verify PASS, missing/mismatch/finding 0. `applied_guard_passed_env`; 비선택·blocked family는 수동 우회하지 않았다. 실제 효과는 아래 장중 OPEN owner와 별개다.
   - Source: [threshold_cycle_ev_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-07.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
 
-- [ ] `[RisingMissedScoutRuntimePreopen0908] rising_missed_scout_workorder 후속 구현 및 귀속 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[RisingMissedScoutRuntimePreopen0908] rising_missed_scout_workorder 후속 구현 및 귀속 확인` (`Due: 2026-09-08`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+  - 09:53 완료 근거: [3개 stable ID 대사](../audit-reports/2026-09-08-intraday-due-work-execution.md). main workorder에 각각 1회 `attach_existing_family`, 모두 runtime/apply false이며 selected family에 없음. `source_only_no_runtime_authority`로 귀속 확인을 닫는다. BBO source/economic floor는 미완료이고 #8/#9 상세검토를 재개하지 않았다.
   - Source: [rising_missed_scout_workorder_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_2026-09-07.json), [code_improvement_workorder_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-07.json), [threshold_apply_2026-09-08.json](/home/ubuntu/KORStockScan/data/threshold_cycle/apply_plans/threshold_apply_2026-09-08.json), [threshold_runtime_env_2026-09-08.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_2026-09-08.json), [threshold_runtime_env_verify_2026-09-08.json](/home/ubuntu/KORStockScan/data/threshold_cycle/runtime_env/threshold_runtime_env_verify_2026-09-08.json)
   - 판정 기준: 전일 `rising_missed_scout_workorder` 요약(code_improvement_order_count=`3`, forced_scout_with_post_sell_count=`2`, post_sell_join_coverage_pct=`0.498753`, outcome_coverage_state=`partial`, profitable_forced_scout_count=`2`, loss_or_flat_forced_scout_count=`0`, current_missed_count=`0`)의 outcome join coverage와 code-improvement order를 보고 구현 완료된 mapped family가 당일 PREOPEN apply plan/runtime env/verify에 반영됐는지 확인한다. source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영으로 인정한다.
   - 금지: `rising_missed_scout_workorder` 생성 또는 forced 1-share scout 손익만으로 runtime threshold mutation, stale submit bypass, broker/order guard 완화, provider/bot/cap 변경, real execution quality approval을 열지 않는다.
@@ -57,19 +60,23 @@
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0908] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+  - 10:03 후속 실행: 10:00 BUY Funnel을 기존 producer에 입력해 native followup6개를 메모리상 검증했다. runtime/apply false, workorder→EV→runtime summary→verifier 연결 유지. [재리뷰](../audit-reports/2026-09-08-intraday-due-work-execution.md#1003-재리뷰와-남은-작업-실행). 정식 장후 generation 발행이나 실체결 acceptance 완료는 아니다.
+  - 09:53 실행: [원인 대사](../audit-reports/2026-09-08-intraday-due-work-execution.md). runtime/PID verify PASS이나 09:50 KRX submitted 0, exact attempt54=terminal48+pending6, 미분류 terminal0. spread/DANGER와 AI stale/WAIT/DROP veto를 분리했고 threshold·stale·AI guard는 유지했다. 이후 자연 전환과 장후 drought workorder/EntryRecheckNaturalAttribution0907 handoff까지 OPEN이다.
   - Source: [threshold_cycle_ev_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-07.json)
   - 전일 postclose candidate_selected_families=score65_74_recovery_probe, scalping_scanner_real_source_guard_runtime, score65_74_recovery_probe_strong_micro_override_runtime, entry_price_gap_profile_runtime, profit_stagnation_exit_runtime, latency_spread_relief_real_operator_override, quote_consistency_normalization, scalp_sim_candidate_window_expansion, scalp_sim_ai_budget_manager, post_probe_winner_recovery, scalping_pyramid_quality_gate, holding_decision_context_v1, weak_pullback_entry_block_runtime, early_accel_recheck_runtime, real_pyramid_scale_in_quality_guard_runtime, sell_side_open_time_block_runtime, pre_submit_liquidity_relief_runtime, weak_context_late_entry_guard_runtime, rising_missed_normal_buy_bridge, persistent_operator_overrides_2026_06_26이며 실제 기동 기대 목록으로 직접 사용하지 않는다.
   - 판정 기준: 당일 PREOPEN verify가 통과한 threshold_runtime_env의 selected_families와 selection_change_summary(신규 ON/정책 갱신/carry-forward·operator lock 유지/OFF·제외)를 기준으로 runtime event provenance를 확인한다.
   - 금지: 관찰 결과만으로 장중 runtime을 변경하지 않는다. 사용자 명시 override는 fresh/conflict-free source, 단일 blocker 인과, 기존 bounded_tunable 단일 축, rollback과 즉시 attribution 계약을 모두 충족해야 한다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
 
-- [ ] `[SimProbeIntradayCoverage0908] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0908] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+  - 09:50 현행 비우선 최소 점검 완료: [실행 리뷰](../audit-reports/2026-09-08-intraday-due-work-execution.md). Swing probe/auto policy·greenfield OFF, 독립 sim worker 미관측, scalp 저장 active0. Swing 저장 3행은 pre-baseline 2026-01-11이며 주문 false/broker forbidden true로 현재 holding/EV에 사용하지 않는다. 현재 sim 무표본을 실패·복원·성과 튜닝 지시로 바꾸지 않았다.
   - Source: [threshold_cycle_ev_2026-09-07.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-07.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
 
 - [ ] `[IntradaySourceQualityGateCheck0908] 장중 raw source-quality 결손/unknown 조기 경보 및 튜닝 입력 차단 준비 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 14:20~14:35`, `Track: RuntimeStability`)
+  - 10:03 선행 실행: [재리뷰·남은 작업 실행](../audit-reports/2026-09-08-intraday-due-work-execution.md#1003-재리뷰와-남은-작업-실행). 기존 lock으로 write/backfill 없는 수동 감사1회: 41529 events/72 stages, PASS, hard gap/unknown/review warning0. enqueue 전 micro 유실이나 이후 row까지 승인하지 않으며 14:20 예정 점검은 OPEN 유지한다.
   - Source: [pipeline_events_2026-09-08.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-09-08.jsonl), [threshold_events_2026-09-08.jsonl](/home/ubuntu/KORStockScan/data/threshold_cycle/threshold_events_2026-09-08.jsonl), [observation_source_quality_audit_2026-09-08.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-09-08.json), [observation_source_quality_audit.py](/home/ubuntu/KORStockScan/src/engine/observation_source_quality_audit.py)
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-09-08 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
@@ -165,7 +172,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 장전 모니터링 보고 수리의 자연 acceptance
 
-- [ ] `[ScannerPremarketCensusNaturalAcceptance0908] census 장전 예정 구간 분모 보완의 자연 report 소비 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 09:15~09:20`, `Track: RuntimeStability`)
+- [x] `[ScannerPremarketCensusNaturalAcceptance0908] census 장전 예정 구간 분모 보완의 자연 report 소비 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 09:15~09:20`, `Track: RuntimeStability`)
+  - 09:53 완료 근거: [자연 generation 검증](../audit-reports/2026-09-08-intraday-due-work-execution.md). 09:15 target-date/hash report에서 required-window 필드, NXT 장전 정상과 due KRX/NXT cadence 결손 실패를 함께 확인했다. 해당 진단 수리만 닫으며 전체 scanner recall·BBO/경제성 floor는 미완료다. 다음 정기 12:00 report 관찰은 RuntimeEnvIntradayObserve0908에서 이어간다.
   - Source: [08:50 모니터링 리뷰](../audit-reports/2026-09-08-preopen-intraday-monitoring-0850.md), [producer](/home/ubuntu/KORStockScan/src/engine/monitoring/market_opportunity_census.py).
   - 확인: 08시 NXT-only snapshot의 빈 KRX는 `required_in_observed_window=false`이며 정규장 이후 due KRX/NXT 결손은 계속 cadence 실패여야 한다. 09:15 설치 trigger의 자연 report에서 이 필드와 target date/source hash를 확인한다. 현재 시각 source freshness는 snapshot 기준 cadence와 별도 확인한다.
   - 완료 조건: 예정 구간 오탐 제거와 missing due-session fail-closed가 실제 consumer에서 확인됨. NXT census와 PREMARKET_KRX_LIKE scanner를 cross-venue join하지 않고 BBO/terminal/economic floor를 유지한다. 코드 수리의 acceptance이며 양수 EV·runtime 승격을 요구하지 않는다.
@@ -176,6 +184,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 recheck·lookup-attention·AI 자연 확인 3개는 위 이월 절의 동일 ID가 현재 owner다. 9/7 원 문서에는 이관 기록·과거 근거를 보존했다. 나머지 과거 링크는 해당 상태를 확인하며 완료 기록을 새 승인으로 바꾸지 않는다.
 
 - [ ] `[WidgetEpisodeRecommendationApplyAcceptance0908] 위젯·에피소드 승인 추천의 exact-date 기동 및 owner 귀속 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 08:57~14:45`, `Track: RuntimeStability`)
+  - 10:03 후속 실행: SD morning liquidity guard/NO_TRADE(09:40:06), NHN morning scan-window-closed/NO_TRADE(09:51:01), 두 service Result success/exit0/position0 확인. 옛 순서 receipt를 새 hash로 묵시 정규화하지 않는 회귀 추가 후 관련295 tests PASS. [재리뷰](../audit-reports/2026-09-08-intraday-due-work-execution.md#1003-재리뷰와-남은-작업-실행). 이후 신규 midday/afternoon timer와 자연 signal/다음 정상 PID receipt는 OPEN이다.
+  - 09:53 실행·보완: [위젯 hash 결정성 수리](../audit-reports/2026-09-08-intraday-due-work-execution.md). 080220 정책/현재 eligible state와 collector PID249964·trader PID21846 확인. blocked 상태 tuple 정렬을 보완했으며 기존 시작 receipt는 원래 순서를 재구성한 hash로만 검증했다. 새 코드 PID 반영·현재 signal별 소비를 주장하지 않고 재기동하지 않았다. TYM은 guard에 따른 정상 NO_TRADE/NO_FILL이며, 다음 정상 로드의 결정적 receipt와 나머지 예약 window·자연 신호/owner 귀속은 OPEN 유지.
   - Source: [구현·적용 검토](../audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md), [추천 원장](../audit-reports/2026-09-07-widget-episode-recommendation-ledger.json), [승인 evidence](../audit-reports/2026-09-07-low-price-recommendation-apply-evidence.json).
   - 승인 범위: 사용자 9/7 지시의 9/8 적용. Low-price 기존 수정8/신규3의 11건, 전체56/runtime eligible53 및 기존 quarantine3 유지. Widget080220 exact-date policy 사용. 미달 후보나 다른 profile의 자동 승격 권한은 없다.
   - 확인: TYM 오전09:05/09:09, NHN 정오13:25/13:29, 에스디바이오센서 오후14:10/14:14의 preflight/live timer, exact-date applied hash와 authority receipt/PID를 연결한다. 위젯 collector08:57와 실제 trader 정책 ID, 신규 자연 신호를 확인한다. 예약 전은 not_yet_due이며 실패 guard를 완화하지 않는다.

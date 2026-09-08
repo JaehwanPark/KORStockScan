@@ -5,12 +5,14 @@ from datetime import date, datetime
 from pathlib import Path
 
 from src.engine.monitoring.samsung_widget_contract import KST
+from src.trading.widget_auto_trade import policy as policy_module
 from src.trading.widget_auto_trade.policy import (
     POLICY_AUTHORITY,
     POLICY_SCHEMA,
     WIDGET_AUTO_TRADE_LEG_QUANTITY,
     WidgetAutoTradePolicyLoader,
 )
+from src.trading.widget_auto_trade.runtime_verification import content_hash
 from src.utils.market_day import is_krx_trading_day
 
 
@@ -102,6 +104,32 @@ def test_loader_selects_newest_effective_verified_policy(tmp_path: Path) -> None
     assert (
         policy["new_entry_runtime_block_reason"]
         == "cumulative_research_40_qualified_dates_incomplete"
+    )
+
+
+def test_blocked_policy_receipt_hash_is_independent_of_set_iteration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    payload = _policy()
+    payload["symbols"] = {}
+    payload["blocked_sessions"] = {"034020": {"KRX_REGULAR": "hold_sample"}}
+    _write_policy(tmp_path, "widget_auto_trade_policy_2026-08-12.json", payload)
+    results = []
+    for order in [("ENTRY_READY", "ENTRY_CAUTION"), ("ENTRY_CAUTION", "ENTRY_READY")]:
+        monkeypatch.setattr(policy_module, "SUPPORTED_ENTRY_STATES", order)
+        loaded = WidgetAutoTradePolicyLoader(
+            tmp_path, include_symbol_expansion=False
+        ).resolve_all(observed_date=date(2026, 8, 12))
+        blocked = loaded["034020"]["KRX_REGULAR"]
+        assert blocked["new_entry_runtime_eligible"] is False
+        assert blocked["new_entry_runtime_block_reason"] == "hold_sample"
+        assert blocked["actual_order_submitted"] is False
+        assert blocked["broker_guard_bypass"] is False
+        results.append(loaded)
+    assert content_hash(results[0]) == content_hash(results[1])
+    assert results[0]["034020"]["KRX_REGULAR"]["allowed_entry_states"] == (
+        "ENTRY_CAUTION",
+        "ENTRY_READY",
     )
 
 
