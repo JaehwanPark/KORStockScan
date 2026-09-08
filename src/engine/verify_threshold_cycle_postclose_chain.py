@@ -14,6 +14,7 @@ from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
+from src.utils.jsonl_io import read_json_object_strict
 
 from src.engine.automation.source_quality_clean_baseline import (
     analytics_quarantine_reason,
@@ -26,6 +27,7 @@ from src.engine.automation.source_quality_hard_gate import (
     RUNTIME_APPLY_BOOL_FIELDS,
     RUNTIME_CANDIDATE_COUNT_FIELDS,
     RUNTIME_CANDIDATE_LIST_FIELDS,
+    load_source_quality_preflight,
     source_quality_preflight_blocked,
 )
 from src.engine.build_code_improvement_workorder import (
@@ -792,6 +794,15 @@ def _source_quality_hard_block_status(
     bridge_report: dict[str, Any],
     workorder: dict[str, Any],
 ) -> dict[str, Any]:
+    # V2 raw reports must pass the shared date/source-generation loader first.
+    # Preserve legacy raw-summary compatibility, never trust an unvalidated v2.
+    if preflight.get("schema_version") is not None:
+        preflight = {
+            **preflight,
+            "tuning_input_allowed": False,
+            "allowed_runtime_apply": False,
+            "validation_errors": ["source_quality_preflight_not_validated"],
+        }
     if not source_quality_preflight_blocked(preflight):
         return {
             "status": "pass",
@@ -6305,9 +6316,13 @@ def build_threshold_cycle_postclose_verification(
     workorder_contract = _code_improvement_workorder_contract_status(
         workorder, target_date=target_date
     )
-    observation_source_quality_audit = _load_json(
-        paths["observation_source_quality_audit"]
-    )
+    try:
+        observation_source_quality_audit = read_json_object_strict(
+            paths["observation_source_quality_audit"]
+        )
+    except Exception:
+        # The shared validator below owns invalid/missing approval, not this display copy.
+        observation_source_quality_audit = {}
     ai_decision_action_outcome_calibration = _load_json(
         paths["ai_decision_action_outcome_calibration"]
     )
@@ -6401,19 +6416,27 @@ def build_threshold_cycle_postclose_verification(
         log_issues.append("clean_baseline_report_residue_present")
     if clean_baseline_analytics_residue.get("status") == "fail":
         log_issues.append("clean_baseline_analytics_residue_present")
-    if (
-        is_date_allowed(target_date, clean_policy)
-        and not paths["observation_source_quality_audit"].exists()
+    validated_source_quality = load_source_quality_preflight(
+        target_date, artifact_path=paths["observation_source_quality_audit"]
+    )
+    if is_date_allowed(target_date, clean_policy) and not validated_source_quality.get(
+        "artifact"
     ):
         log_issues.append("source_quality_preflight_missing")
+    if is_date_allowed(target_date, clean_policy) and (
+        validated_source_quality.get("validation_errors")
+        or validated_source_quality.get("load_error")
+    ):
+        log_issues.append("source_quality_preflight_invalid_contract")
     source_quality_hard_block = _source_quality_hard_block_status(
-        observation_source_quality_audit,
+        validated_source_quality,
         ev_report=ev_report,
         runtime_summary=runtime_summary,
         ldm_report=ldm_report,
         bridge_report=bridge_report,
         workorder=workorder,
     )
+    source_quality_hard_block["validated_preflight"] = validated_source_quality
     if source_quality_hard_block.get("candidate_violation_sources"):
         log_issues.append("source_quality_hard_block_candidate_generated")
     if source_quality_hard_block.get("workorder_handoff_present") is False:

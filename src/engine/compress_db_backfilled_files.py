@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import os
 from datetime import date, timedelta
 from pathlib import Path
 
 from src.utils.constants import DATA_DIR
-from src.utils.jsonl_io import jsonl_artifact_generation_lock
+from src.utils.jsonl_io import (
+    jsonl_artifact_generation_lock,
+    write_json_object_generation_safe,
+)
 
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 CANONICAL_CONTEXT_DIR = DATA_DIR / "ai_canonical_context_candidates"
@@ -198,20 +202,45 @@ def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
     if dry_run:
         return True, original_size
     tmp_path = Path(f"{gz_path}.tmp")
+    logical_digest = hashlib.sha256()
     with open(path, "rb") as src, gzip.open(tmp_path, "wb", compresslevel=9) as dst:
         while True:
             chunk = src.read(1024 * 1024)
             if not chunk:
                 break
             dst.write(chunk)
+            logical_digest.update(chunk)
     restored_size = 0
+    restored_digest = hashlib.sha256()
     with gzip.open(tmp_path, "rb") as archived:
         while chunk := archived.read(1024 * 1024):
             restored_size += len(chunk)
-    if restored_size != original_size:
+            restored_digest.update(chunk)
+    if (
+        restored_size != original_size
+        or restored_digest.digest() != logical_digest.digest()
+    ):
         tmp_path.unlink(missing_ok=True)
         raise OSError(f"gzip_size_mismatch:{path.name}:{restored_size}/{original_size}")
     os.replace(tmp_path, gz_path)
+    if path.name.startswith("pipeline_events_") and path.suffix == ".jsonl":
+        stat = gz_path.stat()
+        write_json_object_generation_safe(
+            Path(f"{gz_path}.archive_receipt.json"),
+            {
+                "schema": "pipeline_raw_archive_identity_v1",
+                "logical_path": str(path),
+                "logical_content_sha256": logical_digest.hexdigest(),
+                "archive_generation": {
+                    "device": stat.st_dev,
+                    "inode": stat.st_ino,
+                    "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                },
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
+        )
     path.unlink()
     return True, original_size
 

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import json
+import gzip
+import hashlib
+from functools import lru_cache
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
@@ -11,6 +14,7 @@ from src.engine.automation.source_quality_clean_baseline import (
     is_date_allowed,
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.jsonl_io import read_json_object_strict
 
 BLOCKED_STATUS = "source_quality_blocked"
 BLOCKED_GATE = "blocked_contract_gap"
@@ -55,7 +59,7 @@ def observation_source_quality_audit_path(target_date: str) -> Path:
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -84,13 +88,59 @@ def _compact_raw_row_exclusion(raw_row_exclusion: Any) -> dict[str, Any]:
     return compact
 
 
-def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
-    path = observation_source_quality_audit_path(target_date)
-    exists = path.exists()
+@lru_cache(maxsize=64)
+def _archived_raw_digest(
+    path: str, device: int, inode: int, size: int, mtime: int
+) -> str:
+    """Only compressed-generation migration needs a logical-byte recheck."""
+    digest = hashlib.sha256()
+    with gzip.open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _archive_matches_source(archived: Path, source: dict, current: dict) -> bool:
+    """Use the verified archiver receipt; legacy migrations have a bounded-memory fallback."""
+    try:
+        receipt = json.loads(
+            Path(f"{archived}.archive_receipt.json").read_text(encoding="utf-8")
+        )
+        if (
+            isinstance(receipt, dict)
+            and receipt.get("schema") == "pipeline_raw_archive_identity_v1"
+            and receipt.get("archive_generation") == current
+            and receipt.get("logical_path") == source.get("pipeline_events")
+            and receipt.get("runtime_effect") is False
+            and receipt.get("allowed_runtime_apply") is False
+            and receipt.get("logical_content_sha256")
+            == source.get("logical_content_sha256")
+        ):
+            return True
+    except (ValueError, OSError):
+        pass
+    return _archived_raw_digest(
+        str(archived),
+        current["device"],
+        current["inode"],
+        current["size_bytes"],
+        current["mtime_ns"],
+    ) == source.get("logical_content_sha256")
+
+
+def load_source_quality_preflight(
+    target_date: str, *, artifact_path: Path | None = None
+) -> dict[str, Any]:
+    path = (
+        artifact_path
+        if artifact_path is not None
+        else observation_source_quality_audit_path(target_date)
+    )
+    exists = path.exists() or Path(f"{path}.gz").exists()
     clean_baseline_enforced = is_date_allowed(target_date, clean_baseline_policy())
     load_error: str | None = None
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = read_json_object_strict(path)
     except Exception as exc:
         load_error = type(exc).__name__
         payload = {}
@@ -111,10 +161,80 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         summary.get("hard_blocking_excluded_row_count")
         or raw_row_exclusion.get("excluded_row_count")
     )
-    status = payload.get("status") or ("missing" if not exists else "invalid")
+    raw_status = payload.get("status")
+    status = (
+        raw_status
+        if isinstance(raw_status, str) and raw_status
+        else ("missing" if not exists else "invalid")
+    )
     has_machine_summary = bool(summary)
     explicit_allowed = summary.get("tuning_input_allowed")
-    hard_gap_count = int(summary.get("hard_blocking_contract_gap_count") or 0)
+    validation_errors: list[str] = []
+    if clean_baseline_enforced and has_machine_summary:
+        if payload.get("target_date") != target_date:
+            validation_errors.append("source_quality_preflight_target_date_mismatch")
+        if type(explicit_allowed) is not bool:
+            validation_errors.append("source_quality_preflight_allow_type_invalid")
+        source = payload.get("source")
+        if not isinstance(source, dict) or source.get("exists") is not True:
+            validation_errors.append("source_quality_preflight_source_missing")
+        if status not in {"pass", "warning", "fail"}:
+            validation_errors.append("source_quality_preflight_status_invalid")
+        raw_gap_count = summary.get("hard_blocking_contract_gap_count")
+        if type(raw_gap_count) is not int or raw_gap_count < 0:
+            validation_errors.append("source_quality_preflight_gap_count_invalid")
+        if payload.get("schema_version") not in (
+            None,
+            "observation_source_quality_audit_v2",
+        ):
+            validation_errors.append("source_quality_preflight_schema_invalid")
+        # Legacy exact-date reports stay readable; only v2 claims a bound raw generation.
+        if payload.get("schema_version") == "observation_source_quality_audit_v2":
+            source = source if isinstance(source, dict) else {}
+            try:
+                raw_path = Path(source["pipeline_events"])
+                archived = raw_path.with_name(raw_path.name + ".gz")
+                migrated = not raw_path.exists() and archived.exists()
+                stat = (archived if migrated else raw_path).stat()
+                current = {
+                    "device": stat.st_dev,
+                    "inode": stat.st_ino,
+                    "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                }
+                same_content = migrated and _archive_matches_source(
+                    archived, source, current
+                )
+                if source.get("generation_stable") is not True or not (
+                    source.get("generation") == current or same_content
+                ):
+                    validation_errors.append(
+                        "source_quality_preflight_source_generation_changed"
+                    )
+                digest = source.get("logical_content_sha256")
+                if (
+                    not isinstance(digest, str)
+                    or len(digest) != 64
+                    or any(c not in "0123456789abcdef" for c in digest)
+                ):
+                    validation_errors.append(
+                        "source_quality_preflight_source_digest_invalid"
+                    )
+                after = (archived if migrated else raw_path).stat()
+                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                    stat.st_dev,
+                    stat.st_ino,
+                    stat.st_size,
+                    stat.st_mtime_ns,
+                ):
+                    validation_errors.append(
+                        "source_quality_preflight_source_changed_during_validation"
+                    )
+            except (KeyError, TypeError, ValueError, EOFError, OSError):
+                validation_errors.append(
+                    "source_quality_preflight_source_generation_missing"
+                )
+    hard_gap_count = _safe_int(summary.get("hard_blocking_contract_gap_count"))
     explicit_hard_block = (
         status == "fail"
         or explicit_allowed is False
@@ -125,7 +245,7 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
         not exists or status in {"missing", "invalid"} or not has_machine_summary
     )
     fail_closed = explicit_hard_block or (
-        clean_baseline_enforced and preflight_unusable
+        clean_baseline_enforced and (preflight_unusable or bool(validation_errors))
     )
     blocked_reason = summary.get("blocked_reason") or None
     if fail_closed and blocked_reason is None:
@@ -137,10 +257,14 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
             blocked_reason = "source_quality_preflight_summary_missing"
         elif status == "fail":
             blocked_reason = "source_quality_preflight_status_fail"
+        elif validation_errors:
+            blocked_reason = validation_errors[0]
         else:
             blocked_reason = "blocked_contract_gap"
     return {
         "artifact": str(path) if exists else None,
+        "target_date": target_date,
+        "validation_errors": validation_errors,
         "status": status,
         "tuning_input_allowed": not fail_closed,
         "source_quality_gate": (
@@ -159,7 +283,7 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
             if isinstance(summary.get("hard_blocking_stages"), list)
             else []
         ),
-        "review_warning_count": int(summary.get("review_warning_count") or 0),
+        "review_warning_count": _safe_int(summary.get("review_warning_count")),
         "runtime_effect": False,
         "allowed_runtime_apply": not fail_closed,
         "load_error": load_error,
@@ -168,6 +292,8 @@ def load_source_quality_preflight(target_date: str) -> dict[str, Any]:
 
 
 def source_quality_preflight_blocked(preflight: dict[str, Any]) -> bool:
+    if preflight.get("validation_errors"):
+        return True
     if preflight.get("tuning_input_allowed") is False:
         return True
     if preflight.get("allowed_runtime_apply") is False:
@@ -186,7 +312,14 @@ def source_quality_preflight_blocked(preflight: dict[str, Any]) -> bool:
     summary = (
         preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
     )
-    return summary.get("tuning_input_allowed") is False
+    if (
+        "tuning_input_allowed" in summary
+        and type(summary["tuning_input_allowed"]) is not bool
+    ):
+        return True
+    return summary.get("tuning_input_allowed") is False or bool(
+        summary.get("blocked_reason")
+    )
 
 
 def filter_source_dates_by_preflight(

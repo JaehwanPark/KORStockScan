@@ -1,4 +1,5 @@
 import json
+import pytest
 from types import SimpleNamespace
 
 from src.engine.monitoring import intraday_ws_freshness_monitor as mod
@@ -163,6 +164,7 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
     snapshot_path.write_text(
         json.dumps(
             {
+                "generated_at": "2026-07-13T12:00:00+09:00",
                 "rows": [
                     {
                         "stock_code": "000101",
@@ -199,7 +201,7 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
                         "registered_route_counts": {"nxt_only": 1},
                         "multi_route_registered": False,
                     },
-                ]
+                ],
             },
             ensure_ascii=False,
         ),
@@ -211,7 +213,7 @@ def test_build_report_splits_subscription_stale_from_trade_tick_quiet(tmp_path):
         pipeline_path=pipeline_path,
         threshold_path=threshold_path,
         subscription_snapshot_path=snapshot_path,
-        generated_at="fixed",
+        generated_at="2026-07-13T12:00:00+09:00",
     )
 
     assert report["metric_contract"]["runtime_effect"] is False
@@ -564,6 +566,9 @@ def test_scanner_hotset_capacity_proxy_separates_queue_rank_and_right_censoring(
     ]
     assert scenario_by_capacity[2]["selected_candidate_count"] == 2
     assert scenario_by_capacity[2]["source_quality_adjusted_ev_pct"] == -0.23
+    assert scenario_by_capacity[2]["resolved_return_sum_pct"] == pytest.approx(-0.46)
+    assert scenario_by_capacity[2]["profitable_outcome_count"] == 1
+    assert scenario_by_capacity[2]["resolved_holding_sec_sum"] == 4
     assert scenario_by_capacity[4]["selected_candidate_count"] == 3
     assert scenario_by_capacity[4]["resolved_outcome_count"] == 2
     assert scenario_by_capacity[4]["right_censored_count"] == 1
@@ -2766,7 +2771,7 @@ def test_build_report_uses_same_day_live_dashboard_snapshot_fallback(
         "2026-07-30",
         pipeline_path=pipeline_path,
         threshold_path=threshold_path,
-        generated_at="fixed",
+        generated_at="2026-07-30T12:20:00+09:00",
     )
 
     assert report["subscription_snapshot_path"] == str(dashboard_path)
@@ -2777,6 +2782,10 @@ def test_build_report_uses_same_day_live_dashboard_snapshot_fallback(
         "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
         "generated_at": "2026-07-30T12:20:00+09:00",
         "subscription_state_available": False,
+        "current_freshness_usable": True,
+        "evaluation_scope": "current_snapshot",
+        "snapshot_as_of": "2026-07-30T12:20:00+09:00",
+        "snapshot_age_sec": 0.0,
     }
     assert report["snapshot_summary"]["row_count"] == 3
     assert report["snapshot_summary"]["trade_tick_quiet_count"] == 1

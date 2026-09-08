@@ -14,6 +14,16 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.ws_freshness_acceptance import (
+    RESOLVED_FLOOR,
+    BBO_COVERAGE_FLOOR_PCT,
+    RIGHT_CENSORED_MAX_PCT,
+    economic_receipt,
+    hotset_economic_receipt,
+    finalize_followups,
+    observer_receipt_accounting,
+    rolling_economics,
+)
 from src.engine.monitoring.pruned_candidate_bbo_collector import (
     EPISODE_RESET_GAP_SEC as SCANNER_PRUNE_BBO_EPISODE_RESET_GAP_SEC,
     MAX_ACTIVE_EPISODES as SCANNER_PRUNE_BBO_MAX_ACTIVE_EPISODES,
@@ -30,6 +40,7 @@ from src.utils.jsonl_io import (
     existing_or_gzip_path,
     iter_jsonl,
     read_json_object_strict_receipt,
+    write_json_object_generation_safe,
 )
 
 KST = timezone(timedelta(hours=9))
@@ -46,16 +57,16 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v10"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v13"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
 SCANNER_BBO_HORIZON_SEC = 20 * 60
 SCANNER_BBO_TIMEOUT_MAX_LAG_SEC = 5.0
-SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT = 95.0
+SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT = BBO_COVERAGE_FLOOR_PCT
 SCANNER_PRUNE_BBO_MAX_SCHEDULE_LAG_SEC = 2.0
-SCANNER_PRUNE_BBO_RESOLVED_FLOOR = 20
-SCANNER_PRUNE_BBO_RIGHT_CENSORED_MAX_PCT = 20.0
+SCANNER_PRUNE_BBO_RESOLVED_FLOOR = RESOLVED_FLOOR
+SCANNER_PRUNE_BBO_RIGHT_CENSORED_MAX_PCT = RIGHT_CENSORED_MAX_PCT
 SCANNER_PRUNE_BBO_SCHEDULED_STATUSES = frozenset(
     {
         "new_episode_scheduled",
@@ -379,6 +390,14 @@ def _load_incremental_state(
         cached = cached_sources.get(source_name)
         if not isinstance(cached, dict):
             return None, f"{source_name}_state_missing"
+        # A consistently absent optional mirror cannot invalidate the primary stream.
+        # Its later appearance/disappearance still forces a full, deduplicated rebuild.
+        if source_name == "threshold_events" and identity.get("exists") is False:
+            if cached.get("exists") is False and cached.get("path") == identity.get(
+                "path"
+            ):
+                continue
+            return None, f"{source_name}_disappeared"
         if not identity.get("cacheable"):
             return None, f"{source_name}_not_cacheable"
         try:
@@ -1276,6 +1295,33 @@ def _update_scanner_funnel_state(
                     + [budget_snapshot]
                 )[-64:]
         if stage == "scalping_scanner_prune_bbo_observation":
+            sample_index = _nonnegative_integer_metadata(
+                row.get("scanner_prune_observer_sample_index")
+            )
+            sample_offset = _to_float(
+                row.get("scanner_prune_observer_scheduled_offset_sec")
+            )
+            if (
+                observer_episode_id
+                and sample_index is not None
+                and sample_index < len(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC)
+                and sample_offset == SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC[sample_index]
+                and row.get("runtime_effect") is False
+                and row.get("allowed_runtime_apply") is False
+                and row.get("actual_order_submitted") is False
+                and row.get("broker_order_forbidden") is True
+                and row.get("scanner_prune_observer_status")
+                in {"captured", "source_quality_gap"}
+            ):
+                prune["prune_observer_receipt_indices"] = sorted(
+                    set(prune.get("prune_observer_receipt_indices") or [])
+                    | {sample_index}
+                )
+                if (
+                    sample_index == len(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC) - 1
+                    and row.get("scanner_prune_observer_terminal_sample") is True
+                ):
+                    prune["prune_observer_receipt_terminal_valid"] = True
             prune["prune_observer_sample_event_count"] = (
                 int(prune.get("prune_observer_sample_event_count") or 0) + 1
             )
@@ -1640,6 +1686,14 @@ def _coalesce_prune_observation_episodes(
         current["prune_observer_sample_event_count"] = int(
             current.get("prune_observer_sample_event_count") or 0
         ) + int(prune.get("prune_observer_sample_event_count") or 0)
+        current["prune_observer_receipt_indices"] = sorted(
+            set(current.get("prune_observer_receipt_indices") or [])
+            | set(prune.get("prune_observer_receipt_indices") or [])
+        )
+        current["prune_observer_receipt_terminal_valid"] = bool(
+            current.get("prune_observer_receipt_terminal_valid")
+            or prune.get("prune_observer_receipt_terminal_valid")
+        )
         current["prune_observer_terminal_sample_observed"] = bool(
             current.get("prune_observer_terminal_sample_observed")
             or prune.get("prune_observer_terminal_sample_observed")
@@ -2096,6 +2150,18 @@ def _scanner_hotset_capacity_counterfactual(
                             "exact_bbo_joined_count": len(joined_rows),
                             "exact_bbo_join_coverage_pct": join_coverage_pct,
                             "resolved_outcome_count": len(path_resolved),
+                            "resolved_return_sum_pct": (
+                                sum(resolved_returns)
+                                if cost_contract_status == "verified"
+                                else None
+                            ),
+                            "resolved_holding_sec_sum": sum(
+                                float(item["hit_sec"])
+                                for item in cost_adjusted_resolved
+                            ),
+                            "profitable_outcome_count": sum(
+                                value > 0 for value in resolved_returns
+                            ),
                             "cost_adjusted_resolved_outcome_count": len(
                                 cost_adjusted_resolved
                             ),
@@ -2240,6 +2306,8 @@ def _scanner_hotset_capacity_counterfactual(
         "capacity_values": list(SCANNER_HOTSET_CAPACITY_VALUES),
         "gross_target_values": list(SCANNER_HOTSET_GROSS_TARGET_VALUES),
         "adverse_stop_values": list(SCANNER_HOTSET_ADVERSE_STOP_VALUES),
+        "horizon_sec": SCANNER_BBO_HORIZON_SEC,
+        "timeout_max_lag_sec": SCANNER_BBO_TIMEOUT_MAX_LAG_SEC,
         "capacity_comparison_resolved_floor": (
             SCANNER_HOTSET_COMPARISON_RESOLVED_FLOOR
         ),
@@ -2684,6 +2752,15 @@ def _scanner_bbo_economic_attribution(
             "exact_bbo_joined_count": len(group_joined_rows),
             "exact_bbo_join_coverage_pct": group_coverage_pct,
             "resolved_outcome_count": len(group_resolved_rows),
+            "resolved_return_sum_pct": (
+                sum(
+                    float(row["cost_adjusted_return_pct"])
+                    for row in group_resolved_rows
+                )
+                if cost_contract_status == "verified"
+                and symbol_master_binding.get("status") == "verified"
+                else None
+            ),
             "right_censored_count": group_right_censored_count,
             "right_censored_rate_pct_of_joined": group_right_censored_rate_pct,
             "right_censored_or_blocked_count": len(group_eligible_rows)
@@ -2914,17 +2991,17 @@ def _scanner_bbo_economic_attribution(
             > 0
         ):
             prune_acceptance_groups.append(selected_group)
-    prune_acceptance_ready = bool(
-        prune_acceptance_groups
-        and all(
+    for group in prune_acceptance_groups:
+        group["source_only_comparison_ready"] = bool(
             float(group.get("exact_bbo_join_coverage_pct") or 0.0)
             >= SCANNER_BBO_JOIN_COVERAGE_FLOOR_PCT
             and int(group.get("resolved_outcome_count") or 0)
             >= SCANNER_PRUNE_BBO_RESOLVED_FLOOR
             and float(group.get("right_censored_rate_pct_of_joined") or 0.0)
             <= SCANNER_PRUNE_BBO_RIGHT_CENSORED_MAX_PCT
-            for group in prune_acceptance_groups
         )
+    prune_acceptance_ready = any(
+        group["source_only_comparison_ready"] for group in prune_acceptance_groups
     )
     prune_observer_acceptance = {
         "status": (
@@ -2937,6 +3014,12 @@ def _scanner_bbo_economic_attribution(
             )
         ),
         "acceptance_ready": prune_acceptance_ready,
+        "all_groups_required": False,
+        "ready_group_count": sum(
+            group["source_only_comparison_ready"] for group in prune_acceptance_groups
+        ),
+        "metric_role": "daily_source_only_comparison_economics",
+        "diagnostic_implementation_gate": False,
         "group_count": len(prune_acceptance_groups),
         "population_role": "bounded_observer_selected_episode",
         "full_funnel_population_ev_extrapolation_allowed": False,
@@ -3221,6 +3304,10 @@ def _scanner_unique_funnel_summary(
         )[-20:],
         "acceptance": dict(bbo_attribution.get("prune_observer_acceptance") or {}),
         "eligible_episode_census_count": len(eligible_prune_observation_episodes),
+        "receipt_accounting": observer_receipt_accounting(
+            eligible_prune_observation_episodes,
+            len(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC),
+        ),
         "scheduled_stable_episode_count": len(scheduled_prune_observation_episodes),
         "schedule_coverage_pct": _rate_pct(
             len(scheduled_prune_observation_episodes),
@@ -3849,11 +3936,14 @@ def _resolve_snapshot(
     requested_path: Path | None,
     *,
     target_date: str,
+    as_of: datetime | None = None,
+    historical: bool = False,
 ) -> tuple[Path | None, dict[str, Any], dict[str, Any]]:
     explicit = requested_path is not None
     selected_path = requested_path if explicit else DEFAULT_DASHBOARD_SNAPSHOT_PATH
     payload = _read_json(selected_path)
     generated_at = _snapshot_generated_at(payload)
+    as_of = as_of or datetime.now(KST)
     provenance = {
         "source": "explicit_subscription_snapshot" if explicit else "none",
         "selected": False,
@@ -3861,16 +3951,36 @@ def _resolve_snapshot(
         "schema_version": str(payload.get("schema_version") or "unknown"),
         "generated_at": generated_at.isoformat() if generated_at else None,
         "subscription_state_available": False,
+        "snapshot_as_of": generated_at.isoformat() if generated_at else None,
+        "current_freshness_usable": False,
+        "evaluation_scope": "historical_snapshot" if historical else "current_snapshot",
     }
     if selected_path is None or not selected_path.exists():
         return selected_path, {}, provenance
     if not payload:
         provenance["selection_reason"] = "invalid_or_empty_json"
         return selected_path, {}, provenance
+    if generated_at is None or generated_at.date().isoformat() != target_date:
+        provenance["selection_reason"] = (
+            "snapshot_generated_at_missing"
+            if generated_at is None
+            else "default_snapshot_target_date_mismatch"
+        )
+        return selected_path, {}, provenance
+    snapshot_age_sec = (as_of - generated_at).total_seconds()
+    provenance["snapshot_age_sec"] = snapshot_age_sec
+    if snapshot_age_sec < 0 or (
+        not historical and snapshot_age_sec > DEFAULT_STALE_SEC
+    ):
+        provenance["selection_reason"] = (
+            "snapshot_future_dated" if snapshot_age_sec < 0 else "snapshot_stale"
+        )
+        return selected_path, {}, provenance
     if explicit:
         provenance.update(
             {
                 "selected": True,
+                "current_freshness_usable": not historical,
                 "selection_reason": "explicit_path",
                 "subscription_state_available": bool(
                     isinstance(payload.get("rows"), list)
@@ -3882,16 +3992,11 @@ def _resolve_snapshot(
     if str(payload.get("schema_version") or "") != "kiwoom_ws_dashboard_snapshot_v1":
         provenance["selection_reason"] = "unsupported_default_snapshot_schema"
         return selected_path, {}, provenance
-    if generated_at is None:
-        provenance["selection_reason"] = "default_snapshot_generated_at_missing"
-        return selected_path, {}, provenance
-    if generated_at.date().isoformat() != target_date:
-        provenance["selection_reason"] = "default_snapshot_target_date_mismatch"
-        return selected_path, {}, provenance
     provenance.update(
         {
             "source": "same_day_live_dashboard_snapshot_fallback",
             "selected": True,
+            "current_freshness_usable": not historical,
             "selection_reason": "same_day_schema_match",
             "subscription_state_available": False,
         }
@@ -3900,7 +4005,7 @@ def _resolve_snapshot(
 
 
 def _dashboard_snapshot_rows(
-    snapshot: dict[str, Any], *, stale_ms: float
+    snapshot: dict[str, Any], *, stale_ms: float, elapsed_ms: float = 0.0
 ) -> list[dict[str, Any]]:
     stocks = snapshot.get("stocks")
     if not isinstance(stocks, dict):
@@ -3909,14 +4014,24 @@ def _dashboard_snapshot_rows(
     for stock_code, raw in stocks.items():
         if not isinstance(raw, dict):
             continue
-        ages = _dictish(raw.get("last_realtime_type_ages_ms"))
+        ages = {
+            key: value + elapsed_ms
+            for key, raw_value in _dictish(
+                raw.get("last_realtime_type_ages_ms")
+            ).items()
+            if (value := _to_float(raw_value)) is not None
+            and math.isfinite(value)
+            and value >= 0
+        }
         numeric_ages = [
             age for value in ages.values() if (age := _to_float(value)) is not None
         ]
         last_receive_age_ms = min(numeric_ages) if numeric_ages else None
         age_0b_ms = _to_float(raw.get("last_0b_age_ms"))
-        if age_0b_ms is None:
+        if age_0b_ms is None or not math.isfinite(age_0b_ms) or age_0b_ms < 0:
             age_0b_ms = _to_float(ages.get("0B"))
+        else:
+            age_0b_ms += elapsed_ms
         age_0d_ms = _to_float(ages.get("0D"))
         non_trade_fresh = any(
             (age := _to_float(ages.get(realtime_type))) is not None and age < stale_ms
@@ -3969,14 +4084,39 @@ def _dashboard_snapshot_rows(
 
 
 def _snapshot_rows(
-    snapshot: dict[str, Any], *, stale_ms: float
+    snapshot: dict[str, Any], *, stale_ms: float, elapsed_ms: float = 0.0
 ) -> list[dict[str, Any]]:
-    rows = snapshot.get("rows")
-    if isinstance(rows, list):
-        return [row for row in rows if isinstance(row, dict)]
-    if isinstance(snapshot.get("symbols"), list):
-        return [row for row in snapshot["symbols"] if isinstance(row, dict)]
-    return _dashboard_snapshot_rows(snapshot, stale_ms=stale_ms)
+    rows = snapshot.get("rows", snapshot.get("symbols"))
+    if not isinstance(rows, list):
+        return _dashboard_snapshot_rows(
+            snapshot, stale_ms=stale_ms, elapsed_ms=elapsed_ms
+        )
+    result = []
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        row = dict(raw)
+        for field in ("last_receive_age_sec", "last_0b_age_sec", "last_0d_age_sec"):
+            age = _to_float(raw.get(field))
+            row[field] = (
+                age + elapsed_ms / 1000
+                if age is not None and math.isfinite(age) and age >= 0
+                else None
+            )
+        age = row["last_receive_age_sec"]
+        row["freshness_state"] = (
+            "no_tick" if age is None else "stale" if age * 1000 >= stale_ms else "fresh"
+        )
+        row["trade_tick_quiet"] = bool(
+            row["last_0d_age_sec"] is not None
+            and row["last_0d_age_sec"] * 1000 < stale_ms
+            and (
+                row["last_0b_age_sec"] is None
+                or row["last_0b_age_sec"] * 1000 >= stale_ms
+            )
+        )
+        result.append(row)
+    return result
 
 
 def _row_provider_none(row: dict[str, Any]) -> bool:
@@ -4198,7 +4338,7 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 quiet_cumulative_volume_provenance["cumulative_volume_zero"] += 1
         if _boolish(row.get("repair_recommended")):
             repair_rows.append(row)
-        if state in {"stale", "no_tick"}:
+        if state.removesuffix("_at_snapshot") in {"stale", "no_tick"}:
             observed_stale_like_rows.append(row)
             if row.get("subscription_state_available") is not False:
                 subscription_stale_like_rows.append(row)
@@ -4767,12 +4907,58 @@ def _build_workorders(
                 ],
             }
         )
+    if (summary.get("diagnostic_acceptance") or {}).get(
+        "status"
+    ) == "source_quality_gap":
+        orders.append(
+            {
+                **base,
+                "order_id": "order_ws_monitor_source_contract_gap",
+                "priority": 1,
+                "title": "WS monitor required source contract gap",
+                "intent": "Restore exact-date diagnostic source accounting without runtime mutation.",
+                "evidence": [
+                    f"source_missing={summary.get('source_missing')}",
+                    f"invalid_json_line_count={(summary.get('input_processing') or {}).get('invalid_json_line_count')}",
+                ],
+                "files_likely_touched": [
+                    "src/engine/monitoring/intraday_ws_freshness_monitor.py"
+                ],
+                "acceptance_tests": [
+                    "required_source_and_invalid_line_census_accounted"
+                ],
+            }
+        )
+    snapshot_provenance = summary.get("subscription_snapshot_provenance") or {}
+    if snapshot_provenance.get("selection_reason") in {
+        "snapshot_stale",
+        "snapshot_future_dated",
+        "snapshot_generated_at_missing",
+        "invalid_or_empty_json",
+        "unsupported_default_snapshot_schema",
+    }:
+        orders.append(
+            {
+                **base,
+                "order_id": "order_ws_snapshot_source_freshness_gap",
+                "priority": 2,
+                "title": "WS snapshot source freshness attribution gap",
+                "intent": "Separate snapshot generation age from event age without changing WS recovery or trading guards.",
+                "evidence": [f"subscription_snapshot_provenance={snapshot_provenance}"],
+                "files_likely_touched": [
+                    "src/engine/monitoring/intraday_ws_freshness_monitor.py"
+                ],
+                "acceptance_tests": [
+                    "old_or_future_snapshot_never_claims_current_freshness"
+                ],
+            }
+        )
     if not orders:
         return []
     orders.sort(
         key=lambda item: (int(item.get("priority", 99)), str(item.get("order_id")))
     )
-    return orders
+    return finalize_followups(summary, orders)
 
 
 def build_report(
@@ -4785,6 +4971,8 @@ def build_report(
     generated_at: str | None = None,
     incremental_state_path: Path | None = None,
     symbol_master_path: Path | None = None,
+    finalize: bool = False,
+    history_report_dir: Path | None = None,
 ) -> dict[str, Any]:
     target_date = target_date or date.today().isoformat()
     stale_ms = float(stale_sec) * 1000.0
@@ -4935,7 +5123,11 @@ def build_report(
 
     incremental_state_persisted = bool(
         incremental_state_path is not None
-        and all(identity.get("cacheable") for identity in source_identities.values())
+        and all(
+            identity.get("cacheable")
+            or (name == "threshold_events" and identity.get("exists") is False)
+            for name, identity in source_identities.items()
+        )
         and all(
             source.get("source_identity_stable_during_scan")
             for source in source_offsets.values()
@@ -4950,6 +5142,7 @@ def build_report(
                 "stale_ms": stale_ms,
                 "sources": {
                     source_name: {
+                        "exists": source.get("exists"),
                         "path": source.get("path"),
                         "device": source.get("device"),
                         "inode": source.get("inode"),
@@ -4989,9 +5182,33 @@ def build_report(
         resolved_snapshot_path,
         snapshot_payload,
         snapshot_provenance,
-    ) = _resolve_snapshot(subscription_snapshot_path, target_date=target_date)
-    snapshot_rows = _snapshot_rows(snapshot_payload, stale_ms=stale_ms)
+    ) = _resolve_snapshot(
+        subscription_snapshot_path,
+        target_date=target_date,
+        as_of=_snapshot_generated_at({"generated_at": generated_at}),
+        historical=finalize,
+    )
+    snapshot_rows = _snapshot_rows(
+        snapshot_payload,
+        stale_ms=stale_ms,
+        elapsed_ms=(
+            0.0
+            if finalize
+            else max(0.0, snapshot_provenance.get("snapshot_age_sec") or 0) * 1000
+        ),
+    )
+    if finalize:
+        for row in snapshot_rows:
+            row["freshness_state"] = (
+                f"{row.get('freshness_state', 'unknown')}_at_snapshot"
+            )
+            row["repair_recommended"] = False
     snapshot = _snapshot_summary(snapshot_rows)
+    snapshot["evaluation_scope"] = snapshot_provenance["evaluation_scope"]
+    snapshot["snapshot_as_of"] = snapshot_provenance["snapshot_as_of"]
+    snapshot["current_freshness_usable"] = snapshot_provenance[
+        "current_freshness_usable"
+    ]
     symbol_master, symbol_master_binding = _load_verified_symbol_master(
         target_date, symbol_master_path
     )
@@ -5110,6 +5327,33 @@ def build_report(
             },
         },
     }
+    summary["evaluation_phase"] = "postclose_final" if finalize else "intraday"
+    summary["diagnostic_acceptance"] = {
+        "status": (
+            "source_quality_gap"
+            if "pipeline_events" in source_missing
+            or invalid_json_line_count
+            or any(
+                not source.get("source_identity_stable_during_scan")
+                for source in source_offsets.values()
+            )
+            else "diagnostic_generated"
+        ),
+        "requires_economic_floor": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    summary["daily_prune_economic_receipt"] = economic_receipt(summary)
+    summary["daily_hotset_economic_receipt"] = hotset_economic_receipt(summary)
+    if finalize:
+        summary["rolling_prune_economics"] = rolling_economics(
+            summary["daily_prune_economic_receipt"], history_report_dir or REPORT_DIR
+        )
+        summary["rolling_hotset_economics"] = rolling_economics(
+            summary["daily_hotset_economic_receipt"],
+            history_report_dir or REPORT_DIR,
+            hotset=True,
+        )
     workorders = _build_workorders(summary, target_date=target_date)
     workorder_decision_counts = Counter(
         str(item.get("decision") or "unspecified") for item in workorders
@@ -5164,6 +5408,10 @@ def _render_monitor_markdown(report: dict[str, Any]) -> str:
             "",
             f"- pipeline_event_count: `{report.get('pipeline_event_count')}`",
             f"- input_processing: `{report.get('input_processing')}`",
+            f"- evaluation_phase: `{report.get('evaluation_phase')}`",
+            f"- diagnostic_acceptance: `{report.get('diagnostic_acceptance')}`",
+            f"- rolling_prune_economics: `{report.get('rolling_prune_economics')}`",
+            f"- rolling_hotset_economics: `{report.get('rolling_hotset_economics')}`",
             f"- pipeline_counts: `{report.get('pipeline_counts')}`",
             f"- pipeline_rates: `{report.get('pipeline_rates')}`",
             f"- causal_attribution: `{report.get('causal_attribution')}`",
@@ -5259,9 +5507,8 @@ def write_report(
     monitor_json = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.json"
     monitor_md = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.md"
 
-    monitor_json.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    write_json_object_generation_safe(
+        monitor_json, report, sort_keys=True, trailing_newline=True
     )
     monitor_md.write_text(_render_monitor_markdown(report), encoding="utf-8")
     if monitor_only:
@@ -5302,6 +5549,7 @@ def _run_once(args: argparse.Namespace) -> dict[str, Any]:
         threshold_path=Path(args.threshold_path) if args.threshold_path else None,
         subscription_snapshot_path=snapshot_path,
         stale_sec=args.stale_sec,
+        finalize=args.finalize,
         incremental_state_path=(
             Path(args.incremental_state_path) if args.incremental_state_path else None
         ),
@@ -5341,6 +5589,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stale-sec", type=float, default=DEFAULT_STALE_SEC)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--monitor-only", action="store_true")
+    parser.add_argument(
+        "--finalize",
+        action="store_true",
+        help="Close the target-date diagnostic window and evaluate rolling source-only economics",
+    )
     parser.add_argument("--watch-iterations", type=int, default=1)
     parser.add_argument("--interval-sec", type=float, default=60.0)
     args = parser.parse_args(argv)

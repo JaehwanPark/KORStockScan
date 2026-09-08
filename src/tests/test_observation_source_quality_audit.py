@@ -9514,3 +9514,26 @@ def test_observation_source_quality_reviews_explicit_20260821_provenance_gaps(
         ),
         "main_lifecycle_venue": "reviewed_main_lifecycle_venue_not_available",
     }
+
+
+def test_required_raw_missing_is_not_valid_empty(tmp_path, monkeypatch):
+    from src.engine import observation_source_quality_audit as audit
+
+    monkeypatch.setattr(
+        audit, "_pipeline_events_path", lambda d: tmp_path / "absent.jsonl"
+    )
+    report = audit.build_observation_source_quality_audit("2026-09-08")
+    assert report["status"] == "fail"
+    assert report["summary"]["tuning_input_allowed"] is False
+    assert report["summary"]["blocked_reason"] == "source_quality_raw_missing"
+
+
+def test_invalid_raw_line_is_counted_not_silently_approved(tmp_path, monkeypatch):
+    from src.engine import observation_source_quality_audit as audit
+
+    raw = tmp_path / "pipeline.jsonl"
+    raw.write_text("{bad json}\n[]\n")
+    monkeypatch.setattr(audit, "_pipeline_events_path", lambda d: raw)
+    report = audit.build_observation_source_quality_audit("2026-09-08")
+    assert report["source"]["invalid_json_line_count"] == 2
+    assert report["summary"]["tuning_input_allowed"] is False

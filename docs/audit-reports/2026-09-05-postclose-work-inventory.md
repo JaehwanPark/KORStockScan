@@ -10,6 +10,9 @@
 
 ## 1. 이번 갱신 판정
 
+- **9/8 최우선 개선 목표는 메인 submit drought 해소**다. 필수 운영 terminal·source-quality 확보를 선행하고, §6 순서로 최초 병목과 수정 가능성을 확인한다. 주문 건수만 늘리는 것이 아니라 기존 안전 계약 안에서 유효 기회의 제출→체결→비용 차감 순이익 경로를 회복하는 목표다. 검토 우선순위이지 cron 재배열·guard 완화·실주문 권한이 아니다.
+- **9/8 10:10:03 KRX 관측**: `buy_funnel_sentinel_2026-09-08.json`의 `KRX|KRX_REGULAR`은 `SUBMIT_DROUGHT_CRITICAL`. exact attempt **64 = terminal 59 + pending 5 + submitted 0**, 미분류 terminal 0이며 terminal causal 축은 upstream28/latency26/Entry-AI 재검증5/price0/broker0이다. raw stage unique AI25/budget41/latency6은 서로 다른 모집단이라 25→41→6의 인과 funnel로 쓰지 않는다. JSON SHA256=`06f59784582fa63364a42f7733d0e19774c27197b1d1b1d47e3f36b14f2f53df`; 이는 읽은 generation 기록이며 이후 자연 갱신 파일이나 장마감 판정을 대신하지 않는다. source: `data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-09-08.json` (저장소 루트 기준).
+- **오전 수리·배포 기록 갱신**: [10:03 재리뷰](2026-09-08-intraday-due-work-execution.md#1003-재리뷰와-남은-작업-실행)의 위젯 blocked-policy hash 결정성·과거 receipt 비정규화·micro frozen compatibility 검증은 관련295 PASS 후 `c1bd9660`으로 main/원격에 반영됐다. [09:27 재기동](2026-09-08-graceful-restart-0927.md)은 그보다 앞선 `f67a7ec7`/PID461794의 별도 승인 기록이다. 커밋은 새 위젯 PID 소비·drought 해소 증거가 아니다. raw41529/72stage 감사 PASS도 enqueue 전 micro loss를 포함하지 않으므로 Provider hold·자연 acceptance는 유지한다.
 - **9/8 현행 판정: 문서·계약 보완 종결과 운영 YELLOW를 분리**한다. [9/7 source 우선순위 복구 리뷰](2026-09-08-postclose-priority-repair-review.md)의 955 targeted PASS는 요약 세대·controller·CF 귀속 등 해당 수리 범위의 증거다. 전체 119개 작업의 경제성 전수검토 완료가 아니다. 9/8 00:27:43 strict verifier는 handoff PASS/필수·후행·세대 결손 0, 00:27:44 controller DONE이다. cleanup/detector는 원래 9/7 23:23:29/23:23:30 receipt를 보존했고 재실행하지 않았다.
 - **실적 귀속 복원**: CF route 관찰 3행 분리로 NXT 실제 eligible lifecycle 0→2, custody gap 5→2. 두 기존 거래의 비용 차감 +453원은 과거 귀속 복원이지 신규 수익/전략 개선량이 아니다. 다른 집합의 headline PnL은 `null/unresolved_trade_review_count_mismatch`를 유지한다. legacy identity 2행과 과거 market 18행을 합성하지 않는다.
 - **AI·machine는 새 원천 필요**: provider0 source/metadata 재생성은 consumer terminal을 닫았지만 KRX/NXT exact control 각 0, holding checkpoint 미충족, machine 8 anchor/eligible 0이다. 검증된 9/7 ingress loss는 격리·immediate baseline carry를 유지한다. 같은 날짜 무변경 재실행 대신 기존 OPEN의 다음 exact source를 확인한다.
@@ -184,7 +187,7 @@
 | 71 | Pattern currentness audit | pattern freshness 검사 | stale 승격 차단 | 낡은 가설 사용 방지 | ON, trigger-gated | 상세검토 대기 | E2 |
 | 72 | Pattern AI review | pattern 후보 AI 검토 | 구현가능 항목 분리 | 무의미한 후보 축소 | ON | 상세검토 대기 | E2 |
 | 73 | Pipeline verbosity | 중복·과다 event 분석 | producer별 비용 측정 | 저장량·runtime 절감 | ON, freshness reuse | 상세검토 대기 | E2 |
-| 74 | Source-quality final audit | 후속 산출물 포함 재감사 | 최종 tuning 허용상태 확정 | 중간 gap 포착 | ON, trigger-gated | 상세검토 대기 | E2 |
+| 74 | Source-quality final audit | #11과 동일 producer의 최종 원천 재검사 | EV/PREOPEN/최종 verifier 공통 날짜·승인·generation 검증 및 결함 행 격리 | 잘못된 승인과 verifier 불일치 차단, 정상 입력 보존 | ON, trigger-gated; 공통 품질 gate | [9/8 보완 리뷰](2026-09-08-ws-freshness-source-quality-remediation-review.md); 2차 보완, 자연 v2 소비 별도 | E2 |
 | 75 | Entry split order plan | 최초진입 분할 정책 | 1·2차 가격·타이밍 후보 생성 | 체결률/slippage 개선 | ON | 상세검토 대기 | E2; operator lock 없음 |
 | 76 | AI decision-quality materialization | trace/outcome/replay 입력 준비 | exact cohort 생성 | prompt EV 측정 | ON; 자기해시·부분 성공 학습 계약 | 기존 self-hash/부분 성공 검토 유지; 9/7 source 복구에서 6단계 성공, CF custody 오분류 제거. 원본 결손과 provider 평가·경제성은 별도 | 코드 검증과 자연 산출물 증거 분리 |
 | 77 | Main AI R0–R3 | exact A/B/C prompt·입력 비교 | 연구 후보와 full-gate manifest·동일 prompt/input 소비 연결 | 비용 차감 EV·paired 원화 순이익 개선 검증 | 연구 ON; 현행 Entry adapter 기본 OFF | [연결 구현](2026-09-07-main-ai-r0-r3-remediation-review.md), [새 소스 합성 성능 PASS](2026-09-07-main-ai-current-axis-approval-performance-deployment.md): 승인·배포 지시 접수, prospective baseline 준비 | exact 후보/승인 artifact·active chain 종료·clean 배포·자연/실수익 OPEN; #81 계속 OFF; V2.14/V2.15 alias 아님 |
@@ -199,7 +202,7 @@
 | 86 | Producer-gap discovery | AI 기반 gap 탐색 | 구현 workorder 생성 | 영구 gap 해소 | OFF | 상세검토 대기 | 없음 |
 | 87 | Stage-hook discovery | lifecycle hook 누락 탐색 | hook workorder 생성 | attribution coverage 확대 | OFF | 상세검토 대기 | 없음 |
 | 88 | Stage-hook scaffold | hook 골격 생성 | source-only 관찰점 추가 | 결과 불능 경로 해소 | OFF | 상세검토 대기 | 없음 |
-| 89 | WS freshness finalize | 장중 시세상태 종결 | exact-date freshness artifact | micro/AI 근거 보호 | ON | 상세검토 대기 | E2, E3 |
+| 89 | WS freshness finalize | WS 정상 안전 차단·원천/전달 결손의 장후 종결 | episode receipt·snapshot as-of 검증→workorder, 소목표 포함 별도 rolling 비교 | 결손 정상화 방지, 무기한 진단 대기 제거, 증분 처리 | 독립 기본 ON; --finalize, 직접 runtime apply 없음 | [9/8 보완 리뷰](2026-09-08-ws-freshness-source-quality-remediation-review.md); 2차 보완, 자연 terminal/경제성 별도 | E2, E3 |
 
 ### 4.4 EV·승인·최종검증 단계
 
@@ -286,13 +289,17 @@ recheck·lookup-attention·AI 자연 acceptance 3개는 [9/8 checklist](../check
 
 ## 6. 다음 상세검토 우선순위
 
-검토 우선순위이며 cron 실행 순서를 바꾸지 않는다. 완료 항목의 자연 확인과 미검토 항목의 코드 상세검토를 별도 대기열로 운영한다.
+**메인 submit drought 해소를 최우선으로 하는 점검·개선 대기열**이다. 필수 owner의 실패 복구·source-quality 확보가 먼저이며 cron/immutable wrapper의 실행 순서는 바꾸지 않는다. 완료 항목의 자연 확인과 미검토 항목의 코드 상세검토를 분리한다. source-only 보고서와 실전 효과의 완료 기준은 [장후 지시문 §1.1](../postclose-tuning-result-review-task-instructions.md#11-submit-drought-최우선-점검개선-계약)을 따른다.
 
-| 순위 | 잔여 검토·자연 확인 | 먼저 확인할 이유·판정 기준 |
-| --- | --- | --- |
-| 1 | #48 fact sync·실제 receipt → 남은 9개 workorder의 exact evidence | 복원된 NXT 2건과 미복원 identity/receipt/taxonomy/Telegram 계약을 분리한다. #50/#51/#54의 보완은 완료 근거를 유지하고 다음 자연 source→후보→parsed review→PREOPEN 소비를 확인한다. 수리 완료를 무표본 때문에 재개하지 않는다. |
-| 2 | #79/#80 실제 비교 준비와 machine timing 새 원천 | metadata terminal·control0과 provider 평가/비용 EV를 구분하고 최초 소실 source를 확인한다. 저장되지 않은 9/7 market/ingress는 반복 재실행하지 않는다. 전체 owner 상세검토와 기존 자연 acceptance를 분리한다. |
-| 3 | #91/#103/#110 추천 전수·#97 apply-gap / 최종 요약의 자연 handoff | source-only 65행과 별도 승인 projection26행의 현재 disposition을 원본별 대사한다. #90~#117 hash/strict 수리를 처음부터 재개하지 않고 다음 자연 wrapper 소비를 확인한다. 위젯·에피소드 실제 적용은 별도 INTRADAY acceptance가 소유한다. |
-| 조건부 | #46 panic-sell, #55 cancel-wait, #75 Entry split | 실제 drought 원인이 해당 stage일 때 앞당긴다. pre-submit 단절인데 cancel/split을 첫 해법으로 삼지 않는다. #27 context 진단과 machine timing 경제성 owner를 혼합하지 않는다. |
+| 순위 | 점검·개선 대상 / 기존 review ID | 반드시 확인할 근거와 consumer | 실행·자연 acceptance owner (9/8 checklist) |
+| --- | --- | --- | --- |
+| 1 | **최초 병목 확정**: #119 BUY Funnel, #11 preflight·#74 final audit | 대상일 마지막 정상 generation의 exact attempt/cycle·terminal 보존식과 5개 core axis를 대사한다. upstream/latency/AI 재검증을 우선 분해하고 `PRICE_REVALIDATION`·`BROKER_RECEIPT`의 0을 결손과 정상 미도달로 구분한다. raw census 비율과 exact 인과 분모를 혼합하지 않는다. Sentinel·당일 pipeline snapshot과 이를 소비하는 #23 controller/workorder의 날짜/hash 연결을 확인한다. | `EntryRecheckNaturalAttribution0907`, `PostcloseRecoverySourceAcceptance0908` |
+| 2 | **scanner 상위 탐색·관측 지연**: 외부 market census, #8/#9 rising-missed, #49 lookup-attention, #27 micro·#89 WS freshness | 독립 보통주 시장 모집단→fetch/pool/watch/promotion→attach/fast/heavy eval의 최초 결손·지연을 확인한다. benchmark·BBO/SLA가 없으면 recall 정상이나 유효 기회 없음으로 닫지 않는다. lookup-attention의 동일-tier 자원배분은 전체 시장 포착률의 대체 검증이 아니다. timestamp loss·source/queue·callback 지연을 분리하고 유효 row/window만 소비한다. | `RuntimeEnvIntradayObserve0908`, `ScannerLookupAttentionNaturalEvidence0908`, `MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908` |
+| 3 | **Entry AI 입력·판단·submit 직전 재검증**: #76/#77/#78/#80/#82, #27/#89 | 최신 AI trace/payload/response·완성봉·BBO·세션과 final authority를 exact attempt에 연결한다. 10:10 quote refresh의 latency 회복5 중 AI 재검증 차단4, budget 단계 잔류1이며 제출0이다. stale/untrusted/schema/transport 결손과 정상 WAIT/DROP의 경제적 오판 가능성을 분리한다. action-neutral outcome·같은 payload replay로 확인하고 미래 label을 입력에 역류시키지 않는다. #79 holding은 별도 cohort이며 #81은 계속 OFF다. | `AIDecisionActionOutcomeNaturalEvidence0908`, `EntryRecheckNaturalAttribution0907` |
+| 4 | **기존 대응 후보의 실효 경로**: #21 one-share 진단·#23 daily recheck, #48 fact sync·#75/#76/#77 원천→#50/#51/#54 Daily/cumulative/AI correction | #23의 정확한 최근3거래일 source·scope·controller v4→기존 PREOPEN 후보를 확인한다. on-demand 누적 backtest를 정기 복구 대상으로 삼지 않는다. #50은 같은 장후 paired/실제 비용을 소비하고 정상 hold·missing/source failure를 분리한다. submit0을 이유로 모든 family의 양수 순EV 후보를 일괄 거부하거나, 반대로 drought 경보를 자동 승인으로 사용하지 않는다. 새 수량·threshold·cap 변경은 이 목록의 권한이 아니다. | `EntryRecheckNaturalAttribution0907`, `DailyThresholdNaturalAcceptance0908` |
+| 5 | **개선 지시의 누락·stale handoff 차단**: #91/#103/#110 workorder→#90/#92/#104/#109 EV→#96/#97/#98/#105/#111 summary/gap/lineage→#117/#112/#116 | `order_entry_submit_drought_auto_resolution`과 원본이 발급한 weak-contract native ID 전수를 현재 disposition으로 대사한다. 10:03 메모리상 6개 검증은 장후 canonical 발행이 아니다. `buy_funnel_sentinel_primary`, `entry_submit_drought_handoff_selected`, 마지막 strict `--require-summary-handoff`와 다음 PREOPEN 소비를 확인한다. 코드 완료·후속 전달·실제 drought 해소는 별도다. | `PostcloseRecoverySourceAcceptance0908`, `EntryRecheckNaturalAttribution0907` |
+| 조건부 | **제출 이후 품질**: #48 receipt/fact, #55 cancel-wait·#75 Entry split, #46 holding/exit·#12/#13/#47 scale-in | exact accepted submit 뒤 미체결·부분체결·잘못된 가격/취소/귀속이 최초 병목일 때 상세검토를 앞당긴다. pre-submit0만으로 cancel timeout·split·scale-in을 첫 해법으로 삼지 않는다. 기존 NXT identity/receipt workorder는 지우지 않고 별도 scope로 계속 대사한다. #75는 Daily 선행 원천으로서 정상 실행을 유지한다. | 기존 해당 family owner 및 `PostcloseRecoverySourceAcceptance0908` |
+
+#67/#69 pattern lab의 새 source-only 연구는 기존 owner의 순EV/빈도 개선 근거를 보강하지만, 위 drought 원인 점검을 지연시키는 추가 합의·승인 gate가 아니다. 다른 세션의 관련 수정·리뷰 기록은 보존하며 이번 문서 검토의 코드 완료 범위에 포함하지 않는다. 위젯·Samsung/저가주 거래와 machine timing은 독립 owner로 필수 운영·추천 intake를 유지하되 메인 submit0의 분모나 대체 성공 근거로 합산하지 않는다.
 
 §5.1의 #11/#119/#23/#49/#76/#78/#82는 **완료 보완의 자연 acceptance 확인**이지 다시 처음부터 상세검토할 목록이 아니다. #8/#9는 신규 결함이 없으면 재개하지 않는다. OFF/RETIRED와 비우선 sim/bucket/Swing은 단순 무표본 때문에 우선순위에 넣지 않는다. 실행·재확인 시점은 현재 체크리스트의 기존 owner를 따르며 이 표는 새 자동실행 권한이나 일정이 아니다.

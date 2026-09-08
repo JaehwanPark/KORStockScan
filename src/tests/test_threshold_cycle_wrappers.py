@@ -2648,7 +2648,16 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_MONITOR" not in script
     assert "THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_FINALIZE" in script
     assert "intraday_ws_freshness_finalize" in script
+    assert (
+        'RUN_INTRADAY_WS_FRESHNESS_FINALIZE="${THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_FINALIZE:-true}"'
+        in script
+    )
     assert '--symbol-master-path "$intraday_ws_symbol_master"' in script
+    ws_finalize_command = script.split(
+        'wait_for_postclose_resources "intraday_ws_freshness_finalize"', 1
+    )[1].split("wait_for_report_artifact", 1)[0]
+    assert "--finalize" in ws_finalize_command
+    assert "--monitor-only" in ws_finalize_command
     assert (
         'wait_for_json_artifact "$intraday_ws_symbol_master" '
         '"intraday_ws_freshness_symbol_master"' not in script

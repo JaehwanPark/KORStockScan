@@ -6,6 +6,8 @@
 
 운영 체인이 정상화된 뒤에는 같은 generation의 authoritative `implement_now`와 위젯·에피소드 매매기계의 구현 추천을 전수 intake한다. 허용 범위의 항목은 `Pass 1 구현 → review/fix → 영향 산출물 재생성 → Pass 2 재판정·추가 구현`을 fixed-point까지 반복한다.
 
+현행 최우선 개선 목표는 **메인 submit drought 해소**다. 운영 terminal 확인만으로 끝내지 않고 유효 기회가 scanner·Entry AI·latency/price·최종 authority·broker 중 어디에서 사라지는지 식별해 기존 owner의 개선·다음 PREOPEN handoff까지 추적한다. 목표는 안전 계약 안의 유효 제출·체결과 비용 차감 순이익 회복이며, 주문 건수 강제 증가나 무차별 guard 완화가 아니다. 검토 우선순위는 [상세검토 진행표 §6](audit-reports/2026-09-05-postclose-work-inventory.md#6-다음-상세검토-우선순위)를 따른다.
+
 사용자가 이 지시문에 따라 장후작업을 모니터링하라고 요청하면 위 허용 범위의 2-pass 구현도 함께 지시한 것으로 본다. 별도의 구현 재지시를 기다리지 않는다. 단, 이 문서의 인용·열람·현행화 또는 읽기 전용 점검 요청은 모니터링/추천 구현 실행 지시가 아니다. 문서 수정만 요청받았으면 운영 산출물·PID·env를 변경하지 않는다.
 
 상세 EV 연구, 전략별 장기성과 재평가와 모든 report의 계산 재현은 기본 범위가 아니다. 장애 원인 또는 추천의 구현 가능성·권한을 판정하는 데 필요한 근거만 확인하고, 사용자가 별도 성과 분석을 요청했을 때 확장한다.
@@ -29,12 +31,28 @@
 9. authoritative `implement_now`와 위젯·에피소드 추천 전수가 stable ID로 분류되고 누락이 없다.
 10. 허용된 구현 항목은 Pass 1과 Pass 2 fixed-point, review finding 0, targeted validation과 영향 산출물 재생성까지 닫힌다.
 11. 권한 밖 추천은 구현하지 않고 `user_authority`와 필요한 승인 근거를 명시한다.
+12. 대상일 submit drought의 scope별 최초 병목·해당 workorder/기존 family·다음 consumer·남은 실효성 검증이 설명된다. 경보 전달이나 코드 완료를 drought 해소로 대체하지 않는다.
 
 코드·계약 검토, 배포, 자연 산출물, PREOPEN 선택, PID 소비, 비용 차감 EV/순이익 검증은 각각 별도 상태다. 기존 review finding 0을 이유로 자연 acceptance를 완료하지 않으며, 반대로 미관측 EV를 이유로 수리 완료를 취소하지 않는다. #8/#9처럼 완료된 상세검토는 새 결함·계약 변경·필수 handoff 실패가 입증될 때만 재개한다.
 
 source-only 자연 표본 부족이나 전략 후보 0건은 작업 실패가 아니다. 반대로 process 종료 코드가 0이어도 필수 artifact가 없거나 target date가 다르면 정상 종료로 보지 않는다.
 
 현행 기준 사례는 [9/7 원천의 자정 이후 보완 검토](audit-reports/2026-09-08-postclose-priority-repair-review.md)다. 코드·요약 handoff는 종결했지만 9개 workorder 증거, 과거 market/identity 결손, AI control 무표본과 machine ingress loss는 자연 acceptance로 남았다. [별도 승인 위젯·에피소드 구현](audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)은 이 지시문의 source-only 권한으로 수행한 live 변경이 아니며, 해당 사용자 승인·effective-date receipt와 별도 ledger를 따른다. 이 사례를 새 실행의 PID/terminal 판정으로 재사용하지 않는다.
+
+### 1.1 Submit drought 최우선 점검·개선 계약
+
+필수 실행 실패·원천 손상이 있으면 먼저 복구한다. 아래는 검토 순서이며 설치된 cron/producer 순서나 wrapper snapshot을 바꾸지 않는다. 보고서 진단·완료된 수리의 자연 확인은 진행 중에도 읽기 전용으로 할 수 있지만, 추천 구현은 §7의 terminal·generation 고정·native ID·비권한 gate를 따른다.
+
+1. **분모와 최초 병목 고정**: #119 `buy_funnel_sentinel`의 source date/as-of/hash, scope별 primary·threshold/sample floor, exact attempt/cycle·terminal/pending/submitted 보존식을 기록한다. `UPSTREAM_GATE`, `LATENCY_PRE_SUBMIT`, `ENTRY_AI_AUTHORITY_REVALIDATION`, `PRICE_REVALIDATION`, `BROKER_RECEIPT`를 분리하고 raw AI/budget/latency unique 수를 단일 인과 funnel로 연결하지 않는다. 뒤에서 회복된 veto·비차단 fallback을 terminal 차단으로 중복 집계하지 않는다.
+2. **탐색과 원천부터 검증**: 독립 market-wide benchmark와 #8/#9/#49로 scanner 밖 미관측·watch/promotion·post-promotion 소비를 분리한다. #11/#74의 row/window exclusion, #27 micro delivery와 #89 WS freshness를 소비하며, enqueue 이전 loss가 raw 감사 분모 밖이면 별도 blocker로 남긴다. 독립 모집단·official master·forward-exact/SLA가 없으면 `insufficient_evidence_scanner_recall`이지 정상 탐색이 아니다. 상세 정의는 [장중 지시문 §2.1](intraday-monitoring-task-instructions.md#21-메인-봇-매매기계)을 따른다.
+3. **AI·latency/price 경로 분리**: 같은 attempt의 AI request/response·trusted action·final authority, BBO age·refresh 결과와 다음 blocker를 연결한다. source/transport/schema/stale 결함은 개선 대상이지만 정상 WAIT/DROP·DANGER 차단의 경제적 최적성은 exact executable outcome으로 별도 검토한다. #76/#77/#78/#80/#82는 기존 offline 환류이며 provider0/control0이나 metadata terminal을 판단 개선으로 세지 않는다. #81 legacy OFF·독립 Entry live owner·holding cohort 경계를 유지한다.
+4. **기존 대응 owner 확인**: #21은 one-share source-only 진단, #23은 exact 최근3거래일·동일 scope의 daily recheck controller다. 누적 Entry AI gate backtest는 on-demand only이며 무표본 복구용 정기 실행이 아니다. #48 fact sync와 기존 #75/#76/#77 원천이 #50/#51/#54에 연결되는지 확인한다. recheck·Daily·lookup-attention은 각자의 승인 계약으로 판정하며 submit drought를 모든 family의 추가 양수-EV 승인 veto 또는 무조건 승인 사유로 만들지 않는다.
+5. **행동 가능한 후속 전달 검증**: `order_entry_submit_drought_auto_resolution` 및 source가 발급한 post-submit/broker receipt/fill quality/Telegram/source taxonomy 등의 native ID를 §7 ledger에 전수 분류한다. #91/#103/#110→EV→runtime summary/gap/lineage→tower→checklist→strict verifier의 같은 source generation과 `buy_funnel_sentinel_primary`, `entry_submit_drought_handoff_selected`를 확인한다. 메모리상 검증·이전 날짜 정상 보고서는 당일 canonical handoff를 대신하지 않는다. 결손은 `buy_funnel_submit_drought_handoff_missing` 등 실제 verifier contract로 처리하며 synthetic 완료 marker를 만들지 않는다.
+6. **실효성의 다음 단계 명시**: 허용 수리는 review/fix/validation 후 최초 producer부터 필요한 consumer만 재생성한다. 승인된 후보의 다음 PREOPEN 선택→PID receipt→동일 scope의 자연 submit/fill/terminal·비용 EV는 기존 OPEN owner에 남긴다. 정책 적용 없이 자연 제출이 생기면 관측 회복이지 코드 효과로 귀속하지 않는다. 정상 pre-submit 차단만 있고 accepted submit이 없을 때 #55 cancel-wait·#75 split·scale-in을 첫 해법으로 삼지 않는다. 다만 #75의 기존 Daily 선행 원천 실행은 유지한다.
+
+완료는 세 층으로 보고한다: **진단/코드 수리**, **장후 canonical handoff**, **실제 drought 해소·경제성**. 마지막 층은 선언된 동일 venue/session·관찰창에서 source-quality/원래 탐지 floor가 유효하고 기존 critical 조건을 벗어났는지, 실제 accepted submit 및 후속 전환이 확인되는지 함께 평가한다. 한 건 제출·분모 감소·표본 미달로 경보가 사라진 것을 해소로 확정하지 않으며, executable 기회 부재가 입증된 경우도 `기회 부재`로 별도 보고한다. submit 회복과 비용 차감 수익 개선은 독립 판정이다. 경제성 미관측 때문에 진단 수리 완료를 취소하거나, 수리를 닫기 위해 실주문·floor 하향을 요구하지 않는다.
+
+`SUBMIT_DROUGHT_CRITICAL`만으로 main wrapper 실패나 재기동 사유를 만들지 않는다. 필수 운영이 성공 terminal이고 handoff가 정상이어도 drought 원인/자연 효과가 남으면 종합 상태는 YELLOW다. 미래 작업·정상 대기가 남으면 §9의 `진행 중`, 필수 artifact·handoff 실패 또는 허용 actionable 수리 누락은 RED 기준을 따른다. main의 drought 분모에 위젯·에피소드·sim 주문을 합치지 않으며 독립 owner의 필수 실행·추천 전수 intake를 생략하지 않는다.
 
 ## 2. 권한 경계
 
@@ -285,7 +303,7 @@ Pass 1 전에 현재 generation의 main/위젯/에피소드 추천 **전수**를
 
 ### 7.3 Pass 1
 
-1. authoritative generation의 모든 eligible `implement_now`와 위젯·에피소드 구현 추천을 ID별로 고정한다.
+1. authoritative generation의 모든 eligible `implement_now`와 위젯·에피소드 구현 추천을 ID별로 고정한다. 필수 source-quality/운영 장애를 먼저 닫고, 같은 eligible 집합 안에서는 §1.1의 main submit drought 최초 병목을 우선한다. 우선순위가 낮아진 위젯·에피소드/공통 owner도 전수 ledger에서 빠지면 안 된다.
 2. `already_implemented`는 관련 코드 존재만으로 닫지 않고 producer·consumer·test 근거로 검증한다.
 3. eligible 항목을 누락 없이 구현한다.
 4. 항목별로 직접 consumer, silent-fail, target-date, source-quality와 owner 분리를 리뷰한다.
@@ -424,5 +442,6 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 7. 재실행한 최소 범위와 이전 FAIL보다 최신인 성공 근거
 8. implement-now와 위젯·에피소드 추천 Pass 1/2 ledger 및 fixed-point 결과
 9. 남은 warning, external dependency 또는 user-authority 항목
+10. submit drought: scope·as-of/source hash·raw/causal 분모·최초 병목, 개선 owner/native ID·현재 disposition, canonical handoff/다음 PREOPEN/PID 상태, 실제 제출 회복과 비용 차감 경제성의 별도 판정
 
 작업이 진행 중이면 완료 보고를 하지 않는다. 현재 stage, PID, 마지막 progress 근거, 기다리는 조건과 bounded deadline을 알리고 계속 모니터링한다.

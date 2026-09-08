@@ -2,18 +2,18 @@
 
 ## 판정
 
-- primary: `RUNTIME_OPS`
+- primary: `AI_HOLDING_OPS`
 - secondary: `-`
 - report_only: `true`
 - live_runtime_effect: `false`
-- operator_action_required: `true`
-- followup_route: `holding_runtime_ops_playbook`
-- followup_owner: `operator_review`
+- operator_action_required: `false`
+- followup_route: `ai_holding_provenance_review`
+- followup_owner: `runtime_stability_review`
 - runtime_effect: `report_only_no_mutation`
 
 ## 근거
 
-- as_of: `2026-09-08T09:15:02`
+- as_of: `2026-09-08T12:25:03`
 - exit_signal unique: `0`
 - sell_order_sent unique: `0`
 - sell_completed unique: `0`
@@ -25,13 +25,13 @@
 - flow defer events: `0`
 - real flow defer/force/confirm: `0` / `0` / `0`
 - non-real flow defer/force/confirm: `0` / `0` / `0`
-- AI holding cache MISS: `0.0%`
-- score50 origins: `{}`
-- score50 preflight/source-quality blocked: `0`
-- score50 raw-non50 neutralized: `0`
+- AI holding cache MISS: `100.0%`
+- score50 origins: `{'fallback_score_50': 36, 'legacy_or_unclassified_score50': 332, 'post_call_source_quality_neutralized': 8, 'preflight_source_quality_blocked': 9}`
+- score50 preflight/source-quality blocked: `44`
+- score50 raw-non50 neutralized: `8`
 - soft_stop rebound above sell 10m: `0.0%`
 - trailing missed-upside: `0.0%`
-- top reasons: `-`
+- top reasons: `AI보유감시:cache_miss=65, soft_stop_grace=1`
 
 ## 금지된 자동변경
 
@@ -43,4 +43,4 @@
 
 ## 권고 액션
 
-- Check holding pipeline event freshness; restart only after explicit approval.
+- Review AI cache/provenance/parse telemetry; do not mutate cache TTL automatically.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -24,11 +25,53 @@ from src.engine.ai_response_contracts import (
 from src.engine.monitoring.market_halt_windows import load_market_halt_windows
 from src.engine.lifecycle.avg_down_replay import runtime_config_valid
 from src.utils.constants import DATA_DIR, PROJECT_ROOT
-from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.utils.jsonl_io import (
+    existing_or_gzip_path,
+    iter_jsonl,
+    write_json_object_generation_safe,
+)
 
 REPORT_DIRNAME = "observation_source_quality_audit"
 BACKFILL_REPORT_STEM = "observation_source_quality_backfill_audit"
 DEFAULT_HEAVY_ANALYSIS_LOCK_PATH = PROJECT_ROOT / "tmp" / "intraday_heavy_analysis.lock"
+AUDIT_SCHEMA_VERSION = "observation_source_quality_audit_v2"
+
+
+def _raw_generation(path: Path) -> dict[str, Any]:
+    try:
+        stat = path.stat()
+        return {
+            "device": stat.st_dev,
+            "inode": stat.st_ino,
+            "size_bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+    except OSError:
+        return {}
+
+
+def _audited_jsonl(path: Path, receipt: dict[str, Any]):
+    """One streaming pass; invalid lines must not disappear from the audit census."""
+    digest = hashlib.sha256()
+    receipt.update(nonempty_line_count=0, invalid_json_line_count=0)
+    if not path.exists():
+        return
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as handle:
+        for raw in handle:
+            digest.update(raw)
+            if not raw.strip():
+                continue
+            receipt["nonempty_line_count"] += 1
+            try:
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    raise ValueError("non_object_row")
+            except (ValueError, UnicodeError):
+                receipt["invalid_json_line_count"] += 1
+                continue
+            yield payload
+    receipt["logical_content_sha256"] = digest.hexdigest()
 
 
 SOURCE_LIKE_TOKENS = (
@@ -6454,6 +6497,8 @@ def _hard_gate_summary(contract_result: dict[str, Any]) -> dict[str, Any]:
 
 def _streaming_contract_audit(
     path: Path,
+    *,
+    source_receipt: dict[str, Any] | None = None,
 ) -> tuple[int, Counter[str], dict[str, Any], list[dict[str, Any]]]:
     """Evaluate source-quality contracts without retaining source event rows."""
     stage_counts: Counter[str] = Counter()
@@ -6482,7 +6527,9 @@ def _streaming_contract_audit(
     if not resolved_path.exists():
         resolved_path = path
 
-    for payload in iter_jsonl(resolved_path):
+    for payload in _audited_jsonl(
+        resolved_path, source_receipt if source_receipt is not None else {}
+    ):
         if payload.get("event_type") not in (None, "", "pipeline_event"):
             continue
         event_count += 1
@@ -6899,9 +6946,12 @@ def _streaming_contract_audit(
 
 def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
+    generation_before = _raw_generation(raw_path)
+    source_receipt: dict[str, Any] = {}
     event_count, stage_counts, contract_result, row_exclusions = (
-        _streaming_contract_audit(raw_path)
+        _streaming_contract_audit(raw_path, source_receipt=source_receipt)
     )
+    generation_after = _raw_generation(raw_path)
     hard_gate = _hard_gate_summary(contract_result)
     status = (
         "fail"
@@ -6921,7 +6971,25 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
             else "pass"
         )
     )
+    source_block = (
+        "source_quality_raw_missing"
+        if not generation_before
+        else (
+            "source_quality_raw_changed_during_audit"
+            if generation_before != generation_after
+            else (
+                "source_quality_raw_invalid_json"
+                if source_receipt.get("invalid_json_line_count")
+                else None
+            )
+        )
+    )
+    if source_block:
+        status = "fail"
+        hard_gate["tuning_input_allowed"] = False
+        hard_gate["blocked_reason"] = source_block
     return {
+        "schema_version": AUDIT_SCHEMA_VERSION,
         "report_type": REPORT_DIRNAME,
         "target_date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -6945,6 +7013,14 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
             "exists": raw_path.exists(),
             "read_mode": "streaming_contract_aggregate",
             "full_source_materialized": False,
+            "generation": generation_after,
+            "generation_stable": bool(
+                generation_before and generation_before == generation_after
+            ),
+            "population_status": (
+                "observed" if event_count else "empty_source_no_events"
+            ),
+            **source_receipt,
         },
         "summary": {
             "event_count": event_count,
@@ -7759,7 +7835,9 @@ def write_report(target_date: str) -> dict[str, Any]:
         exclusion_manifest = _pending_raw_row_exclusion_manifest(
             target_date, report, raw_path
         )
-    else:
+    elif not str(report.get("summary", {}).get("blocked_reason") or "").startswith(
+        "source_quality_raw_"
+    ):
         exclusion_manifest = _exclude_hard_blocking_rows_from_raw(target_date, report)
         if exclusion_manifest is None and report.get("hard_blocking_row_exclusions"):
             writer_active = True
@@ -7801,9 +7879,7 @@ def write_report(target_date: str) -> dict[str, Any]:
             report["status"] = "warning"
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    write_json_object_generation_safe(json_path, report)
     _write_markdown(report, md_path)
     return report
 

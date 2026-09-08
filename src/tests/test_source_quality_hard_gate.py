@@ -1,6 +1,192 @@
 import json
+import gzip
+import pytest
 
 from src.engine.automation import source_quality_hard_gate as mod
+from src.engine import observation_source_quality_audit as producer
+
+
+def test_duplicate_approval_keys_and_invalid_status_fail_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    path = _write_preflight(tmp_path, "2026-09-08", _valid_current_preflight())
+    path.write_text(
+        '{"status":"pass","summary":{"tuning_input_allowed":false,"tuning_input_allowed":true}}'
+    )
+    assert (
+        mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is False
+    )
+    payload = _valid_current_preflight()
+    payload["status"] = []
+    _write_preflight(tmp_path, "2026-09-08", payload)
+    assert (
+        mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is False
+    )
+
+
+def _valid_current_preflight():
+    return {
+        "target_date": "2026-09-08",
+        "status": "pass",
+        "source": {"exists": True},
+        "summary": {
+            "tuning_input_allowed": True,
+            "hard_blocking_contract_gap_count": 0,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "mutation,reason",
+    [
+        (lambda p: p.update(target_date="2026-09-07"), "target_date_mismatch"),
+        (lambda p: p["source"].update(exists=False), "source_missing"),
+        (
+            lambda p: p["summary"].update(tuning_input_allowed="false"),
+            "allow_type_invalid",
+        ),
+        (
+            lambda p: p["summary"].update(hard_blocking_contract_gap_count="bad"),
+            "gap_count_invalid",
+        ),
+        (lambda p: p.update(status="success"), "status_invalid"),
+    ],
+)
+def test_current_preflight_rejects_invalid_contract(
+    tmp_path, monkeypatch, mutation, reason
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    payload = _valid_current_preflight()
+    mutation(payload)
+    _write_preflight(tmp_path, "2026-09-08", payload)
+    result = mod.load_source_quality_preflight("2026-09-08")
+    assert result["tuning_input_allowed"] is False
+    assert reason in result["blocked_reason"]
+
+
+def test_v2_raw_generation_and_lossless_archive_binding(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    raw = tmp_path / "pipeline.jsonl"
+    raw.write_text('{"event_type":"other"}\n')
+    monkeypatch.setattr(producer, "_pipeline_events_path", lambda d: raw)
+    payload = producer.build_observation_source_quality_audit("2026-09-08")
+    _write_preflight(tmp_path, "2026-09-08", payload)
+    assert (
+        mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is True
+    )
+    with gzip.open(str(raw) + ".gz", "wb") as handle:
+        handle.write(raw.read_bytes())
+    raw.unlink()
+    assert (
+        mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is True
+    )
+    with gzip.open(str(raw) + ".gz", "wb") as handle:
+        handle.write(b'{"event_type":"changed"}\n')
+    assert (
+        mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is False
+    )
+
+
+def test_v2_append_invalidates_previous_audited_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    raw = tmp_path / "pipeline.jsonl"
+    raw.write_text("")
+    monkeypatch.setattr(producer, "_pipeline_events_path", lambda d: raw)
+    payload = producer.build_observation_source_quality_audit("2026-09-08")
+    _write_preflight(tmp_path, "2026-09-08", payload)
+    assert (
+        mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is True
+    )
+    raw.write_text('{"event_type":"new"}\n')
+    result = mod.load_source_quality_preflight("2026-09-08")
+    assert result["tuning_input_allowed"] is False
+    assert "generation_changed" in result["blocked_reason"]
+
+
+def test_final_verifier_consumes_same_exact_artifact_validation(tmp_path, monkeypatch):
+    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+
+    raw = tmp_path / "pipeline.jsonl"
+    raw.write_text("")
+    monkeypatch.setattr(producer, "_pipeline_events_path", lambda d: raw)
+    path = tmp_path / "audit.json"
+    path.write_text(
+        json.dumps(producer.build_observation_source_quality_audit("2026-09-08"))
+    )
+    before = verifier.load_source_quality_preflight("2026-09-08", artifact_path=path)
+    raw.write_text('{"event_type":"new"}\n')
+    after = verifier.load_source_quality_preflight("2026-09-08", artifact_path=path)
+    for preflight, expected in ((before, True), (after, False)):
+        result = verifier._source_quality_hard_block_status(
+            preflight,
+            ev_report={},
+            runtime_summary={},
+            ldm_report={},
+            bridge_report={},
+            workorder={},
+        )
+        assert result["tuning_input_allowed"] is expected
+    assert after["validation_errors"] == [
+        "source_quality_preflight_source_generation_changed"
+    ]
+    # Exercise the production builder, including its target-specific path routing.
+    monkeypatch.setattr(verifier, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(verifier, "REPORT_DIR", tmp_path / "reports")
+    monkeypatch.setattr(verifier, "LOG_PATH", tmp_path / "missing.log")
+    monkeypatch.setattr(verifier, "_next_krx_trading_day", lambda d: "2026-09-09")
+    monkeypatch.setattr(verifier, "_postclose_not_yet_due", lambda d: False)
+    calls = []
+
+    def checked_load(day, *, artifact_path):
+        calls.append((day, artifact_path))
+        return after
+
+    monkeypatch.setattr(verifier, "load_source_quality_preflight", checked_load)
+    report = verifier.build_threshold_cycle_postclose_verification("2026-09-08")
+    assert calls == [
+        (
+            "2026-09-08",
+            tmp_path
+            / "reports/observation_source_quality_audit/observation_source_quality_audit_2026-09-08.json",
+        )
+    ]
+    assert report["status"] == "fail"
+    raw_status = verifier._source_quality_hard_block_status(
+        {
+            "schema_version": "observation_source_quality_audit_v2",
+            "status": "pass",
+            "summary": {"tuning_input_allowed": True},
+        },
+        ev_report={},
+        runtime_summary={},
+        ldm_report={},
+        bridge_report={},
+        workorder={},
+    )
+    assert raw_status["tuning_input_allowed"] is False
+
+
+def test_verified_archiver_receipt_avoids_decompressing_raw_per_consumer(
+    tmp_path, monkeypatch
+):
+    from src.engine import compress_db_backfilled_files as archive
+
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    raw = tmp_path / "pipeline_events_2026-09-08.jsonl"
+    raw.write_text('{"event_type":"other"}\n')
+    monkeypatch.setattr(producer, "_pipeline_events_path", lambda d: raw)
+    _write_preflight(
+        tmp_path,
+        "2026-09-08",
+        producer.build_observation_source_quality_audit("2026-09-08"),
+    )
+    archive._gzip_file_with_jsonl_generation_lock(raw, dry_run=False)
+    monkeypatch.setattr(
+        mod,
+        "_archived_raw_digest",
+        lambda *args: pytest.fail("unexpected full gzip rescan"),
+    )
+    result = mod.load_source_quality_preflight("2026-09-08")
+    assert result["tuning_input_allowed"] is True
 
 
 def _write_preflight(tmp_path, target_date, payload):
