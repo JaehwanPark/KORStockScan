@@ -5406,7 +5406,8 @@ def test_buy_funnel_submit_drought_marks_post_submit_gap_when_submit_sample_exis
         == "submitted_sample_requires_exact_join_verification"
     )
     assert (
-        taxonomy_order["implementation_status"] == "pending_exact_source_taxonomy_verification"
+        taxonomy_order["implementation_status"]
+        == "pending_exact_source_taxonomy_verification"
     )
     assert (
         taxonomy_order["implementation_provenance"]["implementation_type"]
@@ -5557,14 +5558,16 @@ def test_buy_funnel_submit_drought_keeps_source_taxonomy_gap_open_when_leakage_r
     by_id = {item["order_id"]: item for item in orders}
     taxonomy_order = by_id["order_entry_source_taxonomy_contract_gap_review"]
     assert (
-        taxonomy_order["implementation_status"] == "pending_exact_source_taxonomy_verification"
+        taxonomy_order["implementation_status"]
+        == "pending_exact_source_taxonomy_verification"
     )
     assert (
         "taxonomy_leakage_labels=['blocked_swing_gap:-']" in taxonomy_order["evidence"]
     )
     receipt_order = by_id["order_entry_broker_receipt_contract_gap_review"]
     assert (
-        receipt_order["implementation_status"] == "pending_exact_post_submit_verification"
+        receipt_order["implementation_status"]
+        == "pending_exact_post_submit_verification"
     )
 
 

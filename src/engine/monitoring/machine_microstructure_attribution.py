@@ -8459,9 +8459,10 @@ def build_report(
         "gap": source_contract_gap,
         "recovery": _rolling_source_contract_recovery(
             source_contract_gap,
-            immutable_ingress_receipt_loss=(micro_source.get("canary_source_quality") or {}).get(
-                "immutable_ingress_receipt_loss"
-            ) is True,
+            immutable_ingress_receipt_loss=(
+                micro_source.get("canary_source_quality") or {}
+            ).get("immutable_ingress_receipt_loss")
+            is True,
         ),
         "required": (
             "clean_baseline_exact_date_partition_manifest_canary_stream_and_runtime_registration_receipt_contract"

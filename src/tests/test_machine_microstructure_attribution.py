@@ -5460,11 +5460,19 @@ def test_closed_ingress_loss_is_quarantine_only_and_requires_complete_evidence(d
 
 def test_closed_ingress_loss_followup_does_not_retry_immutable_date():
     gap = "micro_canary_source_quality_missing_or_invalid"
-    assert _rolling_source_contract_recovery(gap)["rerun_same_source_date_allowed"] is True
-    recovery = _rolling_source_contract_recovery(gap, immutable_ingress_receipt_loss=True)
+    assert (
+        _rolling_source_contract_recovery(gap)["rerun_same_source_date_allowed"] is True
+    )
+    recovery = _rolling_source_contract_recovery(
+        gap, immutable_ingress_receipt_loss=True
+    )
     assert recovery["rerun_same_source_date_allowed"] is False
     assert recovery["excluded_from_rolling_policy_evidence"] is True
     assert recovery["disposition"] == "immutable_source_date_quarantine"
-    assert _rolling_source_contract_recovery(
-        "micro_source_exclusion_manifest_missing_or_invalid", immutable_ingress_receipt_loss=True
-    )["rerun_same_source_date_allowed"] is True
+    assert (
+        _rolling_source_contract_recovery(
+            "micro_source_exclusion_manifest_missing_or_invalid",
+            immutable_ingress_receipt_loss=True,
+        )["rerun_same_source_date_allowed"]
+        is True
+    )

@@ -545,7 +545,9 @@ def test_log_rotation_cleanup_preserves_open_micro_source_and_compresses_peer(
         assert "[MICRO_REVERSION_STORAGE_FAIL]" in result.stdout
         assert "micro_reversion_storage_status=partial_failure" in result.stdout
         assert "micro_reversion_storage_partition_failures=1" in result.stdout
-        receipts = list((project_root / "tmp").glob("micro_reversion_storage_maintenance.*.json"))
+        receipts = list(
+            (project_root / "tmp").glob("micro_reversion_storage_maintenance.*.json")
+        )
         assert len(receipts) == 1
         receipt = json.loads(receipts[0].read_text())
         assert receipt["partition_failure_count"] == 1

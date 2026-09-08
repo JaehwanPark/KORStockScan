@@ -2740,7 +2740,8 @@ def maintain_report_artifact_storage(
             if (
                 not validation_complete
                 and type(exc) is ValueError
-                and str(exc) in {
+                and str(exc)
+                in {
                     "r3_manifest_research_projection_mismatch",
                     "r2_current_run_blocker_binding_invalid",
                 }
@@ -2752,20 +2753,22 @@ def maintain_report_artifact_storage(
                     for logical in candidates
                 )
             ):
-                historical_contract_preservations.append({
-                    "trade_date": trade_date.isoformat(),
-                    "paths": [str(path) for path in candidates],
-                    "candidate_count": len(candidates),
-                    "candidate_bytes": physical_bytes,
-                    "reason": str(exc),
-                    "disposition": "historical_semantic_contract_preserved_uncompressed",
-                    "decision_authority": "storage_preservation_only",
-                    "source_preserved": True,
-                    "compression_allowed": False,
-                    "runtime_effect": False,
-                    "allowed_runtime_apply": False,
-                    "tuning_input_approval": False,
-                })
+                historical_contract_preservations.append(
+                    {
+                        "trade_date": trade_date.isoformat(),
+                        "paths": [str(path) for path in candidates],
+                        "candidate_count": len(candidates),
+                        "candidate_bytes": physical_bytes,
+                        "reason": str(exc),
+                        "disposition": "historical_semantic_contract_preserved_uncompressed",
+                        "decision_authority": "storage_preservation_only",
+                        "source_preserved": True,
+                        "compression_allowed": False,
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "tuning_input_approval": False,
+                    }
+                )
                 continue
             failures.append(
                 _failure_row(
@@ -2901,7 +2904,9 @@ def maintain_report_artifact_storage(
         ),
         "failure_count": len(failures),
         "failures": failures,
-        "historical_contract_preservation_count": len(historical_contract_preservations),
+        "historical_contract_preservation_count": len(
+            historical_contract_preservations
+        ),
         "historical_contract_preservations": historical_contract_preservations,
         "action_count": len(normalized_actions),
         "source_bytes": sum(action.source_bytes for action in actions),

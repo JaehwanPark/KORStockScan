@@ -3731,24 +3731,37 @@ def test_micro_reversion_daily_owner_is_census_only_with_retention_owner_open(
     assert current_file.exists()
 
 
-@pytest.mark.parametrize("reason", [
-    "r3_manifest_research_projection_mismatch", "r2_current_run_blocker_binding_invalid",
-    "artifact_hash_mismatch",
-])
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "r3_manifest_research_projection_mismatch",
+        "r2_current_run_blocker_binding_invalid",
+        "artifact_hash_mismatch",
+    ],
+)
 @pytest.mark.parametrize("source_date", [date(2026, 8, 25), date(2026, 9, 7)])
 def test_storage_preserves_old_semantic_rejection_without_approving_source(
-    tmp_path, monkeypatch, reason, source_date,
+    tmp_path,
+    monkeypatch,
+    reason,
+    source_date,
 ):
     root = tmp_path / "main_ai_quality_r0_r3"
     root.mkdir()
     source = root / f"main_ai_quality_r3_source_candidates_{source_date}.json"
     source.write_text('{"source":"unchanged"}')
     before = source.read_bytes()
+
     def reject(*args, **kwargs):
         raise ValueError(reason)
-    monkeypatch.setattr(storage_maintenance_module, "_classify_report_artifact_set", reject)
+
+    monkeypatch.setattr(
+        storage_maintenance_module, "_classify_report_artifact_set", reject
+    )
     result = maintain_report_artifact_storage(
-        [root], as_of_date=date(2026, 9, 7), apply=True,
+        [root],
+        as_of_date=date(2026, 9, 7),
+        apply=True,
     )
     preserved = source_date < date(2026, 9, 7) and reason != "artifact_hash_mismatch"
     assert result["failure_count"] == (0 if preserved else 1)
