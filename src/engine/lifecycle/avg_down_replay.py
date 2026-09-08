@@ -37,9 +37,7 @@ def policy_fingerprint(rules: Any) -> str:
     source = (
         rules
         if isinstance(rules, Mapping)
-        else vars(rules)
-        if rules is not None
-        else {}
+        else vars(rules) if rules is not None else {}
     )
     values = {
         str(key): value

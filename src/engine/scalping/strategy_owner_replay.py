@@ -312,14 +312,14 @@ def observe_seed(handlers, stock, code, *, now_ts, ws_data, entry=None, ai_engin
             "pre_add_buy_price": target["buy_price"],
             "pre_add_buy_qty": target["buy_qty"],
             "cost_rate": handlers.get_trade_cost_rate(),
-            "entry_guard_inputs": _json_value(entry.get("guard_inputs"))
-            if entry
-            else None,
+            "entry_guard_inputs": (
+                _json_value(entry.get("guard_inputs")) if entry else None
+            ),
             "entry_authority": entry.get("authority") if entry else None,
             "entry_submit_attempt_id": entry_attempt_id,
-            "entry_fill_model": "conditional_full_executable_ask_not_broker_receipt"
-            if entry
-            else None,
+            "entry_fill_model": (
+                "conditional_full_executable_ask_not_broker_receipt" if entry else None
+            ),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
@@ -567,9 +567,9 @@ def build(day, inputs, *, executor=None, cached=None, checkpoint=None):
     seen = set()
     for seed, frames in inputs[:MAX_SEEDS_PER_DAY]:
         if not valid_seed(seed, day):
-            result["blocked"]["invalid_seed:" + str(len(seen))] = (
-                "seed_contract_invalid"
-            )
+            result["blocked"][
+                "invalid_seed:" + str(len(seen))
+            ] = "seed_contract_invalid"
             continue
         identity = seed["source_event_id"]
         if identity in seen:

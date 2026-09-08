@@ -9,30 +9,30 @@
 - panic_confirmation_policy: `portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-09-08T15:28:04`
-- latest_event_at: `2026-09-08T15:28:25`
+- as_of: `2026-09-08T21:27:37`
+- latest_event_at: `2026-09-08T19:59:59`
 - reasons: `panic thresholds not breached`
 
 ## 입력 자원 계약
 
 - memory_bounded_streaming: `true`
-- scanned_row_count: `210511`
-- retained_exit_event_count: `1814`
+- scanned_row_count: `379029`
+- retained_exit_event_count: `2047`
 - full_event_list_materialized: `false`
 - out_of_order_event_count: `1`
-- unique_market_observation_count: `56406`
-- duplicate_snapshot_skipped_count: `45940`
+- unique_market_observation_count: `96048`
+- duplicate_snapshot_skipped_count: `82632`
 
 ## 패닉 지표
 
 - panic_decision_basis: `broker_confirmed_exit_identity_deduplicated`
 - real_exit_provenance_required: `true`
-- raw_exit_signal_count: `3`
+- raw_exit_signal_count: `4`
 - real_exit_count: `0`
 - duplicate_real_exit_signal_count: `0`
 - duplicate_real_exit_signals_excluded_from_panic: `true`
-- non_real_exit_count: `3`
-- unproven_exit_count: `3`
+- non_real_exit_count: `4`
+- unproven_exit_count: `4`
 - exit_signal_partition_reconciled: `true`
 - sim_probe_exit_excluded_from_panic: `true`
 - stop_loss_exit_count: `0`
@@ -61,14 +61,14 @@
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `2778`
+- evaluated_symbol_count: `2822`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `2047`
-- degraded_orderbook_count: `2047`
+- missing_orderbook_count: `2152`
+- degraded_orderbook_count: `2152`
 - stale_or_unhealthy_orderbook_count: `0`
 - panic_report_entry_count: `0`
 - panic_active_confirmation_count: `0`
@@ -84,11 +84,11 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-09-08T15:28:01+09:00`
+- market_panic_breadth_as_of: `2026-09-08T21:27:37+09:00`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `false`
-- market_panic_breadth_single_market_risk_off_advisory: `false`
-- evaluated_symbol_count: `2778`
+- market_panic_breadth_single_market_risk_off_advisory: `true`
+- evaluated_symbol_count: `2822`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_micro_risk_off_advisory: `false`
 - confirmed_risk_off_advisory: `false`
@@ -98,8 +98,8 @@
 
 ## Market Weakness Observation
 
-- raw_state: `NEAR_WEAKNESS_BOUNDARY`
-- observation_id: `market-weakness-667c53e8186ae56d3c4c`
+- raw_state: `SINGLE_MARKET_WEAKNESS`
+- observation_id: `market-weakness-33c1c02654649155edaf`
 - source_quality_ready: `true`
 - release_margin_passed: `false`
 - runtime_effect: `false`

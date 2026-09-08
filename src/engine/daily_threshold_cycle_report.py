@@ -14951,6 +14951,30 @@ def _owned_scale_in_rolling_metrics(candidate: dict) -> dict:
     if not isinstance(evidence, dict):
         return {}
     paired = evidence.get("paired_economic_sample_count")
+    # The producer sets current_source_date_included from outcome presence,
+    # not from source availability. A verified empty current day is observable
+    # zero, but can never provide positive rolling readiness or runtime refresh.
+    daily = payload.get("input_summary") or {}
+    quality = payload.get("source_quality") or {}
+    excluded = rolling.get("excluded_dates")
+    valid_empty_current_source = (
+        rolling.get("current_source_date_included") is False
+        and type(rolling.get("current_unique_attempt_count")) is int
+        and rolling["current_unique_attempt_count"] == 0
+        and isinstance(daily, dict)
+        and type(daily.get("daily_unique_attempt_count")) is int
+        and daily["daily_unique_attempt_count"] == 0
+        and isinstance(quality, dict)
+        and quality.get("tuning_input_allowed") is True
+        and type(paired) is int
+        and paired == 0
+        and evidence.get("runtime_policy_refresh_allowed") is False
+        and isinstance(excluded, list)
+        and all(
+            isinstance(row, dict) and row.get("source_date") != target_date
+            for row in excluded
+        )
+    )
     if (
         payload.get("schema_version") != "scale_in_split_order_plan_v3"
         or payload.get("target_date") != target_date
@@ -14958,7 +14982,10 @@ def _owned_scale_in_rolling_metrics(candidate: dict) -> dict:
         or not isinstance(rolling, dict)
         or rolling.get("target_date") != target_date
         or rolling.get("window_policy") != "latest_20_report_dates_including_target"
-        or rolling.get("current_source_date_included") is not True
+        or (
+            rolling.get("current_source_date_included") is not True
+            and not valid_empty_current_source
+        )
         or type(paired) is not int
         or paired < 0
         or metrics.get("paired_economic_sample_count") != paired

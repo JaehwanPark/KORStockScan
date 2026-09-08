@@ -8771,6 +8771,83 @@ def test_force_exit_quarantine_does_not_clear_unrelated_ingestion_failure(monkey
     ]
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "missing_daily_count",
+        "nonempty_daily",
+        "bool_count",
+        "missing_quality",
+        "blocked_quality",
+        "positive_paired",
+        "refresh_allowed",
+        "target_excluded",
+    ],
+)
+def test_owned_scale_in_verified_empty_day_is_available_but_never_ready(
+    tmp_path, monkeypatch, defect
+):
+    target_date = "2026-09-08"
+    monkeypatch.setattr(report_mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", tmp_path)
+    payload = {
+        "schema_version": "scale_in_split_order_plan_v3",
+        "target_date": target_date,
+        "source_quality": {"tuning_input_allowed": True},
+        "input_summary": {"daily_unique_attempt_count": 0},
+        "rolling_summary": {
+            "target_date": target_date,
+            "window_policy": "latest_20_report_dates_including_target",
+            "current_source_date_included": False,
+            "current_unique_attempt_count": 0,
+            "excluded_dates": [],
+        },
+        "recommended_policy": {
+            "runtime_refresh_evidence": {
+                "paired_economic_sample_count": 0,
+                "runtime_policy_refresh_allowed": False,
+            }
+        },
+    }
+    if defect == "missing_daily_count":
+        payload["input_summary"] = {}
+    elif defect == "nonempty_daily":
+        payload["input_summary"]["daily_unique_attempt_count"] = 1
+    elif defect == "bool_count":
+        payload["rolling_summary"]["current_unique_attempt_count"] = False
+    elif defect == "missing_quality":
+        payload.pop("source_quality")
+    elif defect == "blocked_quality":
+        payload["source_quality"]["tuning_input_allowed"] = False
+    elif defect == "positive_paired":
+        payload["recommended_policy"]["runtime_refresh_evidence"][
+            "paired_economic_sample_count"
+        ] = 5
+    elif defect == "refresh_allowed":
+        payload["recommended_policy"]["runtime_refresh_evidence"][
+            "runtime_policy_refresh_allowed"
+        ] = True
+    elif defect == "target_excluded":
+        payload["rolling_summary"]["excluded_dates"] = [{"source_date": target_date}]
+    path = tmp_path / f"scale_in_split_order_plan_{target_date}.json"
+    path.write_text(json.dumps(payload))
+    family = report_mod._build_scale_in_split_order_plan_family(target_date=target_date)
+    candidate = next(
+        row
+        for row in report_mod._build_calibration_candidates([family], {})
+        if row["family"] == "scale_in_split_order_plan"
+    )
+    resolution = report_mod._build_window_policy_resolution(candidate, {})
+    assert resolution["primary_source_available"] is (defect is None)
+    assert resolution["primary_sample_ready"] is False
+    assert family["apply_ready"] is False
+    if defect is None:
+        assert resolution["primary_sample_count"] == 0
+        candidate["window_policy_resolution"] = resolution
+        audit = report_mod._build_window_policy_audit([candidate])
+        assert audit["issue_counts"].get("rolling_consumer_gap", 0) == 0
+
+
 def test_owned_scale_in_window_source_distinguishes_zero_from_missing(
     tmp_path, monkeypatch
 ):

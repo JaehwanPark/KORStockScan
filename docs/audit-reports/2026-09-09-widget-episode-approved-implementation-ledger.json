@@ -1,0 +1,1103 @@
+{
+  "schema_version": "widget_episode_separately_approved_implementation_ledger_v1",
+  "source_target_date": "2026-09-08",
+  "effective_target_date": "2026-09-09",
+  "as_of_kst": "2026-09-09T00:33:32+09:00",
+  "status": "YELLOW_natural_and_economic_acceptance_pending",
+  "artifact_authority": "audit_ledger_only_not_a_runtime_policy",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "user_approval": "2026-09-09 explicit code-review/fix loop and widget/episode recommendation implementation approval; no economic-guard waiver, process restart, manual env/lock change or order authorization",
+  "parent_frozen_ledger": {
+    "path": "docs/audit-reports/2026-09-08-implement-now-two-pass-ledger.json",
+    "sha256": "e5641bf21c94c66106b7b292413690073c2dda4f1ddae36bf192a93655950db8",
+    "overwritten": false,
+    "intake_total": 61
+  },
+  "denominator_contract": "These 17 rows are the same 17 widget/episode/followup rows in the frozen 61-row intake, not 17 additional tasks. All four low-price recommendations were already present as deferred; no omitted-native defect was found.",
+  "counts": {
+    "scope_total": 17,
+    "native_recommendation_total": 16,
+    "followup_alias_total": 1,
+    "implementation_requested_total": 4,
+    "eligible_approved_total": 2,
+    "implemented_pass1": 2,
+    "implemented_pass2": 0,
+    "blocked_economic_guard": 2,
+    "nonimplementation_total": 13,
+    "already_implemented_verified_nonrequest": 1,
+    "observed_no_patch": 2,
+    "deferred_nonrequest": 7,
+    "rejected": 3,
+    "unaccounted_count": 0,
+    "eligible_actionable_open": 0
+  },
+  "source_only_main_context": {
+    "current_generation_id": "2026-09-08-f98290e4027e",
+    "main_native_total": 44,
+    "main_id_or_decision_diff_count": 0,
+    "implementation_requested": 9,
+    "already_implemented_verified": 1,
+    "blocked_missing_evidence": 8,
+    "pattern_blocked_missing_evidence_nonrequest": 2,
+    "implementation_complete": false
+  },
+  "source_inventory": [
+    {
+      "family": "code_improvement_workorder",
+      "path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+      "sha256": "29f0d1032eaa1605609a3d2bc2a500ad07412da772394a2b4bf6f82a221138ee",
+      "changed_since_parent": true
+    },
+    {
+      "family": "widget_collector_expansion_recommendation",
+      "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+      "sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+      "changed_since_parent": false
+    },
+    {
+      "family": "widget_symbol_signal_policy_research",
+      "path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+      "sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+      "changed_since_parent": false
+    },
+    {
+      "family": "widget_symbol_runtime_policy_apply",
+      "path": "data/report/widget_symbol_runtime_policy_apply/widget_symbol_runtime_policy_apply_2026-09-08.json",
+      "sha256": "854d30841e12f6832e61dab19d68cdcb440d9e2689ada4616eb3ed3b621b0155",
+      "changed_since_parent": false
+    },
+    {
+      "family": "samsung_machine_entry_tuning",
+      "path": "data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_2026-09-08.json",
+      "sha256": "b0dfdc3500f1ce09ca001fdba7110deba7646515e34a57f500827f076f895bdd",
+      "changed_since_parent": false
+    },
+    {
+      "family": "low_price_two_leg_tuning",
+      "path": "data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-08.json",
+      "sha256": "4b86574c7f156a3558f95933e1f2550b7f9e392c077202293059f96b2d7a34b1",
+      "changed_since_parent": false
+    },
+    {
+      "family": "low_price_two_leg_expanded_candidate_research",
+      "path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+      "sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+      "changed_since_parent": false
+    },
+    {
+      "family": "machine_microstructure_attribution",
+      "path": "data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-08.json",
+      "sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+      "changed_since_parent": false
+    },
+    {
+      "family": "machine_entry_timing_tuning",
+      "path": "data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_2026-09-08.json",
+      "sha256": "81245b395adeaf0fbc49e49e3ee017f0751514c10b389442a61494658bc7e291",
+      "changed_since_parent": false
+    },
+    {
+      "family": "machine_microstructure_policy_approval",
+      "path": "data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-08.json",
+      "sha256": "2599833aa9ee47b31bd97b76a5f9442eb5f9a11be6f1b55ca6bd8c9cbd509080",
+      "changed_since_parent": false
+    }
+  ],
+  "pass1": {
+    "implemented_profile_ids": [
+      "sk_eternix_late_morning",
+      "tym_morning"
+    ],
+    "new_profile_count": 0,
+    "total_profile_count": 56,
+    "runtime_eligible_profile_count": 53,
+    "quarantine_count": 3,
+    "quantity_per_profile": 20,
+    "legs": 2,
+    "quantity_per_leg": 10,
+    "existing_custody_or_target_mutations": 0,
+    "unrelated_applied_policy_reset_regression": "fixed_and_validated"
+  },
+  "pass2": {
+    "recommendation_source_regenerations": 0,
+    "reason": "No widget/episode producer changed; re-intake checks immutable exact-date source hashes and native contracts. WS diagnostics alone were regenerated.",
+    "native_source_ids_rechecked": 16,
+    "mirror_locations_rechecked": 21,
+    "followup_aliases_rechecked": 1,
+    "new_or_decision_changed_eligible": 0,
+    "review_unresolved_findings": 0
+  },
+  "approval_evidence": {
+    "path": "docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json",
+    "byte_sha256": "47c634e80f426a7d55702599a4fceb10c2b2972cd2ae1c78ad00b14a1316b27f",
+    "canonical_sha256": "beabcefb58b49050c16beb789a15f83fab8b35e11eb21082b2e9cc883c5b42ea"
+  },
+  "low_price_apply_preview": {
+    "status": "candidate_validated_profile_revision_applied",
+    "policy_hash": "36a38b1e3ad6015388966cff9e1606f55cebc78d478f6284871d80a23494f3df",
+    "applied_written": false,
+    "target_date": "2026-09-09",
+    "profiles": {
+      "sk_eternix_late_morning": {
+        "selection_status": "user_approved_profile_revision_baseline",
+        "selected_axis": null,
+        "policy": {
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.75,
+          "lookback_bars": 20,
+          "entry_valid_completed_bars": 5,
+          "quantity": 20,
+          "target_ticks": 4
+        }
+      },
+      "tym_morning": {
+        "selection_status": "user_approved_profile_revision_baseline",
+        "selected_axis": null,
+        "policy": {
+          "rolling_high_drawdown_pct": 1,
+          "rolling_low_proximity_pct": 0.5,
+          "lookback_bars": 15,
+          "entry_valid_completed_bars": 5,
+          "quantity": 20,
+          "target_ticks": 4
+        }
+      }
+    }
+  },
+  "widget_policy": {
+    "path": "data/runtime/widget_symbol_runtime_policy/widget_symbol_runtime_policy_2026-09-09.json",
+    "sha256": "2f337b7341d8460614464adcb84cc0065110e1c4ad48d9b623f87f25cf76acb4",
+    "loaded_symbols": [
+      "080220"
+    ],
+    "loader_round_trip": "pass",
+    "published_by_this_turn": false,
+    "pid_consumption_claimed": false
+  },
+  "validation": {
+    "targeted_pytest_passed": 975,
+    "python_compile": "pass",
+    "git_diff_check": "pass",
+    "current_checklist_carried_id_count": 5,
+    "current_checklist_carried_id_unique": true,
+    "external_project_calendar_sync": false
+  },
+  "repository_delivery": "uncommitted_worktree_no_push_no_trading_restart",
+  "handoff": {
+    "source_target_date": "2026-09-08",
+    "strict_verifier_as_of_kst": "2026-09-09T00:27:14+09:00",
+    "strict_command_exit_code": 0,
+    "summary_handoff": "pass",
+    "drought_canonical_handoff": "pass",
+    "missing_required_artifact_count": 0,
+    "missing_downstream_link_count": 0,
+    "stale_downstream_link_count": 0,
+    "controller_json_status": "done",
+    "controller_wrapper_done_at_kst": "2026-09-09T00:27:14+09:00",
+    "provider_followup": "terminal_ready_checkpoint_skipped_no_new_call",
+    "finalization_predecessors_read_only_recheck": "7_of_7_done",
+    "cleanup_receipt_reused_at_kst": "2026-09-08T22:53:19+09:00",
+    "detector_receipt_reused_at_kst": "2026-09-08T22:53:21+09:00",
+    "tail_implementation_or_source_date_contract_affected": false,
+    "hashes": {
+      "data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-09-08.json": "5f166b845057d8dcb2c2529d86f137e8aa82fa5934a3152959ffa225ebe5d801",
+      "data/report/postclose_done_controller/postclose_done_controller_2026-09-08.json": "2bf596cce80c3f284e516c891814836b4abd5505c9b5e054e4040445f496492e",
+      "src/trading/low_price_two_leg/profiles.py": "eca77531bc55818fbadff8cdfc4537975bcfccaeb77d742a6f7c9b75a737962b",
+      "src/trading/low_price_two_leg/policy_runtime.py": "926ff9db355f593f7e4322442c34e93d0e35c4d5248ca4868700ac9ab8dd5874",
+      "src/trading/low_price_two_leg/preflight.py": "183b121e14de23aec89102dee32e6a1a74e7dc3f959496e92614929bc88e7cf6",
+      "src/engine/monitoring/intraday_ws_freshness_monitor.py": "01d3e1b85113edef069d6f9d4fd895cd0b39d4cda4bab348ad898208641d4013",
+      "src/engine/monitoring/ws_freshness_acceptance.py": "c883041eeaa3d5999ec0c22f4be1dd2a025276feb294a26d69f6ac8b5292034d",
+      "src/engine/monitoring/machine_recommendation_identity.py": "3fbcbc3b982ac6e8a13eb9411ad90483dd8d76a68b39aa3bd15a44bb94fac4e3"
+    }
+  },
+  "report": "docs/audit-reports/2026-09-09-review-widget-episode-implementation.md",
+  "rows": [
+    {
+      "native_id": "widget_collector_expansion_recommendation:7ff28758a02a80ced86c9d279c6b46cb0b02a95a5eb6186245551a68d8ee66d2",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[0]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[0]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": null,
+        "stock_code": "138080",
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": "research_watch",
+        "implementation_review_ready": false,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"recommendations\"][0]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:2eaf06787075f5631a2790102165df3f4813b7c8778c2d1e0bd34d9d264c9334",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[1]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[1]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": null,
+        "stock_code": "142760",
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": "research_watch",
+        "implementation_review_ready": false,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"recommendations\"][1]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:1876a96dff2b6afebb1f445538c9a487def36028174fe64880e497c68d19745a",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[2]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[2]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": null,
+        "stock_code": "361610",
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": "research_watch",
+        "implementation_review_ready": false,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"recommendations\"][2]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:519bad7f319ed282a6130f6ef2c55cc353c5cbf7f1de96bea8e07b8448bef3e3",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[3]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[3]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": null,
+        "stock_code": "033640",
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": "research_watch",
+        "implementation_review_ready": false,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"recommendations\"][3]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:1ed187a6c7bf27db9dd41bb361c3005e4bc961b64036fa65e2159e926ed22322",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[4]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[4]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": null,
+        "stock_code": "484870",
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": "research_watch",
+        "implementation_review_ready": false,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"recommendations\"][4]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:eb4436766d789ebf29bbd6af11c61eee7341b44a041c5d4280403a6291d009f2",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[5]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[5]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": null,
+        "stock_code": "488280",
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": "research_watch",
+        "implementation_review_ready": false,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"recommendations\"][5]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:d3845195b73790a6428270bb61f84eaaa065879844b08240e9995643f52e2b88",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[6]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[6]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": null,
+        "stock_code": "007810",
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": "research_watch",
+        "implementation_review_ready": false,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"recommendations\"][6]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:2991bcc69c56990b25c4b08aaf4fdd60e5d3173a67c6592ec632d5328db3c16d",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.006800",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.006800",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "final_disposition": "rejected"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "rejected",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "006800",
+        "stock_code": null,
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "d680980112b1bb216e13556f830410b98c43afbab22ae8113ae17cc79fffe0d4",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "source_locations": [
+          "$[\"symbols\"][\"006800\"]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:814eab726593d89d0288fe3ad6a3d6fcb3d3dbc4fe5a1d6dff5ca6d17b32d0a0",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.010140",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.010140",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "final_disposition": "rejected"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "rejected",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "010140",
+        "stock_code": null,
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "7b0dafbec6cff567aeaaf42536d0e23b8268d400f31b811c428bab194f6994b7",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "source_locations": [
+          "$[\"symbols\"][\"010140\"]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:f4ef9259aaa1ee8420d52ce4303595054ec87d2981b617f425739820921042b3",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.080220",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_pass_widget_signal_policy_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "already_implemented_verified",
+      "decision_reason": "Existing automatic owner published the verified 2026-09-09 policy selecting only 080220. Current exact-date loader replay returns only 080220 and reconstructs the original source/hash contract. No duplicate policy publish, restart or order. Future PID/signal/terminal economics remain unobserved.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.080220",
+        "decision": "holdout_pass_widget_signal_policy_candidate",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "already_implemented_verified",
+      "parent_disposition": "observed_no_patch",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "080220",
+        "stock_code": null,
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "19881449b743ec14d72d329847a2a806144833e3d076f158e3cbf93a49f856d6",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": "holdout_pass_widget_signal_policy_candidate",
+        "source_locations": [
+          "$[\"symbols\"][\"080220\"]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work",
+      "runtime_consumption": "policy_loader_verified_pid_consumption_not_claimed"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:1a6aebfa63c42f751b0242e3e18a558d326ca01f58eb3055c6b699316120f216",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.475150",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.475150",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "final_disposition": "rejected"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "rejected",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "475150",
+        "stock_code": null,
+        "profile_id": null,
+        "session": null,
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "5f959794a7f03d246aea2462725a5d7ded2febd3dde8a113d3c18ba0ba824dc3",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "source_locations": [
+          "$[\"symbols\"][\"475150\"]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:71a76fc58230e78abde51898aebfac8088bb6af71c005c07e0b765508540c60c",
+      "identity_field": "recommendation_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[0]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "implemented_pass1",
+      "decision_reason": "Explicit approval plus existing research/preflight gates permit this exact existing-profile revision effective 2026-09-09. Preserve every unrelated actual applied policy, two 10-share legs, quarantine and existing custody targets. Exact-date PREOPEN apply and PID consumption remain not_yet_due.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[0]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "implemented_and_reviewed",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "475150",
+        "stock_code": null,
+        "profile_id": "logic_sk_eternix_late_morning",
+        "session": "late_morning",
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "bbdc68462bd704daf4ce67b7e23eda0e1a1c8d88ac7e5802dd49c9cf10e00a6d",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "recommended_spot": {
+          "entry_offsets_ticks": [
+            0,
+            -1
+          ],
+          "entry_valid_completed_bars": 5,
+          "lookback_bars": 20,
+          "rolling_high_drawdown_pct": 1.25,
+          "rolling_low_proximity_pct": 0.75,
+          "scan_end": "10:54",
+          "scan_start": "10:45",
+          "target_ticks": 4
+        },
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"existing_symbol_logic_improvement_recommendations\"][0]",
+          "$[\"recommendations\"][0]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work",
+      "separate_user_approval": "explicit_widget_episode_recommendation_implementation_2026_09_09",
+      "implemented_profile_id": "sk_eternix_late_morning",
+      "implementation_files": [
+        "src/trading/low_price_two_leg/profiles.py",
+        "src/trading/low_price_two_leg/policy_runtime.py",
+        "src/trading/low_price_two_leg/preflight.py",
+        "docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json"
+      ],
+      "runtime_consumption": "not_yet_due",
+      "economic_acceptance": "not_observed",
+      "rollback": "Exact-date/hash/evidence mismatch blocks new entries. A user-directed reversal selects the previous revision at a subsequent PREOPEN; never replace existing custody/target orders."
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:2c12077e277ea743fbc2add1007b002a6d0fd3412fc31fa51a91d064914412d8",
+      "identity_field": "recommendation_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[1]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Implementation approval is present, but an existing required calibration half has nonpositive EV. No policy change or preflight bypass. Reconsider only with a new exact source passing both halves, full/calibration/holdout and all source-quality guards.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[1]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "blocked_economic_guard",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "111770",
+        "stock_code": null,
+        "profile_id": "existing_111770_late_morning",
+        "session": "late_morning",
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "5a5976c85de08f84cb57b162d87de393315f21c1d1be2cd6f06d5deae540ccfb",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "recommended_spot": {
+          "entry_offsets_ticks": [
+            0,
+            -1
+          ],
+          "entry_valid_completed_bars": 5,
+          "lookback_bars": 20,
+          "rolling_high_drawdown_pct": 0.5,
+          "rolling_low_proximity_pct": 0.2,
+          "scan_end": "10:59",
+          "scan_start": "10:05",
+          "target_ticks": 2
+        },
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"existing_symbol_time_extension_recommendations\"][0]",
+          "$[\"recommendations\"][1]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work",
+      "separate_user_approval": "explicit_widget_episode_recommendation_implementation_2026_09_09",
+      "runtime_consumption": "not_applied"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:2fa713b05718abda99b058a7dd322550140feb1cc896ff96c2f67082be03c856",
+      "identity_field": "recommendation_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[2]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "implemented_pass1",
+      "decision_reason": "Explicit approval plus existing research/preflight gates permit this exact existing-profile revision effective 2026-09-09. Preserve every unrelated actual applied policy, two 10-share legs, quarantine and existing custody targets. Exact-date PREOPEN apply and PID consumption remain not_yet_due.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[2]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "implemented_and_reviewed",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "002900",
+        "stock_code": null,
+        "profile_id": "logic_tym_morning",
+        "session": "morning",
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "f7d46f74be062c9b127cad1f0a6227822436c276761b265357217eb9925bf493",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "recommended_spot": {
+          "entry_offsets_ticks": [
+            -1,
+            -2
+          ],
+          "entry_valid_completed_bars": 5,
+          "lookback_bars": 15,
+          "rolling_high_drawdown_pct": 1,
+          "rolling_low_proximity_pct": 0.5,
+          "scan_end": "09:59",
+          "scan_start": "09:10",
+          "target_ticks": 4
+        },
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"existing_symbol_logic_improvement_recommendations\"][1]",
+          "$[\"recommendations\"][2]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work",
+      "separate_user_approval": "explicit_widget_episode_recommendation_implementation_2026_09_09",
+      "implemented_profile_id": "tym_morning",
+      "implementation_files": [
+        "src/trading/low_price_two_leg/profiles.py",
+        "src/trading/low_price_two_leg/policy_runtime.py",
+        "src/trading/low_price_two_leg/preflight.py",
+        "docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json"
+      ],
+      "runtime_consumption": "not_yet_due",
+      "economic_acceptance": "not_observed",
+      "rollback": "Exact-date/hash/evidence mismatch blocks new entries. A user-directed reversal selects the previous revision at a subsequent PREOPEN; never replace existing custody/target orders."
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:0bdfc39c76573e968028e3e36bea0f840b8249c225566ea71ae456c3c248b563",
+      "identity_field": "recommendation_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[3]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Implementation approval is present, but an existing required calibration half has nonpositive EV. No policy change or preflight bypass. Reconsider only with a new exact source passing both halves, full/calibration/holdout and all source-quality guards.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[3]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "blocked_economic_guard",
+      "parent_disposition": "deferred",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "034020",
+        "stock_code": null,
+        "profile_id": "existing_034020_midday",
+        "session": "midday",
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "f57c3270a176035a5d089cdb3c9941dd1790778ee1fed44a19ff0fc7042fd080",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "recommended_spot": {
+          "entry_offsets_ticks": [
+            0,
+            -1
+          ],
+          "entry_valid_completed_bars": 5,
+          "lookback_bars": 15,
+          "rolling_high_drawdown_pct": 0.5,
+          "rolling_low_proximity_pct": 0.75,
+          "scan_end": "13:29",
+          "scan_start": "13:20",
+          "target_ticks": 2
+        },
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"existing_symbol_time_extension_recommendations\"][1]",
+          "$[\"recommendations\"][3]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work",
+      "separate_user_approval": "explicit_widget_episode_recommendation_implementation_2026_09_09",
+      "runtime_consumption": "not_applied"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:3287c340cabe4b868a3283e957a49c5ae5bf8494fb936d371c8bd5f20b934400",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.operator_observation_candidate_inventory.candidate_475560_morning",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "475560 morning remains source-only keep_collecting; no profile enrollment.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.operator_observation_candidate_inventory.candidate_475560_morning",
+        "decision": null,
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "observed_no_patch",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "symbol": "475560",
+        "stock_code": null,
+        "profile_id": "candidate_475560_morning",
+        "session": "morning",
+        "recommendation_tier": null,
+        "implementation_review_ready": null,
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "low_price_two_leg_expanded_candidate_research",
+        "recommendation_acceptance": "Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+        "recommended_spot": null,
+        "calibration_first_half_ev_pct": null,
+        "calibration_second_half_ev_pct": null,
+        "decision": null,
+        "source_locations": [
+          "$[\"operator_observation_candidate_inventory\"][\"candidate_475560_morning\"]",
+          "$[\"profiles\"][\"candidate_475560_morning\"][\"observation_candidate\"]"
+        ]
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    },
+    {
+      "native_id": "machine_lifecycle_turnover_policy_research_v1",
+      "identity_field": "followup_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "machine_microstructure_attribution",
+        "source_path": "data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-08.json",
+        "source_pointer": "$.objective_followups[0]",
+        "source_sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native followup_id tracks EVIDENCE_ACCUMULATING with immutable source-date quarantine. It is not an order_id/recommendation_id granting implementation authority; same followup in approval is an alias. Exact new market/receipt evidence, not a same-day replay or live change, owns next acceptance.",
+      "current_acceptance_owner": "MachineLifecycleTurnoverObjectiveFollowup0909",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+        "source_pointer": "$.objective_followups[0]",
+        "decision": null,
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change",
+      "parent_disposition": "observed_no_patch",
+      "current_acceptance_checklist": "docs/checklists/2026-09-09-stage2-todo-checklist.md",
+      "native_evidence": {
+        "source_locations": [
+          "$.objective_followups[0]"
+        ],
+        "decision": "EVIDENCE_ACCUMULATING"
+      },
+      "source_decision_preserved": true,
+      "parent_intake_mapping": "same_owner_and_native_id_not_additional_work"
+    }
+  ]
+}

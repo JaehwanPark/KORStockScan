@@ -1,14 +1,14 @@
 {
-  "timestamp": "2026-09-08T12:31:44.276937",
-  "vix_close": 15.300000190734863,
-  "vix_ma3": 14.716666539510092,
+  "timestamp": "2026-09-08T16:40:28.670641",
+  "vix_close": 15.569999694824219,
+  "vix_ma3": 15.133333206176758,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 92.83000183105469,
-  "wti_rsi": 66.49871365641914,
-  "wti_macd": 2.5580567427917913,
-  "wti_macd_signal": 1.7651081480050255,
+  "wti_close": 94.2300033569336,
+  "wti_rsi": 68.46850037686548,
+  "wti_macd": 2.669737776195234,
+  "wti_macd_signal": 1.7874443546857142,
   "wti_dead_cross": false,
   "wti_from_recent_high_pct": 0.0,
   "oil_reversal": false,
@@ -25,10 +25,10 @@
   "swing_recovery_gate_label": "INSUFFICIENT",
   "recovery_gate_reason": "recovery_signal_insufficient",
   "oil_only_recovery_prior": false,
-  "market_regime_continuous_score": 65.2929,
+  "market_regime_continuous_score": 65.0229,
   "market_regime_continuous_label": "RISK_ON",
   "market_regime_component_scores": {
-    "vix_level": 24.7,
+    "vix_level": 24.43,
     "fear_greed_level": 6.7429,
     "domestic_breadth": 31.15,
     "oil_relief": 0.0,
@@ -68,7 +68,7 @@
         "neutral_min_score": 45.0
       },
       "component_scores": {
-        "vix_level": 24.7,
+        "vix_level": 24.43,
         "fear_greed_level": 6.7429,
         "domestic_breadth": 31.15,
         "oil_relief": 0.0,
@@ -96,5 +96,5 @@
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-09-08",
-  "cached_at": "2026-09-08T12:31:44.283201+09:00"
+  "cached_at": "2026-09-08T16:40:28.685352+09:00"
 }

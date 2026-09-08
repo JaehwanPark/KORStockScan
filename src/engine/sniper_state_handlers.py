@@ -70056,14 +70056,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         from src.engine.scalping.strategy_owner_replay import observe_seed
 
         observe_seed(
-            sys.modules[__name__], stock, code, now_ts=time.time(), ws_data=ws_data,
+            sys.modules[__name__],
+            stock,
+            code,
+            now_ts=time.time(),
+            ws_data=ws_data,
             entry={
                 "authority": entry_ai_submit_authority,
                 "ai_engine": ai_engine,
                 "planned_orders": planned_orders,
                 "order_type_code": order_type_code,
                 "guard_inputs": {
-                    "strategy": strategy, "stock": stock, "latency_gate": latency_gate,
+                    "strategy": strategy,
+                    "stock": stock,
+                    "latency_gate": latency_gate,
                     "pre_ai_fields": pre_ai_gate_submit_log_fields,
                     "guard_fields": real_pre_submit_guard_fields,
                     "orderbook_fields": entry_orderbook_micro_fields,
@@ -84527,7 +84533,11 @@ def handle_holding_state(
     from src.engine.scalping.strategy_owner_replay import observe_seed
 
     observe_seed(
-        sys.modules[__name__], stock, code, now_ts=now_ts, ws_data=ws_data,
+        sys.modules[__name__],
+        stock,
+        code,
+        now_ts=now_ts,
+        ws_data=ws_data,
         ai_engine=ai_engine,
     )
 

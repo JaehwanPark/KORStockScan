@@ -2689,6 +2689,8 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
             "conflict_resolution_acceptance_test"
         ),
         "implementation_provenance": item.order.get("implementation_provenance"),
+        "diagnostic_actionability": item.order.get("diagnostic_actionability"),
+        "diagnostic_provenance": item.order.get("diagnostic_provenance"),
         "repeat_unresolved_escalation": item.order.get("repeat_unresolved_escalation"),
         "longstanding_non_implement_review": item.order.get(
             "longstanding_non_implement_review"
@@ -3153,6 +3155,23 @@ def _classify_order(
         "pattern_lab_ai_review",
         "tuning_observability_summary",
     }:
+        actionability = order.get("diagnostic_actionability") or {}
+        if (
+            order.get("source_report_type") == "pattern_lab_ai_review"
+            and isinstance(actionability, dict)
+            and actionability.get("schema") == "pattern_review_actionability_v1"
+            and actionability.get("status") == "blocked_missing_evidence"
+            and actionability.get("source_quality_resolved") is False
+        ):
+            return ClassifiedOrder(
+                order=order,
+                decision="defer_evidence",
+                reason="Preserved AI gap claim lacks an exact failing source contract; a passing currentness check and generic pytest path do not authorize implementation",
+                mapped_family=mapped_family or "pattern_lab_feedback_handoff",
+                route="pattern_lab_ai_review_followup_evidence",
+                confidence=confidence,
+                automation_reentry="Identify the exact failing field/row and consumer under the existing Pattern Lab owner; preserve the provider response and existing daily call budget.",
+            )
         if order.get("source_report_type") == "pattern_lab_ai_review" and order.get(
             "upstream_currentness_order_id"
         ):

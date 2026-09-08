@@ -90,6 +90,7 @@ PROFILE_REVISION_20260828_EFFECTIVE_DATE = date(2026, 8, 28)
 PROFILE_REVISION_20260831_EFFECTIVE_DATE = date(2026, 8, 31)
 PROFILE_REVISION_20260907_EFFECTIVE_DATE = date(2026, 9, 7)
 PROFILE_REVISION_20260908_EFFECTIVE_DATE = date(2026, 9, 8)
+PROFILE_REVISION_20260909_EFFECTIVE_DATE = date(2026, 9, 9)
 # Compatibility alias for consumers that own the first recommendation transition.
 PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
@@ -2179,6 +2180,42 @@ PROFILES["sd_biosensor_afternoon"] = _profile(
 )
 
 
+# Explicit 9/9 implementation approval; prior custody keeps its original policy.
+PROFILES_20260909_PRIOR = dict(PROFILES)
+PROFILES = dict(PROFILES_20260909_PRIOR)
+PROFILES["sk_eternix_late_morning"] = replace(
+    PROFILES_20260909_PRIOR["sk_eternix_late_morning"],
+    policy=replace(
+        PROFILES_20260909_PRIOR["sk_eternix_late_morning"].policy,
+        scan_start=time(10, 45),
+        scan_last_bar=time(10, 54),
+        lookback_bars=20,
+        rolling_high_drawdown_pct=1.25,
+        rolling_low_proximity_pct=0.75,
+        entry_offsets_ticks=(0, -1),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260909",
+    ),
+)
+
+PROFILES["tym_morning"] = replace(
+    PROFILES_20260909_PRIOR["tym_morning"],
+    policy=replace(
+        PROFILES_20260909_PRIOR["tym_morning"].policy,
+        scan_start=time(9, 10),
+        scan_last_bar=time(9, 59),
+        lookback_bars=15,
+        rolling_high_drawdown_pct=1,
+        rolling_low_proximity_pct=0.5,
+        entry_offsets_ticks=(-1, -2),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260909",
+    ),
+)
+
+
 def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
     if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return PRE_RECOMMENDATION_PROFILES
@@ -2198,6 +2235,8 @@ def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
         return PROFILES_20260907_PRIOR
     if target_date < PROFILE_REVISION_20260908_EFFECTIVE_DATE:
         return PROFILES_20260908_PRIOR
+    if target_date < PROFILE_REVISION_20260909_EFFECTIVE_DATE:
+        return PROFILES_20260909_PRIOR
     return PROFILES
 
 

@@ -17,96 +17,97 @@
 
 | Venue/session | Eligible episodes | Provider reached within SLA | Provider reach % | Promotion recall % |
 |---|---:|---:|---:|---:|
-| KRX/KRX_REGULAR | 258 | 2 | 0.78 | 11.24 |
+| KRX/KRX_REGULAR | 260 | 2 | 0.77 | 11.15 |
+| NXT/NXT_AFTERMARKET | 115 | 3 | 2.61 | 6.09 |
 | NXT/NXT_PREMARKET | 36 | 0 | 0.0 | 0.0 |
-| NXT/NXT_REGULAR_OVERLAP | 315 | 0 | 0.0 | 0.0 |
+| NXT/NXT_REGULAR_OVERLAP | 335 | 0 | 0.0 | 0.0 |
 
 ### Venue aggregation (diagnostic only)
 
 | Venue | Eligible episodes | Provider reached within SLA | Provider reach % | Promotion recall % | Terminal count sum | Conservation delta | Conservation |
 |---|---:|---:|---:|---:|---:|---:|---|
-| KRX | 258 | 2 | 0.78 | 11.24 | 258 | 0 | pass |
-| NXT | 351 | 0 | 0.0 | 0.0 | 351 | 0 | pass |
+| KRX | 260 | 2 | 0.77 | 11.15 | 260 | 0 | pass |
+| NXT | 486 | 3 | 0.62 | 1.44 | 486 | 0 | pass |
 
 ### Terminal Coverage Reasons
 
-- KRX terminal coverage reasons: `candidate_not_promoted`=177, `entry_ai_trace_gap`=9, `entry_authority_guard_block`=2, `entry_decision_rejected`=7, `late_discovery_after_opportunity_window`=29, `scanner_discovery_gap_or_unobserved`=17, `scanner_fast_precheck_gap`=9, `scanner_heavy_eval_gap`=2, `scanner_source_guard_blocked_before_promotion`=6
-- NXT terminal coverage reasons: `scanner_discovery_gap_or_unobserved`=351
+- KRX terminal coverage reasons: `candidate_not_promoted`=177, `entry_ai_trace_gap`=9, `entry_authority_guard_block`=2, `entry_decision_rejected`=7, `late_discovery_after_opportunity_window`=29, `scanner_discovery_gap_or_unobserved`=19, `scanner_fast_precheck_gap`=9, `scanner_heavy_eval_gap`=2, `scanner_source_guard_blocked_before_promotion`=6
+- NXT terminal coverage reasons: `candidate_not_promoted`=68, `entry_ai_trace_gap`=1, `entry_authority_guard_block`=1, `entry_decision_observe_only`=1, `entry_decision_rejected`=2, `late_discovery_after_opportunity_window`=15, `scanner_discovery_gap_or_unobserved`=396, `scanner_fast_precheck_gap`=1, `scanner_heavy_eval_gap`=1
 
 ### Candidate Not Promoted First Reasons
 
 - KRX: `general_slot_limit`=17, `market_gainer_reserved_full`=31, `max_new_codes_reached`=6, `reentry_cooldown_no_material_upgrade`=123; count_sum=177; conservation_delta=0; conservation_status=`pass`
-- NXT: none; count_sum=0; conservation_delta=0; conservation_status=`pass`
+- NXT: `general_slot_limit`=2, `market_gainer_reserved_full`=28, `reentry_cooldown_no_material_upgrade`=38; count_sum=68; conservation_delta=0; conservation_status=`pass`
 
 ## Ex-post Executable Opportunity (Source-only)
 
 - Direct external-census, promoted-WS, and bounded prune-observer exact-route BBOs only; ka10027 mark prices are never substituted for executable prices.
 - comparison cost: `0.23%`
-- external BBO request reservation conservation: attempted=1242, valid=1242, invalid=0, unique=1242, duplicate=0, delta=0, status=`pass`
+- external BBO request reservation conservation: attempted=2302, valid=2302, invalid=0, unique=2302, duplicate=0, delta=0, status=`pass`
 
 | Venue | Episodes | Exact BBO joined | Coverage % | Executable entry | Resolved 20m | Right-censored % | Observed cohort net EV % | Decision EV % | Floor |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| KRX | 258 | 156 | 60.47 | 136 | 76 | 42.42 | -0.2142534 | None | False |
-| NXT | 351 | 268 | 76.35 | 250 | 115 | 51.27 | -0.51244451 | None | False |
+| KRX | 260 | 156 | 60.0 | 136 | 80 | 41.18 | -0.22139061 | None | False |
+| NXT | 486 | 389 | 80.04 | 362 | 168 | 51.3 | -0.5147441 | None | False |
 
 ## Coverage
 
 | Panel | Window | Venue | View | Episodes | Promotion recall % | Heavy recall % | Provider reach % | PREV_CLOSE_GAINER source | Promote→AI p50 sec | Submitted |
 |---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|
-| all | 10 | ALL | forward_exact | 318 | 1.89 | 0.63 | 0.0 | 15 | None | 0 |
-| all | 10 | KRX | forward_exact | 121 | 4.96 | 1.65 | 0.0 | 15 | None | 0 |
-| all | 10 | NXT | forward_exact | 197 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| all | 10 | ALL | same_day_any_venue_retrospective_noncausal | 318 | 84.59 | 80.19 | 37.42 | 82 | None | 0 |
-| all | 10 | KRX | same_day_any_venue_retrospective_noncausal | 121 | 75.21 | 74.38 | 51.24 | 65 | None | 0 |
-| all | 10 | NXT | same_day_any_venue_retrospective_noncausal | 197 | 90.36 | 83.76 | 28.93 | 17 | None | 0 |
-| all | 10 | ALL | same_day_venue_consistent_retrospective | 318 | 28.62 | 28.3 | 19.5 | 65 | None | 0 |
-| all | 10 | KRX | same_day_venue_consistent_retrospective | 121 | 75.21 | 74.38 | 51.24 | 65 | None | 0 |
-| all | 10 | NXT | same_day_venue_consistent_retrospective | 197 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| all | 20 | ALL | forward_exact | 631 | 2.85 | 1.9 | 0.16 | 39 | 24.401143 | 0 |
-| all | 20 | KRX | forward_exact | 244 | 7.38 | 4.92 | 0.41 | 39 | 24.401143 | 0 |
-| all | 20 | NXT | forward_exact | 387 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| all | 20 | ALL | same_day_any_venue_retrospective_noncausal | 631 | 86.21 | 77.97 | 35.34 | 145 | None | 0 |
-| all | 20 | KRX | same_day_any_venue_retrospective_noncausal | 244 | 79.92 | 78.69 | 56.56 | 123 | None | 0 |
-| all | 20 | NXT | same_day_any_venue_retrospective_noncausal | 387 | 90.18 | 77.52 | 21.96 | 22 | None | 0 |
-| all | 20 | ALL | same_day_venue_consistent_retrospective | 631 | 30.9 | 30.43 | 21.87 | 123 | None | 0 |
-| all | 20 | KRX | same_day_venue_consistent_retrospective | 244 | 79.92 | 78.69 | 56.56 | 123 | None | 0 |
-| all | 20 | NXT | same_day_venue_consistent_retrospective | 387 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| all | 50 | ALL | forward_exact | 1601 | 1.56 | 1.12 | 0.19 | 55 | 32.165786 | 0 |
-| all | 50 | KRX | forward_exact | 615 | 4.07 | 2.93 | 0.49 | 55 | 32.165786 | 0 |
-| all | 50 | NXT | forward_exact | 986 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| all | 50 | ALL | same_day_any_venue_retrospective_noncausal | 1601 | 78.14 | 67.21 | 23.8 | 272 | None | 0 |
-| all | 50 | KRX | same_day_any_venue_retrospective_noncausal | 615 | 70.24 | 66.02 | 39.84 | 243 | None | 0 |
-| all | 50 | NXT | same_day_any_venue_retrospective_noncausal | 986 | 83.06 | 67.95 | 13.79 | 29 | None | 0 |
-| all | 50 | ALL | same_day_venue_consistent_retrospective | 1601 | 26.98 | 25.36 | 15.3 | 243 | None | 0 |
-| all | 50 | KRX | same_day_venue_consistent_retrospective | 615 | 70.24 | 66.02 | 39.84 | 243 | None | 0 |
-| all | 50 | NXT | same_day_venue_consistent_retrospective | 986 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| liquid_common | 10 | ALL | forward_exact | 324 | 4.63 | 2.16 | 0.31 | 23 | 157.090355 | 0 |
-| liquid_common | 10 | KRX | forward_exact | 145 | 10.34 | 4.83 | 0.69 | 23 | 157.090355 | 0 |
-| liquid_common | 10 | NXT | forward_exact | 179 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| liquid_common | 10 | ALL | same_day_any_venue_retrospective_noncausal | 324 | 87.04 | 82.41 | 41.05 | 101 | None | 0 |
-| liquid_common | 10 | KRX | same_day_any_venue_retrospective_noncausal | 145 | 80.0 | 79.31 | 53.79 | 87 | None | 0 |
-| liquid_common | 10 | NXT | same_day_any_venue_retrospective_noncausal | 179 | 92.74 | 84.92 | 30.73 | 14 | None | 0 |
-| liquid_common | 10 | ALL | same_day_venue_consistent_retrospective | 324 | 35.8 | 35.49 | 24.07 | 87 | None | 0 |
-| liquid_common | 10 | KRX | same_day_venue_consistent_retrospective | 145 | 80.0 | 79.31 | 53.79 | 87 | None | 0 |
-| liquid_common | 10 | NXT | same_day_venue_consistent_retrospective | 179 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| liquid_common | 20 | ALL | forward_exact | 647 | 4.64 | 2.78 | 0.31 | 60 | 33.421126 | 0 |
-| liquid_common | 20 | KRX | forward_exact | 296 | 10.14 | 6.08 | 0.68 | 60 | 33.421126 | 0 |
-| liquid_common | 20 | NXT | forward_exact | 351 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| liquid_common | 20 | ALL | same_day_any_venue_retrospective_noncausal | 647 | 89.34 | 81.92 | 39.88 | 175 | None | 0 |
-| liquid_common | 20 | KRX | same_day_any_venue_retrospective_noncausal | 296 | 85.47 | 84.12 | 60.14 | 155 | None | 0 |
-| liquid_common | 20 | NXT | same_day_any_venue_retrospective_noncausal | 351 | 92.59 | 80.06 | 22.79 | 20 | None | 0 |
-| liquid_common | 20 | ALL | same_day_venue_consistent_retrospective | 647 | 39.1 | 38.49 | 27.51 | 155 | None | 0 |
-| liquid_common | 20 | KRX | same_day_venue_consistent_retrospective | 296 | 85.47 | 84.12 | 60.14 | 155 | None | 0 |
-| liquid_common | 20 | NXT | same_day_venue_consistent_retrospective | 351 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| liquid_common | 50 | ALL | forward_exact | 1621 | 3.02 | 1.91 | 0.25 | 82 | 31.527274 | 0 |
-| liquid_common | 50 | KRX | forward_exact | 741 | 6.61 | 4.18 | 0.54 | 82 | 31.527274 | 0 |
-| liquid_common | 50 | NXT | forward_exact | 880 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
-| liquid_common | 50 | ALL | same_day_any_venue_retrospective_noncausal | 1621 | 82.6 | 71.68 | 27.39 | 338 | None | 0 |
-| liquid_common | 50 | KRX | same_day_any_venue_retrospective_noncausal | 741 | 79.62 | 73.95 | 42.78 | 312 | None | 0 |
-| liquid_common | 50 | NXT | same_day_any_venue_retrospective_noncausal | 880 | 85.11 | 69.77 | 14.43 | 26 | None | 0 |
-| liquid_common | 50 | ALL | same_day_venue_consistent_retrospective | 1621 | 36.4 | 33.81 | 19.56 | 312 | None | 0 |
-| liquid_common | 50 | KRX | same_day_venue_consistent_retrospective | 741 | 79.62 | 73.95 | 42.78 | 312 | None | 0 |
-| liquid_common | 50 | NXT | same_day_venue_consistent_retrospective | 880 | 0.0 | 0.0 | 0.0 | 0 | None | 0 |
+| all | 10 | ALL | forward_exact | 378 | 2.38 | 0.79 | 0.0 | 24 | 49.855343 | 0 |
+| all | 10 | KRX | forward_exact | 131 | 4.58 | 1.53 | 0.0 | 15 | None | 0 |
+| all | 10 | NXT | forward_exact | 247 | 1.21 | 0.4 | 0.0 | 9 | 49.855343 | 0 |
+| all | 10 | ALL | same_day_any_venue_retrospective_noncausal | 378 | 90.21 | 89.42 | 62.17 | 102 | None | 0 |
+| all | 10 | KRX | same_day_any_venue_retrospective_noncausal | 131 | 75.57 | 74.81 | 51.91 | 69 | None | 0 |
+| all | 10 | NXT | same_day_any_venue_retrospective_noncausal | 247 | 97.98 | 97.17 | 67.61 | 33 | None | 0 |
+| all | 10 | ALL | same_day_venue_consistent_retrospective | 378 | 88.1 | 87.3 | 49.47 | 265 | None | 0 |
+| all | 10 | KRX | same_day_venue_consistent_retrospective | 131 | 75.57 | 74.81 | 51.91 | 69 | None | 0 |
+| all | 10 | NXT | same_day_venue_consistent_retrospective | 247 | 94.74 | 93.93 | 48.18 | 196 | None | 0 |
+| all | 20 | ALL | forward_exact | 751 | 3.2 | 2.13 | 0.4 | 54 | 24.401143 | 0 |
+| all | 20 | KRX | forward_exact | 264 | 6.82 | 4.55 | 0.38 | 39 | 24.401143 | 0 |
+| all | 20 | NXT | forward_exact | 487 | 1.23 | 0.82 | 0.41 | 15 | 10.797751 | 0 |
+| all | 20 | ALL | same_day_any_venue_retrospective_noncausal | 751 | 92.01 | 87.62 | 55.79 | 177 | None | 0 |
+| all | 20 | KRX | same_day_any_venue_retrospective_noncausal | 264 | 80.68 | 78.79 | 59.09 | 132 | None | 0 |
+| all | 20 | NXT | same_day_any_venue_retrospective_noncausal | 487 | 98.15 | 92.4 | 54.0 | 45 | None | 0 |
+| all | 20 | ALL | same_day_venue_consistent_retrospective | 751 | 88.55 | 84.69 | 44.87 | 461 | None | 0 |
+| all | 20 | KRX | same_day_venue_consistent_retrospective | 264 | 79.92 | 78.79 | 56.82 | 132 | None | 0 |
+| all | 20 | NXT | same_day_venue_consistent_retrospective | 487 | 93.22 | 87.89 | 38.4 | 329 | None | 0 |
+| all | 50 | ALL | forward_exact | 1901 | 2.05 | 1.26 | 0.21 | 64 | 32.165786 | 0 |
+| all | 50 | KRX | forward_exact | 665 | 3.76 | 2.71 | 0.45 | 55 | 32.165786 | 0 |
+| all | 50 | NXT | forward_exact | 1236 | 1.13 | 0.49 | 0.08 | 9 | 173.770131 | 0 |
+| all | 50 | ALL | same_day_any_venue_retrospective_noncausal | 1901 | 86.53 | 79.22 | 33.61 | 322 | None | 0 |
+| all | 50 | KRX | same_day_any_venue_retrospective_noncausal | 665 | 72.18 | 67.52 | 45.11 | 265 | None | 0 |
+| all | 50 | NXT | same_day_any_venue_retrospective_noncausal | 1236 | 94.26 | 85.52 | 27.43 | 57 | None | 0 |
+| all | 50 | ALL | same_day_venue_consistent_retrospective | 1901 | 80.69 | 73.28 | 25.88 | 655 | None | 0 |
+| all | 50 | KRX | same_day_venue_consistent_retrospective | 665 | 70.68 | 66.47 | 40.6 | 262 | None | 0 |
+| all | 50 | NXT | same_day_venue_consistent_retrospective | 1236 | 86.08 | 76.94 | 17.96 | 393 | None | 0 |
+| liquid_common | 10 | ALL | forward_exact | 394 | 4.82 | 2.28 | 0.51 | 34 | 157.090355 | 0 |
+| liquid_common | 10 | KRX | forward_exact | 147 | 10.2 | 4.76 | 0.68 | 23 | 157.090355 | 0 |
+| liquid_common | 10 | NXT | forward_exact | 247 | 1.62 | 0.81 | 0.4 | 11 | 49.855343 | 0 |
+| liquid_common | 10 | ALL | same_day_any_venue_retrospective_noncausal | 394 | 92.13 | 91.12 | 62.94 | 118 | None | 0 |
+| liquid_common | 10 | KRX | same_day_any_venue_retrospective_noncausal | 147 | 80.27 | 79.59 | 54.42 | 87 | None | 0 |
+| liquid_common | 10 | NXT | same_day_any_venue_retrospective_noncausal | 247 | 99.19 | 97.98 | 68.02 | 31 | None | 0 |
+| liquid_common | 10 | ALL | same_day_venue_consistent_retrospective | 394 | 90.61 | 89.59 | 50.51 | 289 | None | 0 |
+| liquid_common | 10 | KRX | same_day_venue_consistent_retrospective | 147 | 80.27 | 79.59 | 54.42 | 87 | None | 0 |
+| liquid_common | 10 | NXT | same_day_venue_consistent_retrospective | 247 | 96.76 | 95.55 | 48.18 | 202 | None | 0 |
+| liquid_common | 20 | ALL | forward_exact | 785 | 4.71 | 2.93 | 0.64 | 80 | 82.220462 | 0 |
+| liquid_common | 20 | KRX | forward_exact | 299 | 10.03 | 6.02 | 0.67 | 60 | 33.421126 | 0 |
+| liquid_common | 20 | NXT | forward_exact | 486 | 1.44 | 1.03 | 0.62 | 20 | 173.770131 | 0 |
+| liquid_common | 20 | ALL | same_day_any_venue_retrospective_noncausal | 785 | 94.01 | 90.45 | 58.73 | 202 | None | 0 |
+| liquid_common | 20 | KRX | same_day_any_venue_retrospective_noncausal | 299 | 85.28 | 83.95 | 62.21 | 156 | None | 0 |
+| liquid_common | 20 | NXT | same_day_any_venue_retrospective_noncausal | 486 | 99.38 | 94.44 | 56.58 | 46 | None | 0 |
+| liquid_common | 20 | ALL | same_day_venue_consistent_retrospective | 785 | 91.46 | 87.77 | 48.15 | 499 | None | 0 |
+| liquid_common | 20 | KRX | same_day_venue_consistent_retrospective | 299 | 85.28 | 83.95 | 60.2 | 156 | None | 0 |
+| liquid_common | 20 | NXT | same_day_venue_consistent_retrospective | 486 | 95.27 | 90.12 | 40.74 | 343 | None | 0 |
+| liquid_common | 50 | ALL | forward_exact | 1959 | 3.32 | 1.99 | 0.31 | 97 | 33.421126 | 0 |
+| liquid_common | 50 | KRX | forward_exact | 748 | 6.55 | 4.14 | 0.53 | 82 | 31.527274 | 0 |
+| liquid_common | 50 | NXT | forward_exact | 1211 | 1.32 | 0.66 | 0.17 | 15 | 173.770131 | 0 |
+| liquid_common | 50 | ALL | same_day_any_venue_retrospective_noncausal | 1959 | 89.94 | 83.51 | 36.65 | 378 | None | 0 |
+| liquid_common | 50 | KRX | same_day_any_venue_retrospective_noncausal | 748 | 80.48 | 75.4 | 48.26 | 319 | None | 0 |
+| liquid_common | 50 | NXT | same_day_any_venue_retrospective_noncausal | 1211 | 95.79 | 88.52 | 29.48 | 59 | None | 0 |
+| liquid_common | 50 | ALL | same_day_venue_consistent_retrospective | 1959 | 85.09 | 78.1 | 28.18 | 718 | None | 0 |
+| liquid_common | 50 | KRX | same_day_venue_consistent_retrospective | 748 | 79.68 | 73.93 | 42.78 | 315 | None | 0 |
+| liquid_common | 50 | NXT | same_day_venue_consistent_retrospective | 1211 | 88.44 | 80.68 | 19.16 | 403 | None | 0 |
 
 ## Forbidden Uses
 
@@ -127,9 +128,10 @@
 
 | Venue/session | Status | Eligible / raw episodes | Exclusions | Economic status |
 |---|---|---:|---|---|
-| KRX/KRX_REGULAR | insufficient_evidence_scanner_recall | 19/296 | {'master_unverified_or_not_common_equity': 38, 'capture_gap_or_pending_validity_window': 239} | insufficient_economic_evidence |
+| KRX/KRX_REGULAR | diagnostic_ready | 21/299 | {'master_unverified_or_not_common_equity': 39, 'capture_gap_or_pending_validity_window': 239} | insufficient_economic_evidence |
+| NXT/NXT_AFTERMARKET | diagnostic_ready | 112/115 | {'capture_gap_or_pending_validity_window': 3} | insufficient_economic_evidence |
 | NXT/NXT_PREMARKET | diagnostic_ready | 35/36 | {'capture_gap_or_pending_validity_window': 1} | insufficient_economic_evidence |
-| NXT/NXT_REGULAR_OVERLAP | diagnostic_ready | 84/315 | {'capture_gap_or_pending_validity_window': 231} | insufficient_economic_evidence |
+| NXT/NXT_REGULAR_OVERLAP | diagnostic_ready | 84/335 | {'capture_gap_or_pending_validity_window': 251} | insufficient_economic_evidence |
 
 ## Small net alternatives (source-only, non-additive)
 
@@ -138,15 +140,27 @@
 | KRX/KRX_REGULAR | net_0.03_h60 | 3 | 0 | -1.01610758 | 33.852285333333334 | False |
 | KRX/KRX_REGULAR | net_0.03_h180 | 9 | 1 | -1.53131788 | 89.77586000000001 | False |
 | KRX/KRX_REGULAR | net_0.03_h300 | 43 | 10 | -0.76172821 | 254.40362065116278 | False |
-| KRX/KRX_REGULAR | net_0.03_h1200 | 81 | 34 | -0.20322308 | 589.5430131234568 | False |
+| KRX/KRX_REGULAR | net_0.03_h1200 | 85 | 37 | -0.21045953 | 610.9561136941177 | False |
 | KRX/KRX_REGULAR | net_0.07_h60 | 3 | 0 | -1.01610758 | 33.852285333333334 | False |
 | KRX/KRX_REGULAR | net_0.07_h180 | 8 | 0 | -1.7306395 | 81.198510875 | False |
 | KRX/KRX_REGULAR | net_0.07_h300 | 42 | 9 | -0.78137068 | 256.68954845238096 | False |
-| KRX/KRX_REGULAR | net_0.07_h1200 | 78 | 31 | -0.21315201 | 598.6165046153845 | False |
+| KRX/KRX_REGULAR | net_0.07_h1200 | 82 | 34 | -0.22016887 | 620.3704019634147 | False |
 | KRX/KRX_REGULAR | net_0.10_h60 | 3 | 0 | -1.01610758 | 33.852285333333334 | False |
 | KRX/KRX_REGULAR | net_0.10_h180 | 8 | 0 | -1.7306395 | 81.198510875 | False |
 | KRX/KRX_REGULAR | net_0.10_h300 | 42 | 9 | -0.78137068 | 256.68954845238096 | False |
-| KRX/KRX_REGULAR | net_0.10_h1200 | 78 | 31 | -0.21315201 | 598.6165046153845 | False |
+| KRX/KRX_REGULAR | net_0.10_h1200 | 82 | 34 | -0.22016887 | 620.3704019634147 | False |
+| NXT/NXT_AFTERMARKET | net_0.03_h60 | 0 | 0 | None | None | False |
+| NXT/NXT_AFTERMARKET | net_0.03_h180 | 0 | 0 | None | None | False |
+| NXT/NXT_AFTERMARKET | net_0.03_h300 | 36 | 2 | -0.64702518 | 300.57832086111114 | False |
+| NXT/NXT_AFTERMARKET | net_0.03_h1200 | 50 | 12 | -0.47431069 | 738.7339870000001 | False |
+| NXT/NXT_AFTERMARKET | net_0.07_h60 | 0 | 0 | None | None | False |
+| NXT/NXT_AFTERMARKET | net_0.07_h180 | 0 | 0 | None | None | False |
+| NXT/NXT_AFTERMARKET | net_0.07_h300 | 36 | 2 | -0.64702518 | 300.57832086111114 | False |
+| NXT/NXT_AFTERMARKET | net_0.07_h1200 | 49 | 11 | -0.48508618 | 741.5918341836735 | False |
+| NXT/NXT_AFTERMARKET | net_0.10_h60 | 0 | 0 | None | None | False |
+| NXT/NXT_AFTERMARKET | net_0.10_h180 | 0 | 0 | None | None | False |
+| NXT/NXT_AFTERMARKET | net_0.10_h300 | 36 | 2 | -0.64702518 | 300.57832086111114 | False |
+| NXT/NXT_AFTERMARKET | net_0.10_h1200 | 48 | 10 | -0.4969725 | 744.5554318541667 | False |
 | NXT/NXT_PREMARKET | net_0.03_h60 | 0 | 0 | None | None | False |
 | NXT/NXT_PREMARKET | net_0.03_h180 | 0 | 0 | None | None | False |
 | NXT/NXT_PREMARKET | net_0.03_h300 | 18 | 5 | -0.27559435 | 299.9785475 | False |
@@ -162,12 +176,12 @@
 | NXT/NXT_REGULAR_OVERLAP | net_0.03_h60 | 0 | 0 | None | None | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.03_h180 | 0 | 0 | None | None | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.03_h300 | 73 | 15 | -0.49391975 | 303.7590228767123 | False |
-| NXT/NXT_REGULAR_OVERLAP | net_0.03_h1200 | 101 | 41 | -0.50456209 | 686.6369037326733 | False |
+| NXT/NXT_REGULAR_OVERLAP | net_0.03_h1200 | 108 | 43 | -0.51547806 | 702.5442418518519 | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.07_h60 | 0 | 0 | None | None | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.07_h180 | 0 | 0 | None | None | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.07_h300 | 73 | 15 | -0.49391975 | 303.7590228767123 | False |
-| NXT/NXT_REGULAR_OVERLAP | net_0.07_h1200 | 101 | 41 | -0.50456209 | 686.6369037326733 | False |
+| NXT/NXT_REGULAR_OVERLAP | net_0.07_h1200 | 108 | 43 | -0.51547806 | 702.5442418518519 | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.10_h60 | 0 | 0 | None | None | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.10_h180 | 0 | 0 | None | None | False |
 | NXT/NXT_REGULAR_OVERLAP | net_0.10_h300 | 73 | 15 | -0.49391975 | 303.7590228767123 | False |
-| NXT/NXT_REGULAR_OVERLAP | net_0.10_h1200 | 101 | 41 | -0.50456209 | 686.6369037326733 | False |
+| NXT/NXT_REGULAR_OVERLAP | net_0.10_h1200 | 108 | 43 | -0.51547806 | 702.5442418518519 | False |

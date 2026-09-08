@@ -1570,6 +1570,9 @@ def _microstructure_code_improvement_orders(
                 "representative_receipt": (
                     summary.get("diagnostic_contract_examples") or {}
                 ).get(cause),
+                "diagnostic_provenance": (
+                    summary.get("diagnostic_contract_provenance") or {}
+                ).get(cause),
                 "closure_condition": "contract_regression_pass_and_next_natural_receipt_valid",
             }
         )
@@ -1594,10 +1597,51 @@ def _delivery_observation_summary(rows):
     unknown = 0
     defects = {}
     examples = {}
+    provenance = {}
 
     def defect(cause, identity, row):
-        defects.setdefault(cause, set()).add(identity)
-        examples.setdefault(cause, microstructure_delivery_fields(row))
+        ids = defects.setdefault(cause, set())
+        receipt = {
+            **{
+                key: row.get(key)
+                for key in (
+                    "stock_code",
+                    "record_id",
+                    "event_time",
+                    "stage",
+                    "source_event_stage",
+                    "ai_trace_endpoint_name",
+                    "ai_prompt_type",
+                    "effective_venue",
+                    "venue",
+                )
+            },
+            **microstructure_delivery_fields(row),
+        }
+        examples.setdefault(cause, receipt)
+        detail = provenance.setdefault(
+            cause,
+            {
+                "schema": "microstructure_diagnostic_provenance_v1",
+                "unique_evaluation_count": 0,
+                "stage_counts": {},
+                "receipts": [],
+                "receipt_limit": 20,
+                "truncated": False,
+                "historical_source_repaired": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
+        )
+        if identity not in ids:
+            detail["unique_evaluation_count"] += 1
+            stage = str(row.get("stage") or "unknown")
+            detail["stage_counts"][stage] = detail["stage_counts"].get(stage, 0) + 1
+            if len(detail["receipts"]) < detail["receipt_limit"]:
+                detail["receipts"].append(receipt)
+            else:
+                detail["truncated"] = True
+        ids.add(identity)
 
     for index, row in enumerate(rows):
         if row.get("microstructure_reaction_delivery_telemetry_version") != "v3":
@@ -1816,6 +1860,7 @@ def _delivery_observation_summary(rows):
             cause: len(ids) for cause, ids in defects.items()
         },
         "diagnostic_contract_examples": examples,
+        "diagnostic_contract_provenance": provenance,
         "runtime_application": "not_applicable_diagnostic",
         "applied_effect": "not_evaluated",
     }

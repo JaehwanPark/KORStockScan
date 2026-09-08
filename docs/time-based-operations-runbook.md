@@ -1,5 +1,11 @@
 # Time-Based Operations Runbook
 
+## Machine candidate source-hash recovery (2026-09-08)
+
+Samsung/low-price tuning의 현재 실행 위치는 main wrapper의 최종 source-quality audit 뒤다. 이전 초기 preflight 뒤 배치를 대체하며 각각 한 번 실행한다. 독립 expanded research는 원래 앞 단계에 유지한다. 두 후보의 audit hash가 낡아 최종 검증이 실패하면 원본 generation/hash와 종료 PID를 확인하고, review gate 후 controller의 해당 tuning producer→기존 후행 EV/workorder/summary/checklist→strict verifier 최소 복구를 사용한다. audit/hash fail-closed, 정상 candidate guard와 다음 PREOPEN 소비 권한은 유지한다. market/API research, Provider, bot 또는 main wrapper 전체를 이 사유로 재실행하지 않는다. 상세 순서는 [traceability](report-based-automation-traceability.md#machine-candidate-final-audit-binding-2026-09-08-postclose-repair)를 따른다.
+
+이미 승인·대사된 exact 원주문 target receipt에 체결시각이 없는 경우, low-price report는 원장 값을 그대로 전달하고 attribution은 symbol/date/order/leg/quantity/price 및 대사시각을 검증한다. `verified_target_timestamp_loss_v1`은 timing 표본 제외 provenance일 뿐이다. lifecycle/timing eligible=false·실제 체결시각/보유시간 null을 유지하며, 다른 identity/join 결함이 없는 해당 손실만 immutable source-date quarantine에 포함한다. 원장 수정·시각 추정·경제성 승격은 하지 않는다. 복구는 review gate 후 low-price report→attribution→entry timing→approval→checklist/strict/controller 순으로 필요한 consumer만 수행한다. source-only attribution의 collection feedback 갱신은 기존 next-date observer 계약이며 실주문 권한이 아니다.
+
 ## Postclose final summary recovery (2026-09-08; target date retained)
 
 After final source-only producer recovery, publish `tuning_performance_control_tower → build_next_stage2_checklist → verify_threshold_cycle_postclose_chain --require-summary-handoff` for the original source date, even after midnight. The controller requires this last-consumer source-hash contract before DONE. A summary-only failure must not cause a full wrapper, provider replay, PREOPEN env mutation or bot restart; regenerate only the affected summary/checklist and recheck controller/finalization. Missing optional input remains explicit, but its later arrival invalidates the summary. Keep old-generation evidence and user-owned checklist text. Code review and targeted validation precede regeneration; natural source and economic acceptance stay separate.

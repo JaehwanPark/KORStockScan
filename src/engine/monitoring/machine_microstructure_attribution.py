@@ -3127,6 +3127,59 @@ def _has_positive_fill(legs: Any) -> bool:
     return False
 
 
+def _verified_target_timestamp_loss(
+    leg: dict[str, Any], *, symbol: str, target_date: str
+) -> dict[str, Any] | None:
+    """Recognize immutable timing loss, never a substitute execution timestamp."""
+    receipt = leg.get("target_exit_reconciliation_receipt")
+    buy_at = _owner_ts_on_target_date(leg.get("buy_filled_at"), target_date)
+    reconciled_at = _owner_ts_on_target_date(
+        leg.get("target_fill_reconciled_at"), target_date
+    )
+    quantity = leg.get("target_filled_qty")
+    price = leg.get("target_fill_price")
+    if not (
+        isinstance(receipt, dict)
+        and leg.get("exit_fill_source") == "broker_verified_original_target_receipt"
+        and leg.get("target_filled_at") in (None, "")
+        and leg.get("target_fill_timestamp_status") == "unavailable"
+        and leg.get("completed") is True
+        and leg.get("contract_valid") is True
+        and type(quantity) is int
+        and quantity > 0
+        and type(leg.get("buy_filled_qty")) is int
+        and leg["buy_filled_qty"] == quantity
+        and type(price) is int
+        and price > 0
+        and buy_at is not None
+        and reconciled_at is not None
+        and reconciled_at >= buy_at
+        and receipt.get("source_api") == "kt00007"
+        and receipt.get("symbol") == symbol
+        and receipt.get("order_date") == target_date == leg.get("target_order_date")
+        and isinstance(leg.get("target_order_no"), str)
+        and leg["target_order_no"].isascii()
+        and leg["target_order_no"].isdigit()
+        and int(leg["target_order_no"]) > 0
+        and receipt.get("order_no") == leg["target_order_no"]
+        and isinstance(leg.get("leg_id"), str)
+        and bool(leg["leg_id"])
+        and receipt.get("leg_id") == leg["leg_id"]
+        and type(receipt.get("filled_qty")) is int
+        and receipt["filled_qty"] == quantity
+        and type(receipt.get("fill_price")) is int
+        and receipt["fill_price"] == price
+    ):
+        return None
+    return {
+        "leg_id": leg["leg_id"],
+        "order_no": leg["target_order_no"],
+        "receipt_sha256": hashlib.sha256(
+            json.dumps(receipt, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+
+
 def _episode_inventory(
     target_date: str, report_root: Path
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -3284,6 +3337,7 @@ def _episode_inventory(
                 row["owner_anchor_contract_status"] = "valid"
                 lifecycle_id = f"episode:{profile_id}:{anchor_at.isoformat()}"
                 lifecycle_invalid = False
+                immutable_target_time_receipts = []
                 legs = payload.get("legs") or []
                 owner_target_prices = [
                     value
@@ -3401,6 +3455,14 @@ def _episode_inventory(
                         elif not valid_buy_fill:
                             reason = f"{leg_id}:target_fill_without_valid_buy_fill"
                         row["lifecycle_instrumentation_gaps"].append(reason)
+                        if valid_buy_fill and reason == (
+                            f"{leg_id}:target_fill_timestamp_or_price_missing"
+                        ):
+                            receipt = _verified_target_timestamp_loss(
+                                leg, symbol=row["symbol"], target_date=target_date
+                            )
+                            if receipt is not None:
+                                immutable_target_time_receipts.append(receipt)
                     holding_duration_ms = (
                         round(
                             (target_filled_at - buy_filled_at).total_seconds() * 1000.0
@@ -3589,10 +3651,37 @@ def _episode_inventory(
                 if lifecycle_invalid:
                     row["owner_anchor_contract_status"] = "invalid"
                     row["owner_policy_tuning_eligible"] = False
+                    expected_time_gaps = {
+                        f"{receipt['leg_id']}:target_fill_timestamp_or_price_missing"
+                        for receipt in immutable_target_time_receipts
+                    }
+                    timing_loss_only = bool(
+                        expected_time_gaps
+                        and set(row["lifecycle_instrumentation_gaps"])
+                        == expected_time_gaps
+                        and len(
+                            {
+                                receipt["order_no"]
+                                for receipt in immutable_target_time_receipts
+                            }
+                        )
+                        == len(immutable_target_time_receipts)
+                    )
                     for anchor in anchors:
                         if anchor.get("lifecycle_id") == lifecycle_id:
                             anchor["owner_lifecycle_contract_valid"] = False
                             anchor["owner_policy_tuning_eligible"] = False
+                            if timing_loss_only:
+                                anchor["owner_terminal_timestamp_exclusion"] = {
+                                    "schema": "verified_target_timestamp_loss_v1",
+                                    "source_date": target_date,
+                                    "scope_id": profile_id,
+                                    "symbol": row["symbol"],
+                                    "receipts": immutable_target_time_receipts,
+                                    "timing_sample_eligible": False,
+                                    "runtime_effect": False,
+                                    "allowed_runtime_apply": False,
+                                }
             elif owner_diagnostic_eligible:
                 row["owner_anchor_contract_status"] = "invalid"
                 row["owner_policy_tuning_eligible"] = False
@@ -6777,6 +6866,9 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "owner_target_price": result.get("owner_target_price"),
         "owner_round_trip_cost_pct": result.get("owner_round_trip_cost_pct"),
         "owner_lifecycle_contract_valid": result.get("owner_lifecycle_contract_valid"),
+        "owner_terminal_timestamp_exclusion": result.get(
+            "owner_terminal_timestamp_exclusion"
+        ),
         "owner_policy_tuning_eligible": (
             result.get("owner_policy_tuning_eligible") is True
         ),

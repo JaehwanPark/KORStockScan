@@ -1051,6 +1051,40 @@ def test_postclose_done_controller_tail_repair_uses_workorder_max_orders_env(
     )
 
 
+def test_tail_repair_refreshes_only_hash_stale_machine_sources_before_consumers():
+    verification = {
+        "samsung_machine_entry_postclose": {
+            "issues": ["tuning_source_quality_hash_mismatch"]
+        },
+        "low_price_two_leg_postclose": {
+            "issues": ["policy_candidate_candidate_source_quality_hash_mismatch"]
+        },
+    }
+    actions = mod._tail_stage_repair_actions(
+        "2026-09-08", "verify_threshold_cycle_postclose_chain", verification
+    )
+    names = [a.action for a in actions]
+    assert names[:2] == [
+        "refresh_samsung_machine_entry_tuning",
+        "refresh_low_price_two_leg_tuning",
+    ]
+    assert names.index("refresh_low_price_two_leg_tuning") < names.index(
+        "refresh_code_improvement_workorder"
+    )
+    for action in actions[:2]:
+        assert action.command[-3:] == ["--target-date", "2026-09-08", "--print-summary"]
+        assert "--auto-apply" not in action.command
+    assert not any(
+        "expanded_candidate_research" in " ".join(a.command or []) for a in actions
+    )
+    verification["samsung_machine_entry_postclose"]["issues"] = []
+    verification["low_price_two_leg_postclose"]["issues"] = ["unrelated_contract_gap"]
+    actions = mod._tail_stage_repair_actions(
+        "2026-09-08", "verify_threshold_cycle_postclose_chain", verification
+    )
+    assert not any(a.action in names[:2] for a in actions)
+
+
 def test_tail_stage_repair_actions_refresh_final_ev_after_workorder():
     actions = mod._tail_stage_repair_actions(
         "2026-06-03",

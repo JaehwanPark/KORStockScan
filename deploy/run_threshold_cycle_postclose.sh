@@ -1510,32 +1510,6 @@ if [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION" = "true" ] || [ "$RUN_SCALPIN
     "$avg_down_report_md" \
     "scalping_avg_down_recovery_calibration"
 fi
-if [ "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" = "true" ] || [ "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" = "1" ]; then
-  wait_for_postclose_resources "samsung_machine_entry_tuning"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.samsung_machine_entry_tuning \
-    --target-date "$TARGET_DATE" \
-    --print-summary
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_${TARGET_DATE}.md" \
-    "samsung_machine_entry_tuning"
-  wait_for_file_artifact \
-    "$PROJECT_DIR/data/threshold_cycle/samsung_machine_entry_policy/candidates/samsung_machine_entry_policy_candidate_${TARGET_DATE}.json" \
-    "samsung_machine_entry_policy_candidate"
-fi
-if [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "1" ]; then
-  wait_for_postclose_resources "low_price_two_leg_tuning"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.low_price_two_leg_tuning \
-    --target-date "$TARGET_DATE" \
-    --print-summary
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_${TARGET_DATE}.md" \
-    "low_price_two_leg_tuning"
-  wait_for_file_artifact \
-    "$PROJECT_DIR/data/threshold_cycle/low_price_two_leg/candidates/low_price_two_leg_policy_candidate_${TARGET_DATE}.json" \
-    "low_price_two_leg_policy_candidate"
-fi
 if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "1" ]; then
   candidate_recommendation_json="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.json"
   candidate_recommendation_md="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.md"
@@ -2027,6 +2001,34 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
       "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
       "observation_source_quality_audit"
   fi
+fi
+# These candidates bind the audit's exact file hash. Build them once after the
+# final audit, not against the preflight generation that the final audit replaces.
+if [ "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" = "true" ] || [ "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" = "1" ]; then
+  wait_for_postclose_resources "samsung_machine_entry_tuning"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.samsung_machine_entry_tuning \
+    --target-date "$TARGET_DATE" \
+    --print-summary
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_${TARGET_DATE}.md" \
+    "samsung_machine_entry_tuning"
+  wait_for_file_artifact \
+    "$PROJECT_DIR/data/threshold_cycle/samsung_machine_entry_policy/candidates/samsung_machine_entry_policy_candidate_${TARGET_DATE}.json" \
+    "samsung_machine_entry_policy_candidate"
+fi
+if [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "1" ]; then
+  wait_for_postclose_resources "low_price_two_leg_tuning"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.low_price_two_leg_tuning \
+    --target-date "$TARGET_DATE" \
+    --print-summary
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_${TARGET_DATE}.md" \
+    "low_price_two_leg_tuning"
+  wait_for_file_artifact \
+    "$PROJECT_DIR/data/threshold_cycle/low_price_two_leg/candidates/low_price_two_leg_policy_candidate_${TARGET_DATE}.json" \
+    "low_price_two_leg_policy_candidate"
 fi
 if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "1" ]; then
   wait_for_postclose_resources "limit_down_watch_report"

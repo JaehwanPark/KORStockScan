@@ -1545,6 +1545,84 @@ def test_report_does_not_quarantine_receipt_gap_that_masks_repairable_contract_g
     )
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "wrong_date",
+        "wrong_scope",
+        "wrong_symbol",
+        "authority",
+        "sample_eligible",
+        "empty_receipts",
+        "bad_hash",
+        "missing_proof",
+        "other_gap",
+    ],
+)
+def test_report_quarantine_preserves_verified_unknown_target_time_exclusion(defect):
+    day = date(2026, 9, 8)
+    row = _entry_row(day, 1)
+    row.update(
+        classification="source_quality_blocked",
+        owner_lifecycle_contract_valid=False,
+        owner_policy_tuning_eligible=False,
+        source_gap_reasons=["micro_runtime_registration_receipt_missing_or_incomplete"],
+    )
+    proof = {
+        "schema": "verified_target_timestamp_loss_v1",
+        "source_date": day.isoformat(),
+        "scope_id": row["scope_id"],
+        "symbol": row["symbol"],
+        "timing_sample_eligible": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "receipts": [
+            {
+                "leg_id": "signal_close",
+                "order_no": "0021943",
+                "receipt_sha256": "a" * 64,
+            }
+        ],
+    }
+    row["owner_terminal_timestamp_exclusion"] = proof
+    if defect == "wrong_date":
+        proof["source_date"] = "2026-09-07"
+    if defect == "wrong_scope":
+        proof["scope_id"] = "other_owner"
+    if defect == "wrong_symbol":
+        proof["symbol"] = "000000"
+    if defect == "authority":
+        proof["allowed_runtime_apply"] = True
+    if defect == "sample_eligible":
+        proof["timing_sample_eligible"] = True
+    if defect == "empty_receipts":
+        proof["receipts"] = []
+    if defect == "bad_hash":
+        proof["receipts"][0]["receipt_sha256"] = "z" * 64
+    if defect == "missing_proof":
+        row.pop("owner_terminal_timestamp_exclusion")
+    if defect == "other_gap":
+        row["source_gap_reasons"].append("source_entry_event_id_missing")
+    result = _report_sample_floor_assessment(
+        target_date=day,
+        reports=[
+            (
+                day,
+                Path("unused"),
+                {"micro_entry_confirmation": {"entry_anchors": [row]}},
+            )
+        ],
+        target_source_ready=True,
+        cohorts=[],
+        winner=None,
+    )
+    assert result["immutable_source_date_quarantine_eligible"] is (defect is None)
+    assert result["invalid_owner_contract_anchor_count"] == 1
+    assert result["target_source_quality_eligible_anchor_count"] == 0
+    assert result["allowed_runtime_apply"] is False
+
+
 def test_report_receipt_quarantine_allows_normal_policy_ineligible_anchor():
     target_date = date(2026, 9, 4)
     blocked = _entry_row(target_date, 1)

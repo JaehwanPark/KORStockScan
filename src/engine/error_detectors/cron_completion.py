@@ -253,6 +253,7 @@ _START_MARKER = re.compile(r"\[(START|BEGIN)\]", re.IGNORECASE)
 _DATE_PATTERN = re.compile(
     r"(?:target_date|started_at|finished_at)=(\d{4}-\d{2}-\d{2})"
 )
+_TARGET_DATE_PATTERN = re.compile(r"\btarget_date=(\d{4}-\d{2}-\d{2})\b")
 
 
 @register_detector
@@ -537,6 +538,13 @@ class CronCompletionDetector(BaseDetector):
     def _filter_today_lines(text: str, today_str: str) -> str:
         today_lines: list[str] = []
         for line in text.splitlines():
+            target_match = _TARGET_DATE_PATTERN.search(line)
+            if target_match:
+                # Recovery can finish after midnight. Explicit source date
+                # owns the receipt, regardless of its wall-clock timestamp.
+                if target_match.group(1) == today_str:
+                    today_lines.append(line)
+                continue
             match = _DATE_PATTERN.search(line)
             if match and match.group(1) == today_str:
                 today_lines.append(line)

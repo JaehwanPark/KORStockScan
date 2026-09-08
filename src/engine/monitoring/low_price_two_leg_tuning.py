@@ -865,7 +865,22 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "target_filled_at": (
             target_filled_at.isoformat() if target_filled_at else None
         ),
+        "target_fill_timestamp_status": (
+            "unavailable"
+            if raw.get("target_filled_at") in (None, "")
+            else "observed" if target_filled_at is not None else "invalid"
+        ),
         "exit_fill_source": exit_fill_source or None,
+        # Preserve dated reconciliation evidence without inventing a fill time.
+        # Downstream timing diagnostics validate this projection independently.
+        "target_order_no": raw.get("target_order_no"),
+        "target_order_date": raw.get("target_order_date"),
+        "target_fill_reconciled_at": raw.get("target_fill_reconciled_at"),
+        "target_exit_reconciliation_receipt": (
+            dict(raw["target_exit_reconciliation_receipt"])
+            if isinstance(raw.get("target_exit_reconciliation_receipt"), dict)
+            else None
+        ),
         "realization_date": realization_date or None,
         "holding_duration_sec": (
             round(holding_duration_sec, 3) if holding_duration_sec is not None else None

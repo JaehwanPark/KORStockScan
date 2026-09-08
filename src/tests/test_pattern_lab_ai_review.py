@@ -4,6 +4,45 @@ from pathlib import Path
 from src.engine import pattern_lab_ai_review as mod
 
 
+def test_passed_currentness_ai_gap_is_evidence_pending_not_code_authority():
+    from src.engine import build_code_improvement_workorder as consumer
+
+    conclusion = {
+        "review_id": "currentness:claude_small_net_generation_contract",
+        "final_state": "source_quality_gap",
+        "final_decision": "surface_workorder",
+        "reason": "Collect new evidence and rerun the verifier.",
+    }
+    context = {
+        "currentness_checks": [
+            {
+                "check_id": "claude_small_net_generation_contract",
+                "status": "pass",
+            }
+        ]
+    }
+    order = mod._order_from_conclusion(conclusion, context)
+    assert order["intent"] == conclusion["reason"]
+    assert order["diagnostic_actionability"]["source_quality_resolved"] is False
+    assert order["diagnostic_actionability"]["provider_retry_authorized"] is False
+    classified = consumer._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert classified.decision == "defer_evidence"
+    serialized = consumer._serialize_classified_order(classified)
+    assert serialized["diagnostic_actionability"] == order["diagnostic_actionability"]
+    assert serialized["implementation_status"] == "terminal_deferred_evidence"
+
+    context["currentness_checks"][0]["status"] = "fail"
+    failing = mod._order_from_conclusion(conclusion, context)
+    assert "diagnostic_actionability" not in failing
+    assert failing["route"] == "implement_now"
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")

@@ -1597,6 +1597,139 @@ def test_active_episode_signal_bar_gets_micro_path_metrics(tmp_path):
     assert lifecycle["timed_owner_outcome_count"] == 1
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "missing_receipt",
+        "wrong_symbol",
+        "wrong_date",
+        "wrong_order",
+        "wrong_leg",
+        "quantity",
+        "boolean_quantity",
+        "price",
+        "before_buy",
+        "malformed_time",
+        "unverified_source",
+        "invalid_contract",
+    ],
+)
+def test_verified_target_receipt_unknown_time_is_exclusion_not_realized_sample(
+    tmp_path, defect
+):
+    from src.engine.monitoring.low_price_two_leg_tuning import _sanitize_leg
+
+    day = "2026-09-08"
+    raw = {
+        "leg_id": "signal_close",
+        "status": "COMPLETE",
+        "quantity": 10,
+        "entry_price": 33700,
+        "fill_price": 33700,
+        "target_price": 33900,
+        "position_qty": 0,
+        "buy_filled_qty": 10,
+        "target_filled_qty": 10,
+        "target_fill_price": 33900,
+        "buy_filled_at": day + "T09:38:02+09:00",
+        "target_filled_at": "",
+        "target_fill_reconciled_at": day + "T15:58:15+09:00",
+        "target_order_date": day,
+        "target_order_no": "0021943",
+        "exit_fill_source": "broker_verified_original_target_receipt",
+        "target_exit_reconciliation_receipt": {
+            "leg_id": "signal_close",
+            "symbol": "015760",
+            "source_api": "kt00007",
+            "order_date": day,
+            "order_no": "0021943",
+            "filled_qty": 10,
+            "fill_price": 33900,
+        },
+    }
+    leg = _sanitize_leg(raw, 0.23)
+    assert leg["target_filled_at"] is None
+    assert leg["holding_duration_sec"] is None
+    receipt = leg["target_exit_reconciliation_receipt"]
+    if defect == "missing_receipt":
+        leg.pop("target_exit_reconciliation_receipt")
+    if defect == "wrong_symbol":
+        receipt["symbol"] = "005930"
+    if defect == "wrong_date":
+        receipt["order_date"] = "2026-09-07"
+    if defect == "wrong_order":
+        receipt["order_no"] = "0021944"
+    if defect == "wrong_leg":
+        receipt["leg_id"] = "other_leg"
+    if defect == "quantity":
+        receipt["filled_qty"] = 9
+    if defect == "boolean_quantity":
+        receipt["filled_qty"] = True
+    if defect == "price":
+        receipt["fill_price"] = 33950
+    if defect == "before_buy":
+        leg["target_fill_reconciled_at"] = day + "T08:00:00+09:00"
+    if defect == "malformed_time":
+        leg["target_filled_at"] = "invalid"
+    if defect == "unverified_source":
+        leg["exit_fill_source"] = "unknown"
+    if defect == "invalid_contract":
+        leg["contract_valid"] = False
+    report_root = tmp_path / "report"
+    _write_json(
+        report_root
+        / "low_price_two_leg_tuning"
+        / f"low_price_two_leg_tuning_{day}.json",
+        {
+            "schema": "low_price_two_leg_tuning_report_v7",
+            "target_date": day,
+            "cost_pct": 0.23,
+            "daily": {
+                "profiles": {
+                    "kepco_morning": {
+                        "profile_id": "kepco_morning",
+                        "symbol": "015760",
+                        "session": "morning",
+                        "target_date": day,
+                        "attempted": True,
+                        "eligible_for_tuning": True,
+                        "source_quality": "pass",
+                        "signal_features": {
+                            "signal_bar": day + "T09:35:00+09:00",
+                            "signal_close": 33750,
+                            "signal_decision_at": day + "T09:36:04+09:00",
+                            "source_entry_event_id": "exact-kepco-signal",
+                        },
+                        "legs": [leg],
+                    }
+                }
+            },
+        },
+    )
+    profiles, anchors, _ = _episode_inventory(day, report_root)
+    decision = next(
+        a for a in anchors if a["anchor_role"] == "episode_signal_decision_leg"
+    )
+    assert decision["owner_lifecycle_contract_valid"] is False
+    assert decision["owner_policy_tuning_eligible"] is False
+    assert decision["owner_outcome"]["realized"] is False
+    assert decision["owner_outcome"]["holding_duration_ms"] is None
+    assert ("owner_terminal_timestamp_exclusion" in decision) is (defect is None)
+    labeled = attribution_module._entry_confirmation_label(
+        {
+            **decision,
+            "metrics": {},
+            "micro_context_status": "micro_canary_source_quality_missing_or_invalid",
+        }
+    )
+    assert labeled is not None
+    assert bool(labeled.get("owner_terminal_timestamp_exclusion")) is (defect is None)
+    assert labeled["owner_lifecycle_contract_valid"] is False
+    assert profiles["kepco_morning"]["owner_anchor_contract_status"] == "invalid"
+    assert not any(a["lifecycle_stage"] == "exit" for a in anchors)
+
+
 def test_episode_manual_stop_loss_keeps_negative_outcome_and_distinct_exit_role(
     tmp_path,
 ):

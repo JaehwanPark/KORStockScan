@@ -384,6 +384,107 @@ def test_submit_observation_id_is_call_local_nested_and_exception_safe():
     assert stock == {"id": 41181, "scanner_promotion_id": "parent"}
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "fresh_ai_wait_observation_only_probe_veto",
+        "entry_ai_result_stale_or_untrusted",
+    ],
+)
+def test_call_local_negative_ai_guard_needs_no_positive_ai_confirmation(reason):
+    receipt = {
+        "entry_submit_attempt_id": "call-A",
+        "scanner_promotion_id": "SCANPROM-current",
+        "entry_submit_attempt_parent_promotion_id": "SCANPROM-frozen",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+    }
+    exact = inspect(
+        events(
+            ("budget_pass", receipt),
+            ("latency_pass", receipt),
+            (
+                "pre_submit_entry_ai_authority_guard_block",
+                {**receipt, "reason": reason},
+            ),
+            (
+                "entry_submit_attempt_finished",
+                {**receipt, "submit_call_outcome": "returned_false"},
+            ),
+        )
+    )
+    assert exact["attempt_count"] == 1
+    assert exact["terminal_causal_attempt_count"] == 1
+    assert (
+        exact["axis_terminal_causal_attempt_counts"]["ENTRY_AI_AUTHORITY_REVALIDATION"]
+        == 1
+    )
+    assert exact["unclassified_terminal_attempt_count"] == 0
+    assert exact["stage_order_violation_event_count"] == 0
+    assert exact["submitted_attempt_count"] == 0
+    assert exact["attempt_ledger"][0]["stages"] == ["budget_pass", "latency_pass"]
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        "budget_unbound",
+        "latency_unbound",
+        "guard_unbound",
+        "parent_missing",
+        "schema_invalid",
+        "authority_invalid",
+        "parent_conflict",
+        "other_call",
+        "missing_budget",
+        "missing_latency",
+        "reversed_gates",
+    ],
+)
+def test_negative_ai_guard_cannot_borrow_or_fabricate_call_local_gates(broken):
+    receipt = {
+        "entry_submit_attempt_id": "call-A",
+        "scanner_promotion_id": "SCANPROM-P",
+        "entry_submit_attempt_parent_promotion_id": "SCANPROM-P",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+    }
+    rows = [
+        (stage, dict(receipt))
+        for stage in (
+            "budget_pass",
+            "latency_pass",
+            "pre_submit_entry_ai_authority_guard_block",
+        )
+    ]
+    if broken.endswith("_unbound"):
+        index = {"budget_unbound": 0, "latency_unbound": 1, "guard_unbound": 2}[broken]
+        rows[index][1].pop("entry_submit_attempt_id")
+    elif broken == "parent_missing":
+        rows[1][1].pop("entry_submit_attempt_parent_promotion_id")
+    elif broken == "schema_invalid":
+        rows[1][1]["entry_submit_attempt_schema"] = "unknown"
+    elif broken == "authority_invalid":
+        rows[1][1]["entry_submit_attempt_authority"] = "order"
+    elif broken == "parent_conflict":
+        rows[1][1]["entry_submit_attempt_parent_promotion_id"] = "SCANPROM-other"
+    elif broken == "other_call":
+        rows[1][1]["entry_submit_attempt_id"] = "call-B"
+    elif broken == "missing_budget":
+        rows.pop(0)
+    elif broken == "missing_latency":
+        rows.pop(1)
+    elif broken == "reversed_gates":
+        rows[0], rows[1] = rows[1], rows[0]
+    exact = inspect(events(*rows))
+    assert (
+        exact["axis_terminal_causal_attempt_counts"]["ENTRY_AI_AUTHORITY_REVALIDATION"]
+        == 0
+    )
+    assert exact["submitted_attempt_count"] == 0
+    assert all("ai_confirmed" not in row["stages"] for row in exact["attempt_ledger"])
+
+
 def test_true_submit_ids_partition_retries_even_with_shared_promotion():
     def f(key):
         return {

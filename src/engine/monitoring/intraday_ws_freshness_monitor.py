@@ -57,7 +57,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v13"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v15"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
@@ -232,6 +232,15 @@ def _boolish(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _receipt_bool(value: Any) -> bool | None:
+    """Accept JSON booleans and the pipeline logger's exact string encoding only."""
+    if type(value) is bool:
+        return value
+    if type(value) is str and value in {"True", "False"}:
+        return value == "True"
+    return None
 
 
 def _listish(value: Any) -> list[Any]:
@@ -1073,10 +1082,10 @@ def _update_scanner_funnel_state(
             "market_data_request_effect": _boolish(
                 row.get("scanner_prune_observer_market_data_request_effect")
             ),
-            "runtime_effect": _boolish(row.get("runtime_effect")),
-            "allowed_runtime_apply": _boolish(row.get("allowed_runtime_apply")),
-            "actual_order_submitted": _boolish(row.get("actual_order_submitted")),
-            "broker_order_forbidden": _boolish(row.get("broker_order_forbidden")),
+            "runtime_effect": _receipt_bool(row.get("runtime_effect")),
+            "allowed_runtime_apply": _receipt_bool(row.get("allowed_runtime_apply")),
+            "actual_order_submitted": _receipt_bool(row.get("actual_order_submitted")),
+            "broker_order_forbidden": _receipt_bool(row.get("broker_order_forbidden")),
         }
         return
     if stage == "scalping_scanner_iteration_timing":
@@ -1294,6 +1303,37 @@ def _update_scanner_funnel_state(
                     list(prune.get("prune_observer_budget_snapshots") or [])
                     + [budget_snapshot]
                 )[-64:]
+        if (
+            stage
+            in {
+                "scalping_scanner_candidate_pruned",
+                "scalping_scanner_prune_bbo_schedule",
+            }
+            and "scanner_prune_observer_scheduled_sample_count" in row
+        ):
+            count = _positive_integer_metadata(
+                row.get("scanner_prune_observer_scheduled_sample_count")
+            )
+            if (
+                observer_episode_id
+                and count is not None
+                and count <= len(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC)
+                and _receipt_bool(row.get("runtime_effect")) is False
+                and _receipt_bool(row.get("allowed_runtime_apply")) is False
+                and _receipt_bool(row.get("actual_order_submitted")) is False
+                and _receipt_bool(row.get("broker_order_forbidden")) is True
+            ):
+                _merge_immutable_scanner_metadata(
+                    prune,
+                    "prune_observer_scheduled_sample_count",
+                    count,
+                    authoritative=True,
+                )
+            else:
+                prune["metadata_conflicts"] = _append_unique(
+                    prune.get("metadata_conflicts"),
+                    "scheduled_sample_count_or_authority_invalid",
+                )
         if stage == "scalping_scanner_prune_bbo_observation":
             sample_index = _nonnegative_integer_metadata(
                 row.get("scanner_prune_observer_sample_index")
@@ -1306,10 +1346,10 @@ def _update_scanner_funnel_state(
                 and sample_index is not None
                 and sample_index < len(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC)
                 and sample_offset == SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC[sample_index]
-                and row.get("runtime_effect") is False
-                and row.get("allowed_runtime_apply") is False
-                and row.get("actual_order_submitted") is False
-                and row.get("broker_order_forbidden") is True
+                and _receipt_bool(row.get("runtime_effect")) is False
+                and _receipt_bool(row.get("allowed_runtime_apply")) is False
+                and _receipt_bool(row.get("actual_order_submitted")) is False
+                and _receipt_bool(row.get("broker_order_forbidden")) is True
                 and row.get("scanner_prune_observer_status")
                 in {"captured", "source_quality_gap"}
             ):
@@ -1318,8 +1358,17 @@ def _update_scanner_funnel_state(
                     | {sample_index}
                 )
                 if (
+                    _receipt_bool(row.get("scanner_prune_observer_terminal_sample"))
+                    is True
+                ):
+                    prune["prune_observer_terminal_indices"] = sorted(
+                        set(prune.get("prune_observer_terminal_indices") or [])
+                        | {sample_index}
+                    )
+                if (
                     sample_index == len(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC) - 1
-                    and row.get("scanner_prune_observer_terminal_sample") is True
+                    and _receipt_bool(row.get("scanner_prune_observer_terminal_sample"))
+                    is True
                 ):
                     prune["prune_observer_receipt_terminal_valid"] = True
             prune["prune_observer_sample_event_count"] = (
@@ -1647,6 +1696,20 @@ def _coalesce_prune_observation_episodes(
                         f"{field}:{existing}!={value}",
                     )
         generation_id = str(prune.get("scan_generation_id") or "")
+        _merge_immutable_scanner_metadata(
+            current,
+            "prune_observer_scheduled_sample_count",
+            prune.get("prune_observer_scheduled_sample_count"),
+            authoritative=True,
+        )
+        for conflict in prune.get("metadata_conflicts") or []:
+            current["metadata_conflicts"] = _append_unique(
+                current.get("metadata_conflicts"), conflict
+            )
+        current["prune_observer_terminal_indices"] = sorted(
+            set(current.get("prune_observer_terminal_indices") or [])
+            | set(prune.get("prune_observer_terminal_indices") or [])
+        )
         if generation_id and generation_id not in current["scan_generation_ids"]:
             current["scan_generation_ids"].append(generation_id)
         current["reasons"] = sorted(

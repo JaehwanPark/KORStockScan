@@ -884,6 +884,7 @@ def _exact_submit_drought_axis_summary(
         current: dict[str, Any] | None = None
         explicit_id = ""
         explicit_states: dict[str, dict[str, Any]] = {}
+        call_local_gate_progress: dict[str, list[str]] = {}
         cycle = 0
         seen_rows: set[tuple[Any, ...]] = set()
         for event in sorted(record_events, key=lambda e: e.emitted_at):
@@ -1036,6 +1037,21 @@ def _exact_submit_drought_axis_summary(
             current["last_stage"] = event.stage
             attempt_key = current["attempt_key"]
             stages = current["stages"]
+            valid_call_local_receipt = bool(
+                call_id
+                and frozen_parent
+                and not current.get("identity_gap_reason")
+                and current["producer_attempt_id"] == f"submit:{call_id}"
+                and current.get("parent_promotion_id") == frozen_parent
+                and event.fields.get("entry_submit_attempt_schema")
+                == "call_local_submit_attempt_v1"
+                and event.fields.get("entry_submit_attempt_authority")
+                == "observation_only"
+            )
+            # Do not borrow an unbound/legacy pass merely because it was joined
+            # into this cycle. Negative AI revalidation can legitimately have
+            # no ai_confirmed event, but requires its own ordered call receipts.
+            local_gates = call_local_gate_progress.setdefault(attempt_key, [])
             if event.stage in ENTRY_CALL_FINISH_STAGES:
                 current["call_outcome"] = event.fields.get(
                     "submit_call_outcome", "unknown"
@@ -1075,6 +1091,13 @@ def _exact_submit_drought_axis_summary(
                     _event_bindings.append((event, attempt_key))
                 if event.stage not in stages:
                     stages.append(event.stage)
+                if valid_call_local_receipt:
+                    if event.stage == "budget_pass" and not local_gates:
+                        local_gates.append("budget_pass")
+                    elif event.stage == "latency_pass" and local_gates == [
+                        "budget_pass"
+                    ]:
+                        local_gates.append("latency_pass")
                 terminal = current["terminal_axis"]
                 if terminal and event.stage in recovery_stages[terminal]:
                     recovered[terminal].add(attempt_key)
@@ -1094,6 +1117,10 @@ def _exact_submit_drought_axis_summary(
                 and (
                     axis != "ENTRY_AI_AUTHORITY_REVALIDATION"
                     or "ai_confirmed" in stages
+                    or (
+                        valid_call_local_receipt
+                        and local_gates == ["budget_pass", "latency_pass"]
+                    )
                 )
                 and (axis != "PRICE_REVALIDATION" or "budget_pass" in stages)
                 and (

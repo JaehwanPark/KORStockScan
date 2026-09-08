@@ -25,9 +25,11 @@ BOUNDED_REJECTIONS = frozenset(
     {
         "active_episode_capacity_rejected",
         "daily_request_budget_exhausted",
+        "daily_request_budget_rejected",
         "pending_sample_capacity_rejected",
     }
 )
+SOURCE_QUALITY_REJECTIONS = frozenset({"anchor_schedule_latency_exceeded"})
 
 
 def observer_receipt_accounting(episodes: list[dict], sample_count: int) -> dict:
@@ -45,16 +47,37 @@ def observer_receipt_accounting(episodes: list[dict], sample_count: int) -> dict
             }
         )
         indices = set(episode.get("prune_observer_receipt_indices") or [])
+        declared_count = episode.get(
+            "prune_observer_scheduled_sample_count", sample_count
+        )
+        count_valid = type(declared_count) is int and 0 < declared_count <= sample_count
+        expected_indices = set(range(declared_count if count_valid else sample_count))
+        terminal_valid = (
+            count_valid
+            and declared_count - 1
+            in set(episode.get("prune_observer_terminal_indices") or [])
+        ) or (
+            declared_count == sample_count
+            and episode.get("prune_observer_receipt_terminal_valid") is True
+        )
         complete = (
             bool(episode.get("prune_observer_episode_id"))
             and not episode.get("metadata_conflicts")
-            and indices == set(range(sample_count))
-            and episode.get("prune_observer_receipt_terminal_valid") is True
+            and count_valid
+            and indices == expected_indices
+            and terminal_valid
         )
         if scheduled:
             state = "scheduled_complete" if complete else "scheduled_receipt_gap"
         elif states & BOUNDED_REJECTIONS and not (states - BOUNDED_REJECTIONS):
             state = "bounded_not_admitted"
+        elif states & SOURCE_QUALITY_REJECTIONS and not (
+            states - BOUNDED_REJECTIONS - SOURCE_QUALITY_REJECTIONS
+        ):
+            # The collector explicitly rejected an expired original anchor.
+            # This is a recorded source-quality loss, never absent telemetry,
+            # a fresh re-anchored sample, or executable BBO evidence.
+            state = "source_quality_not_admitted"
         else:
             state = "admission_receipt_gap"
         counts[state] += 1
@@ -67,9 +90,10 @@ def observer_receipt_accounting(episodes: list[dict], sample_count: int) -> dict
                     "venue": episode.get("venue"),
                     "market_session_bucket": episode.get("market_session_bucket"),
                     "state": state,
+                    "declared_sample_count": declared_count,
                     "observed_sample_indices": sorted(indices),
                     "missing_sample_indices": (
-                        sorted(set(range(sample_count)) - indices) if scheduled else []
+                        sorted(expected_indices - indices) if scheduled else []
                     ),
                 }
             )

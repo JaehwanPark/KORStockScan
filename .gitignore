@@ -34,6 +34,9 @@ dist/
 # PostgreSQL을 쓰지만, 이전 로컬 DB 잔재나 백업본 방지
 *.db
 *.json
+# Exact reviewed approval assets required by the dated profile/preflight contract.
+!docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json
+!docs/audit-reports/2026-09-09-widget-episode-approved-implementation-ledger.json
 !data/config/micro_reversion_economic_policy.json
 !data/config/low_price_two_leg_expanded_profile_evidence_2026-08-12.json
 !data/config/low_price_two_leg_expanded_profile_evidence_2026-08-18.json

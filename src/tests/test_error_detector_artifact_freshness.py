@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import os
 import time
 from datetime import datetime, timedelta
@@ -539,6 +541,7 @@ class TestArtifactFreshnessDetector:
         today = now.strftime("%Y-%m-%d")
         controller_log = tmp_path / "postclose_done_controller_cron.log"
         controller_log.write_text(
+            f"[DONE] postclose_done_controller target_date=2000-01-01 finished_at={today}T00:27:44+0900\n"
             f"[START] postclose_done_controller target_date={today} started_at={today}T20:40:01+0900\n",
             encoding="utf-8",
         )
@@ -573,6 +576,38 @@ class TestArtifactFreshnessDetector:
                 result.details.get("postclose_done_controller_report_upstream_status")
                 == "in_progress"
             )
+
+    @pytest.mark.parametrize("previous", ["DONE", "FAIL"])
+    def test_upstream_latest_run_survives_rotation_and_verbose_output(
+        self, tmp_path, previous
+    ):
+        day = "2026-09-08"
+        log = tmp_path / "controller.log"
+        log.with_suffix(".log.1").write_text(
+            f"[{previous}] controller target_date={day}\n"
+            f"[START] controller target_date={day}\n",
+            encoding="utf-8",
+        )
+        log.write_text(
+            '{"quoted": "[DONE] controller target_date=2026-09-08"}\n'
+            + "payload detail\n" * 300,
+            encoding="utf-8",
+        )
+        config = {"log": str(log)}
+        assert ArtifactFreshnessDetector._is_upstream_cron_in_progress(config, day)
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write(f"[FAIL] controller target_date={day}\n")
+        assert not ArtifactFreshnessDetector._is_upstream_cron_in_progress(config, day)
+
+    def test_other_date_start_does_not_suppress_missing_artifact(self, tmp_path):
+        log = tmp_path / "controller.log"
+        log.write_text(
+            "[START] controller target_date=2026-09-07 started_at=2026-09-08T00:01:00\n",
+            encoding="utf-8",
+        )
+        assert not ArtifactFreshnessDetector._is_upstream_cron_in_progress(
+            {"log": str(log)}, "2026-09-08"
+        )
 
     def test_missing_critical_artifact_warns_after_window_when_upstream_cron_still_in_progress(
         self, tmp_path

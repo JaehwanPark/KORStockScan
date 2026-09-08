@@ -770,7 +770,17 @@ def test_postclose_wrapper_runs_daily_low_price_candidate_recommendation_and_adm
     recommendation_idx = script.index(
         "-m src.engine.monitoring.low_price_two_leg_expanded_candidate_research"
     )
-    assert tuning_idx < recommendation_idx
+    # Research consumes actual state/catalog, not the tuning report. Exact-hash
+    # policy candidates must bind the final audit, which replaces preflight.
+    final_audit_idx = script.rindex("-m src.engine.observation_source_quality_audit")
+    assert recommendation_idx < final_audit_idx < tuning_idx
+    for module in ("samsung_machine_entry_tuning", "low_price_two_leg_tuning"):
+        command = f"-m src.engine.monitoring.{module}"
+        assert script.count(command) == 1
+        assert final_audit_idx < script.index(command)
+        assert script.index(command) < script.index(
+            'wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"'
+        )
     assert '--target-date "$TARGET_DATE"' in script[recommendation_idx:]
     assert "--write" in script[recommendation_idx:]
     assert "--notify" in script[recommendation_idx:]

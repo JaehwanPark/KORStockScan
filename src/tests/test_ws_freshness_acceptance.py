@@ -580,7 +580,11 @@ def test_below_coverage_subset_is_diagnostic_not_comparison_ready(tmp_path):
     assert group["comparison_block_reasons"] == ["bbo_coverage_below_floor"]
 
 
-def test_natural_telemetry_indices_survive_coalescing_and_mirror_dedup():
+@pytest.mark.parametrize("serialized", [False, True])
+@pytest.mark.parametrize("scheduled_count", [6, 9, 10])
+def test_natural_telemetry_indices_survive_coalescing_and_mirror_dedup(
+    serialized, scheduled_count
+):
     state = monitor._scanner_funnel_state_from_mapping({})
     common = {
         "stock_code": "005930",
@@ -606,10 +610,15 @@ def test_natural_telemetry_indices_survive_coalescing_and_mirror_dedup():
                 **common,
                 "stage": stage,
                 "scanner_prune_observer_schedule_status": "new_episode_scheduled",
+                "scanner_prune_observer_scheduled_sample_count": (
+                    str(scheduled_count) if serialized else scheduled_count
+                ),
             },
             {},
         )
-    for index, offset in enumerate(monitor.SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC):
+    for index, offset in enumerate(
+        monitor.SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC[:scheduled_count]
+    ):
         row = {
             **common,
             "stage": "scalping_scanner_prune_bbo_observation",
@@ -617,8 +626,13 @@ def test_natural_telemetry_indices_survive_coalescing_and_mirror_dedup():
             "scanner_prune_observer_scheduled_offset_sec": offset,
             "scanner_prune_observer_status": "source_quality_gap",
             "scanner_prune_observer_gap_reason": "ka10004_shared_read_budget_deferred",
-            "scanner_prune_observer_terminal_sample": index == 9,
+            "scanner_prune_observer_terminal_sample": index == scheduled_count - 1,
         }
+        if serialized:
+            row = {
+                key: str(value) if type(value) in (bool, int) else value
+                for key, value in row.items()
+            }
         monitor._update_scanner_funnel_state(state, row, {})
         monitor._update_scanner_funnel_state(state, row, {})
     restored = monitor._scanner_funnel_state_from_mapping(
@@ -630,10 +644,123 @@ def test_natural_telemetry_indices_survive_coalescing_and_mirror_dedup():
     accounted = mod.observer_receipt_accounting(episodes, 10)
     assert accounted["state_counts"]["scheduled_complete"] == 1
     assert accounted["unaccounted_episode_count"] == 0
-    assert episodes[0]["prune_observer_sample_event_count"] == 10
+    assert episodes[0]["prune_observer_sample_event_count"] == scheduled_count
     assert not episodes[0][
         "bbo_observations"
     ]  # gap receipts never become price evidence
+
+
+@pytest.mark.parametrize("count", [None, 0, 11, True, "6", 6.0])
+def test_bad_declared_horizon_never_closes_receipt(count):
+    row = {
+        "prune_observer_episode_id": "episode",
+        "prune_observer_schedule_statuses": ["new_episode_scheduled"],
+        "prune_observer_scheduled_sample_count": count,
+        "prune_observer_receipt_indices": list(range(6)),
+        "prune_observer_terminal_indices": [5],
+    }
+    assert mod.observer_receipt_accounting([row], 10)["unaccounted_episode_count"] == 1
+
+
+def test_explicit_null_schedule_is_invalid_not_legacy_missing_metadata():
+    state = monitor._scanner_funnel_state_from_mapping({})
+    monitor._update_scanner_funnel_state(
+        state,
+        {
+            "stage": "scalping_scanner_prune_bbo_schedule",
+            "stock_code": "005930",
+            "scanner_scan_generation_id": "scan-null",
+            "scanner_prune_reason": "general_slot_limit",
+            "scanner_prune_observer_episode_id": "episode-null",
+            "scanner_prune_observer_schedule_status": "new_episode_scheduled",
+            "scanner_prune_observer_scheduled_sample_count": None,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        },
+        {},
+    )
+    episodes = monitor._coalesce_prune_observation_episodes(state["prunes"].values())
+    assert len(episodes) == 1
+    assert (
+        "scheduled_sample_count_or_authority_invalid"
+        in episodes[0]["metadata_conflicts"]
+    )
+    episodes[0].update(
+        prune_observer_receipt_indices=list(range(10)),
+        prune_observer_receipt_terminal_valid=True,
+    )
+    assert (
+        mod.observer_receipt_accounting(episodes, 10)["unaccounted_episode_count"] == 1
+    )
+
+
+def test_missing_terminal_and_conflicting_mirror_horizons_remain_gaps():
+    row = {
+        "prune_observer_episode_id": "episode",
+        "prune_observer_schedule_statuses": ["new_episode_scheduled"],
+        "prune_observer_scheduled_sample_count": 6,
+        "prune_observer_receipt_indices": list(range(6)),
+        "prune_observer_terminal_indices": [],
+    }
+    assert mod.observer_receipt_accounting([row], 10)["unaccounted_episode_count"] == 1
+    other = {
+        **row,
+        "prune_observer_scheduled_sample_count": 9,
+        "prune_observer_terminal_indices": [8],
+        "prune_observer_receipt_indices": list(range(9)),
+    }
+    episodes = monitor._coalesce_prune_observation_episodes([row, other])
+    assert episodes[0]["metadata_conflicts"]
+    assert (
+        mod.observer_receipt_accounting(episodes, 10)["unaccounted_episode_count"] == 1
+    )
+
+
+@pytest.mark.parametrize("value", [None, "", "unknown", "false", "0", 0, 1, [], {}])
+def test_receipt_bool_never_grants_false_authority_to_unknown(value):
+    assert monitor._receipt_bool(value) is None
+
+
+@pytest.mark.parametrize(
+    "value,expected", [(False, False), (True, True), ("False", False), ("True", True)]
+)
+def test_receipt_bool_matches_pipeline_logger_serialization(value, expected):
+    assert monitor._receipt_bool(value) is expected
+
+
+def test_collector_native_defer_reasons_are_receipts_not_captured_samples():
+    episodes = [
+        {"prune_observer_schedule_statuses": ["daily_request_budget_rejected"]},
+        {
+            "prune_observer_schedule_statuses": [
+                "anchor_schedule_latency_exceeded",
+                "active_episode_capacity_rejected",
+            ]
+        },
+        {
+            "prune_observer_schedule_statuses": [
+                "anchor_schedule_latency_exceeded",
+                "unknown",
+            ]
+        },
+        {
+            "prune_observer_schedule_statuses": [
+                "new_episode_scheduled",
+                "anchor_schedule_latency_exceeded",
+            ]
+        },
+    ]
+    result = mod.observer_receipt_accounting(episodes, 10)
+    assert result["state_counts"] == {
+        "bounded_not_admitted": 1,
+        "source_quality_not_admitted": 1,
+        "admission_receipt_gap": 1,
+        "scheduled_receipt_gap": 1,
+    }
+    assert result["unaccounted_episode_count"] == 2
+    assert "scheduled_complete" not in result["state_counts"]
 
 
 @pytest.mark.parametrize(

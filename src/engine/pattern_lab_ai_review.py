@@ -2970,6 +2970,36 @@ def _order_from_conclusion(
         order["implementation_status"] = implementation_status
     if implementation_provenance:
         order["implementation_provenance"] = implementation_provenance
+    # A currentness PASS does not substantiate a new source defect asserted by
+    # the model. Preserve the claim and native ID, but require an exact failed
+    # source contract before turning generic collection advice into code work.
+    if (
+        final_state == "source_quality_gap"
+        and review_id.startswith("currentness:")
+        and not implementation_status
+    ):
+        claimed_check = review_id.split(":", 1)[1]
+        matches = [
+            check
+            for check in context.get("currentness_checks") or []
+            if isinstance(check, dict) and check.get("check_id") == claimed_check
+        ]
+        if len(matches) == 1 and matches[0].get("status") == "pass":
+            order["diagnostic_actionability"] = {
+                "schema": "pattern_review_actionability_v1",
+                "status": "blocked_missing_evidence",
+                "check_id": claimed_check,
+                "check_status": "pass",
+                "reason": "ai_gap_claim_not_substantiated_by_named_currentness_check",
+                "required_evidence": "exact_failing_source_field_row_or_contract_and_owning_consumer",
+                "original_claim_preserved": True,
+                "source_quality_resolved": False,
+                "provider_retry_authorized": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+            order["decision"] = "defer_evidence"
+            order["route"] = "review_ai_output"
     check_id = conclusion.get("deterministic_check_id")
     for check in context.get("currentness_checks") or []:
         if (

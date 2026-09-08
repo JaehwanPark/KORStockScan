@@ -1,5 +1,13 @@
 # Report-Based Automation Traceability
 
+### Verified target timestamp loss (2026-09-08)
+
+`low_price_two_leg_tuning._sanitize_leg` preserves the existing dated target reconciliation receipt and distinguishes unavailable from malformed timestamps. `machine_microstructure_attribution` independently validates exact symbol/date/order/leg/quantity/price before publishing `verified_target_timestamp_loss_v1`; invalid lifecycle/timing samples remain excluded and missing fill time is never filled from reconciliation time. `machine_entry_timing_tuning` accepts this scope-bound exclusion only for immutable source-date quarantine, retaining all other join/identity blockers. The downstream verifier/controller may close operational quarantine, never economic acceptance or custody mutation. Rebuild only these affected producers, approval and canonical summary consumers after review; do not rerun market research or Provider to reconstruct missing historical time.
+
+## Machine candidate final-audit binding (2026-09-08 postclose repair)
+
+Samsung/low-price tuning과 policy candidate의 exact source-quality file hash는 최종 `observation_source_quality_audit` 이후에 생성한다. 두 producer는 main wrapper에서 각각 한 번만 실행하며 초기 preflight 뒤 실행하던 순서를 대체한다. Expanded candidate research는 actual state/catalog를 읽는 독립 원천이므로 기존 앞 단계에 유지한다. 최초 preflight→pyramid/avg-down→Entry split/AI/paired→Daily 순서는 변경하지 않는다. 최종 audit→Samsung/low-price tuning/candidate→후행 EV/workorder/PREOPEN 후보/strict verifier의 같은 generation을 확인한다. controller tail recovery는 verifier가 입증한 두 source-quality hash mismatch에 한해 해당 tuning producer부터 복구하며, hash 검사를 완화하거나 market research/Provider/main wrapper를 재실행하지 않는다. 후보 재생성은 수동 live env·매매 process·주문 변경 권한이 아니다. 9/8 최초 immutable wrapper의 실패는 과거 receipt로 보존한다.
+
 ## Final summary generation handoff (2026-09-08; source date 2026-09-07)
 
 `EV/workorder/runtime summary → tuning performance control tower → next checklist → final verifier --require-summary-handoff` binds the final source byte hashes. The tower owns `source_generation_contract`; the builder owns the `POSTCLOSE_SUMMARY_SOURCES` comment inside its auto block and preserves manual tasks. `automation/postclose_summary_handoff.py` independently resolves canonical paths, detects changed/late/missing inputs and refuses a source change during rendering. Verifier/controller hashes are excluded to avoid a cyclic dependency. Summary-only recovery refreshes only the stale summaries, never a provider, runtime env or trading process.

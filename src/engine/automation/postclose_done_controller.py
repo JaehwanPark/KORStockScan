@@ -907,6 +907,36 @@ def _tail_stage_repair_actions(
     }
     stage_index = _TAIL_REPAIR_STAGE_ORDER.index(failed_stage)
     actions: list[RecoveryAction] = []
+    # The final source audit replaces the preflight generation. Repair only
+    # candidates whose verifier proves an exact-source hash mismatch; do not
+    # bypass the hash gate or rerun market/API research and live processes.
+    for section, issue, module in (
+        (
+            "samsung_machine_entry_postclose",
+            "tuning_source_quality_hash_mismatch",
+            "samsung_machine_entry_tuning",
+        ),
+        (
+            "low_price_two_leg_postclose",
+            "policy_candidate_candidate_source_quality_hash_mismatch",
+            "low_price_two_leg_tuning",
+        ),
+    ):
+        if issue in ((verification.get(section) or {}).get("issues") or []):
+            actions.append(
+                RecoveryAction(
+                    f"refresh_{module}",
+                    [
+                        _python_bin(),
+                        "-m",
+                        f"src.engine.monitoring.{module}",
+                        "--target-date",
+                        target_date,
+                        "--print-summary",
+                    ],
+                    "rebuild source-only candidate against final source-quality audit",
+                )
+            )
     for stage in _TAIL_REPAIR_STAGE_ORDER[stage_index:]:
         action = stage_commands.get(stage)
         if action is not None:

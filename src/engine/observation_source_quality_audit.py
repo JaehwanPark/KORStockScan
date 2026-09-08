@@ -2000,8 +2000,12 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     ),
     "strategy_owner_replay_seed_observed": StageContract(
         required_fields=(
-            "owner_component_seed", "source_event_id", "decision_authority",
-            "runtime_effect", "allowed_runtime_apply", "actual_order_submitted",
+            "owner_component_seed",
+            "source_event_id",
+            "decision_authority",
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
             "broker_order_forbidden",
         )
     ),

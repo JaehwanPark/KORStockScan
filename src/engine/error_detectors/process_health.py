@@ -53,6 +53,8 @@ def write_heartbeat(
     alive: bool = True,
     *,
     terminal_reason: str | None = None,
+    unresolved_scalping_count: int | None = None,
+    unresolved_scalping_codes: str | None = None,
 ):
     HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = HEARTBEAT_PATH.with_suffix(HEARTBEAT_PATH.suffix + ".tmp")
@@ -77,6 +79,16 @@ def write_heartbeat(
                     # The sniper's finally block repeats alive=False. Preserve an
                     # explicit normal-stop reason written by the owning branch.
                     heartbeat["terminal_reason"] = previous["terminal_reason"]
+                for key, value in (
+                    ("unresolved_scalping_count", unresolved_scalping_count),
+                    ("unresolved_scalping_codes", unresolved_scalping_codes),
+                ):
+                    if value is not None:
+                        heartbeat[key] = value
+                    elif terminal_reason is None and key in previous:
+                        # Preserve terminal custody diagnostics on the final
+                        # alive=False write; a new explicit reason replaces them.
+                        heartbeat[key] = previous[key]
             threads[component] = heartbeat
         tmp_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp_path, HEARTBEAT_PATH)
@@ -676,6 +688,13 @@ def _is_expected_thread_terminal(
         return False
     if str(thread_state.get("terminal_reason") or "") != "market_close":
         return False
+    if "unresolved_scalping_count" in thread_state:
+        count = thread_state["unresolved_scalping_count"]
+        if type(count) is not int or count != 0:
+            return False
+    if "unresolved_scalping_codes" in thread_state:
+        if thread_state["unresolved_scalping_codes"] != "":
+            return False
 
     terminal_ts = _parse_iso(str(thread_state.get("last_beat") or ""))
     if terminal_ts is None:

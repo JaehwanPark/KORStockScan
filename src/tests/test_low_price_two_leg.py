@@ -4313,7 +4313,18 @@ def test_candidate_carries_actual_applied_policy_not_latest_unconsumed_proposal(
     result, _ = build_applied_policy(
         target_date=date(2026, 9, 9), candidate_dir=candidate_dir
     )
-    assert result["policy_hash"] == applied["policy_hash"]
+    # Carry the actual source policy except the two explicitly approved 9/9 revisions.
+    approved = {"sk_eternix_late_morning", "tym_morning"}
+    for key, item in result["profiles"].items():
+        expected = (
+            BASELINE_POLICIES[key]
+            if key in approved
+            else applied["profiles"][key]["policy"]
+        )
+        assert item["policy"] == expected
+    assert result["policy_hash"] == policy_hash(
+        {key: item["policy"] for key, item in result["profiles"].items()}
+    )
     assert result["policy_mutations"] == []
     altered = dict(applied, selection_status="different_source_snapshot")
     atomic_write_json(applied_file, altered)
@@ -4403,7 +4414,11 @@ def test_report_cli_to_preopen_is_automatic_custody_only_without_broker_calls(
     applied, status = build_applied_policy(
         target_date=date(2026, 9, 9), candidate_dir=tmp_path / "candidates"
     )
-    assert status == "candidate_applied"
+    assert status == "candidate_validated_profile_revision_applied"
+    assert applied["profile_revision_transition"]["approved_profile_ids"] == [
+        "sk_eternix_late_morning",
+        "tym_morning",
+    ]
     assert applied["policy_mutations"] == []
     assert len(applied["runtime_profile_exclusions"]) == 3
 

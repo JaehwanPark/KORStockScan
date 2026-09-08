@@ -1,7 +1,7 @@
 # 데이터 품질 보고서
 
-생성일: 2026-09-07 21:27:58
-분석 기간: 2026-06-05 ~ 2026-09-07
+생성일: 2026-09-08 21:40:39
+분석 기간: 2026-06-05 ~ 2026-09-08
 
 ---
 
@@ -20,17 +20,18 @@
 
 **코호트별:**
 
-- `full_fill`: 306건
-- `split-entry`: 35건
+- `full_fill`: 175건
+- `partial_fill`: 146건
+- `unknown_fill`: 20건
 
 
 ---
 
 ## 2. funnel_fact
 
-- 날짜 수: 51
+- 날짜 수: 52
 - 서버: ['local']
-- 기간 합계 latency_block_events: 11319
+- 기간 합계 latency_block_events: 11686
 - 기간 합계 submitted_events: 468
 
 ---
@@ -39,7 +40,7 @@
 
 | 플래그 | 건수 |
 |---|---|
-| 총 record 수 | 3733 |
+| 총 record 수 | 3742 |
 | multi_rebase (split-entry) | 64 |
 | partial_then_expand | 59 |
 | rebase_integrity 이상 | 16 |
@@ -55,4 +56,4 @@
 
 ## 4. 서버별 파싱 메모
 
-- 원격 서버 스냅샷은 본 분석에서 local(main) 기준으로 집계됨.
+- local 스냅샷만 사용. 표시용 손익률은 비용/체결 품질 승인 근거가 아님; 검증된 lifecycle 경제성은 별도 집계.

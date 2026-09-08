@@ -18,6 +18,18 @@ def _force_trading_day(monkeypatch):
 
 
 class TestCronCompletionDetector:
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "[DONE] controller target_date=2026-09-07 finished_at=2026-09-08T00:27:44",
+            "[FAIL] controller finished_at=2026-09-08T00:27:44 target_date=2026-09-07",
+            "[2026-09-08 00:27:44] [START] controller target_date=2026-09-07",
+        ],
+    )
+    def test_explicit_source_date_overrides_midnight_completion_timestamp(self, line):
+        assert CronCompletionDetector._filter_today_lines(line, "2026-09-08") == ""
+        assert CronCompletionDetector._filter_today_lines(line, "2026-09-07") == line
+
     def test_pass_when_log_not_yet_due(self):
         detector = CronCompletionDetector()
         with _mock_time(5, 0):

@@ -23,6 +23,7 @@ from src.engine.error_detectors.schedule_contract import (
     evaluate_schedule_contract,
     load_installed_crontab,
 )
+from src.engine.error_detectors.cron_completion import CronCompletionDetector
 
 
 def _today_kst_str(now_kst: datetime | None = None) -> str:
@@ -811,34 +812,15 @@ class ArtifactFreshnessDetector(BaseDetector):
         log_path = PROJECT_ROOT / log_value
         if not log_path.exists():
             return False
-        try:
-            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[
-                -200:
-            ]
-        except OSError:
-            return False
-        today_lines = [
-            line for line in lines if today in line or f"target_date={today}" in line
-        ]
-        if not today_lines:
-            return False
-        has_start = any("[START]" in line or "[BEGIN]" in line for line in today_lines)
-        has_done = any(
-            "[DONE]" in line
-            or "[OK]" in line
-            or "[SUCCESS]" in line
-            or "[COMPLETED]" in line
-            for line in today_lines
+        # Reuse the cron owner's exact-date, latest-run and rotated-log
+        # contract. Verbose JSON must not evict START; prior-day recovery DONE
+        # or an older failed attempt must not terminate the current run.
+        markers = CronCompletionDetector._read_once_markers(log_path, today)
+        has_start = "[START]" in markers.upper() or "[BEGIN]" in markers.upper()
+        return (
+            has_start
+            and CronCompletionDetector._last_terminal_marker(markers) == "none"
         )
-        has_fail = any(
-            "[FAIL]" in line or "[ERROR]" in line or "[CRITICAL]" in line
-            for line in today_lines
-        )
-        if not has_start or has_done:
-            return False
-        if has_fail:
-            return False
-        return True
 
     @staticmethod
     def _has_matching_live_process(config: dict[str, Any]) -> bool:

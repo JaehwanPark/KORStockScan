@@ -1,6 +1,6 @@
 # 2026-09-08 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-09-08T16:25:01+09:00
+- generated_at: 2026-09-08T20:30:02+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,12 +8,12 @@
 
 ## Summary
 
-- pyramid_feedback_row_count: 1
+- pyramid_feedback_row_count: 2
 - closed_pyramid_row_count: 0
 - pyramid_would_have_helped_count: 0
 - pyramid_correctly_blocked_count: 0
 - pyramid_overheat_or_reversal_risk_count: 0
-- pyramid_open_unresolved_count: 1
+- pyramid_open_unresolved_count: 2
 - one_share_event_count: 0
 - one_share_closed_count: 0
 - one_share_pyramid_opportunity_count: 0
@@ -54,10 +54,12 @@
 ## Blocker Metrics
 
 - blocker=profit_not_enough sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=pyramid_hard_blocked:buy_pressure_severe_below_min,large_sell_detected sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 
 ## Rows
 
 - record_id= code=058470 name=리노공업 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.19 final=None ai=50.0 tick=1.0 micro_vwap=17.14
+- record_id= code=052690 name=한전기술 label=pyramid_open_unresolved blocker=pyramid_hard_blocked:buy_pressure_severe_below_min,large_sell_detected profit=1.23 final=None ai=74.0 tick=0.0 micro_vwap=0.0
 
 ## Real Scale-In Performance Rows
 

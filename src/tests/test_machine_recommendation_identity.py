@@ -3,6 +3,9 @@ from copy import deepcopy
 import pytest
 
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
+from src.engine.monitoring.machine_recommendation_identity import (
+    recommendation_inventory,
+)
 from src.engine.monitoring import (
     low_price_two_leg_expanded_candidate_research as episode,
     widget_collector_expansion_recommendation as expansion,
@@ -35,6 +38,62 @@ def test_identity_stable_across_dates_but_proposal_separately_bound():
     assert first["decision"] == "observe"
     assert first["recommendation_identity_grants_authority"] is False
     assert "allowed_runtime_apply" not in first
+
+
+def test_inventory_includes_primary_recommendations_and_observation_rows_without_mirror_inflation():
+    primary = []
+    observations = {}
+    for index in range(4):
+        row = {"decision": "implement_after_approval", "runtime_effect": False}
+        bind(row, scope=f"profile/{index}")
+        primary.append(row)
+    for index in range(5):
+        row = {"decision": "keep_collecting", "runtime_effect": False}
+        bind(row, scope=f"observe/{index}")
+        observations[str(index)] = row
+    report = {
+        "recommendations": primary,
+        "logic_lane": deepcopy(primary[:2]),
+        "operator_observation_candidate_inventory": observations,
+    }
+    before = deepcopy(report)
+    rows = recommendation_inventory(report)
+    assert len(rows) == 9
+    assert sum(len(r["source_locations"]) for r in rows) == 11
+    assert report == before
+    report["logic_lane"][0]["runtime_effect"] = True
+    with pytest.raises(ValueError, match="mirror_conflict"):
+        recommendation_inventory(report)
+
+
+def test_inventory_rejects_missing_or_forged_native_contract():
+    with pytest.raises(ValueError, match="primary_id_missing"):
+        recommendation_inventory(
+            {"recommendations": [{"profile_id": "missing-native"}]}
+        )
+    for row in ({"recommendation_id": None}, {"recommendation_id": "made_up"}):
+        with pytest.raises(ValueError, match="contract_invalid"):
+            recommendation_inventory({"recommendations": [row]})
+    row = {}
+    bind(row)
+    row["recommendation_scope"]["scope"] = "different"
+    with pytest.raises(ValueError, match="identity_invalid"):
+        recommendation_inventory({"recommendations": [row]})
+
+
+def test_sparse_first_mirror_cannot_hide_conflicting_later_authority():
+    row = {}
+    bind(row)
+    with pytest.raises(ValueError, match="mirror_conflict"):
+        recommendation_inventory(
+            {
+                "mirrors": [
+                    row,
+                    dict(row, runtime_effect=False),
+                    dict(row, runtime_effect=True),
+                ]
+            }
+        )
 
 
 @pytest.mark.parametrize(

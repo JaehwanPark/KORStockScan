@@ -1927,6 +1927,44 @@ def _cohort_sample_floor_assessment(
     }
 
 
+def _immutable_owner_timestamp_exclusion(row: dict[str, Any], target_date: date) -> bool:
+    exclusion = row.get("owner_terminal_timestamp_exclusion")
+    if not isinstance(exclusion, dict):
+        return False
+    receipts = exclusion.get("receipts")
+    return bool(
+        row.get("owner") == "episode"
+        and row.get("owner_lifecycle_contract_valid") is False
+        and row.get("owner_policy_tuning_eligible") is False
+        and exclusion.get("schema") == "verified_target_timestamp_loss_v1"
+        and exclusion.get("source_date") == target_date.isoformat()
+        and bool(row.get("scope_id"))
+        and exclusion.get("scope_id") == row.get("scope_id")
+        and bool(row.get("symbol"))
+        and exclusion.get("symbol") == row.get("symbol")
+        and exclusion.get("timing_sample_eligible") is False
+        and exclusion.get("runtime_effect") is False
+        and exclusion.get("allowed_runtime_apply") is False
+        and isinstance(receipts, list)
+        and 1 <= len(receipts) <= 2
+        and all(
+            isinstance(receipt, dict)
+            and isinstance(receipt.get("leg_id"), str)
+            and bool(receipt["leg_id"])
+            and isinstance(receipt.get("order_no"), str)
+            and receipt["order_no"].isascii()
+            and receipt["order_no"].isdigit()
+            and int(receipt["order_no"]) > 0
+            and isinstance(receipt.get("receipt_sha256"), str)
+            and len(receipt["receipt_sha256"]) == 64
+            and all(c in "0123456789abcdef" for c in receipt["receipt_sha256"])
+            for receipt in receipts
+        )
+        and len({receipt["order_no"] for receipt in receipts}) == len(receipts)
+        and len({receipt["leg_id"] for receipt in receipts}) == len(receipts)
+    )
+
+
 def _report_sample_floor_assessment(
     *,
     target_date: date,
@@ -2002,6 +2040,10 @@ def _report_sample_floor_assessment(
         row.get("owner_lifecycle_contract_valid") is False
         for row in target_blocked_rows
     )
+    immutable_owner_timestamp_excluded_anchor_count = sum(
+        _immutable_owner_timestamp_exclusion(row, target_date)
+        for row in target_blocked_rows
+    )
     policy_ineligible_anchor_count = sum(
         row.get("owner_policy_tuning_eligible") is False for row in target_blocked_rows
     )
@@ -2016,7 +2058,8 @@ def _report_sample_floor_assessment(
             )
         )
         and not repairable_receipt_companion_gaps
-        and invalid_owner_contract_anchor_count == 0
+        and invalid_owner_contract_anchor_count
+        == immutable_owner_timestamp_excluded_anchor_count
     )
     if winner is not None:
         state = "candidate_ready"
@@ -2103,6 +2146,9 @@ def _report_sample_floor_assessment(
         "repairable_receipt_companion_gaps": repairable_receipt_companion_gaps,
         "immutable_ingress_receipt_loss": immutable_ingress_receipt_loss,
         "invalid_owner_contract_anchor_count": invalid_owner_contract_anchor_count,
+        "immutable_owner_timestamp_excluded_anchor_count": (
+            immutable_owner_timestamp_excluded_anchor_count
+        ),
         "policy_ineligible_anchor_count": policy_ineligible_anchor_count,
         "cohort_state_counts": {
             value: cohort_states.count(value) for value in sorted(set(cohort_states))

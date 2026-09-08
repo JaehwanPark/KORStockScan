@@ -36,6 +36,8 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILES_20260907_PRIOR,
     PROFILES_20260908_PRIOR,
     PROFILE_REVISION_20260908_EFFECTIVE_DATE,
+    PROFILE_REVISION_20260909_EFFECTIVE_DATE,
+    PROFILES_20260909_PRIOR,
 )
 from src.utils.constants import DATA_DIR
 
@@ -431,6 +433,24 @@ PROFILE_REVISION_20260908_TRANSITION = {
     "decision_authority": "explicit_user_directed_profile_revision_2026_09_07",
     "existing_order_effect": "none_preserve_prior_policy_custody",
 }
+PROFILE_REVISION_20260909_TRANSITION = {
+    "effective_target_date": "2026-09-09",
+    "source_date": "2026-09-08",
+    "before_profile_count": 56,
+    "after_profile_count": 56,
+    "recommendation_count": 2,
+    "source_recommendation_count": 4,
+    "new_profile_count": 0,
+    "logic_revision_count": 2,
+    "approved_profile_ids": ["sk_eternix_late_morning", "tym_morning"],
+    "runtime_active_profile_count": 53,
+    "evidence_path": "docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json",
+    "evidence_canonical_sha256": "beabcefb58b49050c16beb789a15f83fab8b35e11eb21082b2e9cc883c5b42ea",
+    "source_report": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+    "source_report_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+    "decision_authority": "explicit_user_directed_profile_revision_2026_09_09",
+    "existing_order_effect": "none_preserve_prior_policy_custody",
+}
 KAKAO_MORNING_TARGET_TRANSITION = {
     "profile_id": "kakao_morning",
     "axis": "target_ticks",
@@ -499,6 +519,10 @@ PRE_RECOMMENDATION_BASELINE_POLICIES = {
     profile_id: _baseline_policy(profile_id, PRE_RECOMMENDATION_PROFILES)
     for profile_id in PRE_RECOMMENDATION_PROFILES
 }
+PROFILE_20260909_BASELINE_POLICIES = {
+    profile_id: _baseline_policy(profile_id, PROFILES_20260909_PRIOR)
+    for profile_id in PROFILES_20260909_PRIOR
+}
 
 
 def _policy_bounds(policies: dict[str, dict[str, Any]]) -> dict[str, dict[str, float]]:
@@ -516,6 +540,7 @@ def _policy_bounds(policies: dict[str, dict[str, Any]]) -> dict[str, dict[str, f
 
 
 POLICY_BOUNDS = _policy_bounds(BASELINE_POLICIES)
+PROFILE_20260909_POLICY_BOUNDS = _policy_bounds(PROFILE_20260909_BASELINE_POLICIES)
 PROFILE_20260908_POLICY_BOUNDS = _policy_bounds(PROFILE_20260908_BASELINE_POLICIES)
 PROFILE_20260819_POLICY_BOUNDS = _policy_bounds(PROFILE_20260819_BASELINE_POLICIES)
 PROFILE_20260821_POLICY_BOUNDS = _policy_bounds(PROFILE_20260821_BASELINE_POLICIES)
@@ -548,6 +573,8 @@ def baseline_policies_for_target_date(
         return PROFILE_20260907_BASELINE_POLICIES
     if target_date < PROFILE_REVISION_20260908_EFFECTIVE_DATE:
         return PROFILE_20260908_BASELINE_POLICIES
+    if target_date < PROFILE_REVISION_20260909_EFFECTIVE_DATE:
+        return PROFILE_20260909_BASELINE_POLICIES
     return BASELINE_POLICIES
 
 
@@ -570,6 +597,8 @@ def policy_bounds_for_target_date(target_date: date) -> dict[str, dict[str, floa
         return PROFILE_20260907_POLICY_BOUNDS
     if target_date < PROFILE_REVISION_20260908_EFFECTIVE_DATE:
         return PROFILE_20260908_POLICY_BOUNDS
+    if target_date < PROFILE_REVISION_20260909_EFFECTIVE_DATE:
+        return PROFILE_20260909_POLICY_BOUNDS
     return POLICY_BOUNDS
 
 
@@ -592,7 +621,9 @@ def profile_revision_transition(target_date: date) -> dict[str, Any] | None:
         return dict(PROFILE_REVISION_20260831_TRANSITION)
     if target_date < PROFILE_REVISION_20260908_EFFECTIVE_DATE:
         return dict(PROFILE_REVISION_20260907_TRANSITION)
-    return dict(PROFILE_REVISION_20260908_TRANSITION)
+    if target_date < PROFILE_REVISION_20260909_EFFECTIVE_DATE:
+        return dict(PROFILE_REVISION_20260908_TRANSITION)
+    return dict(PROFILE_REVISION_20260909_TRANSITION)
 
 
 def operator_policy_transitions(target_date: date) -> list[dict[str, Any]]:
@@ -1010,6 +1041,27 @@ def candidate_policies_with_current_baselines(
     target_baselines = baseline_policies_for_target_date(effective_target_date)
     source_baselines = baseline_policies_for_target_date(source_date)
     if source_baselines != target_baselines:
+        if (
+            payload.get("schema") == CANDIDATE_SCHEMA
+            and PROFILE_REVISION_20260908_EFFECTIVE_DATE
+            <= source_date
+            < PROFILE_REVISION_20260909_EFFECTIVE_DATE
+            <= effective_target_date
+        ):
+            # The two explicitly approved revisions must not reset unrelated
+            # applied calibrations or add an unconsumed same-stage proposal.
+            bound_policies = payload["source_runtime_policy_binding"]["policies"]
+            approved_ids = set(
+                PROFILE_REVISION_20260909_TRANSITION["approved_profile_ids"]
+            )
+            return {
+                profile_id: dict(
+                    baseline
+                    if profile_id in approved_ids
+                    else bound_policies[profile_id]
+                )
+                for profile_id, baseline in target_baselines.items()
+            }
         return {
             profile_id: dict(policy) for profile_id, policy in target_baselines.items()
         }

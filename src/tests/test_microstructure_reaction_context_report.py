@@ -105,6 +105,27 @@ def test_v3_missing_required_payload_remains_in_delivery_denominator():
     }
 
 
+def test_defect_provenance_preserves_exact_owner_and_bounded_unique_receipts(tmp_path):
+    rows = [
+        _v3_observation(str(i), microstructure_reaction_venue=None) for i in range(25)
+    ]
+    result = mod._delivery_observation_summary(rows + rows)
+    cause = "evaluation_venue_missing_or_conflicting"
+    detail = result["diagnostic_contract_provenance"][cause]
+    assert detail["unique_evaluation_count"] == 25
+    assert detail["stage_counts"] == {"ai_confirmed": 25}
+    assert len(detail["receipts"]) == 20 and detail["truncated"] is True
+    assert detail["historical_source_repaired"] is False
+    example = detail["receipts"][0]
+    assert example["record_id"] == "123" and example["stock_code"] == "005930"
+    assert example["microstructure_reaction_venue"] is None
+    orders = mod._microstructure_code_improvement_orders(
+        result, tmp_path / "source.json"
+    )
+    assert orders[0]["diagnostic_provenance"] == detail
+    assert result["diagnostic_contract_violation_counts"][cause] == 25
+
+
 def test_finite_outcome_floor_and_version_separation(monkeypatch, tmp_path):
     monkeypatch.setattr(
         mod,

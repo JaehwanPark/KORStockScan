@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -338,6 +341,12 @@ class TestProcessHealthDetector:
 
     def test_detector_preserves_concurrent_main_and_samsung_failures(self, monkeypatch):
         monkeypatch.setattr(
+            process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
+        )
+        monkeypatch.setattr(
             process_health_module,
             "_samsung_morning_runtime_contract",
             lambda now: {
@@ -376,6 +385,8 @@ class TestProcessHealthDetector:
             "sniper_engine",
             alive=False,
             terminal_reason="market_close",
+            unresolved_scalping_count=0,
+            unresolved_scalping_codes="",
         )
         # The finalizer writes alive=False once more without knowing the
         # branch reason. The explicit normal terminal marker must survive.
@@ -396,6 +407,74 @@ class TestProcessHealthDetector:
             "market_close"
         )
         assert "sniper_engine" in result.summary
+        terminal = state["threads"]["sniper_engine"]
+        assert terminal["unresolved_scalping_count"] == 0
+        assert terminal["unresolved_scalping_codes"] == ""
+
+    def test_sniper_heartbeat_call_keywords_match_writer_contract(self):
+        source = Path(process_health_module.__file__).parents[1] / "kiwoom_sniper_v2.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_sn_whb"
+        ]
+        assert calls
+        for call in calls:
+            inspect.signature(write_heartbeat).bind(
+                *[object() for _ in call.args],
+                **{keyword.arg: object() for keyword in call.keywords},
+            )
+
+    @pytest.mark.parametrize(
+        "reason,count,codes",
+        [
+            ("market_close_unresolved_scalping_positions", 1, "005930"),
+            ("market_close", 1, "005930"),
+            ("market_close", -1, ""),
+            ("market_close", "0", ""),
+            ("market_close", False, ""),
+            ("market_close", 0, "005930"),
+        ],
+    )
+    def test_terminal_diagnostics_survive_finalizer_and_remain_fail_closed(
+        self, monkeypatch, reason, count, codes
+    ):
+        now = datetime.now().astimezone().replace(hour=20, minute=1)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        write_heartbeat(
+            "sniper_engine",
+            alive=False,
+            terminal_reason=reason,
+            unresolved_scalping_count=count,
+            unresolved_scalping_codes=codes,
+        )
+        write_heartbeat("sniper_engine", alive=False)
+        state = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        terminal = state["threads"]["sniper_engine"]
+        terminal["last_beat"] = now.isoformat(timespec="seconds")
+        assert terminal["terminal_reason"] == reason
+        assert terminal["unresolved_scalping_count"] == count
+        assert terminal["unresolved_scalping_codes"] == codes
+        assert not process_health_module._is_expected_thread_terminal(
+            "sniper_engine", terminal, now_ts=now.timestamp()
+        )
+
+    def test_new_terminal_reason_does_not_reuse_prior_custody_diagnostics(self):
+        write_heartbeat(
+            "sniper_engine",
+            alive=False,
+            terminal_reason="market_close",
+            unresolved_scalping_count=0,
+            unresolved_scalping_codes="",
+        )
+        write_heartbeat("sniper_engine", alive=False, terminal_reason="unexpected_stop")
+        terminal = json.loads(HEARTBEAT_PATH.read_text())["threads"]["sniper_engine"]
+        assert terminal["terminal_reason"] == "unexpected_stop"
+        assert "unresolved_scalping_count" not in terminal
+        assert "unresolved_scalping_codes" not in terminal
 
     def test_detector_rejects_market_close_reason_before_cutoff(self, monkeypatch):
         now = (
@@ -459,6 +538,8 @@ class TestProcessHealthDetector:
             "sniper_engine",
             alive=False,
             terminal_reason="market_close",
+            unresolved_scalping_count=1,
+            unresolved_scalping_codes="005930",
         )
         write_heartbeat("sniper_engine")
 
@@ -466,12 +547,17 @@ class TestProcessHealthDetector:
 
         assert data["threads"]["sniper_engine"]["alive"] is True
         assert "terminal_reason" not in data["threads"]["sniper_engine"]
+        assert "unresolved_scalping_count" not in data["threads"]["sniper_engine"]
+        assert "unresolved_scalping_codes" not in data["threads"]["sniper_engine"]
 
     def test_detector_fail_when_no_heartbeat(self, monkeypatch):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
         monkeypatch.setattr(
             process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
         )
         detector = ProcessHealthDetector()
         result = detector.check()
@@ -481,6 +567,9 @@ class TestProcessHealthDetector:
     def test_detector_fail_when_main_loop_stale(self, monkeypatch):
         monkeypatch.setattr(
             process_health_module, "_is_bot_expected_running", lambda: True
+        )
+        monkeypatch.setattr(
+            process_health_module, "_seconds_since_expected_start", lambda: 600.0
         )
         write_heartbeat("main_loop")
         stale_data = {
@@ -707,22 +796,43 @@ class TestProcessHealthDetector:
         assert result.details["main_loop_status"] == "startup_grace_prior_run_heartbeat"
         assert "prior-run PID" in result.summary
 
-    def test_detector_warns_for_missing_heartbeat_during_startup_grace(
-        self, monkeypatch
+    @pytest.mark.parametrize("heartbeat_state", ["missing", "stale"])
+    @pytest.mark.parametrize("elapsed", [30.0, 180.0])
+    def test_detector_startup_grace_boundary_for_heartbeat_gaps(
+        self, monkeypatch, heartbeat_state, elapsed
     ):
         if HEARTBEAT_PATH.exists():
             HEARTBEAT_PATH.unlink()
+        if heartbeat_state == "stale":
+            HEARTBEAT_PATH.write_text(
+                json.dumps(
+                    {
+                        "main_loop": {
+                            "last_beat": "2000-01-01T00:00:00+00:00",
+                            "pid": os.getpid(),
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
         monkeypatch.setattr(
             process_health_module, "_is_bot_expected_running", lambda: True
         )
         monkeypatch.setattr(
-            process_health_module, "_seconds_since_expected_start", lambda: 30.0
+            process_health_module, "_seconds_since_expected_start", lambda: elapsed
+        )
+        monkeypatch.setattr(
+            ProcessHealthDetector, "startup_grace_sec", property(lambda self: 180)
         )
 
         result = ProcessHealthDetector().check()
 
-        assert result.severity == "warning"
-        assert result.details["main_loop_status"] == "startup_grace_waiting"
+        assert result.severity == ("warning" if elapsed < 180 else "fail")
+        assert result.details["seconds_since_expected_start"] == elapsed
+        if heartbeat_state == "stale":
+            assert result.details["main_loop_status"] == "stale"
+        elif elapsed < 180:
+            assert result.details["main_loop_status"] == "startup_grace_waiting"
 
 
 def _mock_samsung_systemd_states(
