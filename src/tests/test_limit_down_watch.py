@@ -887,6 +887,11 @@ def test_preopen_wait_persists_idle_heartbeat_and_starts_at_krx_open(
 def test_scanner_promotion_handoff_blocks_signal_until_attach_event(
     monkeypatch, tmp_path
 ):
+    # This handoff fixture has no account authority; never read today's live
+    # coexistence policy, which correctly requires a broker-account binding.
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "no-owner-policy.json")
+    )
     monkeypatch.setattr(limit_down_watch, "RUNTIME_DIR", tmp_path)
     monkeypatch.setattr(limit_down_watch, "emit_pipeline_event", lambda *a, **k: None)
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *a, **k: True)

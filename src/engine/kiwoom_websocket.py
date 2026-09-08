@@ -2027,8 +2027,26 @@ class KiwoomWSManager:
 
         return self.get_latest_data(code) or latest or {}
 
-    def _snapshot_target(self, target):
-        snapshot = copy.deepcopy(target)
+    def _snapshot_target(self, target, *, include_history=True):
+        # Raw 0B/0D observers consume the current event, not accumulated history.
+        # Copying every historical row for each incoming tick starves ws.recv.
+        history_keys = (
+            "price_history",
+            "v_pw_history",
+            "signed_volume_history",
+            "program_history",
+            "strength_momentum_history",
+            "recent_trade_ticks",
+            "recent_trade_ticks_by_route",
+            "recent_depth_ticks_by_route",
+        )
+        snapshot = copy.deepcopy(
+            target
+            if include_history
+            else {
+                key: value for key, value in target.items() if key not in history_keys
+            }
+        )
         snapshot["market_session_state"] = self.market_session_state
         snapshot["market_session_remaining"] = self.market_session_remaining
         for key in (
@@ -2197,7 +2215,13 @@ class KiwoomWSManager:
                 log_error(f"[WS] state event dispatch failed ({event_type}): {e}")
 
     def _queue_tick_event(
-        self, code, data, *, realtime_type="0B", observation_only=None
+        self,
+        code,
+        data,
+        *,
+        realtime_type="0B",
+        observation_only=None,
+        snapshot_target=None,
     ):
         if self._stop_event.is_set():
             return
@@ -2230,6 +2254,10 @@ class KiwoomWSManager:
                 )
         with self._tick_lock:
             self._pending_tick_events[code] = {"code": code, "data": data}
+            if snapshot_target is not None:
+                # This private reference never reaches EventBus consumers. They
+                # receive a detached, full latest-state snapshot at dispatch.
+                self._pending_tick_events[code]["_snapshot_target"] = snapshot_target
         self._tick_dispatch_event.set()
 
     def _start_micro_reversion_forward_collector(self):
@@ -2558,12 +2586,27 @@ class KiwoomWSManager:
             if not triggered:
                 continue
 
-            with self._tick_lock:
-                pending_items = list(self._pending_tick_events.values())
-                self._pending_tick_events.clear()
-                self._tick_dispatch_event.clear()
+            # Match ingress lock order (market data -> pending ticks). Freeze
+            # and consume one coherent batch, so a newer update cannot be
+            # published once here and again from the next pending batch.
+            ready_items = []
+            with self.lock:
+                with self._tick_lock:
+                    pending_items = list(self._pending_tick_events.values())
+                    self._pending_tick_events.clear()
+                    self._tick_dispatch_event.clear()
+                for payload in pending_items:
+                    try:
+                        target = payload.pop("_snapshot_target", None)
+                        if target is not None:
+                            payload["data"] = self._snapshot_target(target)
+                        ready_items.append(payload)
+                    except Exception as e:
+                        log_error(
+                            f"[WS] tick snapshot failed ({payload.get('code')}): {e}"
+                        )
 
-            for payload in pending_items:
+            for payload in ready_items:
                 try:
                     self.event_bus.publish("REALTIME_TICK_ARRIVED", payload)
                 except Exception as e:
@@ -4188,14 +4231,18 @@ class KiwoomWSManager:
                             self._persistent_repair_stuck_until_ts.pop(item_code, None)
                             self._maybe_write_dashboard_snapshot()
 
-                            tick_event_snapshot = self._snapshot_target(target)
-                            # Snapshot is completed under the market-data lock; observer
-                            # normalization and enqueue stay outside that critical section.
+                            tick_event_snapshot = self._snapshot_target(
+                                target, include_history=False
+                            )
+                            # Every raw event is observed in order. Only the
+                            # already-coalesced EventBus latest-state view defers
+                            # its full history copy to the dispatch worker.
                             self._queue_tick_event(
                                 item_code,
                                 tick_event_snapshot,
                                 realtime_type=real_type,
                                 observation_only=observation_only_item,
+                                snapshot_target=target,
                             )
                 self._flush_deferred_scalp_condition_matches_if_allowed()
 

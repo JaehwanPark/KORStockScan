@@ -75,6 +75,79 @@ def test_login_success_message_helpers():
     assert KiwoomWSManager._is_login_failure_message(failure) is True
 
 
+def test_raw_tick_snapshot_does_not_traverse_accumulated_history():
+    class HistoryMustNotBeCopied:
+        def __deepcopy__(self, memo):
+            raise AssertionError("ingress copied accumulated history")
+
+    manager = KiwoomWSManager("test-token")
+    target = manager._ensure_target_defaults("005930")
+    target["recent_trade_ticks"] = HistoryMustNotBeCopied()
+    target["last_trade_tick"] = {"price": 100, "values": {"20": "100000"}}
+    snapshot = manager._snapshot_target(target, include_history=False)
+    assert "recent_trade_ticks" not in snapshot
+    target["last_trade_tick"]["values"]["20"] = "100001"
+    assert snapshot["last_trade_tick"]["values"]["20"] == "100000"
+
+
+def test_raw_observation_is_lossless_while_dispatch_keeps_full_latest_history(
+    monkeypatch,
+):
+    manager = KiwoomWSManager("test-token")
+    target = manager._ensure_target_defaults("005930")
+    observed = []
+    monkeypatch.setattr(
+        manager,
+        "_observe_micro_reversion_forward",
+        lambda code, data, *, realtime_type: observed.append(
+            (realtime_type, data["curr"])
+        ),
+    )
+    monkeypatch.setattr(
+        kiwoom_websocket, "observe_raw_market_data", lambda *a, **k: None
+    )
+    for kind, price in [("0B", 100), ("0D", 101), ("0B", 102)]:
+        target["curr"] = price
+        target["recent_trade_ticks"].appendleft({"price": price})
+        manager._queue_tick_event(
+            "005930",
+            manager._snapshot_target(target, include_history=False),
+            realtime_type=kind,
+            observation_only=False,
+            snapshot_target=target,
+        )
+    captured = []
+
+    def publish(event, payload):
+        captured.append(payload)
+        assert event == "REALTIME_TICK_ARRIVED"
+        assert "_snapshot_target" not in payload
+        payload["data"]["recent_trade_ticks"][0]["price"] = -1
+        manager._stop_event.set()
+
+    manager.event_bus = SimpleNamespace(publish=publish)
+    manager._dispatch_tick_events()
+    assert observed == [("0B", 100), ("0D", 101), ("0B", 102)]
+    assert len(captured) == 1
+    assert captured[0]["data"]["curr"] == 102
+    assert target["recent_trade_ticks"][0]["price"] == 102
+
+
+def test_observation_only_event_never_enters_latest_state_dispatch(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    observed = []
+    monkeypatch.setattr(
+        manager,
+        "_observe_micro_reversion_forward",
+        lambda *a, **k: observed.append(k["realtime_type"]),
+    )
+    manager._queue_tick_event(
+        "005930", {}, realtime_type="0D", observation_only=True, snapshot_target={}
+    )
+    assert observed == ["0D"]
+    assert not manager._pending_tick_events
+
+
 def test_widget_dashboard_snapshot_interval_defaults_to_one_second(monkeypatch):
     monkeypatch.delenv(
         kiwoom_websocket.WS_DASHBOARD_SNAPSHOT_INTERVAL_SEC_ENV, raising=False
