@@ -88,9 +88,11 @@ def _producer_timing(manifest: dict[str, Any], target_date: str) -> dict[str, An
         return {**missing, "status": "invalid_measurement"}
     return {
         **receipt,
-        "status": "observed_no_comparable_baseline"
-        if count
-        else "observed_publish_no_submit_sample",
+        "status": (
+            "observed_no_comparable_baseline"
+            if count
+            else "observed_publish_no_submit_sample"
+        ),
         "path": str(path),
         "runtime_latency_improvement": None,
     }

@@ -1036,9 +1036,7 @@ class ProducerSummaryCompactor:
         self.mode = (
             "shadow"
             if mode == "suppress"
-            else mode
-            if mode in {"off", "shadow"}
-            else "off"
+            else mode if mode in {"off", "shadow"} else "off"
         )
         self.flush_sec = max(0, int(flush_sec or 0))
         if self.flush_sec > PRODUCER_MAX_FLUSH_SEC:
@@ -1275,12 +1273,16 @@ class ProducerSummaryCompactor:
             "submit_sample_count": len(ordered),
             "submit_count": submit_count,
             "rejected_summary_count": rejected_count,
-            "submit_p95_ms": round(ordered[math.ceil(len(ordered) * 0.95) - 1], 3)
-            if ordered
-            else None,
-            "submit_p99_ms": round(ordered[math.ceil(len(ordered) * 0.99) - 1], 3)
-            if ordered
-            else None,
+            "submit_p95_ms": (
+                round(ordered[math.ceil(len(ordered) * 0.95) - 1], 3)
+                if ordered
+                else None
+            ),
+            "submit_p99_ms": (
+                round(ordered[math.ceil(len(ordered) * 0.99) - 1], 3)
+                if ordered
+                else None
+            ),
             "submit_max_ms": round(max(ordered), 3) if ordered else None,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
