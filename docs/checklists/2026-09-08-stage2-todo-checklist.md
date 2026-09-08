@@ -85,6 +85,7 @@
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0908] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-09-08`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+  - 16:41 승인 배포·재기동: [통합 리뷰/receipt](../audit-reports/2026-09-08-afternoon-release-restart.md). main6b4ac5e6/CI success → PID992430(16:40:06)/source_dirty=false, 당일20 family verify PASS/missing·mismatch·finding0. PREOPEN/custody env·주문 registry 및 strict 전후 잔고/미체결 불변, 독립 PID 유지, WS LOGIN/0B/0D·heartbeat 정상. 코드/PID 반영을 닫으며 자연 parent/controller/장후 generation·9/9 승계·exact-route/경제성은 기존 OPEN 조건으로 유지한다.
   - 15:52 재검증: [due 실행](../audit-reports/2026-09-08-due-checklist-custody-recovery-review.md). PID682672 read-only verify PASS/missing·mismatch·finding0. 최신 KRX submit0, 자연 census v4 구간 진단 반영을 확인했으며 현재 경제성·신규 telemetry PID 반영은 OPEN 유지.
   - 15:00 관찰 근거: [오후 모니터링](../audit-reports/2026-09-08-intraday-monitoring-1500.md). PID682672 read-only verify PASS와 퇴역15 OFF, 전일 summary source7 SHA 일치. 메인 submit drought와 scanner recall 근거 부족은 계속 OPEN이며 런타임/guard/주문을 변경하지 않았다.
   - 12:32 재기동 수용: [실행 기록](../audit-reports/2026-09-08-ws-quality-release-restart.md). PID461794→682672, b27a67dc/source_dirty=false, 기존 selected20·env·policy 유지 및 missing/mismatch/finding0. KRX/NXT 보유각10주/target SELL2건·300행 owner registry 전후 동일. 새 WS LOGIN/0B/0D·heartbeat를 확인했으며 이 배포 사실을 submit drought 해소나 새 순이익으로 판정하지 않는다.

@@ -22,8 +22,15 @@
 
 ## 실행 상태
 
-16:26 검증 완료 시점: 커밋·원격 CI·main 병합·재기동 결과는 아래 실행 receipt로 후속 기록한다. 이 문서의 사전 검증만으로 기동 완료를 주장하지 않는다.
+- 코드·리뷰 커밋 `c75eb507`, 후속 리뷰 `151b0e64`, 병렬 문서 커밋 `7681a8a6`을 일반 merge로 함께 보존했다. 원격 main 배포 커밋은 `6b4ac5e6c89597f250532a1f75610dcb1acb8bce`다. 병합 결과의 소스 hash 변경 0건·diff/parser PASS. [main Black CI](https://github.com/JaehwanPark/KORStockScan/actions/runs/34200280279) success, 두 릴리스 브랜치 CI도 success다.
+- 16:40 `./restart.sh` 1회 정상 종료. 이전 main PID682672 종료 후 drained bot tmux supervisor만 새 launcher로 교체했다. 새 main PID **992430**, 시작 **16:40:06 KST**, source commit **6b4ac5e6**, `SOURCE_DIRTY=false`, launcher SHA256 `32efc0cc145b78db658357812113e51cb88a643374cd070d9a48b5a2cb481c85`다. Samsung morning handoff는 `morning_owner_not_active/not_required`로 정상 종결했다.
+- 새 PID의 당일 runtime verify **PASS**, selected20, missing/mismatch/finding/정책·날짜 실패0. PREOPEN env SHA256 `f529bb62dd1c75579d2506017d479629aa41595b648805f3b4954795800ee6bc`와 custody env·주문 registry hash는 재기동 전후 동일하다. 정책 승계 9/9 effective date를 9/8로 당기지 않았다.
+- 16:37:58 직전 vs 16:40:33 직후 KRX/NXT strict snapshot: 삼성전자30주·삼성중공업10주와 미체결 SELL0018672 10주, owner별 registry30/10, 충돌0이 동일하다. 16:15에 있었던 수동0062568은 **재기동 요청 전부터** 미체결 목록에 없었고 exact-date kt00007 이력은 체결0·잔량0이었다. 취소/만료의 구체 원인은 이 receipt만으로 확정하지 않는다. 자동 복원·취소·owner 흡수·수량 변경을 하지 않았다.
+- 위젯 trader PID21846, Samsung heavy episode PID453121, collector PID665/663/660과 시작시각은 유지됐다. 메인 단일 PID, WS LOGIN ACK·신규0B/0D 수신, 16:40:27 이후 heartbeat와 모든 기록된 worker alive=true를 확인했다. 16:40 이후 main/WS/scanner/sync/execution 관련 error log 신규 오류0.
+- 16:41:08 micro snapshot은 새 프로세스에서 0B339/0D524 callback, trade/depth writer 각1 alive, queue/worker/writer 오류0, stop 없음이다. 최소 callback floor 전 `warming_up`은 경제성 또는 전체 원천 수용 완료가 아니다. 16:41:17 등록26 item 중 exact0B+0D8/incomplete18은 venue별 자연 receipt로 보존하며 전 item 수집 완료를 주장하지 않는다.
 
-재기동 전 기준(16:15:32): KRX/NXT strict 잔고 삼성전자30주·삼성중공업10주, 미체결 SELL0062568(수동 정정 주문)30주와 SELL0018672(삼성중공업 episode)10주. registry는 widget30주/episode10주이며 주문 owner 충돌0. 수동0062568은 자동 registry target으로 추정 등록하지 않는다. 독립 매매 PID21846/453121, collector PID665/663/660을 유지해야 한다. 실행 직전에 다시 조회하여 최종 전후 대사한다.
+- 16:42:18 재확인에서 micro는 `healthy_observer_canary`, 0B1395/0D2546, configured/alive writer 각각1/1, worker/writer 오류0·자동중지 없음으로 전진했다. 16:42:28 heartbeat와 단일 PID992430, 검증 소스 hash 변경0도 재확인했다.
 
-로컬 검증 근거: `/tmp/release-1610-final-tests.log`, `/tmp/release-1610-black-final.log`, `/tmp/release-1610-code-freeze.json`, `/tmp/release-1610-baseline.json`, `/tmp/release-1610-units-before.txt`. 향후 자연 확인은 [당일 체크리스트](../checklists/2026-09-08-stage2-todo-checklist.md)의 기존 OPEN ID를 재사용한다. 외부 Project/Calendar sync는 수행하지 않는다.
+배포·기동 검증은 완료했다. 자연 parent/cache/controller, 장후 strict generation, callback·exact-route 원천 수용, 9/9 PREOPEN 정책 승계와 비용 차감 경제성은 [당일 체크리스트](../checklists/2026-09-08-stage2-todo-checklist.md)의 기존 OPEN ID에서 계속 확인한다. 이 기록을 추가한 문서 커밋은 실행 소스와 별도이며 문서 반영만으로 두 번째 재기동을 하지 않는다.
+
+로컬 증거: `/tmp/release-1610-final-tests.log`, `/tmp/release-1610-incremental-tests.log`, `/tmp/release-1610-code-freeze.json`, `/tmp/release-1610-parser-merge.log`, `/tmp/release-1610-restart.log`, `/tmp/release-1610-broker-prerestart.json`, `/tmp/release-1610-broker-postrestart.json`, `/tmp/release-1610-manual-order-prerestart.json`, `/tmp/release-1610-postrestart-ws.json`, `/tmp/release-1610-postrestart-micro.json`. 외부 Project/Calendar sync는 수행하지 않았다.
