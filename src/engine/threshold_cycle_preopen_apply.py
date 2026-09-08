@@ -4288,8 +4288,11 @@ def _select_auto_apply_candidates(
         ]
         if conflicts and row["policies"] != row["previous_policies"]:
             row["policies"] = row["previous_policies"]
+            row["trial_history"] = row.get("previous_trial_history", [])
             row["state"] = "same_stage_change_deferred"
             row["conflicting_families"] = conflicts
+            row["economic_evaluation"]["application_state"] = row["state"]
+    policy_succession.reconcile_component_changes(component_decisions)
     decisions.extend(component_decisions)
     env_overrides.update(component_env)
     return selected_decisions, decisions, env_overrides

@@ -56,6 +56,122 @@ def book(family=mod.WEAK):
     )
 
 
+def test_sequential_preopen_versions_can_be_compared():
+    books = []
+    for day, challenger in (
+        ("2026-09-01", False),
+        ("2026-09-02", False),
+        ("2026-09-03", True),
+        ("2026-09-04", True),
+    ):
+        report = economic_report(day)
+        chosen = report["rows"][10 if challenger else 0]
+        for row in report["rows"]:
+            for field in (
+                "strategy_owner_profiles",
+                "realized_net_pnl_krw",
+                "exit_amount_krw",
+                "capital_time_krw_hours",
+            ):
+                row[field] = copy.deepcopy(chosen[field])
+            if challenger:
+                row["realized_net_pnl_krw"] = 40
+                row["exit_amount_krw"] = (
+                    row["entry_notional_krw"] + row["fees_taxes_krw"] + 40
+                )
+        books.append(mod.evidence_book(sign(report), day))
+    result = mod.evaluate(
+        mod.merge_books(books), mod.WEAK, profiles()[mod.WEAK], "2026-09-09"
+    )
+    assert result["state"] == "verified_observed_profile"
+    assert (
+        result["policies"][0]["comparison_window_policy"]
+        == "per_profile_chronological_halves"
+    )
+
+
+def test_multiple_qualified_candidates_are_ranked_not_called_no_edge():
+    source = book()
+    for identity, row in list(source["rows"].items()):
+        if row["profiles"][mod.WEAK] == profiles()[mod.WEAK]:
+            continue
+        second = copy.deepcopy(row)
+        second["profiles"][mod.WEAK] = dict(profiles()[mod.WEAK])
+        second["profiles"][mod.WEAK][
+            "SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS"
+        ] = 4
+        second["net"] = 25
+        source["rows"][identity + "-second"] = second
+    result = mod.evaluate(source, mod.WEAK, profiles()[mod.WEAK], "2026-09-09")
+    assert result["state"] == "verified_observed_profile"
+    assert result["qualified_candidate_count"] == 2
+    assert len(result["policies"]) == 1
+    assert result["superseded_qualified_candidate_count"] == 1
+    assert (
+        result["policies"][0]["profile"][
+            "SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS"
+        ]
+        == 4
+    )
+    reversed_book = {**source, "rows": dict(reversed(list(source["rows"].items())))}
+    assert (
+        mod.evaluate(reversed_book, mod.WEAK, profiles()[mod.WEAK], "2026-09-09")[
+            "policies"
+        ][0]["profile"]
+        == result["policies"][0]["profile"]
+    )
+
+
+def test_reviewed_logging_controls_do_not_invalidate_strategy_context():
+    rules = SimpleNamespace(MODULE_LOG_BACKUP_COUNT=10, BUY_SCORE_THRESHOLD=60)
+    before = mod.context_fingerprint(rules)
+    rules.MODULE_LOG_BACKUP_COUNT = 11
+    assert mod.context_fingerprint(rules) == before
+    rules.BUY_SCORE_THRESHOLD = 65
+    assert mod.context_fingerprint(rules) != before
+
+
+def test_rolling_component_book_survives_canonical_and_calibration_handoff(monkeypatch):
+    from unittest.mock import MagicMock
+    from src.engine import daily_threshold_cycle_report as daily
+
+    one = mod.evidence_book(economic_report("2026-09-08"), "2026-09-08")
+    rolling = book()
+    report = {
+        "date": "2026-09-08",
+        "calibration_candidates": [],
+        "strategy_owner_component_economics": one,
+    }
+    cumulative = {
+        "calibration_source_bundle_by_window": {
+            mod.SOURCE_WINDOW: {
+                "source_metrics": {
+                    "buy_score65_74": {"strategy_owner_component_economics": rolling}
+                }
+            }
+        }
+    }
+    daily.apply_window_policy_registry_to_report(report, cumulative)
+    assert report["strategy_owner_component_economics"] == rolling
+    assert report["strategy_owner_component_source_window"] == mod.SOURCE_WINDOW
+    path = MagicMock()
+    monkeypatch.setattr(daily, "calibration_report_path_for_date", lambda *args: path)
+    daily.save_threshold_calibration_report(report)
+    payload = json.loads(path.write_text.call_args.args[0])
+    assert payload["strategy_owner_component_economics"] == rolling
+    assert len(payload["strategy_owner_component_economics"]["sources"]) == 2
+
+
+def test_disjoint_context_policies_are_not_erased():
+    source = book()
+    for identity, row in list(source["rows"].items()):
+        second = copy.deepcopy(row)
+        second["context_sha256"] = "d" * 64
+        source["rows"][identity + "-context2"] = second
+    result = mod.evaluate(source, mod.WEAK, profiles()[mod.WEAK], "2026-09-09")
+    assert len(result["policies"]) == 2
+
+
 @pytest.fixture
 def scope(tmp_path, monkeypatch):
     runtime, locks = tmp_path / "runtime", tmp_path / "locks"
@@ -256,6 +372,7 @@ def test_runtime_requires_exact_date_context_venue_and_real_scope():
             session="krx_regular",
             environment=env,
             today="2026-09-09",
+            score_profile=policy["score_profile"],
             **kwargs,
         )
 
@@ -416,7 +533,12 @@ def test_baseline_only_is_not_reported_as_future_automatic_first_use():
     result = mod.evaluate(source, mod.WEAK, profiles()[mod.WEAK], "2026-09-09")
     assert result["state"] == "baseline_only_no_observed_challenger"
     assert result["unseen_profile_live_authority"] is False
-    assert result["maintenance_review_due"] is True
+    assert result["first_use_research_required"] is True
+    assert result["maintenance_review_due"] is False
+    assert (
+        result["first_use_authority"]
+        == "exact_replay_real_full_fill_bounded_preopen_contract"
+    )
 
 
 def test_safety_revert_retains_existing_veto_path(scope):
@@ -529,6 +651,7 @@ def test_scoped_weak_relief_does_not_relax_source_quality(
             session="krx_regular",
             environment={mod.ENV_KEY: json.dumps(bundle)},
             today="2026-09-09",
+            score_profile=policy["score_profile"],
         ),
     )
     verdict = runtime._evaluate_real_weak_pullback_entry_block(
@@ -586,7 +709,12 @@ def test_real_nxt_sessions_survive_source_and_exact_runtime_binding(session):
     env = {mod.ENV_KEY: json.dumps(bundle)}
     assert (
         mod.runtime_state(
-            rules, venue="NXT", session=session, environment=env, today="2026-09-09"
+            rules,
+            venue="NXT",
+            session=session,
+            environment=env,
+            today="2026-09-09",
+            score_profile=policy["score_profile"],
         )["status"]
         == "verified_scoped_policy"
     )

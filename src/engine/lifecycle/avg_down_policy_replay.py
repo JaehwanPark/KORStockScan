@@ -49,6 +49,8 @@ IMPLEMENTATION_PATHS = (
     "src/engine/ai_engine_openai.py",
     "src/engine/kiwoom_orders.py",
     "src/engine/scalping/micro_estimator_state.py",
+    "src/engine/scalping/strategy_owner_components.py",
+    "src/engine/scalping/strategy_owner_replay.py",
 )
 _KST = timezone(timedelta(hours=9))
 
@@ -120,6 +122,12 @@ def _code_digest(code: CodeType) -> str:
 
 
 def loaded_code_identity(handlers) -> dict:
+    # Lazy live imports must have the same identity surface in the worker and
+    # the observation thread, regardless of which decision ran first.
+    import importlib
+
+    importlib.import_module("src.engine.scalping.strategy_owner_components")
+    importlib.import_module("src.engine.scalping.strategy_owner_replay")
     identities = {
         name: _code_digest(getattr(handlers, name).__code__)
         for name in (
@@ -629,6 +637,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     handlers._observe_avg_down_runtime_config = quiet
     handlers._observe_avg_down_route_arbitration = quiet
     handlers._persist_scalping_position_peak = quiet
+    sys.modules["src.engine.scalping.strategy_owner_replay"].observe_seed = quiet
     for name in (
         "_log_holding_pipeline",
         "_update_db_for_add",
@@ -729,6 +738,46 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
                         ]
                     module.TRADING_RULES = fixed
         handlers.TRADING_RULES = runtime_rules
+        if observation.get("strategy_owner_replay"):
+            from src.engine.scalping.strategy_owner_components import (
+                profile as owner_profile,
+            )
+
+            family = observation["strategy_owner_replay"]["family"]
+            values = owner_profile(family, state.get("owner_component_profile"))
+            if values is None:
+                raise ReplayInputGap("owner_component_profile_missing")
+            # The isolated interpreter alone changes the one reviewed component.
+            # Other owners and broker/holding guards execute their original code.
+            for key, value in values.items():
+                setattr(runtime_rules, key, value)
+            if family == "weak_pullback_entry_block_runtime" and not context.get(
+                "owner_entry_checked"
+            ):
+                inputs = thaw(deepcopy(observation.get("entry_guard_inputs")))
+                if not isinstance(inputs, dict):
+                    raise ReplayInputGap("owner_entry_guard_inputs_missing")
+                verdict = handlers._evaluate_real_weak_pullback_entry_block(**inputs)
+                context["owner_entry_checked"] = True
+                if verdict.get("blocked"):
+                    return {
+                        "input_digest": input_digest,
+                        "policy_version": policy,
+                        "source_event_id": "owner-no-entry-" + input_digest,
+                        "input_cutoff": frame["emitted_at"],
+                        "full_policy_evaluation": True,
+                        "policy_state_after": deepcopy(context),
+                        "action": "NO_ENTRY",
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                        "adapter_version": ADAPTER_VERSION,
+                        "evaluated_stages": [
+                            {
+                                "stage": "real_weak_pullback_entry_block",
+                                "reason": verdict.get("reason"),
+                            }
+                        ],
+                    }
         for name, value in context["globals"].items():
             if name not in {
                 "COOLDOWNS",
@@ -867,6 +916,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
                 # market orders into a fictional full limit fill.
                 if (
                     code != observation["stock_code"]
+                    or observation.get("strategy_owner_replay")
                     or state["no_add_control"]
                     or state["pending_add"] is not None
                     or stock.get("pending_add_qty") != qty
@@ -1034,10 +1084,16 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
             )
             regime_row = recorded_inputs.get("market_regime")
             regime = frame["market"].get("market_regime")
+            regime_ts = finite_number(frame["market"].get("market_regime_observed_at"))
+            if frame["market"].get("market_regime_observed_at") is not None and (
+                regime_ts is None or not 0 < regime_ts <= current["epoch"]
+            ):
+                raise ReplayInputGap("future_market_regime_input")
             if regime_row is not None:
                 if regime_row["observed_at"] > current["epoch"]:
                     raise ReplayInputGap("future_market_regime_input")
-                regime = regime_row["value"]
+                if regime_ts is None or regime_row["observed_at"] >= regime_ts:
+                    regime = regime_row["value"]
             if not regime or regime == "UNKNOWN":
                 raise ReplayInputGap("recorded_market_regime_missing")
             handlers.handle_holding_state(

@@ -37,7 +37,9 @@ def policy_fingerprint(rules: Any) -> str:
     source = (
         rules
         if isinstance(rules, Mapping)
-        else vars(rules) if rules is not None else {}
+        else vars(rules)
+        if rules is not None
+        else {}
     )
     values = {
         str(key): value
@@ -266,12 +268,37 @@ def replay_exit_paths(
         cost_rate = finite_number(observation.get("cost_rate"))
         if cost_rate is None or not 0 <= cost_rate < 1:
             raise ValueError("cost_policy_rate_missing")
-        route_replay = observation["route_replay"]
+        component = observation.get("strategy_owner_replay")
+        if component:
+            from src.engine.scalping.strategy_owner_components import bounded_change
+
+            if not bounded_change(
+                component.get("family"),
+                component.get("baseline"),
+                component.get("profile"),
+            ):
+                raise ValueError("owner_component_bounded_profile_invalid")
+        route_replay = (
+            {
+                key: {
+                    "should_add": False,
+                    "route_evaluation_complete": True,
+                    "owner_component_profile": component[key],
+                }
+                for key in ("baseline", "profile")
+            }
+            if component
+            else observation["route_replay"]
+        )
         if not isinstance(route_replay, dict) or not route_replay:
             raise ValueError("route_replay_missing")
         if "NO_ADD" in route_replay:
             raise ValueError("reserved_no_add_arm_in_route_replay")
-        current_key = f"{_positive(observation.get('effective_min_buy_pressure')):g}"
+        current_key = (
+            "baseline"
+            if component
+            else f"{_positive(observation.get('effective_min_buy_pressure')):g}"
+        )
         if current_key not in route_replay or len(route_replay) < 2:
             raise ValueError("current_and_candidate_route_required")
         if not isinstance(frames, list) or any(
@@ -377,10 +404,15 @@ def replay_exit_paths(
             raise ValueError(tail_gap or "replay_market_path_missing")
         if tail_gap:
             result["unconsumed_tail_gap"] = tail_gap
-        for key, arm in {
-            **route_replay,
-            "NO_ADD": {"should_add": False, "route_evaluation_complete": True},
-        }.items():
+        replay_arms = (
+            route_replay
+            if component
+            else {
+                **route_replay,
+                "NO_ADD": {"should_add": False, "route_evaluation_complete": True},
+            }
+        )
+        for key, arm in replay_arms.items():
             try:
                 if not isinstance(arm, dict):
                     raise ValueError("route_arm_schema_invalid")
@@ -394,8 +426,14 @@ def replay_exit_paths(
                 if not isinstance(arm.get("should_add"), bool):
                     raise ValueError("route_add_action_missing")
                 state = initial_state(observation, arm)
-                state["min_buy_pressure"] = None if key == "NO_ADD" else _positive(key)
+                state["min_buy_pressure"] = (
+                    None if component or key == "NO_ADD" else _positive(key)
+                )
+                # Component replay does not suppress another owner's ADD gate.
+                # Its unmodelled broker boundary becomes an explicit source gap.
                 state["no_add_control"] = key == "NO_ADD"
+                if component:
+                    state["owner_component_profile"] = arm["owner_component_profile"]
                 state["source_observation_id"] = observation["source_event_id"]
                 trace = []
                 completed = False
@@ -462,7 +500,11 @@ def replay_exit_paths(
                         or record.get("actual_order_submitted") is not False
                         or record.get("broker_order_forbidden") is not True
                         or record.get("action")
-                        not in {"HOLD", "EXIT", "ADD", "CANCEL_ADD"}
+                        not in (
+                            {"HOLD", "EXIT", "ADD", "CANCEL_ADD", "NO_ENTRY"}
+                            if component
+                            else {"HOLD", "EXIT", "ADD", "CANCEL_ADD"}
+                        )
                     ):
                         raise ValueError("full_exit_policy_evaluation_contract_gap")
                     trace.append(
@@ -482,6 +524,26 @@ def replay_exit_paths(
                         )
                     }
                     state["policy_state"] = deepcopy(record["policy_state_after"])
+                    if record["action"] == "NO_ENTRY":
+                        if (
+                            component.get("family")
+                            != "weak_pullback_entry_block_runtime"
+                            or len(trace) != 1
+                        ):
+                            raise ValueError("owner_abstention_contract_invalid")
+                        result["outcomes"][key] = {
+                            "status": "COMPLETED",
+                            "net_pnl_krw": 0.0,
+                            "exit_time": observation["emitted_at"],
+                            "exit_qty": 0,
+                            "full_policy_evaluation": True,
+                            "filled_add_qty": 0,
+                            "known_no_entry": True,
+                            "trace_digest": canonical_digest(trace),
+                            "evidence_authority": "source_only_paired_exit_replay",
+                        }
+                        completed = True
+                        break
                     if record.get("pending_add_cancelled") is True:
                         if (
                             state["pending_add"] is None
@@ -594,7 +656,9 @@ def replay_exit_paths(
         denominator = _positive(observation["pre_add_buy_price"]) * _positive(
             observation["pre_add_buy_qty"]
         )
-        control = result["outcomes"]["NO_ADD"]["net_pnl_krw"]
+        control = result["outcomes"]["baseline" if component else "NO_ADD"][
+            "net_pnl_krw"
+        ]
         baseline = result["outcomes"][current_key]["net_pnl_krw"]
         result["economics"] = {
             key: {

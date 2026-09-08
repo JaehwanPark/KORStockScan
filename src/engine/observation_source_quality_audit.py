@@ -1998,6 +1998,13 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "forbidden_uses",
         )
     ),
+    "strategy_owner_replay_seed_observed": StageContract(
+        required_fields=(
+            "owner_component_seed", "source_event_id", "decision_authority",
+            "runtime_effect", "allowed_runtime_apply", "actual_order_submitted",
+            "broker_order_forbidden",
+        )
+    ),
     "avg_down_exit_replay_frame_observed": StageContract(
         required_fields=(
             "source_observation_id",
@@ -5344,6 +5351,15 @@ def _row_contract_violations(
         or not _contract_bool(fields.get("broker_order_forbidden"), True)
     ):
         invalid.append("avg_down_runtime_config_contract")
+    if stage == "strategy_owner_replay_seed_observed" and (
+        not _safe_dict(fields.get("owner_component_seed"))
+        or fields.get("decision_authority") != "source_only_owner_component_replay"
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+        or not _contract_bool(fields.get("actual_order_submitted"), False)
+        or not _contract_bool(fields.get("broker_order_forbidden"), True)
+    ):
+        invalid.append("strategy_owner_replay_seed_contract")
     if stage == "avg_down_exit_replay_frame_observed" and (
         fields.get("replay_frame_schema") != "avg_down_exit_replay_frame_v1"
         or fields.get("decision_authority") != "source_only_paired_exit_replay"

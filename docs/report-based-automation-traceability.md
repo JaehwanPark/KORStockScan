@@ -826,6 +826,14 @@ Swing micro source-quality는 `swing_micro_ws_quote_source=missing`을 micro 계
 
 daily calibration의 표본 분모도 paired count다. 순수 표본·날짜 부족은 `hold_sample`이며 fresh한 검증 v3 정책만 기존 PREOPEN freshness/동일-stage/source-quality 검사를 통과해 이월된다. 결측을 악화로 만들지 않되 측정된 EV/fill/downside 또는 표본·날짜 floor를 충족한 policy-version R6 음의 EV는 이월하지 않는다. PREOPEN과 runtime은 같은 schema/economic/version/child-shape/content-hash 계약을 검증한다. 실제 submit 요약에 policy version/variant/original qty/final price를 기록하고 R6는 버전별 실체결 full-fill EV·fill/MFE/MAE·missed-upside를 fixed control과 비교한다. partial/unfilled는 별도 집계하며 exact cancel receipt join이 없는 실제 cancel delta는 `not_measured` 진단값이지 자동 rollback 조건이 아니다. 계산된 modeled cancel delta는 paired economic rows에 남긴다. 실제 split의 버전 누락은 EV summary→source-only code-improvement workorder로 연결한다. 미관측/default context·qty<=1·PYRAMID는 원 주문을 유지한다. initial entry, requested quantity, cap, provider/bot 및 broker/account/order/cooldown/stale/hard safety 권한을 확대하지 않는다.
 
+### 기존 전략 component의 최초 적용 handoff (9/8 후속 명시 승인)
+
+`strategy_owner_components`는 기존 Entry gate/recheck와 holding/exit 내부 component이며 독립 alpha family가 아니다. 사용자가 승인한 `정확한 replay + 실제 체결 품질 검증 → 다음 적격 PREOPEN 제한 canary`는 이 두 component의 인접 한 key 후보에 한한다. 일반 source-only나 다른 보호 lock에 포괄적인 승격 권한을 부여하지 않는다.
+
+생산 경로는 기존 live 결정의 `strategy_owner_replay_seed_observed` → 기존 bounded `avg_down_exit_replay_frame_observed` → `daily_threshold_cycle_report` postclose CLI의 `strategy_owner_first_use_replay` terminal/self-hash → 실제 `main_scalping_lifecycle_paired`와 rolling_20d book → PREOPEN 원본 재구성 → component receipt/env → 기존 launcher/runtime다. 별도 cron·engine-root producer·provider route를 만들지 않는다. seed/후행 frame의 원래 날짜·동일 policy/입력·terminal·비용을 보존하고 source-only partial checkpoint는 승격하지 않는다. 날짜별 mutex, 하루 replay 요청 8회/300초, terminal 실패의 무한 재시도 금지를 적용한다.
+
+최초 적용은 replay 10건(시간순 각 절반 5건), 같은 실제 profiles/context/venue/session/score cohort의 비용 대사 full-fill 20건(각 절반 10건), 각각 최소 2일과 양수 순익/증분 자본 효율을 요구한다. owner당 하루 4개 seed cap에서는 최소 4개 유효 거래일이 필요하므로 9/9 자동 기동만으로 최초 경제성 충족을 주장하지 않는다. 후보는 한 owner/한 cohort/한 key·최대 7 calendar days이며 same-stage/다른 component 충돌과 원래 operator source 검증을 유지한다. 미관측 챌린저의 실제 표본을 최초 진입의 선행 조건으로 요구하지 않되, 정식 승계는 실제 양쪽 profile 비교를 통과해야 한다. 충분한 실제 비교의 no-edge 또는 만료는 다음 PREOPEN 기준 복귀, 동일 trial은 source hash 변경만으로 재개하지 않는다. 기존 hard safety, AI 진입 권한, broker/account/order/수량/cap/veto는 그대로다. [세부 보완 리뷰](audit-reports/2026-09-08-operator-policy-succession-review.md)와 `OperatorPolicySuccessionAcceptance0908`에서 코드/배포/자연 소비/실성과를 분리한다.
+
 ## 5. 금지선
 
 - 누적 평균 단독으로 live threshold를 적용하지 않는다.

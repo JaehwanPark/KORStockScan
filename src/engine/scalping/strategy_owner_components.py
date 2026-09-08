@@ -22,6 +22,22 @@ from src.engine.scalping.score_recovery_economics import digest, economic_blocke
 SCHEMA = "strategy_owner_components_v1"
 EFFECTIVE_DATE = "2026-09-09"
 ENV_KEY = "KORSTOCKSCAN_STRATEGY_OWNER_COMPONENTS_JSON"
+CONTEXT_SCHEMA = "strategy_owner_decision_context_v2"
+SOURCE_WINDOW = "rolling_20d"
+# These reviewed output/retention controls cannot change an entry/exit decision.
+# Keep unknown fields in the fingerprint: broad LOG/SIM prefix exemptions could
+# accidentally erase a decision, cadence or shared-resource guard.
+NON_DECISION_RULES = frozenset(
+    {
+        "MODULE_LOG_MAX_BYTES",
+        "MODULE_LOG_BACKUP_COUNT",
+        "LOG_RETENTION_DAYS",
+        "BOT_HISTORY_BACKUP_COUNT",
+        "PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED",
+        "PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST",
+        "WATCHING_STATE_DEBUG_LOG_ENABLED",
+    }
+)
 WEAK = "weak_pullback_entry_block_runtime"
 PROFIT = "profit_stagnation_exit_runtime"
 OWNERS = {WEAK: "entry_gate_recheck", PROFIT: "holding_exit"}
@@ -152,17 +168,22 @@ def runtime_profiles(rules):
 def context_fingerprint(rules):
     # Other rule changes must not inherit a component's economic comparison.
     values = vars(rules) if hasattr(rules, "__dict__") else {}
-    excluded = {k for defaults in DEFAULTS.values() for k in defaults}
+    excluded = {
+        k for defaults in DEFAULTS.values() for k in defaults
+    } | NON_DECISION_RULES
     try:
         return digest(
             {
-                k: v
-                for k, v in values.items()
-                if k.isupper()
-                and k not in excluded
-                and isinstance(
-                    v, (str, int, float, bool, list, tuple, dict, type(None))
-                )
+                "schema": CONTEXT_SCHEMA,
+                "rules": {
+                    k: v
+                    for k, v in values.items()
+                    if k.isupper()
+                    and k not in excluded
+                    and isinstance(
+                        v, (str, int, float, bool, list, tuple, dict, type(None))
+                    )
+                },
             }
         )
     except (TypeError, ValueError, OverflowError):
@@ -188,8 +209,52 @@ def _runtime_baseline(rules):
     return profiles, context
 
 
+def valid_canary(policy, today):
+    """The loader and live helper share the same finite first-use contract."""
+    try:
+        start = date.fromisoformat(policy["canary_start_date"])
+        end = date.fromisoformat(policy["canary_until_date"])
+        return (
+            policy.get("mode") == "first_use_bounded_canary"
+            and policy["canary_start_date"] <= today <= policy["canary_until_date"]
+            and (end - start).days == 6
+            and policy.get("canary_max_calendar_days") == 7
+            and policy.get("real_promotion_required") is True
+            and policy.get("runtime_safety_and_quantity_unchanged") is True
+            and type(policy.get("real_full_fill_sample_count")) is int
+            and policy["real_full_fill_sample_count"] >= 20
+            and policy.get("sample_floor") == 10
+            and re.fullmatch(r"[a-f0-9]{64}", str(policy.get("trial_id", "")))
+            is not None
+            and len(set(policy["source_dates"])) >= 2
+            and all(
+                "2026-06-05" <= d < policy["canary_start_date"]
+                for d in policy["source_dates"]
+            )
+            and all(
+                isinstance(policy.get(k), dict)
+                and len(policy[k]) >= 2
+                and all(
+                    d in policy["source_dates"]
+                    and re.fullmatch(r"[a-f0-9]{64}", str(h))
+                    for d, h in policy[k].items()
+                )
+                for k in ("replay_sources", "real_sources")
+            )
+        )
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return False
+
+
 def runtime_state(
-    rules, *, venue, session, simulated=False, environment=None, today=None
+    rules,
+    *,
+    venue,
+    session,
+    score_profile=None,
+    simulated=False,
+    environment=None,
+    today=None,
 ):
     profiles, context = _runtime_baseline(rules)
     result = {
@@ -222,11 +287,18 @@ def runtime_state(
                 continue  # An explicit effective operator change wins.
             result["managed_families"].append(family)
             for policy in component["policies"]:
+                if policy.get("mode") not in (None, "first_use_bounded_canary"):
+                    raise ValueError("unknown_component_policy_mode")
+                if policy.get(
+                    "mode"
+                ) == "first_use_bounded_canary" and not valid_canary(policy, today):
+                    continue
                 if (
                     policy["venue"] == venue
                     and policy["session"] == session
                     and valid_scope(venue, session)
                     and policy.get("context_sha256") == context
+                    and policy.get("score_profile") == score_profile
                     and all(
                         result["profiles"].get(k) == v
                         for k, v in policy["other_profiles"].items()
@@ -237,7 +309,11 @@ def runtime_state(
                         **result["profiles"],
                         family: policy["profile"],
                     }
-                    result["status"] = "verified_scoped_policy"
+                    result["status"] = (
+                        "first_use_bounded_canary"
+                        if policy.get("mode") == "first_use_bounded_canary"
+                        else "verified_scoped_policy"
+                    )
                     result["applied_families"].append(family)
     except (TypeError, ValueError, KeyError, AttributeError):
         return {
@@ -372,13 +448,29 @@ def evidence_book(report, target_date):
 
 
 def merge_books(books):
-    result = {"schema": SCHEMA, "rows": {}, "sources": {}, "excluded": {}}
+    result = {
+        "schema": SCHEMA,
+        "rows": {},
+        "sources": {},
+        "excluded": {},
+        "replays": {},
+        "replay_sources": {},
+    }
     conflicts, excluded = set(), Counter()
     for book in books:
         if not isinstance(book, dict) or book.get("schema") != SCHEMA:
             excluded["book_contract_invalid"] += 1
             continue
         excluded.update(book.get("excluded", {}))
+        for day, sha in book.get("replay_sources", {}).items():
+            if day in result["replay_sources"] and result["replay_sources"][day] != sha:
+                conflicts.add(day)
+            result["replay_sources"][day] = sha
+        for identity, row in book.get("replays", {}).items():
+            old = result["replays"].get(identity)
+            if old is not None and old != row:
+                conflicts.update((old["date"], row["date"]))
+            result["replays"][identity] = row
         for day, sha in book.get("sources", {}).items():
             if day in result["sources"] and result["sources"][day] != sha:
                 conflicts.add(day)
@@ -390,6 +482,9 @@ def merge_books(books):
             result["rows"][identity] = row
     result["rows"] = {
         k: v for k, v in result["rows"].items() if v["date"] not in conflicts
+    }
+    result["replays"] = {
+        k: v for k, v in result["replays"].items() if v["date"] not in conflicts
     }
     excluded["conflicting_source_dates"] += len(conflicts)
     result["excluded"] = dict(excluded)
@@ -404,6 +499,8 @@ def verify_research(book, report_dir, target_date):
         not isinstance(book, dict)
         or book.get("schema") != SCHEMA
         or not isinstance(book.get("sources"), dict)
+        or not isinstance(book.get("replay_sources", {}), dict)
+        or not set(book.get("replay_sources", {})).issubset(book["sources"])
     ):
         raise ValueError("owner_component_research_invalid")
     books = []
@@ -428,10 +525,23 @@ def verify_research(book, report_dir, target_date):
         rebuilt = evidence_book(payload, day)
         if rebuilt["sources"].get(day) != book["sources"][day]:
             raise ValueError("owner_component_source_generation_changed")
+        if day in book.get("replay_sources", {}):
+            from src.engine.scalping.strategy_owner_replay import attach_replays
+
+            attach_replays(rebuilt, report_dir, day)
+            if (
+                rebuilt.get("replay_sources", {}).get(day)
+                != book["replay_sources"][day]
+            ):
+                raise ValueError("owner_component_replay_generation_changed")
         books.append(rebuilt)
     rebuilt = merge_books(books)
     if rebuilt["rows"] != book.get("rows"):
         raise ValueError("owner_component_research_row_mismatch")
+    if rebuilt.get("replays", {}) != book.get("replays", {}):
+        raise ValueError("owner_component_replay_row_mismatch")
+    if rebuilt.get("replay_sources", {}) != book.get("replay_sources", {}):
+        raise ValueError("owner_component_replay_source_mismatch")
     return rebuilt
 
 
@@ -439,7 +549,8 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
     """Observed profiles only; frequency/capital efficiency, not per-trade uplift.
 
     Matching venue/session, other component and score profile are mandatory. Train
-    and holdout use shared calendar splits; both policies must occur in both halves.
+    and holdout split each policy's chronological exposure dates independently.
+    Different PREOPEN versions need not trade concurrently on identical dates.
     This is bounded observational comparison, not proof of a causal profit gain.
     """
     result = {
@@ -449,9 +560,12 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
         "owner": OWNERS[family],
         "economic_acceptance": "real_post_apply_separate",
         "unseen_profile_live_authority": False,
-        "first_use_authority": "existing_owner_economic_candidate_contract_required",
+        "first_use_authority": "exact_replay_real_full_fill_bounded_preopen_contract",
         "maintenance_requires_positive_ev": False,
         "evaluated_candidate_count": 0,
+        "evaluated_profiles": [],
+        "qualified_candidate_count": 0,
+        "comparison_window_policy": "per_profile_chronological_halves",
     }
     if (
         profile(family, baseline) is None
@@ -479,7 +593,6 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
         days = sorted({r["date"] for _, r in items})
         if len(days) < 2:
             continue
-        split = days[len(days) // 2]
         profiles = {
             digest(r["profiles"][family]): r["profiles"][family] for _, r in items
         }
@@ -492,16 +605,18 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
             ]
             if any(len(arm) < sample_floor for arm in arms):
                 continue
+            arm_days = [sorted({r["date"] for r in arm}) for arm in arms]
+            if any(len(dates) < 2 for dates in arm_days):
+                continue
+            splits = [dates[len(dates) // 2] for dates in arm_days]
             metrics = []
             ready = True
             for holdout in (False, True):
                 subsets = [
-                    [r for r in arm if (r["date"] >= split) == holdout] for arm in arms
+                    [r for r in arm if (r["date"] >= split) == holdout]
+                    for arm, split in zip(arms, splits)
                 ]
                 if any(len(rows) < max(1, sample_floor // 2) for rows in subsets):
-                    ready = False
-                    break
-                if {r["date"] for r in subsets[0]} != {r["date"] for r in subsets[1]}:
                     ready = False
                     break
                 summaries = [
@@ -510,6 +625,8 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
                         "capital": sum(r["capital"] for r in rows),
                         "notional": sum(r["notional"] for r in rows),
                         "days": len({r["date"] for r in rows}),
+                        "dates": sorted({r["date"] for r in rows}),
+                        "sample_count": len(rows),
                     }
                     for rows in subsets
                 ]
@@ -529,6 +646,7 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
                         "session": session,
                         "cohort_sha256": cohort,
                         "context_sha256": items[0][1]["context_sha256"],
+                        "score_profile": items[0][1].get("score_profile"),
                         "other_profiles": {
                             k: v
                             for k, v in items[0][1]["profiles"].items()
@@ -540,15 +658,56 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
                         "source_dates": days,
                         "evidence_sha256": digest(items),
                         "sample_floor": sample_floor,
+                        "comparison_window_policy": result["comparison_window_policy"],
                     }
                 )
             if len(metrics) == 2:
                 result["evaluated_candidate_count"] += 1
-    # More than one incompatible context/profile is not a global overwrite.
+                result["evaluated_profiles"].append(
+                    {
+                        "venue": venue,
+                        "session": session,
+                        "context_sha256": items[0][1]["context_sha256"],
+                        "score_profile": items[0][1].get("score_profile"),
+                        "other_profiles": {
+                            k: v
+                            for k, v in items[0][1]["profiles"].items()
+                            if k != family
+                        },
+                        "profile": proposed,
+                        "qualified": ready,
+                    }
+                )
+    # Retain disjoint runtime contexts. For overlapping candidates choose by
+    # training economics only, then a stable identity tie-break (not input order).
+    result["qualified_candidate_count"] = len(result["policies"])
     by_scope = defaultdict(list)
     for policy in result["policies"]:
-        by_scope[(policy["venue"], policy["session"])].append(policy)
-    result["policies"] = [rows[0] for rows in by_scope.values() if len(rows) == 1]
+        by_scope[
+            (
+                policy["venue"],
+                policy["session"],
+                policy["context_sha256"],
+                digest(policy.get("score_profile")),
+                digest(policy["other_profiles"]),
+            )
+        ].append(policy)
+
+    def rank(policy):
+        before, after = policy["metrics"][0]
+        return (
+            -(after["net"] / after["days"] - before["net"] / before["days"]),
+            -(after["net"] / after["capital"] - before["net"] / before["capital"]),
+            digest(policy["profile"]),
+            policy["cohort_sha256"],
+        )
+
+    result["policies"] = [
+        sorted(rows, key=rank)[0] for _, rows in sorted(by_scope.items())
+    ]
+    result["superseded_qualified_candidate_count"] = result[
+        "qualified_candidate_count"
+    ] - len(result["policies"])
     eligible_rows = [row for items in groups.values() for _, row in items]
     alternative_profiles = {
         digest(row["profiles"][family])
@@ -560,7 +719,10 @@ def evaluate(book, family, baseline, target_date, sample_floor=20):
     # A rolling book cannot reach an unbounded cumulative-date floor. Surface a
     # missing alternative immediately, rather than promise that more identical
     # baseline trades will magically create first-use authority.
-    result["maintenance_review_due"] = bool(eligible_rows and not alternative_profiles)
+    result["first_use_research_required"] = bool(
+        eligible_rows and not alternative_profiles
+    )
+    result["maintenance_review_due"] = False
     result["state"] = (
         "verified_observed_profile"
         if result["policies"]

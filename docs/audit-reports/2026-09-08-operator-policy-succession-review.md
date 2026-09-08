@@ -4,7 +4,7 @@
 
 ## 판정
 
-기존 경제성 생산자가 있는 전략의 자동 승계와 기동 소비 경로를 구현했다. 후속 사용자 지시에 따라 `weak_pullback_entry_block_runtime`은 기존 Entry gate/recheck, `profit_stagnation_exit_runtime`은 기존 holding/exit의 관리 component로 통합했다. 두 component의 기준값 보존·관측된 정책 비교·조건부 승계는 연결했지만, **실행 이력이 없는 새 조건의 최초 경제성 검증/승격까지 전체 자동화가 완료된 것은 아니다**. 같은 기준 정책의 표본 누적을 미실행 조건의 승인 근거로 바꾸지 않는다. 코드/배포/PREOPEN/PID/실수익도 각각 별도 상태다.
+기존 경제성 생산자가 있는 전략의 자동 승계와 기동 소비 경로를 구현했다. 후속 사용자 지시에 따라 `weak_pullback_entry_block_runtime`은 기존 Entry gate/recheck, `profit_stagnation_exit_runtime`은 기존 holding/exit의 관리 component로 통합했다. 이어 사용자가 **정확한 replay와 실제 체결 품질 검증 후 다음 PREOPEN의 제한된 canary까지 자동화**하도록 승인했다. 아래 최종 보완은 두 component의 한 단계 후보에 이 최초 적용 경로를 추가한다. 무제한 조건 탐색·무표본 승격·보호 lock 해제가 아니며 코드/배포/PREOPEN/PID/실수익은 각각 별도 상태다.
 
 ## 전체 JSON lock 대사
 
@@ -14,7 +14,7 @@
 | --- | ---: | --- |
 | 직접 경제성 승계 연결 | 2 | score65_74 recovery, scalping pyramid min-profit. 기존 경제성/AI/단일 stage 검증 후 exact key 승계 |
 | 기존 정식 Entry owner 통합 연결 | 5 | early_accel, pre_submit_liquidity_relief, weak_context_late_entry, scanner_real_source_guard, score strong_micro. 정식 owner 선택 시 기존 `_close_*_for_live_owner` 계약 사용 |
-| 기존 owner 관리 component 통합 | 2 | profit_stagnation_exit → holding/exit, weak_pullback → Entry gate/recheck. 동작 보존 승계에는 EV floor 없음; 실제 관측된 조건 비교만 자동 승계. 미실행 조건 최초 승격은 별도 계약 필요 |
+| 기존 owner 관리 component 통합 | 2 | profit_stagnation_exit → holding/exit, weak_pullback → Entry gate/recheck. 기준값 보존에는 EV floor 없음. 후속 승인으로 exact replay + 실제 full-fill 품질 → 제한된 최초 canary → 실제 관측 profile 승계까지 연결 |
 | 안전·운영·source-only 유지 | 11 | buy/sell 시간 guard, holding context 2개, quote consistency, latency safety relief, sim budget/window, entry-price gap profile, real pyramid quality/protective guard, rising-missed baseline bridge |
 | 혼합 overlay | 1 | persistent operator overlay. 승인된 전략 exact key만 승계; 나머지 키 유지 |
 | 비활성 이력 | 4 | buy-time disable, entry recheck 7/3, late-price drift, soft-stop grace. 복구/활성화 금지 |
@@ -63,3 +63,33 @@ AVG_DOWN의 기존 단일 pressure 경제성 계약도 같은 승계 등록부�
 구조 통합·관측 profile 승계·직접 producer/consumer의 검토 범위에서 추가 미해결 코드 finding은 0이다. 아래 최초 승격 계약 OPEN, 배포 및 자연 경제성 수용까지 결함 0/전체 완료라고 주장하는 판정은 아니다.
 
 `baseline_only_no_observed_challenger`는 다른 조건을 아직 관측하지 못한 상태다. 동일 기본값의 거래만 늘어나면 자동으로 최초 새 조건이 승인되지 않는다. 이 경우 source/기존 owner의 first-use 경제성 경로를 즉시 검토 대상으로 노출하며, rolling window로 도달할 수 없는 20일 누적 대기 문턱을 추가하지 않는다. 미실행 조건의 replay/최초 bounded 적용 계약은 이 observed-profile 승계 경로가 대신하지 않는다. 따라서 **통합·기존 관측 정책 승계의 코드 수리와 전체 새 조건 자동 탐색/최초 승격 완료를 구분**한다. natural/최초 승격 잔여는 기존 체크리스트 ID 한 곳에서 추적한다.
+
+## 최초 replay·제한 canary 승인 후 최종 보완
+
+위 1,017 PASS와 최초 승격 계약 OPEN은 후속 승인 전 기록이다. 이번 구현은 `src/engine/scalping/strategy_owner_replay.py`를 기존 owner의 source-only helper로 둔다. 새 engine-root module, 독립 alpha family, 주문 경로 또는 cron은 만들지 않았다.
+
+### 보완한 결함
+
+- Daily 한 날짜 book이 PREOPEN으로 전달되어 2일 이상 검증을 충족할 수 없던 경로를 수정했다. canonical/phase calibration 모두 기존 `rolling_20d` book을 소비한다.
+- 같은 날짜에 baseline/challenger가 동시에 실행돼야 하는 조건을 제거했다. 각 실제 profile의 시간순 앞/뒤 구간을 따로 비교한다. 서로 다른 PREOPEN 버전의 실제 거래도 검증 가능하며, 인과적 수익 증명의 의미는 아니다.
+- 같은 적용 범위의 합격 후보가 여러 개면 전부 탈락시키던 경로를 학습 구간 순익/자본 효율·고정 ID 정렬로 수정했다. venue/session/context/다른 component/score-recovery cohort를 source와 실제 소비까지 일치시킨다.
+- 로그 회전·보존 등 검토된 7개 비판단 설정만 context hash에서 제외했다. 미지의 설정이나 전략·가격·안전 조건을 광범위하게 제외하지 않는다.
+- 미실행 challenger의 실제 거래부터 요구하던 순환 조건을 별도 최초 canary 경로로 해소했다. replay만으로 정식 승인하거나 모든 보호 lock을 자동 해제하지 않는다.
+
+### 자동 연결과 제한
+
+`기존 Entry/holding 결정의 seed → 기존 bounded frame capture → postclose Daily CLI의 격리 replay → signed replay + signed real lifecycle → rolling book → PREOPEN 원본/hash 검증 → component receipt/env → 기존 launcher/runtime → 실제 profile 경제성 재검증`
+
+- 첫 가설은 기존 weak-pullback의 `MIN_MICRO_POSITIVES` 한 단계 감소와 기존 low-profit-stagnation의 `MIN_HOLD_SEC` 300초 감소다. 현재값에서 허용된 한 key만 변경하며 enable, 비용 가정, 수량·cap·AI 권한·hard safety는 고정한다. 별도 1.1% 수익률 문턱은 없다.
+- Entry는 실제 AI 재검증 통과 후 weak-pullback으로 막힌 exact attempt에서만 수집한다. 같은 promotion/record·거래일의 재시도는 새 경제성 표본이 아니며 첫 native attempt를 보존한다. 현재 AI 상태와 실제 매매 루프가 이미 사용한 시장 국면도 추가 호출 없이 기록한다. 미래 국면은 거절하고, 누락 AI 상태를 이전 보유 상태에서 빌리지 않는다. 기존 약한 진입 predicate와 전체 holding/exit engine을 재현한다. executable ask·단일 limit 전량 깊이 기반의 **조건부 quote CF**이며 후행 주문/계좌 guard 통과나 broker receipt를 재현했다고 주장하지 않는다. 실제 canary에서도 후행 guard가 그대로 실행된다.
+- Holding은 실제 첫 보유 상태를 고정한다. 각 arm의 상태·AI 요청·비용·terminal을 독립 처리하고 hard/protect/emergency 경로를 유지한다. 다른 owner의 ADD를 억제하지 않으며 모델 범위 밖 ADD/부분 청산/외부 입력 결손이면 해당 replay를 제외한다. 최초 seed의 실패를 나중의 유리한 시점으로 교체하지 않는다.
+- 수집은 하루 owner당 4개, 합계 8개 seed이며 기존 shared capture의 active 8개·연속 frame/byte bound를 유지한다. postclose는 합계 provider 요청 8회/대상일, replay 300초 예산, 날짜별 mutex와 원자 checkpoint를 사용한다. 호출 전 예산을 먼저 예약하므로 중단/결과 미상의 요청도 자동 중복 호출하지 않는다. 미상 시 budget charge는 상한 예약이며 실제 과금 호출 횟수 주장이 아니다. 동일 seed terminal 실패/거절은 반복 호출하지 않으며 손상 checkpoint로 예산을 초기화하지 않는다. source-only checkpoint는 terminal 산출물로 승격하지 않는다. raw seed는 한 번만 저장하고 text payload에는 identity만 남긴다.
+- 최초 canary: exact paired replay 10건 이상·2일 이상, 시간순 각 절반 5건 이상; 동일 profiles/context/venue/session/score cohort의 실제 완료·full-fill·비용 대사 20건 이상·2일 이상, 각 절반 10건 이상과 양수 합계 순익을 요구한다. replay 양쪽 구간에서 후보 순익이 양수이고 기준보다 크며 자본시간 효율도 개선돼야 한다. 건당 큰 수익이나 모든 MFE horizon은 요구하지 않는다. 현재 owner별 하루 4개 cap 아래에서는 양쪽 5건을 채우는 데 최소 4개 유효 거래일이 필요하다. 이는 유한한 검증 구간이며 실제 체결이 계속 없으면 사용자 승인 조건인 real 품질을 충족하지 못한 것으로 남긴다.
+- 합격해도 owner당 한 가설·한 cohort만 최대 7 calendar days 적용한다. same-stage 새 변경 및 서로 충돌하는 component는 보류하며 미적용 trial ID를 소진하지 않는다. 같은 날 정책은 고정하고, pinned replay/real 원천이 없어지거나 바뀐 경우·실제 충분 비교의 개선 미달·기간 만료에는 다음 PREOPEN에서 기준으로 복귀한다. 동일 baseline/profile/cohort trial은 새 보고서 hash만으로 재개하지 않는다. 실제 양쪽 profile의 별도 경제성 검증을 통과해야 정식 정책으로 승계한다.
+- `first_use_evaluation.cohort_checks`는 replay 표본, 실제 체결 표본, 구간별 순익/효율 미달, 이미 종료한 trial을 구분한다. baseline-only는 구현된 최초 연구 경로의 입력 대기이며 즉시 수동 계약 수리/maintenance를 요구하지 않는다. 보호/veto/운영 lock과 기존 정식 Entry/score/PYRAMID 승인 경로는 그대로다.
+
+### 검증과 잔여 상태
+
+최종 14개 관련 pytest 모듈 **995 PASS (53.91초)**, 별도 weak-pullback/청산 안전 회귀 **24 PASS**, 합계 **1,019 PASS**다. 생산 문자열 wire·중첩 BBO 수량, exact source 재구성, 최초 canary PREOPEN/launcher/runtime, 만료·source pin·중복 trial·same-day freeze, 호출 전 crash reservation, 원본 lock 보존, 격리 holding/시장 국면 cutoff와 기존 AVG_DOWN 경로를 포함한다. Python compile, 신규/관련 helper Ruff 및 공유 모듈 fatal-rule 검사, launcher/postclose `bash -n`, `git diff --check`를 통과했다. print-only parser는 34개 항목과 `OperatorPolicySuccessionAcceptance0908` 1개를 확인했다. 구현→리뷰→수정→재검증을 반복했으며 이 요청의 코드·계약 검토 범위에서 미해결 finding 0이다. 전체 저장소 무결함이나 배포/자연 경제성 완료를 뜻하지 않는다.
+
+현재 env/PID/원본 lock, 운영 산출물 및 설치 cron은 변경하지 않았다. 장후 전체 재실행·provider 실제 호출·커밋/푸시·재기동도 하지 않았다. 자연 source가 없는 과거 날짜를 복제하지 않는다. 9/9 PREOPEN은 기준 통합/배포 receipt 확인 시점이지 최초 canary의 강제 시작일이 아니다. 필요한 새 원천이 검증된 뒤 정규 PREOPEN에서 자동 판단하며 `OperatorPolicySuccessionAcceptance0908`이 배포·자연 수집·실제 소비·종료/정식 승계·비용 차감 순익을 계속 소유한다.

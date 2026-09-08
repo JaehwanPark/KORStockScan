@@ -12093,13 +12093,16 @@ def run_sniper(is_test_mode=False):
         error_handler=lambda message: log_error(f"[SCALP_FAST_EXIT_MONITOR] {message}"),
     )
     fast_exit_monitor.start()
+    replay_market_context = {}
     smoothing_source_only_observer = SmoothingSourceOnlyPathObserver(
         observer=lambda *, now_ts: (
             sniper_state_handlers.observe_smoothing_source_only_paths_cycle(
                 targets,
                 now_ts=now_ts,
             ),
-            sniper_state_handlers.observe_avg_down_exit_replay_cycle(now_ts=now_ts),
+            sniper_state_handlers.observe_avg_down_exit_replay_cycle(
+                now_ts=now_ts, market_context=dict(replay_market_context)
+            ),
         ),
         interval_sec=min(0.25, fast_exit_interval_sec),
         error_handler=lambda message: log_error(
@@ -12116,6 +12119,11 @@ def run_sniper(is_test_mode=False):
             now_t = now.time()
             run_sniper.runtime_pause_state = is_buy_side_paused()
             current_market_regime = _current_market_regime_code()
+            # Observe the value already used by the live loop; no extra fetch
+            # and no neutral/default substitution for missing replay context.
+            replay_market_context.update(
+                regime=current_market_regime, observed_at=time.time()
+            )
             _ensure_state_handler_deps()
 
             from src.engine.error_detectors.process_health import (

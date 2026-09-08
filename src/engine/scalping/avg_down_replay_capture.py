@@ -340,6 +340,9 @@ def register(
         _SEEN.add(episode)
         if fields.get("replay_capture_state") != "armed_source_only":
             return
+        # A different observer can claim the last slot after prepare returns.
+        if len(_ACTIVE) >= MAX_ACTIVE or _DAILY_FRAME_BYTES >= MAX_DAILY_FRAME_BYTES:
+            return
         _ACTIVE[episode] = {
             "position_episode_id": episode,
             "source_observation_id": source_id,

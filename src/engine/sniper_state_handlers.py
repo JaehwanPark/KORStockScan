@@ -3501,6 +3501,7 @@ def _strategy_owner_component_state(stock):
         TRADING_RULES,
         venue=venue,
         session=session,
+        score_profile=target.get("_strategy_owner_score_profile"),
         simulated=_is_any_simulated_position(target, target.get("strategy")),
     )
 
@@ -13310,6 +13311,7 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     if stage == "score65_74_recovery_probe" and fields.get("applied") is True:
         from src.engine.scalping.score_recovery_economics import runtime_profile
 
+        stock["_strategy_owner_score_profile"] = runtime_profile(_rule)
         _log_entry_pipeline(
             stock,
             code,
@@ -22555,7 +22557,7 @@ def _observe_avg_down_route_arbitration(**kwargs) -> None:
             pass
 
 
-def observe_avg_down_exit_replay_cycle(*, now_ts: float) -> int:
+def observe_avg_down_exit_replay_cycle(*, now_ts: float, market_context=None) -> int:
     """Use the existing source-only cadence and already subscribed WS cache."""
     from src.engine.scalping.avg_down_replay_capture import (
         observe_cycle,
@@ -22595,6 +22597,15 @@ def observe_avg_down_exit_replay_cycle(*, now_ts: float) -> int:
             and 0 <= observed_at - quote_ts <= _holding_exit_ws_max_age_sec()
             and not _boolish_true(ws.get("quote_stale"))
         )
+        regime = ws.get("market_regime", "UNKNOWN")
+        regime_ts = None
+        if market_context is not None:
+            regime_ts = _safe_float(market_context.get("observed_at"), None)
+            regime = (
+                market_context.get("regime")
+                if regime_ts is not None and 0 < regime_ts <= observed_at
+                else "UNKNOWN"
+            )
         return {
             "best_bid": bid,
             "best_ask": ask,
@@ -22603,7 +22614,8 @@ def observe_avg_down_exit_replay_cycle(*, now_ts: float) -> int:
             "source_quality": "fresh_conflict_free" if fresh else "unavailable",
             "ws_data": ws,
             "micro_estimator_state": micro_state(sys.modules[__name__], code),
-            "market_regime": ws.get("market_regime", "UNKNOWN"),
+            "market_regime": regime,
+            "market_regime_observed_at": regime_ts,
         }
 
     def emit(frame):
@@ -70040,6 +70052,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         orderbook_fields=entry_orderbook_micro_fields,
         microstructure_fields=microstructure_submit_log_fields,
     )
+    if weak_pullback_block_verdict.get("blocked"):
+        from src.engine.scalping.strategy_owner_replay import observe_seed
+
+        observe_seed(
+            sys.modules[__name__], stock, code, now_ts=time.time(), ws_data=ws_data,
+            entry={
+                "authority": entry_ai_submit_authority,
+                "ai_engine": ai_engine,
+                "planned_orders": planned_orders,
+                "order_type_code": order_type_code,
+                "guard_inputs": {
+                    "strategy": strategy, "stock": stock, "latency_gate": latency_gate,
+                    "pre_ai_fields": pre_ai_gate_submit_log_fields,
+                    "guard_fields": real_pre_submit_guard_fields,
+                    "orderbook_fields": entry_orderbook_micro_fields,
+                    "microstructure_fields": microstructure_submit_log_fields,
+                },
+            },
+        )
     if weak_pullback_block_verdict.get(
         "blocked"
     ) and not _opening_rotation_submit_guard_enforced(
@@ -84492,6 +84523,13 @@ def handle_holding_state(
 
     record_market_inputs(code, now_ts=time.time(), market_regime=market_regime)
     record_ai_state(code, ai_engine)
+
+    from src.engine.scalping.strategy_owner_replay import observe_seed
+
+    observe_seed(
+        sys.modules[__name__], stock, code, now_ts=now_ts, ws_data=ws_data,
+        ai_engine=ai_engine,
+    )
 
     _maybe_release_auto_manual_control_at_average_price(
         stock,

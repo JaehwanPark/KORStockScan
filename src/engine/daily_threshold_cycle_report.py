@@ -1187,6 +1187,12 @@ def save_threshold_calibration_report(
         "source_report": str(report_path_for_date(target_date)),
         "runtime_change": False,
         "calibration_source_bundle": report.get("calibration_source_bundle") or {},
+        "strategy_owner_component_economics": report.get(
+            "strategy_owner_component_economics"
+        ),
+        "strategy_owner_component_source_window": report.get(
+            "strategy_owner_component_source_window"
+        ),
         "trade_lifecycle_attribution": report.get("trade_lifecycle_attribution") or {},
         "completed_by_source": report.get("completed_by_source") or {},
         "completed_by_source_window": report.get("completed_by_source_window"),
@@ -2323,6 +2329,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     owner_component_book = strategy_owner_components.evidence_book(
         paired_report, target_date
     )
+    from src.engine.scalping.strategy_owner_replay import attach_replays
+
+    attach_replays(owner_component_book, REPORT_DIR, target_date)
     missed_entry = _read_json_dict(source_paths["missed_entry_counterfactual"])
     performance_tuning = _read_json_dict(source_paths["performance_tuning"])
     holding_exit_observation = _read_json_dict(source_paths["holding_exit_observation"])
@@ -15113,6 +15122,19 @@ def _build_window_policy_resolution(
 def apply_window_policy_registry_to_report(
     report: dict, cumulative_report: dict | None
 ) -> dict:
+    # Components are managed by existing owners, not standalone calibration
+    # candidates. Bind their rolling source even when that candidate list is empty.
+    from src.engine.scalping.strategy_owner_components import SOURCE_WINDOW
+
+    windows = (cumulative_report or {}).get("calibration_source_bundle_by_window") or {}
+    component_book = _source_metrics_for_family(
+        "score65_74_recovery_probe", windows.get(SOURCE_WINDOW) or {}
+    ).get("strategy_owner_component_economics")
+    if isinstance(component_book, dict):
+        report["strategy_owner_component_economics"] = component_book
+        report["strategy_owner_component_source_window"] = SOURCE_WINDOW
+    else:
+        report["strategy_owner_component_source_window"] = "daily_diagnostic_only"
     candidates = report.get("calibration_candidates")
     if not isinstance(candidates, list):
         return report
@@ -19311,6 +19333,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     benchmark_started = time.monotonic()
+    if args.calibration_run_phase == "postclose" and not args.benchmark_inputs_only:
+        from src.engine.scalping.strategy_owner_replay import materialize
+
+        materialize(args.target_date, REPORT_DIR)
     report = build_daily_threshold_cycle_report(
         args.target_date,
         skip_completed_rows=args.skip_db,

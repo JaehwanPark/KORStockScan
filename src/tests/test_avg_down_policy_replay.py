@@ -613,6 +613,15 @@ def test_runtime_capture_uses_only_matching_bbo_quantity(monkeypatch):
     ws["orderbook"]["bids"][0]["price"] = 9990
     handlers.observe_avg_down_exit_replay_cycle(now_ts=now)
     assert markets[-1]["best_bid_qty"] is None
+    handlers.observe_avg_down_exit_replay_cycle(
+        now_ts=now, market_context={"regime": "BEAR", "observed_at": now - 1}
+    )
+    assert markets[-1]["market_regime"] == "BEAR"
+    assert markets[-1]["market_regime_observed_at"] == now - 1
+    handlers.observe_avg_down_exit_replay_cycle(
+        now_ts=now, market_context={"regime": "BULL", "observed_at": now + 1}
+    )
+    assert markets[-1]["market_regime"] == "UNKNOWN"
 
 
 def test_frozen_files_reject_expansion_and_unknown_data_reads(tmp_path):

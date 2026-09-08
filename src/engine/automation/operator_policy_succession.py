@@ -605,8 +605,20 @@ def validate_components(manifest, runtime_dir, lock_dir):
         ):
             raise ValueError("owner_component_contract_invalid")
         for policy in row["policies"]:
+            if policy.get("mode") == "first_use_bounded_canary":
+                if not components.valid_canary(policy, day) or policy.get(
+                    "trial_id"
+                ) not in row.get("trial_history", []):
+                    raise ValueError("owner_component_canary_contract_invalid")
             if (
-                policy["baseline"] != row["baseline"]
+                policy.get("mode") not in (None, "first_use_bounded_canary")
+                or policy["baseline"] != row["baseline"]
+                or set(policy.get("other_profiles", {}))
+                != set(components.OWNERS) - {family}
+                or any(
+                    components.profile(f, p) != p
+                    for f, p in policy.get("other_profiles", {}).items()
+                )
                 or not components.bounded_change(
                     family, policy["baseline"], policy["profile"]
                 )
@@ -684,6 +696,7 @@ def prepare_components(
             continue
         old = prior.get(family)
         policies = []
+        trial_history = list(old.get("trial_history", [])) if old else []
         if old:
             previous_sources = [
                 s
@@ -703,15 +716,99 @@ def prepare_components(
                 != previous_sources
             ):
                 raise ValueError("owner_component_operator_instruction_changed")
-            policies = old["policies"]
+            policies = [
+                p
+                for p in old["policies"]
+                if p.get("mode") != "first_use_bounded_canary"
+                or (
+                    p.get("canary_start_date", "")
+                    <= target_date
+                    <= p.get("canary_until_date", "")
+                    and (
+                        previous.get("target_date") == target_date
+                        or (
+                            research
+                            and all(
+                                all(
+                                    research.get(source, {}).get(day) == sha
+                                    for day, sha in p.get(pin, {}).items()
+                                )
+                                and bool(p.get(pin))
+                                for source, pin in (
+                                    ("replay_sources", "replay_sources"),
+                                    ("sources", "real_sources"),
+                                )
+                            )
+                        )
+                    )
+                )
+            ]
+        previous_policies = list(policies)
         evaluation = {
             "state": "baseline_migrated" if not old else "last_verified_policy_carried",
             "policies": policies,
         }
+        if old and old.get("policies") and not policies:
+            evaluation["state"] = (
+                "canary_expired_or_source_unavailable_baseline_retained"
+            )
         if previous.get("target_date") != target_date and research:
             evaluation = components.evaluate(research, family, baseline, target_date)
+            policies = [
+                p
+                for p in policies
+                if not (
+                    p.get("mode") == "first_use_bounded_canary"
+                    and any(
+                        e.get("qualified") is False
+                        and all(
+                            e.get(k) == p.get(k)
+                            for k in (
+                                "venue",
+                                "session",
+                                "context_sha256",
+                                "score_profile",
+                                "other_profiles",
+                                "profile",
+                            )
+                        )
+                        for e in evaluation.get("evaluated_profiles", [])
+                    )
+                )
+            ]
+            previous_policies = list(policies)
             if evaluation["policies"]:
                 policies = evaluation["policies"]
+            elif not policies:
+                from src.engine.scalping.strategy_owner_replay import first_use_policies
+
+                policies = first_use_policies(
+                    research,
+                    family,
+                    baseline,
+                    target_date,
+                    trial_history,
+                    diagnostics=evaluation.setdefault("first_use_evaluation", {}),
+                )
+                if policies:
+                    trial_history.extend(p["trial_id"] for p in policies)
+                    evaluation = {
+                        **evaluation,
+                        "state": "first_use_bounded_canary",
+                        "policies": policies,
+                        "unseen_profile_live_authority": "bounded_canary_only",
+                    }
+        if any(p.get("mode") == "first_use_bounded_canary" for p in policies):
+            if evaluation["state"] != "first_use_bounded_canary":
+                evaluation["state"] = "first_use_canary_carried_pending_real_promotion"
+        elif (
+            not policies
+            and old
+            and any(
+                p.get("mode") == "first_use_bounded_canary" for p in old["policies"]
+            )
+        ):
+            evaluation["state"] = "first_use_canary_terminal_baseline_retained"
         row = {
             "family": family,
             "owner": components.OWNERS[family],
@@ -724,7 +821,9 @@ def prepare_components(
             ),
             "state": evaluation["state"],
             "structural_migration_requires_ev": False,
-            "previous_policies": old["policies"] if old else [],
+            "previous_policies": previous_policies,
+            "trial_history": trial_history,
+            "previous_trial_history": list(old.get("trial_history", [])) if old else [],
             "economic_evaluation": evaluation,
             "economic_sample_floor": 20,
             "economic_acceptance": "separate_real_post_apply",
@@ -742,6 +841,46 @@ def prepare_components(
         )
         env.update(owned)
     return remaining, decisions, env
+
+
+def reconcile_component_changes(decisions):
+    """Do not publish two individually valid but mutually unconsumable profiles.
+
+    Existing selections win. Between two new incompatible trials, Entry is
+    considered first; the other owner's unapplied trial is not burned.
+    """
+    rows = [d["strategy_owner_component"] for d in decisions]
+    rows.sort(key=lambda r: r["family"] != components.WEAK)
+    for _ in range(len(rows) + 1):
+        collision = None
+        for i, left in enumerate(rows):
+            for right in rows[i + 1 :]:
+                for a in left["policies"]:
+                    for b in right["policies"]:
+                        if all(
+                            a.get(k) == b.get(k)
+                            for k in (
+                                "venue",
+                                "session",
+                                "context_sha256",
+                                "score_profile",
+                            )
+                        ) and (
+                            a["other_profiles"].get(right["family"]) != b["profile"]
+                            or b["other_profiles"].get(left["family"]) != a["profile"]
+                        ):
+                            collision = (left, right)
+        if collision is None:
+            return
+        left, right = collision
+        defer = right if right["policies"] != right["previous_policies"] else left
+        if defer["policies"] == defer["previous_policies"]:
+            raise ValueError("existing_owner_component_cohort_conflict")
+        defer["policies"] = defer["previous_policies"]
+        defer["trial_history"] = defer.get("previous_trial_history", [])
+        defer["state"] = "other_component_change_deferred"
+        defer["economic_evaluation"]["application_state"] = defer["state"]
+    raise ValueError("owner_component_cohort_conflict_unresolved")
 
 
 def build_component_receipt(target_date, decisions):
