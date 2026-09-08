@@ -10,6 +10,8 @@
 
 사용자가 이 지시문에 따라 장후작업을 모니터링하라고 요청하면 위 허용 범위의 2-pass 구현도 함께 지시한 것으로 본다. 별도의 구현 재지시를 기다리지 않는다. 단, 이 문서의 인용·열람·현행화 또는 읽기 전용 점검 요청은 모니터링/추천 구현 실행 지시가 아니다. 문서 수정만 요청받았으면 운영 산출물·PID·env를 변경하지 않는다.
 
+명시적 모니터링 실행에는 **모니터링 시점까지 도래한 체크리스트 항목의 실행·점검**을 포함한다. §4.1에 따라 전수 분류한 뒤 요청 범위·권한·선행 조건이 충족된 작업은 실행하고 결과를 검증한다. 단순히 남은 목록만 제시하고 종료하지 않으며, 체크박스나 예정 시각 자체를 실주문·수동 적용·재기동 권한으로 해석하지 않는다.
+
 상세 EV 연구, 전략별 장기성과 재평가와 모든 report의 계산 재현은 기본 범위가 아니다. 장애 원인 또는 추천의 구현 가능성·권한을 판정하는 데 필요한 근거만 확인하고, 사용자가 별도 성과 분석을 요청했을 때 확장한다.
 
 튜닝 원칙과 현재 owner는 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8, 당일 실행 항목은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 `docs/time-based-operations-runbook.md`, producer/consumer 순서는 `docs/report-based-automation-traceability.md`를 따른다.
@@ -32,12 +34,15 @@
 10. 허용된 구현 항목은 Pass 1과 Pass 2 fixed-point, review finding 0, targeted validation과 영향 산출물 재생성까지 닫힌다.
 11. 권한 밖 추천은 구현하지 않고 `user_authority`와 필요한 승인 근거를 명시한다.
 12. 대상일 submit drought의 scope별 최초 병목·해당 workorder/기존 family·다음 consumer·남은 실효성 검증이 설명된다. 경보 전달이나 코드 완료를 drought 해소로 대체하지 않는다.
+13. §4.1의 체크리스트 전수 대사에서 미분류 항목이 없고, 요청 범위 안의 due 작업은 실행·검증됐거나 구체적인 대기/차단 근거가 있다. 허용된 미실행 작업을 누락한 채 완료로 보고하지 않는다.
 
 코드·계약 검토, 배포, 자연 산출물, PREOPEN 선택, PID 소비, 비용 차감 EV/순이익 검증은 각각 별도 상태다. 기존 review finding 0을 이유로 자연 acceptance를 완료하지 않으며, 반대로 미관측 EV를 이유로 수리 완료를 취소하지 않는다. #8/#9처럼 완료된 상세검토는 새 결함·계약 변경·필수 handoff 실패가 입증될 때만 재개한다.
 
 source-only 자연 표본 부족이나 전략 후보 0건은 작업 실패가 아니다. 반대로 process 종료 코드가 0이어도 필수 artifact가 없거나 target date가 다르면 정상 종료로 보지 않는다.
 
 현행 기준 사례는 [9/7 원천의 자정 이후 보완 검토](audit-reports/2026-09-08-postclose-priority-repair-review.md)다. 코드·요약 handoff는 종결했지만 9개 workorder 증거, 과거 market/identity 결손, AI control 무표본과 machine ingress loss는 자연 acceptance로 남았다. [별도 승인 위젯·에피소드 구현](audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)은 이 지시문의 source-only 권한으로 수행한 live 변경이 아니며, 해당 사용자 승인·effective-date receipt와 별도 ledger를 따른다. 이 사례를 새 실행의 PID/terminal 판정으로 재사용하지 않는다.
+
+9/8 후속 기준은 [현재 진행표 §5.1](audit-reports/2026-09-05-postclose-work-inventory.md#51-현행-자연-acceptance와-재검토-경계)와 [당일 체크리스트](checklists/2026-09-08-stage2-todo-checklist.md)다. #119는 cache12/report6/exact3 및 call-local frozen parent, #23은 controller v4의 `source_binding_version=1`·strict/PREOPEN 공통 소비 검증을 확인한다. schema5/exact2와 오전 집계는 과거 기록이며 새 원천으로 재라벨링하지 않는다. #74/#89는 audit v2 공통 품질 gate와 독립 WS finalize·episode receipt·별도 rolling 경제성 보완의 자연 소비가 남았다. #73 원본 보존 요약, #67/#69 pattern source/currentness/AI, #76/#78/#82 판단 계층·비용 결손 보완도 각 기존 OPEN의 새 generation으로 확인한다. 리뷰 문서·dirty 코드 존재를 배포·자연 완료로 바꾸지 않는다.
 
 ### 1.1 Submit drought 최우선 점검·개선 계약
 
@@ -104,9 +109,12 @@ Swing은 설치된 main postclose cron의 `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=f
 
 대상 거래일은 처음 한 번 정하고 자정이 지나도 바꾸지 않는다.
 
+먼저 다음 §4.1의 체크리스트 대사를 수행한 뒤 process·로그를 확인한다. `TARGET_DATE`는 원래 장후 source date, `AS_OF_KST`는 매 점검의 실제 현재 시각이며 둘을 혼합하지 않는다.
+
 ```bash
 cd /home/ubuntu/KORStockScan
 TARGET_DATE="YYYY-MM-DD"
+AS_OF_KST="$(TZ=Asia/Seoul date --iso-8601=seconds)"
 
 git status --short
 crontab -l
@@ -137,6 +145,31 @@ jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_
 #11 source-quality preflight는 20:10 main wrapper의 해당 stage가 당일 자연 생성 owner다. 예약 전 없는 당일 파일을 실패 또는 현재 실매매 전체 차단으로 해석하지 않는다. 기존/수동 진단 artifact와 자연 산출물을 구분해 생성시각·run/source hash를 기록하고, #74 final audit 및 영향 row/window의 실제 consumer 판정을 확인한다.
 
 파일이 없으면 예정 시각과 process부터 확인한다. 실행시각 전이면 `not_yet_due`, predecessor를 정상 대기 중이면 `waiting`이며 실패로 처리하지 않는다.
+
+### 4.1 모니터링 시점 체크리스트 실행·점검
+
+이 절의 시간·목록 대사 방식은 장중에도 공통으로 사용하되, **실행 권한은 호출한 장중/장후 지시문과 별도 사용자 승인 범위**를 따른다. 장중 점검에 장후 worker 복구·2-pass 권한을 자동 부여하지 않는다.
+
+1. 현재 KST 날짜의 체크리스트 상단 목적·강제 규칙과 OPEN 항목을 읽는다. 자정 이후 복구라면 원래 `TARGET_DATE` 체크리스트의 미종결 owner도 함께 대사하고, 현재 날짜 파일 안의 미래 Due 항목·과거 ID 이관을 구분한다. 파일명·ID 끝자리·섹션 제목 대신 각 항목의 실제 `Due/Slot/TimeWindow`, 본문 선행 조건·Source·Acceptance를 사용한다. 당일 파일 부재나 일정/owner 충돌은 `blocked_missing_evidence|contract_drift`로 남기고 날짜·권한을 추정해 실행하지 않는다.
+2. stable ID별로 `checklist path/ID, Due/Slot/TimeWindow, as_of, source date/hash, 실행 owner, 선행 조건, 권한, 최신 receipt, 현재 판정, 이번 실행/점검 결과, 남은 acceptance/다음 확인 시각`을 기록한다. 같은 ID의 이관·반복 관찰은 한 항목으로 대사하고 다른 owner의 주문·경제성은 합치지 않는다.
+3. 아래 표로 모든 OPEN을 분류한다. 요청 범위 밖 항목도 미분류로 버리지 말고 해당 owner에 handoff한다. `[x]`는 완료 당시 범위의 증거로만 참조하며 새 결함·필수 freshness/handoff 실패 없이 재실행하지 않는다.
+
+| 시점·상태 | 이번 모니터링에서 할 일 |
+| --- | --- |
+| 미래 Due 또는 window 시작 전 | `not_yet_due`; 다음 확인 시각을 기록하고 예약 실행을 앞당기지 않음 |
+| window 도래, 실행 가능한 권한·원천·선행 조건 충족 | 최신 유효 결과가 있으면 직접 consumer까지 점검. 미실행인 허용 작업은 정상 owner/명령으로 실행→결과 검증→기존 ID에 근거 기록 |
+| 이미 running/recovering 또는 정상 선행 대기 | PID/lock·progress·대기 사유와 bounded deadline 확인. 자동 retry나 동일 producer를 중복 실행하지 않음 |
+| window 종료 후 미확인·부분 확인 | `overdue_unresolved`로 잔여 조건부터 확인. 복구 가능한 허용 작업만 현재 시각으로 수행하고, 지나간 관측창·수집되지 않은 원천은 소급 성공/재실행으로 합성하지 않음 |
+| 선행 producer가 아직 예정 전이거나 정상 bounded wait 중 | consumer 확인 시각이 됐어도 producer를 강제 기동하지 않음. producer의 `not_yet_due`와 consumer의 `waiting`, 예정/완료 예상 근거를 분리 |
+| 권한·근거·외부 의존성 결손 | `user_authority|blocked_missing_evidence|external_dependency`; 직접 owner·필요 승인/근거·수용조건을 명시하고 가능한 읽기 전용 확인만 수행 |
+| 정상 OFF/retired/valid-empty 또는 이미 해당 acceptance 완료 | 근거가 있는 정상 skip/완료로 대사. 무표본을 만들기 위한 수리·재기동은 하지 않음 |
+
+4. `overdue_unresolved`는 체크리스트 확인 상태이지 process FAIL이 아니다. 당초 window에서 확인한 provenance와 through-close·다음 PREOPEN·경제성 등 남은 조건을 분리하고, 실제 producer deadline 초과·필수 artifact 결손일 때만 §5/§6 장애 대응으로 올린다. 불명확한 기한은 owner 계약을 확인해 기록하며 무제한 `waiting`으로 남기지 않는다.
+5. due 작업은 **실제 안전/필수 실행 장애 → source-quality·custody 정합성 → submit drought 원인·handoff → 그 밖의 독립 owner** 순으로 처리하되 producer 순서와 설치된 자동실행을 보존한다. source-only 수리도 review gate 후 영향 consumer만 검증한다. custody/state 수정은 신규 진입 가능 상태를 바꿀 수 있으므로 일반 source-only 권한이 아니다. 별도 승인된 exact receipt 복구와 단순 점검을 구분한다.
+6. 기존 ID의 실행 근거에 실제 시각·명령/검사 범위·exit/receipt·원천 hash·남은 조건을 남긴다. 전체 Acceptance가 충족됐을 때만 `[x]`로 닫고, 부분 실행은 OPEN을 유지한다. 새 미래 작업만 `Due/Slot/TimeWindow/Track`으로 기록하며 같은 owner를 중복 생성하지 않는다. checklist 변경 후 print-only parser로 ID 유일성을 검증한다. 외부 sync는 실행하지 않는다.
+7. 매 관찰 재개·slot 경계·producer terminal 뒤 시각과 체크리스트 변경을 다시 읽어 대기열을 갱신한다. 단회 요청은 as-of 실행·점검 범위와 잔여를 보고하고, 지속 요청은 지정 종료조건까지 새 due 작업을 포함해 반복한다. 둘 모두 미해결 상태를 완료로 바꾸지 않는다.
+
+9/8 예시: `ThresholdDailyEVReport0908` 16:30~16:45와 `HumanInterventionSummary0908` 17:00~17:15는 각 Source에 지정된 **9/7 보고서**를 읽는 점검이며 9/8 main 20:10 조기 재실행이 아니다. 같은 파일에 있어도 `OperatorPolicySuccessionAcceptance0908`의 Due는 9/9, `ScannerLookupAttentionCalendarMaintenance1002`는 10/2다. 이후 모니터링에는 이 예시 시각을 고정하지 말고 실제 항목을 다시 읽는다.
 
 ## 5. 상태 판정과 지속 모니터링
 
@@ -426,7 +459,7 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 
 최종 상태는 다음처럼 사용한다.
 
-- `진행 중`: 아직 미래 작업 또는 정상 running/waiting/recovering이 남으면 현재 상태만 보고하고 GREEN 완료로 종료하지 않는다. 정해진 기한 내 정상 대기를 RED 장애로 오판하지 않는다.
+- `진행 중`: 대상 거래일의 필수 운영 owner에 아직 예정 전 작업 또는 정상 running/waiting/recovering이 남으면 현재 상태만 보고하고 GREEN 완료로 종료하지 않는다. 정해진 기한 내 정상 대기를 RED 장애로 오판하지 않는다. 별도 다음 거래일 자연 관찰이나 장기 maintenance 예정은 당일 실행 중 상태와 구분하고 아래 YELLOW의 잔여 조건으로 보고한다.
 - `GREEN`: 대상일 마지막 필수 owner까지 due가 되었고 모든 due 필수 owner가 성공 terminal이고, eligible implement-now·추천 fixed-point와 review finding 0까지 닫혔으며 unresolved failure와 실제 점유 stale lock이 없다.
 - `YELLOW`: 필수 실행은 정상 terminal이지만 source-only warning, 외부 dependency, user-authority 추천 또는 다음 거래일 관찰이 남아 있다.
 - `RED`: due 필수 owner의 실패·확정 hang·비정상 missing, deadline/실패 때문에 닫히지 못한 verifier/controller/finalization, 또는 완료를 선언하면서 누락한 허용 범위 actionable 구현이 있다.
@@ -443,5 +476,6 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 8. implement-now와 위젯·에피소드 추천 Pass 1/2 ledger 및 fixed-point 결과
 9. 남은 warning, external dependency 또는 user-authority 항목
 10. submit drought: scope·as-of/source hash·raw/causal 분모·최초 병목, 개선 owner/native ID·현재 disposition, canonical handoff/다음 PREOPEN/PID 상태, 실제 제출 회복과 비용 차감 경제성의 별도 판정
+11. 체크리스트 대사: ID별 Due/TimeWindow·이번 실행/점검·최신 receipt·완료 또는 잔여 조건. due 미실행·기한 경과·정상 대기·권한/외부 의존성·미래 예정·범위 밖을 구분하고 미분류 0을 확인
 
-작업이 진행 중이면 완료 보고를 하지 않는다. 현재 stage, PID, 마지막 progress 근거, 기다리는 조건과 bounded deadline을 알리고 계속 모니터링한다.
+작업이 진행 중이면 운영 완료를 선언하지 않는다. 현재 stage, PID, 마지막 progress 근거, 기다리는 조건과 bounded deadline을 알린다. 명시적으로 요청받은 지속 모니터링은 지정 종료조건까지 계속하며, 단회 점검은 as-of 상태와 미완료 조건을 보고하고 닫되 이를 장후 완료로 표현하지 않는다.
