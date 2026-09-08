@@ -2722,13 +2722,13 @@ def _dedupe_calibration_candidates(
 def _score65_74_entry_unlock_candidate(
     candidate: dict[str, Any], *, target_date: str = ""
 ) -> bool:
-    from src.engine.scalping.score_recovery_economics import evaluate, profile
+    from src.engine.scalping.score_recovery_economics import evaluate_policy, profile
 
     if candidate.get("family") != "score65_74_recovery_probe":
         return False
     current = profile(candidate.get("current_values"))
     recommended = profile(candidate.get("recommended_values"))
-    if current is None or current != recommended:
+    if current is None or recommended is None:
         return False
     raw_metrics = candidate.get("source_metrics")
     if not isinstance(raw_metrics, dict):
@@ -2749,7 +2749,8 @@ def _score65_74_entry_unlock_candidate(
         except (ValueError, TypeError, AttributeError):
             return False
     try:
-        return evaluate(metrics, candidate.get("sample_floor", 20))["ready"]
+        decision = evaluate_policy(metrics, candidate.get("sample_floor", 20))
+        return decision["ready"] and decision.get("profile") == recommended
     except (TypeError, ValueError, OverflowError):
         return False
 
@@ -3555,6 +3556,24 @@ def _ai_guard_allows_candidate(
                 else "ai_review_missing_deterministic_allowed"
             ),
         )
+    from src.engine.scalping.score_recovery_economics import (
+        profile,
+        policy_search_digest,
+    )
+
+    changed_score_profile = family == "score65_74_recovery_probe" and profile(
+        candidate.get("current_values")
+    ) != profile(candidate.get("recommended_values"))
+    if changed_score_profile and (
+        item.get("reviewed_current_profile") != profile(candidate.get("current_values"))
+        or item.get("reviewed_recommended_profile")
+        != profile(candidate.get("recommended_values"))
+        or item.get("reviewed_policy_search_sha256")
+        != policy_search_digest(
+            candidate.get("source_metrics") or {}, candidate.get("sample_floor", 20)
+        )
+    ):
+        return (False, "score_profile_ai_review_generation_mismatch")
     guard_decision = (
         item.get("guard_decision")
         if isinstance(item.get("guard_decision"), dict)
@@ -3579,6 +3598,7 @@ def _ai_guard_allows_candidate(
         return (True, "ai_unavailable_deterministic_allowed")
     if (
         _score65_74_entry_unlock_candidate(candidate)
+        and not changed_score_profile
         and route_action == "exclude_from_threshold_candidate_review"
         and str(
             guard_decision.get("anomaly_route") or item.get("ai_anomaly_route") or ""

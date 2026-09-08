@@ -7,6 +7,7 @@ writes or new runtime gate live here. Missing days/rows are isolated explicitly.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
@@ -18,6 +19,7 @@ from src.engine.scalping.score_recovery_economics import (
     digest,
     economic_blockers,
     profile,
+    evaluate_policy,
 )
 from src.utils.market_day import is_krx_trading_day
 
@@ -275,15 +277,101 @@ def build_evidence(report_dir: Path, start, end):
         "observations": rows,
         "counterfactual_incremental_ev": None,
         "counterfactual_status": "existing_strategy_owner_evaluation_required",
-        "maintenance_review_due": len(sources) >= 20
-        and not any(
-            c["net_pnl_krw"] > 0 and c["profile"] and c["scale_class"] == "initial_only"
-            for c in windows["rolling_10d"]["cohorts"]
-        ),
+        "maintenance_review_due": len(sources) >= 20,
         "maintenance_action": "review_source_or_owner_handoff_or_retirement_not_force_buy",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
+
+
+def attach_owner_evaluation(evidence, report_dir: Path):
+    """Reuse the preceding Daily owner's search, never a second apply owner."""
+    target = evidence["target_date"]
+    path = (
+        report_dir
+        / "threshold_cycle_calibration"
+        / f"threshold_cycle_calibration_{target}_postclose.json"
+    )
+    status = "owner_report_missing_or_invalid"
+    try:
+        raw = path.read_bytes()
+        report = json.loads(raw)
+        if report.get("date") != target or report.get("run_phase") != "postclose":
+            raise ValueError("owner_date_or_phase_mismatch")
+        candidates = [
+            c
+            for c in report["calibration_candidates"]
+            if isinstance(c, dict) and c.get("family") == "score65_74_recovery_probe"
+        ]
+        if len(candidates) != 1:
+            raise ValueError("owner_candidate_not_unique")
+        c = candidates[0]
+        metrics = c["source_metrics"]
+        source_days = metrics["score_recovery_real_economics"]["source_dates"]
+        if any(date.fromisoformat(d) > date.fromisoformat(target) for d in source_days):
+            raise ValueError("future_owner_evidence")
+        if profile(metrics.get("score_recovery_current_profile")) != profile(
+            c.get("current_values")
+        ):
+            raise ValueError("owner_current_profile_mismatch")
+        decision = evaluate_policy(metrics, c["sample_floor"])
+        if (
+            "policy_search" not in decision
+            or c.get("condition_feasibility") != decision
+        ):
+            raise ValueError("owner_search_generation_mismatch")
+        status = "owner_evaluation_verified"
+        evidence["owner_evaluation"] = {
+            "status": status,
+            "path": str(path),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "decision": decision,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        if decision["ready"] and decision["policy_search"].get("selected_profile"):
+            evidence["maintenance_review_due"] = False
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        evidence["owner_evaluation"] = {
+            "status": status,
+            "path": str(path),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    return evidence
+
+
+def maintenance_followups(evidence):
+    if not evidence.get("maintenance_review_due"):
+        return []
+    owner = evidence.get("owner_evaluation") or {}
+    search = (owner.get("decision") or {}).get("policy_search") or {}
+    return [
+        {
+            "title": "pattern lab bounded maintenance review",
+            "expected_effect": "Resolve missing economics/owner comparison or integrate redundant research",
+            "risk": "No automatic retirement, forced entry or policy mutation",
+            "required_sample": "Maintenance is due; additional samples are not a prerequisite for review",
+            "metric": "exact source gap and existing-owner economic selection",
+            "apply_stage": "report_only_observation",
+            "maintenance_review": {
+                "contract": "pattern_lab_maintenance_v1",
+                "reason": search.get("status")
+                or owner.get("status")
+                or "economic_source_not_ready",
+                "valid_source_day_count": len(evidence["sources"]),
+                "required_dispositions": [
+                    "retain_with_evidence",
+                    "repair_source",
+                    "integrate",
+                    "retire",
+                ],
+                "acceptance": "Record exact blocker and disposition; do not close for a single positive cohort",
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    ]
 
 
 def profit_followups(evidence):

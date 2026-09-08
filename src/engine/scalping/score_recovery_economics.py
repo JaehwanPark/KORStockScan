@@ -29,6 +29,14 @@ SCOPES = {
     "NXT": "nxt",
     "PREMARKET_KRX_LIKE": "krx_like_premarket",
 }
+POLICY_SEARCH_SCHEMA = "score_recovery_real_profile_search_v1"
+# Existing bounded axes only. Scores, sizing and the effective rebound floor
+# are not searched. An unseen profile never receives execution evidence.
+PROFILE_SEARCH_BOUNDS = {
+    "min_buy_pressure": (55.0, 75.0, 5.0),
+    "min_tick_accel": (0.8, 1.5, 0.1),
+    "min_micro_vwap_bp": (10.0, 20.0, 5.0),
+}
 
 
 def digest(value):
@@ -391,7 +399,37 @@ def _evaluate(metrics, sample_floor=20):
             if not partial_invalid
             else None
         )
-        partial_risk_veto = partial_net is None or partial_net < 0
+        # A tiny isolated partial loss is not a whole-scope stop. Preserve
+        # separate fill cohorts and compare losses with the conservative full
+        # edge reserve; repeated negative partial-day evidence is a veto too.
+        partial_by_day = {}
+        for r in partial_rows:
+            partial_by_day.setdefault(r["date"], []).append(r["net_krw"])
+        partial_days = [math.fsum(v) for v in partial_by_day.values()]
+        partial_mean = (
+            math.fsum(partial_days) / len(partial_days) if partial_days else 0
+        )
+        partial_se = (
+            math.sqrt(
+                sum((v - partial_mean) ** 2 for v in partial_days)
+                / (len(partial_days) - 1)
+                / len(partial_days)
+            )
+            if len(partial_days) > 1
+            else None
+        )
+        repeated_partial_loss = (
+            partial_se is not None and partial_mean + 2 * partial_se < 0
+        )
+        full_edge_reserve = (
+            max(0.0, mean - 2 * se) / 100 * math.fsum(r["notional_krw"] for r in rows)
+        )
+        full_edge_reserve = max(0.0, min(net, full_edge_reserve))
+        partial_risk_veto = (
+            partial_net is None
+            or (partial_net < 0 and -partial_net >= full_edge_reserve)
+            or repeated_partial_loss
+        )
         ready = (
             n >= floor
             and days >= 2
@@ -416,6 +454,9 @@ def _evaluate(metrics, sample_floor=20):
                 "partial_sample_count_diagnostic": len(partial_rows),
                 "partial_net_krw_diagnostic": partial_net,
                 "partial_loss_veto": partial_risk_veto,
+                "partial_risk_contract": "separate_partial_loss_vs_full_edge_reserve_v2",
+                "partial_loss_repeated_across_days": repeated_partial_loss,
+                "full_edge_reserve_krw": full_edge_reserve,
                 "ready": ready,
             }
         )
@@ -457,7 +498,7 @@ def evaluate(metrics, sample_floor=20):
 
 
 def approval_version(metrics, sample_floor=20):
-    decision = evaluate(metrics, sample_floor)
+    decision = evaluate_policy(metrics, sample_floor)
     if not decision["ready"]:
         raise ValueError("score_recovery_economics_not_ready")
     return (
@@ -466,6 +507,209 @@ def approval_version(metrics, sample_floor=20):
         + ":"
         + ",".join(decision["eligible_scopes"])
     )
+
+
+def _bounded_profile_change(current, proposed):
+    changed = [k for k in PROFILE_KEYS if proposed[k] != current[k]]
+    if len(changed) != 1 or changed[0] not in PROFILE_SEARCH_BOUNDS:
+        return False
+    key = changed[0]
+    low, high, step = PROFILE_SEARCH_BOUNDS[key]
+    return (
+        low <= proposed[key] <= high
+        and abs(proposed[key] - current[key]) <= step + 1e-9
+        and proposed["min_micro_vwap_bp"] >= 10
+    )
+
+
+def _profile_period_stats(book, p, venue, days):
+    rows = [
+        r
+        for r in book["observations"].values()
+        if r["profile"] == p
+        and r["venue"] == venue
+        and r.get("session") == SCOPES[venue]
+        and r["date"] in days
+    ]
+    partial_net = math.fsum(
+        r["net_krw"]
+        for r in book["partial_observations"].values()
+        if r.get("profile") == p
+        and r.get("venue") == venue
+        and r.get("session") == SCOPES[venue]
+        and r.get("date") in days
+    )
+    full_net = math.fsum(r["net_krw"] for r in rows)
+    return {
+        "count": len(rows),
+        "net_per_source_day": (full_net + partial_net) / len(days),
+        "full_net_per_source_day": full_net / len(days),
+        "partial_net_per_source_day": partial_net / len(days),
+        "net_ev_scope": "full_only_not_pooled_with_partial",
+        "completed_per_source_day": len(rows) / len(days),
+        "net_ev_pct": (
+            (
+                math.fsum(r["net_krw"] for r in rows)
+                / math.fsum(r["notional_krw"] for r in rows)
+                * 100
+            )
+            if rows
+            else None
+        ),
+    }
+
+
+def _evaluate_policy(metrics, sample_floor=20):
+    """Bounded reselection of actually traded profiles, not invented BUY fills.
+
+    Fit ranks on the early half of source dates; only the one frozen winner is
+    checked on the later half. Both halves retain losses and zero-trade days.
+    Observational version comparison is NOT a causal treatment-effect claim.
+    The existing PREOPEN/AI/lock/safety owners remain in charge of application.
+    """
+    baseline = evaluate(metrics, sample_floor)
+    search = {
+        "schema": POLICY_SEARCH_SCHEMA,
+        "status": "no_supported_alternative_profile",
+        "comparison_basis": "observed_real_profiles_not_causal_counterfactual",
+        "candidate_count": 0,
+        "selected_profile": None,
+        "candidate_ledger": [],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    baseline["policy_search"] = search
+    current = profile(metrics.get("score_recovery_current_profile"))
+    book = metrics.get("score_recovery_real_economics")
+    if (
+        current is None
+        or not isinstance(book, dict)
+        or "natural_acceptance" not in baseline
+    ):
+        search["status"] = "source_contract_not_ready"
+        return baseline
+    days = sorted(book["source_dates"])
+    if len(days) < 2:
+        search["status"] = "source_window_not_mature"
+        return baseline
+    train, holdout = days[: len(days) // 2], days[len(days) // 2 :]
+    search.update(
+        source_dates=days,
+        train_dates=train,
+        holdout_dates=holdout,
+        source_book_sha256=digest(book),
+        current_profile=current,
+    )
+    profiles = {}
+    for row in book["observations"].values():
+        p = profile(row.get("profile"))
+        if p is not None and _bounded_profile_change(current, p):
+            profiles[digest(p)] = p
+    ranked = []
+    for key, p in sorted(profiles.items()):
+        candidate = evaluate(
+            {**metrics, "score_recovery_current_profile": p}, sample_floor
+        )
+        entry = {
+            "candidate_id": "score-profile-" + key[:20],
+            "profile": p,
+            "sample_count": candidate["sample_count"],
+            "status": "hold_economic_evidence",
+            "training_comparisons": [],
+            "comparisons": [],
+        }
+        search["candidate_ledger"].append(entry)
+        # Do not select a runner-up using knowledge of holdout outcomes.
+        for venue in SCOPES:
+            before = _profile_period_stats(book, current, venue, train)
+            after = _profile_period_stats(book, p, venue, train)
+            entry["training_comparisons"].append(
+                {"venue": venue, "baseline": before, "candidate": after}
+            )
+            if not before["count"] or not after["count"]:
+                continue
+            delta = after["net_per_source_day"] - before["net_per_source_day"]
+            if delta > 0 and after["net_ev_pct"] > before["net_ev_pct"]:
+                ranked.append((delta, key, venue, p, candidate, entry))
+                entry["status"] = "train_candidate"
+    search["candidate_count"] = len(profiles)
+    if not ranked:
+        search["status"] = "no_training_improvement" if profiles else search["status"]
+        return baseline
+    _, key, venue, p, candidate, entry = sorted(
+        ranked, key=lambda v: (-v[0], v[1], v[2])
+    )[0]
+    before = _profile_period_stats(book, current, venue, holdout)
+    after = _profile_period_stats(book, p, venue, holdout)
+    comparison = {
+        "venue": venue,
+        "baseline": before,
+        "candidate": after,
+        "observed_incremental_net_per_source_day": after["net_per_source_day"]
+        - before["net_per_source_day"],
+    }
+    entry["comparisons"].append(comparison)
+    passed = (
+        candidate["ready"]
+        and venue in candidate["eligible_scopes"]
+        and before["count"] > 0
+        and after["count"] > 0
+        and after["net_per_source_day"] > max(0, before["net_per_source_day"])
+        and after["net_ev_pct"] > max(0, before["net_ev_pct"])
+    )
+    # One env profile is shared by the scoped runtime consumer. A KRX-only
+    # improvement must not silently drop an already eligible NXT scope.
+    required_scopes = sorted(set(baseline["eligible_scopes"]) | {venue})
+    for other in sorted(set(required_scopes) - {venue}):
+        old = _profile_period_stats(book, current, other, holdout)
+        new = _profile_period_stats(book, p, other, holdout)
+        passed = passed and (
+            other in candidate["eligible_scopes"]
+            and old["count"] > 0
+            and new["count"] > 0
+            and new["net_per_source_day"] >= old["net_per_source_day"]
+            and new["net_ev_pct"] >= old["net_ev_pct"]
+        )
+        entry["comparisons"].append({"venue": other, "baseline": old, "candidate": new})
+    entry["status"] = "selected_observed_profile" if passed else "holdout_not_improved"
+    search["status"] = entry["status"]
+    if not passed:
+        return baseline
+    search.update(
+        selected_profile=p,
+        selected_candidate_id=entry["candidate_id"],
+        eligible_scopes=required_scopes,
+    )
+    candidate.update(
+        policy_search=search,
+        eligible_scopes=required_scopes,
+        reason="bounded_observed_profile_improved_on_holdout",
+    )
+    return candidate
+
+
+def evaluate_policy(metrics, sample_floor=20):
+    try:
+        return _evaluate_policy(metrics, sample_floor)
+    except (ValueError, TypeError, OverflowError, KeyError, AttributeError):
+        result = evaluate({}, sample_floor)
+        result.update(
+            state="source_quality_blocked", reason="malformed_profile_search_contract"
+        )
+        result["policy_search"] = {
+            "schema": POLICY_SEARCH_SCHEMA,
+            "status": "source_contract_not_ready",
+            "candidate_count": 0,
+            "selected_profile": None,
+            "candidate_ledger": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        return result
+
+
+def policy_search_digest(metrics, sample_floor=20):
+    return digest(evaluate_policy(metrics, sample_floor)["policy_search"])
 
 
 def runtime_profile(rule):

@@ -318,10 +318,233 @@ def test_observed_partial_losses_are_separate_and_veto_full_only_survivor_bias()
     partial = econ.evidence_book(sign(report), "2026-09-07")["partial_observations"]
     assert len(partial) == 1
     metrics["score_recovery_real_economics"]["partial_observations"] = partial
+    second = copy.deepcopy(next(iter(partial.values())))
+    second["date"] = "2026-09-04"
+    partial["second-partial-day"] = second
     decision = econ.evaluate(metrics)
     assert decision["sample_count"] == 20
     assert decision["cohorts"][0]["partial_loss_veto"] is True
     assert not decision["ready"]
+
+
+def test_isolated_small_partial_loss_is_not_a_whole_scope_veto():
+    metrics = real_metrics(net=1)
+    row = copy.deepcopy(
+        next(iter(metrics["score_recovery_real_economics"]["observations"].values()))
+    )
+    row.update(net_krw=-1, net_return_pct=-0.002, fill_class="partial_only")
+    metrics["score_recovery_real_economics"]["partial_observations"]["partial"] = row
+    decision = econ.evaluate(metrics)
+    assert decision["ready"]
+    assert decision["cohorts"][0]["partial_net_krw_diagnostic"] == -1
+    row["net_krw"] = -21
+    row["net_return_pct"] = -21 / 50000 * 100
+    assert not econ.evaluate(metrics)["ready"]
+
+
+def real_comparison_metrics(*, holdout_net=2):
+    proposed = {**PROFILE, "min_tick_accel": 1.3}
+    books = []
+    for index, day in enumerate(
+        ("2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07")
+    ):
+        r = signed_report(day, count=5, net=1)
+        alternative = signed_report(day, count=5, net=2 if index < 2 else holdout_net)
+        for row in alternative["rows"]:
+            row["score_recovery_profile"] = proposed
+            row["main_lifecycle_id"] += "-alternative"
+        r["rows"].extend(alternative["rows"])
+        books.append(econ.evidence_book(sign(r), day))
+    return {
+        "score_recovery_current_profile": PROFILE,
+        "score_recovery_real_economics": econ.merge_books(books),
+    }
+
+
+def test_observed_bounded_profile_reselection_and_preopen_recompute():
+    metrics = real_comparison_metrics()
+    selected = econ.evaluate_policy(metrics)
+    assert selected["ready"]
+    assert selected["profile"]["min_tick_accel"] == 1.3
+    assert selected["policy_search"]["selected_profile"] == selected["profile"]
+    c = candidate(metrics)
+    # Old parameters must not inherit the alternative's approval version.
+    assert not preopen._score65_74_entry_unlock_candidate(c)
+    c["recommended_values"].update(selected["profile"])
+    assert preopen._score65_74_entry_unlock_candidate(c, target_date="2026-09-08")
+    version = econ.approval_version(metrics)
+    assert econ.digest(selected["profile"]) in version
+    c["recommended_values"]["min_tick_accel"] = 1.4
+    assert not preopen._score65_74_entry_unlock_candidate(c)
+
+
+def test_failed_holdout_keeps_baseline_without_searching_a_runner_up():
+    metrics = real_comparison_metrics(holdout_net=-1)
+    book = metrics["score_recovery_real_economics"]
+    # A second profile has a smaller train gain but a successful holdout. It
+    # must not be selected after observing the first candidate's failure.
+    for key, row in list(book["observations"].items()):
+        if row["profile"] != PROFILE:
+            continue
+        second = copy.deepcopy(row)
+        second["profile"] = {**PROFILE, "min_buy_pressure": 70}
+        second["net_krw"] = 1.5
+        second["net_return_pct"] = 1.5 / second["notional_krw"] * 100
+        book["observations"][key + "-runner-up"] = second
+    selected = econ.evaluate_policy(metrics)
+    assert selected["profile"] == PROFILE
+    assert selected["policy_search"]["status"] == "holdout_not_improved"
+    assert selected["policy_search"]["selected_profile"] is None
+    ledger = selected["policy_search"]["candidate_ledger"]
+    assert len(ledger) == 2
+    assert sum(bool(item["comparisons"]) for item in ledger) == 1
+    assert all(item["training_comparisons"] for item in ledger)
+
+
+def test_reselection_cannot_drop_an_existing_eligible_venue():
+    metrics = real_comparison_metrics()
+    book = metrics["score_recovery_real_economics"]
+    for key, row in list(book["observations"].items()):
+        if row["profile"] != PROFILE:
+            continue
+        nxt = copy.deepcopy(row)
+        nxt.update(venue="NXT", session=econ.SCOPES["NXT"])
+        book["observations"][key + "-nxt"] = nxt
+    assert econ.evaluate(metrics)["eligible_scopes"] == ["KRX", "NXT"]
+    selected = econ.evaluate_policy(metrics)
+    assert selected["profile"] == PROFILE
+    assert selected["eligible_scopes"] == ["KRX", "NXT"]
+    assert selected["policy_search"]["status"] == "holdout_not_improved"
+
+
+def test_partial_loss_reserve_never_exceeds_real_full_net():
+    metrics = real_metrics(net=1)
+    book = metrics["score_recovery_real_economics"]
+    for index, row in enumerate(book["observations"].values()):
+        row["notional_krw"] = 10**6 if index == 0 else 100
+        row["net_return_pct"] = row["net_krw"] / row["notional_krw"] * 100
+    full = econ.evaluate(metrics)["cohorts"][0]
+    assert full["full_edge_reserve_krw"] <= full["net_krw"]
+    partial = copy.deepcopy(next(iter(book["observations"].values())))
+    partial.update(net_krw=-21, fill_class="partial_only")
+    partial["net_return_pct"] = -21 / partial["notional_krw"] * 100
+    book["partial_observations"]["partial"] = partial
+    assert not econ.evaluate(metrics)["ready"]
+
+
+def test_only_one_existing_bounded_rise_rebound_axis_is_searchable():
+    assert econ._bounded_profile_change(PROFILE, {**PROFILE, "min_tick_accel": 1.3})
+    for changes in (
+        {"min_score": 68},
+        {"min_micro_vwap_bp": 5},
+        {"min_tick_accel": 1.4},
+        {"min_tick_accel": 1.3, "min_buy_pressure": 70},
+    ):
+        assert not econ._bounded_profile_change(PROFILE, {**PROFILE, **changes})
+
+
+def test_legacy_raw_micro_zero_is_normalized_before_profile_comparison():
+    rules = {
+        "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE": 69,
+        "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP": 0,
+        "AI_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP": 10,
+    }
+    current = econ.runtime_profile(lambda key, default: rules.get(key, default))
+    assert current == PROFILE
+    assert econ._bounded_profile_change(current, {**current, "min_tick_accel": 1.3})
+
+
+def test_daily_refresh_emits_changed_profile_and_preopen_consumes_it(
+    tmp_path, monkeypatch
+):
+    metrics = real_comparison_metrics()
+    c = candidate(metrics)
+    c.update(
+        stage="entry",
+        priority=10,
+        allowed_runtime_apply=True,
+        calibration_state="hold_sample",
+        sample_floor_status="hold_sample",
+        target_env_keys=daily.CALIBRATION_FAMILY_METADATA[c["family"]][
+            "target_env_keys"
+        ],
+    )
+    daily._refresh_candidate_from_primary_window(
+        c,
+        primary_snapshot={},
+        primary_source_metrics=metrics,
+        primary_sample_count=20,
+        primary_ready=True,
+        primary_window="rolling_20d",
+    )
+    assert c["recommended_values"]["min_tick_accel"] == 1.3
+    assert c["current_values"]["min_tick_accel"] == 1.2
+    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", tmp_path)
+    _, decisions, env = preopen._select_auto_apply_candidates(
+        [c], ai_review={}, require_ai=False, target_date="2026-09-08", operator_locks=[]
+    )
+    assert decisions[0]["selected"], decisions
+    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL"] == "1.3"
+
+
+def test_changed_profile_ai_receipt_is_bound_and_no_old_instrumentation_exception():
+    metrics = real_comparison_metrics()
+    c = candidate(metrics)
+    c["recommended_values"].update(econ.evaluate_policy(metrics)["profile"])
+    c.update(
+        allowed_runtime_apply=True,
+        calibration_state="adjust_up",
+        sample_floor_status="ready",
+        runtime_apply_eligible_now=True,
+    )
+    report = daily.build_threshold_cycle_ai_correction_report(
+        {"date": "2026-09-07", "run_phase": "postclose", "calibration_candidates": [c]}
+    )
+    receipt = report["items"][0]
+    assert receipt["reviewed_recommended_profile"]["min_tick_accel"] == 1.3
+    assert receipt["reviewed_policy_search_sha256"] == econ.policy_search_digest(
+        metrics
+    )
+    # Synthetic parsed receipt only: this test calls no provider.
+    receipt.update(
+        guard_accepted=True,
+        ai_anomaly_route="threshold_candidate",
+        route_action="allow",
+    )
+    bundle = {"items_by_family": {c["family"]: receipt}}
+    assert preopen._ai_guard_allows_candidate(c, bundle, require_ai=True)[0]
+    receipt["reviewed_policy_search_sha256"] = "stale"
+    assert not preopen._ai_guard_allows_candidate(c, bundle, require_ai=True)[0]
+    receipt["reviewed_policy_search_sha256"] = econ.policy_search_digest(metrics)
+    receipt.update(
+        route_action="exclude_from_threshold_candidate_review",
+        guard_decision={"anomaly_route": "instrumentation_gap"},
+    )
+    assert not preopen._ai_guard_allows_candidate(c, bundle, require_ai=True)[0]
+
+
+@pytest.mark.parametrize("value", [None, [], {"score_recovery_real_economics": []}])
+def test_malformed_policy_search_fails_closed(value):
+    assert not econ.evaluate_policy(value)["ready"]
+
+
+def test_partial_costs_cannot_make_a_worse_profile_look_like_an_improvement():
+    metrics = real_comparison_metrics()
+    # Isolated holdout loss stays below the full-edge reserve, but erases the
+    # candidate's improvement versus the baseline. Do not pool fill-class EV.
+    book = metrics["score_recovery_real_economics"]
+    row = copy.deepcopy(
+        next(
+            r
+            for r in book["observations"].values()
+            if r["profile"]["min_tick_accel"] == 1.3 and r["date"] == "2026-09-07"
+        )
+    )
+    row.update(net_krw=-11, net_return_pct=-11 / 50000 * 100, fill_class="partial_only")
+    book["partial_observations"]["partial"] = row
+    result = econ.evaluate_policy(metrics)
+    assert result["policy_search"]["status"] == "holdout_not_improved"
+    assert result["profile"] == PROFILE
 
 
 def test_new_pipeline_stage_preserves_scalar_profile_and_old_stage_is_not_remapped():

@@ -300,6 +300,13 @@ def _normalize_route(title: str) -> dict[str, str]:
 def _finding_from_backlog_item(lab: str, item: dict[str, Any]) -> dict[str, Any]:
     title = str(item.get("title") or item.get("제목") or "").strip()
     route = _normalize_route(title)
+    if item.get("maintenance_review"):
+        route = {
+            "route": "maintenance_review",
+            "family": "",
+            "stage": "runtime_ops",
+            "target_subsystem": "pattern_lab_maintenance",
+        }
     if item.get("diagnostic_source") or item.get("economic_cohort"):
         family = item.get("owner_family")
         route = {
@@ -331,6 +338,7 @@ def _finding_from_backlog_item(lab: str, item: dict[str, Any]) -> dict[str, Any]
             "apply_stage": item.get("적용단계") or item.get("apply_stage"),
             "diagnostic_source": item.get("diagnostic_source"),
             "economic_cohort": item.get("economic_cohort"),
+            "maintenance_review": item.get("maintenance_review"),
             "required_owner_evaluation": "rise_rebound_and_incremental_net_ev_with_existing_guards",
         },
     }

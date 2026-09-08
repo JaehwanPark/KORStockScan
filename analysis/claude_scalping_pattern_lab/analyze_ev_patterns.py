@@ -26,6 +26,8 @@ from analysis.claude_scalping_pattern_lab.economic_evidence import (
     finite,
     profit_followups,
     trading_dates,
+    attach_owner_evaluation,
+    maintenance_followups,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -410,6 +412,7 @@ def build_ev_backlog(
     # exact-cost all-outcome cohort (including losses) owns economic followups.
     if economics:
         backlog.extend(profit_followups(economics))
+        backlog.extend(maintenance_followups(economics))
 
     return backlog
 
@@ -475,6 +478,7 @@ def main() -> dict:
         config.ANALYSIS_START,
         config.ANALYSIS_END,
     )
+    attach_owner_evaluation(economics, config.PROJECT_ROOT / "data/report")
 
     print("[analyze] cohort summary …")
     coh_summary = cohort_summary(trade_df)

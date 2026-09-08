@@ -834,6 +834,12 @@ def _pattern_lab_automation_summary(
                 name: {
                     "status": (evidence or {}).get("status"),
                     "valid_source_days": len((evidence or {}).get("sources") or {}),
+                    "maintenance_review_due": (evidence or {}).get(
+                        "maintenance_review_due"
+                    ),
+                    "owner_evaluation_status": (
+                        (evidence or {}).get("owner_evaluation") or {}
+                    ).get("status"),
                     "rolling_completed_count": (
                         ((evidence or {}).get("windows") or {}).get("rolling_10d") or {}
                     ).get("completed_count"),

@@ -513,6 +513,127 @@ def test_twenty_valid_empty_source_days_trigger_review_not_buy(tmp_path):
     assert not econ.profit_followups(e)
 
 
+def test_ai_context_receives_economics_and_scalping_native_orders(
+    tmp_path, monkeypatch
+):
+    payloads = {
+        "pattern_lab_currentness_audit": {"checks": []},
+        "scalping_pattern_lab_automation": {
+            "economic_evidence": {
+                "claude": {
+                    "target_date": "2026-09-08",
+                    "sources": {"2026-09-07": {"sha256": "a" * 64}},
+                    "windows": {
+                        "rolling_10d": {
+                            "cohorts": [
+                                {
+                                    "net_pnl_krw": 17,
+                                    "notional_weighted_ev_pct": 0.002,
+                                    "completed_per_valid_source_day": 10,
+                                }
+                            ]
+                        }
+                    },
+                    "maintenance_review_due": True,
+                }
+            }
+        },
+        "code_improvement_workorder": {
+            "orders": [
+                {
+                    "order_id": f"native-{i}",
+                    "source_report_type": "scalping_pattern_lab_automation",
+                    "decision": "attach_existing_family",
+                    "evidence": [{"net_pnl_krw": 17}],
+                }
+                for i in range(21)
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        ai, "_source_paths", lambda *a, **kw: {k: tmp_path / k for k in payloads}
+    )
+    monkeypatch.setattr(ai, "_load_json", lambda p: payloads[p.name])
+    context = ai._build_input_context("2026-09-08", include_swing=False)
+    economics = context["sources"]["scalping_pattern_lab_automation"]["summary"][
+        "economic_evidence"
+    ]["claude"]
+    assert economics["windows"]["rolling_10d"]["cohorts"][0]["net_pnl_krw"] == 17
+    assert not economics["allowed_runtime_apply"]
+    assert context["pattern_lab_workorder_count"] == 21
+    assert len(context["pattern_lab_workorder_ids"]) == 21
+    assert context["pattern_lab_workorder_omitted_detail_count"] == 1
+    assert (
+        context["pattern_lab_workorder_orders"][0]["evidence"][0]["net_pnl_krw"] == 17
+    )
+
+
+def test_maintenance_produces_a_native_design_review_not_another_solo_wait():
+    evidence = {
+        "maintenance_review_due": True,
+        "sources": {str(i): {} for i in range(20)},
+    }
+    row = econ.maintenance_followups(evidence)[0]
+    finding = automation._finding_from_backlog_item("claude", row)
+    finding.update(
+        source_labs=["claude"], confidence="solo", evidence=[finding["evidence"]]
+    )
+    order = automation._code_improvement_orders([], [finding])[0]
+    result = workorder._classify_order(
+        order,
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert order["order_id"] == "order_pattern_lab_bounded_maintenance_review"
+    assert result.decision == "design_family_candidate"
+    assert "implementation_status" not in order
+    assert not order["allowed_runtime_apply"]
+
+
+@pytest.mark.parametrize("has_alternative", [True, False])
+def test_lab_reads_same_generation_daily_owner_evaluation(tmp_path, has_alternative):
+    from src.tests.test_score_recovery_net_approval import (
+        real_comparison_metrics,
+        real_metrics,
+        PROFILE,
+    )
+    from src.engine.scalping.score_recovery_economics import evaluate_policy
+
+    metrics = real_comparison_metrics() if has_alternative else real_metrics(net=1)
+    decision = evaluate_policy(metrics)
+    root = tmp_path / "threshold_cycle_calibration"
+    root.mkdir()
+    path = root / "threshold_cycle_calibration_2026-09-08_postclose.json"
+    report = {
+        "date": "2026-09-08",
+        "run_phase": "postclose",
+        "calibration_candidates": [
+            {
+                "family": "score65_74_recovery_probe",
+                "current_values": PROFILE,
+                "source_metrics": metrics,
+                "sample_floor": 20,
+                "condition_feasibility": decision,
+            }
+        ],
+    }
+    path.write_text(json.dumps(report))
+    evidence = {"target_date": "2026-09-08", "maintenance_review_due": True}
+    econ.attach_owner_evaluation(evidence, tmp_path)
+    assert evidence["owner_evaluation"]["status"] == "owner_evaluation_verified"
+    # A profitable baseline alone does not close the maintenance question of
+    # whether the lab can produce a useful improvement.
+    assert evidence["maintenance_review_due"] is (not has_alternative)
+    report["calibration_candidates"][0]["condition_feasibility"]["ready"] = False
+    path.write_text(json.dumps(report))
+    evidence["maintenance_review_due"] = True
+    econ.attach_owner_evaluation(evidence, tmp_path)
+    assert evidence["maintenance_review_due"]
+    assert evidence["owner_evaluation"]["status"] == "owner_report_missing_or_invalid"
+
+
 @pytest.mark.parametrize("missing", ["date", "rec_date"])
 def test_missing_date_never_joins_fill_by_trade_id(tmp_path, monkeypatch, missing):
     monkeypatch.setattr(prepare, "OUTPUT_DIR", tmp_path)

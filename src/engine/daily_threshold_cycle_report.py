@@ -43,10 +43,11 @@ from src.engine.scalping.score_recovery_observation import (
 )
 from src.engine.scalping.score_recovery_economics import (
     evidence_book as score_recovery_evidence_book,
-    evaluate as score_recovery_evaluate,
+    evaluate_policy as score_recovery_evaluate,
     merge_books as score_recovery_merge_books,
     profile as score_recovery_profile,
     runtime_profile as score_recovery_runtime_profile,
+    policy_search_digest as score_recovery_search_digest,
 )
 from src.utils.constants import (
     CONFIG_PATH,
@@ -14064,7 +14065,14 @@ def _build_calibration_candidates(
             source_metrics["score_recovery_current_profile"] = score_recovery_profile(
                 current
             )
-            recommended = dict(current)
+            selection = score_recovery_evaluate(
+                source_metrics, metadata.get("sample_floor", 20)
+            )
+            source_metrics["policy_search"] = selection.get("policy_search")
+            recommended = {
+                **current,
+                **(selection.get("policy_search", {}).get("selected_profile") or {}),
+            }
         source_sample_count = _source_sample_count_for_family(
             output_family, source_metrics
         )
@@ -14845,7 +14853,12 @@ def _refresh_candidate_from_primary_window(
     recommended = recommended if isinstance(recommended, dict) else {}
     if family == "score65_74_recovery_probe":
         current = dict(candidate.get("current_values") or {})
-        recommended = dict(current)
+        selection = score_recovery_evaluate(source_metrics, sample_floor)
+        source_metrics["policy_search"] = selection.get("policy_search")
+        recommended = {
+            **current,
+            **(selection.get("policy_search", {}).get("selected_profile") or {}),
+        }
     if family == "score65_74_recovery_probe" and _score65_74_entry_unlock_probe_ready(
         source_metrics,
         sample_count=primary_sample_count,
@@ -17219,6 +17232,16 @@ def build_threshold_cycle_ai_correction_report(
             "final_source_of_truth": "deterministic_calibration_guard",
             "runtime_change": False,
         }
+        if family == "score65_74_recovery_probe":
+            item["reviewed_current_profile"] = score_recovery_profile(
+                candidate.get("current_values")
+            )
+            item["reviewed_recommended_profile"] = score_recovery_profile(
+                candidate.get("recommended_values")
+            )
+            item["reviewed_policy_search_sha256"] = score_recovery_search_digest(
+                candidate.get("source_metrics") or {}, candidate.get("sample_floor", 20)
+            )
         items.append(item)
 
     return {

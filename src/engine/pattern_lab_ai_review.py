@@ -235,6 +235,7 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         "summary": summary,
         "lifecycle_flow_summary": lifecycle_flow_summary,
         "ev_report_summary": ev_summary,
+        "economic_evidence": _economic_review_summary(payload.get("economic_evidence")),
         "source_quality_contracts": (
             source_quality_contracts
             if source_quality_contracts
@@ -265,6 +266,50 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
             "allowed_runtime_apply": False,
         },
     }
+
+
+def _economic_review_summary(evidence: Any) -> dict[str, Any]:
+    """Bounded numerical evidence with explicit truncation, never title-only."""
+    result = {}
+    if not isinstance(evidence, dict):
+        return result
+    for lab, e in evidence.items():
+        if not isinstance(e, dict):
+            continue
+        windows = {}
+        raw_windows = e.get("windows")
+        raw_windows = raw_windows if isinstance(raw_windows, dict) else {}
+        for name, window in raw_windows.items():
+            if not isinstance(window, dict):
+                continue
+            cohorts = window.get("cohorts")
+            cohorts = cohorts if isinstance(cohorts, list) else []
+            windows[name] = {
+                **{
+                    k: window.get(k)
+                    for k in (
+                        "expected_dates",
+                        "valid_source_dates",
+                        "excluded_source_dates",
+                        "completed_count",
+                    )
+                },
+                "cohorts": cohorts[:20],
+                "cohort_count": len(cohorts),
+                "omitted_cohort_count": max(0, len(cohorts) - 20),
+            }
+        result[lab] = {
+            "status": e.get("status"),
+            "basis": e.get("basis"),
+            "target_date": e.get("target_date"),
+            "sources": e.get("sources"),
+            "windows": windows,
+            "owner_evaluation": e.get("owner_evaluation"),
+            "maintenance_review_due": e.get("maintenance_review_due"),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    return result
 
 
 def _feedback_handoff_summary(payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -2183,11 +2228,16 @@ def _build_input_context(
             "title": item.get("title"),
             "source_report_type": item.get("source_report_type"),
             "decision": item.get("decision"),
+            "evidence": item.get("evidence"),
         }
         for item in workorder.get("orders", [])
         if isinstance(item, dict)
-        and str(item.get("source_report_type") or "").startswith("pattern_lab")
-    ][:20]
+        and (
+            str(item.get("source_report_type") or "").startswith("pattern_lab")
+            or item.get("source_report_type")
+            in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation"}
+        )
+    ]
     sources = {
         label: {
             "path": str(path) if path.exists() else None,
@@ -2207,7 +2257,12 @@ def _build_input_context(
         "sources": sources,
         "feedback_handoff_summary": _feedback_handoff_summary(payloads),
         "currentness_checks": currentness_checks,
-        "pattern_lab_workorder_orders": workorder_orders,
+        "pattern_lab_workorder_orders": workorder_orders[:20],
+        "pattern_lab_workorder_ids": [o["order_id"] for o in workorder_orders],
+        "pattern_lab_workorder_count": len(workorder_orders),
+        "pattern_lab_workorder_omitted_detail_count": max(
+            0, len(workorder_orders) - 20
+        ),
     }
 
 

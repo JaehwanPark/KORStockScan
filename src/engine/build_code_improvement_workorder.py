@@ -3391,6 +3391,22 @@ def _classify_order(
             automation_reentry="Existing score-recovery owner evaluates rise/rebound, exact rolling costs and counterfactual increment; its PREOPEN/runtime guards remain authoritative.",
         )
 
+    if (
+        order.get("source_report_type") == "scalping_pattern_lab_automation"
+        and route == "maintenance_review"
+        and order.get("runtime_effect") is False
+        and order.get("allowed_runtime_apply") is False
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="design_family_candidate",
+            mapped_family=None,
+            route=route,
+            confidence=confidence,
+            reason="Bounded maintenance is due: review exact source or integrate/retire redundant research, not another sample wait.",
+            automation_reentry="Record retain_with_evidence / repair_source / integrate / retire against the stable maintenance ID; no live mutation authority.",
+        )
+
     if confidence == "solo":
         return ClassifiedOrder(
             order=order,
