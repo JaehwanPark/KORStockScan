@@ -19,7 +19,12 @@ def observe_submit_attempt(function=None, *, on_finish=None):
     @wraps(function)
     def wrapped(stock, code, *args, **kwargs):
         try:
-            identity = (str(stock.get("id") or ""), str(code), uuid4().hex)
+            identity = (
+                str(stock.get("id") or ""),
+                str(code),
+                uuid4().hex,
+                _promotion_id(stock),
+            )
         except Exception as exc:
             identity = None
             logging.getLogger(__name__).warning(
@@ -50,12 +55,28 @@ def observe_submit_attempt(function=None, *, on_finish=None):
     return wrapped
 
 
+def _promotion_id(stock):
+    value = str(stock.get("scanner_promotion_id") or "").strip()
+    return "" if value.lower() in {"none", "null", "unknown", "-", "0"} else value
+
+
 def submit_attempt_fields(stock, code):
     value = _ATTEMPT.get()
     if value is None or value[:2] != (str(stock.get("id") or ""), str(code)):
         return {}
-    return {
+    # The scanner may refresh the stock's promotion while this call waits.
+    # Preserve that live metadata, but bind submit telemetry to one parent.
+    # Late hydration may supply the first known parent before the first event.
+    if not value[3]:
+        parent = _promotion_id(stock)
+        if parent:
+            value = (*value[:3], parent)
+            _ATTEMPT.set(value)
+    fields = {
         "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
         "entry_submit_attempt_id": value[2],
         "entry_submit_attempt_authority": "observation_only",
     }
+    if value[3]:
+        fields["entry_submit_attempt_parent_promotion_id"] = value[3]
+    return fields

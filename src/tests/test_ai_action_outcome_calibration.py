@@ -26,6 +26,47 @@ def _economic_row(index: int, ev: float = 0.4) -> dict:
     }
 
 
+def test_small_profit_opportunity_is_handed_off_without_changing_live_gate(tmp_path):
+    from src.engine.scalping.micro_reversion import (
+        main_ai_prompt_optimizer as optimizer,
+    )
+
+    row = _economic_row(1)
+    row.update(
+        {
+            "candidate_action": "DROP",
+            "candidate_error_taxonomy": ["false_drop_small_profit_execution_proxy"],
+            "entry_small_profit_opportunity": {
+                "schema": "entry_small_profit_opportunity_v1",
+                "positive_target_first_after_execution_proxy": True,
+            },
+        }
+    )
+    path = (
+        tmp_path
+        / "report"
+        / calibration.PAIRED_SUBDIR
+        / "ai_prompt_detailed_paired_replay_2026-09-08_small.json"
+    )
+    _write_json(path, {"target_date": "2026-09-08", "paired_comparisons": [row]})
+    summary = build_report(target_date="2026-09-08", data_root=tmp_path)[
+        "candidate_summaries"
+    ][0]
+    assert summary["small_profit_opportunity_diagnostic"]["candidate_missed_count"] == 1
+    assert summary["false_drop_count"] == 0
+    taxonomy = optimizer._error_taxonomy(
+        [
+            {
+                "error_taxonomy_counts": summary["candidate_error_taxonomy_counts"],
+            }
+        ]
+    )
+    assert (
+        taxonomy["candidate_patch_objectives"]["small_profit_opportunity_diagnostic"]
+        == 1
+    )
+
+
 def test_partial_batch_retains_exact_learning_without_live_promotion(tmp_path):
     pairs = [_economic_row(i) for i in range(39)]
     payload = _valid_detailed_payload(
@@ -168,13 +209,17 @@ def test_missing_or_invalid_cost_not_assumed_zero_for_review(tmp_path, invalid):
         / "report"
         / calibration.PAIRED_SUBDIR
         / "ai_prompt_detailed_paired_replay_2026-09-07_cost.json",
-        {"target_date": "2026-09-07", "paired_comparisons": [row]},
+        {"target_date": "2026-09-07", "paired_comparisons": [row, _economic_row(2)]},
     )
-    candidate = build_report(target_date="2026-09-07", data_root=tmp_path)[
-        "candidate_summaries"
-    ][0]
-    assert candidate["probe_cost_contract_complete"] is False
-    assert candidate["review_classification"] == "learning_only_or_rejected"
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+    candidate = report["candidate_summaries"][0]
+    assert candidate["exact_trace_count"] == 1
+    assert candidate["probe_cost_contract_complete"] is True
+    assert report["source_contract_summary"]["row_exclusion_count"] == 1
+    assert report["source_reports"][0]["row_exclusion_reason_counts"] == {
+        "exposure_execution_cost_missing_or_invalid": 1
+    }
+    assert candidate["review_classification"] == "thin_positive_review"
 
 
 def test_calibration_rejects_target_before_clean_baseline(tmp_path: Path) -> None:

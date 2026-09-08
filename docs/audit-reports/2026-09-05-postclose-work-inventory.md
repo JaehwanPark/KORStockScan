@@ -10,6 +10,11 @@
 
 ## 1. 이번 갱신 판정
 
+- **9/8 오후 문서 대사**: 아래 최신 연결은 [15:00 관찰](2026-09-08-intraday-monitoring-1500.md)과 [15:45~16:10 due 실행·복구](2026-09-08-due-checklist-custody-recovery-review.md), 당일 checklist의 후속 기록을 반영한다. 이 문서 갱신에서 운영 모니터링·복구를 새로 실행하거나 병행 worktree 코드 전체를 재검증한 것은 아니다. 현재 작업은 두 지시문의 시점별 체크리스트 실행·점검 계약을 맞추는 문서 범위다.
+- **#119/#23 최신 계약과 실제 소비 분리**: 오전 schema5/exact2 이후 새 결함에 대한 cache12/report6/exact3 수리와 call-local frozen parent 보완을 각각 [추가 수리](2026-09-08-buy-funnel-entry-recheck-remediation-review.md), [15:00 계측 리뷰](2026-09-08-intraday-monitoring-1500.md)에서 추적한다. [drought 후속 구현](2026-09-08-drought-handoff-objective-final-review.md#후속-권장보완-구현)의 controller `source_binding_version=1`·지시별 summary receipt·strict/PREOPEN 공통 검증·20유효일 유지 진단은 기존 `EntryRecheckNaturalAttribution0907`의 자연 수용이다. 과거 원천 복원·신규 계측 PID 소비·실제 제출/순익은 코드 완료와 별개다.
+- **#74/#89 상세검토 대기 해제, 자연 수용 유지**: [2차 보완 리뷰](2026-09-08-ws-freshness-source-quality-remediation-review.md)의 1,093 PASS는 audit v2 공통 품질 gate·WS finalize/episode receipt·snapshot as-of·그룹별 rolling 진단/경제성 분리의 검토 범위다. 새 자연 finalize→native workorder와 audit→실제 verifier/PREOPEN은 `PostcloseSourceQualityGateReview0908`에서 확인한다. 단순 무표본 때문에 완료된 코드 리뷰를 반복하지 않는다.
+- **장중 완료/잔여 정정**: 15:51 writer-safe 감사의 결손1행 격리 후 `IntradaySourceQualityGateCheck0908`은 완료 기록이다. 이후 유입·unknown warning 장후 handoff는 별도다. 별도 승인으로 4 HELD 원장과 SamsungE&A registry를 복구했지만 Widget/Runtime/Micro acceptance는 OPEN이다. 16:00:56에도 main submit0이며, custody 수리·공간 확보·코드 PASS를 drought 해소나 새 수익으로 합산하지 않는다. 과거 PID/잔고 수치는 새 모니터링 때 다시 읽는다.
+- **전략 operator lock 후속 구현**: [25개 전수 분류·기존 owner 통합 리뷰](2026-09-08-operator-policy-succession-review.md). 최초 effective 9/9이며 현재 env/원본 lock/PID는 변경하지 않았다. 직접 승계2·정식 Entry owner 통합5·기존 owner 관리 component2·보호/운영11·혼합1·비활성4. weak-pullback→Entry gate/recheck, profit-stagnation→holding/exit의 기준값 보존과 관측 profile 경제성→PREOPEN→launcher/consumer를 연결했다. 미실행 조건의 최초 검증/승격과 자연 PID·순익은 별도 OPEN이며, 전체 새 조건 자동화 완료가 아니다. `OperatorPolicySuccessionAcceptance0908` 한 곳에서 추적한다.
 - **9/8 최우선 개선 목표는 메인 submit drought 해소**다. 필수 운영 terminal·source-quality 확보를 선행하고, §6 순서로 최초 병목과 수정 가능성을 확인한다. 주문 건수만 늘리는 것이 아니라 기존 안전 계약 안에서 유효 기회의 제출→체결→비용 차감 순이익 경로를 회복하는 목표다. 검토 우선순위이지 cron 재배열·guard 완화·실주문 권한이 아니다.
 - **9/8 10:10:03 KRX 관측**: `buy_funnel_sentinel_2026-09-08.json`의 `KRX|KRX_REGULAR`은 `SUBMIT_DROUGHT_CRITICAL`. exact attempt **64 = terminal 59 + pending 5 + submitted 0**, 미분류 terminal 0이며 terminal causal 축은 upstream28/latency26/Entry-AI 재검증5/price0/broker0이다. raw stage unique AI25/budget41/latency6은 서로 다른 모집단이라 25→41→6의 인과 funnel로 쓰지 않는다. JSON SHA256=`06f59784582fa63364a42f7733d0e19774c27197b1d1b1d47e3f36b14f2f53df`; 이는 읽은 generation 기록이며 이후 자연 갱신 파일이나 장마감 판정을 대신하지 않는다. source: `data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-09-08.json` (저장소 루트 기준).
 - **오전 수리·배포 기록 갱신**: [10:03 재리뷰](2026-09-08-intraday-due-work-execution.md#1003-재리뷰와-남은-작업-실행)의 위젯 blocked-policy hash 결정성·과거 receipt 비정규화·micro frozen compatibility 검증은 관련295 PASS 후 `c1bd9660`으로 main/원격에 반영됐다. [09:27 재기동](2026-09-08-graceful-restart-0927.md)은 그보다 앞선 `f67a7ec7`/PID461794의 별도 승인 기록이다. 커밋은 새 위젯 PID 소비·drought 해소 증거가 아니다. raw41529/72stage 감사 PASS도 enqueue 전 micro loss를 포함하지 않으므로 Provider hold·자연 acceptance는 유지한다.
@@ -74,6 +79,25 @@
 ### 9/8 승인 문턱 교차 점검
 
 [소액 순이익 승인 재설계·재점검](2026-09-08-small-net-profit-approval-review.md)에 이어 [1~3 후속 구현](2026-09-08-scanner-daily-net-approval-followup-review.md)에서 #49의 고정 +0.10%p 문턱을 작은 양수 net·거래일 변동/불확실성 검사로 대체하고, #50의 당일 paired 소비 지연을 실행 순서로 보완했다. 아래 번호는 stable inventory ID이며 #75~77의 원천 생성은 #50보다 먼저 실행된다. 기존 자연 owner에서 PREOPEN/PID/실수익·20유효일 유지 판단을 계속한다. #75 등 상세검토 대기 작업 전체를 완료 범위로 편입하지 않으며 운영/source guard·retired 권한은 그대로다.
+
+### 2.1 모니터링 시점의 체크리스트 대사
+
+이 진행표는 상세검토 index와 근거 연결이며 **실행 큐는 현재 체크리스트**다. 모니터링을 명시적으로 요청받으면 [장후 §4.1](../postclose-tuning-result-review-task-instructions.md#41-모니터링-시점-체크리스트-실행점검) 또는 [장중 §4.1](../intraday-monitoring-task-instructions.md#41-모니터링-시점-체크리스트-실행점검)에 따라 실제 KST 시각까지 도래한 항목을 전수 분류하고 허용된 실행·검증까지 수행한다. 이 문서의 열람·현행화는 해당 절의 실행 요청이 아니다.
+
+- 파일 날짜·ID 끝자리 대신 `Due/Slot/TimeWindow`와 Source·선행 조건·Acceptance를 읽는다. 지난 window의 부분 확인과 실제 장애, 미래 Due와 정상 선행 대기, 코드 리뷰 종결과 다음 자연/경제성 수용을 구분한다.
+- 같은 ID는 이관 이력을 보존한 한 owner로 대사한다. 완료 `[x]`는 근거이며 새로운 실패 없이 다시 OPEN하지 않는다. OPEN도 구현 권한이나 매매 process 재기동 권한 자체가 아니다.
+- 최신 성공 결과가 있으면 소비 계약을 확인하고, 미실행인 due 작업은 요청 범위·권한·source가 충족될 때만 정상 owner로 실행한다. 진행 중 producer를 복제하거나 PREOPEN/매매 시간창을 소급 실행하지 않는다.
+- ID별 현재 판정·이번 수행·최신 receipt·미수행 사유·남은 수용조건을 기존 checklist에 남긴다. 미분류가 없어야 하며, 부분 실행·기한 경과·권한 차단을 전체 완료로 합치지 않는다.
+
+| 9/8 기존 실행 owner | 시점 판정에 필요한 경계 |
+| --- | --- |
+| `IntradaySourceQualityGateCheck0908` | 15:51 완료 기록. 장후 `PostcloseSourceQualityGateReview0908`과 이후 원천까지 완료한 것은 아님 |
+| `RuntimeEnvIntradayObserve0908`, `MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908`, `WidgetEpisodeRecommendationApplyAcceptance0908` | 오전 window 경과 후에도 현재 receipt·through-close/경제성 잔여를 분리해 점검. 시간 경과만으로 실패 또는 재기동 필요를 선언하지 않음 |
+| `ThresholdDailyEVReport0908`, `HumanInterventionSummary0908` | 16:30~16:45 / 17:00~17:15에 각 Source의 9/7 보고서를 읽음. 당일 main 20:10 조기 재실행 아님 |
+| Entry recheck / Scanner / AI / Pipeline / Pattern / Daily / Postclose recovery 기존 OPEN | 실제 20:10 이후 선행 owner와 자연 산출물을 확인. review index 순서로 cron을 재배열하지 않음 |
+| `OperatorPolicySuccessionAcceptance0908`, `ScannerLookupAttentionCalendarMaintenance1002` | Due 9/9 PREOPEN / 10/2 POSTCLOSE. 같은 9/8 파일의 항목이라도 오늘 overdue가 아님 |
+
+위 시각은 9/8 checklist 예시다. 재개 시 실제 현재 시각과 변경된 원 항목을 다시 확인하며 새 고정 일정·중복 checkbox를 이 진행표에 만들지 않는다.
 
 ## 3. 상위 장후 실행 목록
 
@@ -184,18 +208,18 @@
 | 68 | Gemini scalp pattern lab | 과거 provider lab | 자동실행 제거 | 중복비용 제거 | RETIRED | 상태 확인만 남음 | 없음 |
 | 69 | Scalping pattern automation | 단일 활성 lab을 기존 전략 연구 입력으로 전달 | exact generation → EV/workorder → 기존 owner | 불가능한 합의·폐기 ADM/LDM 대기 제거 | ON / source-only | **native 유지 검토→design workorder와 AI 전수 ID 전달 보완, 자연 전달 대기**; [후속 리뷰](2026-09-08-pattern-lab-owner-selection-followup-review.md). 실전 후보는 기존 Daily/AI/PREOPEN/lock 계약 | E2 |
 | 70 | Swing pattern automation | swing pattern handoff | swing 후보 변환 | swing 자동화 | OFF | 현재 불필요 지정 유지 | 없음 |
-| 71 | Pattern currentness audit | pattern freshness 검사 | stale 승격 차단 | 낡은 가설 사용 방지 | ON, trigger-gated | 상세검토 대기 | E2 |
-| 72 | Pattern AI review | pattern 후보 AI 검토 | 구현가능 항목 분리 | 무의미한 후보 축소 | ON | 상세검토 대기 | E2 |
+| 71 | Pattern currentness audit | pattern 원천·소비 세대 검증 | 실제 payload receipt와 날짜/hash 대사 | 낡은 가설·허위 소비 완료 방지 | ON, trigger-gated / source-only | **소비 receipt·trigger 결함 보완, 자연 확인 대기**; [#71/#72 리뷰](2026-09-08-pattern-currentness-ai-review-remediation.md), `PatternLabSmallNetNaturalEvidence0908` | E2; 존재·가용·실제 소비 구분, 독립 실전 승인 없음 |
+| 72 | Pattern AI review | pattern 연구·source-only 추천 감사 | 필수 실패 전수 대사·원본 AI 입력 보존 | 유효한 작은 순익·빈도 연구의 기존-owner 전달 | ON / source-only | **material v2·대상일 2회 상한 재검토·복구/verifier 연결·기존 경제성 owner의 순익/자금효율 평가 보완, 자연 확인 대기**; [#71/#72 리뷰](2026-09-08-pattern-currentness-ai-review-remediation.md), `PatternLabSmallNetNaturalEvidence0908` | E2; 소진·중단/거절은 명시적 미검토 source-only terminal, PREOPEN 권한 아님 |
 | 73 | Pipeline verbosity | 원본 증거를 보존한 중복·과다 event 진단 | 원본/요약 장애 격리·exact hash 대사·실제 절감 대상 구분 | 경량 요약과 호출 경로의 disk 대기 제거; 실제 봇 지연·순이익 효과는 별도 검증 | ON, exact-date terminal freshness reuse; raw suppression 비활성 | [9/8 보완 리뷰](2026-09-08-pipeline-verbosity-remediation-review.md); 분리 잠금·주기 결속 timeout·hash-bound timing receipt 보완. `PipelineVerbosityNaturalEvidence0908`의 새 PID/자연 소비는 별도 | E2; producer manifest별 기록 mutex 및 분리 publish lock, operator policy lock 아님 |
 | 74 | Source-quality final audit | #11과 동일 producer의 최종 원천 재검사 | EV/PREOPEN/최종 verifier 공통 날짜·승인·generation 검증 및 결함 행 격리 | 잘못된 승인과 verifier 불일치 차단, 정상 입력 보존 | ON, trigger-gated; 공통 품질 gate | [9/8 보완 리뷰](2026-09-08-ws-freshness-source-quality-remediation-review.md); 2차 보완, 자연 v2 소비 별도 | E2 |
 | 75 | Entry split order plan | 최초진입 분할 정책 | 1·2차 가격·타이밍 후보 생성 | 체결률/slippage 개선 | ON | 상세검토 대기 | E2; operator lock 없음 |
-| 76 | AI decision-quality materialization | trace/outcome/replay 입력 준비 | exact cohort 생성 | prompt EV 측정 | ON; 자기해시·부분 성공 학습 계약 | 기존 self-hash/부분 성공 검토 유지; 9/7 source 복구에서 6단계 성공, CF custody 오분류 제거. 원본 결손과 provider 평가·경제성은 별도 | 코드 검증과 자연 산출물 증거 분리 |
+| 76 | AI decision-quality materialization | trace/outcome/replay 입력 준비 | exact cohort 생성 | prompt EV 측정 | ON; 자기해시·부분 성공 학습 계약 | [9/8 Entry 보완](2026-09-08-entry-ai-submit-drought-remediation-review.md): retirement token 오마스킹 수리, 원모델/보정/final response·hash 분리, 비용 결손 pair 격리. 과거 원본 결손은 합성하지 않음 | 새 코드 배포·자연 exact control·provider 평가·경제성은 별도 |
 | 77 | Main AI R0–R3 | exact A/B/C prompt·입력 비교 | 연구 후보와 full-gate manifest·동일 prompt/input 소비 연결 | 비용 차감 EV·paired 원화 순이익 개선 검증 | 연구 ON; 현행 Entry adapter 기본 OFF | [연결 구현](2026-09-07-main-ai-r0-r3-remediation-review.md), [새 소스 합성 성능 PASS](2026-09-07-main-ai-current-axis-approval-performance-deployment.md): 승인·배포 지시 접수, prospective baseline 준비 | exact 후보/승인 artifact·active chain 종료·clean 배포·자연/실수익 OPEN; #81 계속 OFF; V2.14/V2.15 alias 아님 |
-| 78 | Main AI prompt optimizer | 기존 prompt 후보 평가 개선 | 격리된 누적 EV로 오프라인 평가 후보 유지·전진 | 무의미한 반복 평가 감소 | ON; #82 v5 source-generation 검증 및 offline 선택 소비 | [최종 재보완](2026-09-07-ai-decision-action-outcome-calibration-final-review.md): 당일 실행 후보 고정, 다음 세션 권고 분리, registry 고갈 시 기본 후보 재실행 금지 | runtime 권한 없음; V2.14/V2.15 KRX는 별도 entry_setup_live_policy owner |
+| 78 | Main AI prompt optimizer | 기존 prompt 후보 평가 개선 | 격리된 누적 EV로 오프라인 평가 후보 유지·전진 | 무의미한 반복 평가 감소 | ON; #82 v5 source-generation 검증 및 offline 선택 소비 | [최종 재보완](2026-09-07-ai-decision-action-outcome-calibration-final-review.md) 유지; [9/8](2026-09-08-entry-ai-submit-drought-remediation-review.md) 작은 target-first 비용 proxy 진단을 기존 개선목표에 연결. 당일 선택 고정/registry 고갈 계약 유지 | runtime 권한 없음; proxy를 수수료·세금/실체결 net으로 해석 금지 |
 | 79 | Holding-base replay | holding control manifest | base path hash binding | 비교 기준 안정화 | ON | metadata hash/manifest 연결부 복구·확인; holding provider checkpoint 미충족. 전체 replay 경제성 상세검토는 대기 | E2 |
 | 80 | Main AI prompt consumer | entry/holding path 연결 | 모든 request path 분류 | 소비경로 누락 제거 | ON | 9/8 source-date 9/7 consumer terminal 연결 확인; Entry KRX/NXT exact control 각0. 전체 비교표본·live 효과 검토는 별도 | E2 |
 | 81 | Main AI runtime family | 기존 exact R3 runtime 설계 | 현재 실적용 권한 없음 | 자동반영 기대효과를 주장하지 않음 | DISABLED; LEGACY_RUNTIME_AUTHORITY_ENABLED=False | postclose/PREOPEN 예약 호출 제거·retired_disabled SKIP. 별도 V2.14/V2.15 entry owner와 혼동 금지 | 9/7 오전 blocked_fail_closed는 과거 receipt; 새 wrapper의 자연 SKIP는 별도 확인 |
-| 82 | AI action-outcome calibration | AI action과 사후결과 비교 | 정상 누적 경제성을 기존 오프라인 평가에 환류 | 평가 후보 선택 개선 가능성 | ON; schema v2/policy v5, 자연 근거 대기 | [최종 재보완](2026-09-07-ai-decision-action-outcome-calibration-final-review.md): 부분 성공·충돌 격리, 정상 후보 정렬/해시 검증, 21:05 상세 결과 후 재갱신·metadata-only 재결속 | `AIDecisionActionOutcomeNaturalEvidence0908` OPEN; 실수익/실적용 미검증 |
+| 82 | AI action-outcome calibration | AI action과 사후결과 비교 | 정상 누적 경제성을 기존 오프라인 평가에 환류 | 평가 후보 선택 개선 가능성 | ON; schema v2/policy v5, 자연 근거 대기 | [9/8 보완](2026-09-08-entry-ai-submit-drought-remediation-review.md): 비용 결손 노출의 재검사/행 격리, 작은 기회 진단 전달. 기존 부분 성공·hash·21:05 재결속·review gate 유지 | `AIDecisionActionOutcomeNaturalEvidence0908` OPEN; 실수익/실적용 미검증 |
 | 83 | Codebase performance workorder | 코드 runtime 병목 분석 | 자동 성능 workorder 생성 | 장후시간 단축 | OFF | 상세검토 대기 | 없음 |
 | 84 | Time-window regime CF | 시간대별 정책 비교 | regime 후보 탐색 | 장중 적응 | OFF | 상세검토 대기 | 없음 |
 | 85 | Producer-gap bundle | 누락 producer 근거 수집 | gap 분석 입력 생성 | 원천 결손 해결 | OFF | 상세검토 대기 | 없음 |
@@ -253,11 +277,14 @@
 | 영역 | 코드·계약 검토 | 다음 자연 확인과 OPEN owner |
 | --- | --- | --- |
 | #8/#9 Rising-missed | 9/5 종결 유지 | 당일 원천·handoff를 통상 소비한다. 새 결함/계약 변경/필수 소비자 실패가 없으면 상세검토를 다시 열지 않는다. |
-| #11 Source-quality preflight | 9/5 종결 유지 | 20:10 main의 해당 stage 실행 전 당일 자연 artifact 부재는 `not_yet_due`. due 이후 source date·row/window exclusion·tuning 허용과 #74 final audit를 대사한다. `PostcloseSourceQualityGateReview0907`과 기존 AVG_DOWN/PYRAMID acceptance에서 소비한다. 수동 재생성을 자연 증거로 바꾸지 않는다. |
+| #11 Source-quality preflight | 9/5 종결 및 #74 공통 품질 gate 후속 보완 | 20:10 main의 해당 stage 실행 전 당일 자연 artifact 부재는 `not_yet_due`. 장중 수동 감사의 완료 범위와 자연 postclose를 구분한다. 현재 `PostcloseSourceQualityGateReview0908`에서 v2 source date/generation·row/window exclusion·EV/PREOPEN/최종 verifier 소비를 대사한다. |
+| #74/#89 최종 품질·WS | [9/8 2차 리뷰](2026-09-08-ws-freshness-source-quality-remediation-review.md) 1,093 PASS 기록; 전체 배포/경제성 미검증 | `PostcloseSourceQualityGateReview0908`: audit v2→공통 consumer, 독립 `--finalize`→native workorder·episode 전수 receipt, 과거 snapshot과 current freshness 분리, 그룹별 rolling 원천 hash. 진단 완료에 경제성 20개 outcome을 추가 gate로 요구하지 않음 |
 | #119/#23 submit drought | [9/8 schema6/exact3 추가 수리](2026-09-08-buy-funnel-entry-recheck-remediation-review.md); controller v4의 ON 조건 유지 | 10:25 raw 재구성107=terminal107+pending0+submit0, refresh7pass/5records=AI6+가격1. 이는 누락/재시도 귀속 수리이지 자연 발행·제출 해소가 아니다. `EntryRecheckNaturalAttribution0907`: 자연 cache12/report6→구 history의 원본 복원 가능성/유효 최근3거래일→controller→PREOPEN/PID→submit/fill/terminal/비용 EV. paired10은 초기 ON 허들이 아니다. 이전 schema5/exact2 완료 기록은 역사이며 현재 계약의 소비 증거로 재사용하지 않는다. |
-| #49 lookup-attention | v4/resource v2·PREOPEN receipt + small_net_v1 승인 보완 | `ScannerLookupAttentionNaturalEvidence0908`: 새 generation 경쟁군/교체 pair→정책→다음 PREOPEN immutable receipt→PID/R6. CF와 실제 full-fill 경제성·비교비용/정확 비용 대사를 구분한다. |
+| #49 lookup-attention | v4/resource v2·PREOPEN receipt + small_net_v1 승인 보완; [9/8 census·유지 판단 보완](2026-09-08-market-census-scanner-submit-drought-remediation-review.md) | `ScannerLookupAttentionNaturalEvidence0908`: 새 generation 경쟁군/교체 pair→정책→다음 PREOPEN immutable receipt→PID/R6. census v4 구간 진단과 native workorder handoff, 0완료일·조건부 표본 민감도도 확인한다. 20유효일/10월2일 유지 재검토이며 자동 OFF나 실제 full-fill 승인 완화가 아니다. |
 | #76/#78/#82 AI calibration | self-hash·부분 정상행 학습·offline 선택·late refresh 종결 | `AIDecisionActionOutcomeNaturalEvidence0908`: terminal detailed→#82 v5→당일 선택 고정 optimizer→provider0 재결속→consumer 동일 hash. 실수익·별도 live owner receipt는 미확인이다. |
 | #81 Main AI legacy runtime | DISABLED 유지 | 표본 누적으로 켜지는 경로가 아니다. #77 현행 Entry adapter는 별도 구현·기본 OFF이며 승인 접수와 실제 배포/소비는 각각 해당 receipt로 확인한다.  KRX V2.14/V2.15의 `entry_setup_live_policy`도 독립 owner다. |
+| #73 Pipeline verbosity | 원본 보존·잠금 분리·bounded summary/timing receipt 보완 기록 | `PipelineVerbosityNaturalEvidence0908`: 새 PID의 manifest/hash-bound receipt와 장후 v2 소비. raw suppression OFF와 기존 원천 보존을 유지하며 디스크 정리를 원천 생략 승인으로 바꾸지 않음 |
+| #67/#69·#50 Pattern/Daily | 기존 owner의 소액 net·source/currentness/AI 전달 후속 리뷰 기록 | `PatternLabSmallNetNaturalEvidence0908`, `DailyThresholdNaturalAcceptance0908`: 자연 paired/비용 source→manifest/currentness/AI→EV/workorder→정식 PREOPEN. 동시 수정 중인 코드·임시 fixture를 생산 generation/전체 review0으로 간주하지 않음 |
 
 recheck·lookup-attention·AI 자연 acceptance 3개는 [9/8 checklist](../checklists/2026-09-08-stage2-todo-checklist.md)로 같은 ID를 이관했고 [9/7 checklist](../checklists/2026-09-07-stage2-todo-checklist.md)는 이관/과거 근거를 보존한다. 나머지 과거 링크의 OPEN/완료 여부는 개별 원 항목을 확인한다. 다음 행은 9/8 신규 완료 선언이 아니라 코드와 남은 acceptance의 연결이다.
 
@@ -302,4 +329,4 @@ recheck·lookup-attention·AI 자연 acceptance 3개는 [9/8 checklist](../check
 
 #67/#69 pattern lab의 새 source-only 연구는 기존 owner의 순EV/빈도 개선 근거를 보강하지만, 위 drought 원인 점검을 지연시키는 추가 합의·승인 gate가 아니다. 다른 세션의 관련 수정·리뷰 기록은 보존하며 이번 문서 검토의 코드 완료 범위에 포함하지 않는다. 위젯·Samsung/저가주 거래와 machine timing은 독립 owner로 필수 운영·추천 intake를 유지하되 메인 submit0의 분모나 대체 성공 근거로 합산하지 않는다.
 
-§5.1의 #11/#119/#23/#49/#76/#78/#82는 **완료 보완의 자연 acceptance 확인**이지 다시 처음부터 상세검토할 목록이 아니다. #8/#9는 신규 결함이 없으면 재개하지 않는다. OFF/RETIRED와 비우선 sim/bucket/Swing은 단순 무표본 때문에 우선순위에 넣지 않는다. 실행·재확인 시점은 현재 체크리스트의 기존 owner를 따르며 이 표는 새 자동실행 권한이나 일정이 아니다.
+§5.1의 #11/#74/#89/#119/#23/#49/#76/#78/#82는 **각 최신 리뷰에서 닫힌 범위의 자연 acceptance 확인**이지 다시 처음부터 상세검토할 목록이 아니다. 후속 코드가 계속 변경되면 해당 diff의 검토·배포 여부를 따로 확인한다. #8/#9는 신규 결함이 없으면 재개하지 않는다. OFF/RETIRED와 비우선 sim/bucket/Swing은 단순 무표본 때문에 우선순위에 넣지 않는다. 실행·재확인 시점은 현재 체크리스트의 기존 owner를 따르며 이 표는 새 자동실행 권한이나 일정이 아니다.

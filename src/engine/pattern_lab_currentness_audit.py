@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.automation.pattern_lab_source_contract import (
+    RECEIPT_SCHEMA,
+    read_feedback,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_currentness_audit"
@@ -218,7 +223,8 @@ def _metric_contract_ok(payload: dict[str, Any]) -> bool:
         if isinstance(payload.get("metric_contract"), dict)
         else {}
     )
-    if int(payload.get("schema_version") or 0) < 2:
+    version = payload.get("schema_version")
+    if type(version) is not int or version < 2:
         return False
     for field in REQUIRED_METRIC_CONTRACT_FIELDS:
         if field not in contract:
@@ -237,7 +243,8 @@ def _observability_source_contract_ok(path: Path) -> bool:
     payload = _load_json(path)
     if not payload:
         return False
-    if int(payload.get("schema_version") or 0) < 3:
+    version = payload.get("schema_version")
+    if type(version) is not int or version < 3:
         return False
     source_quality = payload.get("source_quality")
     if not isinstance(source_quality, dict):
@@ -355,7 +362,26 @@ def _feedback_source_status(
 ) -> dict[str, Any]:
     contract = FEEDBACK_SOURCE_CONTRACTS[domain]
     active_text = _active_source_text(source_paths)
+    # The scalp producer records what it actually parsed. A source mention is
+    # only wiring evidence; it is never a consumption receipt.
+    receipts = []
+    if domain == "scalping":
+        for lab_dir in source_paths:
+            try:
+                output = lab_dir / "outputs"
+                content = (output / "claude_payload_summary.json").read_bytes()
+                manifest = _load_json(output / "run_manifest.json")
+                if (manifest.get("generation_sha256") or {}).get(
+                    "claude_payload_summary.json"
+                ) != hashlib.sha256(content).hexdigest():
+                    continue
+                payload = json.loads(content)
+                feedback = payload.get("feedback_sources") or {}
+                receipts.extend(feedback.get("consumed_feedback_sources") or [])
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
     consumed: list[dict[str, Any]] = []
+    available: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     for source_id, (report_name, stem) in contract["artifact_dirs"].items():
         artifact_path, source_date = _latest_feedback_artifact_path(
@@ -363,6 +389,36 @@ def _feedback_source_status(
         )
         mentioned = source_id.lower() in active_text
         exists = artifact_path is not None and artifact_path.exists()
+        validation = read_feedback(artifact_path, source_date, target_date)
+        matches = [
+            r
+            for r in receipts
+            if isinstance(r, dict) and r.get("source_id") == source_id
+        ]
+        receipt = matches[0] if len(matches) == 1 else {}
+        try:
+            receipt_date_valid = date.fromisoformat(
+                receipt.get("source_date", "")
+            ).isoformat() == receipt.get("source_date")
+        except (TypeError, ValueError):
+            receipt_date_valid = False
+        consumed_ok = (
+            receipt.get("schema") == RECEIPT_SCHEMA
+            and receipt.get("validation_status") == "valid"
+            and receipt.get("target_date") == target_date
+            and isinstance(receipt.get("source_date"), str)
+            and receipt_date_valid
+            and receipt["source_date"] <= target_date
+            and (
+                target_date < CLEAN_TUNING_BASELINE_DATE
+                or receipt["source_date"] >= CLEAN_TUNING_BASELINE_DATE
+            )
+            and receipt.get("path")
+            == str(_feedback_artifact_path(report_name, stem, receipt["source_date"]))
+            and receipt.get("runtime_effect") is False
+            and receipt.get("allowed_runtime_apply") is False
+            and bool(re.fullmatch(r"[a-f0-9]{64}", str(receipt.get("sha256") or "")))
+        )
         item = {
             "source_id": source_id,
             "artifact_path": str(artifact_path) if exists else None,
@@ -375,21 +431,42 @@ def _feedback_source_status(
             ),
             "active_source_mentions": mentioned,
             "artifact_exists": exists,
+            "artifact_validation": validation,
+            "consumption_receipt": receipt if consumed_ok else None,
+            "current_generation_consumed": consumed_ok
+            and receipt.get("sha256") == validation.get("sha256"),
             "decision_authority": "source_quality_only",
             "runtime_effect": False,
         }
-        if mentioned and exists:
-            consumed.append(item)
+        valid = validation["validation_status"] == "valid"
+        wiring_ok = domain == "scalping" or mentioned
+        if wiring_ok and valid:
+            item["consumption_status"] = (
+                "verified_receipt"
+                if consumed_ok
+                else "available_not_consumption_verified"
+            )
+            available.append(item)
+        # Swing is an explicitly enabled legacy/offline path; do not claim a
+        # receipt there merely because its source file can be read.
+        if wiring_ok and valid and (consumed_ok or domain != "scalping"):
+            if consumed_ok:
+                consumed.append(item)
         else:
             reason = []
-            if not mentioned:
+            if not wiring_ok:
                 reason.append("active_source_missing_reference")
             if not exists:
                 reason.append("same_day_artifact_missing")
+            if not valid:
+                reason.append(validation.get("reason") or "source_invalid")
+            if domain == "scalping" and not consumed_ok:
+                reason.append("consumption_receipt_missing_or_invalid")
             missing.append({**item, "gap_type": "source_quality_gap", "reason": reason})
     return {
         "domain": domain,
         "consumed_feedback_sources": consumed,
+        "available_feedback_sources": available,
         "missing_feedback_sources": missing,
         "decision_authority": "source_quality_only",
         "runtime_effect": False,
@@ -635,15 +712,14 @@ def build_pattern_lab_currentness_audit(
     checks.append(
         _check(
             check_id="scalping_ldm_threshold_reentry_sources",
-            ok=_source_mentions_all(scalping_lab_dirs, SCALPING_REENTRY_TERMS)
-            and not feedback_sources["scalping"]["missing_feedback_sources"],
+            ok=not feedback_sources["scalping"]["missing_feedback_sources"],
             finding=(
                 "Scalping pattern labs must consume threshold_cycle_ev as the current re-entry source; "
                 "retired ADM/LDM artifacts are archive-only and not required."
             ),
             source_paths=scalping_lab_dirs,
             severity="automation_handoff_gap",
-            order_title="Feed LDM/threshold feedback into scalping pattern labs",
+            order_title="Verify active threshold feedback consumption in scalping pattern labs",
             files_likely_touched=[
                 "analysis/claude_scalping_pattern_lab/prepare_dataset.py",
                 "analysis/claude_scalping_pattern_lab/build_claude_payload.py",
@@ -651,7 +727,7 @@ def build_pattern_lab_currentness_audit(
             ],
             acceptance_tests=[
                 "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py",
-                "pattern lab payloads include LDM bucket/discovery and threshold EV feedback context with runtime_effect=false",
+                "pattern lab payloads bind active threshold feedback dates and hashes with runtime_effect=false",
             ],
         )
     )
@@ -742,6 +818,7 @@ def build_pattern_lab_currentness_audit(
         "status": status,
         "runtime_effect": False,
         "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "allowed_runtime_apply": False,
         "swing_sources_enabled": include_swing,
         "decision_authority": "source_quality_only",
         "forbidden_uses": FORBIDDEN_USES,
@@ -752,6 +829,10 @@ def build_pattern_lab_currentness_audit(
             "observability_embedded_order_count": len(embedded_observability_orders),
             "consumed_feedback_source_count": sum(
                 len(item.get("consumed_feedback_sources") or [])
+                for item in feedback_sources.values()
+            ),
+            "available_feedback_source_count": sum(
+                len(item.get("available_feedback_sources") or [])
                 for item in feedback_sources.values()
             ),
             "missing_feedback_source_count": sum(

@@ -3174,6 +3174,20 @@ class GPTSniperEngine:
             }
 
         candidate_action = str(payload.get("action") or "DROP").upper()
+        # Observation only: retain the validated decision before the existing
+        # BUY-to-WAIT/probe adapter changes action, evidence and reason codes.
+        repaired_response = {
+            key: payload.get(key)
+            for key in (
+                "action",
+                "edge_state",
+                "confidence",
+                "expected_upside_pct",
+                "expected_downside_pct",
+            )
+        }
+        repaired_response["reason_codes"] = list(payload.get("reason_codes") or [])
+        repaired_response["evidence"] = dict(payload.get("evidence") or {})
         v2_13_buy_probe_selected = bool(
             v2_13_prompt_selected and candidate_action == "BUY"
         )
@@ -3341,6 +3355,7 @@ class GPTSniperEngine:
                     else "model_action_preserved"
                 )
             ),
+            "decision_quality_repaired_response": repaired_response,
             "entry_probe_intent": entry_probe_intent,
             "entry_probe_intent_status": (
                 (

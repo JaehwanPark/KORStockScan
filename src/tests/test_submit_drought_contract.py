@@ -407,6 +407,88 @@ def test_true_submit_ids_partition_retries_even_with_shared_promotion():
     assert exact["stage_order_violation_event_count"] == 1
 
 
+@pytest.mark.parametrize("late_hydration", [False, True])
+def test_submit_parent_is_frozen_when_scanner_refreshes_during_call(late_hydration):
+    from src.engine.monitoring.entry_attempt_identity import (
+        observe_submit_attempt,
+        submit_attempt_fields,
+    )
+
+    stock = {"id": 1}
+    if not late_hydration:
+        stock["scanner_promotion_id"] = "SCANPROM-A"
+    rows = []
+
+    def emit(stage, **extra):
+        rows.append(
+            (
+                stage,
+                {
+                    "scanner_promotion_id": stock["scanner_promotion_id"],
+                    **extra,
+                    **submit_attempt_fields(stock, "000001"),
+                },
+            )
+        )
+
+    @observe_submit_attempt(
+        on_finish=lambda stock, code, outcome: emit(
+            "entry_submit_attempt_finished",
+            submit_call_outcome=outcome,
+        )
+    )
+    def run(stock, code):
+        stock["scanner_promotion_id"] = "SCANPROM-A"
+        emit("budget_pass")
+        stock["scanner_promotion_id"] = "SCANPROM-B"
+        emit(
+            "rising_missed_tick_speed_entry_block",
+            block_reason="tick_acceleration_ratio_lt_1",
+        )
+        return False
+
+    assert run(stock, "000001") is False
+    assert stock["scanner_promotion_id"] == "SCANPROM-B"
+    assert rows[-1][1]["scanner_promotion_id"] == "SCANPROM-B"
+    assert {r[1]["entry_submit_attempt_parent_promotion_id"] for r in rows} == {
+        "SCANPROM-A"
+    }
+    exact = inspect(events(*rows))
+    assert exact["attempt_count"] == 1
+    assert exact["unclassified_terminal_attempt_count"] == 0
+    assert exact["axis_terminal_causal_attempt_counts"]["UPSTREAM_GATE"] == 1
+    assert exact["submitted_attempt_count"] == 0
+    assert exact["attempt_ledger"][0]["parent_promotion_id"] == "SCANPROM-A"
+    assert submit_attempt_fields(stock, "000001") == {}
+
+
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"entry_submit_attempt_parent_promotion_id": "SCANPROM-B"},
+        {"entry_submit_attempt_authority": "order_submit_allowed"},
+        {"entry_submit_attempt_schema": "unknown"},
+    ],
+)
+def test_invalid_frozen_submit_contract_stays_excluded(invalid_fields):
+    base = {
+        "entry_submit_attempt_id": "call",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+        "scanner_promotion_id": "SCANPROM-B",
+        "entry_submit_attempt_parent_promotion_id": "SCANPROM-A",
+    }
+    exact = inspect(
+        events(
+            ("budget_pass", base),
+            ("latency_block", {**base, **invalid_fields}),
+        )
+    )
+    assert exact["unclassified_terminal_attempt_count"] == 1
+    assert exact["attempt_ledger"][0]["terminal_stage"] == "identity_contract_gap"
+    assert exact["submitted_attempt_count"] == 0
+
+
 def test_finished_call_without_terminal_is_not_perpetual_pending():
     fields = {
         "entry_submit_attempt_id": "A",
@@ -608,6 +690,10 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
     ]
     first_id = emitted[0][1]["entry_submit_attempt_id"]
     assert emitted[1][1]["entry_submit_attempt_id"] == first_id
+    assert all(
+        fields["entry_submit_attempt_parent_promotion_id"] == "SCANPROM-P"
+        for _, fields in emitted
+    )
     assert emitted[1][1]["submit_call_outcome"] == "returned_false"
     from src.engine import observation_source_quality_audit as audit
 
@@ -626,9 +712,14 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
     assert emitted[2][1]["entry_submit_attempt_id"] != first_id
     assert stock["entry_submit_identity_reconciliation_required"] is True
     sh._log_entry_pipeline(
-        stock, "010170", "budget_pass", entry_submit_attempt_id="spoofed"
+        stock,
+        "010170",
+        "budget_pass",
+        entry_submit_attempt_id="spoofed",
+        entry_submit_attempt_parent_promotion_id="spoofed-parent",
     )
     assert "entry_submit_attempt_id" not in emitted[-1][1]
+    assert "entry_submit_attempt_parent_promotion_id" not in emitted[-1][1]
 
 
 def test_identity_allocation_failure_does_not_skip_original_guard(monkeypatch, caplog):

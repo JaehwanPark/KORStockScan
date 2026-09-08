@@ -2274,7 +2274,7 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
     wait_for_postclose_resources "pattern_lab_ai_review_source_provenance_refresh"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
       --date "$TARGET_DATE" \
-      --refresh-source-provenance \
+      --review-current-generation \
       "${PATTERN_LAB_SWING_ARGS[@]}"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
@@ -2415,7 +2415,7 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
     wait_for_postclose_resources "pattern_lab_ai_review_final_source_provenance_refresh"
     run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
       --date "$TARGET_DATE" \
-      --refresh-source-provenance \
+      --review-current-generation \
       "${PATTERN_LAB_SWING_ARGS[@]}"
     wait_for_report_artifact \
       "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \

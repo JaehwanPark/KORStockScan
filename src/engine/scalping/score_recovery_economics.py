@@ -29,7 +29,7 @@ SCOPES = {
     "NXT": "nxt",
     "PREMARKET_KRX_LIKE": "krx_like_premarket",
 }
-POLICY_SEARCH_SCHEMA = "score_recovery_real_profile_search_v1"
+POLICY_SEARCH_SCHEMA = "score_recovery_real_profile_search_v2"
 # Existing bounded axes only. Scores, sizing and the effective rebound floor
 # are not searched. An unseen profile never receives execution evidence.
 PROFILE_SEARCH_BOUNDS = {
@@ -531,15 +531,22 @@ def _profile_period_stats(book, p, venue, days):
         and r.get("session") == SCOPES[venue]
         and r["date"] in days
     ]
-    partial_net = math.fsum(
-        r["net_krw"]
+    partial_rows = [
+        r
         for r in book["partial_observations"].values()
         if r.get("profile") == p
         and r.get("venue") == venue
         and r.get("session") == SCOPES[venue]
         and r.get("date") in days
-    )
+    ]
+    partial_net = math.fsum(r["net_krw"] for r in partial_rows)
     full_net = math.fsum(r["net_krw"] for r in rows)
+    hours = [finite(r.get("capital_hours")) for r in [*rows, *partial_rows]]
+    capital = (
+        math.fsum(hours)
+        if hours and all(h is not None and h > 0 for h in hours)
+        else None
+    )
     return {
         "count": len(rows),
         "net_per_source_day": (full_net + partial_net) / len(days),
@@ -547,6 +554,10 @@ def _profile_period_stats(book, p, venue, days):
         "partial_net_per_source_day": partial_net / len(days),
         "net_ev_scope": "full_only_not_pooled_with_partial",
         "completed_per_source_day": len(rows) / len(days),
+        "capital_time_krw_hours": capital,
+        "net_per_capital_time": (
+            (full_net + partial_net) / capital if capital else None
+        ),
         "net_ev_pct": (
             (
                 math.fsum(r["net_krw"] for r in rows)
@@ -557,6 +568,28 @@ def _profile_period_stats(book, p, venue, days):
             else None
         ),
     }
+
+
+def _cadence_economics_improved(before, after, *, strict=True):
+    """Small profitable fills may trade more often; extra capital is not alpha.
+
+    Full-only positive net EV remains required. Total net includes separately
+    reconciled partial fills, including their capital-time denominator.
+    Existing dispersion, sample, partial-loss and holdout guards stay intact.
+    """
+    if not before["count"] or not after["count"]:
+        return False
+    old_eff = before["net_per_capital_time"]
+    new_eff = after["net_per_capital_time"]
+    if old_eff is None or new_eff is None or after["net_ev_pct"] <= 0:
+        return False
+    old_net = max(0, before["net_per_source_day"])
+    new_net = after["net_per_source_day"]
+    return (
+        (new_net > old_net if strict else new_net >= old_net)
+        and new_eff >= max(0, old_eff)
+        and (not strict or not math.isclose(new_eff, max(0, old_eff), rel_tol=1e-9))
+    )
 
 
 def _evaluate_policy(metrics, sample_floor=20):
@@ -572,6 +605,7 @@ def _evaluate_policy(metrics, sample_floor=20):
         "schema": POLICY_SEARCH_SCHEMA,
         "status": "no_supported_alternative_profile",
         "comparison_basis": "observed_real_profiles_not_causal_counterfactual",
+        "selection_objective": "positive_full_net_ev_and_net_per_source_day_with_non_degrading_capital_efficiency",
         "candidate_count": 0,
         "selected_profile": None,
         "candidate_ledger": [],
@@ -628,13 +662,26 @@ def _evaluate_policy(metrics, sample_floor=20):
             )
             if not before["count"] or not after["count"]:
                 continue
+            if (
+                before["net_per_capital_time"] is None
+                or after["net_per_capital_time"] is None
+            ):
+                entry["status"] = "comparison_capital_time_missing"
+                continue
             delta = after["net_per_source_day"] - before["net_per_source_day"]
-            if delta > 0 and after["net_ev_pct"] > before["net_ev_pct"]:
+            if _cadence_economics_improved(before, after):
                 ranked.append((delta, key, venue, p, candidate, entry))
                 entry["status"] = "train_candidate"
     search["candidate_count"] = len(profiles)
     if not ranked:
-        search["status"] = "no_training_improvement" if profiles else search["status"]
+        search["status"] = (
+            "comparison_source_incomplete"
+            if any(
+                e["status"] == "comparison_capital_time_missing"
+                for e in search["candidate_ledger"]
+            )
+            else "no_training_improvement" if profiles else search["status"]
+        )
         return baseline
     _, key, venue, p, candidate, entry = sorted(
         ranked, key=lambda v: (-v[0], v[1], v[2])
@@ -652,10 +699,7 @@ def _evaluate_policy(metrics, sample_floor=20):
     passed = (
         candidate["ready"]
         and venue in candidate["eligible_scopes"]
-        and before["count"] > 0
-        and after["count"] > 0
-        and after["net_per_source_day"] > max(0, before["net_per_source_day"])
-        and after["net_ev_pct"] > max(0, before["net_ev_pct"])
+        and _cadence_economics_improved(before, after)
     )
     # One env profile is shared by the scoped runtime consumer. A KRX-only
     # improvement must not silently drop an already eligible NXT scope.
@@ -665,10 +709,7 @@ def _evaluate_policy(metrics, sample_floor=20):
         new = _profile_period_stats(book, p, other, holdout)
         passed = passed and (
             other in candidate["eligible_scopes"]
-            and old["count"] > 0
-            and new["count"] > 0
-            and new["net_per_source_day"] >= old["net_per_source_day"]
-            and new["net_ev_pct"] >= old["net_ev_pct"]
+            and _cadence_economics_improved(old, new, strict=False)
         )
         entry["comparisons"].append({"venue": other, "baseline": old, "candidate": new})
     entry["status"] = "selected_observed_profile" if passed else "holdout_not_improved"

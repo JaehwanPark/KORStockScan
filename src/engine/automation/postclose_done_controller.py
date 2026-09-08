@@ -80,6 +80,7 @@ MARKER_RECONCILIATION_LOG_ISSUES = {
     "postclose_fail_marker_present",
 }
 EV_WORKORDER_STALE_ISSUES = {
+    "pattern_lab_ai_review_source_generation_stale",
     "threshold_cycle_ev_trade_review_calibration_count_mismatch",
     "threshold_cycle_ev_stale_before_code_improvement_workorder",
     "threshold_cycle_ev_stale_before_pattern_lab_currentness_audit",
@@ -170,6 +171,31 @@ def _runtime_approval_scope_args(verification: dict[str, Any]) -> list[str]:
     if not _env_enabled("THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY", "false"):
         args.append("--producer-gap-disabled")
     return args
+
+
+def _pattern_review_recovery_actions(target_date, verification):
+    profile = verification.get("execution_profile") or {}
+    if (profile.get("flags") or {}).get(
+        "pattern_lab_ai_review"
+    ) is not True or "pattern_lab_ai_review" in (
+        profile.get("disabled_stage_flags") or []
+    ):
+        return []
+    return [
+        RecoveryAction(
+            "refresh_pattern_lab_ai_review_generation",
+            [
+                _python_bin(),
+                "-m",
+                "src.engine.pattern_lab_ai_review",
+                "--date",
+                target_date,
+                "--review-current-generation",
+                *_swing_scope_args(verification),
+            ],
+            "reconcile current pattern sources using the original bounded daily review budget",
+        )
+    ]
 
 
 def _workorder_command(
@@ -899,6 +925,7 @@ def _tail_stage_repair_actions(
                 ],
                 "wrapper tail repair pattern currentness audit refresh before final EV",
             ),
+            *_pattern_review_recovery_actions(target_date, verification),
             RecoveryAction(
                 "refresh_pattern_lab_propagation_audit",
                 [
@@ -1222,6 +1249,82 @@ def _recovery_actions(
         - set(summary_issues)
         - _done_acceptable_warning_issues(verification)
     )
+    drought = verification.get("drought_canonical_handoff") or {}
+    drought_issues = set(drought.get("issues") or [])
+    # A changed controller also invalidates its workorder fingerprint. Both are
+    # repaired in this same producer -> workorder -> summary sequence.
+    workorder_source_issues = set(
+        (verification.get("code_improvement_workorder_source_fingerprint") or {}).get(
+            "issues"
+        )
+        or []
+    )
+    if drought_issues and not (other_issues - drought_issues - workorder_source_issues):
+        # The EV workorder snapshot is deliberately previous-generation. Repair
+        # the final canonical receipt without rerunning EV/AI or applying an env.
+        if (
+            drought.get("controller_validation_error")
+            and drought.get("controller_required") is True
+        ):
+            actions.append(
+                RecoveryAction(
+                    "refresh_entry_recheck_drought_controller",
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.scalping.entry_recheck_drought_controller",
+                        "--target-date",
+                        target_date,
+                        "--write",
+                    ],
+                    "restore the exact-date controller source and PREOPEN contract",
+                )
+            )
+        actions.append(
+            RecoveryAction(
+                "refresh_code_improvement_workorder_final",
+                _workorder_command(target_date, verification),
+                "restore canonical per-ID drought dispositions after controller repair",
+            )
+        )
+        actions.append(
+            RecoveryAction(
+                "refresh_runtime_approval_summary",
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.runtime_approval_summary",
+                    "--date",
+                    target_date,
+                    *_runtime_approval_scope_args(verification),
+                ],
+                "bind canonical workorder and controller generation",
+            )
+        )
+        actions.append(
+            _build_verify_action(
+                target_date, verification, require_summary_handoff=False
+            )
+        )
+        if ((verification.get("execution_profile") or {}).get("flags") or {}).get(
+            "tuning_performance_control_tower"
+        ) is not False:
+            actions.append(_build_tuning_performance_control_tower_action(target_date))
+        actions.append(
+            RecoveryAction(
+                "refresh_next_stage2_checklist_final",
+                [
+                    _python_bin(),
+                    "-m",
+                    "src.engine.build_next_stage2_checklist",
+                    "--source-date",
+                    target_date,
+                ],
+                "bind final drought sources and tower before strict verification",
+            )
+        )
+        actions.append(_build_verify_action(target_date, verification))
+        return actions
     if summary_issues and not other_issues:
         if any(":tower:" in issue for issue in summary_issues):
             # The tower must not copy its own old summary-handoff failure back
@@ -1335,6 +1438,9 @@ def _recovery_actions(
         )
         return actions
     if EV_WORKORDER_STALE_ISSUES & set(issues):
+        pattern_only = set(issues) - _done_acceptable_warning_issues(verification) == {
+            "pattern_lab_ai_review_source_generation_stale"
+        }
         actions.extend(
             [
                 RecoveryAction(
@@ -1388,6 +1494,7 @@ def _recovery_actions(
                     ],
                     "pattern currentness audit refresh after EV",
                 ),
+                *_pattern_review_recovery_actions(target_date, verification),
                 RecoveryAction(
                     "refresh_pattern_lab_propagation_audit",
                     [
@@ -1450,6 +1557,28 @@ def _recovery_actions(
                 _build_verify_action(target_date, verification),
             ]
         )
+        if pattern_only:
+            # A reviewer generation mismatch does not invalidate execution
+            # facts, Daily/AI correction or the next PREOPEN selection.
+            checklist = next(
+                a for a in actions if a.action == "refresh_next_stage2_checklist"
+            )
+            actions = [
+                a
+                for a in actions[3:]
+                if a.action
+                not in {
+                    "refresh_next_preopen_apply",
+                    "refresh_next_stage2_checklist",
+                    "verify_postclose_chain",
+                }
+            ]
+            flags = (verification.get("execution_profile") or {}).get("flags") or {}
+            if flags.get("tuning_performance_control_tower") is True:
+                actions.append(
+                    _build_tuning_performance_control_tower_action(target_date)
+                )
+            actions.extend([checklist, _build_verify_action(target_date, verification)])
         return actions
     if "runtime_apply_gap" in issue_text:
         actions.append(_build_runtime_apply_gap_audit_action(target_date, verification))

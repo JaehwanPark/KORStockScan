@@ -1,7 +1,9 @@
 import json
+import hashlib
 from pathlib import Path
 
 from src.engine import pattern_lab_currentness_audit as mod
+from src.engine.automation.pattern_lab_source_contract import read_feedback
 
 
 def _metric_contract() -> dict:
@@ -48,7 +50,7 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
     ):
         _write_json(
             report_dir / report_name / f"{stem}_{target_date}.json",
-            {"runtime_effect": False},
+            {"date": target_date, "runtime_effect": False},
         )
     for lab in ("claude_scalping_pattern_lab",):
         lab_dir = project_root / "analysis" / lab
@@ -111,6 +113,24 @@ def _seed_labs(project_root: Path, target_date: str) -> None:
         "ai_two_pass_review = {'interpretation': {}, 'audit': {}, 'final_conclusions': []}\n",
         encoding="utf-8",
     )
+    _seed_receipts(project_root, target_date, target_date)
+
+
+def _seed_receipts(root, target_date, source_date):
+    output = root / "analysis/claude_scalping_pattern_lab/outputs"
+    receipts = []
+    for name in ("threshold_cycle_ev", "runtime_approval_summary"):
+        source = root / "data/report" / name / f"{name}_{source_date}.json"
+        receipts.append(
+            {"source_id": name, **read_feedback(source, source_date, target_date)}
+        )
+    path = output / "claude_payload_summary.json"
+    _write_json(path, {"feedback_sources": {"consumed_feedback_sources": receipts}})
+    manifest = json.loads((output / "run_manifest.json").read_text())
+    manifest["generation_sha256"] = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+    }
+    _write_json(output / "run_manifest.json", manifest)
 
 
 def test_currentness_audit_passes_when_contracts_and_guards_exist(
@@ -228,6 +248,12 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(
         encoding="utf-8",
     )
     (project_root / "src" / "engine" / "pattern_lab_ai_review.py").unlink()
+    # Missing code text is no longer a substitute for actual consumption
+    # evidence. This scenario also lacks the producer's receipt artifact.
+    (
+        project_root
+        / "analysis/claude_scalping_pattern_lab/outputs/claude_payload_summary.json"
+    ).unlink()
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -271,8 +297,9 @@ def test_currentness_audit_accepts_latest_prior_feedback_artifacts(
             target_path.unlink()
         _write_json(
             report_dir / report_name / f"{stem}_{prior_date}.json",
-            {"runtime_effect": False},
+            {"date": prior_date, "runtime_effect": False},
         )
+    _seed_receipts(project_root, target_date, prior_date)
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

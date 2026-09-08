@@ -452,6 +452,15 @@ def _candidate_source_contract(
             exclusions["decision_date_mismatch"] += 1
         elif _number(row.get("outcome_return_pct")) is None:
             exclusions["mature_outcome_missing"] += 1
+        elif row.get("candidate_execution_cost_contract_applied") is True and any(
+            str(row.get(f"{actor}_action") or "").upper() in EXPOSURE_ACTIONS
+            and (
+                (cost := _number(row.get(f"{actor}_execution_cost_pct"))) is None
+                or cost < 0
+            )
+            for actor in ("control", "candidate")
+        ):
+            exclusions["exposure_execution_cost_missing_or_invalid"] += 1
         else:
             comparisons.append(row)
 
@@ -870,6 +879,32 @@ def _transition_summary(
         for row in values
     )
     false_drop_rate_pct = (false_drop_count / len(values)) * 100.0 if values else 0.0
+    # Diagnostic only: do not promote a spread/age execution proxy to full net
+    # economics or silently change the existing false-drop review ceiling.
+    small_opportunity_rows = [
+        row
+        for row in values
+        if isinstance(row.get("entry_small_profit_opportunity"), dict)
+        and row["entry_small_profit_opportunity"].get("schema")
+        == "entry_small_profit_opportunity_v1"
+        and row["entry_small_profit_opportunity"].get(
+            "positive_target_first_after_execution_proxy"
+        )
+        is True
+    ]
+    small_opportunity_diagnostic = {
+        "opportunity_count": len(small_opportunity_rows),
+        "control_missed_count": sum(
+            row.get("control_action") in {"WAIT", "DROP"}
+            for row in small_opportunity_rows
+        ),
+        "candidate_missed_count": sum(
+            row.get("candidate_action") in {"WAIT", "DROP"}
+            for row in small_opportunity_rows
+        ),
+        "fee_tax_net_profit_verified": False,
+        "decision_authority": "diagnostic_only_no_promotion_gate",
+    }
     review_gate_checks = {
         "source_integrity_complete": source_integrity_complete,
         "paired_economic_values_complete": bool(values)
@@ -959,6 +994,7 @@ def _transition_summary(
         "candidate_exposure_ev_pct": candidate_exposure_ev,
         "false_drop_count": false_drop_count,
         "false_drop_rate_pct": false_drop_rate_pct,
+        "small_profit_opportunity_diagnostic": small_opportunity_diagnostic,
         "control_source_quality_adjusted_ev_pct": (
             fmean(control_raw_values) if control_raw_values else None
         ),

@@ -361,6 +361,83 @@ def real_comparison_metrics(*, holdout_net=2):
     }
 
 
+def frequent_small_net_metrics(*, capital_multiplier=0.5, holdout_net=70):
+    books = []
+    proposed = {**PROFILE, "min_buy_pressure": 60}
+    for index, day in enumerate(
+        ("2026-09-02", "2026-09-03", "2026-09-04", "2026-09-07")
+    ):
+        r = signed_report(day, count=5, net=100)
+        alt = signed_report(day, count=10, net=70 if index < 2 else holdout_net)
+        for row in alt["rows"]:
+            row["score_recovery_profile"] = proposed
+            row["main_lifecycle_id"] += "-frequent"
+            row["capital_time_krw_hours"] *= capital_multiplier
+        r["rows"].extend(alt["rows"])
+        books.append(econ.evidence_book(sign(r), day))
+    return {
+        "score_recovery_current_profile": PROFILE,
+        "score_recovery_real_economics": econ.merge_books(books),
+    }
+
+
+def test_smaller_net_more_frequently_can_improve_same_capital_time():
+    metrics = frequent_small_net_metrics()
+    d = econ.evaluate_policy(metrics)
+    assert d["ready"]
+    assert d["profile"]["min_buy_pressure"] == 60
+    assert d["policy_search"]["status"] == "selected_observed_profile"
+    comparison = next(
+        e for e in d["policy_search"]["candidate_ledger"] if e["comparisons"]
+    )["comparisons"][0]
+    assert comparison["baseline"]["net_per_source_day"] == 500
+    assert comparison["candidate"]["net_per_source_day"] == 700
+    assert comparison["candidate"]["net_ev_pct"] < comparison["baseline"]["net_ev_pct"]
+    assert (
+        comparison["candidate"]["capital_time_krw_hours"]
+        == comparison["baseline"]["capital_time_krw_hours"]
+    )
+    c = candidate(metrics)
+    c["recommended_values"].update(d["profile"])
+    assert preopen._score65_74_entry_unlock_candidate(c, target_date="2026-09-08")
+
+
+def test_more_profit_from_disproportionate_capital_is_not_selected():
+    d = econ.evaluate_policy(frequent_small_net_metrics(capital_multiplier=2))
+    assert d["policy_search"]["selected_profile"] is None
+
+
+def test_scaling_capital_at_identical_efficiency_is_not_alpha():
+    metrics = frequent_small_net_metrics(capital_multiplier=1)
+    for row in metrics["score_recovery_real_economics"]["observations"].values():
+        if row["profile"] != PROFILE:
+            row.update(net_krw=100, net_return_pct=0.2)
+    d = econ.evaluate_policy(metrics)
+    assert d["policy_search"]["selected_profile"] is None
+
+
+def test_missing_partial_capital_is_unknown_not_measured_no_edge():
+    metrics = frequent_small_net_metrics()
+    book = metrics["score_recovery_real_economics"]
+    for day in book["source_dates"]:
+        row = next(
+            copy.deepcopy(r)
+            for r in book["observations"].values()
+            if r["date"] == day and r["profile"] != PROFILE
+        )
+        row.update(fill_class="partial_only", net_krw=1)
+        row.pop("capital_hours")
+        book["partial_observations"][day + "-partial"] = row
+    d = econ.evaluate_policy(metrics)
+    assert d["policy_search"]["status"] == "comparison_source_incomplete"
+
+
+def test_frequency_cannot_hide_negative_holdout_net():
+    d = econ.evaluate_policy(frequent_small_net_metrics(holdout_net=-1))
+    assert d["policy_search"]["selected_profile"] is None
+    assert d["policy_search"]["status"] == "holdout_not_improved"
+
+
 def test_observed_bounded_profile_reselection_and_preopen_recompute():
     metrics = real_comparison_metrics()
     selected = econ.evaluate_policy(metrics)

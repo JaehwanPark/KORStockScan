@@ -1937,7 +1937,60 @@ def _evidence(
     }
 
 
-def _economic_acceptance(report: dict[str, Any]) -> dict[str, Any]:
+def _approval_feasibility(book):
+    """Conditional sensitivity, not an ETA or a replacement promotion gate."""
+    c, k = book.get("candidate") or {}, book.get("control") or {}
+    cv, uplift, cs, ks = (
+        _finite(v)
+        for v in (
+            c.get("source_quality_adjusted_ev_pct"),
+            book.get("candidate_control_ev_uplift_pct"),
+            c.get("net_return_robust_se_pct"),
+            k.get("net_return_robust_se_pct"),
+        )
+    )
+    counts = {
+        "candidate": max(0, _strict_int(c.get("completed_outcome_count")) or 0),
+        "control": max(0, _strict_int(k.get("completed_outcome_count")) or 0),
+    }
+    state = "blocked_missing_evidence"
+    required = None
+    if cv is not None and uplift is not None and (cv <= 0 or uplift <= 0):
+        state = "no_positive_edge_time_is_not_a_repair"
+    elif (
+        all(v is not None and v >= 0 for v in (cs, ks))
+        and cv is not None
+        and uplift is not None
+        and all(n > 1 for n in counts.values())
+    ):
+        # Assumes unchanged means, dispersion and mix under proportional growth.
+        # Day clustering can break sqrt(n) scaling; this is NOT a finite ETA.
+        try:
+            scale = max((2 * cs / cv) ** 2, (2 * (cs + ks) / uplift) ** 2)
+            required = {
+                name: max(MIN_COHORT_COMPLETED, n, math.floor(n * scale) + 1)
+                for name, n in counts.items()
+            }
+            state = "conditional_uncertainty_sensitivity_available"
+        except (OverflowError, ValueError):
+            state = "uncertainty_scale_not_finite"
+    return {
+        "status": state,
+        "current_completed": counts,
+        "sample_floor_deficit": {
+            name: max(0, MIN_COHORT_COMPLETED - n) for name, n in counts.items()
+        },
+        "conditional_completed_required": required,
+        "finite_eta_trading_days": None,
+        "eta_reason": "future_unique_fill_terminal_inflow_and_stable_day_clusters_not_proven",
+        "assumption": "proportional_sample_growth_fixed_means_dispersion_mix_not_a_forecast",
+        "approval_gate_changed": False,
+    }
+
+
+def _economic_acceptance(
+    report: dict[str, Any], *, legacy_v1: bool = False
+) -> dict[str, Any]:
     """Bounded maintenance evidence, never an additional promotion/BUY gate."""
     lineage = report.get("lineage") or {}
     audited = {
@@ -1956,22 +2009,24 @@ def _economic_acceptance(report: dict[str, Any]) -> dict[str, Any]:
         and row.get("lookup_attention_weight_runtime_policy_eligible") is True
     ]
     status = report["status"]
-    due = len(days) >= 20
+    calendar_deadline = ROLLOUT_DATE + timedelta(days=30)
+    calendar_due = date.fromisoformat(report["target_date"]) >= calendar_deadline
+    due = len(days) >= 20 or calendar_due
     next_action = (
         "verify_next_preopen_receipt_then_runtime_consumption_and_net"
         if status == "live_auto_apply_ready"
         else (
-            "repair_source"
-            if status == "source_quality_blocked"
+            "review_integrate_or_retire_no_evidence_or_edge"
+            if due
             else (
-                "review_integrate_or_retire_no_evidence_or_edge"
-                if due
+                "repair_source"
+                if status == "source_quality_blocked"
                 else "keep_collecting"
             )
         )
     )
-    return {
-        "schema": "scanner_lookup_attention_natural_acceptance_v1",
+    result = {
+        "schema": "scanner_lookup_attention_natural_acceptance_v2",
         "metric_role": "funnel_count",
         "decision_authority": "diagnostic_only_no_runtime_mutation",
         "runtime_effect": False,
@@ -1979,6 +2034,9 @@ def _economic_acceptance(report: dict[str, Any]) -> dict[str, Any]:
         "valid_observation_dates": days,
         "valid_observation_day_count": len(days),
         "bounded_review_after_valid_days": 20,
+        "maintenance_calendar_deadline": calendar_deadline.isoformat(),
+        "calendar_review_due": calendar_due,
+        "maintenance_review_is_runtime_disable": False,
         "maintenance_review_due": due,
         "next_action": next_action,
         "blocking_stage": (
@@ -2008,7 +2066,57 @@ def _economic_acceptance(report: dict[str, Any]) -> dict[str, Any]:
         "incremental_profit_status": "not_proven_observational_cohorts_not_causal_pairs",
         "cost_basis": "actual_fill_prices_with_fixed_comparison_fees_and_tax_not_broker_cost_reconciliation",
         "missing_capital_time_is_diagnostic_only": True,
+        "approval_feasibility": {
+            name: _approval_feasibility(report.get(name) or {})
+            for name in ("base_book", "forward_holdout_book")
+        },
+        "common_source_day_economics": {
+            cohort: {
+                "completed_count": len(cohort_rows),
+                "completed_per_valid_source_day": (
+                    len(cohort_rows) / len(days) if days else None
+                ),
+                "net_per_valid_source_day_krw": (
+                    math.fsum(r["net_pnl_krw"] for r in cohort_rows) / len(days)
+                    if days and cohort_rows
+                    else None
+                ),
+                "zero_completed_source_day_count": len(
+                    set(days) - {r["rec_date"] for r in cohort_rows}
+                ),
+                "comparison_role": "observational_not_causal_or_equal_capital_policy_comparison",
+            }
+            for cohort in ("candidate", "control")
+            for cohort_rows in [[r for r in valid_rows if r["cohort"] == cohort]]
+        },
     }
+    if legacy_v1:
+        # Reproduce frozen diagnostic metadata without imposing new fields on
+        # previously valid policy/report pairs. Economic approval is unchanged.
+        for key in (
+            "maintenance_calendar_deadline",
+            "calendar_review_due",
+            "maintenance_review_is_runtime_disable",
+            "approval_feasibility",
+            "common_source_day_economics",
+        ):
+            result.pop(key)
+        result["schema"] = "scanner_lookup_attention_natural_acceptance_v1"
+        result["maintenance_review_due"] = len(days) >= 20
+        result["next_action"] = (
+            "verify_next_preopen_receipt_then_runtime_consumption_and_net"
+            if status == "live_auto_apply_ready"
+            else (
+                "repair_source"
+                if status == "source_quality_blocked"
+                else (
+                    "review_integrate_or_retire_no_evidence_or_edge"
+                    if len(days) >= 20
+                    else "keep_collecting"
+                )
+            )
+        )
+    return result
 
 
 def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2326,7 +2434,12 @@ def validate_artifact_pair(
                 issues.append("post_apply_book_not_reproducible")
             if post_apply_mature_value is not expected_post["mature"]:
                 issues.append("post_apply_maturity_not_reproducible")
-            if report.get("economic_acceptance") != _economic_acceptance(report):
+            acceptance = report.get("economic_acceptance") or {}
+            if acceptance != _economic_acceptance(
+                report,
+                legacy_v1=acceptance.get("schema")
+                == "scanner_lookup_attention_natural_acceptance_v1",
+            ):
                 issues.append("economic_acceptance_not_reproducible")
         except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
             issues.append("real_economic_outcomes_invalid")

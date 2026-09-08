@@ -1,6 +1,6 @@
 # 2026-09-08 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-09-08T12:30:02+09:00
+- generated_at: 2026-09-08T16:25:01+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -57,7 +57,7 @@
 
 ## Rows
 
-- record_id= code=058470 name=리노공업 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.05 final=None ai=50.0 tick=0.0 micro_vwap=0.0
+- record_id= code=058470 name=리노공업 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.19 final=None ai=50.0 tick=1.0 micro_vwap=17.14
 
 ## Real Scale-In Performance Rows
 

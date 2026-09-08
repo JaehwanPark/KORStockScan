@@ -1,14 +1,15 @@
-"""Broker-receipt reconciliation for manually exited episode inventory.
+"""Exact broker-receipt reconciliation for inactive episode inventory.
 
-The command never submits, cancels, or replaces an order.  It closes exactly
-one profile ledger only after a completed manual sell receipt matches that
-profile's whole held quantity.  Cross-profile or partial allocation is refused.
+Manual exits require an explicit whole-owner allocation. Original targets
+instead retain their immutable order identity. Neither mode submits, cancels,
+replaces an order, rolls the trading date, or starts a new attempt.
 """
 
 from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import tempfile
@@ -21,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 from src.engine.sniper_config import CONF
 from src.trading.low_price_two_leg.profiles import PROFILES
+from src.trading.order.episode_quantity import validate_owned_leg_quantity
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
@@ -481,7 +483,8 @@ def reconcile_manual_exit(
                 "targets": superseded_target_legs,
             },
             "expected_confirmation": expected_confirmation,
-            "runtime_effect": False,
+            "runtime_effect": bool(apply),
+            "runtime_mutation_scope": "custody_terminal_only",
             "actual_order_submitted": False,
         }
         if not apply:
@@ -496,6 +499,7 @@ def reconcile_manual_exit(
                 "entry_trade_date": trade_date.isoformat(),
                 "status": "reserved",
                 "reserved_at_kst": observed_at.isoformat(),
+                "fill_timestamp_status": "unavailable_from_dated_order_receipt",
             }
             registry_rows.append(registry_row)
             new_registry_rows.append(registry_row)
@@ -520,7 +524,9 @@ def reconcile_manual_exit(
                     "position_qty": 0,
                     "target_filled_qty": _positive_int(leg.get("buy_filled_qty")),
                     "target_fill_price": receipt["fill_price"],
-                    "target_filled_at": observed_at.isoformat(),
+                    "target_filled_at": "",
+                    "target_fill_reconciled_at": observed_at.isoformat(),
+                    "fill_timestamp_status": "unavailable_from_dated_order_receipt",
                     "exit_fill_source": "broker_verified_manual_sell_receipt",
                     "manual_exit_receipt": {
                         **receipt,
@@ -565,18 +571,247 @@ def reconcile_manual_exit(
         return result
 
 
+def reconcile_target_exit(
+    *,
+    owner_id: str,
+    receipt_rows: list[dict[str, Any]],
+    observed_at: datetime,
+    apply: bool = False,
+    confirmation: str = "",
+    state_path: Path | None = None,
+) -> dict[str, Any]:
+    """Close an inactive HELD ledger from its original exact target receipts.
+
+    No orders, date roll, new attempt or manual-exit allocation is performed.
+    The confirmation binds the entire state so a concurrent edit fails closed.
+    Broker order time is not a fill time; reconciliation time stays separate.
+    """
+    owner = OWNERS.get(owner_id)
+    if owner is None:
+        raise ValueError("episode_owner_not_allowed")
+    if observed_at.tzinfo is None:
+        raise ValueError("observed_at_timezone_required")
+    observed_at = observed_at.astimezone(KST)
+    path = Path(state_path or owner.state_path)
+    with path.with_suffix(".lock").open("a+", encoding="ascii") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ValueError("episode_service_or_reconciliation_lock_active") from exc
+        raw = path.read_bytes()
+        state = json.loads(raw)
+        state_sha = hashlib.sha256(raw).hexdigest()
+        if (
+            state.get("schema") != owner.schema
+            or state.get("status") != "HELD"
+            or state.get("attempt_consumed") is not True
+        ):
+            raise ValueError("target_exit_requires_consumed_held_owner")
+        trade_date = date.fromisoformat(str(state.get("trade_date") or ""))
+        if trade_date > observed_at.date():
+            raise ValueError("state_trade_date_in_future")
+        legs = state.get("legs")
+        if not isinstance(legs, list) or len(legs) != 2:
+            raise ValueError("state_two_leg_contract_invalid")
+        owned = state.get("owned_order_nos")
+        if not isinstance(owned, list):
+            raise ValueError("owned_order_numbers_missing")
+        numeric = (
+            "quantity",
+            "entry_price",
+            "fill_price",
+            "target_price",
+            "buy_filled_qty",
+            "position_qty",
+            "target_quantity",
+            "target_filled_qty",
+            "target_fill_price",
+        )
+        if not isinstance(state.get("audit"), list):
+            raise ValueError("state_audit_contract_invalid")
+        leg_ids = [leg.get("leg_id") for leg in legs if isinstance(leg, dict)]
+        if len(leg_ids) != 2 or any(not k for k in leg_ids) or len(set(leg_ids)) != 2:
+            raise ValueError("state_leg_identity_invalid")
+        target_ids = [
+            (
+                str(leg.get("target_order_date") or ""),
+                str(leg.get("target_order_no") or "").lstrip("0"),
+            )
+            for leg in legs
+            if leg.get("target_order_no")
+        ]
+        if len(target_ids) != len(set(target_ids)):
+            raise ValueError("target_order_reused_across_legs")
+        receipts = []
+        held = []
+        identities = set()
+        for leg in legs:
+            if not isinstance(leg, dict) or any(
+                _exact_nonnegative_int(leg.get(k)) is None for k in numeric
+            ):
+                raise ValueError("state_leg_numeric_contract_invalid")
+            validate_owned_leg_quantity(_positive_int(leg["quantity"]))
+            if _positive_int(leg["buy_filled_qty"]) > _positive_int(leg["quantity"]):
+                raise ValueError("state_buy_quantity_conflict")
+            pos = _positive_int(leg["position_qty"])
+            if not pos:
+                if leg.get("status") not in {"COMPLETE", "NO_FILL"}:
+                    raise ValueError("other_leg_not_terminal")
+                if _positive_int(leg["buy_filled_qty"]) != _positive_int(
+                    leg["target_filled_qty"]
+                ):
+                    raise ValueError("terminal_leg_quantity_conflict")
+                continue
+            if (
+                leg.get("status") != "HELD"
+                or leg.get("manual_exit_receipt")
+                or _positive_int(leg["target_filled_qty"]) != 0
+                or _positive_int(leg["target_fill_price"]) != 0
+                or _positive_int(leg["entry_price"]) <= 0
+                or _positive_int(leg["fill_price"]) <= 0
+                or _positive_int(leg["target_price"])
+                <= _positive_int(leg["fill_price"])
+                or not pos
+                == _positive_int(leg["buy_filled_qty"])
+                == _positive_int(leg["target_quantity"])
+                or pos > _positive_int(leg["quantity"])
+            ):
+                raise ValueError("target_exit_requires_exact_whole_held_leg")
+            order_no = str(leg.get("target_order_no") or "").strip()
+            order_date = date.fromisoformat(str(leg.get("target_order_date") or ""))
+            if order_date < trade_date or order_date > observed_at.date():
+                raise ValueError("target_order_date_outside_custody_window")
+            if not order_no or not any(_same_order_no(order_no, n) for n in owned):
+                raise ValueError("target_order_not_owned")
+            identity = (order_date.isoformat(), order_no.lstrip("0"))
+            if identity in identities:
+                raise ValueError("target_order_reused_across_legs")
+            identities.add(identity)
+            receipt = _verified_receipts(
+                rows=receipt_rows,
+                order_nos=[order_no],
+                order_date=order_date.isoformat(),
+                symbol=owner.symbol,
+                expected_qty=pos,
+            )[0]
+            if receipt["fill_price"] < _positive_int(leg["target_price"]):
+                raise ValueError("original_target_fill_below_owned_limit")
+            receipts.append({**receipt, "leg_id": leg.get("leg_id")})
+            held.append(leg)
+        qty = sum(_positive_int(leg["position_qty"]) for leg in held)
+        if not qty or _exact_nonnegative_int(state.get("position_qty")) != qty:
+            raise ValueError("state_held_quantity_conflict")
+        proof_sha = hashlib.sha256(
+            json.dumps(receipts, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        expected = f"RECONCILE_TARGET_{owner_id}_{state_sha}_{proof_sha}"
+        result = {
+            "schema": "episode_target_exit_reconciliation_v1",
+            "status": "applied" if apply else "ready",
+            "owner_id": owner_id,
+            "symbol": owner.symbol,
+            "trade_date": trade_date.isoformat(),
+            "state_path": str(path),
+            "state_sha256_before": state_sha,
+            "receipt_sha256": proof_sha,
+            "closed_qty": qty,
+            "receipts": receipts,
+            "observed_at": observed_at.isoformat(),
+            "expected_confirmation": expected,
+            "runtime_effect": bool(apply),
+            "runtime_mutation_scope": "custody_terminal_only",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "fill_timestamp_status": "unavailable_from_dated_order_receipt",
+            "realized_pnl": None,
+            "realized_pnl_status": "exact_cost_not_reconciled",
+        }
+        if not apply:
+            return result
+        if confirmation != expected:
+            raise ValueError("target_exit_confirmation_or_state_hash_mismatch")
+        for leg, receipt in zip(held, receipts, strict=True):
+            leg.update(
+                {
+                    "status": "COMPLETE",
+                    "position_qty": 0,
+                    "target_filled_qty": receipt["filled_qty"],
+                    "target_fill_price": receipt["fill_price"],
+                    "target_filled_at": "",
+                    "target_fill_reconciled_at": observed_at.isoformat(),
+                    "exit_fill_source": "broker_verified_original_target_receipt",
+                    "target_exit_reconciliation_receipt": receipt,
+                }
+            )
+        state.update(
+            {
+                "status": "COMPLETE",
+                "position_qty": 0,
+                "last_action": "broker_verified_target_exit_reconciled",
+                "updated_at": observed_at.isoformat(),
+            }
+        )
+        audit = state.get("audit")
+        if not isinstance(audit, list):
+            raise ValueError("state_audit_contract_invalid")
+        audit.append(
+            {
+                "action": "broker_verified_target_exit_reconciled",
+                "at_kst": observed_at.isoformat(),
+                **result,
+            }
+        )
+        state["audit"] = audit[-100:]
+        _atomic_write(path, state)
+        return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--owner", required=True, choices=sorted(OWNERS))
+    parser.add_argument("--original-target", action="store_true")
     parser.add_argument(
         "--order-no",
-        required=True,
+        default="",
         help="one order number or comma-separated per-leg order numbers",
     )
-    parser.add_argument("--order-date", required=True)
+    parser.add_argument("--order-date", default="")
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm", default="")
     args = parser.parse_args(argv)
+    if args.original_target:
+        if args.order_no or args.order_date:
+            parser.error("original targets are read from the locked owner ledger")
+        owner = OWNERS[args.owner]
+        state = _read_state(owner.state_path)
+        dates = sorted(
+            {
+                str(leg.get("target_order_date") or "")
+                for leg in state.get("legs", [])
+                if leg.get("position_qty")
+            }
+        )
+        token = str(kiwoom_utils.get_cached_kiwoom_token(CONF) or "").strip()
+        if not token:
+            raise SystemExit("shared_cached_token_unavailable")
+        rows = [
+            row
+            for day in dates
+            for row in load_manual_sell_receipts(
+                token, date.fromisoformat(day).isoformat(), owner.symbol
+            )
+        ]
+        result = reconcile_target_exit(
+            owner_id=args.owner,
+            receipt_rows=rows,
+            observed_at=datetime.now(tz=KST),
+            apply=args.apply,
+            confirmation=args.confirm,
+        )
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if not args.order_no or not args.order_date:
+        parser.error("manual exit requires --order-no and --order-date")
     try:
         order_date = date.fromisoformat(args.order_date).isoformat()
     except ValueError as exc:

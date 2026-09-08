@@ -639,8 +639,11 @@ def test_postclose_large_reports_use_compact_stdout_and_verified_refresh():
     assert '"$PROJECT_DIR/src/engine/pipeline_event_summary.py"' in script
     assert '"$PROJECT_DIR/src/engine/pipeline_event_verbosity_report.py"' in script
     assert 'json_is_valid "$pipeline_verbosity_json"' in script
-    assert 'src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE" --check-reusable' in script
-    assert 'pipeline_event_producer_health_${TARGET_DATE}_' in script
+    assert (
+        'src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE" --check-reusable'
+        in script
+    )
+    assert "pipeline_event_producer_health_${TARGET_DATE}_" in script
     assert 'pipeline_verbosity_inputs+=("$pipeline_producer_health")' in script
     assert '"$PROJECT_DIR/src/utils/pipeline_event_logger.py"' in script
     assert (
@@ -1806,7 +1809,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         'run_threshold_cycle_ev_and_wait "post_workorder_refresh"'
     )
     propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
-    ai_review_source_refresh_idx = script.index("--refresh-source-provenance")
+    ai_review_source_refresh_idx = script.index("--review-current-generation")
     post_propagation_ev_idx = script.index(
         'run_threshold_cycle_ev_and_wait "post_propagation_audit_refresh"'
     )
@@ -1837,7 +1840,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     final_next_checklist_idx = script.rindex(checklist_command, 0, pending_verify_idx)
     post_done_checklist_idx = script.rindex(checklist_command)
     final_propagation_idx = script.rindex("src.engine.pattern_lab_propagation_audit")
-    final_ai_source_refresh_idx = script.rindex("--refresh-source-provenance")
+    final_ai_source_refresh_idx = script.rindex("--review-current-generation")
     final_ev_idx = script.index(
         'run_threshold_cycle_ev_and_wait "final_consumer_refresh"'
     )
@@ -1896,7 +1899,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     )
     assert '--require-summary-handoff "${VERIFY_DISABLED_STAGE_ARGS[@]}"' in script
     assert script.count("src.engine.pattern_lab_propagation_audit") == 2
-    assert script.count("--refresh-source-provenance") == 2
+    assert script.count("--review-current-generation") == 2
     assert (
         'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"'
         in script

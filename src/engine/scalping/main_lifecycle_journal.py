@@ -250,6 +250,8 @@ _ALLOWED_DATA_FIELDS = frozenset(
         "realized_net_pnl_krw",
         "score_recovery_profile",
         "score_recovery_applied",
+        "strategy_owner_profiles",
+        "strategy_owner_context_sha256",
         "cost_artifact_sha256",
         "cost_artifact_verified",
         "symbol_master_sha256",

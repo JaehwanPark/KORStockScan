@@ -1088,6 +1088,68 @@ def test_payload_sanitizer_preserves_nonsecret_token_metrics_and_redacts_opaque_
     assert "sk-abcdefghijklmnopqrstuvwxyz" not in serialized
 
 
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_retired_cache_identifiers_preserve_exact_request(
+    monkeypatch, tmp_path, wrapped
+):
+    _enable(monkeypatch, tmp_path)
+    original = {
+        "runtime_context": {
+            owner: {"status": "retired", "cache_token": trace.RETIREMENT_ID}
+            for owner in ("entry_adm", "holding_exit_matrix", "lifecycle_ai")
+        }
+    }
+    user_input = {"exact_payload": original} if wrapped else original
+    fields = trace.capture_ai_request(
+        prompt="prompt",
+        user_input=user_input,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="retirement-exact",
+        model="gpt-test",
+        schema_name="entry_v1",
+        require_json=True,
+    )
+    row = _rows(trace._payload_path(trace._date_text()))[0]
+    assert row["sanitized_user_input"] == user_input
+    assert row["replay_exact"] is True
+    assert fields["ai_input_payload_replay_exact"] is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "scalping_adm_ldm_retirement_20260906-secret",
+        "scalping_adm_ldm_retirement_20260906 bearer sensitive-value",
+        "sk-abcdefghijklmnopqrstuvwxyz",
+        "unknown-secret",
+    ],
+)
+def test_retirement_exception_never_preserves_other_tokens(value):
+    sanitized, redacted = trace.sanitize_ai_trace_value(
+        {
+            "runtime_context": {
+                owner: {"cache_token": value}
+                for owner in ("entry_adm", "holding_exit_matrix", "lifecycle_ai")
+            }
+        }
+    )
+    assert redacted is True
+    assert all(
+        row["cache_token"] == "[REDACTED]"
+        for row in sanitized["runtime_context"].values()
+    )
+    outside, redacted = trace.sanitize_ai_trace_value(
+        {
+            "cache_token": trace.RETIREMENT_ID,
+            "runtime_context": {"other_owner": {"cache_token": trace.RETIREMENT_ID}},
+        }
+    )
+    assert redacted is True
+    assert outside["cache_token"] == "[REDACTED]"
+    assert outside["runtime_context"]["other_owner"]["cache_token"] == "[REDACTED]"
+
+
 def test_payload_sanitizer_preserves_only_approved_runtime_cache_token_paths(
     monkeypatch, tmp_path
 ):
@@ -1902,6 +1964,67 @@ def test_decision_quality_non_buy_repair_provenance_is_preserved_in_trace(
     ]
     assert trace_row["decision_quality_contract_invalid_reason_codes"] == [
         "trigger=insufficient_tape_confirmation"
+    ]
+
+
+@pytest.mark.parametrize(
+    "model_action,final_action,trigger,probe",
+    [
+        ("WAIT", "DROP", "failed", False),
+        ("BUY", "WAIT", "recovery_required", True),
+    ],
+)
+def test_final_control_response_never_mixes_raw_model_evidence(
+    monkeypatch,
+    tmp_path,
+    model_action,
+    final_action,
+    trigger,
+    probe,
+):
+    from src.engine.scalping import ai_decision_quality as quality
+
+    _enable(monkeypatch, tmp_path)
+    trace.record_ai_decision_trace(
+        {
+            "ai_decision_trace_id": "decision-layers",
+            "action": final_action,
+            "score": 63 if probe else 11,
+            "confidence": 60,
+            "reason": "final reason",
+            "reason_codes": ["final_code"],
+            "edge_state": "EDGE",
+            "evidence": {"trigger": trigger},
+            "expected_upside_pct": 0.4,
+            "expected_downside_pct": -0.7,
+            "decision_quality_live_adapter": "decision_quality_v2_13_recovery_confirmation_entry_v1",
+            "decision_quality_model_action": model_action,
+            "decision_quality_model_edge_state": "EDGE",
+            "decision_quality_model_evidence": {"trigger": "confirmed"},
+            "decision_quality_contract_repair_applied": model_action == "WAIT",
+            "entry_probe_intent": probe,
+            "entry_probe_intent_status": (
+                "eligible_wait_probe" if probe else "not_eligible"
+            ),
+            "decision_quality_runtime_action_mapping": "test_mapping",
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_13",
+        result_source="live",
+        provider_called=True,
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["decision_quality_model_evidence"] == {"trigger": "confirmed"}
+    assert quality._final_decision_response_findings(row) == []
+    captured = quality._captured_control_fields(row)
+    assert captured["captured_action"] == final_action
+    assert captured["captured_evidence"] == {"trigger": trigger}
+    assert captured["captured_expected_upside_pct"] == 0.4
+    assert captured["captured_entry_probe_intent"] is probe
+    assert captured["captured_runtime_action_mapping"] == "test_mapping"
+    row["decision_quality_final_response"]["evidence"]["trigger"] = "confirmed"
+    assert quality._final_decision_response_findings(row) == [
+        "natural_control_final_response_invalid"
     ]
 
 

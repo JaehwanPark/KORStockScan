@@ -53,6 +53,7 @@ INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = (
     REPORT_DIR / "intraday_entry_blocker_diagnostics"
 )
 INTRADAY_WS_FRESHNESS_MONITOR_DIR = REPORT_DIR / "intraday_ws_freshness_monitor"
+MARKET_OPPORTUNITY_CENSUS_DIR = REPORT_DIR / "market_opportunity_census"
 RISING_MISSED_SCOUT_WORKORDER_DIR = REPORT_DIR / "rising_missed_scout_workorder"
 RISING_MISSED_CLASSIFIER_PRIOR_DIR = REPORT_DIR / "rising_missed_classifier_prior"
 ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR = REPORT_DIR / "one_share_threshold_opportunity"
@@ -60,7 +61,7 @@ MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_cont
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 2
-WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v5"
+WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v6"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -785,6 +786,108 @@ def _intraday_ws_freshness_followup_orders(
     return orders
 
 
+def _market_census_followup_orders(report, target_date):
+    """Intake exact-date native diagnostics without upgrading them to live orders."""
+    from src.engine.monitoring.market_opportunity_review import report_sha256
+
+    if not report:
+        return []
+    valid = False
+    try:
+        contract = report.get("metric_contract") or {}
+        valid = (
+            report.get("target_date") == target_date
+            and report.get("report_type") == "market_opportunity_census"
+            and report.get("schema_version") == "market_opportunity_census_v4"
+            and report.get("artifact_sha256") == report_sha256(report)
+            and contract.get("runtime_effect") is False
+            and contract.get("allowed_runtime_apply") is False
+            and contract.get("actual_order_submitted") is False
+            and contract.get("broker_order_forbidden") is True
+            and contract.get("decision_authority")
+            == "source_only_scanner_coverage_audit"
+            and isinstance(report.get("diagnostic_followups"), list)
+        )
+    except (ValueError, TypeError, AttributeError):
+        pass
+    raw_orders = report.get("diagnostic_followups", []) if valid else []
+    ids = [o.get("recommendation_id") for o in raw_orders if isinstance(o, dict)]
+    valid = (
+        valid
+        and len(ids) == len(raw_orders)
+        and all(
+            isinstance(i, str) and re.fullmatch(r"market_census_[a-z0-9_]+", i)
+            for i in ids
+        )
+        and len(ids) == len(set(ids))
+    )
+    valid = valid and all(
+        o.get("target_date") == target_date
+        and o.get("decision") == "objective_followup_required"
+        and o.get("runtime_effect") is False
+        and o.get("allowed_runtime_apply") is False
+        and o.get("actual_order_submitted") is False
+        and o.get("broker_order_forbidden") is True
+        and o.get("intended_consumer") == "code_improvement_workorder"
+        for o in raw_orders
+    )
+    if not valid:
+        raw_orders = [
+            {
+                # This is the workorder producer's integrity diagnostic, not
+                # an invented native recommendation from the invalid source.
+                "recommendation_id": None,
+                "reason": "missing_invalid_or_legacy_census_contract_no_authority",
+                "evidence": {"source_date": report.get("target_date")},
+            }
+        ]
+    return [
+        {
+            **{
+                key: o[key]
+                for key in (
+                    "recommendation_id",
+                    "target_date",
+                    "scope",
+                    "decision",
+                    "owner",
+                    "intended_consumer",
+                    "implementation_scope",
+                    "acceptance",
+                    "reason",
+                    "evidence",
+                )
+                if key in o
+            },
+            "order_id": (
+                "order_" + o["recommendation_id"]
+                if valid
+                else "order_market_census_source_contract"
+            ),
+            "source_report_type": "market_opportunity_census",
+            "source_artifact_sha256": report.get("artifact_sha256"),
+            "decision_authority": "source_only_scanner_coverage_audit",
+            "title": "External census scoped first-blocker review",
+            "lifecycle_stage": "entry",
+            "target_subsystem": "scanner_recall_instrumentation",
+            "mapped_family": "scanner_recall_instrumentation",
+            "route": "instrumentation_order",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "census_contract_valid": valid,
+            "forbidden_uses": [
+                "live_policy_apply",
+                "threshold_mutation",
+                "broker_order_submit",
+                "bot_restart",
+            ],
+        }
+        for o in raw_orders
+    ]
+
+
 def _entry_hurdle_backtest_followup_orders(
     report: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -1187,6 +1290,8 @@ def _repeat_info_primary_value(repeat_info: Any, field: str) -> str | None:
 
 def _is_keep_visible_non_implement_order(order: dict[str, Any]) -> bool:
     source_type = str(order.get("source_report_type") or "").strip()
+    if source_type == "market_opportunity_census":
+        return True
     route = str(order.get("route") or "").strip()
     if source_type in {
         "lifecycle_bucket_discovery_quiet_gap_rollup",
@@ -1576,6 +1681,7 @@ def _escalate_repeated_unresolved_orders(
             and not pattern_lab_design_only
             and not pattern_lab_existing_family_evidence_only
             and not manual_review_only
+            and item.order.get("source_report_type") != "market_opportunity_census"
         ):
             escalated_order = dict(item.order)
             original_status = status or primary_history_status or None
@@ -1758,6 +1864,7 @@ def _workorder_isolated_source_mode() -> bool:
         PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
         MICROSTRUCTURE_REACTION_CONTEXT_DIR,
         BUY_FUNNEL_SENTINEL_DIR,
+        MARKET_OPPORTUNITY_CENSUS_DIR,
         PRODUCER_GAP_DISCOVERY_DIR,
         STAGE_HOOK_WORKORDER_DISCOVERY_DIR,
         STAGE_HOOK_RUNTIME_SCAFFOLD_DIR,
@@ -1775,6 +1882,31 @@ def _load_source_json(path: Path, *, isolated_source_mode: bool) -> dict[str, An
     if not _source_path_enabled(path, isolated_source_mode=isolated_source_mode):
         return {}
     return _load_json(path)
+
+
+def _load_market_census_source(
+    path: Path, *, isolated_source_mode: bool
+) -> dict[str, Any]:
+    """Preserve self-hashed bytes' JSON value before authority/schema validation.
+
+    Generic retirement projection must not rewrite nested audit evidence before
+    verifying this source's integrity. Missing optional sources remain absent;
+    existing malformed sources produce a visible integrity diagnostic.
+    """
+    if (
+        not _source_path_enabled(path, isolated_source_mode=isolated_source_mode)
+        or not path.exists()
+    ):
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"source_read_error": "invalid_or_unreadable_census_json"}
+    return (
+        payload
+        if isinstance(payload, dict) and payload
+        else {"source_read_error": "census_object_missing"}
+    )
 
 
 def automation_report_path(target_date: str) -> Path:
@@ -2596,6 +2728,24 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "raw_row_exclusion_context": item.order.get("raw_row_exclusion_context"),
         "terminal_disposition": item.order.get("terminal_disposition"),
     }
+    if item.order.get("source_report_type") == "market_opportunity_census":
+        serialized.update(
+            {
+                key: item.order.get(key)
+                for key in (
+                    "recommendation_id",
+                    "source_artifact_sha256",
+                    "target_date",
+                    "scope",
+                    "owner",
+                    "intended_consumer",
+                    "implementation_scope",
+                    "acceptance",
+                    "census_contract_valid",
+                )
+            }
+        )
+        serialized["source_decision"] = item.order.get("decision")
     root_cause_closure_status = _root_cause_closure_status_for_order(serialized)
     serialized["root_cause_closure_status"] = root_cause_closure_status
     serialized["root_cause_followup_contract"] = _root_cause_followup_contract(
@@ -2920,6 +3070,17 @@ def _classify_order(
             ),
         )
 
+    if order.get("source_report_type") == "market_opportunity_census":
+        return ClassifiedOrder(
+            order=order,
+            decision="defer_evidence",
+            reason="Scoped diagnosis is not a proven code defect or live permission; resolve the exact first owner and source evidence before implementation.",
+            mapped_family="scanner_recall_instrumentation",
+            route="instrumentation_order",
+            confidence="source_only_scoped_diagnostic",
+            automation_reentry="Next exact-date census preserves native ID, scope, exclusions and hash; no changes to scanner or order guards.",
+        )
+
     if order.get("source_report_type") == "pipeline_event_verbosity":
         return ClassifiedOrder(
             order=order,
@@ -2992,22 +3153,41 @@ def _classify_order(
         "pattern_lab_ai_review",
         "tuning_observability_summary",
     }:
+        if order.get("source_report_type") == "pattern_lab_ai_review" and order.get(
+            "upstream_currentness_order_id"
+        ):
+            return ClassifiedOrder(
+                order=order,
+                decision="attach_existing_family",
+                reason="Deterministic AI review mirrors an exact native currentness repair; preserve the failure without duplicate implementation",
+                mapped_family=mapped_family or "pattern_lab_feedback_handoff",
+                route="pattern_lab_exact_currentness_evidence",
+                confidence=confidence,
+                automation_reentry=f"Close upstream order {order['upstream_currentness_order_id']} and regenerate currentness before clearing this evidence.",
+            )
         if (
             order.get("source_report_type") == "pattern_lab_ai_review"
             and str(order.get("improvement_type") or "") == "ai_review_followup"
         ):
+            material_pending = order.get("material_review_pending") is True
             return ClassifiedOrder(
                 order=order,
                 decision="defer_evidence",
                 reason=(
-                    "Pattern Lab generic ai_review_followup is reviewer evidence for concrete source-quality "
+                    "Pattern Lab primary inputs need a fresh exact-generation AI review; this is evidence pending, not implemented code or live approval"
+                    if material_pending
+                    else "Pattern Lab generic ai_review_followup is reviewer evidence for concrete source-quality "
                     "or handoff orders; do not duplicate it as a Codex implement_now item"
                 ),
                 mapped_family=mapped_family or "pattern_lab_feedback_handoff",
                 route="pattern_lab_ai_review_followup_evidence",
                 confidence=confidence or "parsed_ai_review_followup",
                 automation_reentry=(
-                    "Keep as terminal review evidence until the concrete source-quality/handoff orders and "
+                    "Use the existing exact-date Pattern Lab review owner and persisted primary/one-retry budget. "
+                    "Budget exhaustion or a terminal rejected/interrupted attempt remains explicitly unreviewed source-only; "
+                    "do not reset capacity or call a provider during metadata-only refresh."
+                    if material_pending
+                    else "Keep as terminal review evidence until the concrete source-quality/handoff orders and "
                     "regenerated Pattern Lab AI review close the audit."
                 ),
             )
@@ -3416,6 +3596,22 @@ def _classify_order(
             route=route,
             confidence=confidence,
             automation_reentry="Re-evaluate in the next postclose pattern lab automation and daily EV report.",
+        )
+
+    if (
+        order.get("source_report_type") == "entry_recheck_drought_controller"
+        and order.get("implementation_status") == "natural_acceptance_pending"
+        and order.get("runtime_effect") is False
+        and order.get("allowed_runtime_apply") is False
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="defer_evidence",
+            reason="Source transition and finite maintenance remain with the existing natural-acceptance owner; no fabricated implementation or live authority.",
+            mapped_family="entry_opportunity_recheck_runtime",
+            route="maintenance_review",
+            confidence="exact_source_diagnostic",
+            automation_reentry="Investigate the declared first depleted stage immediately. At the review bound decide repair, merge or retire; require new source or consumption evidence before another wait.",
         )
 
     if subsystem == "runtime_instrumentation" or route == "instrumentation_order":
@@ -4034,7 +4230,11 @@ def _pipeline_event_verbosity_followup_orders(
         "expected_ev_effect": "none_direct_ops_cpu_io_reduction_only",
         "next_postclose_metric": "pipeline_event_verbosity.parity.ok",
     }
-    if recommended in {"open_shadow_order", "block_suppress_and_fix_shadow", "repair_source_contract"}:
+    if recommended in {
+        "open_shadow_order",
+        "block_suppress_and_fix_shadow",
+        "repair_source_contract",
+    }:
         return [
             {
                 **base,
@@ -6617,6 +6817,22 @@ def build_code_improvement_workorder(
     )
     if buy_funnel_sentinel:
         buy_funnel_sentinel = {**buy_funnel_sentinel, "_decision_date": target_date}
+    from src.engine.automation.drought_handoff import (
+        CONTROLLER,
+        EFFECTIVE_DATE,
+        report_path,
+    )
+
+    drought_controller_path = report_path(
+        buy_funnel_sentinel_path.parent.parent, CONTROLLER, target_date
+    )
+    drought_controller = (
+        _load_source_json(
+            drought_controller_path, isolated_source_mode=isolated_source_mode
+        )
+        if target_date >= EFFECTIVE_DATE
+        else {}
+    )
     conversion_lane_path = conversion_lane_report_path(target_date)
     conversion_lane = _load_source_json(
         conversion_lane_path, isolated_source_mode=isolated_source_mode
@@ -6632,6 +6848,12 @@ def build_code_improvement_workorder(
     intraday_ws_freshness = _load_source_json(
         intraday_ws_freshness_path,
         isolated_source_mode=isolated_source_mode,
+    )
+    market_census_path = (
+        MARKET_OPPORTUNITY_CENSUS_DIR / f"market_opportunity_census_{target_date}.json"
+    )
+    market_census = _load_market_census_source(
+        market_census_path, isolated_source_mode=isolated_source_mode
     )
     entry_hurdle_backtest_path = entry_hurdle_backtest_report_path(target_date)
     entry_hurdle_backtest = _load_source_json(
@@ -6691,9 +6913,11 @@ def build_code_improvement_workorder(
         "stage_hook_workorder_discovery": stage_hook_workorder_discovery_path,
         "stage_hook_runtime_scaffold": stage_hook_runtime_scaffold_path,
         "buy_funnel_sentinel": buy_funnel_sentinel_path,
+        "entry_recheck_drought_controller": drought_controller_path,
         "conversion_lane": conversion_lane_path,
         "intraday_entry_blocker_diagnostics": intraday_entry_blocker_path,
         "intraday_ws_freshness_monitor": intraday_ws_freshness_path,
+        "market_opportunity_census": market_census_path,
         "entry_hurdle_backtest": entry_hurdle_backtest_path,
         "rising_missed_scout_workorder": rising_missed_scout_workorder_path,
         "rising_missed_classifier_prior": rising_missed_classifier_prior_path,
@@ -6894,6 +7118,7 @@ def build_code_improvement_workorder(
     intraday_ws_freshness_orders = _intraday_ws_freshness_followup_orders(
         intraday_ws_freshness
     )
+    market_census_orders = _market_census_followup_orders(market_census, target_date)
     entry_hurdle_backtest_orders = _entry_hurdle_backtest_followup_orders(
         entry_hurdle_backtest
     )
@@ -6929,6 +7154,9 @@ def build_code_improvement_workorder(
         buy_funnel_sentinel,
         lifecycle_report=lifecycle_report,
     )
+    from src.engine.scalping.entry_recheck_review import intake_review_orders
+
+    drought_review_orders = intake_review_orders(drought_controller, target_date)
     buy_funnel_sentinel_order_ids = {
         str(order.get("order_id"))
         for order in buy_funnel_sentinel_orders
@@ -6977,6 +7205,7 @@ def build_code_improvement_workorder(
         *observation_source_quality_orders,
         *_codebase_performance_followup_orders(codebase_performance),
         *buy_funnel_sentinel_orders,
+        *drought_review_orders,
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(
         ev_report,
@@ -7009,6 +7238,7 @@ def build_code_improvement_workorder(
         *conversion_lane_orders,
         *intraday_entry_blocker_orders,
         *intraday_ws_freshness_orders,
+        *market_census_orders,
         *entry_hurdle_backtest_orders,
         *rising_missed_scout_orders,
         *rising_missed_classifier_prior_orders,
@@ -7232,7 +7462,7 @@ def build_code_improvement_workorder(
     )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
-        for order in buy_funnel_sentinel_orders
+        for order in [*buy_funnel_sentinel_orders, *drought_review_orders]
         if order.get("order_id")
     )
     required_handoff_order_ids.update(
@@ -7525,6 +7755,9 @@ def build_code_improvement_workorder(
             ),
             "stage_hook_runtime_scaffold": source_ref("stage_hook_runtime_scaffold"),
             "buy_funnel_sentinel": source_ref("buy_funnel_sentinel"),
+            "entry_recheck_drought_controller": source_ref(
+                "entry_recheck_drought_controller"
+            ),
             "conversion_lane": source_ref("conversion_lane"),
             "intraday_entry_blocker_diagnostics": source_ref(
                 "intraday_entry_blocker_diagnostics"
@@ -7532,6 +7765,7 @@ def build_code_improvement_workorder(
             "intraday_ws_freshness_monitor": source_ref(
                 "intraday_ws_freshness_monitor"
             ),
+            "market_opportunity_census": source_ref("market_opportunity_census"),
             "entry_hurdle_backtest": source_ref("entry_hurdle_backtest"),
             "rising_missed_scout_workorder": source_ref(
                 "rising_missed_scout_workorder"

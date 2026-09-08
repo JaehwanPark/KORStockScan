@@ -546,6 +546,44 @@ def _pending(action="DROP"):
     }
 
 
+def test_historical_repaired_control_requires_final_response_not_raw_evidence():
+    source = {
+        **_trace(),
+        "decision_quality_live_adapter": "v2_13",
+        "decision_quality_model_action": "WAIT",
+        "action": "DROP",
+        "decision_quality_model_evidence": {"trigger": "recovery_required"},
+    }
+    assert (
+        "natural_control_final_response_missing"
+        in quality._natural_control_contract_findings(source)
+    )
+    with pytest.raises(ValueError, match="natural_control_final_response_missing"):
+        quality._captured_control_fields(source)
+    # Earlier simple controls without an adapter remain supported, without
+    # inventing model evidence or relabelling historical repaired sources exact.
+    assert quality._final_decision_response_findings(_trace()) == []
+
+
+@pytest.mark.parametrize("edge", [[], {}, True, None])
+def test_malformed_final_decision_is_row_finding_not_report_exception(edge):
+    response = {"evidence": {"trigger": "failed"}, "edge_state": edge}
+    source = {
+        "decision_quality_decision_layers_schema": quality.DECISION_LAYERS_SCHEMA,
+        "decision_quality_model_evidence": {"trigger": "recovery_required"},
+        "decision_quality_final_response": response,
+        "decision_quality_final_response_redacted": False,
+        "decision_quality_final_response_sha256": quality._sha256(response),
+    }
+    assert quality._final_decision_response_findings(source) == [
+        "natural_control_final_response_invalid"
+    ]
+    source.pop("decision_quality_decision_layers_schema")
+    assert quality._final_decision_response_findings(source) == [
+        "natural_control_final_response_missing"
+    ]
+
+
 def test_control_manifest_freezes_exact_post_promotion_signature():
     report = quality.build_control_manifest(
         target_date="2026-07-27",
@@ -10961,6 +10999,115 @@ def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():
     )
 
 
+def _small_profit_report(*, cost=0.2, first_hit="target_first", action="DROP"):
+    return quality.build_paired_replay_report(
+        target_date="2026-09-08",
+        requests=[
+            {
+                "decision_trace_id": "small-profit",
+                "paired_replay_id": "small-pair",
+                "stock_code": "005930",
+                "candidate": {
+                    "exposure_semantics": "offline_counterfactual_passive_probe_only"
+                },
+                "anticipatory_reversal_analysis": {
+                    "execution_cost": {
+                        "conservative_execution_cost_pct": cost,
+                    }
+                },
+            }
+        ],
+        results=[
+            {
+                "decision_trace_id": "small-profit",
+                "paired_replay_id": "small-pair",
+                "stage": "entry",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "pass",
+                "same_payload_confirmed": True,
+                "control_response": {"action": "WAIT"},
+                "candidate_response": {"action": action},
+            }
+        ],
+        labels=[
+            {
+                "decision_trace_id": "small-profit",
+                "decision_stage": "entry",
+                "source_quality_status": "pass",
+                "horizon_metrics": {
+                    "10m": {
+                        "end_return_pct": 0.32,
+                        "mfe_pct": 0.4,
+                        "mae_pct": -0.1,
+                        "entry_path_target_pct": 0.3,
+                        "entry_path_adverse_pct": -0.7,
+                        "entry_path_first_hit": first_hit,
+                    }
+                },
+            }
+        ],
+    )
+
+
+@pytest.mark.parametrize("action", ["WAIT", "DROP"])
+def test_small_profit_capture_diagnostic_below_one_percent_reaches_taxonomy(action):
+    report = _small_profit_report(action=action)
+    row = report["paired_comparisons"][0]
+    diagnostic = row["entry_small_profit_opportunity"]
+    assert diagnostic["target_margin_after_execution_proxy_pct"] == pytest.approx(0.1)
+    assert diagnostic["positive_target_first_after_execution_proxy"] is True
+    assert diagnostic["net_profit_opportunity"] is None
+    assert (
+        f"false_{action.lower()}_small_profit_execution_proxy"
+        in row["candidate_error_taxonomy"]
+    )
+    assert "false_drop" not in row["candidate_error_taxonomy"]
+    assert (
+        report["entry_small_profit_opportunity_contract"]["allowed_runtime_apply"]
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "cost,first_hit,expected",
+    [
+        (None, "target_first", None),
+        (float("nan"), "target_first", None),
+        (-0.1, "target_first", None),
+        (0.4, "target_first", False),
+        (0.2, "adverse_first", False),
+        (0.2, "same_bar_ambiguous", None),
+        (0.2, "neither_hit", False),
+    ],
+)
+def test_small_profit_diagnostic_never_invents_cost_or_sequence(
+    cost, first_hit, expected
+):
+    row = _small_profit_report(cost=cost, first_hit=first_hit)["paired_comparisons"][0]
+    assert (
+        row["entry_small_profit_opportunity"][
+            "positive_target_first_after_execution_proxy"
+        ]
+        is expected
+    )
+    assert not any("small_profit" in error for error in row["candidate_error_taxonomy"])
+
+
+@pytest.mark.parametrize("cost", [None, -0.2, float("nan"), float("inf"), True])
+def test_missing_exposure_cost_is_excluded_not_substituted_with_zero(cost):
+    report = _small_profit_report(cost=cost, action="BUY")
+    assert report["paired_comparisons"] == []
+    assert report["economic_source_exclusion_count"] == 1
+    assert (
+        report["economic_source_exclusions"][0]["reason"]
+        == "exposure_execution_cost_missing_or_invalid"
+    )
+    assert report["candidate_primary_decision_ev_pct"] is None
+    assert report["promotion_report_integrity_pass"] is False
+    assert report["calibration_source_contract"]["excluded_request_count"] == 1
+
+
 def test_paired_replay_consumes_tight_stop_entry_path_label():
     report = quality.build_paired_replay_report(
         target_date="2026-07-27",
@@ -11473,9 +11620,11 @@ def test_paired_report_requires_diverse_candidate_exposure_sample():
     ]
 
 
+@pytest.mark.parametrize("failed_cost_source", [False, True])
 def test_partial_pair_contract_allows_learning_but_keeps_promotion_fail_closed(
     monkeypatch,
     tmp_path,
+    failed_cost_source,
 ):
     from src.engine.scalping import ai_action_outcome_calibration as calibration
 
@@ -11499,6 +11648,8 @@ def test_partial_pair_contract_allows_learning_but_keeps_promotion_fail_closed(
         }
         for i in range(2)
     ]
+    if failed_cost_source:
+        requests[1]["anticipatory_reversal_analysis"]["execution_cost"] = {}
     report = quality.build_paired_replay_report(
         target_date="2026-09-07",
         requests=requests,
@@ -11519,11 +11670,25 @@ def test_partial_pair_contract_allows_learning_but_keeps_promotion_fail_closed(
                 "decision_trace_id": "trace-1",
                 "paired_replay_id": "pair-1",
                 "status": "provider_failed",
+                **(
+                    {
+                        "status": "pass",
+                        "stage": "entry",
+                        "effective_venue": "KRX",
+                        "session_bucket": "KRX_REGULAR",
+                        "same_payload_confirmed": True,
+                        "candidate_contract_sha256": contract["contract_sha256"],
+                        "control_response": {"action": "DROP"},
+                        "candidate_response": {"action": "BUY"},
+                    }
+                    if failed_cost_source
+                    else {}
+                ),
             },
         ],
         labels=[
             {
-                "decision_trace_id": "trace-0",
+                "decision_trace_id": f"trace-{i}",
                 "source_quality_status": "pass",
                 "decision_stage": "entry",
                 "horizon_metrics": {
@@ -11535,9 +11700,11 @@ def test_partial_pair_contract_allows_learning_but_keeps_promotion_fail_closed(
                     }
                 },
             }
+            for i in range(2)
         ],
     )
     learning = report["calibration_source_contract"]
+    assert report["economic_source_exclusion_count"] == int(failed_cost_source)
     assert learning["global_integrity_pass"] is True
     assert learning["request_count"] == 2
     assert learning["retained_pair_count"] == learning["excluded_request_count"] == 1

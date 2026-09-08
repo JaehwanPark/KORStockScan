@@ -61,7 +61,10 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_system_prompt,
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
-from src.engine.scalping.ai_decision_trace import replay_source_input
+from src.engine.scalping.ai_decision_trace import (
+    DECISION_LAYERS_SCHEMA,
+    replay_source_input,
+)
 from src.engine.scalping.entry_candidate_lifecycle_state import (
     component_is_complete as candidate_lifecycle_component_is_complete,
     event_path as candidate_lifecycle_event_path,
@@ -2400,8 +2403,98 @@ def _holding_flow_forensic_sidecar_only(trace: dict[str, Any]) -> bool:
     )
 
 
+def _final_decision_response_findings(trace: dict[str, Any]) -> list[str]:
+    schema = trace.get("decision_quality_decision_layers_schema")
+    if schema is None:
+        if (
+            trace.get("decision_quality_live_adapter")
+            or trace.get("decision_quality_contract_repair_applied") is True
+            or trace.get("decision_quality_model_action")
+            or "decision_quality_final_response" in trace
+        ):
+            # Historical raw model evidence cannot reconstruct a repaired decision.
+            return ["natural_control_final_response_missing"]
+        return []
+    response = trace.get("decision_quality_final_response")
+    if (
+        schema != DECISION_LAYERS_SCHEMA
+        or not isinstance(response, dict)
+        or trace.get("decision_quality_final_response_redacted") is not False
+        or trace.get("decision_quality_final_response_sha256") != _sha256(response)
+        or any(
+            response.get(field) != trace.get(field)
+            for field in (
+                "action",
+                "score",
+                "confidence",
+                "reason",
+                "reason_codes",
+                "entry_probe_intent",
+                "entry_probe_intent_status",
+                "entry_probe_intent_eligibility_path",
+                "entry_probe_intent_after_cost_reward_risk",
+            )
+        )
+        or (
+            trace.get("decision_quality_model_evidence")
+            and (
+                not isinstance(response.get("evidence"), dict)
+                or not isinstance(response.get("edge_state"), str)
+                or response.get("edge_state") not in {"EDGE", "NO_EDGE"}
+            )
+        )
+    ):
+        return ["natural_control_final_response_invalid"]
+    return []
+
+
+def _captured_control_fields(trace: dict[str, Any]) -> dict[str, Any]:
+    findings = _final_decision_response_findings(trace)
+    if findings:
+        raise ValueError(findings[0])
+    response = trace.get("decision_quality_final_response") or {}
+    fields = {
+        "captured_action": trace.get("action"),
+        "captured_score": trace.get("score"),
+        "captured_reason": trace.get("reason"),
+        "captured_edge_state": response.get("edge_state"),
+        "captured_evidence": response.get("evidence"),
+        **{
+            f"captured_{field}": trace.get(field)
+            for field in (
+                "entry_probe_intent",
+                "entry_probe_intent_status",
+                "entry_probe_intent_eligibility_path",
+                "entry_probe_intent_after_cost_reward_risk",
+            )
+        },
+    }
+    if response:
+        fields.update(
+            {
+                "captured_decision_layers_schema": DECISION_LAYERS_SCHEMA,
+                "captured_final_response_sha256": trace[
+                    "decision_quality_final_response_sha256"
+                ],
+                "captured_runtime_action_mapping": trace.get(
+                    "decision_quality_runtime_action_mapping"
+                ),
+                **{
+                    f"captured_{field}": response.get(field)
+                    for field in (
+                        "reason_codes",
+                        "confidence",
+                        "expected_upside_pct",
+                        "expected_downside_pct",
+                    )
+                },
+            }
+        )
+    return fields
+
+
 def _natural_control_contract_findings(trace: dict[str, Any]) -> list[str]:
-    findings: list[str] = []
+    findings = _final_decision_response_findings(trace)
     semantic_validator_version = str(
         trace.get("semantic_validator_version") or ""
     ).strip()
@@ -10254,21 +10347,7 @@ def prepare_paired_replay_requests(
                 "model": control.get("model"),
                 "temperature": control.get("request_temperature"),
                 "reasoning_effort": control.get("request_reasoning_effort"),
-                "captured_action": trace.get("action"),
-                "captured_score": trace.get("score"),
-                "captured_reason": trace.get("reason"),
-                "captured_edge_state": trace.get("decision_quality_model_edge_state"),
-                "captured_evidence": trace.get("decision_quality_model_evidence"),
-                "captured_entry_probe_intent": trace.get("entry_probe_intent"),
-                "captured_entry_probe_intent_status": trace.get(
-                    "entry_probe_intent_status"
-                ),
-                "captured_entry_probe_intent_eligibility_path": trace.get(
-                    "entry_probe_intent_eligibility_path"
-                ),
-                "captured_entry_probe_intent_after_cost_reward_risk": trace.get(
-                    "entry_probe_intent_after_cost_reward_risk"
-                ),
+                **_captured_control_fields(trace),
             },
             "candidate": candidate,
             "outcome_join_key": label.get("label_id"),
@@ -13220,21 +13299,7 @@ def materialize_micro_reversion_offline_requests(
                 raise ValueError(
                     f"micro_reversion_current_control_metadata_{field}_mismatch"
                 )
-        captured_source_fields = {
-            "captured_action": "action",
-            "captured_score": "score",
-            "captured_reason": "reason",
-            "captured_edge_state": "decision_quality_model_edge_state",
-            "captured_evidence": "decision_quality_model_evidence",
-            "captured_entry_probe_intent": "entry_probe_intent",
-            "captured_entry_probe_intent_status": "entry_probe_intent_status",
-            "captured_entry_probe_intent_eligibility_path": (
-                "entry_probe_intent_eligibility_path"
-            ),
-            "captured_entry_probe_intent_after_cost_reward_risk": (
-                "entry_probe_intent_after_cost_reward_risk"
-            ),
-        }
+        captured_source_fields = _captured_control_fields(source_trace)
         unexpected_captured_fields = {
             field
             for field in control_metadata
@@ -13251,9 +13316,8 @@ def materialize_micro_reversion_offline_requests(
             or source_action != source_action.strip()
             or source_action != source_action.upper()
             or any(
-                _sha256(control_metadata.get(control_field))
-                != _sha256(source_trace.get(source_field))
-                for control_field, source_field in captured_source_fields.items()
+                _sha256(control_metadata.get(control_field)) != _sha256(source_value)
+                for control_field, source_value in captured_source_fields.items()
             )
         ):
             raise ValueError("micro_reversion_current_control_captured_source_mismatch")
@@ -23828,6 +23892,38 @@ def _anticipatory_cumulative_learning_summary(
     }
 
 
+def _small_entry_opportunity(
+    *,
+    stage: str,
+    metric: Mapping[str, Any],
+    execution_cost_pct: Any,
+) -> dict[str, Any]:
+    """Existing target-first diagnostic, not full fee/tax net EV or a live gate."""
+    target = _number(metric.get("entry_path_target_pct"))
+    cost = _number(execution_cost_pct)
+    first_hit = metric.get("entry_path_first_hit")
+    available = bool(
+        stage == "entry"
+        and target is not None
+        and target > 0
+        and cost is not None
+        and cost >= 0
+        and first_hit in {"target_first", "adverse_first", "neither_hit"}
+    )
+    margin = target - cost if available else None
+    return {
+        "schema": "entry_small_profit_opportunity_v1",
+        "status": "execution_proxy_only" if available else "source_unavailable",
+        "target_margin_after_execution_proxy_pct": margin,
+        "positive_target_first_after_execution_proxy": (
+            first_hit == "target_first" and margin > 0 if available else None
+        ),
+        "net_profit_opportunity": None,
+        "net_profit_unavailable_reason": "fee_tax_and_actual_fill_not_bound",
+        "decision_authority": "diagnostic_only_no_promotion_gate",
+    }
+
+
 def _paired_report_request_view(request: Mapping[str, Any]) -> dict[str, Any]:
     """Return the exact provider-free request representation persisted by R0."""
 
@@ -23868,6 +23964,7 @@ def build_paired_replay_report(
     prepared_requests: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     results = list(results or [])
+    economic_source_exclusions: list[dict[str, Any]] = []
     candidate_execution_requested = bool(results or execution_selection is not None)
     prepared_census_provided = prepared_requests is not None
     all_prepared_requests = list(prepared_requests or requests)
@@ -24028,6 +24125,22 @@ def build_paired_replay_report(
             action=candidate_action,
             response=candidate_response,
         )
+        execution_cost_value = _number(
+            execution_cost.get("conservative_execution_cost_pct")
+        )
+        if (
+            execution_cost_contract_applied
+            and (control_exposure_selected or candidate_exposure_selected)
+            and (execution_cost_value is None or execution_cost_value < 0)
+        ):
+            economic_source_exclusions.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "paired_replay_id": result.get("paired_replay_id"),
+                    "reason": "exposure_execution_cost_missing_or_invalid",
+                }
+            )
+            continue
         control_execution_cost_pct = (
             _number(execution_cost.get("conservative_execution_cost_pct"))
             if execution_cost_contract_applied and control_exposure_selected
@@ -24073,6 +24186,11 @@ def build_paired_replay_report(
         conservative_execution_cost_pct = _number(
             execution_cost.get("conservative_execution_cost_pct")
         )
+        small_opportunity = _small_entry_opportunity(
+            stage=comparison_stage,
+            metric=preferred,
+            execution_cost_pct=conservative_execution_cost_pct,
+        )
         probe_path_risk = _probe_path_risk(
             request=request,
             outcome_mfe_pct=mfe,
@@ -24083,6 +24201,14 @@ def build_paired_replay_report(
             conservative_execution_cost_pct=conservative_execution_cost_pct,
         )
         candidate_errors: list[str] = []
+        if (
+            not candidate_exposure_selected
+            and candidate_action in {"DROP", "WAIT"}
+            and small_opportunity["positive_target_first_after_execution_proxy"] is True
+        ):
+            candidate_errors.append(
+                f"false_{candidate_action.lower()}_small_profit_execution_proxy"
+            )
         stage_outcome = label.get("stage_outcome")
         stage_outcome = stage_outcome if isinstance(stage_outcome, dict) else {}
         post_block_outcome = stage_outcome.get("rising_missed_post_block_outcome")
@@ -24176,6 +24302,7 @@ def build_paired_replay_report(
                 "outcome_mae_pct": mae,
                 "first_hit": first_hit,
                 "entry_path_first_hit": entry_path_first_hit or None,
+                "entry_small_profit_opportunity": small_opportunity,
                 "entry_path_target_pct": preferred.get("entry_path_target_pct"),
                 "entry_path_adverse_pct": preferred.get("entry_path_adverse_pct"),
                 "profit_opportunity_threshold_pct": (
@@ -25123,6 +25250,8 @@ def build_paired_replay_report(
     quality_gate_pass = all(quality_checks.values())
     if candidate_contract_integrity_rejected_count:
         status = "candidate_contract_integrity_rejected_no_runtime_apply"
+    elif economic_source_exclusions:
+        status = "paired_replay_economic_source_excluded_no_runtime_apply"
     elif rejected or (results and missing_result_count):
         status = "candidate_rejected_no_runtime_apply"
     elif not requests:
@@ -25269,6 +25398,7 @@ def build_paired_replay_report(
         and results
         and execution_selection_contract_pass
         and candidate_contract_integrity_rejected_count == 0
+        and not economic_source_exclusions
         and rejected == 0
         and missing_result_count == 0
         and len(comparable_rows) == len(requests)
@@ -25321,6 +25451,8 @@ def build_paired_replay_report(
         "provider_failed_count": provider_failed,
         "missing_result_count": missing_result_count,
         "paired_comparable_count": len(comparable_rows),
+        "economic_source_exclusion_count": len(economic_source_exclusions),
+        "economic_source_exclusions": economic_source_exclusions,
         "candidate_contract_integrity_rejected_count": (
             candidate_contract_integrity_rejected_count
         ),
@@ -25424,6 +25556,23 @@ def build_paired_replay_report(
             ],
             "decision_authority": "offline_replay_and_attribution_only",
         },
+        "entry_small_profit_opportunity_contract": {
+            "schema": "entry_small_profit_opportunity_v1",
+            "metric_role": "opportunity_capture_diagnostic",
+            "decision_authority": "diagnostic_only_no_promotion_gate",
+            "window_policy": "same_exact_trace_mature_primary_horizon",
+            "sample_floor": "one_valid_pair_starts_diagnostic_learning",
+            "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "source_quality_gate": "ordered_target_first_and_finite_nonnegative_execution_proxy",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "forbidden_uses": [
+                "realized_net_profit",
+                "gross_or_missing_cost_as_net_ev",
+                "live_gate_relaxation",
+                "standalone_promotion",
+            ],
+        },
         "candidate_exposure_decision_count": len(candidate_exposure_rows),
         "candidate_exposure_unique_symbol_count": candidate_exposure_symbol_count,
         "candidate_exposure_sample_floor": {
@@ -25510,12 +25659,17 @@ def build_paired_replay_report(
                 and candidate_contract_integrity_rejected_count == 0
                 and promotion_cohort_isolated
                 and promotion_contract_isolated
-                and len(comparable_rows) + rejected + missing_result_count
+                and len(comparable_rows)
+                + rejected
+                + missing_result_count
+                + len(economic_source_exclusions)
                 == len(requests)
             ),
             "request_count": len(requests),
             "retained_pair_count": len(comparable_rows),
-            "excluded_request_count": rejected + missing_result_count,
+            "excluded_request_count": (
+                rejected + missing_result_count + len(economic_source_exclusions)
+            ),
             "retained_pairs_sha256": _sha256(comparable_rows),
             "decision_authority": "calibration_learning_only",
             "runtime_apply_authority": False,
@@ -31139,6 +31293,19 @@ def main(argv: list[str] | None = None) -> int:
                         "reason": control.get("captured_reason"),
                         "edge_state": control.get("captured_edge_state"),
                         "evidence": control.get("captured_evidence"),
+                        **{
+                            field: control.get(f"captured_{field}")
+                            for field in (
+                                "reason_codes",
+                                "confidence",
+                                "expected_upside_pct",
+                                "expected_downside_pct",
+                                "decision_layers_schema",
+                                "final_response_sha256",
+                                "runtime_action_mapping",
+                            )
+                            if f"captured_{field}" in control
+                        },
                         "entry_probe_intent": control.get(
                             "captured_entry_probe_intent"
                         ),

@@ -457,6 +457,8 @@ def _current_application(
     if selected:
         selection = selection or {}
         decision_reason = str(selection.get("decision_reason") or "").strip()
+        if selection.get("operator_policy_succession"):
+            return "현재 target-date PREOPEN env 선택: 검증 정책이 전략 operator lock 승계 (PID 소비는 별도 확인)"
         if decision_reason.startswith("operator_runtime_env_lock_preserved:"):
             return "현재 target-date PREOPEN env 적용: operator runtime lock 유지"
         if decision_reason == "deterministic_policy_handoff":
@@ -482,6 +484,11 @@ def _state_interpretation(
     if selected:
         selection = selection or {}
         decision_reason = str(selection.get("decision_reason") or "").strip()
+        if selection.get("operator_policy_succession"):
+            return (
+                "기존 전략 lock 대신 검증된 정책 버전을 선택/유지한다. "
+                "현재 표본 부족은 과거 lock 복원의 근거가 아니며 PID 소비와 비용 차감 성과는 별도 검증한다."
+            )
         if state in {"hold", "hold_no_edge", "hold_sample", "freeze"}:
             if decision_reason.startswith("operator_runtime_env_lock_preserved:"):
                 return (
@@ -760,6 +767,23 @@ def _runtime_selection_by_family(
         )
         apply_manifest = {}
     result: dict[str, dict[str, Any]] = {}
+    for item in apply_manifest.get("auto_apply_decisions") or []:
+        component = (
+            item.get("strategy_owner_component") if isinstance(item, dict) else None
+        )
+        if not isinstance(component, dict):
+            continue
+        result[component["family"]] = {
+            "family": component["family"],
+            "selected": False,
+            "managed_by_existing_owner": True,
+            "owner": component["owner"],
+            "strategy_owner_component": component,
+            "selection_provenance": "target_date_component_migration_manifest",
+            "apply_manifest": apply_manifest_path,
+            "pid_consumption_verified": False,
+            "economic_acceptance": "separate_real_post_apply",
+        }
     for item in apply_manifest.get("auto_apply_selected") or []:
         if not isinstance(item, dict) or not item.get("selected"):
             continue
@@ -971,6 +995,9 @@ def _attach_runtime_selection_contract(
         else {}
     )
     row["current_runtime_operator_lock_id"] = operator_lock.get("lock_id")
+    row["current_runtime_operator_policy_succession"] = selection.get(
+        "operator_policy_succession"
+    )
     row["postclose_calibration_state"] = row.get("state")
     row["postclose_recommended_value"] = candidate.get("recommended_value")
     row["postclose_recommended_values"] = candidate.get("recommended_values")
@@ -2570,6 +2597,11 @@ def build_runtime_approval_summary(
             ),
         },
         "application_timing": _application_timing(target_date, ev_report),
+        "strategy_owner_components": [
+            item
+            for item in _runtime_selection_by_family(ev_report).values()
+            if item.get("managed_by_existing_owner") is True
+        ],
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "buy_funnel_sentinel": (
             ev_report.get("buy_funnel_sentinel")
@@ -2675,6 +2707,12 @@ def build_runtime_approval_summary(
             if message
         ],
     }
+    from src.engine.automation.drought_handoff import EFFECTIVE_DATE, canonical_receipt
+
+    if target_date >= EFFECTIVE_DATE:
+        report["drought_handoff"] = canonical_receipt(
+            ev_json.parent.parent, target_date, ev_report
+        )
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = summary_paths(target_date)
@@ -2797,6 +2835,9 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "",
         "- 목적: 스캘핑 threshold-cycle 판정과 스윙 runtime approval 판정을 한 화면에서 보는 읽기 전용 요약이다.",
         "- runtime_mutation_allowed: `False`",
+        f"- drought canonical handoff issues: `{(report.get('drought_handoff') or {}).get('issues', [])}`",
+        f"- drought EV previous-generation diagnostic diff: `{(report.get('drought_handoff') or {}).get('ev_snapshot_diff', {})}`",
+        f"- drought controller next-PREOPEN decision (not PID application): `{(report.get('drought_handoff') or {}).get('controller_decision', {})}`",
         f"- target_date_runtime_selected_family_count_total: `{summary.get('target_date_runtime_selected_family_count_total')}`",
         f"- scalping_reported_items/current_selected/current_enabled: `{summary.get('scalping_items')}` / `{summary.get('scalping_reported_family_current_runtime_selected_count')}` / `{summary.get('scalping_reported_family_current_runtime_enabled_count')}`",
         f"- scalping_reported_current_selected_postclose_hold/next_preopen_candidate: `{summary.get('scalping_reported_family_current_selected_postclose_hold_count')}` / `{summary.get('scalping_reported_family_next_preopen_candidate_count')}`",

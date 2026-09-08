@@ -175,9 +175,11 @@ def _drought_day_summary(path: Path) -> dict[str, Any]:
     from src.engine.automation.submit_drought_contract import (
         make_scope_evidence,
         validate_scope_evidence,
+        validate_submit_drought_contract,
     )
+    from src.engine.automation.drought_handoff import read_source
 
-    payload = _load_json(path)
+    payload, source_sha256 = read_source(path)
     source_date = _date_from_path(path)
     preflight = load_source_quality_preflight(source_date)
     quality = bool(
@@ -209,6 +211,11 @@ def _drought_day_summary(path: Path) -> dict[str, Any]:
     return {
         "source_date": source_date,
         "source_path": str(path),
+        "source_sha256": source_sha256,
+        "source_schema_version": payload.get("schema_version"),
+        "source_validation": validate_submit_drought_contract(
+            payload, contract, require_current=True
+        ),
         "report_loaded": bool(payload),
         "source_quality_pass": quality,
         "source_quality_preflight": preflight,

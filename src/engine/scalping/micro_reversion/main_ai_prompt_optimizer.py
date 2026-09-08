@@ -915,6 +915,15 @@ def _error_taxonomy(detailed: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             "recovery_discrimination": sum(
                 count for key, count in counts.items() if "recovery" in key
             ),
+            "small_profit_opportunity_diagnostic": sum(
+                count
+                for key, count in counts.items()
+                if key
+                in {
+                    "false_drop_small_profit_execution_proxy",
+                    "false_wait_small_profit_execution_proxy",
+                }
+            ),
         },
     }
 

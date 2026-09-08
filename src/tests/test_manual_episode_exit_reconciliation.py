@@ -176,6 +176,8 @@ def test_manual_exit_applies_only_exact_whole_owner_receipt(tmp_path: Path):
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     assert result["status"] == "applied"
+    assert result["runtime_effect"] is True
+    assert result["runtime_mutation_scope"] == "custody_terminal_only"
     assert state["status"] == "COMPLETE"
     assert state["position_qty"] == 0
     assert all(leg["status"] == "COMPLETE" for leg in state["legs"])
@@ -192,6 +194,8 @@ def test_manual_exit_applies_only_exact_whole_owner_receipt(tmp_path: Path):
     assert sanitized["profit_price_source"] == "broker_manual_sell_receipt"
     assert sanitized["realization_date"] == "2026-08-14"
     assert sanitized["net_profit_pct"] < 0
+    assert sanitized["target_filled_at"] is None
+    assert sanitized["holding_duration_sec"] is None
     aggregate = _aggregate(
         [
             {
@@ -519,3 +523,228 @@ def test_manual_exit_rejects_malformed_raw_receipt_numbers(tmp_path: Path):
             state_path=state_path,
             receipt_registry_path=tmp_path / "receipts.json",
         )
+
+
+def _full_target_rows():
+    rows = _target_receipts()
+    for row in rows:
+        row["raw"].update(cntr_qty="10", ord_remnq="0", cntr_uv="50200")
+    return rows
+
+
+def test_original_target_repair_preserves_identity_and_does_not_invent_fill_time(
+    tmp_path,
+):
+    from src.trading.order.manual_episode_exit_reconciliation import (
+        reconcile_target_exit,
+    )
+
+    path = tmp_path / "state.json"
+    before = _held_state()
+    path.write_text(json.dumps(before))
+    kwargs = dict(
+        owner_id="sk_eternix_midday",
+        state_path=path,
+        receipt_rows=_full_target_rows(),
+        observed_at=datetime(2026, 8, 14, tzinfo=KST),
+    )
+    old = path.read_bytes()
+    preview = reconcile_target_exit(**kwargs)
+    assert path.read_bytes() == old
+    assert preview["runtime_effect"] is False
+    result = reconcile_target_exit(
+        **kwargs, apply=True, confirmation=preview["expected_confirmation"]
+    )
+    after = json.loads(path.read_text())
+    assert after["status"] == "COMPLETE" and after["position_qty"] == 0
+    assert after["attempt_consumed"] is True
+    assert after["trade_date"] == before["trade_date"]
+    assert after["owned_order_nos"] == before["owned_order_nos"]
+    assert result["actual_order_submitted"] is False
+    assert result["runtime_effect"] is True
+    assert result["realized_pnl"] is None
+    for old_leg, leg in zip(before["legs"], after["legs"]):
+        assert leg["target_order_no"] == old_leg["target_order_no"]
+        assert leg["quantity"] == 10 and leg["target_filled_qty"] == 10
+        assert leg["target_fill_price"] == 50200
+        assert leg["target_filled_at"] == ""
+        assert "manual_exit_receipt" not in leg
+        consumed = _sanitize_leg(leg, 0.23)
+        assert consumed["completed"] is True
+        assert consumed["holding_duration_sec"] is None
+        assert consumed["target_filled_at"] is None
+    with pytest.raises(ValueError, match="consumed_held"):
+        reconcile_target_exit(
+            **kwargs, apply=True, confirmation=preview["expected_confirmation"]
+        )
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "symbol",
+        "date",
+        "side",
+        "partial",
+        "missing_price",
+        "duplicate",
+        "not_owned",
+        "leg_reuse",
+        "quantity",
+        "unconsumed",
+        "active",
+        "aggregate",
+        "bad_audit",
+        "below_target",
+    ],
+)
+def test_original_target_repair_rejects_unsafe_evidence(tmp_path, defect):
+    from src.trading.order.manual_episode_exit_reconciliation import (
+        reconcile_target_exit,
+    )
+
+    state = _held_state()
+    rows = _full_target_rows()
+    if defect == "symbol":
+        rows[0]["code"] = "005930"
+    if defect == "date":
+        rows[0]["trade_date"] = "20260812"
+    if defect == "side":
+        rows[0]["side"] = "매수"
+    if defect == "partial":
+        rows[0]["raw"]["cntr_qty"] = "9"
+    if defect == "missing_price":
+        rows[0]["raw"].pop("cntr_uv")
+    if defect == "below_target":
+        rows[0]["raw"]["cntr_uv"] = "49900"
+    if defect == "duplicate":
+        rows.append(dict(rows[0]))
+    if defect == "not_owned":
+        state["owned_order_nos"] = []
+    if defect == "leg_reuse":
+        state["legs"][1]["target_order_no"] = state["legs"][0]["target_order_no"]
+    if defect == "quantity":
+        state["legs"][0]["quantity"] = 100
+    if defect == "unconsumed":
+        state["attempt_consumed"] = False
+    if defect == "active":
+        state["status"] = "TARGET_OPEN"
+    if defect == "aggregate":
+        state["position_qty"] = 10
+    if defect == "bad_audit":
+        state["audit"] = None
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state))
+    old = path.read_bytes()
+    with pytest.raises(ValueError):
+        reconcile_target_exit(
+            owner_id="sk_eternix_midday",
+            state_path=path,
+            receipt_rows=rows,
+            observed_at=datetime(2026, 8, 14, tzinfo=KST),
+        )
+    assert path.read_bytes() == old
+
+
+def test_original_target_repair_rejects_changed_preview_and_active_lock(tmp_path):
+    import fcntl
+    from src.trading.order.manual_episode_exit_reconciliation import (
+        reconcile_target_exit,
+    )
+
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_held_state()))
+    kwargs = dict(
+        owner_id="sk_eternix_midday",
+        state_path=path,
+        receipt_rows=_full_target_rows(),
+        observed_at=datetime(2026, 8, 14, tzinfo=KST),
+    )
+    preview = reconcile_target_exit(**kwargs)
+    state = json.loads(path.read_text())
+    state["audit"].append({"concurrent": True})
+    path.write_text(json.dumps(state))
+    with pytest.raises(ValueError, match="state_hash_mismatch"):
+        reconcile_target_exit(
+            **kwargs, apply=True, confirmation=preview["expected_confirmation"]
+        )
+    with path.with_suffix(".lock").open("a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(ValueError, match="lock_active"):
+            reconcile_target_exit(**kwargs)
+
+
+def test_original_target_repair_confirmation_binds_broker_receipt(tmp_path):
+    from src.trading.order.manual_episode_exit_reconciliation import (
+        reconcile_target_exit,
+    )
+
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_held_state()))
+    rows = _full_target_rows()
+    kwargs = dict(
+        owner_id="sk_eternix_midday",
+        state_path=path,
+        receipt_rows=rows,
+        observed_at=datetime(2026, 8, 14, tzinfo=KST),
+    )
+    preview = reconcile_target_exit(**kwargs)
+    rows[0]["raw"]["cntr_uv"] = "50400"
+    with pytest.raises(ValueError, match="confirmation"):
+        reconcile_target_exit(
+            **kwargs, apply=True, confirmation=preview["expected_confirmation"]
+        )
+
+
+def test_original_target_repair_preserves_already_completed_leg(tmp_path):
+    from src.trading.order.manual_episode_exit_reconciliation import (
+        reconcile_target_exit,
+    )
+
+    state = _held_state()
+    state["position_qty"] = 10
+    state["legs"][0].update(
+        status="COMPLETE",
+        position_qty=0,
+        target_filled_qty=10,
+        target_fill_price=50200,
+        target_filled_at="2026-08-13T13:10:00+09:00",
+    )
+    old_leg = dict(state["legs"][0])
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state))
+    kwargs = dict(
+        owner_id="sk_eternix_midday",
+        state_path=path,
+        receipt_rows=_full_target_rows()[1:],
+        observed_at=datetime(2026, 8, 14, tzinfo=KST),
+    )
+    preview = reconcile_target_exit(**kwargs)
+    assert preview["closed_qty"] == 10
+    reconcile_target_exit(
+        **kwargs, apply=True, confirmation=preview["expected_confirmation"]
+    )
+    assert json.loads(path.read_text())["legs"][0] == old_leg
+
+
+def test_manual_dated_receipt_does_not_become_midnight_fill_in_samsung_consumer():
+    from src.engine.monitoring.samsung_machine_entry_tuning import (
+        _resolve_row_with_broker_receipts,
+    )
+
+    row = {"legs": _held_state()["legs"]}
+    resolved = _resolve_row_with_broker_receipts(
+        row,
+        [
+            {
+                "status": "applied",
+                "filled_qty": 20,
+                "fill_price": 49800,
+                "order_date": "2026-08-14",
+                "fill_timestamp_status": "unavailable_from_dated_order_receipt",
+            }
+        ],
+        cost_pct=0.23,
+    )
+    assert resolved is not None
+    assert all(not leg["target_filled_at"] for leg in resolved["legs"])

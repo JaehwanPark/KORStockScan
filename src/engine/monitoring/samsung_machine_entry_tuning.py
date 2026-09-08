@@ -752,7 +752,12 @@ def _resolve_row_with_broker_receipts(
         {
             "quantity": _as_int(item.get("filled_qty")),
             "price": _as_int(item.get("fill_price")),
-            "filled_at": str(item.get("filled_at_kst") or item.get("order_date") or ""),
+            "filled_at": (
+                ""
+                if item.get("fill_timestamp_status")
+                == "unavailable_from_dated_order_receipt"
+                else str(item.get("filled_at_kst") or item.get("order_date") or "")
+            ),
         }
         for item in receipts
         if str(item.get("status") or "") == "applied"

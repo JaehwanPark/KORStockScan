@@ -22,6 +22,7 @@ import json
 import math
 import os
 import shlex
+import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,7 @@ from src.engine.automation.source_quality_hard_gate import (
 from src.engine.automation.source_quality_clean_baseline import (
     embedded_source_date_gate,
 )
+from src.engine.automation import operator_policy_succession as policy_succession
 from src.engine.automation.ai_multi_timeframe_context_promotion import (
     authoritative_runtime_env as authoritative_ai_context_runtime_env,
 )
@@ -2128,15 +2130,24 @@ def _load_entry_recheck_drought_controller_candidates(
     if not isinstance(candidates, list):
         candidates = []
     normalized = [item for item in candidates if isinstance(item, dict)]
-    cumulative_contract_error = _entry_recheck_drought_controller_contract_error(
-        payload, normalized
-    )
+    try:
+        cumulative_contract_error = _entry_recheck_drought_controller_contract_error(
+            payload, normalized
+        )
+    except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
+        cumulative_contract_error = "entry_recheck_controller_contract_invalid"
     if payload.get("schema_version") != 1:
         cumulative_contract_error = "entry_recheck_controller_schema_version_mismatch"
     elif payload.get("report_type") != "entry_recheck_drought_controller":
         cumulative_contract_error = "entry_recheck_controller_report_type_mismatch"
     elif payload.get("target_date") != source_date:
         cumulative_contract_error = "entry_recheck_controller_target_date_mismatch"
+    if not cumulative_contract_error:
+        from src.engine.automation.drought_handoff import controller_source_error
+
+        cumulative_contract_error = controller_source_error(
+            payload, path.parent.parent, source_date
+        )
     if cumulative_contract_error:
         normalized = [
             {
@@ -3765,16 +3776,64 @@ def _select_auto_apply_candidates(
     operator_locks: list[dict[str, Any]] | None = None,
     runtime_handoff_contract_required_families: set[str] | None = None,
     runtime_handoff_contract_source_version: int = RUNTIME_HANDOFF_CONTRACT_VERSION,
+    strategy_owner_component_economics: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     selected_by_stage: dict[str, dict[str, Any]] = {}
     selected_cumulative_quality_by_stage: dict[str, str] = {}
     decisions: list[dict[str, Any]] = []
+    previous_selected_families, previous_runtime_manifest = (
+        _load_previous_runtime_env_selected_families(target_date)
+    )
+    component_research = None
+    component_research_error = None
+    if (
+        target_date >= policy_succession.EFFECTIVE_DATE
+        and strategy_owner_component_economics
+    ):
+        try:
+            component_research = policy_succession.components.verify_research(
+                strategy_owner_component_economics, REPORT_DIR, target_date
+            )
+        except (TypeError, ValueError, KeyError, OSError):
+            component_research_error = "owner_component_economic_source_invalid"
+    operator_locks, component_decisions, component_env = (
+        policy_succession.prepare_components(
+            operator_locks or [],
+            previous_runtime_manifest,
+            RUNTIME_ENV_DIR,
+            OPERATOR_RUNTIME_ENV_LOCK_DIR,
+            target_date,
+            component_research,
+            include_families,
+            safety_reverts={
+                item.get("family")
+                for item in calibration_candidates
+                if item.get("safety_revert_required") is True
+                or item.get("runtime_disable_family") is True
+            },
+        )
+    )
+    for item in component_decisions:
+        item["economic_source_blocker"] = component_research_error
+    operator_locks = policy_succession.prepare_locks(
+        operator_locks or [],
+        calibration_candidates,
+        previous_runtime_manifest,
+        RUNTIME_ENV_DIR,
+        OPERATOR_RUNTIME_ENV_LOCK_DIR,
+        target_date,
+    )
     locks_by_family = {
         str(lock.get("family") or ""): lock
         for lock in (operator_locks or [])
         if isinstance(lock, dict) and lock.get("family")
     }
-    candidates = list(calibration_candidates)
+    component_families = {item["family"] for item in component_decisions}
+    candidates = [
+        item
+        for item in calibration_candidates
+        if item.get("family") not in component_families
+    ]
     present_families = {
         str(item.get("family") or "") for item in candidates if isinstance(item, dict)
     }
@@ -3815,7 +3874,13 @@ def _select_auto_apply_candidates(
         )
         runtime_handoff_contract_required = bool(
             family in (runtime_handoff_contract_required_families or set())
-            and lock is None
+            and (
+                lock is None
+                or (
+                    target_date >= policy_succession.EFFECTIVE_DATE
+                    and family in policy_succession.POLICY_KEYS
+                )
+            )
         )
         contract_blockers = _candidate_apply_contract_blockers(
             candidate,
@@ -3935,7 +4000,9 @@ def _select_auto_apply_candidates(
                 f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
             )
 
-        if family == "score65_74_recovery_probe" and lock is None:
+        if family == "score65_74_recovery_probe" and (
+            lock is None or target_date >= policy_succession.EFFECTIVE_DATE
+        ):
             if not _score65_74_entry_unlock_candidate(
                 candidate, target_date=target_date
             ):
@@ -3967,6 +4034,44 @@ def _select_auto_apply_candidates(
         lock_close_reasons = _candidate_close_reasons(candidate, reject_reason)
         if lock_stage_conflict_reason:
             lock_close_reasons.append(lock_stage_conflict_reason)
+        succession = None
+        succession_blocker = ""
+        if lock and target_date >= policy_succession.EFFECTIVE_DATE:
+            try:
+                succession_blocker = policy_succession.succession_reason(
+                    candidate,
+                    lock,
+                    _env_overrides_for_candidate(candidate),
+                    policy_succession.current_locked_values(
+                        lock, RUNTIME_ENV_DIR, target_date
+                    ),
+                    ordinary_allowed=(
+                        not reject_reason
+                        and allowed
+                        and not hold_carry_forward
+                        and not lock_stage_conflict_reason
+                    ),
+                    target_date=target_date,
+                )
+            except (TypeError, ValueError, KeyError, OverflowError):
+                succession_blocker = "succession_evidence_invalid"
+            if not succession_blocker:
+                succession = {
+                    "state": "superseded_by_verified_policy",
+                    "applied_target_date": target_date,
+                    "predecessor_lock_id": lock.get("lock_id"),
+                    "stage": stage,
+                    "priority": candidate.get("priority", 999),
+                    "candidate_sha256": policy_succession.digest(candidate),
+                    "rollback_env": policy_succession.current_locked_values(
+                        lock, RUNTIME_ENV_DIR, target_date
+                    ),
+                }
+                succession["rollback_env"] = {
+                    k: v
+                    for k, v in succession["rollback_env"].items()
+                    if k in policy_succession.POLICY_KEYS.get(family, set())
+                }
         if (
             lock
             and family not in RETIRED_RUNTIME_FAMILY_REASONS
@@ -3979,11 +4084,19 @@ def _select_auto_apply_candidates(
                 and not lock_allowed_close
                 and not contract_blockers
             )
-            if lock_can_preserve:
+            if succession:
+                reason = "operator_strategy_lock_superseded_by_verified_policy"
+                hold_carry_forward = False
+            elif lock_can_preserve:
                 reject_reason = ""
                 reason = f"operator_runtime_env_lock_preserved:{lock.get('lock_id') or family}"
                 hold_carry_forward = False
                 lock_applied = True
+                if lock.get("_policy_succession"):
+                    succession = {
+                        **lock["_policy_succession"],
+                        "state": "carried_verified_policy",
+                    }
             elif bool(lock_overrides):
                 if lock_stage_conflict_reason:
                     reject_reason = lock_stage_conflict_reason
@@ -4003,6 +4116,22 @@ def _select_auto_apply_candidates(
             selected_env_overrides = {}
 
         if (
+            hold_carry_forward
+            and not reject_reason
+            and lock
+            and lock.get("_policy_succession")
+        ):
+            # AVG_DOWN has a family-owned hold/carry path even when a new
+            # economic candidate fails its promotion contract. Keep its receipt
+            # only when that path preserved every previously approved key.
+            carried = lock["_policy_succession"]
+            if all(
+                selected_env_overrides.get(k) == v
+                for k, v in carried["env_overrides"].items()
+            ):
+                succession = {**carried, "state": "carried_verified_policy"}
+
+        if (
             family == "score65_74_recovery_probe"
             and not reject_reason
             and not lock_applied
@@ -4014,6 +4143,10 @@ def _select_auto_apply_candidates(
             ] = approval_version(
                 candidate["source_metrics"], candidate.get("sample_floor", 20)
             )
+            if succession:
+                selected_env_overrides[
+                    "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE"
+                ] = state
         decision = {
             "family": family,
             "stage": stage,
@@ -4036,6 +4169,10 @@ def _select_auto_apply_candidates(
             "runtime_disable_family": bool(candidate.get("runtime_disable_family")),
             "same_stage_owner_claim": claims_stage_owner,
         }
+        if succession:
+            decision["operator_policy_succession"] = succession
+        if lock:
+            decision["operator_policy_succession_blocker"] = succession_blocker or None
         previous_family_env = _previous_runtime_env_overrides_for_family(
             previous_runtime_manifest, family
         )
@@ -4044,6 +4181,12 @@ def _select_auto_apply_candidates(
                 "previous_family_not_selected"
                 if family in previous_selected_families
                 else "not_selected"
+            )
+        elif succession:
+            selection_change_class = (
+                "policy_carried_forward"
+                if succession.get("state") == "carried_verified_policy"
+                else "operator_lock_superseded"
             )
         elif lock_applied:
             selection_change_class = "operator_lock_preserved"
@@ -4117,6 +4260,38 @@ def _select_auto_apply_candidates(
     env_overrides: dict[str, str] = {}
     for decision in selected_decisions:
         env_overrides.update(decision.get("env_overrides") or {})
+    # Mixed legacy overlays are separate selected rows; they cannot overwrite
+    # an independently validated successor's exact owned strategy keys.
+    for decision in selected_decisions:
+        if decision.get("operator_policy_succession"):
+            env_overrides.update(
+                {
+                    k: v
+                    for k, v in decision["env_overrides"].items()
+                    if k in policy_succession.POLICY_KEYS[decision["family"]]
+                }
+            )
+    changing_classes = {"newly_enabled", "policy_refreshed", "operator_lock_superseded"}
+    for component in component_decisions:
+        row = component["strategy_owner_component"]
+        stages = (
+            {"entry", "entry_pre_submit"}
+            if row["family"] == policy_succession.components.WEAK
+            else {"holding", "exit", "holding_exit"}
+        )
+        conflicts = [
+            d["family"]
+            for d in selected_decisions
+            if d.get("stage") in stages
+            and d.get("same_stage_owner_claim") is not False
+            and d.get("selection_change_class") in changing_classes
+        ]
+        if conflicts and row["policies"] != row["previous_policies"]:
+            row["policies"] = row["previous_policies"]
+            row["state"] = "same_stage_change_deferred"
+            row["conflicting_families"] = conflicts
+    decisions.extend(component_decisions)
+    env_overrides.update(component_env)
     return selected_decisions, decisions, env_overrides
 
 
@@ -4163,6 +4338,8 @@ def _entry_live_tuning_owner_family(*selected_groups: list[dict[str, Any]]) -> s
                 continue
             if str(item.get("stage") or "") != "entry":
                 continue
+            if item.get("operator_policy_succession"):
+                return family
             if str(item.get("calibration_state") or "") == "operator_locked":
                 continue
             if isinstance(item.get("operator_runtime_env_lock"), dict):
@@ -5951,6 +6128,22 @@ def verify_runtime_env_handoff(
     effective_env_overrides = dict(env_overrides)
     effective_env_overrides.update(operator_overrides)
     effective_env_overrides.update(dated_operator_overrides)
+    succession_error = ""
+    try:
+        successor_env = policy_succession.validate_receipt(
+            manifest, RUNTIME_ENV_DIR, OPERATOR_RUNTIME_ENV_LOCK_DIR
+        )
+    except (ValueError, TypeError, KeyError, OSError):
+        successor_env = {}
+        succession_error = "operator_policy_succession_receipt_invalid"
+    effective_env_overrides.update(successor_env)
+    # The receipt, not the superseded historical layer, owns these exact keys.
+    operator_overrides = {
+        k: v for k, v in operator_overrides.items() if k not in successor_env
+    }
+    dated_operator_overrides = {
+        k: v for k, v in dated_operator_overrides.items() if k not in successor_env
+    }
     (
         dated_runtime_auto_renew_expected_env,
         dated_runtime_auto_renew_expected_keys,
@@ -5960,6 +6153,14 @@ def verify_runtime_env_handoff(
     )
     effective_env_overrides.update(dated_runtime_auto_renew_expected_env)
     findings: list[dict[str, Any]] = []
+    if succession_error:
+        findings.append(
+            {
+                "code": succession_error,
+                "severity": "critical",
+                "family": "operator_policy_succession",
+            }
+        )
     authoritative_context_env: dict[str, str] = {}
     promotion_artifact_value = str(
         manifest.get("ai_multi_timeframe_context_promotion") or ""
@@ -6556,6 +6757,8 @@ def verify_runtime_env_handoff(
             str(operator_override_path) if operator_override_path.exists() else None
         ),
         "operator_runtime_override_keys": sorted(operator_overrides),
+        "operator_policy_succession": manifest.get("operator_policy_succession"),
+        "operator_policy_succession_applied_keys": sorted(successor_env),
         "dated_operator_runtime_override_path": (
             str(dated_operator_override_path)
             if dated_operator_override_path.exists()
@@ -6762,6 +6965,31 @@ def _write_gap_provenance(target_date: str) -> None:
 def _write_runtime_env(
     target_date: str, manifest: dict[str, Any], env_overrides: dict[str, str]
 ) -> None:
+    component_receipt = None
+    if target_date >= policy_succession.EFFECTIVE_DATE:
+        component_receipt = policy_succession.build_component_receipt(
+            target_date, manifest.get("auto_apply_decisions") or []
+        )
+        if component_receipt:
+            for component in component_receipt["components"]:
+                env_overrides.update(component["env_overrides"])
+            env_overrides[policy_succession.components.ENV_KEY] = (
+                policy_succession.component_bundle(
+                    target_date, component_receipt["components"]
+                )
+            )
+            manifest["strategy_owner_components"] = component_receipt
+    succession_receipt = None
+    if target_date >= policy_succession.EFFECTIVE_DATE:
+        succession_receipt = policy_succession.build_receipt(
+            target_date,
+            manifest.get("auto_apply_decisions") or [],
+            RUNTIME_ENV_DIR,
+            OPERATOR_RUNTIME_ENV_LOCK_DIR,
+        )
+        for policy in succession_receipt["policies"]:
+            env_overrides.update(policy["env_overrides"])
+        manifest["operator_policy_succession"] = succession_receipt
     env_overrides = {**without_retired_env(env_overrides), **retirement_env()}
     env_overrides = {
         key: value
@@ -6885,7 +7113,7 @@ def _write_runtime_env(
         "policy_refreshed": sorted(
             item["family"]
             for item in selection_change_details
-            if item["change_class"] == "policy_refreshed"
+            if item["change_class"] in {"policy_refreshed", "operator_lock_superseded"}
         ),
         "carried_forward_or_unchanged": sorted(
             item["family"]
@@ -6895,6 +7123,7 @@ def _write_runtime_env(
                 "carried_forward_unchanged",
                 "retained_unchanged",
                 "operator_lock_preserved",
+                "policy_carried_forward",
             }
         ),
         "retained_provenance_unclassified": sorted(
@@ -6906,8 +7135,31 @@ def _write_runtime_env(
         "removed_selected_families_ignored": removed_selected_families,
     }
     RUNTIME_ENV_DIR.mkdir(parents=True, exist_ok=True)
-    runtime_env_path(target_date).write_text("\n".join(lines) + "\n", encoding="utf-8")
-    runtime_env_manifest_path(target_date).write_text(
+
+    def publish(path, content):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix="." + path.name,
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            try:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            except BaseException:
+                temporary.unlink(missing_ok=True)
+                raise
+        try:
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    publish(runtime_env_path(target_date), "\n".join(lines) + "\n")
+    publish(
+        runtime_env_manifest_path(target_date),
         json.dumps(
             {
                 "schema_version": 1,
@@ -6921,11 +7173,28 @@ def _write_runtime_env(
                 "selected_families": selected_families,
                 "removed_selected_families_ignored": removed_selected_families,
                 "selection_change_summary": selection_change_summary,
+                **(
+                    {"operator_policy_succession_required": True}
+                    if succession_receipt
+                    else {}
+                ),
+                **(
+                    {"operator_policy_succession": succession_receipt}
+                    if succession_receipt
+                    else {}
+                ),
+                **(
+                    {
+                        "strategy_owner_components_required": True,
+                        "strategy_owner_components": component_receipt,
+                    }
+                    if component_receipt
+                    else {}
+                ),
             },
             ensure_ascii=False,
             indent=2,
         ),
-        encoding="utf-8",
     )
 
 
@@ -7433,6 +7702,9 @@ def build_preopen_apply_manifest(
                 runtime_handoff_contract_required_families=(
                     runtime_handoff_contract_required_families
                 ),
+                strategy_owner_component_economics=report.get(
+                    "strategy_owner_component_economics"
+                ),
                 runtime_handoff_contract_source_version=(
                     source_runtime_handoff_contract_version
                 ),
@@ -7503,6 +7775,12 @@ def build_preopen_apply_manifest(
                 selected,
                 runtime_bridge_selected,
             )
+            if not holding_exit_live_owner_family and any(
+                item.get("strategy_owner_component", {}).get("family")
+                == policy_succession.components.PROFIT
+                for item in decisions
+            ):
+                holding_exit_live_owner_family = "holding_exit"
             scale_in_live_owner_family = _scale_in_live_owner_family(
                 selected,
                 runtime_bridge_selected,
@@ -7860,6 +8138,12 @@ def build_preopen_apply_manifest(
                 encoding="utf-8",
             )
     APPLY_PLAN_DIR.mkdir(parents=True, exist_ok=True)
+    manifest["operator_policy_lock_inventory"] = policy_succession.inventory(
+        [
+            {**_load_json(path, sanitize=False), "path": str(path)}
+            for path in sorted(OPERATOR_RUNTIME_ENV_LOCK_DIR.glob("*.json"))
+        ]
+    )
     apply_manifest_path(target_date).write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
     )

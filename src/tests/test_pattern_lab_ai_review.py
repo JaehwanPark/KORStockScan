@@ -2528,14 +2528,14 @@ def test_pattern_lab_ai_review_resolves_current_source_only_warning_set(
                 "reason": "AI two-pass review is incomplete.",
             },
             {
-                "review_id": "source-quality",
+                "review_id": "source-quality-admission",
                 "domain": "scalping",
                 "final_state": "source_quality_gap",
                 "final_decision": "block_runtime_use",
                 "reason": "The warning status in the scalping entry admission metric indicates a data quality problem.",
             },
             {
-                "review_id": "source-quality",
+                "review_id": "source-quality-bucket",
                 "domain": "scalping",
                 "final_state": "automation_handoff_gap",
                 "final_decision": "block_runtime_use",
@@ -2707,10 +2707,11 @@ def test_pattern_lab_ai_review_normalizes_keep_decision_gap_state(
     )
 
     conclusion = report["ai_two_pass_review"]["final_conclusions"][0]
-    assert conclusion["final_state"] == "source_only_keep_collecting"
-    assert conclusion["final_decision"] == "keep"
-    assert conclusion["auditor_pass"] is True
-    assert report["summary"]["state_counts"] == {"source_only_keep_collecting": 1}
+    assert conclusion["final_state"] == "ai_review_gap"
+    assert conclusion["final_decision"] == "surface_workorder"
+    assert conclusion["auditor_pass"] is False
+    assert report["summary"]["state_counts"] == {"ai_review_gap": 1}
+    assert report["status"] == "warning"
 
 
 def test_pattern_lab_ai_review_resolves_generic_instrumentation_gap_with_workorder_ledger(
@@ -4091,7 +4092,7 @@ def test_pattern_lab_ai_review_refresh_repairs_legacy_bedrock_transport_provenan
                     {
                         "review_id": "transport_provenance",
                         "domain": "cross_domain",
-                        "final_state": "resolved",
+                        "final_state": "source_only_keep_collecting",
                         "final_decision": "keep",
                         "reason": "parsed response retained",
                         "explicit_gap_type": "",

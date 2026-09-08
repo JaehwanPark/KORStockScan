@@ -25,6 +25,9 @@ from src.engine.scalping.entry_ai_gate_backtest import (
     _drought_conditional_policy,
     _entry_recheck_drought_candidate,
     _exclusive_report_lock,
+    _drought_day_summary,
+    _recent_trading_dates,
+    BUY_FUNNEL_SENTINEL_DIR,
 )
 
 SCHEMA_VERSION = 1
@@ -174,6 +177,40 @@ def build_report(target_date: str) -> dict[str, Any]:
         clean_baseline_date=clean_baseline_date,
         report=report,
     )
+    from src.engine.automation.drought_handoff import (
+        EFFECTIVE_DATE,
+        controller_source_error,
+    )
+
+    if target_date >= EFFECTIVE_DATE:
+        from src.engine.scalping.entry_recheck_review import (
+            build_review,
+            review_orders,
+            REVIEW_DATES,
+        )
+
+        history_by_date = {row["source_date"]: row for row in drought_policy["history"]}
+        review_days = []
+        for day in _recent_trading_dates(
+            target_date, start_date=clean_baseline_date, count=REVIEW_DATES
+        ):
+            review_days.append(
+                history_by_date.get(day)
+                or _drought_day_summary(
+                    BUY_FUNNEL_SENTINEL_DIR / f"buy_funnel_sentinel_{day}.json"
+                )
+            )
+        report["source_binding_version"] = 1
+        report["maintenance_review"] = build_review(
+            drought_policy, review_days, target_date
+        )
+        report["code_improvement_orders"] = review_orders(report["maintenance_review"])
+        # Do not publish a policy calculated from an overwritten input generation.
+        source_error = controller_source_error(
+            report, BUY_FUNNEL_SENTINEL_DIR.parent, target_date, validate_review=True
+        )
+        if source_error:
+            raise RuntimeError(source_error)
     return report
 
 
@@ -254,10 +291,20 @@ def render_markdown(report: dict[str, Any]) -> str:
         "## Next action",
         "",
         "- PREOPEN consumes only this controller report; the cumulative score sweep is diagnostic-only.",
-        "- Use the dominant evaluated blocker to design one later non-safety relaxation only after exact paired economics reaches its floor.",
+        "- Investigate source/consumption gaps and design source-only repairs immediately; positive economics is not a prerequisite for investigation.",
+        "- Live widening still requires the existing exact paired economics and separate policy authority. The finite maintenance review may recommend repair, merge, or retirement, never automatic runtime mutation.",
+        f"- maintenance acceptance owner: `{(report.get('maintenance_review') or {}).get('acceptance_owner')}`",
+        f"- conditional next PREOPEN date (all existing guards required): `{(report.get('maintenance_review') or {}).get('conditional_next_preopen_date')}`",
+        f"- source transition dates: `{[r.get('source_date') for r in (report.get('maintenance_review') or {}).get('history_transition', [])]}`",
         "- Never relax stale quote, DANGER, broker/account/order/quantity/cooldown, or probe-first guards.",
         "",
+        "| Scope | Valid drought dates / review bound | First depleted stage | Maintenance due | Review options |",
+        "|---|---|---|---|---|",
     ]
+    for row in (report.get("maintenance_review") or {}).get("scopes", []):
+        lines.append(
+            f"| {row['scope'].replace('|', '/')} | {row['review_date_count']}/{row['review_date_floor']} | {row['first_depleted_stage']} | {row['bounded_maintenance_due']} | {', '.join(row['review_options'])} |"
+        )
     return "\n".join(lines)
 
 

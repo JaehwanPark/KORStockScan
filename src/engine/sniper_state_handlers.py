@@ -3492,6 +3492,30 @@ def _clear_profit_stagnation_state(stock: dict | None) -> None:
         _mutate_stock_state(stock, pop_fields=_PROFIT_STAGNATION_STATE_FIELDS)
 
 
+def _strategy_owner_component_state(stock):
+    from src.engine.scalping.strategy_owner_components import runtime_state, stock_scope
+
+    target = stock if isinstance(stock, dict) else {}
+    venue, session = stock_scope(target)
+    return runtime_state(
+        TRADING_RULES,
+        venue=venue,
+        session=session,
+        simulated=_is_any_simulated_position(target, target.get("strategy")),
+    )
+
+
+def _strategy_owner_component_fields(stock):
+    state = _strategy_owner_component_state(stock)
+    return {
+        "strategy_owner_profiles": json.dumps(
+            state["profiles"], sort_keys=True, separators=(",", ":")
+        ),
+        "strategy_owner_context_sha256": state["context_sha256"],
+        "strategy_owner_component_state": state["status"],
+    }
+
+
 def _evaluate_scalp_profit_stagnation_exit(
     stock: dict | None,
     *,
@@ -3501,6 +3525,14 @@ def _evaluate_scalp_profit_stagnation_exit(
     current_ai_score: float,
     now_ts: float,
 ) -> dict:
+    from src.engine.scalping.strategy_owner_components import PROFIT
+
+    owner_state = _strategy_owner_component_state(stock)
+    owned = (
+        (owner_state["profiles"].get(PROFIT) or {})
+        if PROFIT in owner_state["applied_families"]
+        else {}
+    )
     if not _rule_bool("SCALP_PROFIT_STAGNATION_EXIT_ENABLED", False):
         _clear_profit_stagnation_state(stock)
         return {"should_exit": False, "reason": "disabled"}
@@ -3513,8 +3545,19 @@ def _evaluate_scalp_profit_stagnation_exit(
         _clear_profit_stagnation_state(stock)
         return {"should_exit": False, "reason": "simulated_position"}
 
-    min_profit = _rule_float("SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT", 1.0)
-    min_sec = max(1, _rule_int("SCALP_PROFIT_STAGNATION_MIN_SEC", 180))
+    min_profit = owned.get(
+        "SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT",
+        _rule_float("SCALP_PROFIT_STAGNATION_MIN_PROFIT_PCT", 1.0),
+    )
+    min_sec = max(
+        1,
+        int(
+            owned.get(
+                "SCALP_PROFIT_STAGNATION_MIN_SEC",
+                _rule_int("SCALP_PROFIT_STAGNATION_MIN_SEC", 180),
+            )
+        ),
+    )
     max_profit_move = max(
         0.0, _rule_float("SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT", 0.15)
     )
@@ -3604,6 +3647,14 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
     held_sec: int,
     now_ts: float,
 ) -> dict:
+    from src.engine.scalping.strategy_owner_components import PROFIT
+
+    owner_state = _strategy_owner_component_state(stock)
+    owned = (
+        (owner_state["profiles"].get(PROFIT) or {})
+        if PROFIT in owner_state["applied_families"]
+        else {}
+    )
     if not _rule_bool("SCALP_LOW_PROFIT_STAGNATION_HARD_EXIT_ENABLED", False):
         if isinstance(stock, dict):
             _mutate_stock_state(stock, pop_fields=_LOW_PROFIT_STAGNATION_STATE_FIELDS)
@@ -3619,6 +3670,9 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
         return {"should_exit": False, "reason": "simulated_position"}
 
     min_hold_sec = max(1, _rule_int("SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC", 1800))
+    min_hold_sec = max(
+        1, int(owned.get("SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC", min_hold_sec))
+    )
     min_adjusted_profit = _rule_float(
         "SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT",
         0.20,
@@ -3626,6 +3680,12 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
     max_adjusted_profit = _rule_float(
         "SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT",
         1.00,
+    )
+    min_adjusted_profit = owned.get(
+        "SCALP_LOW_PROFIT_STAGNATION_MIN_ADJUSTED_PROFIT_PCT", min_adjusted_profit
+    )
+    max_adjusted_profit = owned.get(
+        "SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT", max_adjusted_profit
     )
     if max_adjusted_profit < min_adjusted_profit:
         min_adjusted_profit, max_adjusted_profit = (
@@ -3637,6 +3697,9 @@ def _evaluate_scalp_low_profit_stagnation_hard_exit(
         _rule_float("SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS", 15.0),
     )
     confirmation_sec = max(1, _rule_int("SCALP_PROFIT_STAGNATION_MIN_SEC", 180))
+    confirmation_sec = max(
+        1, int(owned.get("SCALP_PROFIT_STAGNATION_MIN_SEC", confirmation_sec))
+    )
     max_profit_move = max(
         0.0,
         _rule_float("SCALP_PROFIT_STAGNATION_MAX_PROFIT_MOVE_PCT", 0.15),
@@ -13065,6 +13128,13 @@ def _canonicalize_rising_missed_venue_fields(
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage in {
+        "ai_confirmed",
+        "order_leg_sent",
+        "order_bundle_submitted",
+        "real_weak_pullback_entry_block",
+    }:
+        fields.update(_strategy_owner_component_fields(stock))
     # Only the call-local observer owns these keys; callers cannot inject them.
     fields = {
         key: value
@@ -20344,6 +20414,13 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
     if not should_emit:
         return False
+    if stage in {
+        "exit_signal",
+        "sell_completed",
+        "holding_flow_override_defer_exit",
+        "low_profit_stagnation_confirmation",
+    }:
+        fields.update(_strategy_owner_component_fields(stock))
     fields.update(throttle_fields)
     for key, value in _holding_pipeline_observation_scope_fields(stock).items():
         fields.setdefault(key, value)
@@ -34289,6 +34366,15 @@ def _evaluate_real_weak_pullback_entry_block(
     ):
         return {"blocked": False, "reason": "sim_or_dry_run"}
 
+    from src.engine.scalping.strategy_owner_components import WEAK
+
+    owner_state = _strategy_owner_component_state(stock)
+    owned = (
+        (owner_state["profiles"].get(WEAK) or {})
+        if WEAK in owner_state["applied_families"]
+        else {}
+    )
+
     latency_fields = latency_gate if isinstance(latency_gate, dict) else {}
     latency_state = str(latency_fields.get("latency_state") or "").strip().upper()
     if latency_state == "DANGER":
@@ -34339,6 +34425,11 @@ def _evaluate_real_weak_pullback_entry_block(
     min_spread_ticks = max(
         0, _rule_int("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS", 5)
     )
+    min_spread_ticks = int(
+        owned.get(
+            "SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_SPREAD_TICKS", min_spread_ticks
+        )
+    )
     spread_requirement_met = spread_ticks >= min_spread_ticks
     caution_submit = latency_state == "CAUTION"
     if not caution_submit and not spread_requirement_met:
@@ -34375,7 +34466,17 @@ def _evaluate_real_weak_pullback_entry_block(
     min_micro_positives = max(
         0, _rule_int("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES", 2)
     )
-    if positive_signal_count >= min_micro_positives:
+    min_micro_positives = int(
+        owned.get(
+            "SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES",
+            min_micro_positives,
+        )
+    )
+    if positive_signal_count >= min_micro_positives and (
+        positive_signal_count
+        >= _rule_int("SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_MIN_MICRO_POSITIVES", 2)
+        or not _missing_context_label(micro_state)
+    ):
         return {
             "blocked": False,
             "reason": "micro_confirmed",
@@ -40697,6 +40798,7 @@ def _retry_entry_ai_submit_authority_before_block(
         return fields
 
     fields["pre_submit_entry_ai_authority_retry_attempted"] = True
+    retry_started_at = time.monotonic()
     _mutate_stock_state(
         stock,
         set_fields={
@@ -40808,6 +40910,15 @@ def _retry_entry_ai_submit_authority_before_block(
             overlap_snapshot = {}
         for adm_key, adm_value in overlap_snapshot.items():
             retry_ws_data.setdefault(adm_key, adm_value)
+        retry_input_ready_at = time.monotonic()
+        fields["pre_submit_entry_ai_authority_retry_input_prepare_ms"] = round(
+            max(0.0, retry_input_ready_at - retry_started_at) * 1000.0, 3
+        )
+        fields["pre_submit_entry_ai_authority_retry_input_basis"] = (
+            "exact_entry_price_handoff"
+            if handoff is not None
+            else "fresh_pre_submit_rebuild"
+        )
         ai_decision = ai_engine.analyze_target(
             (stock or {}).get("name"),
             retry_ws_data,
@@ -40836,6 +40947,9 @@ def _retry_entry_ai_submit_authority_before_block(
             candle_context=candle_context,
         )
         ai_response_completed_at = time.time()
+        fields["pre_submit_entry_ai_authority_retry_analysis_elapsed_ms"] = round(
+            max(0.0, time.monotonic() - retry_input_ready_at) * 1000.0, 3
+        )
         ai_decision = dict(ai_decision or {})
         action = str(ai_decision.get("action") or "not_evaluated").upper()
         model_action = action
@@ -40861,6 +40975,30 @@ def _retry_entry_ai_submit_authority_before_block(
             action = "NOT_EVALUATED"
         reason = str(ai_decision.get("reason") or "")[:240]
         source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
+        fields.update(
+            {
+                "pre_submit_entry_ai_authority_retry_original_model_action": (
+                    ai_decision.get("decision_quality_model_action") or "not_reported"
+                ),
+                "pre_submit_entry_ai_authority_retry_runtime_action_mapping": (
+                    ai_decision.get("decision_quality_runtime_action_mapping")
+                    or "not_reported"
+                ),
+                "pre_submit_entry_ai_authority_retry_contract_repair_applied": (
+                    ai_decision.get("decision_quality_contract_repair_applied") is True
+                ),
+                "pre_submit_entry_ai_authority_retry_trusted_tick_count": (
+                    source_quality_fields.get(
+                        "tick_aggressor_trusted_count", "not_reported"
+                    )
+                ),
+                "pre_submit_entry_ai_authority_retry_tick_pressure_usable": (
+                    source_quality_fields.get(
+                        "tick_aggressor_pressure_usable", "not_reported"
+                    )
+                ),
+            }
+        )
         source_quality_fields["ai_result_source"] = result_source
         source_quality_fields["ai_decision_evaluation_status"] = (
             decision_evaluation_status
@@ -41012,6 +41150,20 @@ def _retry_entry_ai_submit_authority_before_block(
         retry_log_fields.setdefault(
             "large_sell_print_detected",
             bool(feature_probe.get("large_sell_print", False)),
+        )
+        retry_log_fields.update(
+            {
+                key: value
+                for key, value in fields.items()
+                if key
+                not in {
+                    "pre_submit_entry_ai_authority_retry_success",
+                    "pre_submit_entry_ai_authority_retry_reason",
+                    "pre_submit_entry_ai_authority_retry_result_source",
+                    "pre_submit_entry_ai_authority_retry_score",
+                    "pre_submit_entry_ai_authority_retry_action",
+                }
+            }
         )
         _log_entry_pipeline(
             stock,
@@ -42441,6 +42593,23 @@ def _consume_entry_price_exact_context_handoff(
     age_sec = max(0.0, float(now_ts) - captured_at) if captured_at > 0 else None
     fields["pre_submit_entry_ai_exact_context_handoff_age_sec"] = (
         round(age_sec, 3) if age_sec is not None else "not_available"
+    )
+    # Retain diagnostic identity on rejection too, without claiming an expired
+    # snapshot was consumed or setting the authoritative parent trace fields.
+    fields.update(
+        {
+            "pre_submit_entry_ai_exact_context_handoff_observed_trace_id": (
+                handoff.get("decision_trace_id") or "-"
+            ),
+            "pre_submit_entry_ai_exact_context_handoff_observed_snapshot_id": (
+                handoff.get("snapshot_id") or "-"
+            ),
+            "pre_submit_entry_ai_exact_context_handoff_ttl_sec": (
+                round(expires_at - captured_at, 3)
+                if captured_at > 0
+                else "not_available"
+            ),
+        }
     )
     if captured_at <= 0 or expires_at <= float(now_ts):
         _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])

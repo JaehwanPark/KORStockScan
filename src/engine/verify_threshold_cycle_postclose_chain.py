@@ -7448,6 +7448,26 @@ def build_threshold_cycle_postclose_verification(
         )
     )
     stale_downstream_links: list[str] = []
+    if (
+        execution_flags.get("pattern_lab_ai_review") is True
+        and "pattern_lab_ai_review" not in disabled_stage_flags
+        and pattern_lab_ai_review.get("material_contract_version")
+        == "pattern_review_material_v2"
+    ):
+        from src.engine.pattern_lab_ai_review import review_generation_matches
+
+        try:
+            matched = review_generation_matches(
+                target_date,
+                pattern_lab_ai_review,
+                report_dir=paths["pattern_lab_ai_review"].parent.parent,
+            )
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            matched = False
+        if not matched:
+            stale_downstream_links.append(
+                "pattern_lab_ai_review_source_generation_stale"
+            )
     if "daily_ev" not in disabled_stage_flags:
         if (
             "pattern_lab_currentness_audit" not in disabled_stage_flags
@@ -7604,6 +7624,10 @@ def build_threshold_cycle_postclose_verification(
         "status": "deferred_until_post_done_summary_publish",
         "issues": [],
     }
+    drought_canonical_handoff = {
+        "status": "deferred_until_strict_verification",
+        "issues": [],
+    }
     if require_summary_handoff:
         from src.engine.automation.postclose_summary_handoff import (
             verify_summary_handoff,
@@ -7618,6 +7642,26 @@ def build_threshold_cycle_postclose_verification(
             require_checklist="next_stage2_checklist" not in disabled_stage_flags,
         )
         missing_downstream_links.extend(summary_handoff["issues"])
+        from src.engine.automation.drought_handoff import (
+            EFFECTIVE_DATE,
+            verify_drought_handoff,
+        )
+
+        if (
+            target_date >= EFFECTIVE_DATE
+            and "runtime_approval_summary" not in disabled_stage_flags
+        ):
+            drought_canonical_handoff = verify_drought_handoff(
+                paths["code_improvement_workorder"].parent.parent,
+                target_date,
+                ev=ev_report,
+                summary=runtime_summary,
+                require_controller=execution_flags.get(
+                    "entry_recheck_drought_controller"
+                )
+                is not False,
+            )
+            missing_downstream_links.extend(drought_canonical_handoff["issues"])
 
     gap_provenance_path = runtime_gap_provenance_artifact_path(target_date)
     gap_provenance = (
@@ -8046,6 +8090,7 @@ def build_threshold_cycle_postclose_verification(
         "stale_downstream_links": stale_downstream_links,
         "source_generation_warnings": sorted(set(source_generation_warnings)),
         "summary_handoff": summary_handoff,
+        "drought_canonical_handoff": drought_canonical_handoff,
         "runtime_apply_gap_audit": {
             "status": runtime_apply_gap_audit_status,
             "issues": runtime_apply_gap_audit_issues,

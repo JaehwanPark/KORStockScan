@@ -908,6 +908,12 @@ def _exact_submit_drought_axis_summary(
             call_id = identity("entry_submit_attempt_id")
             main_id = identity("main_lifecycle_attempt_id")
             promotion_id = identity("scanner_promotion_id")
+            frozen_parent = identity("entry_submit_attempt_parent_promotion_id")
+            if call_id and frozen_parent:
+                # Current scanner metadata can advance during a submit call.
+                # Only producer-issued call-local provenance anchors its parent;
+                # legacy events retain their original strict conflict checks.
+                promotion_id = frozen_parent
             # Lifecycle IDs derived from promotions are parent identities, not
             # individual retries. Accept their documented legacy representation.
             if not promotion_id and main_id.startswith("SCANPROM-"):

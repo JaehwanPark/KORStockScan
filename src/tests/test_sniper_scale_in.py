@@ -170,7 +170,12 @@ def test_entry_price_exact_context_handoff_expires_without_use(monkeypatch):
         recent_candles=[],
         candle_context=_exact_entry_context(),
         preflight={"allowed": True},
-        result={"ai_result_source": "live", "ai_parse_ok": True},
+        result={
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "ai_decision_trace_id": "expired-trace",
+            "ai_input_snapshot_id": "expired-snapshot",
+        },
     )
 
     handoff, fields = state_handlers._consume_entry_price_exact_context_handoff(
@@ -181,6 +186,13 @@ def test_entry_price_exact_context_handoff_expires_without_use(monkeypatch):
 
     assert handoff is None
     assert fields["pre_submit_entry_ai_exact_context_handoff_reason"] == "expired"
+    assert (
+        fields["pre_submit_entry_ai_exact_context_handoff_observed_trace_id"]
+        == "expired-trace"
+    )
+    assert fields["pre_submit_entry_ai_exact_context_handoff_ttl_sec"] == 2.0
+    assert fields["pre_submit_entry_ai_exact_context_handoff_used"] is False
+    assert "pre_submit_entry_ai_exact_context_handoff_parent_trace_id" not in fields
     assert "_entry_price_exact_context_handoff" not in stock
 
 
@@ -5497,6 +5509,16 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
 
     assert before["blocked"] is True
     assert retry["pre_submit_entry_ai_authority_retry_attempted"] is True
+    assert retry["pre_submit_entry_ai_authority_retry_input_prepare_ms"] >= 0
+    assert retry["pre_submit_entry_ai_authority_retry_analysis_elapsed_ms"] >= 0
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_input_basis"]
+        == "fresh_pre_submit_rebuild"
+    )
+    assert (
+        retry["pre_submit_entry_ai_authority_retry_original_model_action"]
+        == "not_reported"
+    )
     assert retry["pre_submit_entry_ai_authority_retry_success"] is True
     assert retry["pre_submit_entry_ai_authority_retry_probe_intent"] is True
     assert (
@@ -14893,11 +14915,22 @@ def test_watching_entry_submit_blocks_unresolved_exit_authority_before_deposit(
         )
         is False
     )
+    logs = _without_validated_failed_submit_completion(logs)
     assert logs[-1][0] == "entry_submit_blocked_exit_authority_conflict"
     assert field in logs[-1][1]["exit_authority_conflict_fields"]
     assert logs[-1][1]["unresolved_exit_authority_field_count"] >= 1
     assert logs[-1][1]["actual_order_submitted"] is False
     assert logs[-1][1]["broker_order_forbidden"] is True
+
+
+def _without_validated_failed_submit_completion(logs):
+    stage, completion = logs[-1]
+    assert stage == "entry_submit_attempt_finished"
+    assert completion["submit_call_outcome"] == "returned_false"
+    assert completion["runtime_effect"] is False
+    assert completion["allowed_runtime_apply"] is False
+    assert sum(stage == "entry_submit_attempt_finished" for stage, _ in logs) == 1
+    return logs[:-1]
 
 
 def test_rising_missed_one_share_submit_respects_runtime_cooldown_before_deposit(
@@ -14955,6 +14988,7 @@ def test_rising_missed_one_share_submit_respects_runtime_cooldown_before_deposit
     assert result is False
     assert stock.get("rising_missed_one_share_entry_forced") is None
     assert stock.get("rising_missed_one_share_scout") is None
+    logs = _without_validated_failed_submit_completion(logs)
     assert logs[-1][0] == "rising_missed_one_share_entry_submit_blocked"
     assert logs[-1][1]["block_reason"] == "entry_cooldown_active"
     assert logs[-1][1]["cooldown_remaining_sec"] == 120
@@ -15365,6 +15399,7 @@ def test_rising_missed_one_share_submit_rechecks_price_cap_before_deposit(monkey
     assert result is False
     assert stock.get("rising_missed_one_share_entry_forced") is None
     assert stock.get("rising_missed_one_share_scout") is None
+    logs = _without_validated_failed_submit_completion(logs)
     assert logs[-1][0] == "rising_missed_one_share_entry_submit_blocked"
     assert logs[-1][1]["block_reason"] == BLOCK_PRICE_ABOVE_CAP
     assert (
@@ -15436,6 +15471,7 @@ def test_rising_missed_one_share_submit_blocks_upper_limit_before_deposit(monkey
     assert result is False
     assert stock.get("rising_missed_one_share_entry_forced") is None
     assert stock.get("rising_missed_one_share_scout") is None
+    logs = _without_validated_failed_submit_completion(logs)
     assert logs[-1][0] == "upper_limit_entry_proximity_block"
     assert logs[-1][1]["block_reason"] == BLOCK_UPPER_LIMIT_PROXIMITY
     assert logs[-1][1]["upper_limit_entry_fluctuation_pct"] == "27.20"
@@ -15491,6 +15527,7 @@ def test_scalping_buy_submit_blocks_upper_limit_before_deposit(monkeypatch):
     )
 
     assert result is False
+    logs = _without_validated_failed_submit_completion(logs)
     assert logs[-1][0] == "upper_limit_entry_proximity_block"
     assert logs[-1][1]["block_reason"] == BLOCK_UPPER_LIMIT_PROXIMITY
     assert logs[-1][1]["forced_entry_reason"] == "-"
@@ -30544,6 +30581,7 @@ def test_entry_submit_identity_reconciliation_guard_blocks_repeat_broker_attempt
 
     assert submitted is False
     assert broker_calls == []
+    logs = _without_validated_failed_submit_completion(logs)
     assert len(logs) == 1
     stage, fields = logs[0]
     assert stage == "entry_submit_identity_reconciliation_blocked"

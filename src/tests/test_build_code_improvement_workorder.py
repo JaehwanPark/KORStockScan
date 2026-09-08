@@ -180,13 +180,13 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     assert report["generation_id"].startswith("2026-05-08-")
     assert report["schema_version"] == 2
     assert report["producer_contract_version"] == (
-        "code_improvement_workorder_producer_v5"
+        "code_improvement_workorder_producer_v6"
     )
     assert len(report["generation_hash"]) == 64
     assert report["generation_inputs"] == {
         "source_hash": report["source_hash"],
         "schema_version": 2,
-        "producer_contract_version": "code_improvement_workorder_producer_v5",
+        "producer_contract_version": "code_improvement_workorder_producer_v6",
         "max_orders": 5,
         "include_swing": True,
     }

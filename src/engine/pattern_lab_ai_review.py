@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import copy
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,10 @@ from src.engine.ai.postclose_review_config import (
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.lifecycle.retirement import current_report_view, retired_artifact
+from src.utils.jsonl_io import (
+    json_artifact_generation_lock,
+    write_json_object_generation_safe,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_ai_review"
@@ -29,6 +34,8 @@ AI_REVIEW_MODEL = "gpt-5.4-mini"
 AI_REVIEW_REASONING_EFFORT = "medium"
 AI_REVIEW_TIMEOUT_SEC = 180
 AI_REVIEW_DEFAULT_PROVIDER = "openai"
+MATERIAL_CONTRACT_VERSION = "pattern_review_material_v2"
+REVIEW_ATTEMPT_LIMIT = 2  # Existing primary + one retry budget, shared across reentry.
 REPORT_DIRNAME = REPORT_TYPE
 FORBIDDEN_USES = [
     "threshold mutation",
@@ -236,6 +243,7 @@ def _summary_for(payload: dict[str, Any]) -> dict[str, Any]:
         "lifecycle_flow_summary": lifecycle_flow_summary,
         "ev_report_summary": ev_summary,
         "economic_evidence": _economic_review_summary(payload.get("economic_evidence")),
+        "lab_freshness": payload.get("lab_freshness"),
         "source_quality_contracts": (
             source_quality_contracts
             if source_quality_contracts
@@ -2206,9 +2214,9 @@ def _normalize_audit_resolution_fields(payload: dict[str, Any]) -> dict[str, Any
 
 
 def _build_input_context(
-    target_date: str, *, include_swing: bool = True
+    target_date: str, *, include_swing: bool = True, _paths=None
 ) -> dict[str, Any]:
-    paths = _source_paths(target_date, include_swing=include_swing)
+    paths = _paths or _source_paths(target_date, include_swing=include_swing)
     payloads = {label: _load_json(path) for label, path in paths.items()}
     currentness = payloads["pattern_lab_currentness_audit"]
     currentness_checks = [
@@ -2217,10 +2225,15 @@ def _build_input_context(
             "status": item.get("status"),
             "severity": item.get("severity"),
             "finding": item.get("finding"),
+            "upstream_order_id": (
+                item["recommended_order"].get("order_id")
+                if isinstance(item.get("recommended_order"), dict)
+                else None
+            ),
         }
         for item in currentness.get("checks", [])
         if isinstance(item, dict)
-    ][:20]
+    ]
     workorder = payloads["code_improvement_workorder"]
     workorder_orders = [
         {
@@ -2242,7 +2255,26 @@ def _build_input_context(
         label: {
             "path": str(path) if path.exists() else None,
             "exists": path.exists(),
+            "invalid_source": path.exists()
+            and not retired_artifact(path)
+            and (
+                not payloads[label]
+                or (
+                    payloads[label].get("date")
+                    or payloads[label].get("target_date")
+                    or target_date
+                )
+                != target_date
+            ),
             "summary": _summary_for(payloads[label]),
+            "material_payload_hash": (
+                _text_hash(
+                    {k: v for k, v in payloads[label].items() if k != "generated_at"}
+                )
+                if label
+                in {"scalping_pattern_lab_automation", "swing_pattern_lab_automation"}
+                else None
+            ),
         }
         for label, path in paths.items()
     }
@@ -2263,7 +2295,183 @@ def _build_input_context(
         "pattern_lab_workorder_omitted_detail_count": max(
             0, len(workorder_orders) - 20
         ),
+        # These are economic/quality inputs, not the self-referential report
+        # and workorder summaries added by later consumers.
+        "late_bound_review_material": _late_bound_review_material(payloads),
     }
+
+
+def _semantic_review_value(value):
+    """Exclude transport metadata, never cost, outcome or exclusion decisions."""
+    if isinstance(value, dict):
+        return {
+            key: _semantic_review_value(item)
+            for key, item in value.items()
+            if key
+            not in {
+                "generated_at",
+                "refreshed_at",
+                "artifact",
+                "path",
+                "source_paths",
+                "sources",
+                "source",
+            }
+        }
+    if isinstance(value, list):
+        return [_semantic_review_value(item) for item in value]
+    return value
+
+
+def _late_bound_review_material(payloads):
+    quality = payloads.get("observation_source_quality_audit") or {}
+    ev = payloads.get("threshold_cycle_ev") or {}
+    economic = _semantic_review_value(
+        {
+            key: ev.get(key)
+            for key in (
+                "daily_ev_summary",
+                "calibration_outcome",
+                "source_quality_preflight_gate",
+            )
+        }
+    )
+    # Fingerprint all meaningful fields, but do not send an unbounded raw-row
+    # exclusion ledger or every family's detailed source book to the provider.
+    return {
+        "observation_source_quality_audit": {
+            "semantic_hash": _text_hash(_semantic_review_value(quality)),
+            "status": quality.get("status"),
+            "summary": _semantic_review_value(quality.get("summary")),
+        },
+        "threshold_cycle_ev": {
+            "semantic_hash": _text_hash(economic),
+            "daily_ev_summary": economic["daily_ev_summary"],
+            "source_quality_preflight_gate": {
+                key: (economic["source_quality_preflight_gate"] or {}).get(key)
+                for key in (
+                    "status",
+                    "tuning_input_allowed",
+                    "blocked_reason",
+                    "hard_blocking_contract_gap_count",
+                    "hard_blocking_excluded_row_count",
+                )
+            },
+        },
+    }
+
+
+def _material_context_hash(context: dict[str, Any]) -> str:
+    """Only primary review inputs; late-bound handoff reconciliation is separate."""
+    sources = context.get("sources") or {}
+    return _text_hash(
+        {
+            "contract": MATERIAL_CONTRACT_VERSION,
+            "date": context.get("date"),
+            "review_instructions_hash": _text_hash(_build_ai_review_instructions()),
+            "strategy_scope": context.get("strategy_scope"),
+            "swing_sources_enabled": context.get("swing_sources_enabled"),
+            "currentness_checks": context.get("currentness_checks"),
+            "late_bound_review_material": context.get("late_bound_review_material"),
+            "invalid_sources": sorted(
+                name
+                for name, source in sources.items()
+                if source.get("invalid_source") is True
+            ),
+            "quality_guard_summary": _semantic_review_value(
+                (sources.get("observation_source_quality_audit") or {}).get("summary")
+            ),
+            "sources": {
+                name: source
+                for name, source in sources.items()
+                if name
+                not in {
+                    "observation_source_quality_audit",
+                    "threshold_cycle_ev",
+                    "code_improvement_workorder",
+                    "pattern_lab_propagation_audit",
+                }
+            },
+        }
+    )
+
+
+def _enforce_currentness_failures(conclusions, context):
+    """An AI omission or KEEP cannot discharge a deterministic producer failure."""
+    result = list(conclusions)
+    checks = list(context.get("currentness_checks") or [])
+    for name, source in (context.get("sources") or {}).items():
+        if source.get("invalid_source") is True:
+            checks.append(
+                {
+                    "check_id": f"{name}_invalid_review_source",
+                    "status": "fail",
+                    "severity": "source_quality_blocker",
+                    "finding": "Existing review source is unreadable, empty or has a mismatched target date.",
+                }
+            )
+    quality = (
+        (context.get("sources") or {}).get("observation_source_quality_audit") or {}
+    ).get("summary") or {}
+    gate = quality.get("source_quality_preflight_gate") or {}
+    summary = quality.get("summary") or {}
+    allowed = gate.get("tuning_input_allowed", summary.get("tuning_input_allowed"))
+    if allowed is False or (
+        allowed is not True and quality.get("status") in {"fail", "failed", "blocked"}
+    ):
+        checks.append(
+            {
+                "check_id": "pattern_review_source_quality_guard",
+                "status": "fail",
+                "severity": "source_quality_blocker",
+                "finding": "Current source-quality gate blocks economic review inputs; preserve exclusions and repair the exact source contract.",
+            }
+        )
+    for name in (
+        "scalping_pattern_lab_automation",
+        "swing_pattern_lab_automation",
+        "pattern_lab_currentness_audit",
+    ):
+        source = (context.get("sources") or {}).get(name) or {}
+        summary = source.get("summary") or {}
+        if (
+            summary.get("runtime_effect") is True
+            or summary.get("allowed_runtime_apply") is True
+        ):
+            checks.append(
+                {
+                    "check_id": f"{name}_source_only_authority",
+                    "status": "fail",
+                    "severity": "source_quality_blocker",
+                    "finding": "Source-only Pattern Lab input claimed runtime authority.",
+                }
+            )
+    for check in checks:
+        if not isinstance(check, dict) or check.get("status") != "fail":
+            continue
+        check_id = str(check.get("check_id") or "unknown")
+        review_id = f"currentness:{check_id}"
+        # Replace rather than append so repeated refreshes are idempotent.
+        result = [r for r in result if r.get("review_id") != review_id]
+        state = _state_for_check(check)
+        result.append(
+            _normalize_final_conclusion(
+                {
+                    "review_id": review_id,
+                    "domain": _domain_for_check(check_id),
+                    "final_state": state,
+                    "final_decision": "surface_workorder",
+                    "reason": check.get("finding")
+                    or "Required currentness check failed.",
+                    "required_followup": ["repair_exact_currentness_source_contract"],
+                    "deterministic_check_id": check_id,
+                    "upstream_order_id": check.get("upstream_order_id"),
+                    "auditor_pass": False,
+                },
+                context,
+            )
+        )
+    return result
 
 
 def _state_for_check(check: dict[str, Any]) -> str:
@@ -2408,15 +2616,16 @@ def _normalize_final_conclusion(
     if final_decision not in FINAL_DECISIONS:
         final_decision = "surface_workorder" if final_state in GAP_STATES else "keep"
     if final_decision == "keep" and final_state in GAP_STATES:
-        final_state = "source_only_keep_collecting"
+        final_decision = "surface_workorder"
     domain = str(item.get("domain") or "cross_domain")
     auditor_pass = item.get("auditor_pass")
     if auditor_pass is None:
         auditor_pass = final_decision != "block_runtime_use" and final_state not in {
             "ai_review_gap"
         }
-    if final_decision == "keep" and final_state == "source_only_keep_collecting":
-        auditor_pass = True
+    if auditor_pass is False and final_decision == "keep":
+        final_state = "ai_review_gap"
+        final_decision = "surface_workorder"
     explicit_gap_type = item.get("explicit_gap_type") or _explicit_gap_type(final_state)
     source_paths = (
         item.get("source_paths") if isinstance(item.get("source_paths"), list) else []
@@ -2443,7 +2652,7 @@ def _deterministic_two_pass_review(context: dict[str, Any]) -> dict[str, Any]:
         if isinstance(item, dict) and str(item.get("status") or "") == "fail"
     ]
     review_items: list[dict[str, Any]] = []
-    for check in checks[:20]:
+    for check in checks:
         check_id = str(check.get("check_id") or "unknown")
         state = _state_for_check(check)
         review_items.append(
@@ -2548,9 +2757,20 @@ def _build_ai_review_instructions() -> str:
         "Use a mandatory two-pass process: first interpretation, then audit, then final conclusions.\n"
         "Your output is report/workorder source only. Never propose threshold mutation, broker order submit, "
         "provider change, bot restart, runtime env apply, real order enable, cap release, or safety guard bypass.\n"
-        "Treat pattern labs as analysis and source-quality workorder inputs. They cannot replace LDM, bucket "
-        "discovery, runtime bridge, approval contracts, or deterministic guards.\n"
-        "If LDM/threshold feedback is missing from pattern lab inputs, classify it as automation_handoff_gap.\n"
+        "Optimize reliable delivery of cost-adjusted small net profits and repeatable trading cadence "
+        "to existing strategy owners, not forced BUY or fixed high return floors.\n"
+        "Scalping ADM, LDM, bucket discovery and runtime bridge are retired. Their absence is not a gap "
+        "and must never create restoration work. Respect the supplied active strategy_scope; "
+        "disabled Swing has no required source or sample floor.\n"
+        "Use exact active owner and source IDs, not mentions in free text, to classify scope. "
+        "Evaluate supplied cost, frequency and window evidence without mixing full/partial fills. "
+        "Missing economics is unknown, never zero or proof of failure.\n"
+        "More frequent smaller positive net trades may improve net per source day at non-degrading "
+        "capital-time efficiency. Do not require every profitable candidate to increase per-trade return. "
+        "Keep cost reconciliation, positive full-fill net EV, dispersion, partial-loss and holdout guards.\n"
+        "Every failed currentness check must retain its exact check ID in review_id=currentness:<check_id>. "
+        "KEEP cannot resolve a failed check or override auditor_pass=false. "
+        "Missing active feedback is automation_handoff_gap unless it is explicitly late-bound and not due yet.\n"
         "If the reviewer contract itself is missing or incomplete, classify it as ai_review_gap.\n"
         "Ambiguity alone must not block sim-only collection; only explicit source-quality, schema, handoff, "
         "forbidden-use, or instrumentation gaps should surface workorders.\n"
@@ -2622,14 +2842,19 @@ def _parse_ai_review_response(
     if raw_response in (None, ""):
         return "missing", {}, ["ai_review_response_missing"]
     if isinstance(raw_response, dict):
-        payload = raw_response
+        payload = copy.deepcopy(raw_response)
     else:
         try:
             payload = json.loads(str(raw_response))
         except Exception as exc:
             return "parse_rejected", {}, [f"ai_review_json_parse_failed:{exc}"]
+    if not isinstance(payload, dict):
+        return "parse_rejected", {}, ["ai_review_root_not_object"]
     warnings: list[str] = []
-    if payload.get("schema_version") != 1:
+    if (
+        type(payload.get("schema_version")) is not int
+        or payload.get("schema_version") != 1
+    ):
         warnings.append("ai_review_schema_version_invalid")
     interpretation = (
         payload.get("interpretation")
@@ -2652,10 +2877,31 @@ def _parse_ai_review_response(
         warnings.append("ai_review_audit_status_invalid")
     if not isinstance(audit.get("forbidden_use_violations"), list):
         warnings.append("ai_review_audit_forbidden_uses_missing")
+    seen_ids = set()
+    seen_order_keys = set()
     for item in conclusions:
         if not isinstance(item, dict):
             warnings.append("ai_review_final_conclusion_non_dict")
             continue
+        review_id = item.get("review_id")
+        if not isinstance(review_id, str) or not review_id.strip():
+            warnings.append("ai_review_missing_review_id")
+        elif review_id in seen_ids:
+            warnings.append(f"ai_review_duplicate_review_id:{review_id}")
+        else:
+            seen_ids.add(review_id)
+            order_key = _slug(review_id)
+            if order_key in seen_order_keys:
+                warnings.append(f"ai_review_colliding_order_key:{review_id}")
+            seen_order_keys.add(order_key)
+        if "auditor_pass" in item and type(item["auditor_pass"]) is not bool:
+            warnings.append(f"ai_review_invalid_auditor_pass:{review_id}")
+        for field in ("source_paths", "required_followup"):
+            if field in item and (
+                not isinstance(item[field], list)
+                or any(not isinstance(v, str) for v in item[field])
+            ):
+                warnings.append(f"ai_review_invalid_{field}:{review_id}")
         if str(item.get("final_state") or "") not in FINAL_STATES:
             warnings.append(f"ai_review_invalid_final_state:{item.get('review_id')}")
         if str(item.get("final_decision") or "") not in FINAL_DECISIONS:
@@ -2724,6 +2970,15 @@ def _order_from_conclusion(
         order["implementation_status"] = implementation_status
     if implementation_provenance:
         order["implementation_provenance"] = implementation_provenance
+    check_id = conclusion.get("deterministic_check_id")
+    for check in context.get("currentness_checks") or []:
+        if (
+            check_id
+            and check.get("check_id") == check_id
+            and check.get("upstream_order_id")
+        ):
+            order["upstream_currentness_order_id"] = check["upstream_order_id"]
+            break
     return order
 
 
@@ -3458,6 +3713,9 @@ def build_pattern_lab_ai_review_report(
     provider: str | None = None,
     ai_raw_response: Any | None = None,
     include_swing: bool = True,
+    _context: dict[str, Any] | None = None,
+    _publish: bool = True,
+    _reserve_call=None,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     resolved_provider = (
@@ -3473,7 +3731,11 @@ def build_pattern_lab_ai_review_report(
         .lower()
         or "none"
     )
-    context = _build_input_context(target_date, include_swing=include_swing)
+    context = (
+        _context
+        if _context is not None
+        else _build_input_context(target_date, include_swing=include_swing)
+    )
     primary_config = _ai_review_config()
     provider_status: dict[str, Any] = {
         "provider": resolved_provider,
@@ -3505,6 +3767,9 @@ def build_pattern_lab_ai_review_report(
     if raw_response is not None:
         provider_status["status"] = "provided_response"
     if raw_response is None and resolved_provider == "openai":
+        if _reserve_call is not None:
+            if not _reserve_call(context):
+                raise RuntimeError("pattern_review_call_budget_exhausted")
         raw_response, provider_status = _call_openai_ai_review(
             context, config=primary_config
         )
@@ -3529,7 +3794,12 @@ def build_pattern_lab_ai_review_report(
             1 if ai_status == "parsed" and not retry_conclusions else 0
         ),
     )
-    if retry_reason and resolved_provider == "openai" and not provided_ai_response:
+    if (
+        retry_reason
+        and resolved_provider == "openai"
+        and not provided_ai_response
+        and (_reserve_call is None or _reserve_call(context, retry=True))
+    ):
         primary_provider_status = dict(provider_status)
         retry_config = _ai_review_config(
             attempt_role="retry", retry_reason=retry_reason
@@ -3551,6 +3821,16 @@ def build_pattern_lab_ai_review_report(
             ai_status = "disabled_deterministic_review"
         else:
             ai_status = "unavailable_deterministic_review"
+    original_response = copy.deepcopy(ai_payload)
+    # These fields are deterministic reconciler outputs, never provider
+    # authority. Recompute them even when consuming a legacy saved response.
+    for item in ai_payload.get("final_conclusions") or []:
+        for field in (
+            "source_context_resolution",
+            "source_contract_resolution",
+            "feedback_handoff_resolution",
+        ):
+            item.pop(field, None)
     ai_payload = _normalize_empty_audit_correction(
         _apply_feedback_handoff_resolutions(
             _apply_source_contract_resolutions(ai_payload, context),
@@ -3603,26 +3883,9 @@ def build_pattern_lab_ai_review_report(
             item
             for item in conclusions
             if not _resolved_after_swing_exclusion(item)
-            and "swing"
-            not in " ".join(
-                [
-                    *(
-                        str(item.get(key) or "").lower()
-                        for key in (
-                            "review_id",
-                            "domain",
-                            "title",
-                            "source_report_type",
-                            "reason",
-                        )
-                    ),
-                    *(
-                        str(value).lower()
-                        for value in (item.get("required_followup") or [])
-                    ),
-                ]
-            )
+            and str(item.get("domain") or "").lower() != "swing"
         ]
+    conclusions = _enforce_currentness_failures(conclusions, context)
     ai_payload["final_conclusions"] = conclusions
     ai_payload = _normalize_audit_resolution_fields(ai_payload)
     orders = [
@@ -3731,6 +3994,9 @@ def build_pattern_lab_ai_review_report(
             for label, path in source_paths.items()
         },
         "source_context_hash": _text_hash(context),
+        "review_material_hash": _material_context_hash(context),
+        "material_contract_version": MATERIAL_CONTRACT_VERSION,
+        "material_review_current": ai_status == "parsed",
         "summary": {
             "status": status,
             "ai_two_pass_review_status": ai_status,
@@ -3765,6 +4031,8 @@ def build_pattern_lab_ai_review_report(
             "schema_name": AI_REVIEW_SCHEMA_NAME,
             "provider_status": provider_status,
             "input_context_hash": _text_hash(context),
+            "original_response": original_response,
+            "original_response_hash": _text_hash(original_response),
             "interpretation": (
                 ai_payload.get("interpretation")
                 if isinstance(ai_payload.get("interpretation"), dict)
@@ -3778,24 +4046,42 @@ def build_pattern_lab_ai_review_report(
         },
         "code_improvement_orders": orders,
     }
-    json_path, md_path = report_paths(target_date)
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(render_markdown(report), encoding="utf-8")
+    if _publish:
+        _publish_report(report)
     return report
+
+
+def _publish_report(report):
+    json_path, md_path = report_paths(report["date"])
+    # Validate both renderings before touching the previous generation. JSON
+    # is the authoritative commit and must not expose a half-written response.
+    json.dumps(report, ensure_ascii=False, allow_nan=False)
+    markdown = render_markdown(report)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(markdown, encoding="utf-8")
+    write_json_object_generation_safe(json_path, report)
 
 
 def refresh_pattern_lab_ai_review_source_provenance(
     target_date: str,
     *,
     include_swing: bool = True,
+    _context=None,
+    _publish: bool = True,
 ) -> dict[str, Any]:
     """Reconcile late-bound sources without issuing a second provider call."""
 
     json_path, md_path = report_paths(str(target_date).strip())
-    existing = _load_json(json_path)
+    # The saved provider response is immutable evidence, including retired
+    # labels it may have incorrectly asserted. Never retirement-filter it.
+    try:
+        existing = json.loads(json_path.read_bytes())
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise RuntimeError("existing_pattern_lab_ai_review_unreadable") from exc
+    if not isinstance(existing, dict) or (
+        existing.get("date") is not None and existing["date"] != target_date
+    ):
+        raise RuntimeError("existing_pattern_lab_ai_review_date_mismatch")
     review = (
         existing.get("ai_two_pass_review")
         if isinstance(existing.get("ai_two_pass_review"), dict)
@@ -3820,12 +4106,27 @@ def refresh_pattern_lab_ai_review_source_provenance(
         raise RuntimeError("existing_pattern_lab_ai_review_provider_missing")
     if str(review.get("status") or "") != "parsed":
         raise RuntimeError("existing_pattern_lab_ai_review_not_parsed")
-    raw_response = {
+    raw_response = review.get("original_response") or {
         "schema_version": 1,
         "interpretation": review.get("interpretation") or {},
         "audit": review.get("audit") or {},
         "final_conclusions": review.get("final_conclusions") or [],
     }
+    original_response_hash = review.get("original_response_hash")
+    if original_response_hash and original_response_hash != _text_hash(raw_response):
+        raise RuntimeError("existing_pattern_lab_ai_review_response_hash_mismatch")
+    if _parse_ai_review_response(raw_response)[0] != "parsed":
+        raise RuntimeError("existing_pattern_lab_ai_review_response_invalid")
+    context = (
+        _context
+        if _context is not None
+        else _build_input_context(target_date, include_swing=include_swing)
+    )
+    material_hash = _material_context_hash(context)
+    original_material_hash = existing.get("review_material_hash")
+    material_current = bool(
+        original_material_hash and original_material_hash == material_hash
+    )
     original_provider_status = (
         dict(review.get("provider_status"))
         if isinstance(review.get("provider_status"), dict)
@@ -3852,6 +4153,8 @@ def refresh_pattern_lab_ai_review_source_provenance(
         provider=requested_provider,
         ai_raw_response=raw_response,
         include_swing=include_swing,
+        _context=context,
+        _publish=False,
     )
     refreshed_at = datetime.now().astimezone().isoformat(timespec="seconds")
     refresh_provenance = {
@@ -3902,6 +4205,15 @@ def refresh_pattern_lab_ai_review_source_provenance(
         "original_generated_at": original_generated_at,
     }
     refreshed_review["source_provenance_refresh"] = refresh_provenance
+    # Never attribute current inputs to an earlier provider response. The
+    # source_context_hash records reconciliation, input_context_hash the call.
+    refreshed_review["input_context_hash"] = review.get("input_context_hash")
+    refreshed_review["original_response"] = copy.deepcopy(raw_response)
+    refreshed_review["original_response_hash"] = _text_hash(raw_response)
+    report["review_material_hash"] = original_material_hash
+    report["reconciled_material_hash"] = material_hash
+    report["material_review_current"] = material_current
+    refreshed_review["material_review_current"] = material_current
     report["ai_two_pass_review"] = refreshed_review
     report["source_provenance_refresh"] = refresh_provenance
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
@@ -3910,12 +4222,296 @@ def refresh_pattern_lab_ai_review_source_provenance(
     summary["provider_provenance"] = refreshed_review["provider_provenance"]
     summary["fallback_used"] = bool(existing_summary.get("fallback_used"))
     summary["source_provenance_refresh_status"] = refresh_provenance["status"]
+    summary["material_review_current"] = material_current
+    if not material_current:
+        reason = (
+            "material_inputs_changed_requires_review"
+            if original_material_hash
+            else "original_material_inputs_unverifiable"
+        )
+        refresh_provenance["material_review_reason"] = reason
+        # Old model suggestions are archive evidence, not actionable repairs
+        # for a different primary generation. Retain only failures confirmed
+        # from current deterministic sources, plus the pending-review handoff.
+        current_conclusions = _enforce_currentness_failures([], context)
+        refreshed_review["effective_review_authority"] = (
+            "deterministic_current_sources_only"
+        )
+        refreshed_review["final_conclusions"] = current_conclusions
+        refreshed_review["audit"] = {
+            "status": "correction_required",
+            "issues": [reason],
+            "forbidden_use_violations": [],
+            "reason": "Prior provider response retained as evidence only; primary generation needs review.",
+        }
+        report["code_improvement_orders"] = [
+            _order_from_conclusion(c, context) for c in current_conclusions
+        ]
+        summary["audit_status"] = "correction_required"
+        summary["final_conclusion_count"] = len(current_conclusions)
+        summary["state_counts"] = dict(
+            Counter(c["final_state"] for c in current_conclusions)
+        )
+        summary["generic_ai_review_followup_resolved_by_concrete_orders"] = False
+        report["status"] = summary["status"] = "warning"
+        summary["ai_review_followup_required"] = True
+        summary["ai_review_followup_reasons"] = sorted(
+            set(summary.get("ai_review_followup_reasons", []) + [reason])
+        )
+        refreshed_review["followup_required"] = True
+        refreshed_review["followup_reasons"] = summary["ai_review_followup_reasons"]
+        order = _ai_review_followup_order(
+            target_date=target_date, reasons=[reason], audit=refreshed_review["audit"]
+        )
+        order.update(
+            material_review_pending=True,
+            intent="Primary inputs changed or their original generation is unverifiable. Await a fresh existing-owner AI review; do not manufacture another code repair or call a provider during metadata-only refresh.",
+        )
+        report["code_improvement_orders"] = [
+            o
+            for o in report["code_improvement_orders"]
+            if o["order_id"] != order["order_id"]
+        ] + [order]
+        summary["workorder_count"] = len(report["code_improvement_orders"])
     report["summary"] = summary
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(render_markdown(report), encoding="utf-8")
+    if "review_reentry" in existing:
+        reentry = copy.deepcopy(existing["review_reentry"])
+        if not isinstance(reentry, dict):
+            raise ValueError("pattern_review_reentry_invalid")
+        reentry["new_provider_calls"] = 0
+        if material_current:
+            reentry["state"] = "reviewed"
+        elif reentry.get("state") == "reviewed":
+            reentry["state"] = (
+                "pending"
+                if reentry.get("remaining_attempts", 0) > 0
+                else "budget_exhausted"
+            )
+        report["review_reentry"] = reentry
+        summary["review_reentry_state"] = reentry.get("state")
+    if "review_history" in existing:
+        report["review_history"] = copy.deepcopy(existing["review_history"])
+    if _publish:
+        _publish_report(report)
     return report
+
+
+def review_current_generation(target_date, *, provider="openai", include_swing=True):
+    """Scheduled/recovery owner: exact generation, serialized two-call daily cap.
+
+    A reservation survives a crash. Neither a new hash nor a recovery resets
+    the original primary/one-retry allowance. Metadata-only refresh remains a
+    separate provider-free operation.
+    """
+    from datetime import date
+
+    if date.fromisoformat(target_date).isoformat() != target_date:
+        raise ValueError("pattern_review_target_date_invalid")
+    report_path, _ = report_paths(target_date)
+    budget_path = report_path.with_suffix(".review-budget.json")
+    budget_path.parent.mkdir(parents=True, exist_ok=True)
+    with json_artifact_generation_lock(
+        budget_path, exclusive=True, blocking=False
+    ) as lease:
+        existing = json.loads(report_path.read_bytes()) if report_path.exists() else {}
+        if existing and (
+            not isinstance(existing, dict) or existing.get("date") != target_date
+        ):
+            raise ValueError("pattern_review_existing_date_invalid")
+        if budget_path.exists():
+            ledger = json.loads(budget_path.read_bytes())
+            if (
+                not isinstance(ledger, dict)
+                or ledger.get("schema") != "pattern_review_attempt_budget_v1"
+                or ledger.get("date") != target_date
+                or not isinstance(ledger.get("attempts"), list)
+                or len(ledger["attempts"]) > REVIEW_ATTEMPT_LIMIT
+                or any(
+                    not isinstance(a, dict)
+                    or a.get("status")
+                    not in {"reserved", "terminal", "legacy_unverifiable"}
+                    or (
+                        a.get("status") != "legacy_unverifiable"
+                        and not re.fullmatch(
+                            r"[a-f0-9]{64}", str(a.get("material_hash") or "")
+                        )
+                    )
+                    for a in ledger["attempts"]
+                )
+            ):
+                raise ValueError("pattern_review_budget_invalid")
+        else:
+            # Legacy attempts cannot be reconstructed from a parsed response
+            # alone. Do not assume there is unused provider capacity.
+            ledger = {
+                "schema": "pattern_review_attempt_budget_v1",
+                "date": target_date,
+                "attempts": (
+                    [{"status": "legacy_unverifiable"}] * REVIEW_ATTEMPT_LIMIT
+                    if existing
+                    else []
+                ),
+            }
+        context = _build_input_context(target_date, include_swing=include_swing)
+        material = _material_context_hash(context)
+        attempts = ledger["attempts"]
+        recorded = (existing.get("review_reentry") or {}).get("attempts_used", 0)
+        if type(recorded) is not int or recorded < 0 or recorded > len(attempts):
+            raise ValueError("pattern_review_budget_regressed")
+        previous_count = len(attempts)
+        attempted = any(a.get("material_hash") == material for a in attempts)
+        interrupted = any(a.get("status") == "reserved" for a in attempts)
+        parsed = (existing.get("ai_two_pass_review") or {}).get("status") == "parsed"
+        reconciled = (
+            refresh_pattern_lab_ai_review_source_provenance(
+                target_date,
+                include_swing=include_swing,
+                _context=context,
+                _publish=False,
+            )
+            if parsed
+            else None
+        )
+        current = bool(existing and existing.get("review_material_hash") == material)
+        enabled = provider == "openai"
+        can_call = (
+            enabled
+            and len(attempts) < REVIEW_ATTEMPT_LIMIT
+            and not attempted
+            and not interrupted
+        )
+        # Terminal parse/receipt rejection is not a new-generation retry.
+        if existing and not parsed:
+            can_call = False
+
+        def reserve(call_context, retry=False):
+            if len(attempts) >= REVIEW_ATTEMPT_LIMIT:
+                return False
+            attempts.append(
+                {
+                    "material_hash": _material_context_hash(call_context),
+                    "input_hash": _text_hash(call_context),
+                    "status": "reserved",
+                    "retry": retry,
+                }
+            )
+            write_json_object_generation_safe(budget_path, ledger, generation=lease)
+            return True
+
+        if (not existing or not current) and can_call:
+            report = build_pattern_lab_ai_review_report(
+                target_date,
+                provider=provider,
+                include_swing=include_swing,
+                _context=context,
+                _publish=False,
+                _reserve_call=reserve,
+            )
+            for attempt in attempts[previous_count:]:
+                attempt["status"] = "terminal"
+            if existing:
+                old_review = existing.get("ai_two_pass_review") or {}
+                report["review_history"] = [
+                    *(existing.get("review_history") or []),
+                    {
+                        "material_hash": existing.get("review_material_hash"),
+                        "input_context_hash": old_review.get("input_context_hash"),
+                        "original_response": old_review.get("original_response"),
+                        "original_response_hash": old_review.get(
+                            "original_response_hash"
+                        ),
+                        "provider_provenance": old_review.get("provider_provenance"),
+                    },
+                ]
+        elif parsed:
+            report = reconciled
+        elif existing and current:
+            report = existing
+        else:
+            # A terminal failed call remains evidence; current deterministic
+            # failures can still be surfaced without retrying that provider.
+            report = build_pattern_lab_ai_review_report(
+                target_date,
+                provider=provider,
+                ai_raw_response="{}",
+                include_swing=include_swing,
+                _context=context,
+                _publish=False,
+            )
+            if existing:
+                report["prior_provider_review"] = existing.get(
+                    "prior_provider_review"
+                ) or existing.get("ai_two_pass_review")
+        report["reconciled_material_hash"] = material
+        state = (
+            "reviewed"
+            if report.get("material_review_current") is True
+            else (
+                "provider_disabled"
+                if not enabled
+                else (
+                    "terminal_attempt_not_retried"
+                    if attempted
+                    or interrupted
+                    or (existing and not parsed)
+                    or (report.get("ai_two_pass_review") or {}).get("status")
+                    != "parsed"
+                    else (
+                        "budget_exhausted"
+                        if len(attempts) >= REVIEW_ATTEMPT_LIMIT
+                        else "pending"
+                    )
+                )
+            )
+        )
+        report["review_reentry"] = {
+            "schema": "pattern_review_reentry_v1",
+            "date": target_date,
+            "state": state,
+            "attempt_limit": REVIEW_ATTEMPT_LIMIT,
+            "attempts_used": len(attempts),
+            "remaining_attempts": max(0, REVIEW_ATTEMPT_LIMIT - len(attempts)),
+            "attempted_material_hashes": sorted(
+                {a["material_hash"] for a in attempts if a.get("material_hash")}
+            ),
+            "new_provider_calls": len(attempts) - previous_count,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        report["summary"]["review_reentry_state"] = state
+        for order in report.get("code_improvement_orders") or []:
+            if order.get("material_review_pending") is True:
+                order["review_reentry"] = copy.deepcopy(report["review_reentry"])
+                if state in {
+                    "budget_exhausted",
+                    "terminal_attempt_not_retried",
+                    "provider_disabled",
+                }:
+                    order["intent"] = (
+                        f"Exact-date review is terminal source-only/unreviewed: {state}. "
+                        "Do not reset the budget or retry a rejected/interrupted generation. "
+                        "The next scheduled target date has its own evidence and allowance, not retrospective approval."
+                    )
+        write_json_object_generation_safe(budget_path, ledger, generation=lease)
+        _publish_report(report)
+        return report
+
+
+def review_generation_matches(target_date, report, *, report_dir=None):
+    """Verifier checks reconciliation, not positive EV or provider acceptance."""
+    include_swing = report.get("strategy_scope") != "scalp_only"
+    paths = _source_paths(target_date, include_swing=include_swing)
+    if report_dir is not None:
+        paths = {
+            label: report_dir / path.parent.name / path.name
+            for label, path in paths.items()
+        }
+    context = _build_input_context(
+        target_date, include_swing=include_swing, _paths=paths
+    )
+    return (
+        report.get("reconciled_material_hash") or report.get("review_material_hash")
+    ) == _material_context_hash(context)
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -3946,6 +4542,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- configured_primary_provider/model: `{provider_provenance.get('configured_primary_provider') or '-'}` / `{provider_provenance.get('configured_primary_model') or '-'}`",
         f"- response_reused/new_provider_call: `{provider_provenance.get('response_reused')}` / `{provider_provenance.get('new_provider_call')}`",
         f"- fallback_used: `{summary.get('fallback_used')}`",
+        f"- material_review_current: `{report.get('material_review_current')}`",
+        f"- review_reentry: `{report.get('review_reentry') or {}}`",
+        f"- original_ai_input_context_hash: `{review.get('input_context_hash')}`",
+        f"- reconciled_source_context_hash: `{report.get('source_context_hash')}`",
         f"- audit_status: `{summary.get('audit_status')}`",
         f"- final_conclusion_count: `{summary.get('final_conclusion_count')}`",
         f"- workorder_count: `{summary.get('workorder_count')}`",
@@ -3999,19 +4599,25 @@ def main(argv: list[str] | None = None) -> int:
         ),
         choices=["openai", "none", "off", "false", "0"],
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--refresh-source-provenance",
         action="store_true",
         help="Reuse the existing parsed provider response and reconcile late-bound sources.",
     )
     parser.add_argument("--exclude-swing", action="store_true")
+    mode.add_argument(
+        "--review-current-generation",
+        action="store_true",
+        help="Reconcile and review new material within the original daily call budget.",
+    )
     args = parser.parse_args(argv)
     report = (
         refresh_pattern_lab_ai_review_source_provenance(
             args.date, include_swing=not args.exclude_swing
         )
         if args.refresh_source_provenance
-        else build_pattern_lab_ai_review_report(
+        else review_current_generation(
             args.date,
             provider=args.provider,
             include_swing=not args.exclude_swing,

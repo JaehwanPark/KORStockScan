@@ -3758,6 +3758,11 @@ def test_decision_quality_v2_13_buy_maps_to_guarded_wait_probe(monkeypatch):
     assert "recovery_trigger_required" in result["reason_codes"]
     assert "recovery_trigger_confirmed" not in result["reason_codes"]
     assert result["decision_quality_model_evidence"]["trigger"] == "confirmed"
+    assert result["decision_quality_repaired_response"]["action"] == "BUY"
+    assert (
+        result["decision_quality_repaired_response"]["evidence"]["trigger"]
+        == "confirmed"
+    )
     assert result["entry_probe_intent"] is True
     assert result["entry_probe_intent_status"] == "eligible_wait_probe"
     assert result["entry_probe_intent_submit_guard_required"] is True
@@ -5519,6 +5524,9 @@ def test_decision_quality_v2_7_repairs_no_edge_setup_without_structural_floor():
         "non_buy_no_edge_setup_aligned"
     ]
     assert result["decision_quality_model_evidence"]["setup"] == "pullback_recovery"
+    assert (
+        result["decision_quality_repaired_response"]["evidence"]["setup"] == "no_setup"
+    )
 
 
 def test_decision_quality_v2_7_does_not_repair_invalid_buy_neutral_tape():

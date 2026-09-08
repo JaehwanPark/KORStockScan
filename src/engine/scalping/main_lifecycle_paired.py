@@ -1253,6 +1253,11 @@ def _pipeline_transition_data(
         if parsed is not None:
             data[destination_key] = parsed
 
+    if fields.get("strategy_owner_profiles"):
+        data["strategy_owner_profiles"] = fields["strategy_owner_profiles"]
+        data["strategy_owner_context_sha256"] = fields.get(
+            "strategy_owner_context_sha256"
+        )
     action = _pipeline_text(fields.get("action"))
     if source_stage == "score_recovery_real_economics_observed":
         from src.engine.scalping.score_recovery_economics import profile
@@ -1997,6 +2002,9 @@ class _LifecycleAccumulator:
     entry_notional_krw: float = 0.0
     score_recovery_profile: dict[str, Any] | None = None
     score_recovery_profile_conflict: bool = False
+    strategy_owner_profiles: dict[str, Any] | None = None
+    strategy_owner_profile_conflict: bool = False
+    strategy_owner_context_sha256: str | None = None
     scale_in_fill_qty: float = 0.0
     exit_qty: float = 0.0
     exit_amount_krw: float = 0.0
@@ -3486,6 +3494,40 @@ class _LifecycleAccumulator:
         if companion_state == "new":
             self._retain_receipt_companion(data)
 
+        if data.get("strategy_owner_profiles"):
+            from src.engine.scalping.strategy_owner_components import OWNERS, profile
+
+            try:
+                raw_profiles = json.loads(data["strategy_owner_profiles"])
+                profiles = {
+                    family: profile(family, raw_profiles.get(family))
+                    for family in OWNERS
+                }
+            except (TypeError, ValueError, AttributeError):
+                profiles = {}
+            if (
+                not profiles
+                or any(value is None for value in profiles.values())
+                or (
+                    self.strategy_owner_profiles is not None
+                    and (
+                        self.strategy_owner_profiles != profiles
+                        or self.strategy_owner_context_sha256
+                        != data.get("strategy_owner_context_sha256")
+                    )
+                )
+            ):
+                self.strategy_owner_profile_conflict = True
+            elif self.strategy_owner_profiles is None:
+                # A late holding snapshot cannot establish the entry-time policy.
+                if self.first_fill_at is not None:
+                    self.strategy_owner_profile_conflict = True
+                else:
+                    self.strategy_owner_profiles = profiles
+                    self.strategy_owner_context_sha256 = data.get(
+                        "strategy_owner_context_sha256"
+                    )
+
         self.transition_count += 1
         self.first_observed_at = self.first_observed_at or timestamp
         self.last_observed_at = timestamp
@@ -4063,6 +4105,9 @@ class _LifecycleAccumulator:
             "exit_amount_krw": self.exit_amount_krw,
             "score_recovery_profile": self.score_recovery_profile,
             "score_recovery_profile_conflict": self.score_recovery_profile_conflict,
+            "strategy_owner_profiles": self.strategy_owner_profiles,
+            "strategy_owner_profile_conflict": self.strategy_owner_profile_conflict,
+            "strategy_owner_context_sha256": self.strategy_owner_context_sha256,
             "scale_in_fill_qty": self.scale_in_fill_qty,
             "exit_qty": self.exit_qty,
             "exit_execution_leg_count": self.exit_execution_leg_count,

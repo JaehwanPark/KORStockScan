@@ -283,6 +283,20 @@ apply_retired_runtime_policy_env() {
     echo "📌 retired runtime namespace OFF 재적용 완료"
 }
 
+apply_verified_operator_policy_successions() {
+    local target_date="$1"
+    local policy_commands
+    if ! policy_commands="$(
+        PYTHONPATH=.. ../.venv/bin/python \
+            -m src.engine.automation.operator_policy_succession \
+            --target-date "$target_date"
+    )"; then
+        echo "❌ verified strategy policy succession failed: target_date=$target_date"
+        return 1
+    fi
+    eval "$policy_commands"
+}
+
 apply_authoritative_ai_context_promotion() {
     local target_date="$1"
     local promotion_exports
@@ -477,6 +491,7 @@ while true; do
         . "$DATED_OPERATOR_RUNTIME_OVERRIDES"
         set +a
     fi
+    apply_verified_operator_policy_successions "$RUNTIME_TARGET_DATE" || exit 1
     renew_enabled_dated_runtime_overrides "$RUNTIME_TARGET_DATE"
     disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"
     record_enabled_dated_runtime_provenance "$RUNTIME_TARGET_DATE"

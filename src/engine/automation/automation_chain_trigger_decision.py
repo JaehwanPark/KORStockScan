@@ -144,14 +144,27 @@ def _step_specs(target_date: str) -> list[StepSpec]:
             ),
             (
                 "analysis/claude_scalping_pattern_lab/outputs/tuning_observability_summary.json",
+                "analysis/claude_scalping_pattern_lab/outputs/ev_analysis_result.json",
+                "analysis/claude_scalping_pattern_lab/outputs/run_manifest.json",
+                "analysis/claude_scalping_pattern_lab/outputs/claude_payload_summary.json",
+                "src/engine/pattern_lab_currentness_audit.py",
+                "src/engine/automation/pattern_lab_source_contract.py",
             ),
         ),
         "pattern_lab_ai_review": (
             _pair("pattern_lab_ai_review", "pattern_lab_ai_review", target_date),
-            _pair(
-                "pattern_lab_currentness_audit",
-                "pattern_lab_currentness_audit",
-                target_date,
+            (
+                *_pair(
+                    "pattern_lab_currentness_audit",
+                    "pattern_lab_currentness_audit",
+                    target_date,
+                ),
+                *_pair(
+                    "scalping_pattern_lab_automation",
+                    "scalping_pattern_lab_automation",
+                    target_date,
+                ),
+                "src/engine/pattern_lab_ai_review.py",
             ),
         ),
         "observation_source_quality_audit": (
@@ -392,6 +405,29 @@ def _ignored_directory_child(path: Path) -> bool:
 def _non_reusable_payload_reason(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
+    if payload.get("material_review_current") is False:
+        reentry = payload.get("review_reentry") or {}
+        if not isinstance(reentry, dict):
+            return "pattern_review_reentry_contract_invalid"
+        if reentry and (
+            type(reentry.get("remaining_attempts")) is not int
+            or reentry["remaining_attempts"] < 0
+            or not isinstance(reentry.get("attempted_material_hashes"), list)
+        ):
+            return "pattern_review_reentry_contract_invalid"
+        material = payload.get("reconciled_material_hash")
+        if not reentry or (
+            reentry.get("state")
+            not in {
+                "budget_exhausted",
+                "terminal_attempt_not_retried",
+                "provider_disabled",
+            }
+            and type(reentry.get("remaining_attempts")) is int
+            and reentry["remaining_attempts"] > 0
+            and material not in (reentry.get("attempted_material_hashes") or [])
+        ):
+            return "pattern_review_material_pending"
     for key, value in payload.items():
         key_text = str(key)
         if key_text in STATUS_KEYS and isinstance(value, str):

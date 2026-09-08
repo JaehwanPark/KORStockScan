@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.engine.lifecycle.retirement import RETIREMENT_ID
 from src.engine.scalping.microstructure_reaction_context import (
     microstructure_delivery_fields,
 )
@@ -30,6 +31,7 @@ REQUEST_SCHEMA = "ai_decision_request_provenance_v1"
 PROMPT_SCHEMA = "ai_decision_prompt_v1"
 OUTCOME_SCHEMA = "ai_decision_outcome_label_v1"
 CONTEXT_CANDIDATE_SCHEMA = "ai_canonical_context_candidate_v1"
+DECISION_LAYERS_SCHEMA = "ai_entry_decision_layers_v1"
 OUTCOME_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
 
 OBSERVATION_CONTRACT = {
@@ -417,6 +419,10 @@ def _is_non_secret_internal_token(
     sanitized_value, redacted = _sanitize_text(value)
     if redacted or sanitized_value != value:
         return False
+    # These three producers emit a public retirement identifier, not a credential.
+    # Keep both the exact value and path bounded; never exempt arbitrary tokens.
+    if canonical_path[-1] == "cache_token" and value == RETIREMENT_ID:
+        return True
     if canonical_path == (
         "runtime_context",
         "entry_adm",
@@ -2296,6 +2302,55 @@ def record_ai_decision_trace(
             **STORAGE_SECURITY_CONTRACT,
             **OBSERVATION_CONTRACT,
         }
+        if merged.get("decision_quality_live_adapter"):
+            final_response = {
+                field: merged.get(field)
+                for field in (
+                    "edge_state",
+                    "evidence",
+                    "expected_upside_pct",
+                    "expected_downside_pct",
+                    "entry_probe_intent",
+                    "entry_probe_intent_status",
+                    "entry_probe_intent_eligibility_path",
+                    "entry_probe_intent_after_cost_reward_risk",
+                )
+            }
+            final_response.update(
+                {
+                    field: trace_row[field]
+                    for field in (
+                        "action",
+                        "score",
+                        "confidence",
+                        "reason",
+                        "reason_codes",
+                    )
+                }
+            )
+            final_response, final_redacted = _sanitize(final_response)
+            trace_row.update(
+                {
+                    "decision_quality_decision_layers_schema": DECISION_LAYERS_SCHEMA,
+                    "decision_quality_final_response": final_response,
+                    "decision_quality_final_response_redacted": final_redacted,
+                    "decision_quality_final_response_sha256": hashlib.sha256(
+                        json.dumps(
+                            final_response,
+                            ensure_ascii=True,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            default=str,
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    "decision_quality_repaired_response": merged.get(
+                        "decision_quality_repaired_response"
+                    ),
+                    "decision_quality_runtime_action_mapping": merged.get(
+                        "decision_quality_runtime_action_mapping"
+                    ),
+                }
+            )
         sanitized_trace_row, trace_redacted = _sanitize(trace_row)
         trace_row = dict(sanitized_trace_row)
         trace_row["trace_storage_redacted"] = bool(trace_redacted)

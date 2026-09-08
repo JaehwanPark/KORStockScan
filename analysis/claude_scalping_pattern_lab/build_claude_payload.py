@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - direct script execution
         PROJECT_ROOT,
     )
 from tuning_observability_summary import write_tuning_observability_outputs
+from src.engine.automation.pattern_lab_source_contract import read_feedback
 
 LAB_DIR = Path(__file__).resolve().parent
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
@@ -114,27 +115,11 @@ def _load_feedback_sources() -> dict:
             "runtime_effect": False,
             "decision_authority": "source_quality_only",
         }
-        if path and path.exists():
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                payload = {}
-            summary = (
-                payload.get("summary")
-                if isinstance(payload.get("summary"), dict)
-                else {}
-            )
-            consumed.append(
-                {
-                    **item,
-                    "status": payload.get("status") or summary.get("status"),
-                    "warnings": payload.get("warnings")
-                    or summary.get("warnings")
-                    or [],
-                }
-            )
+        receipt = read_feedback(path, source_date, target_date)
+        if receipt["validation_status"] == "valid":
+            consumed.append({**item, **receipt})
         else:
-            missing.append({**item, "gap_type": "source_quality_gap"})
+            missing.append({**item, **receipt, "gap_type": "source_quality_gap"})
     return {
         "consumed_feedback_sources": consumed,
         "missing_feedback_sources": missing,
@@ -671,6 +656,7 @@ def write_run_manifest(
             "ev_analysis_result.json",
             "tuning_observability_summary.json",
             "source_manifest.json",
+            "claude_payload_summary.json",
         )
         if (OUTPUT_DIR / name).exists()
     }

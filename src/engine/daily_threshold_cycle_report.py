@@ -2316,8 +2316,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
 
     buy_funnel_sentinel = _read_json_dict(source_paths["buy_funnel_sentinel"])
     wait6579_ev = _read_json_dict(source_paths["wait6579_ev_cohort"])
-    score_recovery_real_book = score_recovery_evidence_book(
-        _read_json_dict(source_paths["main_scalping_lifecycle_paired"]), target_date
+    from src.engine.scalping import strategy_owner_components
+
+    paired_report = _read_json_dict(source_paths["main_scalping_lifecycle_paired"])
+    score_recovery_real_book = score_recovery_evidence_book(paired_report, target_date)
+    owner_component_book = strategy_owner_components.evidence_book(
+        paired_report, target_date
     )
     missed_entry = _read_json_dict(source_paths["missed_entry_counterfactual"])
     performance_tuning = _read_json_dict(source_paths["performance_tuning"])
@@ -2748,6 +2752,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             )
             or [],
             "score_recovery_real_economics": score_recovery_real_book,
+            "strategy_owner_component_economics": owner_component_book,
             "score60_74_unapplied_observation_candidates": wait_counterfactual.get(
                 "score60_74_unapplied_observation_candidates", 0
             ),
@@ -4044,6 +4049,13 @@ def _aggregate_metric_dicts(dicts: list[dict]) -> dict:
     result: dict[str, Any] = {}
     keys = sorted({key for item in dicts if isinstance(item, dict) for key in item})
     for key in keys:
+        if key == "strategy_owner_component_economics":
+            from src.engine.scalping.strategy_owner_components import merge_books
+
+            result[key] = merge_books(
+                [item[key] for item in dicts if isinstance(item, dict) and key in item]
+            )
+            continue
         if key == "score_recovery_real_economics":
             result[key] = score_recovery_merge_books(
                 [item[key] for item in dicts if isinstance(item, dict) and key in item]
@@ -19094,6 +19106,9 @@ def build_daily_threshold_cycle_report(
         "threshold_diff_report": threshold_diff_report,
         "trade_lifecycle_attribution": trade_lifecycle_attribution,
         "calibration_source_bundle": report_source_context,
+        "strategy_owner_component_economics": _source_metrics_for_family(
+            "score65_74_recovery_probe", report_source_context
+        ).get("strategy_owner_component_economics"),
         "family_readiness_list": _build_family_readiness_list(families),
         "apply_candidate_list": _build_apply_candidate_list(calibration_candidates),
         "calibration_candidates": calibration_candidates,

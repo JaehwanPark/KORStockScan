@@ -39,6 +39,15 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
     paths = {
         label: report_dir / label / f"{label}_{target_date}.json" for label in labels
     }
+    # The recheck policy producer is an acyclic source, distinct from the DONE controller.
+    from src.engine.automation.drought_handoff import (
+        EFFECTIVE_DATE,
+        CONTROLLER,
+        report_path,
+    )
+
+    if target_date >= EFFECTIVE_DATE:
+        paths[CONTROLLER] = report_path(report_dir, CONTROLLER, target_date)
     if consumer == "checklist":
         paths.update(
             {

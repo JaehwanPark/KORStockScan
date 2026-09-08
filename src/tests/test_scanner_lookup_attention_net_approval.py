@@ -96,6 +96,21 @@ def test_small_net_policy_reaches_frozen_preopen_and_runtime_without_approval(tm
     assert policy.bounded_bonus(0.8, loaded)["bonus_points"] > 0
 
 
+def test_frozen_v1_diagnostics_remain_valid_without_new_approval_hurdle(tmp_path):
+    source_date = date(2026, 9, 17)
+    report, payload = _write_live_pair(tmp_path, source_date)
+    report["economic_acceptance"] = tuning._economic_acceptance(report, legacy_v1=True)
+    assert "approval_feasibility" not in report["economic_acceptance"]
+    report["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in report.items() if k != "artifact_sha256"}
+    )
+    payload["source_report_artifact_sha256"] = report["artifact_sha256"]
+    payload["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in payload.items() if k != "artifact_sha256"}
+    )
+    assert tuning.validate_artifact_pair(report, payload, target=source_date) == []
+
+
 @pytest.mark.parametrize("value", [0, -0.01, 0.02])
 def test_nonpositive_candidate_or_increment_does_not_approve(value):
     rows = small_rows()
@@ -240,6 +255,34 @@ def test_legacy_frozen_metrics_keep_original_hash_shape():
     assert not tuning._book_passes(book)[
         0
     ]  # Old 0.10 rule is audit compatibility only.
+
+
+def test_calendar_review_cannot_wait_forever_for_valid_source_days():
+    result = tuning._economic_acceptance(
+        {
+            "target_date": "2026-10-02",
+            "status": "source_quality_blocked",
+            "outcomes": [],
+            "lineage": {},
+            "natural_observation_audit": {},
+        }
+    )
+    assert result["calendar_review_due"] and result["maintenance_review_due"]
+    assert result["next_action"] == "review_integrate_or_retire_no_evidence_or_edge"
+    assert not result["maintenance_review_is_runtime_disable"]
+    assert (
+        result["approval_feasibility"]["base_book"]["finite_eta_trading_days"] is None
+    )
+
+
+def test_uncertainty_sensitivity_is_not_a_new_gate_or_eta():
+    book = tuning._cohort_book(small_rows())
+    book["candidate"]["net_return_robust_se_pct"] = 0.2 / (10**0.5)
+    book["control"]["net_return_robust_se_pct"] = 0.2 / (10**0.5)
+    result = tuning._approval_feasibility(book)
+    assert min(result["conditional_completed_required"].values()) >= 400
+    assert result["finite_eta_trading_days"] is None
+    assert not result["approval_gate_changed"]
 
 
 @pytest.mark.parametrize("mode", ["ready", "blocked_master", "post_loss"])

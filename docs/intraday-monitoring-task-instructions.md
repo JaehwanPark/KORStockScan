@@ -6,6 +6,8 @@
 
 이 지시문에 따른 모니터링을 명시적으로 요청했을 때만 아래 점검·허용 범위 보완 절차를 실행한다. 문서 인용·열람·현행화는 실행 요청이 아니며, 단순 상태 조회·읽기 전용 검증도 구현이나 재생성을 자동 승인하지 않는다. 문서 수정만 요청받으면 운영 산출물·PID·env·주문을 변경하지 않는다.
 
+명시적 모니터링에는 §4.1의 **현재 시각까지 도래한 체크리스트 실행·점검**을 포함한다. 최신 결과가 있으면 수용조건까지 대사하고, 미실행인 허용 작업은 선행 조건·권한·중복 실행 여부를 확인한 뒤 수행한다. 실행 가능한 항목을 목록 제시만으로 끝내지 않되, 단회/지속 요청의 범위와 종료조건을 보존한다.
+
 현재 튜닝 원칙과 active/open 상태는 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8, 실행 항목은 당일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 `docs/time-based-operations-runbook.md`, producer/consumer와 R0→R6 의존 순서는 `docs/report-based-automation-traceability.md`를 기준으로 한다. 실제 기동 권한은 검증된 당일 PREOPEN apply plan/runtime env/verify와 exact-date machine policy, 이를 읽은 현재 PID의 provenance를 함께 기준으로 한다. 이 문서의 family 예시는 고정 ON 목록이나 재기동 권한이 아니다.
 
 이 문서는 장중 반복 실행 절차다. 매 실행 시작 시 고정 예시를 신뢰하지 말고 현재 PID env, 당일 runtime verify, exact-date policy, broker 계좌·미체결, 설치된 cron/systemd/tmux owner와 최신 source-quality artifact를 다시 읽는다. 코드가 구현돼 있거나 전일 추천에 나타났다는 사실만으로 현재 process 반영 또는 실주문 권한을 인정하지 않는다. 전일 장후 candidate는 당일 PREOPEN handoff 입력일 뿐이고, 당일 apply plan/runtime env/verify와 launcher/PID load receipt가 닫히기 전에는 적용 또는 효과로 보고하지 않는다. runbook·traceability·설치 trigger·실행 snapshot의 단계, 조건 또는 owner가 다르면 mtime이나 우연한 실행 사실로 한쪽을 선택하지 않고 `contract_drift`로 fail-closed한다.
@@ -29,13 +31,18 @@ Scalping Entry ADM, Holding/Exit ADM, statistical action weight, LDM policy/runt
 | 영역 | 장중 확인할 연결·남은 경계 | 기존 acceptance owner |
 | --- | --- | --- |
 | 전일 장후 요약 | source-date 9/7의 tower→마지막 checklist→strict verifier→controller와 오늘 PREOPEN/PID를 분리. 요약 PASS는 오늘 정책 적용이 아님 | `PostcloseRecoverySourceAcceptance0908` |
-| Entry recheck / submit drought | schema5/exact2, 새 최근 3거래일→controller v4→당일 PREOPEN/PID→exact submit/fill/terminal. 진단 수리와 경제성 분리 | `EntryRecheckNaturalAttribution0907` (9/8로 같은 ID 이관) |
+| Entry recheck / submit drought | 9/8 cache12/report6/exact3·call-local frozen parent→유효 최근3거래일→controller v4/source binding→strict/PREOPEN/PID. 구 schema5/exact2와 과거 원천 결손을 재라벨링하지 않음 | `EntryRecheckNaturalAttribution0907` (9/8로 같은 ID 이관) |
 | Scanner lookup-attention | resource v2/decision v4의 자연 source·경쟁 pair·immutable receipt·PID/R6. marginal CF와 실제 full-fill EV 분리 | `ScannerLookupAttentionNaturalEvidence0908` |
 | Main AI / micro source | #76→#82 v5→frozen optimizer→provider0 metadata binding→consumer와 새 exact 원천. metadata terminal은 Provider 비교·live 승격이 아님 | `AIDecisionActionOutcomeNaturalEvidence0908`, `MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908` |
 | 위젯·저가주 승인 적용 | widget080220와 low-price 기존8/신규3의 9/8 policy/설치 receipt 이후 자연 preflight·PID·신호·custody·실현 EV 확인 | `WidgetEpisodeRecommendationApplyAcceptance0908` |
 | Machine timing | 검증된 9/7 ingress loss 격리·immediate baseline carry와 다음 exact ordered/route/epoch source 분리. 과거일 반복 재실행 금지 | `MachineLifecycleTurnoverObjectiveFollowup0908`, `PostcloseRecoverySourceAcceptance0908` |
+| 품질·WS·원본 보존 요약 | #74 audit v2와 #89 독립 finalize의 진단/rolling 경제성 분리, #73 manifest·timing receipt의 자연 소비. 장중 감사 완료와 다음 원천/장후 최종 감사는 별도 | `PostcloseSourceQualityGateReview0908`, `PipelineVerbosityNaturalEvidence0908` |
+| Pattern/Daily 소액 순이익 | #67/#69 exact source/currentness/AI receipt→기존 Daily owner·PREOPEN. 연구 proxy·실제 비용·선택·실수익 분리 | `PatternLabSmallNetNaturalEvidence0908`, `DailyThresholdNaturalAcceptance0908` |
+| 전략 lock 승계 | 별도 승인된 첫 effective 9/9의 기존 owner·승계 receipt·PREOPEN 검증. 잔여 경제성 owner 2개는 OPEN이며 장중 lock 해제 권한 없음 | `OperatorPolicySuccessionAcceptance0908` (Due 9/9) |
 
 근거는 [장후 우선순위 복구 리뷰](./audit-reports/2026-09-08-postclose-priority-repair-review.md)와 [별도 승인 위젯·에피소드 적용 리뷰](./audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)다. #8/#9 및 #11/#119/#23/#49의 완료된 수리는 새 결함·계약 변경·필수 handoff 실패가 입증될 때만 재개한다.
+
+9/8 오후 후속 근거는 [15:00 관찰·call-local parent 수리](./audit-reports/2026-09-08-intraday-monitoring-1500.md)와 [15:45~16:10 due 실행·custody 복구](./audit-reports/2026-09-08-due-checklist-custody-recovery-review.md)다. 후자의 15:51 원천 감사·결손1행 격리는 `IntradaySourceQualityGateCheck0908`의 완료 기록이며 이후 유입 원천 전체를 승인하지 않는다. 4개 HELD 원장 및 SamsungE&A 공통 registry 복구는 별도 사용자 지시에 따른 과거 영수증 귀속으로, 일반 모니터링의 자동 state 수정 권한이나 새 수익이 아니다. 당시 PID682672·runtime verify PASS와 신규 parent 계측 미반영, 16:00:56 main submit0·Widget/Micro/Runtime OPEN을 분리한다. 후속 모니터링에서는 최신 receipt로 다시 판정하며 이 숫자를 현재값으로 고정하지 않는다.
 
 ## 1. 목표
 
@@ -77,6 +84,7 @@ Scalping Entry ADM, Holding/Exit ADM, statistical action weight, LDM policy/runt
 - 당일 PREOPEN apply/verify가 선택한 mode에서만 probe-first가 적용됐고, source-only one-share exploration을 real 1주 주문 권한으로 오인하지 않았는지. 별도 `WAIT6579_PROBE_CANARY` budget/quantity cap의 `0`은 probe 차단이나 1주 cap이 아니라 normal new-buy dynamic sizing 사용을 뜻하며, 실제 probe 체결 뒤에는 fresh BBO와 방향을 다시 확인했는지
 - residual 가격·수량·제출 시점과 취소가 bundle 및 broker 상태와 일치하는지
 - 주문 API 응답과 WS execution receipt의 도착 순서가 바뀌어도 exact 주문번호와 immutable owner로 결속됐는지, 취소·reprice 전에 원주문 terminal absence와 KRX/NXT 전체 잔고가 확인됐는지
+- 같은 submit 호출 중 scanner promotion이 바뀌어도 call-local `entry_submit_attempt_parent_promotion_id`와 종료 이벤트가 처음 유효 parent에 결속되는지. 새 계측의 파일 존재와 현재 PID의 자연 receipt를 분리하고, 과거 parent/terminal 결손을 합성하지 않는지
 - continuation에서 pyramid가 과차단되지 않았고 하락 구간의 avg-down이 불리한 노출만 키우지 않았는지
 - `avg_down_route_arbitration_observed` v2의 CF route 관찰을 실제 ADD/NO_ADD·주문·체결로 오인하지 않았는지. exact identity/schema/source-only authority 검증 후에만 관찰로 분리하며, order authority가 true/unknown인 잘못된 행은 계속 결손으로 유지했는지
 - 부분익절·runner·trailing·hard/protect/emergency owner의 실행 순서와 실제 체결 지연
@@ -200,6 +208,7 @@ promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved
 - 다른 episode, 위젯, 메인 봇 또는 수동 보유수량을 합치거나 대신 매도하지 않았는지
 - `HELD`가 목표 미체결 보유를 뜻하는 정상 custody 상태인지, 실제 장애·고아 주문·누락된 reconciliation인지 구분됐는지
 - 수동 청산이 있었으면 broker receipt와 exact owner ledger에 실현손익·비용·terminal 상태가 반영됐는지
+- 원래 target 체결과 수동 정정/청산을 exact dated 주문번호·`ori_ord`·leg로 구분했는지. broker 잔고 부재만으로 HELD를 COMPLETE로 만들거나 수동 successor를 자동 target으로 흡수하지 않았는지. 실제 체결시각이 없으면 null/직접 결손 사유와 복구시각을 분리하고 주문시각·복구시각으로 대체하지 않았는지
 - fill-before-submit, late broker receipt와 event-time regression을 정상 arrival provenance로 보존했는지, 동일 owner lifecycle의 KRX 진입→NXT 청산을 cross-attempt로 오판하지 않고 phase별 `entry_venue/exit_venue`로 기록했는지
 - target/entry policy를 바꾸지 않는 관측축과 실제 다음 PREOPEN 후보를 명확히 분리했는지
 
@@ -303,6 +312,21 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 
 ## 4. 시작 시 공통 확인
 
+### 4.1 모니터링 시점 체크리스트 실행·점검
+
+[장후 지시문 §4.1](./postclose-tuning-result-review-task-instructions.md#41-모니터링-시점-체크리스트-실행점검)의 **시각·ID·선행 조건·결과 대사 방식**을 공통 사용한다. 해당 문서의 장후 worker 복구·전체 2-pass 권한을 장중에 상속하지 않으며 구현·재생성은 이 문서 §7의 허용 범위로 한정한다.
+
+1. 매 실행 시작과 재개 시 현재 KST 시각·대상 거래일을 기록하고 당일 checklist의 목적/강제 규칙과 OPEN **전수**를 읽는다. 실제 `Due/Slot/TimeWindow`, Source·선행 조건·Acceptance를 사용하며 제목의 시간대·ID 끝자리나 전일 완료 목록만으로 실행 대상을 고르지 않는다.
+2. 도래한 PREOPEN/INTRADAY와 모니터링 구간에 들어온 POSTCLOSE 확인 항목을 누락 없이 분류한다. 이미 성공한 producer는 최신 receipt와 직접 consumer를 확인하고, 미실행인 허용된 점검·source-only 수리는 정상 owner/명령과 review gate로 실행·검증한다. cron/systemd의 실행 중 작업·bounded retry는 기다리며, 예정 전 producer나 비용 큰 report를 체크박스만 보고 조기/중복 실행하지 않는다.
+3. 지난 window의 OPEN은 `overdue_unresolved`로 검토하되 실패로 단정하지 않는다. provenance 확인 완료·through-close 수집 중·다음 PREOPEN·경제성 미관측을 분리한다. 시간 민감한 신규 주문/기동을 늦게 보충하거나 놓친 자연 원천을 합성하지 않는다. 실제 필수 owner의 실패·deadline 초과는 직접 원인과 권한 경계로 처리한다.
+4. 미래 작업은 `not_yet_due`, 정상 선행 대기는 `waiting`과 다음 확인 조건/기한, 권한·근거·외부 결손은 `user_authority|blocked_missing_evidence|external_dependency`로 둔다. 요청 범위 밖 항목도 owner/이관 사유를 기록한다. `[x]` 항목은 완료 범위만 보존하고 새 결함이나 필수 freshness 실패가 없으면 재실행하지 않는다.
+5. `ID·Due/TimeWindow·as_of·source date/hash·실행 owner/권한·이번 실행 또는 점검·최신 receipt·남은 acceptance·다음 확인 시각`을 기존 항목에 기록한다. 전체 수용조건을 충족한 항목만 닫는다. 현재 OPEN 전수의 미분류가 0인지 확인하고, 일부 실행 성공을 전체 체크리스트 완료로 보고하지 않는다. 변경 후 print-only parser로 현재 owner 유일성을 검증한다.
+6. 지속 요청이면 매 slot 경계와 상태 변경 뒤 새 due 항목을 포함해 반복한다. 단회 요청이면 현재 시각의 실행·점검 범위와 남은 대기를 명시하고 종료하며, 요청하지 않은 야간 전체 모니터링으로 자동 연장하지 않는다.
+
+9/8의 `ThresholdDailyEVReport0908` 16:30~16:45, `HumanInterventionSummary0908` 17:00~17:15는 **9/7 원천을 읽는 예정 점검**이다. 20:10 main 원천을 조기 생성하는 작업이 아니다. `OperatorPolicySuccessionAcceptance0908`은 9/9 PREOPEN, `ScannerLookupAttentionCalendarMaintenance1002`는 10/2 Due이므로 같은 9/8 파일에 있어도 오늘 overdue가 아니다. 예시는 현재 체크리스트 본문으로 매번 갱신한다.
+
+### 4.2 현재 owner·원천 공통 확인
+
 - Plan Rebase current-owner override와 이 문서의 현행 우선순위를 먼저 확인하고, ADM/LDM·bucket·greenfield·Swing·retired sim-scale-in을 현재 owner 목록에서 제거했는지
 - 메인 봇 PID, 시작 시각, commit, source-dirty, runtime env와 당일 ON/OFF runtime 목록
 - launcher와 bot source commit/hash, exact-date verifier의 PID mismatch/missing, 퇴역 canonical env 15개 explicit OFF. 이후 문서-only commit과 실행 코드 commit 차이는 실제 runtime source diff와 분리한다.
@@ -322,6 +346,7 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 - KRX, `PREMARKET_KRX_LIKE`, NXT의 source·route·session 분리
 - main/widget/episode별 order ID, trace/snapshot/episode/profile/leg lineage의 연결 가능 여부
 - micro observer freshness·latency·queue/drop/error·writer·disk 상태와 당일 source-only collection target의 실제 WS 반영. `microstructure_reaction_context`는 diagnostic/source-quality이고 퇴역 institutional/LDM consumer를 요구하지 않는다.
+- 디스크는 사용률과 free bytes·증가 시각을 함께 확인하고 당일 pipeline/micro 원천, 파생 요약, 테스트/리뷰 임시 산출물, 복구 증거를 분리. #73 raw suppression OFF와 원본 보존 유지. `tmp` 이름만으로 삭제하지 않으며 당일 원천·미검증 checkpoint·감사 문서가 참조하는 복구 증거는 보존. 공간 회복은 source 품질·Provider hold 해제나 전략 효과의 증거가 아님
 - limit-down natural target/REG receipt, required·requested realtime type 0B+0D, type별 first-data·sequence와 ordered-path downstream lineage
 - R0→R3 단계별 최신 artifact, current Provider 실행 여부·budget, lifecycle exact terminal join과 각 단계 blocker
 - 구현됐지만 현재 PID/process/policy에 미반영된 변경과 rollback 값
@@ -407,6 +432,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 각 항목은 `판정 → 근거 → 다음 액션` 순서로 보고한다. 관찰 target date·as-of 시각, source date·generation, 적용일·현재 PID receipt를 함께 기록한다. 단회 점검은 해당 snapshot으로 닫고 지속 모니터링을 요청받았을 때만 지정 종료조건까지 반복한다. 지속 작업 중에는 상태 변화와 현재 대기 이유·다음 확인 조건을 최대 60초 간격으로 공유하며 새 데이터가 없는 구간의 API 호출량이나 중복 worker를 늘리지 않는다.
 
 마지막에는 반드시 다음을 분리한다.
+
+- 체크리스트 실행·점검: 현재 KST 시각과 ID별 Due/TimeWindow, 이번 수행/최신 receipt, 완료·부분 확인·기한 경과·정상 대기·미래 예정·권한/외부 차단·범위 밖. OPEN 미분류 0과 남은 acceptance/다음 확인 조건을 명시
 
 - 현행 우선순위: 메인 실거래·위젯·Samsung/저가주 독립 머신·공통 품질의 실제 상태와, 퇴역/OFF/비우선 영역의 최소 누출 점검 결과
 - 종목탐색: 독립 `as_of rising benchmark`의 정의·source/hash·분모, discovery·post-promotion consumption·downstream conversion의 독립 분모, scanner source/watch/promotion/fast·heavy evaluation/AI/candidate 단계별 recall·지연·최초 미도달 원인, scanner 밖 미관측 종목의 executable outcome과 최종 판정 상태

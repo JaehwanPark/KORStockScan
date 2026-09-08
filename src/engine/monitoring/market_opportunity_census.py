@@ -27,6 +27,12 @@ from src.engine.monitoring.pruned_candidate_bbo_collector import (
     OBSERVATION_SCHEMA_VERSION as PRUNE_BBO_OBSERVATION_SCHEMA_VERSION,
 )
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.market_opportunity_review import (
+    decision_disposition,
+    diagnostic_followups,
+    scoped_diagnostics,
+    report_sha256,
+)
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
@@ -45,7 +51,7 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "market_opportunity_census"
 SNAPSHOT_SCHEMA_VERSION = "market_opportunity_census_v1"
-REPORT_SCHEMA_VERSION = "market_opportunity_census_v3"
+REPORT_SCHEMA_VERSION = "market_opportunity_census_v4"
 # Backward-compatible snapshot schema alias used by existing capture fixtures.
 SCHEMA_VERSION = SNAPSHOT_SCHEMA_VERSION
 SNAPSHOT_DIR = DATA_DIR / "market_opportunity_census"
@@ -1909,6 +1915,7 @@ def _load_stage_index(
             ),
             "decision_authority": str(fields.get("decision_authority") or ""),
             "actual_order_submitted": _boolish(fields.get("actual_order_submitted")),
+            "entry_decision_disposition": decision_disposition(fields),
         }
         for logical_stage in logical_stages:
             if (
@@ -2080,6 +2087,7 @@ def _ex_post_horizon_outcome(
     horizon_sec: int,
     round_trip_cost_pct: float,
     observation_watermark: datetime | None,
+    target_pct: float = EX_POST_TARGET_PCT,
 ) -> dict[str, Any]:
     entry_epoch = float(entry["observed_epoch"])
     entry_ask = float(entry["best_ask"])
@@ -2091,7 +2099,7 @@ def _ex_post_horizon_outcome(
         if observed_epoch <= entry_epoch or observed_epoch > horizon_epoch:
             continue
         move_pct = (float(observation["best_bid"]) - entry_ask) / entry_ask * 100.0
-        if move_pct >= EX_POST_TARGET_PCT:
+        if move_pct >= target_pct:
             label = "target_first"
             exit_row = observation
             break
@@ -2119,7 +2127,7 @@ def _ex_post_horizon_outcome(
             label = "pending_horizon"
     result: dict[str, Any] = {
         "horizon_sec": horizon_sec,
-        "target_pct": EX_POST_TARGET_PCT,
+        "target_pct": target_pct,
         "adverse_pct": EX_POST_ADVERSE_PCT,
         "label": label,
         "gross_return_pct": None,
@@ -2158,6 +2166,7 @@ def _ex_post_executable_opportunity(
     *,
     observation_watermark: datetime | None,
     round_trip_cost_pct: float,
+    include_small_net_scenarios: bool = False,
 ) -> dict[str, Any]:
     code = str(episode.get("stock_code") or "")
     venue = str(episode.get("venue") or "")
@@ -2241,6 +2250,27 @@ def _ex_post_executable_opportunity(
         "horizons": horizons,
         "primary_horizon_sec": EX_POST_PRIMARY_HORIZON_SEC,
         "primary_outcome": horizons[str(EX_POST_PRIMARY_HORIZON_SEC)],
+        "small_net_scenarios": (
+            {
+                f"net_{net_target:.2f}_h{horizon}": {
+                    **_ex_post_horizon_outcome(
+                        forward_observations,
+                        entry=entry,
+                        horizon_sec=horizon,
+                        round_trip_cost_pct=round_trip_cost_pct,
+                        observation_watermark=observation_watermark,
+                        target_pct=round(round_trip_cost_pct + net_target, 8),
+                    ),
+                    "net_target_pct": net_target,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+                for net_target in (0.03, 0.07, 0.10)
+                for horizon in (60, 180, 300, 1200)
+            }
+            if include_small_net_scenarios
+            else {}
+        ),
     }
 
 
@@ -2257,6 +2287,7 @@ def _coverage_row(
     ) = None,
     observation_watermark: datetime | None = None,
     round_trip_cost_pct: float | None = None,
+    include_small_net_scenarios: bool = False,
 ) -> dict[str, Any]:
     code = episode["stock_code"]
     venue = episode["venue"]
@@ -2496,7 +2527,15 @@ def _coverage_row(
     ):
         terminal_coverage_reason = "entry_authority_guard_block"
     elif flags["entry_authority_decided"]:
-        terminal_coverage_reason = "post_authority_submit_safety_gap"
+        decision_row = max(
+            candidate_rows["entry_authority_decided"], key=lambda row: row["ts"]
+        )
+        disposition = decision_row.get("entry_decision_disposition", "unresolved")
+        terminal_coverage_reason = (
+            "post_authority_submit_safety_gap"
+            if disposition == "allowed"
+            else f"entry_decision_{disposition}"
+        )
     elif flags["entry_ai_provider_called"]:
         terminal_coverage_reason = "entry_authority_decision_gap"
     else:
@@ -2508,6 +2547,7 @@ def _coverage_row(
             executable_bbo_index,
             observation_watermark=observation_watermark,
             round_trip_cost_pct=round_trip_cost_pct,
+            include_small_net_scenarios=include_small_net_scenarios,
         )
         if executable_bbo_index is not None and round_trip_cost_pct is not None
         else {
@@ -3364,6 +3404,9 @@ def build_report(
                     executable_bbo_index=executable_bbo_index,
                     observation_watermark=observation_watermark,
                     round_trip_cost_pct=round_trip_cost_pct,
+                    include_small_net_scenarios=(
+                        panel == "liquid_common" and top_n == 20
+                    ),
                 )
                 for episode in episodes
             ]
@@ -3571,7 +3614,24 @@ def build_report(
             "ex_post_executable_opportunity": venue_ex_post_summary,
         }
 
-    return {
+    scoped_review = scoped_diagnostics(
+        details["liquid_common"]["top_20"]["forward_exact"],
+        snapshots,
+        parse_ts=_parse_ts,
+        summarize=_summarize_rows_base,
+        master_valid=symbol_master_binding.get("status") == "verified",
+        trigger_valid=trigger_contract.get("status") == "verified",
+        validity_sec=OPPORTUNITY_VALIDITY_SEC,
+        max_gap_sec=CAPTURE_CADENCE_SEC + CAPTURE_CADENCE_TOLERANCE_SEC,
+        capture_floor=MIN_VALID_CAPTURE_TIMES_PER_VENUE_PANEL,
+        sample_floor=MIN_PRIMARY_OPPORTUNITY_EPISODES,
+    )
+    scoped_ready = any(
+        s["status"] == "diagnostic_ready"
+        for s in scoped_review["by_venue_session"].values()
+    )
+    small_net_review = _small_net_review(primary_eligible_forward_rows)
+    report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
@@ -3581,12 +3641,22 @@ def build_report(
             "ok"
             if valid_snapshots and not instrumentation_blockers
             else (
-                "early_evidence_hold_sample"
-                if valid_snapshots
-                else "source_unavailable"
+                "partial_diagnostics_ready"
+                if scoped_ready
+                else (
+                    "early_evidence_hold_sample"
+                    if valid_snapshots
+                    else "source_unavailable"
+                )
             )
         ),
-        "scanner_recall_state": scanner_recall_state,
+        "scanner_recall_state": (
+            "scoped_diagnostics_available" if scoped_ready else scanner_recall_state
+        ),
+        "whole_population_scanner_recall_state": scanner_recall_state,
+        "scoped_diagnostics": scoped_review,
+        "small_net_review": small_net_review,
+        "diagnostic_followups": diagnostic_followups(scoped_review, target_date),
         "scanner_recall_blockers": scanner_recall_blockers,
         "instrumentation_blockers": instrumentation_blockers,
         "source_quality_warnings": source_quality_warnings,
@@ -3792,6 +3862,85 @@ def build_report(
         "coverage": coverage,
         "opportunity_details": details,
     }
+    report["artifact_sha256"] = report_sha256(report)
+    return report
+
+
+def _small_net_review(rows):
+    """Reuse the validated BBO path; alternative scenarios are not additive PnL."""
+    scopes = defaultdict(list)
+    for row in rows:
+        scopes[f"{row['venue']}|{row['session']}"].append(row)
+    result = {}
+    for scope, members in sorted(scopes.items()):
+        scenarios = {}
+        for net_target in (0.03, 0.07, 0.10):
+            for horizon in (60, 180, 300, 1200):
+                key = f"net_{net_target:.2f}_h{horizon}"
+                projected = []
+                resolved = []
+                for row in members:
+                    source = row.get("ex_post_executable_opportunity") or {}
+                    outcome = (source.get("small_net_scenarios") or {}).get(key) or {}
+                    projected.append(
+                        {
+                            **row,
+                            "ex_post_executable_opportunity": {
+                                **source,
+                                "primary_outcome": outcome,
+                                "executable_entry_eligible": bool(outcome),
+                            },
+                        }
+                    )
+                    if outcome.get("label") in {
+                        "target_first",
+                        "adverse_first",
+                        "timeout_exit",
+                    }:
+                        if (
+                            _safe_float(outcome.get("cost_adjusted_return_pct"))
+                            is not None
+                        ):
+                            resolved.append(outcome)
+                summary = _summarize_rows_base(projected)[
+                    "ex_post_executable_opportunity"
+                ]
+                scenarios[key] = {
+                    **summary,
+                    "primary_horizon_sec": horizon,
+                    "net_target_pct": net_target,
+                    "profitable_resolved_count": sum(
+                        o["cost_adjusted_return_pct"] > 0 for o in resolved
+                    ),
+                    "mean_resolved_duration_sec": (
+                        sum(o["elapsed_sec"] for o in resolved) / len(resolved)
+                        if resolved
+                        else None
+                    ),
+                    "unobserved_short_path_action": "reuse_existing_exact_bbo_or_bounded_source_design_no_request_budget_increase",
+                }
+        result[scope] = scenarios
+    return {
+        "schema_version": "market_opportunity_small_net_review_v1",
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "source_only_bounded_observed_price_scenarios",
+        "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "window_policy": "target_date_venue_session_separate_alternative_scenarios",
+        "sample_floor": "per_scenario_resolved20_bbo95_censor20",
+        "source_quality_gate": "existing_exact_route_bbo_and_effective_comparison_cost",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "forbidden_uses": [
+            "scenario_pnl_sum",
+            "actual_trade_frequency_claim",
+            "live_policy_apply",
+        ],
+        "market_data_request_count_added": 0,
+        "scenario_returns_additive": False,
+        "by_venue_session": result,
+    }
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -3815,6 +3964,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         + ", ".join(f"`{item}`" for item in report.get("instrumentation_blockers", [])),
         "- scanner_recall_blockers: "
         + ", ".join(f"`{item}`" for item in report.get("scanner_recall_blockers", [])),
+        "- Whole-population limitations do not block valid scoped diagnostics; economic floors do not authorize or block discovery diagnosis.",
         "",
         "## Primary Decision Metric",
         "",
@@ -3980,6 +4130,37 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
         ]
     )
+    lines.extend(
+        [
+            "",
+            "## Scoped diagnostic readiness",
+            "",
+            "| Venue/session | Status | Eligible / raw episodes | Exclusions | Economic status |",
+            "|---|---|---:|---|---|",
+        ]
+    )
+    for scope, summary in (
+        (report.get("scoped_diagnostics") or {}).get("by_venue_session", {}).items()
+    ):
+        lines.append(
+            f"| {scope.replace('|', '/')} | {summary['status']} | {summary['eligible_episode_count']}/{summary['raw_episode_count']} | {summary['exclusion_counts']} | {summary['economic_status']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Small net alternatives (source-only, non-additive)",
+            "",
+            "| Venue/session | Net target / horizon | Resolved | Profitable | Observed EV % | Mean duration sec | Ready |",
+            "|---|---|---:|---:|---:|---:|---|",
+        ]
+    )
+    for scope, scenarios in (
+        (report.get("small_net_review") or {}).get("by_venue_session", {}).items()
+    ):
+        for name, summary in scenarios.items():
+            lines.append(
+                f"| {scope.replace('|', '/')} | {name} | {summary['resolved_outcome_count']} | {summary['profitable_resolved_count']} | {summary['observed_cohort_source_quality_adjusted_ev_pct']} | {summary['mean_resolved_duration_sec']} | {summary['economic_evidence_floor_met']} |"
+            )
     return "\n".join(lines)
 
 
