@@ -11,7 +11,7 @@ import math
 from datetime import date, datetime
 from typing import Any
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 CURRENT_CONTRACT_DATE = "2026-09-07"
 ENTRY_SUBMIT_DROUGHT_CORE_AXES = (
     "UPSTREAM_GATE",
@@ -37,6 +37,10 @@ UPSTREAM_TERMINAL_STAGES = frozenset(
         "blocked_strength_momentum",
         "blocked_vpw",
         "blocked_gap",
+        "rising_missed_tick_speed_entry_block",
+        "real_weak_ai_micro_entry_block",
+        "pre_submit_micro_unavailable_block",
+        "rising_missed_reversal_pre_submit_block",
         "auth_zero_qty",
         "blocked_zero_qty",
         "entry_armed_expired",
@@ -49,6 +53,8 @@ TERMINAL_STAGES_BY_AXIS = {
     "LATENCY_PRE_SUBMIT": {"latency_block"},
     "ENTRY_AI_AUTHORITY_REVALIDATION": {"pre_submit_entry_ai_authority_guard_block"},
     "PRICE_REVALIDATION": {
+        "entry_submit_revalidation_block",
+        "entry_price_canary_submit_block",
         "pre_submit_price_guard_block",
         "entry_ai_price_canary_skip_order",
     },
@@ -469,7 +475,11 @@ def validate_submit_drought_contract(
                 issues.append("current_source_date_mismatch")
             if contract.get("source_taxonomy_leakage") is True:
                 issues.append("sentinel_source_taxonomy_conflict")
-            if exact.get("schema_version") != 2:
+            if (
+                exact.get("schema_version") != 3
+                or exact.get("attempt_partition_policy")
+                != "call_local_submit_or_parent_ordered_retry_v3"
+            ):
                 issues.append("current_attempt_partition_required")
             ledger = exact.get("attempt_ledger")
             if not isinstance(ledger, list):

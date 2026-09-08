@@ -151,7 +151,7 @@ def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
         else []
     )
     exact = raw.get("exact_attempt_contract")
-    if isinstance(exact, dict) and exact.get("schema_version") == 2:
+    if isinstance(exact, dict) and exact.get("schema_version") in {2, 3}:
         # Wider diagnostics must not widen this family's recheck authority.
         ledger = exact.get("attempt_ledger") or []
         addressable_stages = {

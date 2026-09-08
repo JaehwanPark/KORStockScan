@@ -55,7 +55,7 @@ def make_report(
     contract["scope_key"] = "KRX|KRX_REGULAR"
     contract["by_venue_session"] = {"KRX|KRX_REGULAR": scoped}
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "target_date": day,
         "as_of": end.isoformat(),
         "classification": classification,

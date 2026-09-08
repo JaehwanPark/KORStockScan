@@ -114,6 +114,543 @@ def test_budget_retry_preserves_prior_latency_block_not_false_recovery():
     assert exact["pending_attempt_count"] == 1
 
 
+def test_natural_price_terminal_and_retry_use_one_common_refresh_ledger():
+    parent = {"scanner_promotion_id": "SCANPROM-010170-P"}
+    ai = {**parent, "main_lifecycle_attempt_id": parent["scanner_promotion_id"]}
+    refresh = {**parent, "pre_submit_quote_refresh_applied": "true"}
+    rows = events(
+        ("budget_pass", parent),
+        ("latency_pass", refresh),
+        (
+            "entry_submit_revalidation_block",
+            {**parent, "block_reason": "standard_stale_context_or_quote"},
+        ),
+        ("budget_pass", parent),
+        ("latency_pass", refresh),
+        ("ai_confirmed", ai),
+        ("pre_submit_entry_ai_authority_guard_block", parent),
+    )
+    exact = inspect(rows)
+    assert exact["attempt_count"] == 2
+    assert exact["pending_attempt_count"] == 0
+    assert exact["axis_terminal_causal_attempt_counts"]["PRICE_REVALIDATION"] == 1
+    assert (
+        exact["axis_terminal_causal_attempt_counts"]["ENTRY_AI_AUTHORITY_REVALIDATION"]
+        == 1
+    )
+    summary = sentinel._summarize_events(
+        rows, start_at=rows[0].emitted_at, end_at=rows[-1].emitted_at
+    )
+    assert summary["quote_freshness_refresh_latency_pass_count"] == 2
+    assert summary["quote_freshness_refresh_latency_pass_record_count"] == 1
+    assert summary["quote_freshness_refresh_latency_pass_attempt_count"] == 2
+    assert summary["quote_freshness_recovered_downstream_counts"] == {
+        "price_guard_or_revalidation": 1,
+        "entry_ai_authority_revalidation": 1,
+    }
+
+
+def test_explicit_zero_refresh_blocks_are_not_replaced_by_subtraction():
+    root = sentinel._latency_drought_root_cause_summary(
+        {
+            "quote_freshness_refresh_attempted_count": 3,
+            "quote_freshness_refresh_applied_count": 1,
+            "quote_freshness_still_latency_blocked_after_refresh_count": 0,
+        }
+    )
+    assert (
+        root["quote_freshness_attribution"]["still_latency_blocked_after_refresh_count"]
+        == 0
+    )
+
+
+@pytest.mark.parametrize("exclude_summary", [False, True])
+def test_price_and_async_rows_survive_cache_and_producer_compaction(exclude_summary):
+    from src.engine.pipeline_event_summary import SUMMARY_STAGES
+
+    for stage in (
+        "entry_submit_revalidation_block",
+        "entry_price_canary_submit_block",
+        "pre_submit_entry_ai_authority_async_pending",
+        "entry_submit_attempt_finished",
+    ):
+        payload = {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "emitted_at": "2026-09-08T09:56:44.824654",
+            "stage": stage,
+            "record_id": 41181,
+            "stock_code": "010170",
+            "stock_name": "fixture",
+            "fields": {"block_reason": "standard_stale_context_or_quote"},
+        }
+        assert sentinel._payload_to_cache_row(
+            payload, exclude_summary_stages=exclude_summary
+        )
+        assert stage not in SUMMARY_STAGES
+
+
+def test_old_lossless_cache_is_rebuilt_before_new_contract_publish(
+    monkeypatch, tmp_path
+):
+    from src.tests.test_buy_funnel_sentinel import _event, _write_events
+
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-09-08"
+    _write_events(
+        tmp_path,
+        day,
+        [
+            _event(day, "10:00:00", "budget_pass", record_id=1),
+            _event(day, "10:00:01", "entry_submit_revalidation_block", record_id=1),
+        ],
+    )
+    parser = sentinel._payload_to_cache_row
+    with monkeypatch.context() as old:
+        old.setattr(sentinel, "LOSSLESS_EVENT_CACHE_SCHEMA_VERSION", 10)
+        old.setattr(
+            sentinel,
+            "_payload_to_cache_row",
+            lambda payload, **kw: (
+                None
+                if payload["stage"] == "entry_submit_revalidation_block"
+                else parser(payload, **kw)
+            ),
+        )
+        prior = sentinel.load_pipeline_events(
+            day, use_cache=True, exclude_summary_stages=True
+        )
+        assert len(prior) == 1
+    rebuilt = sentinel.load_pipeline_events(
+        day, use_cache=True, exclude_summary_stages=True
+    )
+    assert len(rebuilt) == 2
+    assert (
+        sentinel._exact_submit_drought_axis_summary(rebuilt)[
+            "axis_terminal_causal_attempt_counts"
+        ]["PRICE_REVALIDATION"]
+        == 1
+    )
+
+
+def test_previous_partition_cannot_be_relabelled_as_current_without_rebuild():
+    report = make_report()
+    report["schema_version"] = 5
+    assert (
+        validate_submit_drought_contract(
+            report, report["entry_submit_drought_contract"], require_current=True
+        )["status"]
+        == "invalid"
+    )
+    report["schema_version"] = 6
+    contract = report["entry_submit_drought_contract"]
+    contract["exact_attempt_contract"]["schema_version"] = 2
+    assert (
+        validate_submit_drought_contract(report, contract, require_current=True)[
+            "status"
+        ]
+        == "invalid"
+    )
+
+
+def test_promotion_change_before_ai_does_not_leave_old_latency_pending():
+    rows = events(
+        (
+            "ai_confirmed",
+            {
+                "main_lifecycle_attempt_id": "SCANPROM-old",
+                "scanner_promotion_id": "SCANPROM-old",
+            },
+        ),
+        ("budget_pass", {"scanner_promotion_id": "SCANPROM-new"}),
+        ("latency_pass", {"scanner_promotion_id": "SCANPROM-new"}),
+        (
+            "ai_confirmed",
+            {
+                "main_lifecycle_attempt_id": "SCANPROM-new",
+                "scanner_promotion_id": "SCANPROM-new",
+            },
+        ),
+        (
+            "pre_submit_entry_ai_authority_guard_block",
+            {"scanner_promotion_id": "SCANPROM-new"},
+        ),
+    )
+    exact = inspect(rows)
+    assert exact["attempt_count"] == 2
+    assert exact["pending_attempt_count"] == 0
+    assert exact["unclassified_terminal_attempt_count"] == 1
+    assert exact["attempt_ledger"][1]["stages"] == [
+        "budget_pass",
+        "latency_pass",
+        "ai_confirmed",
+    ]
+
+
+def test_partial_main_id_on_same_promotion_cannot_resume_old_timeout_cycle():
+    parent = {"scanner_promotion_id": "SCANPROM-P"}
+    ai = {**parent, "main_lifecycle_attempt_id": "SCANPROM-P"}
+    rows = events(
+        ("budget_pass", parent),
+        ("latency_pass", parent),
+        ("ai_confirmed", ai),
+        ("pre_submit_entry_ai_authority_guard_block", parent),
+        ("budget_pass", parent),
+        ("latency_pass", parent),
+        ("ai_confirmed", ai),
+        ("pre_submit_entry_ai_authority_guard_block", parent),
+    )
+    exact = inspect(rows)
+    assert exact["attempt_count"] == 2
+    assert exact["pending_attempt_count"] == 0
+    assert exact["terminal_causal_attempt_count"] == 2
+
+
+def test_unclosed_retry_is_lineage_gap_not_normal_pending():
+    exact = inspect(events("budget_pass", "latency_pass", "budget_pass"))
+    assert exact["pending_attempt_count"] == 1
+    assert exact["unclassified_terminal_attempt_count"] == 1
+    assert (
+        exact["attempt_ledger"][0]["lineage_gap_reason"]
+        == "new_evaluation_without_previous_terminal"
+    )
+
+
+@pytest.mark.parametrize(
+    "stage,axis",
+    [
+        ("entry_price_canary_submit_block", "PRICE_REVALIDATION"),
+        ("rising_missed_tick_speed_entry_block", "UPSTREAM_GATE"),
+        ("real_weak_ai_micro_entry_block", "UPSTREAM_GATE"),
+        ("pre_submit_micro_unavailable_block", "UPSTREAM_GATE"),
+        ("rising_missed_reversal_pre_submit_block", "UPSTREAM_GATE"),
+    ],
+)
+def test_actual_before_latency_terminals_are_preserved_across_retry(stage, axis):
+    exact = inspect(events("budget_pass", stage, "budget_pass"))
+    assert exact["attempt_count"] == 2
+    assert exact["axis_terminal_causal_attempt_counts"][axis] == 1
+    assert exact["pending_attempt_count"] == 1
+    assert exact["unclassified_terminal_attempt_count"] == 0
+
+
+def test_async_wait_is_explicit_and_does_not_mask_later_terminal():
+    rows = events(
+        "budget_pass",
+        ("latency_pass", {"pre_submit_quote_refresh_applied": "true"}),
+        "pre_submit_entry_ai_authority_async_pending",
+    )
+    exact = inspect(rows)
+    assert exact["pending_attempt_count"] == 1
+    assert exact["unclassified_terminal_attempt_count"] == 0
+    summary = sentinel._summarize_events(
+        rows, start_at=rows[0].emitted_at, end_at=rows[-1].emitted_at
+    )
+    assert summary["quote_freshness_recovered_downstream_counts"] == {
+        "entry_ai_authority_async_pending": 1
+    }
+
+
+def test_submit_observation_id_is_call_local_nested_and_exception_safe():
+    from concurrent.futures import ThreadPoolExecutor
+    from src.engine.monitoring.entry_attempt_identity import (
+        observe_submit_attempt,
+        submit_attempt_fields,
+    )
+
+    stock = {"id": 41181, "scanner_promotion_id": "parent"}
+    seen = []
+
+    @observe_submit_attempt
+    def run(stock, code, *, nested=False, fail=False):
+        before = submit_attempt_fields(stock, code)
+        seen.append(before["entry_submit_attempt_id"])
+        assert submit_attempt_fields({"id": 99}, code) == {}
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            assert pool.submit(submit_attempt_fields, stock, code).result() == {}
+        if nested:
+            run(stock, code)
+            assert submit_attempt_fields(stock, code) == before
+        if fail:
+            raise ValueError("fixture")
+        return before
+
+    first = run(stock, "010170", nested=True)
+    assert run(stock, "010170") != first
+    with pytest.raises(ValueError):
+        run(stock, "010170", fail=True)
+    assert submit_attempt_fields(stock, "010170") == {}
+    assert len(seen) == len(set(seen))
+    assert stock == {"id": 41181, "scanner_promotion_id": "parent"}
+
+
+def test_true_submit_ids_partition_retries_even_with_shared_promotion():
+    def f(key):
+        return {
+            "entry_submit_attempt_id": key,
+            "scanner_promotion_id": "SCANPROM-P",
+            "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+            "entry_submit_attempt_authority": "observation_only",
+        }
+
+    exact = inspect(
+        events(
+            ("budget_pass", f("A")),
+            ("latency_pass", f("A")),
+            ("entry_submit_revalidation_block", f("A")),
+            ("budget_pass", f("B")),
+            ("order_bundle_submitted", f("B")),
+        )
+    )
+    assert exact["attempt_count"] == 2
+    assert exact["submitted_attempt_count"] == 0
+    assert exact["stage_order_violation_event_count"] == 1
+
+
+def test_finished_call_without_terminal_is_not_perpetual_pending():
+    fields = {
+        "entry_submit_attempt_id": "A",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+    }
+    exact = inspect(
+        events(
+            ("budget_pass", fields),
+            (
+                "entry_submit_attempt_finished",
+                {
+                    **fields,
+                    "submit_call_outcome": "returned_false",
+                },
+            ),
+        )
+    )
+    assert exact["pending_attempt_count"] == 0
+    assert exact["unclassified_terminal_attempt_count"] == 1
+
+
+def test_duplicate_call_local_submit_does_not_create_new_attempt_or_veto():
+    fields = {
+        "entry_submit_attempt_id": "A",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+    }
+    exact = inspect(
+        events(
+            *[
+                (stage, fields)
+                for stage in (
+                    "budget_pass",
+                    "latency_pass",
+                    "order_bundle_submitted",
+                    "order_bundle_submitted",
+                    "pre_submit_price_guard_block",
+                )
+            ]
+        )
+    )
+    assert exact["attempt_count"] == 1
+    assert exact["submitted_attempt_count"] == 1
+    assert exact["terminal_causal_attempt_count"] == 0
+
+
+def test_exception_after_async_wait_is_not_normal_waiting():
+    fields = {
+        "entry_submit_attempt_id": "A",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+    }
+    exact = inspect(
+        events(
+            ("budget_pass", fields),
+            ("pre_submit_entry_ai_authority_async_pending", fields),
+            (
+                "entry_submit_attempt_finished",
+                {**fields, "submit_call_outcome": "raised"},
+            ),
+        )
+    )
+    assert exact["pending_attempt_count"] == 0
+    assert exact["unclassified_terminal_attempt_count"] == 1
+
+
+def test_finished_call_preserves_submit_or_explicit_wait():
+    fields = {
+        "entry_submit_attempt_id": "A",
+        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+        "entry_submit_attempt_authority": "observation_only",
+    }
+    for tail, state in (
+        ("order_bundle_submitted", "submitted"),
+        ("pre_submit_entry_ai_authority_async_pending", "pending"),
+    ):
+        exact = inspect(
+            events(
+                ("budget_pass", fields),
+                ("latency_pass", fields),
+                (tail, fields),
+                (
+                    "entry_submit_attempt_finished",
+                    {
+                        **fields,
+                        "submit_call_outcome": (
+                            "returned_true"
+                            if state == "submitted"
+                            else "returned_false"
+                        ),
+                    },
+                ),
+            )
+        )
+        assert exact["attempt_count"] == 1
+        assert exact["attempt_ledger"][0]["state"] == state
+
+
+def test_malformed_call_identity_cannot_support_causal_or_refresh_counts():
+    exact = inspect(
+        events(
+            ("budget_pass", {"entry_submit_attempt_id": "untrusted"}),
+            (
+                "entry_submit_revalidation_block",
+                {"entry_submit_attempt_id": "untrusted"},
+            ),
+        )
+    )
+    assert exact["terminal_causal_attempt_count"] == 0
+    assert exact["denominator_exact_attempt_counts"]["budget_pass"] == 0
+    assert exact["unclassified_terminal_attempt_count"] == 1
+
+
+def test_unbound_event_cannot_borrow_one_of_two_concurrent_call_ids():
+    def f(key):
+        return {
+            "entry_submit_attempt_id": key,
+            "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+            "entry_submit_attempt_authority": "observation_only",
+            "scanner_promotion_id": "P",
+        }
+
+    exact = inspect(
+        events(
+            ("budget_pass", f("A")),
+            ("budget_pass", f("B")),
+            ("latency_pass", {"scanner_promotion_id": "P"}),
+        )
+    )
+    assert exact["denominator_exact_attempt_counts"]["latency_pass"] == 0
+    assert exact["unclassified_terminal_attempt_count"] == 1
+    assert exact["pending_attempt_count"] == 2
+
+
+def test_completion_observer_cannot_change_return_or_mask_original_exception(caplog):
+    from src.engine.monitoring.entry_attempt_identity import (
+        observe_submit_attempt,
+        submit_attempt_fields,
+    )
+
+    recorded = []
+
+    def finish(stock, code, outcome):
+        recorded.append((outcome, submit_attempt_fields(stock, code)))
+        raise RuntimeError("observer failure")
+
+    @observe_submit_attempt(on_finish=finish)
+    def run(stock, code, fail=False):
+        if fail:
+            raise ValueError("original")
+        return False
+
+    assert run({"id": 1}, "000001") is False
+    with pytest.raises(ValueError, match="original"):
+        run({"id": 1}, "000001", fail=True)
+    assert [r[0] for r in recorded] == ["returned_false", "raised"]
+    assert all(r[1]["entry_submit_attempt_id"] for r in recorded)
+    assert "Submit completion telemetry failed" in caplog.text
+    assert submit_attempt_fields({"id": 1}, "000001") == {}
+
+
+def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch):
+    from src.engine import sniper_state_handlers as sh
+
+    emitted = []
+    monkeypatch.setattr(
+        sh, "emit_pipeline_event", lambda *a, **kw: emitted.append((a[3], kw["fields"]))
+    )
+    for name in (
+        "_remember_scanner_terminal_block",
+        "observe_candidate_transition_safe",
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler",
+    ):
+        monkeypatch.setattr(sh, name, lambda *a, **kw: None)
+    stock = {
+        "id": 41181,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "scanner_promotion_id": "SCANPROM-P",
+        "entry_submit_identity_reconciliation_required": True,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "ratio": 0.1,
+        "curr_price": 1000,
+        "liquidity_value": 0,
+        "msg": "",
+        "now_ts": 1,
+        "cooldowns": {},
+        "alerted_stocks": set(),
+    }
+    assert (
+        sh._submit_watching_triggered_entry(stock, "010170", {}, None, runtime) is False
+    )
+    assert [stage for stage, _ in emitted] == [
+        "entry_submit_identity_reconciliation_blocked",
+        "entry_submit_attempt_finished",
+    ]
+    first_id = emitted[0][1]["entry_submit_attempt_id"]
+    assert emitted[1][1]["entry_submit_attempt_id"] == first_id
+    assert emitted[1][1]["submit_call_outcome"] == "returned_false"
+    from src.engine import observation_source_quality_audit as audit
+
+    contract = audit.STAGE_CONTRACTS["entry_submit_attempt_finished"]
+
+    def violations(fields):
+        return audit._row_contract_violations(
+            "entry_submit_attempt_finished", {"fields": fields}, contract
+        )
+
+    assert not any(violations(emitted[1][1]).values())
+    assert any(violations({**emitted[1][1], "allowed_runtime_apply": True}).values())
+    assert (
+        sh._submit_watching_triggered_entry(stock, "010170", {}, None, runtime) is False
+    )
+    assert emitted[2][1]["entry_submit_attempt_id"] != first_id
+    assert stock["entry_submit_identity_reconciliation_required"] is True
+    sh._log_entry_pipeline(
+        stock, "010170", "budget_pass", entry_submit_attempt_id="spoofed"
+    )
+    assert "entry_submit_attempt_id" not in emitted[-1][1]
+
+
+def test_identity_allocation_failure_does_not_skip_original_guard(monkeypatch, caplog):
+    from src.engine.monitoring import entry_attempt_identity as identity
+
+    def fail():
+        raise OSError("fixture entropy failure")
+
+    monkeypatch.setattr(identity, "uuid4", fail)
+    called = []
+
+    @identity.observe_submit_attempt
+    def run(stock, code):
+        called.append(True)
+        assert identity.submit_attempt_fields(stock, code) == {}
+        return False
+
+    assert run({"id": 1}, "000001") is False
+    assert called == [True]
+    assert "Submit identity telemetry failed" in caplog.text
+
+
 def test_explicit_attempts_never_borrow_latency_pass():
     seq = [
         (stage, {"main_lifecycle_attempt_id": key})

@@ -57,6 +57,8 @@ BUDGET_BLOCKER_STAGES = {
     "blocked_zero_qty",
 }
 PRICE_GUARD_STAGES = {
+    "entry_submit_revalidation_block",
+    "entry_price_canary_submit_block",
     "pre_submit_price_guard_block",
     "entry_ai_price_canary_skip_order",
     "entry_ai_price_canary_fallback",
@@ -69,26 +71,13 @@ ENTRY_PRICE_GUARD_STAGES = PRICE_GUARD_STAGES - {
 ENTRY_AI_AUTHORITY_GUARD_STAGES = {
     "pre_submit_entry_ai_authority_guard_block",
 }
+ENTRY_ASYNC_WAIT_STAGES = {"pre_submit_entry_ai_authority_async_pending"}
+ENTRY_CALL_FINISH_STAGES = {"entry_submit_attempt_finished"}
 BROKER_SUBMIT_FAILURE_STAGES = {
     "order_bundle_failed",
     "broker_submit_failed",
     "buy_order_failed",
     "submit_order_failed",
-}
-POST_LATENCY_SUBMIT_BLOCK_STAGES = {
-    "budget_pass",
-    "pre_submit_price_guard_block",
-    "pre_submit_entry_ai_authority_guard_block",
-    "entry_ai_price_canary_skip_order",
-    "entry_ai_price_canary_fallback",
-    "scale_in_price_guard_block",
-    "order_bundle_submitted",
-    "broker_submit_failed",
-    "buy_order_failed",
-    "submit_order_failed",
-    "entry_armed_expired",
-    "entry_armed_expired_after_wait",
-    "entry_arm_expired",
 }
 BLOCKER_STAGE_PREFIXES = ("blocked_",)
 BLOCKER_STAGES = {
@@ -113,8 +102,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 8
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 10
+EVENT_CACHE_SCHEMA_VERSION = 10
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 12
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -346,6 +335,8 @@ def _payload_to_cache_row(
         or stage in PROBE_BUNDLE_LIFECYCLE_STAGES
         or stage in AI_TERMINAL_ATTRIBUTION_STAGES
         or stage in AI_TRACE_RESULT_STAGES
+        or stage in ENTRY_ASYNC_WAIT_STAGES
+        or stage in ENTRY_CALL_FINISH_STAGES
         or stage in BLOCKER_STAGES
         or stage in UPSTREAM_BLOCK_STAGES
         or stage in PRICE_GUARD_STAGES
@@ -828,6 +819,8 @@ def _submit_drought_axis_for_event(event: PipelineEvent) -> str | None:
 
 def _exact_submit_drought_axis_summary(
     events: list[PipelineEvent],
+    *,
+    _event_bindings: list[tuple[PipelineEvent, str]] | None = None,
 ) -> dict[str, Any]:
     """Reconstruct execution attempts, never symbol-fallback or borrowed passes.
 
@@ -845,6 +838,8 @@ def _exact_submit_drought_axis_summary(
         | ENTRY_AI_AUTHORITY_GUARD_STAGES
         | ENTRY_PRICE_GUARD_STAGES
         | BROKER_SUBMIT_FAILURE_STAGES
+        | ENTRY_ASYNC_WAIT_STAGES
+        | ENTRY_CALL_FINISH_STAGES
     )
     grouped: dict[str, list[PipelineEvent]] = defaultdict(list)
     missing_den: Counter[str] = Counter()
@@ -901,10 +896,45 @@ def _exact_submit_drought_axis_summary(
             if signature in seen_rows:
                 continue
             seen_rows.add(signature)
-            producer_id = _safe_str(event.fields.get("main_lifecycle_attempt_id"))
-            if producer_id.lower() in {"none", "null", "unknown", "-", "0"}:
-                producer_id = ""
-            resumed_explicit = producer_id in explicit_states
+
+            def identity(field: str) -> str:
+                value = _safe_str(event.fields.get(field)).strip()
+                return (
+                    ""
+                    if value.lower() in {"", "none", "null", "unknown", "-", "0"}
+                    else value
+                )
+
+            call_id = identity("entry_submit_attempt_id")
+            main_id = identity("main_lifecycle_attempt_id")
+            promotion_id = identity("scanner_promotion_id")
+            # Lifecycle IDs derived from promotions are parent identities, not
+            # individual retries. Accept their documented legacy representation.
+            if not promotion_id and main_id.startswith("SCANPROM-"):
+                promotion_id = main_id
+            producer_id = (
+                f"submit:{call_id}" if call_id else ("" if promotion_id else main_id)
+            )
+            ambiguous_unbound = (
+                not producer_id
+                and len(
+                    [
+                        row
+                        for row in explicit_states.values()
+                        if row["state"] == "pending"
+                        and row["producer_attempt_id"].startswith("submit:")
+                        and (
+                            not promotion_id
+                            or row.get("parent_promotion_id") == promotion_id
+                        )
+                    ]
+                )
+                > 1
+            )
+            if ambiguous_unbound:
+                current = None
+                explicit_id = ""
+            resumed_explicit = bool(producer_id and producer_id in explicit_states)
             if resumed_explicit:
                 current = explicit_states[producer_id]
                 explicit_id = producer_id
@@ -919,24 +949,57 @@ def _exact_submit_drought_axis_summary(
                         and explicit_id
                         and producer_id != explicit_id
                     )
-                    or (current["state"] == "submitted")
                     or (
-                        progress
-                        and current["state"] in {"blocked", "unclassified"}
-                        and event.stage in {"budget_pass", "ai_confirmed"}
-                        and event.stage in current["stages"]
+                        not resumed_explicit
+                        and promotion_id
+                        and current.get("parent_promotion_id")
+                        and promotion_id != current["parent_promotion_id"]
+                    )
+                    or (
+                        not resumed_explicit
+                        and call_id
+                        and "budget_pass" in current["stages"]
+                    )
+                    or (
+                        current["state"] == "submitted"
+                        and not call_id
+                        and event.stage not in ENTRY_CALL_FINISH_STAGES
+                    )
+                    or (
+                        not call_id
+                        and progress
+                        and (
+                            (
+                                event.stage == "budget_pass"
+                                and "budget_pass" in current["stages"]
+                            )
+                            or (
+                                current["state"] in {"blocked", "unclassified"}
+                                and event.stage in {"budget_pass", "ai_confirmed"}
+                                and event.stage in current["stages"]
+                            )
+                        )
                     )
                 )
             )
             if current is None or new_cycle:
                 if new_cycle:
                     retry_count += 1
+                    if current["state"] == "pending" and not (
+                        producer_id and explicit_id and producer_id != explicit_id
+                    ):
+                        current.update(
+                            state="unclassified",
+                            terminal_stage="superseded_without_terminal",
+                            lineage_gap_reason="new_evaluation_without_previous_terminal",
+                        )
                 cycle += 1
                 explicit_id = producer_id
                 current = {
                     "attempt_key": f"{record_key}:cycle:{cycle}",
                     "record_id": record_key.removeprefix("id:"),
                     "producer_attempt_id": producer_id,
+                    "parent_promotion_id": promotion_id,
                     "started_at": event.emitted_at.isoformat(),
                     "stages": [],
                     "terminal_axis": "",
@@ -947,12 +1010,49 @@ def _exact_submit_drought_axis_summary(
             elif producer_id and not explicit_id:
                 explicit_id = producer_id
                 current["producer_attempt_id"] = producer_id
+            if promotion_id and not current.get("parent_promotion_id"):
+                current["parent_promotion_id"] = promotion_id
             if producer_id:
                 explicit_states[producer_id] = current
+            if ambiguous_unbound:
+                current["identity_gap_reason"] = (
+                    "unbound_event_with_concurrent_submit_calls"
+                )
+            if call_id and (
+                event.fields.get("entry_submit_attempt_schema")
+                != "call_local_submit_attempt_v1"
+                or event.fields.get("entry_submit_attempt_authority")
+                != "observation_only"
+                or (promotion_id and current.get("parent_promotion_id") != promotion_id)
+            ):
+                current["identity_gap_reason"] = "submit_call_identity_contract_invalid"
             current["last_event_at"] = event.emitted_at.isoformat()
             current["last_stage"] = event.stage
             attempt_key = current["attempt_key"]
             stages = current["stages"]
+            if event.stage in ENTRY_CALL_FINISH_STAGES:
+                current["call_outcome"] = event.fields.get(
+                    "submit_call_outcome", "unknown"
+                )
+                if current["state"] == "pending" and (
+                    not current.get("wait_reason")
+                    or current["call_outcome"] != "returned_false"
+                ):
+                    current.update(
+                        state="unclassified",
+                        terminal_stage=event.stage,
+                        lineage_gap_reason="submit_call_finished_without_terminal_evidence",
+                    )
+                continue
+            if call_id and current["state"] == "submitted":
+                # Duplicate/later telemetry cannot turn an acknowledged submit
+                # into another attempt or a pre-submit veto.
+                continue
+            if event.stage in ENTRY_ASYNC_WAIT_STAGES:
+                current["wait_reason"] = event.stage
+                if _event_bindings is not None:
+                    _event_bindings.append((event, attempt_key))
+                continue
             if axis:
                 axis_keys[axis].add(attempt_key)
             if progress:
@@ -965,6 +1065,8 @@ def _exact_submit_drought_axis_summary(
                 if not ordered:
                     denominator_order[event.stage] += 1
                     continue
+                if _event_bindings is not None:
+                    _event_bindings.append((event, attempt_key))
                 if event.stage not in stages:
                     stages.append(event.stage)
                 terminal = current["terminal_axis"]
@@ -996,12 +1098,35 @@ def _exact_submit_drought_axis_summary(
             if not ordered:
                 axis_order[axis] += 1
                 continue
+            if _event_bindings is not None:
+                _event_bindings.append((event, attempt_key))
             prior = current["terminal_axis"]
             if prior and prior != axis:
                 superseded[prior].add(attempt_key)
             current.update(
                 terminal_axis=axis, terminal_stage=event.stage, state="blocked"
             )
+
+    invalid_identity_keys = set()
+    for row in ledger:
+        if row.get("identity_gap_reason"):
+            invalid_identity_keys.add(row["attempt_key"])
+            row.update(
+                excluded_stages=list(row["stages"]),
+                stages=[],
+                state="unclassified",
+                terminal_axis="",
+                terminal_stage="identity_contract_gap",
+            )
+    if _event_bindings is not None:
+        _event_bindings[:] = [
+            (e, key) for e, key in _event_bindings if key not in invalid_identity_keys
+        ]
+
+    for axis in SUBMIT_DROUGHT_CORE_AXIS_ORDER:
+        axis_keys[axis].difference_update(invalid_identity_keys)
+        recovered[axis].difference_update(invalid_identity_keys)
+        superseded[axis].difference_update(invalid_identity_keys)
 
     terminal_counts = Counter(
         row["terminal_axis"] for row in ledger if row["state"] == "blocked"
@@ -1028,10 +1153,10 @@ def _exact_submit_drought_axis_summary(
         )
     states["unclassified"] += unknown_missing
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "identity_field": "record_id",
         "identity_fallback_allowed": False,
-        "attempt_partition_policy": "record_explicit_attempt_or_ordered_retry_v2",
+        "attempt_partition_policy": "call_local_submit_or_parent_ordered_retry_v3",
         "status": (
             "source_quality_gap_excluded"
             if missing or violations or states["unclassified"]
@@ -2096,87 +2221,75 @@ def _summarize_events(
         for event in latency_blocked_budget_events
         for label in _latency_danger_reason_labels(event)
     )
+    event_bindings: list[tuple[PipelineEvent, str]] = []
+    exact_attempt_contract = _exact_submit_drought_axis_summary(
+        lossless_scoped, _event_bindings=event_bindings
+    )
     refresh_scope_events = [
-        event
-        for event in lossless_scoped
+        (event, key)
+        for event, key in event_bindings
         if event.stage in {"latency_block", "latency_pass", "order_bundle_submitted"}
-        and (key := _exact_attempt_key(event)) in budget_pass_first_at
-        and event.emitted_at >= budget_pass_first_at[key]
     ]
     refresh_attempt_keys = {
-        key
-        for event in refresh_scope_events
-        if (key := _exact_attempt_key(event)) is not None
-        if _event_refresh_attempted(event)
+        key for event, key in refresh_scope_events if _event_refresh_attempted(event)
     }
     refresh_applied_keys = {
-        key
-        for event in refresh_scope_events
-        if (key := _exact_attempt_key(event)) is not None
-        if _event_refresh_applied(event)
+        key for event, key in refresh_scope_events if _event_refresh_applied(event)
     }
     refresh_blocked_after_attempt_keys = {
         key
-        for event in refresh_scope_events
-        if (key := _exact_attempt_key(event)) is not None
+        for event, key in refresh_scope_events
         if event.stage == "latency_block"
         and _event_refresh_attempted(event)
         and not _event_refresh_applied(event)
     }
-    refresh_latency_pass_count = len(
-        {
-            key
-            for event in refresh_scope_events
-            if (key := _exact_attempt_key(event)) is not None
-            if event.stage == "latency_pass" and _event_refresh_applied(event)
-        }
-    )
-    refresh_latency_pass_keys = {
-        key
-        for event in refresh_scope_events
-        if (key := _exact_attempt_key(event)) is not None
+    refresh_latency_passes = [
+        (event, key)
+        for event, key in refresh_scope_events
         if event.stage == "latency_pass" and _event_refresh_applied(event)
-    }
+    ]
+    refresh_latency_pass_count = len(refresh_latency_passes)
     refresh_order_bundle_submitted_count = len(
         {
             key
-            for event in refresh_scope_events
-            if (key := _exact_attempt_key(event)) is not None
+            for event, key in refresh_scope_events
             if event.stage == "order_bundle_submitted" and _event_refresh_applied(event)
         }
     )
     events_by_key: dict[str, list[PipelineEvent]] = {}
-    for event in lossless_scoped:
-        exact_key = _exact_attempt_key(event)
-        if exact_key is not None:
-            events_by_key.setdefault(exact_key, []).append(event)
+    for event, exact_key in event_bindings:
+        events_by_key.setdefault(exact_key, []).append(event)
+    ledger_by_key = {
+        row["attempt_key"]: row for row in exact_attempt_contract["attempt_ledger"]
+    }
     post_refresh_downstream_counter: Counter[str] = Counter()
     post_refresh_downstream_stage_counter: Counter[str] = Counter()
-    for key in refresh_latency_pass_keys:
+    for first_latency_pass, key in refresh_latency_passes:
         events_for_key = events_by_key.get(key) or []
-        latency_pass_events = [
-            event
-            for event in events_for_key
-            if event.stage == "latency_pass" and _event_refresh_applied(event)
-        ]
-        if not latency_pass_events:
-            post_refresh_downstream_counter["no_latency_pass_event"] += 1
-            continue
-        first_latency_pass = min(latency_pass_events, key=lambda item: item.emitted_at)
         next_event = None
-        for event in sorted(events_for_key, key=lambda item: item.emitted_at):
-            if event.emitted_at <= first_latency_pass.emitted_at:
-                continue
-            if event.stage in POST_LATENCY_SUBMIT_BLOCK_STAGES or (
-                _is_blocker_stage(event.stage) and event.stage != "latency_block"
+        # Use exact ordered bindings, including equal-timestamp source order.
+        offset = next(
+            i for i, e in enumerate(events_for_key) if e is first_latency_pass
+        )
+        for event in events_for_key[offset + 1 :]:
+            if event.stage == "latency_pass":
+                break
+            if (
+                event.stage == "order_bundle_submitted"
+                or _submit_drought_axis_for_event(event)
             ):
                 next_event = event
                 break
         bucket = _post_refresh_downstream_bucket(next_event)
+        if next_event is None:
+            row = ledger_by_key[key]
+            if row["state"] == "unclassified":
+                bucket = "lineage_gap"
+            elif row.get("wait_reason"):
+                bucket = "entry_ai_authority_async_pending"
         post_refresh_downstream_counter[bucket] += 1
         if next_event is not None:
             post_refresh_downstream_stage_counter[next_event.stage] += 1
-    exact_attempt_contract = _exact_submit_drought_axis_summary(lossless_scoped)
     _apply_terminal_summary_gaps(exact_attempt_contract, terminal_summary_gaps)
     for stage, count in exact_attempt_contract[
         "denominator_exact_attempt_counts"
@@ -2293,6 +2406,12 @@ def _summarize_events(
             refresh_blocked_after_attempt_keys
         ),
         "quote_freshness_refresh_latency_pass_count": refresh_latency_pass_count,
+        "quote_freshness_refresh_latency_pass_record_count": len(
+            {event.record_id for event, _ in refresh_latency_passes}
+        ),
+        "quote_freshness_refresh_latency_pass_attempt_count": len(
+            {key for _, key in refresh_latency_passes}
+        ),
         "quote_freshness_refresh_order_bundle_submitted_count": refresh_order_bundle_submitted_count,
         "quote_freshness_recovered_downstream_counts": dict(
             sorted(post_refresh_downstream_counter.items())
@@ -2504,15 +2623,20 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
         buckets[_latency_root_cause_bucket(label)] += count
     total = sum(buckets.values())
     refresh_attempted = int(
-        current.get("quote_freshness_refresh_attempted_count", 0)
-        or sum(refresh_buckets.values())
+        current.get(
+            "quote_freshness_refresh_attempted_count", sum(refresh_buckets.values())
+        )
+        or 0
     )
     refresh_applied = int(
-        current.get("quote_freshness_refresh_applied_count", 0)
-        or (
-            refresh_buckets.get("ws_snapshot_refresh_applied", 0)
-            + refresh_buckets.get("observer_quote_refresh_applied", 0)
+        current.get(
+            "quote_freshness_refresh_applied_count",
+            (
+                refresh_buckets.get("ws_snapshot_refresh_applied", 0)
+                + refresh_buckets.get("observer_quote_refresh_applied", 0)
+            ),
         )
+        or 0
     )
     recovered_latency_pass = int(
         current.get("quote_freshness_refresh_latency_pass_count", 0) or 0
@@ -2521,8 +2645,11 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
         current.get("quote_freshness_refresh_order_bundle_submitted_count", 0) or 0
     )
     still_blocked_after_refresh = int(
-        current.get("quote_freshness_still_latency_blocked_after_refresh_count", 0)
-        or max(refresh_attempted - refresh_applied, 0)
+        current.get(
+            "quote_freshness_still_latency_blocked_after_refresh_count",
+            max(refresh_attempted - refresh_applied, 0),
+        )
+        or 0
     )
     recovered_downstream_counts = (
         current.get("quote_freshness_recovered_downstream_counts")
@@ -2569,6 +2696,13 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
             "refresh_applied_count": refresh_applied,
             "still_latency_blocked_after_refresh_count": still_blocked_after_refresh,
             "latency_pass_recovered_count": recovered_latency_pass,
+            "counting_policy": "exact_ledger_bound_latency_pass_events_v2",
+            "latency_pass_recovered_record_count": current.get(
+                "quote_freshness_refresh_latency_pass_record_count", 0
+            ),
+            "latency_pass_recovered_attempt_count": current.get(
+                "quote_freshness_refresh_latency_pass_attempt_count", 0
+            ),
             "order_bundle_submitted_after_refresh_count": submitted_after_refresh,
             "latency_pass_recovered_downstream_counts": recovered_downstream_counts,
             "latency_pass_recovered_downstream_stage_counts": recovered_downstream_stage_counts,
@@ -3512,7 +3646,7 @@ def build_buy_funnel_sentinel_report(
     )
 
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "report_type": "buy_funnel_sentinel",
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),

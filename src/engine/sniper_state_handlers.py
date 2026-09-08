@@ -45,6 +45,10 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
+from src.engine.monitoring.entry_attempt_identity import (
+    observe_submit_attempt,
+    submit_attempt_fields,
+)
 from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
     TIME_09_05,
@@ -13061,6 +13065,12 @@ def _canonicalize_rising_missed_venue_fields(
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    # Only the call-local observer owns these keys; callers cannot inject them.
+    fields = {
+        key: value
+        for key, value in fields.items()
+        if not key.startswith("entry_submit_attempt_")
+    }
     record_id = stock.get("id") if isinstance(stock, dict) else None
     scanner_venue_fields = (
         _scanner_runtime_event_venue_fields(stock)
@@ -13088,6 +13098,7 @@ def _log_entry_pipeline(stock, code, stage, **fields):
             ),
             **fields,
             **scout_attribution_fields,
+            **submit_attempt_fields(stock, code),
         }
     )
     if scout_attribution_fields:
@@ -66229,6 +66240,25 @@ def _handle_watching_strategy_branch(
     return True
 
 
+def _observe_entry_submit_finished(stock, code, outcome):
+    _log_entry_pipeline(
+        stock,
+        code,
+        "entry_submit_attempt_finished",
+        submit_call_outcome=outcome,
+        metric_role="funnel_count",
+        decision_authority="submit_call_completion_observation_only",
+        window_policy="single_submit_function_invocation",
+        sample_floor="one_record_bound_call",
+        primary_decision_metric="submit_call_outcome",
+        source_quality_gate="call_local_identity_and_exact_terminal_evidence",
+        forbidden_uses="order_authority|guard_relaxation|runtime_apply|standalone_ev",
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
+
+
+@observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     strategy = runtime["strategy"]
     ratio = runtime["ratio"]

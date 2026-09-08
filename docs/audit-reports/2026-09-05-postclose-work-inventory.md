@@ -241,7 +241,7 @@
 
 | # | 작업 | 목적 | 목표 | 기대효과 | 운영상태 | 상세검토 상태 | 연결 lock |
 | ---: | --- | --- | --- | --- | --- | --- | --- |
-| 119 | BUY Funnel Sentinel → submit drought handoff | BUY 후보가 submit에 이르지 못한 원인을 단계별로 분리 | 다섯 core axis의 exact attempt·terminal을 분리해 실제 causal owner에 전달 | 무차별 threshold 완화 없이 submit 병목 수리와 후속 비용 차감 EV 표본 회복 | 5분 producer/장후 handoff ON; 직접 runtime 권한 없음, 간접 recheck PREOPEN 경로 있음 | [보완·재리뷰 §11](2026-09-07-buy-funnel-submit-drought-handoff-review.md#11-r1r5-보완-구현과-최종-재리뷰): **1,061 PASS**, R1~R5 및 raw 보존/권한 경계 보완. 탐지 floor 유지, 진단 수리와 EV 승격 조건 분리. 구 history 대체·다음 PREOPEN/PID의 새 계약 소비는 미확인 | E3; 코드 종결=`BuyFunnelFinalContractReviewRepair0907`, 자연 후속 OPEN=`EntryRecheckNaturalAttribution0907` |
+| 119 | BUY Funnel Sentinel → submit drought handoff | BUY 후보가 submit에 이르지 못한 원인을 단계별로 분리 | 다섯 core axis의 exact attempt·terminal을 분리해 실제 causal owner에 전달 | 무차별 threshold 완화 없이 submit 병목 수리와 후속 비용 차감 EV 표본 회복 | 5분 producer/장후 handoff ON; 직접 runtime 권한 없음, 간접 recheck PREOPEN 경로 있음 | [9/8 추가 수리·재리뷰](2026-09-08-buy-funnel-entry-recheck-remediation-review.md): schema6/exact3의 실제 가격/micro/tick terminal, 공통 refresh ledger, call-local ID/종료 관측. 탐지/활성 floor와 safety 유지. [9/7 R1~R5](2026-09-07-buy-funnel-submit-drought-handoff-review.md#11-r1r5-보완-구현과-최종-재리뷰)는 이전 완료 기록 | E3; 9/8 자연/이력 복원·controller·PREOPEN/PID·효과 후속 OPEN=`EntryRecheckNaturalAttribution0907` |
 
 ## 5. 다음 자연 실행에서 분리해 확인할 것
 
@@ -251,7 +251,7 @@
 | --- | --- | --- |
 | #8/#9 Rising-missed | 9/5 종결 유지 | 당일 원천·handoff를 통상 소비한다. 새 결함/계약 변경/필수 소비자 실패가 없으면 상세검토를 다시 열지 않는다. |
 | #11 Source-quality preflight | 9/5 종결 유지 | 20:10 main의 해당 stage 실행 전 당일 자연 artifact 부재는 `not_yet_due`. due 이후 source date·row/window exclusion·tuning 허용과 #74 final audit를 대사한다. `PostcloseSourceQualityGateReview0907`과 기존 AVG_DOWN/PYRAMID acceptance에서 소비한다. 수동 재생성을 자연 증거로 바꾸지 않는다. |
-| #119/#23 submit drought | schema5/exact2·controller v4 수리/재리뷰 종결 | `EntryRecheckNaturalAttribution0907`: 신규 raw terminal 보존→최근 정확한 3거래일→controller→다음 PREOPEN/PID→submit/fill/terminal/비용 EV. paired10은 초기 ON 허들이 아니라 후속 중단·확대 판정이다. |
+| #119/#23 submit drought | [9/8 schema6/exact3 추가 수리](2026-09-08-buy-funnel-entry-recheck-remediation-review.md); controller v4의 ON 조건 유지 | 10:25 raw 재구성107=terminal107+pending0+submit0, refresh7pass/5records=AI6+가격1. 이는 누락/재시도 귀속 수리이지 자연 발행·제출 해소가 아니다. `EntryRecheckNaturalAttribution0907`: 자연 cache12/report6→구 history의 원본 복원 가능성/유효 최근3거래일→controller→PREOPEN/PID→submit/fill/terminal/비용 EV. paired10은 초기 ON 허들이 아니다. 이전 schema5/exact2 완료 기록은 역사이며 현재 계약의 소비 증거로 재사용하지 않는다. |
 | #49 lookup-attention | v4/resource v2·PREOPEN receipt + small_net_v1 승인 보완 | `ScannerLookupAttentionNaturalEvidence0908`: 새 generation 경쟁군/교체 pair→정책→다음 PREOPEN immutable receipt→PID/R6. CF와 실제 full-fill 경제성·비교비용/정확 비용 대사를 구분한다. |
 | #76/#78/#82 AI calibration | self-hash·부분 정상행 학습·offline 선택·late refresh 종결 | `AIDecisionActionOutcomeNaturalEvidence0908`: terminal detailed→#82 v5→당일 선택 고정 optimizer→provider0 재결속→consumer 동일 hash. 실수익·별도 live owner receipt는 미확인이다. |
 | #81 Main AI legacy runtime | DISABLED 유지 | 표본 누적으로 켜지는 경로가 아니다. #77 현행 Entry adapter는 별도 구현·기본 OFF이며 승인 접수와 실제 배포/소비는 각각 해당 receipt로 확인한다.  KRX V2.14/V2.15의 `entry_setup_live_policy`도 독립 owner다. |

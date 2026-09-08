@@ -2656,7 +2656,7 @@ def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_p
         as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
     )
 
-    assert report["schema_version"] == 5
+    assert report["schema_version"] == 6
     assert report["classification"]["primary"] == "UPSTREAM_AI_THRESHOLD"
     assert report["followup"]["route"] == "score65_74_counterfactual_review"
     assert report["followup"]["operator_action_required"] is False

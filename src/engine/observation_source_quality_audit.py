@@ -1405,6 +1405,17 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
             "caution_weak_liquidity_block_liquidity_reason",
         ),
     ),
+    "entry_submit_attempt_finished": StageContract(
+        required_fields=(
+            *DIAGNOSTIC_CONTRACT_FIELDS,
+            "entry_submit_attempt_id",
+            "entry_submit_attempt_schema",
+            "entry_submit_attempt_authority",
+            "submit_call_outcome",
+            "allowed_runtime_apply",
+        ),
+        decision_authority="submit_call_completion_observation_only",
+    ),
     "pre_submit_entry_ai_authority_guard_block": StageContract(
         required_fields=(
             "metric_role",
@@ -5224,6 +5235,16 @@ def _row_contract_violations(
         if _zero_sensitive_contract_gap(field, fields)
     ]
     invalid: list[str] = []
+    if stage == "entry_submit_attempt_finished" and (
+        fields.get("entry_submit_attempt_schema") != "call_local_submit_attempt_v1"
+        or fields.get("entry_submit_attempt_authority") != "observation_only"
+        or fields.get("decision_authority") != "submit_call_completion_observation_only"
+        or fields.get("submit_call_outcome")
+        not in {"returned_true", "returned_false", "returned_other", "raised"}
+        or not _contract_bool(fields.get("runtime_effect"), False)
+        or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+    ):
+        invalid.append("submit_call_completion_observation_contract")
     if stage == "soft_stop_whipsaw_confirmation" and _is_present(
         fields.get("invalid_flow_state_label")
     ):
