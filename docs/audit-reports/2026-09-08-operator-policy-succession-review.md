@@ -58,6 +58,8 @@ AVG_DOWN의 기존 단일 pressure 경제성 계약도 같은 승계 등록부�
 
 ### 후속 검증 및 한계
 
-10개 관련 모듈 963 tests PASS와 실제 Entry/holding 안전·동등성 40 tests PASS를 확인했다. 이후 계측 예외 보호 및 최종 문서 보완은 재검증 결과를 아래에 기록한다. 전체 보고서 재생성·실주문·재기동은 하지 않았다.
+최종 10개 관련 모듈 **977 tests PASS**, 별도 Entry/holding 안전·동등성 **40 tests PASS**, 합계 **1,017 tests PASS**다. 계측 예외의 주문 경로 전파 방지, 순수 contract 검사에서 profile 상태를 변경하지 않도록 하는 보완, NXT 실제 세션명 보존과 정확한 stock scope 소비도 포함한다. 공유 세션의 venue/session 보완을 보존하고 현재 파일로 재검증했다. Python compile/Ruff, launcher `bash -n`, `git diff --check` PASS. print-only parser는 34개 항목 중 `OperatorPolicySuccessionAcceptance0908` 1개, Due 9/9를 확인했다. 25개 실제 JSON lock 분류와 두 component의 다음 PREOPEN effective profile 유효성도 읽기 전용으로 대사했다. 전체 보고서 재생성·실주문·원본 env/lock 변경·재기동·커밋/푸시·외부 sync는 하지 않았다.
+
+구조 통합·관측 profile 승계·직접 producer/consumer의 검토 범위에서 추가 미해결 코드 finding은 0이다. 아래 최초 승격 계약 OPEN, 배포 및 자연 경제성 수용까지 결함 0/전체 완료라고 주장하는 판정은 아니다.
 
 `baseline_only_no_observed_challenger`는 다른 조건을 아직 관측하지 못한 상태다. 동일 기본값의 거래만 늘어나면 자동으로 최초 새 조건이 승인되지 않는다. 이 경우 source/기존 owner의 first-use 경제성 경로를 즉시 검토 대상으로 노출하며, rolling window로 도달할 수 없는 20일 누적 대기 문턱을 추가하지 않는다. 미실행 조건의 replay/최초 bounded 적용 계약은 이 observed-profile 승계 경로가 대신하지 않는다. 따라서 **통합·기존 관측 정책 승계의 코드 수리와 전체 새 조건 자동 탐색/최초 승격 완료를 구분**한다. natural/최초 승격 잔여는 기존 체크리스트 ID 한 곳에서 추적한다.
