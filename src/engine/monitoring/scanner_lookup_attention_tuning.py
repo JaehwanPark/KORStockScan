@@ -40,6 +40,9 @@ from src.engine.scalping.scanner_lookup_attention_policy import (
     MIN_COHORT_COMPLETED,
     MIN_COHORT_DATES,
     MIN_EV_UPLIFT_PCT,
+    NET_ECONOMIC_CONTRACT,
+    NET_ECONOMIC_EFFECTIVE_FROM,
+    net_edge_reasons,
     MIN_SCORE,
     MIN_TOTAL_COMPLETED,
     MIN_TRADING_DATES,
@@ -414,6 +417,7 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
     resource_capture_diagnostics: dict[str, Any] = {}
     resource_start = _resource_window_start(target)
     event_file_count = 0
+    observed_event_dates = []
     cursor = start
     while cursor <= target:
         event_file_date = cursor
@@ -424,6 +428,7 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
         resource_rows = {}
         conflicted_resource_keys = set()
         event_file_count += 1
+        observed_event_dates.append(event_file_date.isoformat())
         for event in _iter_events(path, parse_stats=parse_stats):
             fields = (
                 event.get("fields") if isinstance(event.get("fields"), dict) else {}
@@ -867,6 +872,7 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
         "window_start": start.isoformat(),
         "window_end": target.isoformat(),
         "event_file_count": event_file_count,
+        "observed_event_dates": observed_event_dates,
         "valid_observation_count": len(rows),
         "invalid_observation_count": invalid_observation_count,
         "invalid_fill_contract_count": invalid_fill_contract_count,
@@ -934,6 +940,8 @@ def load_completed_facts(start: date, target: date) -> list[dict[str, Any]]:
             "buy_price": _finite(fact.buy_price),
             "buy_qty": _strict_int(fact.buy_qty),
             "sell_price": _finite(fact.sell_price),
+            "buy_time": fact.buy_time.isoformat() if fact.buy_time else None,
+            "sell_time": fact.sell_time.isoformat() if fact.sell_time else None,
             "profit_rate": _finite(fact.profit_rate),
             "add_count": _strict_int(fact.add_count),
             "avg_down_count": _strict_int(fact.avg_down_count),
@@ -1256,6 +1264,22 @@ def join_completed_outcomes(
             + sell_notional * COST_CONTRACT["statutory_sell_tax_bps"] / 10_000.0
         )
         net_pnl = sell_notional - buy_notional - costs
+        if not all(
+            math.isfinite(v) for v in (buy_notional, sell_notional, costs, net_pnl)
+        ):
+            exclusions["economics_arithmetic_nonfinite"] += 1
+            continue
+        # Optional capital-time diagnostic; absence must not invent zero duration
+        # or become another economic approval floor.
+        capital_hours = None
+        try:
+            entered = datetime.fromisoformat(str(fact.get("buy_time") or ""))
+            exited = datetime.fromisoformat(str(fact.get("sell_time") or ""))
+            elapsed = (exited - entered).total_seconds() / 3600.0
+            if elapsed > 0 and entered.date() == rec_date and exited.date() >= rec_date:
+                capital_hours = buy_notional * elapsed
+        except (TypeError, ValueError, OverflowError):
+            pass
         score = float(observation["lookup_attention_snapshot_score"])
         outcomes.append(
             {
@@ -1267,6 +1291,7 @@ def join_completed_outcomes(
                 "comparison_cost_krw": round(costs, 6),
                 "net_pnl_krw": round(net_pnl, 6),
                 "net_return_pct": round(net_pnl / buy_notional * 100.0, 8),
+                "capital_hours_krw": capital_hours,
             }
         )
     outcomes.sort(key=lambda row: (row["rec_date"], row["recommendation_id"]))
@@ -1286,11 +1311,11 @@ def _percentile(values: list[float], fraction: float) -> float | None:
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
-def _metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _metrics(rows: list[dict[str, Any]], *, economic_contract=True) -> dict[str, Any]:
     returns = [float(row["net_return_pct"]) for row in rows]
     total_notional = sum(float(row["buy_notional_krw"]) for row in rows)
     total_pnl = sum(float(row["net_pnl_krw"]) for row in rows)
-    return {
+    metrics = {
         "completed_outcome_count": len(rows),
         "trading_date_count": len({row["rec_date"] for row in rows}),
         "equal_weight_avg_profit_pct": (
@@ -1312,13 +1337,43 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "buy_notional_krw": round(total_notional, 6),
         "net_pnl_krw": round(total_pnl, 6),
     }
+    if not economic_contract:
+        return metrics
+    n = len(returns)
+    days = metrics["trading_date_count"]
+    se = None
+    if n > 1 and days > 1:
+        mean = math.fsum(returns) / n
+        residuals = defaultdict(float)
+        for row, value in zip(rows, returns):
+            residuals[row["rec_date"]] += value - mean
+        iid_variance = math.fsum((v - mean) ** 2 for v in returns) / (n - 1) / n
+        cluster_variance = (
+            days / (days - 1) * math.fsum(v * v for v in residuals.values()) / n**2
+        )
+        se = math.sqrt(max(iid_variance, cluster_variance))
+    hours = [_finite(row.get("capital_hours_krw")) for row in rows]
+    duration_complete = bool(rows and all(v is not None and v > 0 for v in hours))
+    metrics.update(
+        net_return_robust_se_pct=se,
+        net_uncertainty_method="max_trade_se_day_cluster_se_not_causal_ci",
+        completed_per_outcome_day=n / days if days else None,
+        net_per_outcome_day_krw=total_pnl / days if days else None,
+        capital_time_covered_count=sum(v is not None and v > 0 for v in hours),
+        net_per_capital_hour=(
+            total_pnl / math.fsum(hours) if duration_complete else None
+        ),
+    )
+    return metrics
 
 
-def _cohort_book(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _cohort_book(
+    rows: list[dict[str, Any]], *, economic_contract=True
+) -> dict[str, Any]:
     candidate = [row for row in rows if row["cohort"] == "candidate"]
     control = [row for row in rows if row["cohort"] == "control"]
-    candidate_metrics = _metrics(candidate)
-    control_metrics = _metrics(control)
+    candidate_metrics = _metrics(candidate, economic_contract=economic_contract)
+    control_metrics = _metrics(control, economic_contract=economic_contract)
     candidate_ev = candidate_metrics["source_quality_adjusted_ev_pct"]
     control_ev = control_metrics["source_quality_adjusted_ev_pct"]
     uplift = (
@@ -1327,7 +1382,12 @@ def _cohort_book(rows: list[dict[str, Any]]) -> dict[str, Any]:
         else None
     )
     return {
-        "all": _metrics(rows),
+        **(
+            {"economic_contract_version": NET_ECONOMIC_CONTRACT}
+            if economic_contract
+            else {}
+        ),
+        "all": _metrics(rows, economic_contract=economic_contract),
         "candidate": candidate_metrics,
         "control": control_metrics,
         "candidate_control_ev_uplift_pct": uplift,
@@ -1466,7 +1526,12 @@ def _book_passes(book: dict[str, Any]) -> tuple[bool, list[str]]:
     uplift = book["candidate_control_ev_uplift_pct"]
     if candidate_ev is None or candidate_ev <= 0.0:
         reasons.append("candidate_positive_ev_missing")
-    if uplift is None or uplift < MIN_EV_UPLIFT_PCT:
+    if book.get("economic_contract_version") is not None:
+        # An empty/one-day book legitimately has no estimable uncertainty.
+        # Keep it a sample wait, not a deterministic schema failure.
+        if _sample_floor_passes(book):
+            reasons.extend(net_edge_reasons(book))
+    elif uplift is None or uplift < MIN_EV_UPLIFT_PCT:
         reasons.append("candidate_control_ev_uplift_floor")
     candidate_p10 = candidate["downside_p10_pct"]
     control_p10 = control["downside_p10_pct"]
@@ -1511,7 +1576,13 @@ def _campaign_valid(campaign: Any, target: date) -> bool:
                 for row in rows
             )
             and len({row["recommendation_id"] for row in rows}) == len(rows)
-            and campaign["base_book"] == _cohort_book(rows)
+            and campaign["base_book"]
+            == _cohort_book(
+                rows,
+                economic_contract=bool(
+                    campaign["base_book"].get("economic_contract_version")
+                ),
+            )
             and _book_passes(campaign["base_book"])[0]
             and campaign["source_quality_at_arm"] == "pass"
             and campaign["cost_contract_sha256"] == canonical_sha256(COST_CONTRACT)
@@ -1759,6 +1830,23 @@ def _evidence(
     post_apply_mature: bool,
 ) -> dict[str, Any]:
     return {
+        **(
+            {
+                "economic_contract_version": NET_ECONOMIC_CONTRACT,
+                **{
+                    prefix + name + "_" + field: book[name].get(field)
+                    for prefix, book in (
+                        ("", base),
+                        ("forward_holdout_", holdout),
+                        ("post_apply_", post_apply),
+                    )
+                    for name in ("candidate", "control")
+                    for field in ("net_pnl_krw", "net_return_robust_se_pct")
+                },
+            }
+            if base.get("economic_contract_version") == NET_ECONOMIC_CONTRACT
+            else {}
+        ),
         "completed_outcome_count": base["all"]["completed_outcome_count"],
         "trading_date_count": base["all"]["trading_date_count"],
         "candidate_completed_outcome_count": base["candidate"][
@@ -1849,6 +1937,80 @@ def _evidence(
     }
 
 
+def _economic_acceptance(report: dict[str, Any]) -> dict[str, Any]:
+    """Bounded maintenance evidence, never an additional promotion/BUY gate."""
+    lineage = report.get("lineage") or {}
+    audited = {
+        row["target_date"]
+        for row in (report.get("natural_observation_audit") or {}).get("audits", [])
+        if row.get("status") == "pass"
+    }
+    days = sorted(audited & set(lineage.get("observed_event_dates", [])))
+    rows = report.get("outcomes") or []
+    valid_rows = [row for row in rows if row["rec_date"] in days]
+    total_net = math.fsum(row["net_pnl_krw"] for row in valid_rows)
+    receipt_rows = [
+        row
+        for row in rows
+        if row["rec_date"] == report["target_date"]
+        and row.get("lookup_attention_weight_runtime_policy_eligible") is True
+    ]
+    status = report["status"]
+    due = len(days) >= 20
+    next_action = (
+        "verify_next_preopen_receipt_then_runtime_consumption_and_net"
+        if status == "live_auto_apply_ready"
+        else (
+            "repair_source"
+            if status == "source_quality_blocked"
+            else (
+                "review_integrate_or_retire_no_evidence_or_edge"
+                if due
+                else "keep_collecting"
+            )
+        )
+    )
+    return {
+        "schema": "scanner_lookup_attention_natural_acceptance_v1",
+        "metric_role": "funnel_count",
+        "decision_authority": "diagnostic_only_no_runtime_mutation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "valid_observation_dates": days,
+        "valid_observation_day_count": len(days),
+        "bounded_review_after_valid_days": 20,
+        "maintenance_review_due": due,
+        "next_action": next_action,
+        "blocking_stage": (
+            "lookup_observation"
+            if not lineage.get("valid_observation_count")
+            else (
+                "receipt_or_completed_cost_join"
+                if not rows
+                else (
+                    "independent_forward_holdout"
+                    if status == "forward_holdout_armed"
+                    else status
+                )
+            )
+        ),
+        "full_completed_per_valid_source_day": (
+            len(valid_rows) / len(days) if days else None
+        ),
+        "net_per_valid_source_day_krw": (
+            total_net / len(days) if days and valid_rows else None
+        ),
+        "net_scope": "completed_full_only_excludes_open_missing_and_partial",
+        "current_date_policy_bound_completed_count": len(receipt_rows),
+        "pid_consumption_status": (
+            "policy_bound_outcomes_observed" if receipt_rows else "not_observed"
+        ),
+        "incremental_profit_status": "not_proven_observational_cohorts_not_causal_pairs",
+        "cost_basis": "actual_fill_prices_with_fixed_comparison_fees_and_tax_not_broker_cost_reconciliation",
+        "missing_capital_time_is_diagnostic_only": True,
+    }
+
+
 def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
     observations, lineage = collect_lineage(target)
     resource_pair_rows = list(lineage.pop("_resource_pair_rows", []))
@@ -1900,6 +2062,15 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
     if post_apply_attribution["rollback_triggered"]:
         status = "hold_no_edge"
     campaign = dict(prior_policy.get("campaign_base") or {})
+    if campaign and not campaign["base_book"].get("economic_contract_version"):
+        # Re-evaluate verified frozen real rows, preserving the original arm
+        # boundary and immutable predecessor hash. Never mix in forward rows.
+        predecessor_hash = campaign["artifact_sha256"]
+        campaign = _freeze_base(base_rows, campaign["arm_date"])
+        campaign["predecessor_campaign_sha256"] = predecessor_hash
+        campaign["artifact_sha256"] = canonical_sha256(
+            {k: v for k, v in campaign.items() if k != "artifact_sha256"}
+        )
     if decision["holdout_armed_since"] and not campaign and decision["base_pass"]:
         campaign = _freeze_base(base_rows, decision["holdout_armed_since"])
     if not decision["holdout_armed_since"] or status == "hold_no_edge":
@@ -1953,6 +2124,7 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
         "full_fill_contract": FULL_FILL_CONTRACT,
         "exclusions": exclusions,
         "base_book": base_book,
+        "base_outcomes": base_rows,
         "holdout_armed_since": decision["holdout_armed_since"],
         "campaign_base": campaign,
         "campaign_live_started": bool(
@@ -1975,12 +2147,17 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
         "policy_evidence_sha256": canonical_sha256(evidence),
         "outcome_count": len(outcomes),
         "outcomes": outcomes,
+        "natural_observation_audit": _source_quality(
+            target,
+            {date.fromisoformat(d) for d in lineage.get("observed_event_dates", [])},
+        ),
         "rollback": {
             "trigger": "missing_invalid_stale_policy_or_any_source_evidence_guard_failure",
             "bonus_points": 0.0,
             "effect": "legacy_same_tier_sort_score_restored",
         },
     }
+    report["economic_acceptance"] = _economic_acceptance(report)
     report["artifact_sha256"] = canonical_sha256(report)
     policy = {
         "schema_version": POLICY_SCHEMA_VERSION,
@@ -2028,6 +2205,12 @@ def validate_artifact_pair(
     if not isinstance(report, dict) or not isinstance(policy, dict):
         return ["report_or_policy_not_object"]
     issues: list[str] = []
+    new_economics = (
+        isinstance(policy.get("evidence"), dict)
+        and policy["evidence"].get("economic_contract_version") == NET_ECONOMIC_CONTRACT
+    )
+    if target >= NET_ECONOMIC_EFFECTIVE_FROM and not new_economics:
+        issues.append("net_economic_contract_required")
     expected_report_scalar = {
         "schema_version": SCHEMA_VERSION,
         "report_type": REPORT_TYPE,
@@ -2089,6 +2272,64 @@ def validate_artifact_pair(
     post_apply = report.get("post_apply_attribution")
     post_apply_payload = post_apply if isinstance(post_apply, dict) else {}
     post_apply_mature_value = post_apply_payload.get("mature")
+    if new_economics:
+        try:
+            rows = report["outcomes"]
+            arm = report.get("holdout_armed_since")
+            campaign = report.get("campaign_base") or {}
+            if (
+                not isinstance(rows, list)
+                or any(
+                    not isinstance(row, dict)
+                    or row.get("cohort") not in {"candidate", "control"}
+                    or not (
+                        ROLLOUT_DATE.isoformat()
+                        <= row["rec_date"]
+                        <= target.isoformat()
+                    )
+                    or not is_krx_trading_day(date.fromisoformat(row["rec_date"]))
+                    or _finite(row.get("net_return_pct")) is None
+                    or _finite(row.get("net_pnl_krw")) is None
+                    or _finite(row.get("buy_notional_krw")) is None
+                    or row["buy_notional_krw"] <= 0
+                    or not math.isclose(
+                        row["net_return_pct"],
+                        row["net_pnl_krw"] / row["buy_notional_krw"] * 100,
+                        abs_tol=1e-7,
+                    )
+                    for row in rows
+                )
+                or len({r["recommendation_id"] for r in rows}) != len(rows)
+            ):
+                raise ValueError("outcome_contract_invalid")
+            if report.get("outcome_count") != len(rows):
+                raise ValueError("outcome_count_invalid")
+            base_rows = report.get(
+                "base_outcomes", campaign["outcomes"] if campaign else rows
+            )
+            if campaign and base_rows != campaign["outcomes"]:
+                issues.append("frozen_base_outcomes_mismatch")
+            expected_base = _cohort_book(base_rows)
+            # Blocked source and pre-arm reports intentionally have empty holdout.
+            source_pass = (
+                report.get("source_quality", {}).get("status") == "pass"
+                and report.get("official_symbol_master", {}).get("status") == "pass"
+                and report.get("runtime_policy_provenance_status") == "pass"
+            )
+            holdout_rows = (
+                [r for r in rows if r["rec_date"] > arm] if arm and source_pass else []
+            )
+            if base_book != expected_base or holdout_book != _cohort_book(holdout_rows):
+                issues.append("economic_books_not_reproducible")
+            expected_post = evaluate_post_apply(policy, rows)
+            if post_apply_payload.get("book") != expected_post["book"]:
+                issues.append("post_apply_book_not_reproducible")
+            if post_apply_mature_value is not expected_post["mature"]:
+                issues.append("post_apply_maturity_not_reproducible")
+            if report.get("economic_acceptance") != _economic_acceptance(report):
+                issues.append("economic_acceptance_not_reproducible")
+        except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+            issues.append("real_economic_outcomes_invalid")
     if not isinstance(post_apply_mature_value, bool):
         issues.append("post_apply_mature_not_boolean")
     if not isinstance(post_apply_payload.get("rollback_triggered"), bool):
@@ -2456,6 +2697,10 @@ def _markdown(report: dict[str, Any]) -> str:
             f"- base completed/dates: `{base['all']['completed_outcome_count']}/{base['all']['trading_date_count']}`",
             f"- base candidate/control EV: `{base['candidate']['source_quality_adjusted_ev_pct']}` / `{base['control']['source_quality_adjusted_ev_pct']}`",
             f"- base EV uplift: `{base['candidate_control_ev_uplift_pct']}`",
+            f"- economic contract: `{base.get('economic_contract_version', 'legacy_fixed_uplift')}`; candidate/control robust SE: `{base['candidate'].get('net_return_robust_se_pct')}` / `{base['control'].get('net_return_robust_se_pct')}`",
+            "- economic rule: positive candidate net and candidate/control increment after 2-SE robustness margins; no fixed minimum uplift; not a causal confidence interval.",
+            f"- natural acceptance / bounded maintenance: `{report.get('economic_acceptance', {})}`",
+            f"- candidate net per capital-hour: `{base['candidate'].get('net_per_capital_hour')}`; missing duration remains null, not an approval blocker.",
             f"- candidate/control observations: `{candidate_funnel.get('valid_observation_count', 0)}/{control_funnel.get('valid_observation_count', 0)}`",
             f"- candidate/control full-fill: `{candidate_funnel.get('full_fill_observation_count', 0)}/{control_funnel.get('full_fill_observation_count', 0)}`",
             f"- resource allocation pair: `{resource_pair.get('status', 'not_observed')}` generations=`{resource_pair.get('paired_generation_count', 0)}` dates=`{resource_pair.get('trading_date_count', 0)}` reordered=`{resource_pair.get('reordered_generation_count', 0)}`",

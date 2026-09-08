@@ -1,0 +1,302 @@
+{
+  "schema": "widget_episode_20260908_application_receipt_v1",
+  "observed_at_kst": "2026-09-08T00:06:12.669448+09:00",
+  "source_date": "2026-09-07",
+  "target_date": "2026-09-08",
+  "low_price": {
+    "path": "/home/ubuntu/KORStockScan/data/threshold_cycle/low_price_two_leg/applied/low_price_two_leg_policy_2026-09-08.json",
+    "artifact_sha256": "226d1620bc8902c548b14ffbbe64fdea1800861a96303146a43d8f24414acc82",
+    "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+    "inventory": 56,
+    "runtime_eligible": 53,
+    "quarantined": [
+      {
+        "effective_cost_pct": 0.23,
+        "profile_id": "cj_cgv_morning",
+        "reason": "unified_round_trip_cost_revalidation_nonpositive",
+        "release_condition": "new_user_approved_profile_revision_with_positive_calibration_halves_holdout_and_full_ev_under_current_cost_contract",
+        "revalidated_notional_weighted_ev_pct": {
+          "calibration": 0.030287,
+          "calibration_first_half": -0.004323,
+          "calibration_second_half": 0.06553,
+          "full": 0.054061,
+          "holdout": 0.116837
+        },
+        "source_cost_pct": 0.2,
+        "source_profile_id": "existing_079160_morning",
+        "source_report": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-04.json"
+      },
+      {
+        "effective_cost_pct": 0.23,
+        "profile_id": "youngone_midday",
+        "reason": "unified_round_trip_cost_revalidation_nonpositive",
+        "release_condition": "new_user_approved_profile_revision_with_positive_calibration_halves_holdout_and_full_ev_under_current_cost_contract",
+        "revalidated_notional_weighted_ev_pct": {
+          "calibration": 0.009584,
+          "calibration_first_half": 0.020595,
+          "calibration_second_half": -0.000262,
+          "full": 0.012238,
+          "holdout": 0.025027
+        },
+        "source_cost_pct": 0.2,
+        "source_profile_id": "existing_111770_midday",
+        "source_report": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-04.json"
+      },
+      {
+        "effective_cost_pct": 0.23,
+        "profile_id": "sk_telecom_midday",
+        "reason": "unified_round_trip_cost_revalidation_nonpositive",
+        "release_condition": "new_user_approved_profile_revision_with_positive_calibration_halves_holdout_and_full_ev_under_current_cost_contract",
+        "revalidated_notional_weighted_ev_pct": {
+          "calibration": -0.001478255,
+          "full": -0.005667687,
+          "holdout": -0.017345954
+        },
+        "source_cost_pct": 0.2,
+        "source_profile_id": "existing_017670_midday",
+        "source_report": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-04.json"
+      }
+    ],
+    "validation": "valid",
+    "profiles": [
+      {
+        "profile_id": "cj_cgv_late_morning",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@cj_cgv_late_morning.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh cj_cgv_late_morning ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "cj_cgv_midday",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@cj_cgv_midday.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh cj_cgv_midday ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "doosan_enerbility_late_morning",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@doosan_enerbility_late_morning.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh doosan_enerbility_late_morning ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "fan_ocean_late_morning",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@fan_ocean_late_morning.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh fan_ocean_late_morning ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "hanse_morning",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@hanse_morning.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh hanse_morning ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "nhn_midday",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@nhn_midday.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh nhn_midday ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "nhn_morning",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@nhn_morning.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh nhn_morning ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "sd_biosensor_afternoon",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@sd_biosensor_afternoon.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh sd_biosensor_afternoon ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "sk_telecom_late_morning",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@sk_telecom_late_morning.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh sk_telecom_late_morning ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "tym_morning",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@tym_morning.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh tym_morning ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      },
+      {
+        "profile_id": "youngone_afternoon",
+        "policy_hash": "a4d3741f97b1c538eba106bb5cbd7cd45c192cc5d89d0a3eec59a9344287fb01",
+        "loader_reason": "ready",
+        "preflight_research": "ready",
+        "service": "korstockscan-low-price-two-leg@youngone_afternoon.service",
+        "service_status": "MainPID=0\nExecStart={ path=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh ; argv[]=/home/ubuntu/KORStockScan/deploy/run_low_price_two_leg_live.sh youngone_afternoon ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }\nActiveState=inactive\n"
+      }
+    ],
+    "timers": [
+      {
+        "unit": "korstockscan-low-price-two-leg-nhn-midday-preflight.timer",
+        "sha256": "97455de85d415cb37d150a132765673848f51fe2c1bc0e1b8685ab05e943adf8",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 13:25:00 KST\nTriggers=korstockscan-low-price-two-leg-preflight@nhn_midday.service\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-nhn-midday.timer",
+        "sha256": "da0429507d350f26e2337a976f1cd375386b62beaa609a2c45c0e1180d20f10a",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 13:29:00 KST\nTriggers=korstockscan-low-price-two-leg@nhn_midday.service\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-tym-morning-preflight.timer",
+        "sha256": "5f5f011e553d7e87feb82f2ee14a1bd51b8ad7cf8afefce839f350b77f797118",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:05:00 KST\nTriggers=korstockscan-low-price-two-leg-preflight@tym_morning.service\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-tym-morning.timer",
+        "sha256": "7f2f836e3833ca4b681926ca6e2515b4704bc270ed003e1749807c7b930ec856",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:09:00 KST\nTriggers=korstockscan-low-price-two-leg@tym_morning.service\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-sd-biosensor-afternoon-preflight.timer",
+        "sha256": "ec4c0ab3190ee03e3bd3a44327ed62adba2acc4add4f2a1a113485762db3c27b",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 14:10:00 KST\nTriggers=korstockscan-low-price-two-leg-preflight@sd_biosensor_afternoon.service\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-sd-biosensor-afternoon.timer",
+        "sha256": "a3e5fb9dce92082260b8e8727c80b3aa2558ff0976f84253e057b0e5f6fadc1e",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 14:14:00 KST\nTriggers=korstockscan-low-price-two-leg@sd_biosensor_afternoon.service\nActiveState=active\nUnitFileState=enabled\n"
+      }
+    ],
+    "all_approved_profile_timer_status": [
+      {
+        "unit": "korstockscan-low-price-two-leg-cj-cgv-late-morning-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:55:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-cj-cgv-late-morning.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:59:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-cj-cgv-midday-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 13:15:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-cj-cgv-midday.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 13:19:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-doosan-enerbility-late-morning-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 10:10:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-doosan-enerbility-late-morning.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 10:14:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-fan-ocean-late-morning-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 10:00:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-fan-ocean-late-morning.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 10:04:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-hanse-morning-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:25:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-hanse-morning.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:29:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-nhn-midday-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 13:25:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-nhn-midday.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 13:29:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-nhn-morning-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:35:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-nhn-morning.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:39:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-sd-biosensor-afternoon-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 14:10:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-sd-biosensor-afternoon.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 14:14:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-sk-telecom-late-morning-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 10:40:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-sk-telecom-late-morning.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 10:44:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-tym-morning-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:05:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-tym-morning.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 09:09:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-youngone-afternoon-preflight.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 14:25:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      },
+      {
+        "unit": "korstockscan-low-price-two-leg-youngone-afternoon.timer",
+        "status": "NextElapseUSecRealtime=Tue 2026-09-08 14:29:00 KST\nActiveState=active\nUnitFileState=enabled\n"
+      }
+    ]
+  },
+  "widget": {
+    "pid": 9704,
+    "policy_id": "widget_symbol_runtime_policy_2026-09-08_from_2026-09-07",
+    "policy_path": "/home/ubuntu/KORStockScan/data/runtime/widget_symbol_runtime_policy/widget_symbol_runtime_policy_2026-09-08.json",
+    "policy_sha256": "6402bc6ed25561aa11b1d76dc8bfddc058ff8d66e3c4ba2d89615aeca13cb2a7",
+    "state_path": "data/runtime/widget_signal_auto_trade_state.json",
+    "state_snapshot_sha256": "1db9ad6afb538712f889af22bb73327ead50d955603eda2578c2e3916889673f",
+    "observed_policy_manifest": {
+      "005930": {
+        "KRX_REGULAR": "widget_auto_trade_policy_2026-09-08_from_2026-09-07",
+        "NXT_AFTERMARKET": "widget_auto_trade_policy_2026-09-08_from_2026-09-07",
+        "NXT_PREMARKET": "widget_auto_trade_policy_2026-09-08_from_2026-09-07"
+      },
+      "034020": {
+        "KRX_REGULAR": "widget_auto_trade_policy_2026-09-08_from_2026-09-07"
+      },
+      "042660": {
+        "KRX_REGULAR": "widget_auto_trade_policy_2026-09-08_from_2026-09-07"
+      },
+      "080220": {
+        "KRX_REGULAR": "widget_symbol_runtime_policy_2026-09-08_from_2026-09-07"
+      }
+    },
+    "actual_order_submitted_by_this_task": false
+  },
+  "trading_service_started_or_restarted_by_this_task": false,
+  "orders_or_cancellations_by_this_task": false,
+  "economic_acceptance": "pending_natural_target_date_outcome"
+}

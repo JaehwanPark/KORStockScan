@@ -52,6 +52,9 @@ MIN_COHORT_COMPLETED = 10
 MIN_TRADING_DATES = 5
 MIN_COHORT_DATES = 3
 MIN_EV_UPLIFT_PCT = 0.10
+# Archive compatibility only. New source dates cannot use the fixed uplift gate.
+NET_ECONOMIC_CONTRACT = "scanner_lookup_attention_small_net_v1"
+NET_ECONOMIC_EFFECTIVE_FROM = date(2026, 9, 8)
 MAX_TAIL_DEGRADATION_PCT = 0.25
 MIN_WORST_NET_RETURN_PCT = -5.0
 ELIGIBLE_VENUES = ["KRX"]
@@ -107,6 +110,71 @@ def _count_at_least(evidence: dict[str, Any], key: str, minimum: int) -> bool:
     return bool(value is not None and value.is_integer() and value >= minimum)
 
 
+def net_edge_reasons(book: Any) -> list[str]:
+    """Shared producer/PREOPEN/R6 robustness screen, not a causal confidence CI.
+
+    Real candidate and control cohorts are observational, NOT matched CF pairs.
+    Their standard errors include day clustering. No minimum profit magnitude
+    is required, but losses, uncertainty and unequal-notional net loss matter.
+    """
+    if not isinstance(book, dict):
+        return ["net_economic_contract_invalid"]
+    candidate, control = book.get("candidate"), book.get("control")
+    if not isinstance(candidate, dict) or not isinstance(control, dict):
+        return ["net_economic_contract_invalid"]
+    c, k, uplift, net, cse, kse = (
+        _finite_number(value)
+        for value in (
+            candidate.get("source_quality_adjusted_ev_pct"),
+            control.get("source_quality_adjusted_ev_pct"),
+            book.get("candidate_control_ev_uplift_pct"),
+            candidate.get("net_pnl_krw"),
+            candidate.get("net_return_robust_se_pct"),
+            control.get("net_return_robust_se_pct"),
+        )
+    )
+    if (
+        book.get("economic_contract_version") != NET_ECONOMIC_CONTRACT
+        or any(v is None for v in (c, k, uplift, net, cse, kse))
+        or cse < 0
+        or kse < 0
+        or not math.isclose(c - k, uplift, rel_tol=1e-9, abs_tol=1e-7)
+    ):
+        return ["net_economic_contract_invalid"]
+    reasons = []
+    if c <= 0 or net <= 0:
+        reasons.append("candidate_positive_net_missing")
+    if c - 2 * cse <= 0:
+        reasons.append("candidate_net_uncertainty_margin")
+    # Cohorts share trading days; do not assume zero covariance. The sum is
+    # the conservative SE bound when cross-cohort covariance is unknown.
+    if uplift - 2 * (cse + kse) <= 0:
+        reasons.append("candidate_control_net_uncertainty_margin")
+    return reasons
+
+
+def _net_evidence_valid(evidence: dict[str, Any], prefix: str) -> bool:
+    return not net_edge_reasons(
+        {
+            "economic_contract_version": evidence.get("economic_contract_version"),
+            "candidate_control_ev_uplift_pct": evidence.get(
+                prefix + "candidate_control_ev_uplift_pct"
+            ),
+            **{
+                name: {
+                    field: evidence.get(prefix + name + "_" + field)
+                    for field in (
+                        "source_quality_adjusted_ev_pct",
+                        "net_pnl_krw",
+                        "net_return_robust_se_pct",
+                    )
+                }
+                for name in ("candidate", "control")
+            },
+        }
+    )
+
+
 def _latest_prior_path(target: date, policy_dir: Path) -> tuple[date, Path] | None:
     candidates: list[tuple[date, Path]] = []
     for path in policy_dir.glob("scanner_lookup_attention_policy_*.json"):
@@ -122,6 +190,9 @@ def _latest_prior_path(target: date, policy_dir: Path) -> tuple[date, Path] | No
 
 def _evidence_valid(evidence: Any) -> bool:
     if not isinstance(evidence, dict):
+        return False
+    net_contract = evidence.get("economic_contract_version")
+    if net_contract not in (None, NET_ECONOMIC_CONTRACT):
         return False
     candidate_ev = _finite_number(
         evidence.get("candidate_source_quality_adjusted_ev_pct")
@@ -185,7 +256,11 @@ def _evidence_valid(evidence: Any) -> bool:
         and candidate_ev is not None
         and candidate_ev > 0.0
         and uplift is not None
-        and uplift >= MIN_EV_UPLIFT_PCT
+        and (
+            _net_evidence_valid(evidence, "")
+            if net_contract
+            else uplift >= MIN_EV_UPLIFT_PCT
+        )
         and candidate_p10 is not None
         and control_p10 is not None
         and candidate_p10 >= control_p10 - MAX_TAIL_DEGRADATION_PCT
@@ -194,7 +269,11 @@ def _evidence_valid(evidence: Any) -> bool:
         and holdout_candidate_ev is not None
         and holdout_candidate_ev > 0.0
         and holdout_uplift is not None
-        and holdout_uplift >= MIN_EV_UPLIFT_PCT
+        and (
+            _net_evidence_valid(evidence, "forward_holdout_")
+            if net_contract
+            else holdout_uplift >= MIN_EV_UPLIFT_PCT
+        )
         and holdout_candidate_p10 is not None
         and holdout_control_p10 is not None
         and holdout_candidate_p10 >= holdout_control_p10 - MAX_TAIL_DEGRADATION_PCT
@@ -204,6 +283,32 @@ def _evidence_valid(evidence: Any) -> bool:
     if not base_and_holdout_valid:
         return False
     post_apply_mature = evidence.get("post_apply_mature")
+    if net_contract:
+        post_count = _finite_number(
+            evidence.get("post_apply_candidate_completed_outcome_count")
+        )
+        post_worst = _finite_number(
+            evidence.get("post_apply_candidate_worst_net_return_pct")
+        )
+        if (
+            post_count is not None
+            and post_count > 0
+            and (post_worst is None or post_worst < MIN_WORST_NET_RETURN_PCT)
+        ):
+            return False
+        expected_mature = all(
+            _count_at_least(evidence, "post_apply_" + key, minimum)
+            for key, minimum in (
+                ("completed_outcome_count", MIN_TOTAL_COMPLETED),
+                ("trading_date_count", MIN_TRADING_DATES),
+                ("candidate_completed_outcome_count", MIN_COHORT_COMPLETED),
+                ("control_completed_outcome_count", MIN_COHORT_COMPLETED),
+                ("candidate_trading_date_count", MIN_COHORT_DATES),
+                ("control_trading_date_count", MIN_COHORT_DATES),
+            )
+        )
+        if post_apply_mature is not expected_mature:
+            return False
     if post_apply_mature is False:
         return True
     if post_apply_mature is not True:
@@ -249,7 +354,11 @@ def _evidence_valid(evidence: Any) -> bool:
         and post_candidate_ev is not None
         and post_candidate_ev > 0.0
         and post_uplift is not None
-        and post_uplift >= MIN_EV_UPLIFT_PCT
+        and (
+            _net_evidence_valid(evidence, "post_apply_")
+            if net_contract
+            else post_uplift >= MIN_EV_UPLIFT_PCT
+        )
         and post_candidate_p10 is not None
         and post_control_p10 is not None
         and post_candidate_p10 >= post_control_p10 - MAX_TAIL_DEGRADATION_PCT
@@ -312,6 +421,11 @@ def _validate_payload(payload: Any, *, source_date: date) -> list[str]:
 
     if not _evidence_valid(payload.get("evidence")):
         errors.append("policy_evidence_contract_invalid")
+    if source_date >= NET_ECONOMIC_EFFECTIVE_FROM and (
+        not isinstance(payload.get("evidence"), dict)
+        or payload["evidence"].get("economic_contract_version") != NET_ECONOMIC_CONTRACT
+    ):
+        errors.append("policy_net_economic_contract_required")
     report_hash = str(payload.get("source_report_artifact_sha256") or "")
     if not re.fullmatch(r"[0-9a-f]{64}", report_hash):
         errors.append("policy_source_report_hash_invalid")

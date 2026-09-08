@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -2615,6 +2616,14 @@ def build_threshold_cycle_ev_report(
         and trade_review_win == win
         and trade_review_loss == loss
     )
+    # A different/missing trade snapshot is not the PnL of the headline cohort.
+    # Keep its original value for diagnosis without substituting zero economics.
+    snapshot_pnl = _safe_float(trade_metrics.get("realized_pnl_krw"), None)
+    if isinstance(trade_metrics.get("realized_pnl_krw"), bool) or (
+        snapshot_pnl is not None and not math.isfinite(snapshot_pnl)
+    ):
+        snapshot_pnl = None
+    reconciled_pnl = snapshot_pnl if trade_review_count_match else None
     budget_pass = _safe_int(perf_metrics.get("budget_pass_events"), 0)
     submitted = _safe_int(perf_metrics.get("order_bundle_submitted_events"), 0)
     submitted_rate = round((submitted / budget_pass) * 100.0, 2) if budget_pass else 0.0
@@ -2724,7 +2733,16 @@ def build_threshold_cycle_ev_report(
             "loss_trades": loss,
             "win_rate_pct": win_rate,
             "avg_profit_rate_pct": round(avg_profit_rate_pct, 4),
-            "realized_pnl_krw": _safe_int(trade_metrics.get("realized_pnl_krw"), 0),
+            "realized_pnl_krw": reconciled_pnl,
+            "realized_pnl_status": (
+                "unresolved_trade_review_count_mismatch"
+                if not trade_review_count_match
+                else (
+                    "missing_or_invalid_snapshot_pnl"
+                    if snapshot_pnl is None
+                    else "count_reconciled_snapshot_diagnostic_not_cost_verified"
+                )
+            ),
             "headline_authority": (
                 "completed_by_source_same_day_real"
                 if same_day_source_split_present
@@ -2732,6 +2750,7 @@ def build_threshold_cycle_ev_report(
             ),
             "realized_pnl_authority": "trade_review_snapshot_diagnostic",
             "trade_review_snapshot_reconciliation": {
+                "snapshot_realized_pnl_krw": snapshot_pnl,
                 "completed_trades": trade_review_completed,
                 "win_trades": trade_review_win,
                 "loss_trades": trade_review_loss,
@@ -3071,6 +3090,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- win/loss: `{ev.get('win_trades')}` / `{ev.get('loss_trades')}` (`{ev.get('win_rate_pct')}`%)",
         f"- avg_profit_rate: `{ev.get('avg_profit_rate_pct')}`%",
         f"- realized_pnl_krw: `{ev.get('realized_pnl_krw')}`",
+        f"- realized_pnl_status: `{ev.get('realized_pnl_status')}`",
         f"- full_fill_completed_avg_profit_rate: `{ev.get('full_fill_completed_avg_profit_rate_pct')}`%",
         "",
         "## Entry Funnel",

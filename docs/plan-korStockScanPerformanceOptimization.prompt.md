@@ -1,6 +1,6 @@
 # 계획: KORStockScan 성능 최적화 실행안 (Session Prompt)
 
-현행화: `2026-09-07 KST`
+현행화: `2026-09-08 KST`
 역할: 세션 진입용 경량 포인터이며 별도의 runtime owner/ON 목록을 복제하지 않는다. 일반 작업마다 이 문서를 다시 읽을 필요는 없다.
 
 ## 현재 Source of Truth
@@ -8,7 +8,7 @@
 | 용도 | 문서 |
 | --- | --- |
 | 튜닝 원칙·current/open 판단 | [Plan Rebase §1~§8](./plan-korStockScanPerformanceOptimization.rebase.md) |
-| 실행 항목·시간·OPEN owner | 당일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md` — 이번 현행화 기준 [9/7 checklist](./checklists/2026-09-07-stage2-todo-checklist.md) |
+| 실행 항목·시간·OPEN owner | 당일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md` — 이번 기준 [9/8 checklist](./checklists/2026-09-08-stage2-todo-checklist.md); 연결된 9/7의 아직 OPEN인 원 항목 재사용 |
 | producer/consumer·승인·Metric Contract | [Traceability](./report-based-automation-traceability.md) |
 | 실행·복구 권한 | [Time-based runbook](./time-based-operations-runbook.md) |
 | 장후 상세검토 진행 | [Stable-index inventory](./audit-reports/2026-09-05-postclose-work-inventory.md) |
@@ -19,6 +19,8 @@
 | 이력·종료축 | [Execution delta](./plan-korStockScanPerformanceOptimization.execution-delta.md), [archive](./archive/) |
 
 ## 세션 시작과 판단 경계
+
+최근 변경 근거는 [postclose 요약·체결 귀속 복구](./audit-reports/2026-09-08-postclose-priority-repair-review.md)와 [별도 승인 위젯·에피소드 적용](./audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)다. source-date 복구와 다음-session policy/설치, 자연 PID/EV를 분리한다. frozen canonical ledger와 native projection/승인 ledger는 중복 집계하지 않는다.
 
 1. Plan Rebase §1~§8, 당일 checklist의 오늘 목적·오늘 강제 규칙, `AGENTS.md` current-state snapshot을 읽는다. 과거 체크리스트 완료는 현재 OPEN owner가 아니다.
 2. 목표는 EV/순이익 극대화다. Clean tuning 기준은 `2026-06-05T00:00:00+09:00`; 그 이전 자료는 archive/audit only다. 기존 문서의 6/4 시각을 현재 기준으로 쓰지 않는다.

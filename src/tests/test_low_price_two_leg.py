@@ -122,6 +122,8 @@ from src.trading.low_price_two_leg.profiles import (
     PROFILES_20260828_PRIOR,
     PROFILES_20260831_PRIOR,
     PROFILES_20260907_PRIOR,
+    PROFILES_20260908_PRIOR,
+    get_profile,
     PRE_RECOMMENDATION_PROFILES,
     SAMSUNG_HEAVY_MIDDAY_WINDOW,
     SK_ETERNIX_MIDDAY_WINDOW,
@@ -413,7 +415,10 @@ class FakeSession:
 
 
 def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessions():
-    assert {key: (item.symbol, item.session) for key, item in PROFILES.items()} == {
+    assert {
+        key: (item.symbol, item.session)
+        for key, item in PROFILES_20260908_PRIOR.items()
+    } == {
         "samsung_heavy_midday": ("010140", "midday"),
         "samsung_heavy_afternoon": ("010140", "afternoon"),
         "sk_eternix_midday": ("475150", "midday"),
@@ -470,7 +475,7 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
     }
     assert {
         (item.policy.scan_start, item.policy.scan_last_bar)
-        for item in PROFILES.values()
+        for item in PROFILES_20260908_PRIOR.values()
     } == {
         SAMSUNG_HEAVY_MIDDAY_WINDOW,
         AFTERNOON_WINDOW,
@@ -526,12 +531,24 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         YOUNGONE_MIDDAY_20260907_WINDOW,
         SK_TELECOM_MIDDAY_20260907_WINDOW,
     }
-    assert PROFILES["samsung_heavy_midday"].policy.lookback_bars == 30
-    assert PROFILES["samsung_heavy_midday"].policy.rolling_high_drawdown_pct == 0.75
-    assert PROFILES["samsung_heavy_midday"].policy.rolling_low_proximity_pct == 0.35
-    assert PROFILES["sk_eternix_midday"].policy.lookback_bars == 60
-    assert PROFILES["sk_eternix_midday"].policy.rolling_high_drawdown_pct == 0.75
-    assert PROFILES["sk_eternix_midday"].policy.rolling_low_proximity_pct == 0.35
+    assert PROFILES_20260908_PRIOR["samsung_heavy_midday"].policy.lookback_bars == 30
+    assert (
+        PROFILES_20260908_PRIOR["samsung_heavy_midday"].policy.rolling_high_drawdown_pct
+        == 0.75
+    )
+    assert (
+        PROFILES_20260908_PRIOR["samsung_heavy_midday"].policy.rolling_low_proximity_pct
+        == 0.35
+    )
+    assert PROFILES_20260908_PRIOR["sk_eternix_midday"].policy.lookback_bars == 60
+    assert (
+        PROFILES_20260908_PRIOR["sk_eternix_midday"].policy.rolling_high_drawdown_pct
+        == 0.75
+    )
+    assert (
+        PROFILES_20260908_PRIOR["sk_eternix_midday"].policy.rolling_low_proximity_pct
+        == 0.35
+    )
     assert POLICY_BOUNDS["samsung_heavy_midday"] == {
         "drawdown_min": 0.75,
         "drawdown_max": 1.0,
@@ -544,11 +561,18 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
         "near_low_min": 0.25,
         "near_low_max": 0.35,
     }
-    assert all(item.policy.quantity == 20 for item in PROFILES.values())
-    assert PROFILES["mirae_asset_morning"].policy.entry_offsets_ticks == (0, -1)
-    assert PROFILES["jeju_semiconductor_morning"].policy.entry_valid_completed_bars == 3
+    assert all(item.policy.quantity == 20 for item in PROFILES_20260908_PRIOR.values())
+    assert PROFILES_20260908_PRIOR[
+        "mirae_asset_morning"
+    ].policy.entry_offsets_ticks == (0, -1)
+    assert (
+        PROFILES_20260908_PRIOR[
+            "jeju_semiconductor_morning"
+        ].policy.entry_valid_completed_bars
+        == 3
+    )
     assert all(
-        PROFILES[profile_id].policy.target_ticks == 4
+        PROFILES_20260908_PRIOR[profile_id].policy.target_ticks == 4
         for profile_id in {
             "mirae_asset_morning",
             "jeju_semiconductor_morning",
@@ -565,7 +589,7 @@ def test_profiles_are_exact_seventeen_symbols_and_fifty_three_independent_sessio
             profile.policy.entry_valid_completed_bars,
             profile.policy.target_ticks,
         )
-        for profile_id, profile in PROFILES.items()
+        for profile_id, profile in PROFILES_20260908_PRIOR.items()
         if profile_id
         in {
             "kakao_morning",
@@ -1232,7 +1256,7 @@ def test_profile_revision_is_exact_date_preopen_transition(tmp_path):
     monday_0907_generation, _ = build_applied_policy(
         target_date=date(2026, 9, 7), candidate_dir=tmp_path / "none"
     )
-    assert set(monday_0907_generation["profiles"]) == set(PROFILES)
+    assert set(monday_0907_generation["profiles"]) == set(PROFILES_20260908_PRIOR)
     assert (
         monday_0907_generation["profile_revision_transition"]
         == PROFILE_REVISION_20260907_TRANSITION
@@ -1267,7 +1291,7 @@ def test_all_seven_20260828_recommendations_bind_exact_next_profiles():
         live_profile_id,
         report_profile_id,
     ) in RECOMMENDATION_20260828_PROFILE_MAP.items():
-        profile = PROFILES[live_profile_id]
+        profile = get_profile(live_profile_id, target_date=date(2026, 8, 31))
         policy = profile.policy
         assert policy.quantity == 20
         assert recommendations[report_profile_id]["recommended_spot"] == {
@@ -1300,7 +1324,7 @@ def test_all_thirteen_20260904_recommendations_bind_exact_next_profiles():
         live_profile_id,
         report_profile_id,
     ) in RECOMMENDATION_20260904_PROFILE_MAP.items():
-        profile = PROFILES[live_profile_id]
+        profile = get_profile(live_profile_id, target_date=date(2026, 9, 7))
         policy = profile.policy
         assert policy.quantity == 20
         assert recommendations[report_profile_id]["recommended_spot"] == {
@@ -2280,7 +2304,9 @@ def test_terminal_partial_fill_does_not_report_whole_episode_as_unfilled(tmp_pat
     assert state["status"] == "COMPLETE"
     assert state["position_qty"] == 0
     assert state["last_action"] == ("unfilled_buy_leg_resolved_after_sibling_completed")
-    assert state["audit"][-1]["completed_sibling_leg_ids"] == ["signal_close"]
+    assert state["audit"][-1]["completed_sibling_leg_ids"] == [
+        state["legs"][0]["leg_id"]
+    ]
 
 
 @pytest.mark.parametrize(
@@ -4251,7 +4277,7 @@ def test_zero_sample_hash_consistent_policy_change_is_rejected_before_apply(
 def test_candidate_carries_actual_applied_policy_not_latest_unconsumed_proposal(
     tmp_path,
 ):
-    target = date(2026, 9, 7)
+    target = date(2026, 9, 8)
     applied, _ = build_applied_policy(
         target_date=target, candidate_dir=tmp_path / "empty"
     )
@@ -4285,7 +4311,7 @@ def test_candidate_carries_actual_applied_policy_not_latest_unconsumed_proposal(
         candidate_dir / f"low_price_two_leg_policy_candidate_{target}.json", candidate
     )
     result, _ = build_applied_policy(
-        target_date=date(2026, 9, 8), candidate_dir=candidate_dir
+        target_date=date(2026, 9, 9), candidate_dir=candidate_dir
     )
     assert result["policy_hash"] == applied["policy_hash"]
     assert result["policy_mutations"] == []
@@ -4353,12 +4379,12 @@ def test_report_cli_to_preopen_is_automatic_custody_only_without_broker_calls(
             **kwargs, machine_microstructure_report_dir=tmp_path / "micro"
         ),
     )
-    _write_source_quality_audit(tmp_path / "sq", "2026-09-07")
+    _write_source_quality_audit(tmp_path / "sq", "2026-09-08")
     assert (
         tuning.main(
             [
                 "--target-date",
-                "2026-09-07",
+                "2026-09-08",
                 "--state-dir",
                 str(tmp_path / "states"),
                 "--output-dir",
@@ -4375,7 +4401,7 @@ def test_report_cli_to_preopen_is_automatic_custody_only_without_broker_calls(
         == 0
     )
     applied, status = build_applied_policy(
-        target_date=date(2026, 9, 8), candidate_dir=tmp_path / "candidates"
+        target_date=date(2026, 9, 9), candidate_dir=tmp_path / "candidates"
     )
     assert status == "candidate_applied"
     assert applied["policy_mutations"] == []

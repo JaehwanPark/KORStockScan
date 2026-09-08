@@ -1,0 +1,21 @@
+# Scanner lookup-attention tuning — 2026-09-07
+
+- decision: `hold_sample`
+- base completed/dates: `1/1`
+- base candidate/control EV: `None` / `0.29243455`
+- base EV uplift: `None`
+- candidate/control observations: `60/1573`
+- candidate/control full-fill: `0/1`
+- resource allocation pair: `not_observed` generations=`0` dates=`0` reordered=`0`
+- resolved marginal pairs/dates: `0/0`; missing observed labels=`0`
+- marginal snapshot net uplift / incoming return: `None` / `None` (source-only opportunity proxy, not real execution EV)
+- resource retention review: `collecting`; excluded partitions=`{}`
+- immutable base arm: `not_armed`
+- forward holdout completed/dates: `0/0`
+- post-apply status: `not_applicable_before_live_apply`
+- post-apply completed/dates: `0/0`
+- post-apply rollback: `False`
+- source quality/master: `pass` / `pass`
+- runtime handoff allowed: `False`
+- scope: same-priority-tier bounded score only; rollback bonus is 0.
+- automation: validated candidate -> next PREOPEN immutable exact-date receipt -> runtime; no additional operator approval. No receipt means zero bonus.

@@ -575,7 +575,17 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         "count_match"
     ]
     assert "trade_review_calibration_count_mismatch" in report["warnings"]
-    assert report["daily_ev_summary"]["realized_pnl_krw"] == -282
+    assert report["daily_ev_summary"]["realized_pnl_krw"] is None
+    assert (
+        report["daily_ev_summary"]["trade_review_snapshot_reconciliation"][
+            "snapshot_realized_pnl_krw"
+        ]
+        == -282
+    )
+    assert (
+        report["daily_ev_summary"]["realized_pnl_status"]
+        == "unresolved_trade_review_count_mismatch"
+    )
     assert report["summary"]["status"] == "warning"
     assert report["summary"]["real_sample"] == 3
     assert report["summary"]["live_auto_ready_count"] == 0

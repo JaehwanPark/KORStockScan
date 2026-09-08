@@ -6076,6 +6076,7 @@ def build_threshold_cycle_postclose_verification(
     *,
     require_done_marker: bool = True,
     disabled_stages: set[str] | None = None,
+    require_summary_handoff: bool = False,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     requested_disabled_stages = {
@@ -7576,6 +7577,24 @@ def build_threshold_cycle_postclose_verification(
     ):
         source_generation_warnings = []
     handoff_warnings.extend(source_generation_warnings)
+    summary_handoff = {
+        "status": "deferred_until_post_done_summary_publish",
+        "issues": [],
+    }
+    if require_summary_handoff:
+        from src.engine.automation.postclose_summary_handoff import (
+            verify_summary_handoff,
+        )
+
+        summary_handoff = verify_summary_handoff(
+            target_date,
+            report_dir=paths["code_improvement_workorder"].parent.parent,
+            checklist_path=paths["next_stage2_checklist"],
+            require_tower=execution_flags.get("tuning_performance_control_tower")
+            is not False,
+            require_checklist="next_stage2_checklist" not in disabled_stage_flags,
+        )
+        missing_downstream_links.extend(summary_handoff["issues"])
 
     gap_provenance_path = runtime_gap_provenance_artifact_path(target_date)
     gap_provenance = (
@@ -8003,6 +8022,7 @@ def build_threshold_cycle_postclose_verification(
         "missing_downstream_links": missing_downstream_links,
         "stale_downstream_links": stale_downstream_links,
         "source_generation_warnings": sorted(set(source_generation_warnings)),
+        "summary_handoff": summary_handoff,
         "runtime_apply_gap_audit": {
             "status": runtime_apply_gap_audit_status,
             "issues": runtime_apply_gap_audit_issues,
@@ -8496,6 +8516,7 @@ def main() -> None:
         description="Verify threshold-cycle postclose chain integrity."
     )
     parser.add_argument("--date", required=True)
+    parser.add_argument("--require-summary-handoff", action="store_true")
     parser.add_argument(
         "--allow-pending-done-marker",
         action="store_true",
@@ -8520,6 +8541,7 @@ def main() -> None:
         args.date,
         require_done_marker=not args.allow_pending_done_marker,
         disabled_stages=set(args.disabled_stage),
+        require_summary_handoff=args.require_summary_handoff,
     )
     VERIFY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = verification_report_paths(args.date)

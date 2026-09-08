@@ -478,6 +478,66 @@ def _pipeline_event(
     }
 
 
+@pytest.mark.parametrize(
+    "invalid_field",
+    [None, "schema", "authority", "identity", "order_true", "order_invalid"],
+)
+def test_route_counterfactual_observation_is_not_a_scale_in_decision(
+    tmp_path, invalid_field
+):
+    from src.engine.scalping import main_lifecycle_paired as mod
+
+    stock = {
+        "id": 9991,
+        "code": "005930",
+        "scanner_generation_id": "route-observation-only",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+    }
+    fields = {
+        "avg_down_route_schema": "avg_down_route_arbitration_v2",
+        "decision_authority": "source_only_route_arbitration_observation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        # A counterfactual ADD arm must never become an actual ADD or NO_ADD.
+        "route_replay": '{"85":{"should_add":true,"selected_route":"shallow_volatility_avg_down"}}',
+    }
+    raw = _pipeline_event(
+        stock=stock,
+        pipeline="HOLDING_PIPELINE",
+        source_stage="avg_down_route_arbitration_observed",
+        second=5,
+        fields=fields,
+    )
+    if invalid_field == "schema":
+        raw["fields"]["avg_down_route_schema"] = "unknown"
+    elif invalid_field == "authority":
+        raw["fields"]["allowed_runtime_apply"] = "True"
+    elif invalid_field == "identity":
+        raw["fields"]["main_lifecycle_id"] = "mlc-forged"
+    elif invalid_field == "order_true":
+        raw["fields"]["actual_order_submitted"] = "True"
+    elif invalid_field == "order_invalid":
+        raw["fields"]["actual_order_submitted"] = "unknown"
+    transition, reason, in_scope = mod._validated_pipeline_transition(
+        raw, target_date=TARGET_DATE
+    )
+    assert transition is None
+    if invalid_field:
+        assert in_scope is True
+        assert reason == "pipeline_route_observation_contract_invalid"
+        return
+    assert in_scope is False
+    assert reason == "pipeline_route_observation_not_actual_decision"
+    source = tmp_path / "pipeline.jsonl"
+    _write_jsonl(source, [raw])
+    report = build_daily_report(TARGET_DATE, source_path=source, write=False)
+    assert report["pipeline_route_observation_only_count"] == 1
+    assert report["pipeline_lifecycle_instrumentation_gap_count"] == 0
+    assert report["promotion_ready"] is False
+    assert report["rows"] == []
+
+
 def _fill_before_submit_pipeline_events(
     *,
     record_id: int = 720,

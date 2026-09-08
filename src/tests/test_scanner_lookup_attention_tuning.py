@@ -147,6 +147,7 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
             "book": post_apply_book,
         },
         "outcome_count": 40,
+        "outcomes": base_rows + _passing_rows(date(2026, 9, 9), id_start=10_000),
     }
     resource_rows = ready_resource_rows()
     report["resource_pair_rows"] = resource_rows
@@ -160,6 +161,7 @@ def _write_live_pair(root, source_date: date) -> tuple[dict, dict]:
     payload["campaign_base"] = report["campaign_base"]
     payload["campaign_live_started"] = True
     payload["holdout_armed_since"] = report["holdout_armed_since"]
+    report["economic_acceptance"] = tuning._economic_acceptance(report)
     report["artifact_sha256"] = policy.canonical_sha256(report)
     payload["source_report_artifact_sha256"] = report["artifact_sha256"]
     payload["artifact_sha256"] = policy.canonical_sha256(
@@ -203,6 +205,19 @@ def _write_source_quality_blocked_bridge(
     payload["allowed_runtime_apply"] = False
     payload["source_quality_status"] = "blocked"
     payload["holdout_armed_since"] = holdout_since.isoformat()
+    report["forward_holdout_book"] = tuning._cohort_book([])
+    report["forward_holdout_gate"] = {
+        "pass": False,
+        "reasons": ["current_source_quality_audit_blocked"],
+    }
+    payload["evidence"] = tuning._evidence(
+        report["base_book"],
+        report["forward_holdout_book"],
+        report["post_apply_attribution"]["book"],
+        post_apply_mature=False,
+    )
+    report["policy_evidence_sha256"] = policy.canonical_sha256(payload["evidence"])
+    report["economic_acceptance"] = tuning._economic_acceptance(report)
     report["artifact_sha256"] = policy.canonical_sha256(
         {key: value for key, value in report.items() if key != "artifact_sha256"}
     )

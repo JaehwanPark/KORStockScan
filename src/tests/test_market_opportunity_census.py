@@ -2404,6 +2404,65 @@ def test_markdown_is_stable_after_sorted_json_round_trip():
     assert census.render_markdown(report) == census.render_markdown(round_tripped)
 
 
+def test_cadence_requires_only_scheduled_venues_in_observed_window(tmp_path):
+    path = tmp_path / "snapshots.jsonl"
+    snapshots = [
+        {
+            "schema_version": census.SCHEMA_VERSION,
+            "target_date": "2026-07-30",
+            "captured_at": f"2026-07-30T08:{minute}:00+09:00",
+            "venue": "NXT",
+            "session": "NXT_PREMARKET",
+            "panel": panel,
+            "source_quality_status": "ok",
+            "rows": [
+                {
+                    "rank": 1,
+                    "stock_code": "005930",
+                    "current_price": 10000,
+                    "change_rate_pct": 5.0,
+                }
+            ],
+        }
+        for minute in ("30", "35", "40")
+        for panel in census.PANEL_CONTRACTS
+    ]
+
+    def quality():
+        _write_jsonl(path, snapshots)
+        return census.build_report(
+            "2026-07-30",
+            snapshot_path=path,
+            pipeline_path=tmp_path / "pipeline.jsonl",
+            ai_trace_path=tmp_path / "ai.jsonl",
+            symbol_master_path=tmp_path / "master.json",
+            trigger_receipt_path=tmp_path / "trigger.json",
+        )["source_quality"]
+
+    result = quality()
+    assert result["capture_cadence_floor_met"] is True
+    krx = result["observed_capture_cadence_by_venue_panel"]["KRX|all"]
+    assert krx["required_in_observed_window"] is False
+    assert krx["cadence_floor_met"] is False  # No KRX evidence is invented.
+
+    # Once regular capture starts, missing KRX must fail even if NXT is valid.
+    snapshots.append(
+        {
+            **snapshots[-1],
+            "captured_at": "2026-07-30T09:00:00+09:00",
+            "session": "NXT_REGULAR_OVERLAP",
+        }
+    )
+    result = quality()
+    assert result["capture_cadence_floor_met"] is False
+    krx = result["observed_capture_cadence_by_venue_panel"]["KRX|all"]
+    assert krx["required_in_observed_window"] is True
+    assert krx["sessions"]["KRX_REGULAR"]["capture_time_count"] == 0
+
+    snapshots.clear()
+    assert quality()["capture_cadence_floor_met"] is False
+
+
 def test_cadence_cannot_borrow_a_previous_sessions_floor(tmp_path):
     snapshots = []
     for session, times in {

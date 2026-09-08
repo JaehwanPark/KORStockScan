@@ -393,7 +393,8 @@ def _ev_authority(
         "completed_trades": _safe_int(daily.get("completed_trades")),
         "win_rate_pct": _safe_float(daily.get("win_rate_pct")),
         "avg_profit_rate_pct": _safe_float(daily.get("avg_profit_rate_pct")),
-        "realized_pnl_krw": _safe_int(daily.get("realized_pnl_krw")),
+        "realized_pnl_krw": _safe_float(daily.get("realized_pnl_krw")),
+        "realized_pnl_status": daily.get("realized_pnl_status"),
         "source_split": _source_split_summary(daily),
         "warnings": (
             threshold_ev.get("warnings")
@@ -1432,6 +1433,7 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         f"- Daily completed trades `{ev['completed_trades']}`, win-rate `{ev['win_rate_pct']}`, "
         f"avg profit pct `{ev['avg_profit_rate_pct']}`, realized PnL KRW `{ev['realized_pnl_krw']}`.",
+        f"- Realized PnL status: `{ev.get('realized_pnl_status')}`; missing/mismatched PnL is not measured zero profit.",
         f"- Real split sample `{ev['source_split']['real']['sample']}`, avg `{ev['source_split']['real']['avg_profit_rate']}`, "
         f"win-rate `{ev['source_split']['real']['win_rate']}`.",
         f"- Sim split sample `{ev['source_split']['sim']['sample']}`, avg `{ev['source_split']['sim']['avg_profit_rate']}`, "
@@ -1473,6 +1475,14 @@ def _markdown(report: dict[str, Any]) -> str:
 
 
 def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
+    from src.engine.automation.postclose_summary_handoff import (
+        assert_sources_unchanged,
+        source_paths,
+        source_receipt,
+    )
+
+    handoff_paths = source_paths(REPORT_ROOT_DIR, target_date, "tower")
+    handoff_receipt = source_receipt(handoff_paths, target_date)
     payloads: dict[str, dict[str, Any]] = {}
     sources: dict[str, dict[str, Any]] = {}
     warnings: list[str] = []
@@ -1861,6 +1871,8 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "sources": sources,
         "warnings": warnings,
     }
+    assert_sources_unchanged(handoff_receipt, handoff_paths)
+    report["source_generation_contract"] = handoff_receipt
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(

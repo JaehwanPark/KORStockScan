@@ -3,6 +3,113 @@ import json
 from src.engine.automation import postclose_done_controller as mod
 
 
+def test_summary_only_recovery_does_not_regenerate_ev_or_runtime(monkeypatch):
+    monkeypatch.setattr(mod, "_latest_failed_tail_stage", lambda target: None)
+    verification = {
+        "status": "fail",
+        "missing_downstream_links": [
+            "postclose_summary_handoff:tower:source_generation_mismatch"
+        ],
+        "execution_profile": {
+            "flags": {
+                "tuning_performance_control_tower": True,
+                "next_stage2_checklist": True,
+            }
+        },
+    }
+    actions = mod._recovery_actions(
+        "2026-09-07", verification, allow_wrapper_rerun=False
+    )
+    assert [a.action for a in actions] == [
+        "verify_pre_summary_chain",
+        "refresh_tuning_performance_control_tower",
+        "refresh_next_stage2_checklist",
+        "verify_postclose_chain",
+    ]
+    assert "--require-summary-handoff" not in actions[0].command
+    assert "--allow-pending-done-marker" not in actions[0].command
+    assert "--require-summary-handoff" in actions[-1].command
+    assert (
+        "--require-summary-handoff"
+        in mod._build_verify_action("2026-09-07", verification).command
+    )
+
+
+def test_checklist_only_recovery_does_not_rewrite_tower(monkeypatch):
+    monkeypatch.setattr(mod, "_latest_failed_tail_stage", lambda target: None)
+    verification = {
+        "missing_downstream_links": [
+            "postclose_summary_handoff:checklist:source_generation_mismatch"
+        ]
+    }
+    actions = mod._recovery_actions(
+        "2026-09-07", verification, allow_wrapper_rerun=False
+    )
+    assert [a.action for a in actions] == [
+        "refresh_next_stage2_checklist",
+        "verify_postclose_chain",
+    ]
+
+
+def test_failed_verifier_cannot_reuse_previous_success(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json",
+        _pass_verification(),
+    )
+    report = mod.build_postclose_done_controller(
+        "2026-06-03", command_runner=lambda cmd, env=None: 7
+    )
+    assert report["status"] != "done"
+    assert report["blocked_reasons"] == [
+        "verifier_command_failed_with_success_artifact:7"
+    ]
+    assert report["actions"] == []
+
+
+def test_summary_recovery_closes_strictly_within_last_attempt(monkeypatch, tmp_path):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    path = (
+        report_dir
+        / "threshold_cycle_postclose_verification"
+        / "threshold_cycle_postclose_verification_2026-06-03.json"
+    )
+    strict_calls = []
+
+    def runner(cmd, env=None):
+        if "src.engine.verify_threshold_cycle_postclose_chain" in cmd:
+            if "--require-summary-handoff" in cmd:
+                strict_calls.append(cmd)
+                if len(strict_calls) == 1:
+                    _write_json(
+                        path,
+                        {
+                            "status": "fail",
+                            "missing_downstream_links": [
+                                "postclose_summary_handoff:tower:source_generation_mismatch"
+                            ],
+                        },
+                    )
+                    return 2
+            _write_json(path, _pass_verification())
+        return 0
+
+    report = mod.build_postclose_done_controller(
+        "2026-06-03", max_attempts=1, command_runner=runner
+    )
+    assert report["status"] == "done"
+    assert len(strict_calls) == 2
+    assert report["actions"][-1]["action"] == "verify_postclose_chain"
+
+
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -1726,6 +1833,7 @@ def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing
     report_dir = tmp_path / "report"
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    monkeypatch.setattr(mod, "POSTCLOSE_LOG_PATH", tmp_path / "postclose.log")
     _write_succeeded_status(report_dir)
     verification = (
         report_dir
@@ -1752,7 +1860,13 @@ def test_postclose_done_controller_repairs_active_priority_handoff_by_refreshing
             "verify_threshold_cycle_postclose_chain" in joined
             and "--allow-pending-done-marker" in cmd
         ):
-            _write_json(verification, _pass_verification())
+            _write_json(
+                verification,
+                {
+                    **_pass_verification(),
+                    "artifact_status": _passable_artifact_status(),
+                },
+            )
         return 0
 
     report = mod.build_postclose_done_controller(

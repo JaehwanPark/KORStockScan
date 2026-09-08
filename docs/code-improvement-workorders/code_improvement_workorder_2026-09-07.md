@@ -29,10 +29,10 @@
 - stage_hook_runtime_scaffold: `-`
 - buy_funnel_sentinel: `/home/ubuntu/KORStockScan/data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-09-07.json`
 - microstructure_reaction_context: `/home/ubuntu/KORStockScan/data/report/microstructure_reaction_context/microstructure_reaction_context_2026-09-07.json`
-- generated_at: `2026-09-07T23:18:40+09:00`
-- generation_id: `2026-09-07-18b622a64a1e`
-- generation_hash: `18b622a64a1e7b1b1ff69459dc653c2d983edfafeeef8e124a440980f29b7914`
-- source_hash: `0980ca27f51b41092474751aaae34ffc230d819900d584cc4e55ae4671d1325e`
+- generated_at: `2026-09-08T00:17:14+09:00`
+- generation_id: `2026-09-07-77beaaeed6e7`
+- generation_hash: `77beaaeed6e7c6886ce6022ec6fe13b5d4e5daccaeabfc66934478c7508ace7e`
+- source_hash: `e1aa25fde5c1711ccd8311309e45d733f5c07d39c081709d184d918cce0cee72`
 - producer_contract_version: `code_improvement_workorder_producer_v5`
 
 ## 운영 원칙
@@ -55,10 +55,10 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-09-07-1226091fb766`
-- previous_source_hash: `dcc6f193cff886895458d75ab248e8ff06a6b709579fec4cde43c4c53a67f87e`
+- previous_generation_id: `2026-09-07-18b622a64a1e`
+- previous_source_hash: `0980ca27f51b41092474751aaae34ffc230d819900d584cc4e55ae4671d1325e`
 - new_order_ids: `[]`
-- removed_order_ids: `['order_threshold_window_policy_source_snapshot_alignment']`
+- removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary

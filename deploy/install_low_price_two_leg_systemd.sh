@@ -115,6 +115,12 @@ UNITS=(
   korstockscan-low-price-two-leg-youngone-midday.timer
   korstockscan-low-price-two-leg-sk-telecom-midday-preflight.timer
   korstockscan-low-price-two-leg-sk-telecom-midday.timer
+  korstockscan-low-price-two-leg-nhn-midday-preflight.timer
+  korstockscan-low-price-two-leg-nhn-midday.timer
+  korstockscan-low-price-two-leg-tym-morning-preflight.timer
+  korstockscan-low-price-two-leg-tym-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-afternoon.timer
 )
 TIMERS=(
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -223,6 +229,12 @@ TIMERS=(
   korstockscan-low-price-two-leg-youngone-midday.timer
   korstockscan-low-price-two-leg-sk-telecom-midday-preflight.timer
   korstockscan-low-price-two-leg-sk-telecom-midday.timer
+  korstockscan-low-price-two-leg-nhn-midday-preflight.timer
+  korstockscan-low-price-two-leg-nhn-midday.timer
+  korstockscan-low-price-two-leg-tym-morning-preflight.timer
+  korstockscan-low-price-two-leg-tym-morning.timer
+  korstockscan-low-price-two-leg-sd-biosensor-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-sd-biosensor-afternoon.timer
 )
 RETIRED_DAEWOO_UNITS=(
   korstockscan-low-price-two-leg-daewoo-ec-midday-preflight.timer
@@ -283,4 +295,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed fifty-three lower-price profile timers; retired Daewoo units were removed"
+echo "installed fifty-six lower-price profile timers; retired Daewoo units were removed"

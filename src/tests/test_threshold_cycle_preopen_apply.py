@@ -3164,7 +3164,7 @@ def test_build_preopen_apply_manifest_uses_latest_prior_report(tmp_path, monkeyp
     assert saved["source_date"] == "2026-04-30"
 
 
-def test_score65_74_entry_unlock_candidate_requires_cost_adjusted_metrics():
+def test_score65_74_entry_unlock_candidate_rejects_cf_only_cost_metrics():
     assert (
         mod._score65_74_entry_unlock_candidate(
             {
@@ -3181,7 +3181,7 @@ def test_score65_74_entry_unlock_candidate_requires_cost_adjusted_metrics():
                 },
             }
         )
-        is True
+        is False
     )
 
 
@@ -3513,7 +3513,7 @@ def test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority(
     assert manifest["status"] == "auto_bounded_live_ready"
     assert manifest["runtime_change"] is True
     selected = {item["family"] for item in manifest["auto_apply_selected"]}
-    assert selected == {"soft_stop_whipsaw_confirmation", "score65_74_recovery_probe"}
+    assert selected == {"soft_stop_whipsaw_confirmation"}
     blocked = [
         item
         for item in manifest["auto_apply_decisions"]
@@ -3529,8 +3529,8 @@ def test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority(
     )
     assert "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true" in env_text
     assert "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC=45" in env_text
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
-    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65" in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" not in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65" not in env_text
 
 
 def test_auto_bounded_live_writes_dynamic_entry_price_resolver_env(

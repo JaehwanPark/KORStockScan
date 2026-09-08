@@ -39,9 +39,14 @@ from src.engine.scalping.position_sizing_allocator import (
 )
 from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
 from src.engine.scalping.score_recovery_observation import (
-    condition_feasibility,
-    observation_cohort_valid,
     score_recovery_cohort_member,
+)
+from src.engine.scalping.score_recovery_economics import (
+    evidence_book as score_recovery_evidence_book,
+    evaluate as score_recovery_evaluate,
+    merge_books as score_recovery_merge_books,
+    profile as score_recovery_profile,
+    runtime_profile as score_recovery_runtime_profile,
 )
 from src.utils.constants import (
     CONFIG_PATH,
@@ -687,19 +692,22 @@ CALIBRATION_FAMILY_METADATA = {
             "min_micro_vwap_bp": {"min": -10.0, "max": 20.0, "max_step_per_day": 5.0},
         },
         "sample_floor": 20,
-        "sample_window": "rolling_5d_with_daily_trigger",
+        "sample_window": "rolling_20d_real_applied",
         "window_policy": {
-            "primary": "rolling_5d",
-            "secondary": ["daily_intraday", "cumulative_since_2026-06-05"],
-            "use": "BUY drought/score60~74는 당일 병목을 trigger로 쓰되, 비용 차감 counterfactual EV와 close 우위는 clean-baseline rolling/cumulative 전용 표본으로 확인한다.",
+            "primary": "rolling_20d",
+            "secondary": [
+                "rolling_5d",
+                "daily_intraday",
+                "cumulative_since_2026-06-05",
+            ],
+            "use": "Exact applied full-fill terminal net economics, same profile and venue/session; CF/drought/10m are diagnostics only. Latest paired producer may arrive after this report; prior completed dates remain usable.",
             "daily_only_allowed": False,
         },
         "sample_denominator_keys": [
-            "wait65_79_score60_74_candidate",
-            "blocked_score60_74",
+            "real_applied_terminal_full_fill_same_profile_scope",
         ],
-        "primary_decision_metric": "cost_adjusted_counterfactual_expected_ev_pct",
-        "primary_decision_metric_scope": "bounded_exploration_seed_not_real_execution_quality",
+        "primary_decision_metric": "actual_fill_net_return_after_fees_taxes",
+        "primary_decision_metric_scope": "same_profile_scope_positive_repeated_net_not_fixed_profit_target",
         "allowed_runtime_apply": True,
     },
     "liquidity_gate_refined_candidate": {
@@ -1889,6 +1897,9 @@ def _existing_or_gzip_path(path: Path) -> Path:
 
 def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
     return {
+        "main_scalping_lifecycle_paired": REPORT_DIR
+        / "main_scalping_lifecycle_paired"
+        / f"main_scalping_lifecycle_paired_{target_date}.json",
         "buy_funnel_sentinel": REPORT_DIR
         / "buy_funnel_sentinel"
         / f"buy_funnel_sentinel_{target_date}.json",
@@ -2304,6 +2315,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
 
     buy_funnel_sentinel = _read_json_dict(source_paths["buy_funnel_sentinel"])
     wait6579_ev = _read_json_dict(source_paths["wait6579_ev_cohort"])
+    score_recovery_real_book = score_recovery_evidence_book(
+        _read_json_dict(source_paths["main_scalping_lifecycle_paired"]), target_date
+    )
     missed_entry = _read_json_dict(source_paths["missed_entry_counterfactual"])
     performance_tuning = _read_json_dict(source_paths["performance_tuning"])
     holding_exit_observation = _read_json_dict(source_paths["holding_exit_observation"])
@@ -2732,6 +2746,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 "score60_74_observation_policy_hashes"
             )
             or [],
+            "score_recovery_real_economics": score_recovery_real_book,
             "score60_74_unapplied_observation_candidates": wait_counterfactual.get(
                 "score60_74_unapplied_observation_candidates", 0
             ),
@@ -4028,6 +4043,11 @@ def _aggregate_metric_dicts(dicts: list[dict]) -> dict:
     result: dict[str, Any] = {}
     keys = sorted({key for item in dicts if isinstance(item, dict) for key in item})
     for key in keys:
+        if key == "score_recovery_real_economics":
+            result[key] = score_recovery_merge_books(
+                [item[key] for item in dicts if isinstance(item, dict) and key in item]
+            )
+            continue
         if key in _SCORE60_WEIGHTED_AVERAGE_KEYS:
             result[key] = _aggregate_score60_weighted_average(key, dicts)
             continue
@@ -7057,14 +7077,10 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
     submitted = _events_for_stage(events, "order_bundle_submitted")
     filled = _events_for_stage(events, "position_rebased_after_fill")
     budget_pass = _events_for_stage(events, "budget_pass")
-    sample_ready = (
-        len(wait_candidates) >= 20
-        and bool(budget_pass)
-        and len(submitted) < max(20, len(budget_pass) // 10)
-    )
+    # Funnel counts are diagnostic. The central calibration owns real-net
+    # eligibility and must not inherit an earlier CF/drought enable suggestion.
+    sample_ready = False
     recommended = dict(current)
-    if sample_ready:
-        recommended["enabled"] = True
     return {
         "family": "score65_74_recovery_probe",
         "stage": "entry",
@@ -7088,7 +7104,7 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
             "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only"
         ),
         "notes": [
-            "family id는 호환성을 위해 score65_74를 유지하지만 현재 runtime floor 기준 score60~74 예산 bounded canary 후보만 만든다.",
+            "family id는 호환 유지. 기존 profile의 실체결 순손익·반복성 승인은 central calibration이 소유하며 CF/drought는 진단 전용이다.",
             "min_micro_vwap_bp는 실효값이며 configured_min_micro_vwap_bp와 effective_min_micro_vwap_bp를 분리해 기록한다.",
             "partial sample 0은 live 전면 차단이 아니라 post-apply calibration target으로 남긴다.",
             "latency DANGER 제외, 수급/가속/micro-VWAP gate와 예산/position/protection guard는 유지한다.",
@@ -12750,10 +12766,7 @@ def _source_metrics_for_family(
 
 def _source_sample_count_for_family(output_family: str, source_metrics: dict) -> int:
     if output_family == "score65_74_recovery_probe":
-        return max(
-            _safe_int(source_metrics.get("score60_74_candidates"), 0) or 0,
-            _safe_int(source_metrics.get("score65_74_candidates"), 0) or 0,
-        )
+        return score_recovery_evaluate(source_metrics)["sample_count"]
     if output_family == "pre_submit_price_guard":
         return max(
             _safe_int(source_metrics.get("guard_block"), 0) or 0,
@@ -12868,66 +12881,8 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
 def _score65_74_entry_unlock_probe_ready(
     source_metrics: dict, *, sample_count: int, sample_floor: int
 ) -> bool:
-    """Return True when the bounded low-score entry probe should open to collect applied samples."""
-    if sample_count < sample_floor:
-        return False
-    if not observation_cohort_valid(source_metrics):
-        return False
-    cost_adjusted_sample_count = (
-        _safe_int(source_metrics.get("score60_74_cost_adjusted_sample_count"), 0) or 0
-    )
-    if cost_adjusted_sample_count < sample_floor:
-        return False
-    avg_ev = _safe_float(
-        source_metrics.get("score60_74_avg_cost_adjusted_expected_ev_pct"),
-        None,
-    )
-    avg_close = _safe_float(
-        (
-            source_metrics.get("score60_74_avg_close_10m_pct")
-            if source_metrics.get("score60_74_avg_close_10m_pct") is not None
-            else source_metrics.get("score65_74_avg_close_10m_pct")
-        ),
-        None,
-    )
-    avg_mfe = _safe_float(
-        (
-            source_metrics.get("score60_74_avg_mfe_10m_pct")
-            if source_metrics.get("score60_74_avg_mfe_10m_pct") is not None
-            else source_metrics.get("score65_74_avg_mfe_10m_pct")
-        ),
-        None,
-    )
-    submitted_to_budget = _safe_float(
-        source_metrics.get("submitted_to_budget_unique_pct"), None
-    )
-    order_bundle_submitted = _safe_float(
-        source_metrics.get("order_bundle_submitted"), None
-    )
-    risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
-    source_quality_blocked = source_metrics.get("source_quality_blocked") is True
-    if (
-        source_quality_blocked
-        or source_metrics.get("score60_74_cost_contract_complete") is not True
-        or risk_gate == "confirmed_panic"
-        or any(
-            marker in risk_gate
-            for marker in ("source_quality_blocked", "invalid", "fail")
-        )
-    ):
-        return False
-    if avg_ev is None or avg_ev < 2.0:
-        return False
-    if avg_close is None or avg_close < 1.0:
-        return False
-    if avg_mfe is not None and avg_mfe < 2.0:
-        return False
-    if submitted_to_budget is not None:
-        if submitted_to_budget < 0.0 or submitted_to_budget > 10.0:
-            return False
-    elif order_bundle_submitted is None or order_bundle_submitted != 0:
-        return False
-    return True
+    """Shared real-net approval; CF size and drought never confer authority."""
+    return bool(score_recovery_evaluate(source_metrics, sample_floor)["ready"])
 
 
 def _calibration_state_for_family(
@@ -13030,79 +12985,8 @@ def _calibration_state_for_family(
             "market regime continuous thresholds v1은 1차 개발에서 ADM/LDM risk_context 및 manifest-only 후보로만 유지한다.",
         )
     if output_family == "score65_74_recovery_probe":
-        family_sample = (
-            family.get("sample") if isinstance(family.get("sample"), dict) else {}
-        )
-        effective_range = str(family_sample.get("effective_score_range") or "60-74")
-        avg_ev = _safe_float(
-            source_metrics.get("score60_74_avg_cost_adjusted_expected_ev_pct"),
-            None,
-        )
-        avg_close = _safe_float(
-            (
-                source_metrics.get("score60_74_avg_close_10m_pct")
-                if source_metrics.get("score60_74_avg_close_10m_pct") is not None
-                else source_metrics.get("score65_74_avg_close_10m_pct")
-            ),
-            None,
-        )
-        risk_gate = str(source_metrics.get("risk_regime_gate_state") or "").lower()
-        score_source_quality_blocked = source_metrics.get(
-            "source_quality_blocked"
-        ) is True or any(
-            marker in risk_gate
-            for marker in ("source_quality_blocked", "invalid", "fail")
-        )
-        submitted_to_budget = _safe_float(
-            source_metrics.get("submitted_to_budget_unique_pct"), None
-        )
-        if score_source_quality_blocked:
-            return (
-                "source_quality_blocked",
-                f"score{effective_range} risk/source-quality contract is blocked; isolate invalid rows/windows before economic calibration.",
-            )
-        if sample_count >= sample_floor and (
-            (avg_ev is not None and avg_ev < 2.0)
-            or (avg_close is not None and avg_close < 1.0)
-        ):
-            return (
-                "hold",
-                f"score{effective_range} EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지",
-            )
-        if submitted_to_budget is not None and submitted_to_budget > 60.0:
-            return (
-                "hold",
-                "submitted drought가 아니므로 probe live 확대보다 baseline funnel 유지",
-            )
-        if _score65_74_entry_unlock_probe_ready(
-            source_metrics,
-            sample_count=sample_count,
-            sample_floor=sample_floor,
-        ):
-            return (
-                "adjust_up",
-                f"rolling primary score{effective_range} missed EV가 양수이고 panic/source guard가 정상이다. "
-                "submitted drought를 풀기 위해 기본 신규 BUY sizing을 쓰는 bounded entry probe를 연다.",
-            )
-        if risk_gate == "confirmed_panic":
-            return (
-                "hold_sample",
-                f"confirmed panic risk-regime에서는 score{effective_range} live 확대 없이 source-quality review로 보류",
-            )
-        if sample_count >= sample_floor and ready:
-            return (
-                "hold_sample",
-                f"score{effective_range} 표본은 준비됐지만 비용 차감 counterfactual EV 또는 source-quality guard가 미완성이다. gross EV만으로 runtime 후보를 열지 않는다.",
-            )
-        if (
-            _safe_int(family_sample.get("wait65_79_score60_74_candidate"), 0)
-            or _safe_int(family_sample.get("wait65_79_score65_74_candidate"), 0)
-            or 0
-        ):
-            return (
-                "hold_sample",
-                f"score{effective_range} 후보는 있으나 source/report sample floor가 부족해 cap 유지",
-            )
+        decision = score_recovery_evaluate(source_metrics, sample_floor)
+        return decision["state"], decision["reason"]
     if output_family == "pre_submit_price_guard":
         return (
             "hold",
@@ -13666,6 +13550,15 @@ def _load_same_day_runtime_apply_observation(target_date: str) -> dict[str, Any]
             "decision_reason": item.get("decision_reason"),
             "previous_selected": item.get("previous_selected"),
         }
+        if family == "score65_74_recovery_probe" and family_handoff_verified:
+            env = payload.get("runtime_env_overrides") or {}
+            if isinstance(env, dict):
+                families[family]["current_profile"] = score_recovery_runtime_profile(
+                    lambda key, default: env.get(
+                        key.replace("AI_SCORE65_74_", "KORSTOCKSCAN_SCORE65_74_"),
+                        None,
+                    )
+                )
     return {
         **base,
         "status": (
@@ -14154,6 +14047,24 @@ def _build_calibration_candidates(
                 "runtime_authority": "next_preopen_bounded_scale_in_split_policy",
                 "requested_qty_authority": "describe_dynamic_scale_in_qty",
             }
+        if output_family == "score65_74_recovery_probe":
+            observed = ((runtime_apply_observation or {}).get("families") or {}).get(
+                output_family
+            ) or {}
+            observed_profile = score_recovery_profile(observed.get("current_profile"))
+            if observed.get("verified") is True and observed_profile is not None:
+                current = {
+                    **current,
+                    **observed_profile,
+                    "enabled": observed.get("selected") is True,
+                }
+                source_metrics["current_profile_source"] = (
+                    "verified_same_day_preopen_env"
+                )
+            source_metrics["score_recovery_current_profile"] = score_recovery_profile(
+                current
+            )
+            recommended = dict(current)
         source_sample_count = _source_sample_count_for_family(
             output_family, source_metrics
         )
@@ -14214,7 +14125,7 @@ def _build_calibration_candidates(
             )
         if output_family == "score65_74_recovery_probe":
             score_min = _safe_int(current.get("min_score"), 60) or 60
-            source_metrics["condition_feasibility"] = condition_feasibility(
+            source_metrics["condition_feasibility"] = score_recovery_evaluate(
                 source_metrics, sample_floor
             )
             score_max = _safe_int(current.get("max_score"), 74) or 74
@@ -14881,6 +14792,11 @@ def _refresh_candidate_from_primary_window(
         else candidate.get("source_metrics")
     )
     source_metrics = source_metrics if isinstance(source_metrics, dict) else {}
+    if family == "score65_74_recovery_probe":
+        source_metrics = dict(source_metrics)
+        source_metrics["score_recovery_current_profile"] = score_recovery_profile(
+            candidate.get("current_values")
+        )
     sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
     if family == "protect_trailing_smoothing":
         source_metrics = dict(source_metrics)
@@ -14927,6 +14843,9 @@ def _refresh_candidate_from_primary_window(
     )
     current = current if isinstance(current, dict) else {}
     recommended = recommended if isinstance(recommended, dict) else {}
+    if family == "score65_74_recovery_probe":
+        current = dict(candidate.get("current_values") or {})
+        recommended = dict(current)
     if family == "score65_74_recovery_probe" and _score65_74_entry_unlock_probe_ready(
         source_metrics,
         sample_count=primary_sample_count,
@@ -15006,7 +14925,8 @@ def _owned_scale_in_rolling_metrics(candidate: dict) -> dict:
         or rolling.get("target_date") != target_date
         or rolling.get("window_policy") != "latest_20_report_dates_including_target"
         or rolling.get("current_source_date_included") is not True
-        or type(paired) is not int or paired < 0
+        or type(paired) is not int
+        or paired < 0
         or metrics.get("paired_economic_sample_count") != paired
     ):
         return {}
@@ -15045,6 +14965,14 @@ def _build_window_policy_resolution(
     primary_source_sample = _source_sample_count_for_family(
         str(candidate.get("family") or ""), primary_source_metrics
     )
+    if candidate.get("family") == "score65_74_recovery_probe":
+        primary_source_metrics["score_recovery_current_profile"] = (
+            score_recovery_profile(candidate.get("current_values"))
+        )
+        primary_source_sample = _source_sample_count_for_family(
+            "score65_74_recovery_probe", primary_source_metrics
+        )
+        primary_sample = primary_source_sample
     is_bad_entry = str(candidate.get("family") or "") == "bad_entry_refined_canary"
     raw_primary_source_sample = primary_source_sample
     if is_bad_entry:
@@ -15228,7 +15156,7 @@ def apply_window_policy_registry_to_report(
             },
         )
         if candidate.get("family") == "score65_74_recovery_probe":
-            candidate["condition_feasibility"] = condition_feasibility(
+            candidate["condition_feasibility"] = score_recovery_evaluate(
                 candidate.get("source_metrics") or {},
                 int(candidate.get("sample_floor") or 20),
             )

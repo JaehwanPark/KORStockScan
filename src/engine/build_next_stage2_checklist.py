@@ -1946,6 +1946,15 @@ def _build_next_stage2_checklist_locked(
         raise RuntimeError(
             f"required postclose artifacts are missing for {source_date}: {missing}"
         )
+    from src.engine.automation.postclose_summary_handoff import (
+        assert_sources_unchanged,
+        checklist_marker,
+        source_paths,
+        source_receipt,
+    )
+
+    handoff_paths = source_paths(EV_REPORT_DIR.parent, source_date, "checklist")
+    handoff_receipt = source_receipt(handoff_paths, source_date)
     ev_report = _load_json(EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json")
     swing_report = _load_json(
         SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json"
@@ -2003,6 +2012,10 @@ def _build_next_stage2_checklist_locked(
     if existing:
         auto_block = _merge_preserved_auto_tasks(existing, auto_block)
 
+    auto_block = auto_block.replace(
+        AUTO_START, AUTO_START + "\n" + checklist_marker(handoff_receipt), 1
+    )
+
     if existing:
         content = _upsert_auto_block(existing, auto_block)
         created = False
@@ -2010,6 +2023,7 @@ def _build_next_stage2_checklist_locked(
         content = _render_new_document(target_date, auto_block)
         created = True
 
+    assert_sources_unchanged(handoff_receipt, handoff_paths)
     _atomic_write_checklist(target_path, content)
     tasks = _build_tasks(
         source_date=source_date,

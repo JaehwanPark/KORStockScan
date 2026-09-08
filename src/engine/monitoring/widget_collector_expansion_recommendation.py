@@ -22,6 +22,7 @@ from typing import Any, Callable
 from urllib import parse, request
 
 from src.engine.monitoring import widget_mechanical_entry_replay as mechanical_replay
+from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
 from src.engine.monitoring.samsung_widget_contract import (
     KST,
     NXT_AFTERMARKET_END,
@@ -620,7 +621,7 @@ def build_recommendation_report(
     recommended_not_enrolled_count = sum(
         row["research_collection_status"] == "not_enrolled" for row in recommendations
     )
-    return {
+    report = {
         "schema": "widget_collector_expansion_recommendation_v1",
         "status": (
             "recommendations_ready" if recommendations else "no_qualified_candidate"
@@ -693,6 +694,21 @@ def build_recommendation_report(
         "broker_order_forbidden": True,
         "manual_control_exclusion_applied": False,
     }
+    return attach_recommendation_contract(report)
+
+
+def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
+    for row in report["recommendations"]:
+        bind_recommendation(
+            row,
+            producer="widget_collector_expansion_recommendation",
+            scope=f"{row['stock_code']}/{row['suggested_session']}",
+            axis="research_watch_collection",
+            proposal={},
+            consumer="widget_research_watch_collector",
+            acceptance="Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        )
+    return report
 
 
 def build_telegram_message(report: dict[str, Any]) -> str:

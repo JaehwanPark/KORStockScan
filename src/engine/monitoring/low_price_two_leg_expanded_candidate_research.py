@@ -22,6 +22,7 @@ from urllib import parse, request
 
 import requests
 
+from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     CLEAN_BASELINE_DATE,
     COST_PCT,
@@ -1055,7 +1056,7 @@ def build_report(
         if row["decision"] == "recommend_cumulative_logic_candidate_review"
         and row["profile_id"] in cumulative_logic_ids
     ]
-    return {
+    report = {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
@@ -1143,6 +1144,85 @@ def build_report(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    return attach_recommendation_contract(report)
+
+
+def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
+    producer = "low_price_two_leg_expanded_candidate_research"
+    for key, axis, proposal_key in (
+        ("recommendations", "profile_policy", "recommended_spot"),
+        (
+            "postclose_logic_recommendations",
+            "target_date_logic_review",
+            "candidate_parameters",
+        ),
+    ):
+        for row in report[key]:
+            bind_recommendation(
+                row,
+                producer=producer,
+                scope=f"{row['symbol']}/{row['session']}/{row['profile_id']}",
+                axis=axis,
+                proposal=row.get(proposal_key) or {},
+                consumer="low_price_two_leg_policy_apply",
+                acceptance="Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+            )
+    # These lists mirror the authoritative recommendations, not new orders.
+    for key, lane in (
+        ("new_symbol_recommendations", "new_symbol"),
+        (
+            "existing_symbol_time_extension_recommendations",
+            "existing_symbol_time_extension",
+        ),
+        (
+            "existing_symbol_logic_improvement_recommendations",
+            "existing_symbol_logic_improvement",
+        ),
+    ):
+        report[key] = [
+            r for r in report["recommendations"] if r["discovery_lane"] == lane
+        ]
+    for profile_id, row in report["operator_observation_candidate_inventory"].items():
+        bind_recommendation(
+            row,
+            producer=producer,
+            scope=profile_id,
+            axis="operator_observation",
+            proposal={},
+            consumer=producer,
+            acceptance="Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+        )
+    # Materialized JSON has independent copies of these source rows.
+    for row in report.get("target_date_logic_attribution", []):
+        if any(
+            r["profile_id"] == row["profile_id"]
+            for r in report["postclose_logic_recommendations"]
+        ):
+            bind_recommendation(
+                row,
+                producer=producer,
+                scope=f"{row['symbol']}/{row['session']}/{row['profile_id']}",
+                axis="target_date_logic_review",
+                proposal=row.get("candidate_parameters") or {},
+                consumer="low_price_two_leg_policy_apply",
+                acceptance="Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+            )
+    for profile_id, item in report.get("profiles", {}).items():
+        row = item.get("observation_candidate")
+        if (
+            isinstance(row, dict)
+            and profile_id in report["operator_observation_candidate_inventory"]
+        ):
+            bind_recommendation(
+                row,
+                producer=producer,
+                scope=profile_id,
+                axis="operator_observation",
+                proposal={},
+                consumer=producer,
+                acceptance="Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+            )
+    return report
 
 
 def build_source_quality_blocked_report(
@@ -1749,6 +1829,18 @@ class CandidateRecommendationNotifier:
         expected_observation_inventory = _operator_observation_inventory(
             _new_symbol_profiles(candidate_symbols)
         )
+        for profile_id, row in expected_observation_inventory.items():
+            observed = observation_inventory.get(profile_id) or {}
+            if "recommendation_id" in observed:
+                bind_recommendation(
+                    row,
+                    producer="low_price_two_leg_expanded_candidate_research",
+                    scope=profile_id,
+                    axis="operator_observation",
+                    proposal={},
+                    consumer="low_price_two_leg_expanded_candidate_research",
+                    acceptance="Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+                )
         if observation_inventory != expected_observation_inventory:
             return False
         if any(

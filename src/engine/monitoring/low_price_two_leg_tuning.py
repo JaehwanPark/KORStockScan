@@ -83,6 +83,9 @@ APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
 PROFILE_FIRST_OPERATIONAL_DATES = {
+    "nhn_midday": date(2026, 9, 8),
+    "tym_morning": date(2026, 9, 8),
+    "sd_biosensor_afternoon": date(2026, 9, 8),
     "samsung_heavy_midday": date(2026, 8, 12),
     "samsung_heavy_afternoon": date(2026, 8, 12),
     "sk_eternix_midday": date(2026, 8, 12),

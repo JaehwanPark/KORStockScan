@@ -1,6 +1,6 @@
 # 장후작업 실행 모니터링·장애복구·추천구현 지시문
 
-작성 기준: `2026-09-07 KST`
+작성 기준: `2026-09-08 KST`
 
 이 지시문의 목적은 장후작업이 실행되는 동안 상태를 계속 확인하고, `FAIL`, timeout, hang, 필수 산출물 누락 또는 handoff 단절이 발생하면 최초 원인을 찾아 안전한 범위에서 수정·검증·최소 재실행하여 대상 거래일 작업을 정상 terminal 상태로 닫는 것이다.
 
@@ -33,6 +33,8 @@
 코드·계약 검토, 배포, 자연 산출물, PREOPEN 선택, PID 소비, 비용 차감 EV/순이익 검증은 각각 별도 상태다. 기존 review finding 0을 이유로 자연 acceptance를 완료하지 않으며, 반대로 미관측 EV를 이유로 수리 완료를 취소하지 않는다. #8/#9처럼 완료된 상세검토는 새 결함·계약 변경·필수 handoff 실패가 입증될 때만 재개한다.
 
 source-only 자연 표본 부족이나 전략 후보 0건은 작업 실패가 아니다. 반대로 process 종료 코드가 0이어도 필수 artifact가 없거나 target date가 다르면 정상 종료로 보지 않는다.
+
+현행 기준 사례는 [9/7 원천의 자정 이후 보완 검토](audit-reports/2026-09-08-postclose-priority-repair-review.md)다. 코드·요약 handoff는 종결했지만 9개 workorder 증거, 과거 market/identity 결손, AI control 무표본과 machine ingress loss는 자연 acceptance로 남았다. [별도 승인 위젯·에피소드 구현](audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)은 이 지시문의 source-only 권한으로 수행한 live 변경이 아니며, 해당 사용자 승인·effective-date receipt와 별도 ledger를 따른다. 이 사례를 새 실행의 PID/terminal 판정으로 재사용하지 않는다.
 
 ## 2. 권한 경계
 
@@ -131,6 +133,8 @@ jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_
 | `done_warning` | terminal 성공이나 허용 source-only warning 존재 | warning 영향과 비권한성 확인 |
 | `done` | 필수 terminal·artifact·후행 계약 모두 충족 | 다음 owner로 진행 |
 
+일반 non-zero exit는 실패다. 단, R0–R3의 provider 미실행 source-only 모드처럼 producer가 명시적으로 `exit=2/source_only_blocked_or_deferred`를 정의한 경우에만 해당 모드·단계 결과·필수 artifact를 함께 확인해 source warning과 실행 결함을 구분한다. 이 예외를 strict verifier/controller 실패에 적용하거나 Provider 평가 완료·live 승격으로 해석하지 않는다.
+
 단순 elapsed time만으로 hang을 선언하지 않는다. 다음을 함께 확인한다.
 
 - latest stage marker와 최근 log mtime
@@ -204,6 +208,7 @@ GitHub Project와 Google Calendar sync는 실행하지 않는다.
 - main wrapper 전체 재실행은 controller/runbook이 허용하고 부분 재생성으로 닫을 수 없을 때만 사용한다.
 - AI Provider 호출은 검증된 checkpoint와 해당 producer의 resumable 상태만 재사용한다. terminal schema/provider/receipt rejection을 새 retry로 재개하지 않는다. 실제 실패 request도 기존 retry/capacity/ledger 계약이 허용할 때만 재시도한다.
 - 자정 이후 recovery도 최초 `TARGET_DATE`를 유지한다.
+- 이미 검증된 비가역적 과거 ingress/market/identity 결손은 원본을 합성하거나 동일 날짜를 반복 실행해 닫지 않는다. 격리·baseline carry를 유지하고 기존 OPEN acceptance에서 다음 exact-date 원천을 확인한다. 과거 손익 귀속 복원은 신규 수익 증가로 보고하지 않는다.
 - postclose worker 재실행 전 기존 PID와 실제 lock 점유가 0인지 확인한다.
 
 ## 7. Implement-now 및 위젯·에피소드 추천 2-pass 구현
@@ -254,6 +259,8 @@ Pass 1 전에 현재 generation의 main/위젯/에피소드 추천 **전수**를
 `implementation_requested_total`에는 native `implement_now|code_patch_required`, §7.2 계약으로 채택된 `objective_followup_required`, 검증되지 않아 수리/증거 대기로 이관된 `already_implemented` 주장을 센다. 위 식의 클래스는 상호배타적이다. 구현이 불필요하다는 검증이 끝나지 않은 `already_implemented` 주장은 완료 계수에 넣지 않고 권한 확인 후 eligible 수리/증거 대기로 분류한다. 비구현 추천의 권한/근거 결손은 대응하는 `_nonrequest` 계수로 기록한다. 이는 집계상 구분이며 final disposition의 원래 사유를 바꾸지 않는다. `removed_or_superseded`는 이전 generation 이력에 남기고 현재 분모와 섞지 않는다.
 
 보존식, 동일 owner/native ID 유일성 또는 source generation 대사가 실패하면 `intake_contract_defect`로 Pass 1을 시작하지 않는다. 각 pass에서 동일한 분모/분류를 재계산하고 ledger의 현재 합계와 이전 generation 변경 이력을 분리한다.
+
+원본 canonical report를 보존한 채 producer가 native ID metadata projection을 발급한 경우 원본 path/row/hash → projection의 native ID → 별도 승인/구현 ledger를 대사한다. 원래 ID 없는 ledger를 덮어쓰거나 두 ledger를 독립 작업으로 합산하지 않는다. projection은 새 시세·경제성 재생성이 아니며 native ID 추가만으로 구현/live 권한이 생기지 않는다. 별도 승인으로 이미 구현된 축의 최신 disposition은 그 승인 ledger에서 검증하되, 미대사 항목은 완료 처리하지 않는다.
 
 ### 7.2 구현 가능성 판정
 
@@ -319,12 +326,15 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 
 ### 8.1 Main threshold-cycle
 
+- 9/8 후속 보완 wrapper는 source-quality preflight·trade-fact sync 뒤 기존 `Entry split → AI 원천 materialization → R0–R3 내부 lifecycle paired`를 Daily 앞에서 한 번 실행한다. `Daily/cumulative/AI correction → 후행 EV/요약`이 같은 장후 paired를 소비하는지 확인한다. OFF·deferred 또는 유효 빈 표본을 경제성 승인으로 오인하지 않고, 순서 보완을 이유로 lifecycle·Daily·Provider를 중복 실행하지 않는다. 상세 계약은 [후속 구현 리뷰](audit-reports/2026-09-08-scanner-daily-net-approval-followup-review.md)를 따른다.
 - 동일 target date 최신 `[START]`, `[FAIL|DONE]`와 status JSON을 결속한다.
 - wrapper 시작 시 immutable snapshot과 pipeline snapshot/checkpoint를 확인한다.
 - 현재 stage와 마지막으로 완성된 artifact를 식별한다.
 - OFF·retired stage를 실패로 세지 않는다.
 - AI 필수 단계는 parsed/receipt 계약을, disabled 단계는 disabled provenance를 확인한다.
-- 최종 순서는 `EV/workorder → runtime summary/gap/lineage → checklist → verifier → DONE → final verifier`가 유지돼야 한다.
+- 최종 순서는 `EV/workorder → runtime summary/gap/lineage → checklist → verifier → DONE → final verifier → tower → checklist → strict final verifier`가 유지돼야 한다. 요약만 복구할 때에는 tower 직전 일반 verifier로 자기 자신의 이전 handoff 오류를 제거하되, controller 완료는 마지막 strict verifier 명령 성공과 같은 세대 artifact로만 판정한다.
+- DONE 이후 control tower를 생성한 뒤 `checklist 최종 refresh → verifier --require-summary-handoff`까지 닫는다. `source_generation_contract`와 checklist `POSTCLOSE_SUMMARY_SOURCES`의 대상일·source SHA256을 실제 파일과 대조한다. 이 마지막 검사를 생략한 verifier PASS는 요약 최신성 완료가 아니다. controller의 일반 복구도 이 검사를 통과해야 DONE이다. verifier/controller 자체 hash는 순환 방지를 위해 요약 source 계약에서 제외한다.
+- strict verifier 또는 recovery 명령이 실패하면 이전 성공 artifact를 근거로 DONE 처리하지 않는다. 마지막 bounded attempt에도 최종 strict 명령 성공이 필요하다. EV headline의 `realized_pnl_status`가 미대사이면 PnL null을 유지하며, 건수 일치만으로 exact 비용 검증 완료를 주장하지 않는다. source-only CF route 관찰은 identity/schema/권한 검증 후 actual ADD/NO_ADD와 분리하고 malformed authority는 계속 차단한다.
 
 ### 8.2 DONE controller와 AI replay
 
@@ -345,7 +355,7 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 ### 8.4 Widget evaluation과 추천
 
 - systemd unit의 `ActiveState`, `SubState`, `Result`, `ExecMainStatus`와 journal을 확인한다.
-- advisory calibration, auto-trade policy calibration, EOD gate, symbol signal research, runtime policy가 같은 completed target date를 사용해야 한다.
+- advisory calibration, auto-trade policy calibration, symbol signal research, runtime policy의 네 producer와 중간 EOD 대기 gate가 같은 completed target date를 사용해야 한다. EOD gate를 다섯 번째 report producer로 세지 않는다.
 - Kiwoom shared-read budget이 소진되면 빈 source로 성공 처리하거나 API 호출량을 올리지 않는다.
 - 종목 확대·signal policy 추천은 exact source, sample floor, source-quality와 기존 owner guard를 확인한다.
 - 추천의 source-only 구현은 Pass 1/2에 포함한다. 실전 종목 확대 또는 매매조건 변경은 정식 policy candidate와 PREOPEN guard 없이는 `user_authority`다.
@@ -377,6 +387,7 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 - 기본 predecessor wait 5100초/23:20 KST hard deadline과 cleanup·detector 각 600초 상한을 확인한다. predecessor 실패/timeout이면 cleanup은 건너뛰되 bounded detector를 실행하고 finalization FAIL로 닫는 현행 계약을 따른다.
 - finalization 실패 후 재실행은 선행 owner를 먼저 정상화한 뒤 수행한다.
 - error detector의 stale 과거 FAIL보다 최신 recovery DONE이 권위를 갖는지 확인한다.
+- 자정 이후 요약·source-only tail만 복구했고 cleanup/detector의 입력·종결 계약을 무효화하지 않았음이 확인된 경우, exact-date predecessor를 읽기 전용 재확인하고 기존 cleanup/detector receipt의 시각을 별도로 보고한다. 현재 날짜로 동작하는 detector를 전일 재실행 증거로 가장하지 않는다. 실제 선행 실패나 영향받은 detector 검사가 남은 경우에는 이 예외로 완료하지 않고 target-date 지원/권한 결손을 명시한다.
 
 ## 9. 최종 판정과 보고
 

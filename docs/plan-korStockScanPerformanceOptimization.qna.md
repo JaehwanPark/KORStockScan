@@ -1,6 +1,6 @@
 # KORStockScan 성능 최적화 Q&A
 
-기준일: `2026-06-04 KST`
+기준일: `2026-09-08 KST`
 
 이 문서는 Plan Rebase 본문에 길게 두기에는 크지만 반복적으로 참조해야 하는 운영 판단 기준을 모아둔 문서다. 현재 역할은 과거 latency/composite 세부 판단 FAQ가 아니라, 자동화체인에서 `승률/EV`, `daily/rolling`, `real/sim/probe`, `proposal/apply`를 혼동해 오판하지 않도록 막는 반복 Q&A다.
 
@@ -14,7 +14,7 @@
 2. 중심 기준은 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md)다. Q&A는 반복 판단 해설이며 active/open owner의 source of truth가 아니다.
 3. 자동화체인 산출물/consumer/apply 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다.
 4. 실행 작업항목은 날짜별 `stage2 todo checklist`가 소유한다. 완료된 `[x]` 항목은 현재 OPEN owner가 아니라 증적이다.
-5. 장중 runtime threshold mutation은 금지한다. 적용은 장후 report/calibration/AI review와 다음 장전 runtime env를 통해서만 한다.
+5. 정기 자동화의 장중 runtime threshold mutation은 금지하며 장후 report와 다음 PREOPEN을 따른다. 별도 명시적 장중 override는 Plan Rebase의 단일 기존 축·cohort·증거·rollback·runtime mutation guard가 소유한다. Q&A나 문서 갱신이 그 권한을 부여하지 않는다.
 6. clean tuning data baseline 이전 산출물은 현재 의사결정 입력이 아니라 archive-only 증적이다.
 7. 새 관찰지표는 `Metric Decision Contract`를 가져야 한다. 계약이 없으면 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅한다.
 
@@ -127,18 +127,7 @@
 
 ### Q8. 스윙 approval request가 있으면 다음 장전 env에 반영하나?
 
-답변:
-
-1. 일반 approval request만으로는 반영하지 않는다.
-2. 일반 swing dry-run env 변경은 hard floor/source-quality와 parsed AI Tier2 review가 닫힌 `dry_run_auto_apply_ready`일 때만 pre-final auto approval로 반영될 수 있다. Tier2 missing/unavailable/parse-rejected는 fail-closed다.
-3. `swing_one_share_real_canary_phase0`와 `swing_scale_in_real_canary_phase0`는 parsed AI Tier2 review와 source report hard floor/source-quality/allowlist/cap 통과 시 phase0 auto approval로 반영될 수 있다.
-4. 승인 후에도 기본 스윙 dry-run은 유지된다. Phase0 real canary만 `actual_order_submitted=true` source를 만들 수 있으며 full swing live conversion은 아니다.
-
-운영 기준:
-
-1. `swing_runtime_approval`은 pre-final auto approval과 final-stage approval request를 분리하는 layer다.
-2. `swing_one_share_real_canary`와 `swing_scale_in_real_canary_phase0`는 전체 스윙 실주문 전환이 아니다.
-3. final full-live conversion, cap release beyond bounded limits, provider/bot changes, and hard/protect/emergency safety relaxation require user approval.
+아니다. 현재 Swing은 operator OFF다. 과거 approval/phase0 artifact가 활성화 지시가 아니며 OFF 산출물 부재를 복구·승격 작업으로 만들지 않는다. 향후 별도 재개 지시가 있더라도 현행 owner/guard/승인을 확인해야 한다. 예전 hard floor나 parsed review만으로 실주문·cap/provider/bot 권한을 복원하지 않는다.
 
 ### Q9. code-improvement workorder가 생성되면 자동으로 repo를 수정하나?
 
@@ -146,13 +135,13 @@
 
 1. 아니다.
 2. workorder는 Codex 구현 세션 입력용 작업지시다.
-3. 사용자가 구현을 명시적으로 요청한 경우에만 repo 수정으로 넘어간다.
+3. 명시적 구현 요청 또는 장후 모니터링 지시문의 명시적 실행 호출이 있어야 허용 범위 구현으로 넘어간다. 후자는 source-only 복구·추천 2-pass를 포함하지만 live/lock/env/order/provider/bot 권한을 추가하지 않는다. 문서 열람·인용·현행화는 실행 호출이 아니다.
 
 운영 기준:
 
 1. `runtime_effect=false`, `allowed_runtime_apply=false` order는 실운영 변경으로 해석하지 않는다.
 2. workorder 생성은 evidence 정리이지 code mutation이 아니다.
-3. 구현 후에는 관련 테스트와 parser 검증을 실행하고, 다음 postclose EV/report에서 metric을 확인한다.
+3. 구현 후 review→수정→재리뷰→targeted validation을 닫고 허용된 영향 producer/consumer만 재생성한다. 문서-only 작업은 링크·owner·권한·파서 검증으로 닫는다. 미래 자연/EV 확인은 기존 checklist owner를 재사용한다.
 
 ### Q10. Project/Calendar 동기화는 누가 실행하나?
 
@@ -181,6 +170,22 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 1. legacy 기준을 현재 auto-bounded apply 판정에 직접 섞지 않는다.
 2. legacy 축을 재개하려면 새 workorder, 새 rollback guard, 새 checklist가 필요하다.
 3. 현재 자동화체인에서는 family별 `Metric Decision Contract`, source-quality gate, window policy를 우선한다.
+
+### Q12. 코드와 verifier가 PASS면 수익개선도 완료인가?
+
+아니다. 코드 검토, 배포, 자연 산출물, 정책 선택, PID 소비, 비용 차감 EV는 별도다. 누락된 과거 체결·손익 귀속의 복원은 데이터 정확성 개선이지 새로운 순이익 증가가 아니다. headline PnL의 대상 집합이 미대사이면 null과 사유를 남긴다. 건수만 맞는다고 비용까지 검증된 것은 아니다.
+
+### Q13. 장후 DONE 이후 요약이 바뀌거나 자정이 지나면?
+
+tower→마지막 checklist→strict verifier `--require-summary-handoff`의 같은 source date/hash를 확인한다. 과거 PASS 파일로 새 verifier 명령 실패를 숨기지 않는다. 자정 이후에도 원 target date를 유지한다. 영향받지 않은 cleanup/detector는 predecessor 읽기 검증 뒤 기존 receipt 시각을 별도 공개할 수 있으나, 현재 날짜 detector 실행을 전일 성공으로 바꾸거나 실제 영향받은 필수 검사를 생략하지 않는다.
+
+### Q14. 결과가 0이면 계속 재실행해야 하나?
+
+정상 빈 후보, 아직 성숙하지 않은 표본, 복구 가능한 계약 오류, 비가역적인 과거 source loss, 유효 표본의 음수 EV를 먼저 구분한다. 검증된 과거 입력 유실은 재실행으로 복원되지 않는다. 원천을 합성하거나 floor를 낮추지 않고 다음 exact-date 수집을 기존 OPEN owner에서 확인한다. source-only/metadata terminal과 provider 평가·runtime 승격은 별도다.
+
+### Q15. 원본 ledger는 ID 없음인데 후속 구현은 완료일 수 있나?
+
+가능하다. 원본 canonical bytes를 고정한 뒤 producer가 native ID metadata projection을 만들고 별도 사용자 승인을 받아 구현했다면 원본 path/row/hash→native ID→승인/구현 ledger를 대사한다. 원본 결손 이력은 보존하되 현재 disposition은 검증된 후속 근거로 판단한다. 두 ledger를 고유 작업으로 합산하지 않으며 projection을 새 경제성 산출물로 보지 않는다. 새 ID 자체는 구현/live 권한이 아니다.
 
 ## 참고 문서
 

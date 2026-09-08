@@ -31,6 +31,18 @@ from src.trading.widget_auto_trade import service as service_module
 
 
 @pytest.fixture(autouse=True)
+def _isolate_owner_policy_and_registry(tmp_path, monkeypatch):
+    # Historical fake orders must never consume the host's live policy/custody.
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "owner-policy.json")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner-registry.jsonl")
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-widget-account")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_market_weakness_counterfactual_writer(monkeypatch):
     monkeypatch.setattr(
         engine,

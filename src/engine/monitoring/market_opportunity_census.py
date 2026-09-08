@@ -3285,15 +3285,26 @@ def build_report(
                 }
             observed_capture_cadence_by_venue_panel[key] = {
                 "sessions": session_summaries,
+                # Evaluate the capture window, not a venue that the installed
+                # trigger has not scheduled yet (for example KRX at 08:xx).
+                # An expected but absent session still has a watermark above
+                # and therefore remains in the required denominator.
+                "required_in_observed_window": bool(
+                    session_watermarks or session_summaries
+                ),
                 "cadence_floor_met": bool(session_summaries)
                 and all(
                     bool(summary.get("cadence_floor_met"))
                     for summary in session_summaries.values()
                 ),
             }
-    capture_cadence_floor_met = bool(observed_capture_cadence_by_venue_panel) and all(
-        bool(summary.get("cadence_floor_met"))
+    required_capture_cadences = [
+        summary
         for summary in observed_capture_cadence_by_venue_panel.values()
+        if summary["required_in_observed_window"]
+    ]
+    capture_cadence_floor_met = bool(required_capture_cadences) and all(
+        bool(summary.get("cadence_floor_met")) for summary in required_capture_cadences
     )
     missing_session_snapshot_count = sum(
         not str(row.get("session") or "").strip() for row in valid_snapshots

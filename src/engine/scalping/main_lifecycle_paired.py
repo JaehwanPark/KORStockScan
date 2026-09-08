@@ -1254,6 +1254,21 @@ def _pipeline_transition_data(
             data[destination_key] = parsed
 
     action = _pipeline_text(fields.get("action"))
+    if source_stage == "score_recovery_real_economics_observed":
+        from src.engine.scalping.score_recovery_economics import profile
+
+        try:
+            applied_profile = json.loads(
+                fields.get("score_recovery_applied_profile") or "null"
+            )
+        except (TypeError, ValueError):
+            applied_profile = None
+        # Old rows stay diagnostic; adding the mapping must not turn missing
+        # historical metadata into a global lifecycle source failure.
+        data["score_recovery_profile"] = json.dumps(
+            profile(applied_profile), sort_keys=True
+        )
+        data["score_recovery_applied"] = _pipeline_bool(fields.get("applied")) is True
     reason = _pipeline_text(fields.get("reason"))
     if action:
         data["action"] = action
@@ -1808,6 +1823,24 @@ def _validated_pipeline_transition(
     except (TypeError, ValueError):
         return None, "pipeline_lifecycle_explicit_timestamp_invalid", True
 
+    if source_stage == "avg_down_route_arbitration_observed":
+        # Counterfactual route arms are not actual ADD/NO_ADD decisions. Their
+        # raw evidence belongs to the route replay owner, not lifecycle actions.
+        if (
+            fields.get("avg_down_route_schema") == "avg_down_route_arbitration_v2"
+            and fields.get("decision_authority")
+            == "source_only_route_arbitration_observation"
+            and _pipeline_bool(fields.get("runtime_effect")) is False
+            and _pipeline_bool(fields.get("allowed_runtime_apply")) is False
+            and (
+                "actual_order_submitted" not in fields
+                or _pipeline_bool(fields["actual_order_submitted"]) is False
+            )
+            and _pipeline_exact_lifecycle_gap_id(raw_row, target_date=target_date)
+        ):
+            return None, "pipeline_route_observation_not_actual_decision", False
+        return None, "pipeline_route_observation_contract_invalid", True
+
     data, data_error = _pipeline_transition_data(
         lifecycle_stage=lifecycle_stage,
         source_stage=source_stage,
@@ -1961,6 +1994,9 @@ class _LifecycleAccumulator:
     final_exit_reconciled: bool = False
     requested_qty_max: float | None = None
     entry_fill_qty: float = 0.0
+    entry_notional_krw: float = 0.0
+    score_recovery_profile: dict[str, Any] | None = None
+    score_recovery_profile_conflict: bool = False
     scale_in_fill_qty: float = 0.0
     exit_qty: float = 0.0
     exit_amount_krw: float = 0.0
@@ -3177,6 +3213,7 @@ class _LifecycleAccumulator:
             self.scale_in_fill_qty += quantity
         else:
             self.entry_fill_qty += quantity
+            self.entry_notional_krw += quantity * price
 
     def _apply_exit(self, quantity: float, price: float) -> None:
         if quantity > self.open_qty + _QUANTITY_EPSILON:
@@ -3223,6 +3260,26 @@ class _LifecycleAccumulator:
         stage = str(row["stage"])
         data = row["data"]
         assert isinstance(data, dict)
+        if stage == "entry_decision" and data.get("score_recovery_applied") is True:
+            from src.engine.scalping.score_recovery_economics import profile
+
+            try:
+                applied_profile = profile(
+                    json.loads(data.get("score_recovery_profile") or "null")
+                )
+            except (TypeError, ValueError):
+                applied_profile = None
+            if (
+                applied_profile is None
+                or self.first_fill_at is not None
+                or (
+                    self.score_recovery_profile is not None
+                    and self.score_recovery_profile != applied_profile
+                )
+            ):
+                self.score_recovery_profile_conflict = True
+            else:
+                self.score_recovery_profile = applied_profile
         if trusted_historical_diagnostic_recovery is not None:
             recovery_provenance = trusted_historical_diagnostic_recovery
             recovery_schema = recovery_provenance.get("schema")
@@ -4002,6 +4059,10 @@ class _LifecycleAccumulator:
             "capital_time_krw_hours": self.capital_time_krw_seconds / 3600.0,
             "requested_qty_max": self.requested_qty_max,
             "entry_fill_qty": self.entry_fill_qty,
+            "entry_notional_krw": self.entry_notional_krw,
+            "exit_amount_krw": self.exit_amount_krw,
+            "score_recovery_profile": self.score_recovery_profile,
+            "score_recovery_profile_conflict": self.score_recovery_profile_conflict,
             "scale_in_fill_qty": self.scale_in_fill_qty,
             "exit_qty": self.exit_qty,
             "exit_execution_leg_count": self.exit_execution_leg_count,
@@ -5080,6 +5141,7 @@ def build_daily_report(
     pipeline_lifecycle_mapped_row_count = 0
     pipeline_lifecycle_accepted_row_count = 0
     pipeline_lifecycle_out_of_scope_row_count = 0
+    pipeline_route_observation_only_count = 0
     pipeline_lifecycle_instrumentation_gap_count = 0
     pipeline_lifecycle_missing_identity_count = 0
     pipeline_lifecycle_owner_scoped_gap_count = 0
@@ -5651,6 +5713,8 @@ def build_daily_report(
             )
             if not lifecycle_in_scope:
                 pipeline_lifecycle_out_of_scope_row_count += 1
+                if reason == "pipeline_route_observation_not_actual_decision":
+                    pipeline_route_observation_only_count += 1
                 continue
             pipeline_lifecycle_mapped_row_count += 1
             if transition is not None:
@@ -6454,6 +6518,7 @@ def build_daily_report(
         "pipeline_lifecycle_accepted_row_count": (
             pipeline_lifecycle_accepted_row_count
         ),
+        "pipeline_route_observation_only_count": pipeline_route_observation_only_count,
         "pipeline_lifecycle_out_of_scope_row_count": (
             pipeline_lifecycle_out_of_scope_row_count
         ),

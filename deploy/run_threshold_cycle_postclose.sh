@@ -1703,6 +1703,80 @@ if [ "$RUN_SCANNER_LOOKUP_ATTENTION_TUNING" = "true" ] || [ "$RUN_SCANNER_LOOKUP
   fi
 fi
 
+# Materialize the existing source chain once, before its Daily economic consumer.
+# Source-only/provider-deferred results retain their own warning semantics; no
+# extra Provider call, lifecycle replay or second Daily approval pass is added.
+if [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "1" ]; then
+  wait_for_postclose_resources "entry_split_order_plan"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_split_order_plan \
+    --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/entry_split_order_plan/entry_split_order_plan_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/entry_split_order_plan/entry_split_order_plan_${TARGET_DATE}.md" \
+    "entry_split_order_plan"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/threshold_cycle/entry_split_order_policy/entry_split_order_policy_${TARGET_DATE}.json" \
+    "entry_split_order_policy"
+fi
+if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "1" ]; then
+  wait_for_postclose_resources "ai_decision_quality_daily_materialization"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_decision_quality \
+    --date "$TARGET_DATE" \
+    --mode postclose \
+    --write
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/runtime/ai_decision_quality_control_${TARGET_DATE}.json" \
+    "ai_decision_quality_control"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/ai_decision_outcome_labels/ai_decision_outcome_labels_${TARGET_DATE}.json" \
+    "ai_decision_outcome_labels"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/ai_decision_quality_baseline/ai_decision_quality_baseline_${TARGET_DATE}.json" \
+    "ai_decision_quality_baseline"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/ai_prompt_paired_replay/ai_prompt_paired_replay_${TARGET_DATE}.json" \
+    "ai_prompt_paired_replay_preparation"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/entry_candidate_lifecycle_state/entry_candidate_lifecycle_state_${TARGET_DATE}.json" \
+    "entry_candidate_lifecycle_state"
+fi
+if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "1" ]; then
+  main_ai_quality_args=(
+    --date "$TARGET_DATE"
+    --write
+    --daily-attempt-cap "$MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP"
+    --daily-usd-cap "$MAIN_AI_QUALITY_DAILY_USD_CAP"
+    --parent-cap "$MAIN_AI_QUALITY_PARENT_CAP"
+  )
+  if [ "$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY" = "true" ] || [ "$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY" = "1" ]; then
+    main_ai_quality_args+=(--execute-provider-replay)
+  fi
+  main_ai_quality_rc=0
+  main_ai_quality_failure_reason=""
+  wait_for_postclose_resources "main_ai_quality_r0_r3" || {
+    main_ai_quality_rc=$?
+    main_ai_quality_failure_reason="resource_wait_failed"
+  }
+  if [ "$main_ai_quality_rc" -eq 0 ]; then
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
+      -m src.engine.scalping.micro_reversion.ai_quality_cycle \
+      "${main_ai_quality_args[@]}" || {
+        main_ai_quality_rc=$?
+        main_ai_quality_failure_reason="cycle_command_failed_or_deferred"
+      }
+  fi
+  if [ "$main_ai_quality_rc" -eq 0 ]; then
+    if ! wait_for_json_artifact \
+      "$PROJECT_DIR/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_${TARGET_DATE}.json" \
+      "main_ai_quality_r0_r3"; then
+      main_ai_quality_rc=1
+      main_ai_quality_failure_reason="artifact_missing_or_invalid"
+    fi
+  fi
+  if [ "$main_ai_quality_rc" -ne 0 ]; then
+    emit_postclose_marker "[WARN] main-ai-quality-r0-r3 target_date=$TARGET_DATE rc=$main_ai_quality_rc reason=$main_ai_quality_failure_reason runtime_effect=false actual_order_submitted=false"
+  fi
+fi
 ai_review_json="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.json"
 ai_review_md="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.md"
 ai_correction_attempt=1
@@ -1955,77 +2029,6 @@ if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPOR
     "$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/limit_down_watch/limit_down_watch_${TARGET_DATE}.md" \
     "limit_down_watch_report"
-fi
-if [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "1" ]; then
-  wait_for_postclose_resources "entry_split_order_plan"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_split_order_plan \
-    --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/entry_split_order_plan/entry_split_order_plan_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/entry_split_order_plan/entry_split_order_plan_${TARGET_DATE}.md" \
-    "entry_split_order_plan"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/threshold_cycle/entry_split_order_policy/entry_split_order_policy_${TARGET_DATE}.json" \
-    "entry_split_order_policy"
-fi
-if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "1" ]; then
-  wait_for_postclose_resources "ai_decision_quality_daily_materialization"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_decision_quality \
-    --date "$TARGET_DATE" \
-    --mode postclose \
-    --write
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/runtime/ai_decision_quality_control_${TARGET_DATE}.json" \
-    "ai_decision_quality_control"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_decision_outcome_labels/ai_decision_outcome_labels_${TARGET_DATE}.json" \
-    "ai_decision_outcome_labels"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_decision_quality_baseline/ai_decision_quality_baseline_${TARGET_DATE}.json" \
-    "ai_decision_quality_baseline"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_prompt_paired_replay/ai_prompt_paired_replay_${TARGET_DATE}.json" \
-    "ai_prompt_paired_replay_preparation"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/entry_candidate_lifecycle_state/entry_candidate_lifecycle_state_${TARGET_DATE}.json" \
-    "entry_candidate_lifecycle_state"
-fi
-if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "1" ]; then
-  main_ai_quality_args=(
-    --date "$TARGET_DATE"
-    --write
-    --daily-attempt-cap "$MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP"
-    --daily-usd-cap "$MAIN_AI_QUALITY_DAILY_USD_CAP"
-    --parent-cap "$MAIN_AI_QUALITY_PARENT_CAP"
-  )
-  if [ "$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY" = "true" ] || [ "$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY" = "1" ]; then
-    main_ai_quality_args+=(--execute-provider-replay)
-  fi
-  main_ai_quality_rc=0
-  main_ai_quality_failure_reason=""
-  wait_for_postclose_resources "main_ai_quality_r0_r3" || {
-    main_ai_quality_rc=$?
-    main_ai_quality_failure_reason="resource_wait_failed"
-  }
-  if [ "$main_ai_quality_rc" -eq 0 ]; then
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
-      -m src.engine.scalping.micro_reversion.ai_quality_cycle \
-      "${main_ai_quality_args[@]}" || {
-        main_ai_quality_rc=$?
-        main_ai_quality_failure_reason="cycle_command_failed_or_deferred"
-      }
-  fi
-  if [ "$main_ai_quality_rc" -eq 0 ]; then
-    if ! wait_for_json_artifact \
-      "$PROJECT_DIR/data/report/main_ai_quality_r0_r3/main_ai_quality_r0_r3_cycle_${TARGET_DATE}.json" \
-      "main_ai_quality_r0_r3"; then
-      main_ai_quality_rc=1
-      main_ai_quality_failure_reason="artifact_missing_or_invalid"
-    fi
-  fi
-  if [ "$main_ai_quality_rc" -ne 0 ]; then
-    emit_postclose_marker "[WARN] main-ai-quality-r0-r3 target_date=$TARGET_DATE rc=$main_ai_quality_rc reason=$main_ai_quality_failure_reason runtime_effect=false actual_order_submitted=false"
-  fi
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
@@ -2460,4 +2463,10 @@ if [ "$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" = "true" ] || [ "$RUN_TUNING_PERFOR
     "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.md" \
     "tuning_performance_control_tower"
 fi
+# The tower is published after DONE and is itself a checklist input. Close this
+# final generation without feeding the verifier hash back into its own sources.
+wait_for_postclose_resources "postclose_summary_handoff"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+  --date "$TARGET_DATE" --require-summary-handoff "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 restart_postclose_bot_if_requested

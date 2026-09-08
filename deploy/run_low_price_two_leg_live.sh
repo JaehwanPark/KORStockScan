@@ -269,6 +269,21 @@ case "$PROFILE" in
     CONFIRM="017670_MIDDAY_TWO_LEG_LIVE"
     INTERVAL_SEC="6"
     ;;
+  nhn_midday)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_NHN_MIDDAY_ENABLED=true
+    CONFIRM="181710_MIDDAY_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
+  tym_morning)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_TYM_MORNING_ENABLED=true
+    CONFIRM="002900_MORNING_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
+  sd_biosensor_afternoon)
+    export KORSTOCKSCAN_LOW_PRICE_TWO_LEG_SD_BIOSENSOR_AFTERNOON_ENABLED=true
+    CONFIRM="137310_AFTERNOON_TWO_LEG_LIVE"
+    INTERVAL_SEC="6"
+    ;;
   *)
     echo "unsupported low-price two-leg profile: $PROFILE" >&2
     exit 2

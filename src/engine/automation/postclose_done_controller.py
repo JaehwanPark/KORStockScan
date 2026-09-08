@@ -556,10 +556,17 @@ def _verification_disabled_stage_args(verification: dict[str, Any]) -> list[str]
 
 
 def _build_verify_action(
-    target_date: str, verification: dict[str, Any]
+    target_date: str,
+    verification: dict[str, Any],
+    *,
+    require_summary_handoff: bool = True,
 ) -> RecoveryAction:
     return RecoveryAction(
-        "verify_postclose_chain",
+        (
+            "verify_postclose_chain"
+            if require_summary_handoff
+            else "verify_pre_summary_chain"
+        ),
         [
             _python_bin(),
             "-m",
@@ -567,6 +574,7 @@ def _build_verify_action(
             "--date",
             target_date,
             *_verification_disabled_stage_args(verification),
+            *(["--require-summary-handoff"] if require_summary_handoff else []),
         ],
         "refresh verifier status",
     )
@@ -956,11 +964,29 @@ def _tail_stage_repair_actions(
             _build_runtime_apply_gap_audit_action(target_date, verification),
             _build_pending_verify_action(target_date, verification),
             _build_tail_done_reconciliation_action(target_date),
-            _build_verify_action(target_date, verification),
         ]
     )
     if _env_enabled("THRESHOLD_CYCLE_RUN_TUNING_PERFORMANCE_CONTROL_TOWER"):
+        actions.append(
+            _build_verify_action(
+                target_date, verification, require_summary_handoff=False
+            )
+        )
         actions.append(_build_tuning_performance_control_tower_action(target_date))
+    actions.append(
+        RecoveryAction(
+            "refresh_next_stage2_checklist_final",
+            [
+                _python_bin(),
+                "-m",
+                "src.engine.build_next_stage2_checklist",
+                "--source-date",
+                target_date,
+            ],
+            "bind final tower and gap audit generation before final verifier",
+        )
+    )
+    actions.append(_build_verify_action(target_date, verification))
     return actions
 
 
@@ -1188,6 +1214,44 @@ def _recovery_actions(
     issues = _flatten_issues(verification)
     actions: list[RecoveryAction] = []
     issue_text = " ".join(issues)
+    summary_issues = [
+        issue for issue in issues if issue.startswith("postclose_summary_handoff:")
+    ]
+    other_issues = (
+        set(issues)
+        - set(summary_issues)
+        - _done_acceptable_warning_issues(verification)
+    )
+    if summary_issues and not other_issues:
+        if any(":tower:" in issue for issue in summary_issues):
+            # The tower must not copy its own old summary-handoff failure back
+            # into the new snapshot. Final acceptance still uses strict verify.
+            actions.append(
+                _build_verify_action(
+                    target_date, verification, require_summary_handoff=False
+                )
+            )
+            actions.append(_build_tuning_performance_control_tower_action(target_date))
+        # Checklist binds the tower too; refresh it whenever the tower changes.
+        if "next_stage2_checklist" not in (
+            (verification.get("execution_profile") or {}).get("disabled_stage_flags")
+            or []
+        ):
+            actions.append(
+                RecoveryAction(
+                    "refresh_next_stage2_checklist",
+                    [
+                        _python_bin(),
+                        "-m",
+                        "src.engine.build_next_stage2_checklist",
+                        "--source-date",
+                        target_date,
+                    ],
+                    "final source generation handoff after summary recovery",
+                )
+            )
+        actions.append(_build_verify_action(target_date, verification))
+        return actions
     log_issues = (
         ((verification.get("predecessor_integrity") or {}).get("log_issues") or [])
         if isinstance(verification.get("predecessor_integrity"), dict)
@@ -1558,6 +1622,15 @@ def build_postclose_done_controller(
                 "issues": issues,
             }
         )
+        if verify_rc != 0 and _is_done_verifier_status(
+            target_date, final_verifier, issues
+        ):
+            # A failed strict verifier can leave a previous successful artifact.
+            # That stale success must not authorize DONE or downstream actions.
+            blocked_reasons = [
+                f"verifier_command_failed_with_success_artifact:{verify_rc}"
+            ]
+            break
         if _is_done_verifier_status(target_date, final_verifier, issues):
             if require_codex_completed and not dry_run:
                 runner_report = _load_json(_runner_path(target_date))
@@ -1688,8 +1761,10 @@ def build_postclose_done_controller(
 
     if structural_blockers:
         status = "blocked_structural_contract_gap"
-    elif _is_done_verifier_status(target_date, final_verifier, final_issues) and not (
-        require_codex_completed and not dry_run and not runner_completed
+    elif (
+        not blocked_reasons
+        and _is_done_verifier_status(target_date, final_verifier, final_issues)
+        and not (require_codex_completed and not dry_run and not runner_completed)
     ):
         status = "done"
     elif dry_run and (

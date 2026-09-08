@@ -26,6 +26,18 @@ COST_HASH = "a" * 64
 SYMBOL_HASH = "b" * 64
 
 
+@pytest.fixture(autouse=True)
+def _isolate_owner_policy_and_registry(tmp_path, monkeypatch):
+    # Exercise the real resolver against isolated files, not today's live owners.
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "owner-policy.json")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner-registry.jsonl")
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-lifecycle-account")
+
+
 def _exact_buy_execution_stock(
     *,
     order_no: str = "0000123",

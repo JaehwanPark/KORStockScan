@@ -2617,6 +2617,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     calibration_state = str(candidate.get("calibration_state") or "")
     policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
     force_emit = policy_or_family in {
+        "score65_74_recovery_probe",
         "lifecycle_decision_matrix_runtime",
         ENTRY_OPPORTUNITY_RECHECK_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
@@ -2718,81 +2719,39 @@ def _dedupe_calibration_candidates(
     return deduped
 
 
-def _score65_74_entry_unlock_candidate(candidate: dict[str, Any]) -> bool:
-    from src.engine.scalping.score_recovery_observation import observation_cohort_valid
+def _score65_74_entry_unlock_candidate(
+    candidate: dict[str, Any], *, target_date: str = ""
+) -> bool:
+    from src.engine.scalping.score_recovery_economics import evaluate, profile
 
-    if str(candidate.get("family") or "") != "score65_74_recovery_probe":
+    if candidate.get("family") != "score65_74_recovery_probe":
         return False
-    metrics = (
-        candidate.get("source_metrics")
-        if isinstance(candidate.get("source_metrics"), dict)
-        else {}
-    )
-    risk_gate = str(metrics.get("risk_regime_gate_state") or "").lower()
-    if not observation_cohort_valid(metrics):
+    current = profile(candidate.get("current_values"))
+    recommended = profile(candidate.get("recommended_values"))
+    if current is None or current != recommended:
         return False
-    if (
-        metrics.get("score60_74_cost_contract_complete") is not True
-        or metrics.get("source_quality_blocked") is True
-        or any(
-            marker in risk_gate
-            for marker in ("source_quality_blocked", "invalid", "fail")
-        )
-    ):
+    raw_metrics = candidate.get("source_metrics")
+    if not isinstance(raw_metrics, dict):
         return False
+    metrics = dict(raw_metrics)
+    if metrics.get("score_recovery_current_profile") != current:
+        return False
+    if target_date:
+        try:
+            days = (metrics.get("score_recovery_real_economics") or {}).get(
+                "source_dates"
+            ) or {}
+            if not days or any(
+                date.fromisoformat(day) >= date.fromisoformat(target_date)
+                for day in days
+            ):
+                return False
+        except (ValueError, TypeError, AttributeError):
+            return False
     try:
-        sample_count = int(candidate.get("sample_count") or 0)
-        sample_floor = int(candidate.get("sample_floor") or 0)
-    except Exception:
+        return evaluate(metrics, candidate.get("sample_floor", 20))["ready"]
+    except (TypeError, ValueError, OverflowError):
         return False
-    if sample_floor <= 0 or sample_count < sample_floor:
-        return False
-    try:
-        cost_adjusted_sample_count = int(
-            metrics.get("score60_74_cost_adjusted_sample_count") or 0
-        )
-    except (TypeError, ValueError):
-        return False
-    if cost_adjusted_sample_count < sample_floor:
-        return False
-    try:
-        avg_ev = float(metrics["score60_74_avg_cost_adjusted_expected_ev_pct"])
-        avg_close = float(
-            metrics.get("score60_74_avg_close_10m_pct")
-            if metrics.get("score60_74_avg_close_10m_pct") is not None
-            else metrics.get("score65_74_avg_close_10m_pct") or 0.0
-        )
-        avg_mfe_raw = metrics.get("score60_74_avg_mfe_10m_pct")
-        avg_mfe = float(avg_mfe_raw) if avg_mfe_raw is not None else None
-    except (KeyError, TypeError, ValueError):
-        return False
-    if not math.isfinite(avg_ev) or not math.isfinite(avg_close):
-        return False
-    if avg_mfe is not None and (not math.isfinite(avg_mfe) or avg_mfe < 2.0):
-        return False
-    submitted_to_budget = metrics.get("submitted_to_budget_unique_pct")
-    submitted = metrics.get("order_bundle_submitted")
-    try:
-        submitted_to_budget = (
-            float(submitted_to_budget) if submitted_to_budget is not None else None
-        )
-        submitted = float(submitted) if submitted is not None else None
-    except (TypeError, ValueError):
-        return False
-    if submitted_to_budget is not None:
-        drought_ready = (
-            math.isfinite(submitted_to_budget) and 0.0 <= submitted_to_budget <= 10.0
-        )
-    else:
-        drought_ready = (
-            submitted is not None and math.isfinite(submitted) and submitted == 0.0
-        )
-    return (
-        avg_ev >= 2.0
-        and avg_close >= 1.0
-        and drought_ready
-        and risk_gate != "confirmed_panic"
-    )
 
 
 def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, Any]:
@@ -3956,6 +3915,14 @@ def _select_auto_apply_candidates(
                 f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
             )
 
+        if family == "score65_74_recovery_probe" and lock is None:
+            if not _score65_74_entry_unlock_candidate(
+                candidate, target_date=target_date
+            ):
+                reject_reason = (
+                    reject_reason or "score_recovery_real_net_approval_not_ready"
+                )
+                hold_carry_forward = False
         lock_applied = False
         lock_stage_conflict_reason = ""
         if (
@@ -4015,12 +3982,27 @@ def _select_auto_apply_candidates(
         else:
             selected_env_overrides = {}
 
+        if (
+            family == "score65_74_recovery_probe"
+            and not reject_reason
+            and not lock_applied
+        ):
+            from src.engine.scalping.score_recovery_economics import approval_version
+
+            selected_env_overrides[
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"
+            ] = approval_version(
+                candidate["source_metrics"], candidate.get("sample_floor", 20)
+            )
         decision = {
             "family": family,
             "stage": stage,
             "priority": int(candidate.get("priority") or 999),
             "calibration_state": state,
-            "threshold_version": candidate.get("threshold_version"),
+            "threshold_version": selected_env_overrides.get(
+                "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION",
+                candidate.get("threshold_version"),
+            ),
             "selected": not bool(reject_reason),
             "decision_reason": reject_reason or reason,
             "env_overrides": selected_env_overrides,

@@ -1,19 +1,28 @@
 # Time-Based Operations Runbook
 
+## Postclose final summary recovery (2026-09-08; target date retained)
+
+After final source-only producer recovery, publish `tuning_performance_control_tower → build_next_stage2_checklist → verify_threshold_cycle_postclose_chain --require-summary-handoff` for the original source date, even after midnight. The controller requires this last-consumer source-hash contract before DONE. A summary-only failure must not cause a full wrapper, provider replay, PREOPEN env mutation or bot restart; regenerate only the affected summary/checklist and recheck controller/finalization. Missing optional input remains explicit, but its later arrival invalidates the summary. Keep old-generation evidence and user-owned checklist text. Code review and targeted validation precede regeneration; natural source and economic acceptance stay separate.
+
+The intermediate pre-summary verifier clears only the summary generation check; final acceptance always requires strict verification and a successful verifier command. After midnight, do not force a current-date final detector to impersonate the previous source date. Recheck exact-date predecessor state read-only and preserve the prior cleanup/detector receipt when those inputs did not require rerunning; disclose its as-of time separately from the refreshed verifier/controller.
+
 ## ADM/LDM retirement (2026-09-06)
 
 Scalping Entry/Holding ADM, statistical action weight, LDM daily/rolling/MTD, lifecycle AI context/attribution, discovery/refinement, LDM scale-in approval and runtime apply bridge are retired. The main wrapper contains no execution blocks for them; environment overrides cannot re-enable them. PREOPEN removes archived family candidates and emits explicit OFF guards. Missing retired artifacts do not create verifier failures or restoration workorders. Old descriptions of these owners are historical only.
 
 Raw lifecycle lineage and dedicated Entry AI gate/Samsung/AVG_DOWN/PYRAMID remain. Entry gate/probe read normalized raw events through `src.engine.scalping.entry_observation_source`; AVG_DOWN freezes only currently selected external policies. Existing order, quantity, provider, bot and hard-safety controls are unchanged. Archive reports and operator locks are retained, not bulk-deleted. Natural startup and postclose confirmation belongs to `AdmLdmRetirementNaturalEvidence0907`. See [review](./audit-reports/2026-09-06-adm-ldm-retirement-review.md).
 
-작성 기준: `2026-09-07 KST`
+작성 기준: `2026-09-08 KST`
 목적: 장전, 장중, 장후 자동화 체인의 실행 주체, 산출물, 확인 기준을 간결하게 고정한다.
 
 이 문서는 실행 절차 runbook이다. 튜닝 원칙과 active owner는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 작업 소유권은 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 산출물 추적성은 [report-based-automation-traceability.md](./report-based-automation-traceability.md), threshold-cycle 공통 산출물 정의는 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 기준으로 한다.
 
 튜닝 데이터 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 이 기준 이전 raw/report/analytics artifact는 archive/audit evidence로만 본다. EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 쓰지 않는다. `threshold_cycle_preopen_status`와 `threshold_cycle_postclose_status`는 운영 freshness status artifact라 이 제한에서 제외한다.
 
-## 현행 운영·검토 경계 (2026-09-07)
+## 현행 운영·검토 경계 (2026-09-08)
+
+- [9/7 원천 복구](./audit-reports/2026-09-08-postclose-priority-repair-review.md)의 9/8 strict verifier/controller와 원래 9/7 cleanup/detector receipt를 분리한다. 새 source-date wrapper는 다시 자연 검증해야 하며 기존 receipt를 현재 PID/EV 증거로 쓰지 않는다. 비가역적 과거 market/ingress 결손은 다음 exact source acceptance이지 동일 날짜 반복 재실행 대상이 아니다.
+- [별도 승인 위젯·에피소드 9/8 적용](./audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)은 source-only 모니터링의 일반 권한이 아니다. frozen canonical65행과 후속 native projection26행은 원본 path/row/hash로 대사하고 합산하지 않는다. publish/설치와 자연 preflight/PID·실현 EV는 `WidgetEpisodeRecommendationApplyAcceptance0908`에서 분리한다.
 
 - 상세검토 상태는 [장후작업 목록](./audit-reports/2026-09-05-postclose-work-inventory.md), 실행·복구와 추천 구현은 명시적으로 호출된 [장후 모니터링 지시문](./postclose-tuning-result-review-task-instructions.md)을 따른다. 문서 현행화/읽기 요청은 그 지시문의 실행 요청이 아니다.
 - #8/#9/#11 및 #119/#23/#49/#76/#78/#82의 완료 보완을 자연 산출물·PREOPEN/PID·실수익 확인과 분리한다. 새 결함/계약 변경/필수 handoff 실패 없이는 상세검토를 다시 열지 않는다. #77/#79/#80 전체 검토 완료를 연결부 시험으로 대체하지 않는다.
@@ -25,7 +34,7 @@ Raw lifecycle lineage and dedicated Entry AI gate/Samsung/AVG_DOWN/PYRAMID remai
 ## 운영 원칙
 
 - 기본 흐름은 무인 자동화다. 장전에는 전일 postclose artifact와 deterministic guard가 만든 `auto_bounded_live` 후보만 runtime env로 반영한다.
-- 장중 threshold runtime mutation은 금지한다. 장중 산출물은 source-quality, incident, 다음 장전 후보 입력으로만 쓴다.
+- 정기 자동화의 장중 threshold runtime mutation은 금지한다. 장중 산출물은 source-quality, incident, 다음 장전 후보 입력이다. 별도 명시적 override만 Plan Rebase의 기존 단일 축·cohort·증거·rollback과 runtime mutation guard를 따르며 이 문서 현행화는 그 승인 요청이 아니다.
 - AI reviewer는 제안과 감리 계층이다. 최종 state/value는 deterministic guard, source-quality gate, approval contract가 결정한다.
 - broker submit guard, stale quote, price freshness, hard/protect/emergency stop, account/order/cooldown/quantity guard는 항상 최상위 safety다. ADM, LDM, bridge, approval artifact는 이 guard를 우회할 수 없다.
 - `lifecycle_decision_matrix_runtime` 및 기존 ADM adapter는 retired OFF/no-op이다. 현재 dedicated strategy owner와 baseline/hard-safety만 각 계약을 유지한다.
@@ -97,11 +106,18 @@ Raw lifecycle lineage and dedicated Entry AI gate/Samsung/AVG_DOWN/PYRAMID remai
 ## 시간대별 Runbook
 
 저가주 episode exact-date inventory는 2026-08-31~09-06에 48개,
-2026-09-07부터 53개다. 2026-09-04 사용자 승인 추천 중 기존 로직 8건은
+2026-09-07은 53개, 2026-09-08부터 56개다. 2026-09-04 사용자 승인 추천 중 기존 로직 8건은
 해당 profile을 교체하고, 시간확장 5건은 `samsung_heavy_late_morning`,
 `cj_cgv_morning`, `fan_ocean_afternoon`, `youngone_midday`,
 `sk_telecom_midday` profile과 timer를 추가한다. 신규 신호만 새 세대를
 사용하며 기존 주문·보유는 신호일 policy snapshot을 유지한다.
+
+9/8 세대는 별도 9/7 사용자 승인 중 기존8/신규 시간대3을 반영한다.
+TYM morning(09:05 preflight/09:09 start), NHN midday(13:25/13:29),
+SD Biosensor afternoon(14:10/14:14)의 새 timer6을 설치한 receipt가 있다.
+inventory56/eligible53/기존 quarantine3이며, 미달 추천2는 보류다.
+이는 예약 설치 증거이지 자연 기동·체결 증거가 아니다. 기존 보유 target과
+10주×2 leg를 유지하며 exact-date 정책/hash·실행은 당일 acceptance에서 확인한다.
 
 `panic_entry_freeze_guard`는 패닉셀 V2 1차 후보지만, runbook상 즉시 적용 대상이 아니다. `data/threshold_cycle/approvals/panic_entry_freeze_guard_YYYY-MM-DD.json` approval artifact, `KORSTOCKSCAN_PANIC_ENTRY_FREEZE_GUARD_*` env key mapping, stale source/owner conflict/provenance rollback guard가 모두 구현되기 전에는 `panic_sell_defense`가 `PANIC_SELL`이어도 신규 BUY를 자동 차단하지 않는다. `panic_regime_mode=NORMAL|PANIC_DETECTED|STABILIZING|RECOVERY_CONFIRMED`는 report/approval source이며, V2.0 신규 BUY pre-submit freeze, V2.1 미체결 진입 주문 cancel, V2.2 holding/exit context, V2.3 강제 축소/청산은 서로 다른 owner다. approval/rollback guard 없이 mode 전환만으로 주문 취소, 자동매도, stop/TP/trailing/threshold/provider/bot restart를 수행하지 않는다.
 
@@ -152,9 +168,9 @@ threshold 재튜닝이 아니며, family별 실제 호출·실주문 영향·EV�
 
 20:10 threshold-cycle wrapper와 자동 복구 controller는 늦은 NXT 청산을 포함한 exact trade performance fact를 먼저 동기화한 뒤 `daily threshold calibration -> threshold EV` 순서로 생성한다. EV만 나중에 재생해 낡은 calibration 거래 수를 그대로 소비하는 것은 정상 완료로 인정하지 않는다.
 
-20:10 threshold-cycle wrapper는 기본값 `THRESHOLD_CYCLE_RUN_SAMSUNG_MACHINE_ENTRY_TUNING=true`에서 삼성전자 오전·midday·오후 독립 기계의 당일 state를 `samsung_machine_entry_tuning` JSON/Markdown과 다음 거래일 candidate로 원자 생성한다. 과거 시세/API를 조회하지 않고 `2026-06-05` 이후 자기 이전 actual-state 일별 observation 전부와 당일 observation을 단일 `clean_baseline_cumulative` 창으로 누적한다. 기계 도입 전 또는 observation 미생성 거래일은 coverage gap으로 공개하되 outcome으로 보간하거나 historical replay로 대체하지 않는다. `observation_source_quality_audit.tuning_input_allowed=true`, clean-baseline cumulative complete episode/leg floor와 양의 EV, `HELD`·미해결 guard를 모두 요구한다. candidate 자체는 runtime effect가 없고 오전은 baseline-only, midday/오후는 전체 동일 entry stage에서 하루 한 기계·한 axis tightening만 허용한다.
+20:10 threshold-cycle wrapper는 기본값 `THRESHOLD_CYCLE_RUN_SAMSUNG_MACHINE_ENTRY_TUNING=true`에서 삼성전자 오전·midday·오후 독립 기계의 당일 state를 `samsung_machine_entry_tuning` JSON/Markdown과 다음 거래일 candidate로 원자 생성한다. 과거 시세/API를 조회하지 않고 `2026-06-05` 이후 자기 이전 actual-state 일별 observation 전부와 당일 observation을 단일 `clean_baseline_cumulative` 창으로 누적한다. 기계 도입 전 또는 observation 미생성 거래일은 coverage gap으로 공개하되 outcome으로 보간하거나 historical replay로 대체하지 않는다. v9 actual-policy/as-of 원장과 broker 체결금액 EV를 사용한다. observed-signal subset으로 신규 tightening을 승격하지 않으며 기존 활성 entry 축의 근거 있는 bounded rollback만 이 producer가 소유한다. 새 상승·반등 recipe는 별도 `machine_entry_timing_tuning`의 exact source/paired 비용/PREOPEN 계약을 따른다. 오전은 baseline-only이며 candidate 자체는 runtime effect가 없다. code PASS만으로 target·수량·validity나 실제 진입 조건을 변경하지 않는다.
 
-같은 wrapper의 기본값 `THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_TUNING=true`는 exact target-date 실제 profile state를 종목·시간대별로 서로 섞지 않고 `low_price_two_leg_tuning`으로 누적한다. exact-date inventory는 `2026-08-19=20`, `2026-08-21=27`, `2026-08-24=35`, `2026-08-25~26=40`, `2026-08-27=45`, `2026-08-28~30=46`, `2026-08-31~09-06=48`, `2026-09-07 이후=53` profile 세대를 사용하며 `profiles_for_target_date()`와 applied-policy inventory가 권한을 소유한다. 과거 시세를 재조회하지 않으며 `2026-06-05` 이후 생성된 actual profile observation 전부를 단일 `clean_baseline_cumulative` 창에 넣는다. 전일 carry가 후일 자연청산되면 durable state를 원 거래일에 명시적으로 재귀속하며, 미관측 거래일은 coverage로만 공개하고 outcome으로 보간하지 않는다. 이 창에서 completed leg 20, 후보 EV가 0보다 크면서 현 정책 EV보다 큼, source-quality PASS, `HELD`·미해결 0을 모두 요구한다. 전체 regular-entry stage에서 기존 Samsung candidate까지 포함해 하루 한 machine/profile·한 tightening axis만 다음 PREOPEN candidate가 될 수 있다. Samsung candidate가 먼저 유효 mutation을 소유하거나 같은 날짜 artifact가 invalid이면 lower-price family는 전 profile을 carry-forward한다. 신규 진입 수량은 profile별 10주×2 leg(20주), 50:50 진입 offset, profile별 고정 target/validity, SOR, 무손절·미청산 보유와 broker guard로 고정된다.
+같은 wrapper의 기본값 `THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_TUNING=true`는 exact target-date 실제 profile state를 종목·시간대별로 서로 섞지 않고 `low_price_two_leg_tuning`으로 누적한다. exact-date inventory는 `2026-08-19=20`, `2026-08-21=27`, `2026-08-24=35`, `2026-08-25~26=40`, `2026-08-27=45`, `2026-08-28~30=46`, `2026-08-31~09-06=48`, `2026-09-07=53`, `2026-09-08 이후=56` profile 세대를 사용하며 `profiles_for_target_date()`와 applied-policy inventory가 권한을 소유한다. 과거 시세를 재조회하지 않으며 `2026-06-05` 이후 생성된 actual profile observation 전부를 단일 `clean_baseline_cumulative` 창에 넣는다. 전일 carry가 후일 자연청산되면 durable state를 원 거래일에 명시적으로 재귀속하며, 미관측 거래일은 coverage로만 공개하고 outcome으로 보간하지 않는다. 현행 producer는 `carry_actual_policy_subset_promotion_retired`로 실제 적용 정책을 carry하며, observed-signal subset은 진단용으로만 사용한다. 예전 completed-leg/양수 EV 조건만으로 새 tightening을 자동 승인하지 않는다. 새 추천은 expanded research의 기존 두 필터 경제성 연구와 정식 승인 owner가 소유하며, 9/8 별도 승인 변경은 원본 evidence와 effective-date 정책으로만 적용한다. schema/hash/source 결손은 현행 fail-closed 계약을 유지한다. 신규 진입 수량은 profile별 10주×2 leg(20주), 50:50 진입 offset, profile별 고정 target/validity, SOR, 무손절·미청산 보유와 broker guard로 고정된다.
 
 그 다음 기본값 `THRESHOLD_CYCLE_RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION=true`는 clean baseline `2026-06-05`부터 target date까지 전 KRX 거래일을 사용한다. 최신 16거래일은 untouched holdout으로 고정하고 이전 전 거래일을 expanding calibration으로 평가한다. 검토 universe에서 이미 구현된 종목을 신규 lane에서 제외하고, 구현 종목은 active symbol/session pair를 제외한 미구현 regular-session lane으로 이동한다. 모든 source의 integrated-SOR 분봉 거래일과 source quality가 일치하고 표본·양의 notional EV·held/fill 25% 이하·held mark -3% 이상·최신 종가 10만원 이하를 통과한 종목×시간대만 source-only 순위로 만든다. active unrealized는 completed-only EV에 합산하지 않는다. cached token 또는 공통 source 계약이 막히면 `source_quality_blocked` 보고서와 추천 미산출 admin 안내를 보내고 다른 장후 producer는 계속한다. JSON/Markdown 원자 기록 뒤 `ADMIN_ONLY` Telegram을 최대 3회 시도하며 target-date state로 recovery 중복을 차단한다. Telegram 설정 누락·전송 실패·authority 위반은 postclose FAIL이고, 정상 추천은 기계 생성, timer 설치, PREOPEN policy, 주문 또는 runtime mutation 권한이 아니다.
 

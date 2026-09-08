@@ -1,14 +1,28 @@
 # KORStockScan 기본계획 대비 실행 변경사항
 
-기준 시각: `2026-06-04 KST`
+최근 변경 색인 현행화: `2026-09-08 KST`. 아래 기존 번호 절의 기준 시각은 `2026-06-04 KST`이며 당시 이력으로 보존한다.
 
-이 문서는 `2026-04-11` 원안 계획과 `2026-04-19` 현재 실행 기준 사이에서 실제로 변경된 사항만 추린다.  
+기존 본문은 `2026-04-11` 원안 대비 4~6월 실행 변경 이력이다. 최근 9월 변경은 §1의 별도 색인으로 연결하며 과거의 “현재” 표현은 당시 기준이다.
 현재 중심 기준은 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)를 본다.  
-`fallback_scout/main`, `fallback_single`, `latency fallback split-entry` 등 영문 축 표현은 [Plan Rebase 용어 범례](./plan-korStockScanPerformanceOptimization.rebase.md#2-용어-범례)를 우선한다.
+`fallback_scout/main`, `fallback_single`, `latency fallback split-entry` 등 과거 영문 축은 역사적 설명이다. 현재 용어·판정은 [Plan Rebase 용어 범례](./plan-korStockScanPerformanceOptimization.rebase.md#2-terms-and-decision-contracts)를 우선한다.
 
 튜닝 데이터 의사결정 기준은 `clean_tuning_baseline_date=2026-06-05`, `clean_tuning_baseline_ts_kst=2026-06-05T00:00:00+09:00`이다. 이 문서의 과거 변경 이력은 archive/audit evidence이며, 기준 이전 raw/report/analytics artifact 또는 그 기반 보고서를 현재 EV, rolling/MTD/cumulative tuning, live-auto promotion, runtime approval, pattern lab promotion, real execution quality approval 입력으로 재사용하지 않는다.
 
 ## 1. 판정
+
+### 최근 변경 색인 (2026-09-07~09-08)
+
+| 변경 | 현재 확인된 결과 | 별도 남은 acceptance |
+| --- | --- | --- |
+| 최종 summary handoff | [복구 리뷰](./audit-reports/2026-09-08-postclose-priority-repair-review.md): tower/checklist exact source hash, strict verifier 명령·controller 실패 은폐 방지; 955 targeted PASS | 다음 자연 wrapper 최종 요약 소비; 운영 PASS를 경제성 PASS로 보지 않음 |
+| lifecycle/EV 귀속 | CF route 관찰3행 분리, NXT lifecycle0→2, custody gap5→2, 미대사 headline PnL null | +453원은 기존 체결의 순손익 복원; 남은 원본 결손/실수익 개선은 미완료 |
+| AI/machine source | provider0 source/metadata consumer 연결; 비가역적인 9/7 source loss 격리·baseline carry | 새 exact source/control/경제성; 같은 과거일 무변경 재실행 없음 |
+| 별도 승인 widget/episode | [구현·적용 리뷰](./audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md): 399 targeted PASS; widget080220, low-price 기존8/신규3, effective9/8 policy·timer 설치 | 기존 custody/수량 보존; 자연 preflight/PID/terminal/EV는 9/8 checklist owner |
+| 추천 provenance | frozen65행과 별도 native projection26행을 원본별 대사 | 분모 합산/역사 덮어쓰기 금지; native ID 자체는 새 runtime 승인 아님 |
+
+### 기존 판정 (2026-06-04 기준)
+
+이 절 이하의 기존 번호·수치는 과거 변경 기록이며 현재 ON/OPEN 지시가 아니다.
 
 1. 계획은 유지하되 실행 방식은 `공격적 동시 추진`에서 `원인 귀속 우선 순차 실행`으로 조정됐다.
 2. 가장 큰 변경은 `split-entry 3축 동시 shadow`를 버리고 `rebase -> 즉시 재평가 -> cooldown` 순차 도입으로 바꾼 점이다.

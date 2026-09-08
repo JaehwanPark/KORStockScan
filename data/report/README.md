@@ -1,6 +1,6 @@
 # Report Directory Operations
 
-작성 기준: `2026-09-07 KST`
+작성 기준: `2026-09-08 KST`
 
 `data/report/`는 장중·장후 producer가 생성한 운영, source-quality, attribution,
 calibration 산출물을 저장한다. JSON/JSONL이 canonical data이고 Markdown은
@@ -35,6 +35,20 @@ PID 소비와 비용 차감 EV를 구분하고, 완료한 #8/#9 등은 새 결�
   post-sell counterfactual, KRX/NXT/PREMARKET_KRX_LIKE를 합산하지 않는다.
 
 ## 현재 핵심 report 흐름
+
+최종 요약 계약은 `postclose_summary_sources_v1`이다. tower의
+`source_generation_contract`와 마지막 checklist의 `POSTCLOSE_SUMMARY_SOURCES`가
+실제 원본 SHA256/date와 일치해야 strict verifier `--require-summary-handoff`로
+닫힌다. verifier/controller self hash는 순환 방지를 위해 제외한다.
+후행 파일이 늦게 도착하거나 바뀌면 앞선 요약 PASS는 최신성 증거가 아니다.
+
+`threshold_cycle_ev`의 미대사 PnL은 `null`과 `realized_pnl_status`로 표시한다.
+`main_scalping_lifecycle_paired`는 검증된 CF route 관찰과 actual ADD/NO_ADD를
+분리하며, 과거 손익의 귀속 복원을 신규 수익으로 표시하지 않는다.
+AI source-only/metadata terminal과 provider 평가·live promotion은 별도다.
+frozen canonical ledger와 이후 native metadata projection/별도 승인 ledger는
+원본 path/row/hash로 대사한다. projection은 새 경제성 산출물이 아니며
+두 ledger의 중복 항목을 합산하거나 원본 결손 이력을 지우지 않는다.
 
 | 영역 | 대표 산출물 | 운영 목적 |
 | --- | --- | --- |

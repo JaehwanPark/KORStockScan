@@ -1,6 +1,6 @@
 # Threshold Cycle Operations
 
-작성 기준: `2026-09-07 KST`
+작성 기준: `2026-09-08 KST`
 
 이 디렉토리는 threshold 후보 수집, 장후 calibration, 장전 bounded runtime env apply, daily EV 리포트를 저장한다. 현재 원칙은 완전 무인 `auto_bounded_live` apply이며, 장중 runtime threshold 자동 변경은 계속 금지한다.
 
@@ -11,6 +11,10 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 현재 운영 기본 범위는 스캘핑 threshold-cycle, daily EV, PREOPEN runtime env와 code-improvement workorder다. `scalp_sim_*`과 probe/source-only row는 real과 분리하며 `combined`는 diagnostic-only다. 스윙 chain은 operator OFF가 기본이고, OFF 날짜에는 관련 산출물의 freshness를 필수로 요구하지 않는다. 별도 운영 지시로 다시 열더라도 dry-run과 broker-order forbidden 계약을 유지하며 final full-live conversion은 별도 사용자 승인 대상이다.
 
 ## 현행 해석과 검토 경계
+
+- 최종 순서는 `EV/workorder/runtime summary → tower → checklist 최종 refresh → verifier --require-summary-handoff → controller DONE`이다. `postclose_summary_sources_v1`, tower의 `source_generation_contract`, checklist의 `POSTCLOSE_SUMMARY_SOURCES`를 같은 target date/실제 source SHA256으로 대사한다. 일반 verifier PASS나 이전 성공 파일로 마지막 명령 실패를 숨기지 않는다. verifier/controller 자체 hash는 순환 방지를 위해 제외한다.
+- [9/7 원천 복구](../../docs/audit-reports/2026-09-08-postclose-priority-repair-review.md)는 CF route 관찰을 실제 ADD/NO_ADD와 분리해 기존 체결·손익 귀속을 회복한 것이지 신규 수익이 아니다. 미대사 `realized_pnl_krw`는 null과 사유를 유지한다. 건수 일치는 exact 비용 검증이 아니며 비가역적 과거 원천 결손은 격리·다음 자연 수집으로 관리한다.
+- 별도 사용자 승인 위젯·에피소드의 9/8 policy/설치와 source-only 추천 생성을 구분한다. frozen 원본 ledger와 native metadata projection/승인 ledger는 원본 hash·위치로 대사하며 합산하지 않는다. 새 ID·코드 PASS·provider0 metadata terminal은 live 승격 근거가 아니다.
 
 - 원칙/owner는 [Plan Rebase](../../docs/plan-korStockScanPerformanceOptimization.rebase.md), 상세검토는 [진행 목록](../../docs/audit-reports/2026-09-05-postclose-work-inventory.md), 명시적으로 호출한 모니터링/복구/2-pass는 [작업 지시문](../../docs/postclose-tuning-result-review-task-instructions.md)을 따른다. 문서 현행화는 운영 실행 요청이 아니다.
 - ADM/LDM·statistical action weight·bucket·greenfield·전용 institutional aggregate는 retired다. 옛 경로/설명은 archive 호환이며 생성·복구·자동승격 조건이 아니다. Swing은 OFF, sim은 현재 우선 상세튜닝 대상이 아니다. 비-LDM scalp-sim control tower/prior는 별도 surviving source-only owner다.

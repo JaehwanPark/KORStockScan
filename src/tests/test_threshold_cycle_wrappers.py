@@ -189,6 +189,24 @@ def test_postclose_wrapper_syncs_exact_trade_facts_before_daily_calibration():
     assert "src.engine.strategy_position_performance_report" in sync_block
 
 
+def test_postclose_materializes_current_lifecycle_before_single_daily_consumer():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    tokens = (
+        'wait_for_postclose_resources "observation_source_quality_preflight"',
+        "src.engine.strategy_position_performance_report",
+        "src.engine.scalping.entry_split_order_plan",
+        "src.engine.scalping.ai_decision_quality ",
+        "src.engine.scalping.micro_reversion.ai_quality_cycle",
+        "src.engine.daily_threshold_cycle_report",
+        "src.engine.scalping.ai_action_outcome_calibration",
+        'run_threshold_cycle_ev_and_wait "pre_workorder"',
+    )
+    positions = [script.index(token) for token in tokens]
+    assert positions == sorted(positions)
+    for token in tokens[2:6]:
+        assert script.count(token) == 1
+
+
 def test_postclose_wrapper_closes_lookup_attention_auto_promotion_after_fact_sync():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
@@ -1457,22 +1475,42 @@ def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path
     assert result.returncode == 0
     assert result.stdout.strip() == "retry_required:candidate_hash_mismatch"
 
-    candidate.update(status="blocked", canary_mode=None,
-                     candidate_contract_sha256=None, runtime_effect=False,
-                     allowed_runtime_apply=False, actual_order_submitted=False,
-                     broker_order_forbidden=True)
-    batch["cohorts"] = [{"effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
-                         "status": "hold_no_exact_entry_control",
-                         "entry_control_sample_count": 0}]
+    candidate.update(
+        status="blocked",
+        canary_mode=None,
+        candidate_contract_sha256=None,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+    batch["cohorts"] = [
+        {
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "status": "hold_no_exact_entry_control",
+            "entry_control_sample_count": 0,
+        }
+    ]
 
     def publish_candidate():
-        candidate["artifact_sha256"] = hashlib.sha256(json.dumps(
-            {key: value for key, value in candidate.items() if key != "artifact_sha256"},
-            ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str,
-        ).encode()).hexdigest()
+        candidate["artifact_sha256"] = hashlib.sha256(
+            json.dumps(
+                {
+                    key: value
+                    for key, value in candidate.items()
+                    if key != "artifact_sha256"
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
         candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
         batch["krx_bounded_live_candidate"].update(
-            status=candidate["status"], artifact_sha256=candidate["artifact_sha256"],
+            status=candidate["status"],
+            artifact_sha256=candidate["artifact_sha256"],
             allowed_runtime_apply=False,
         )
         batch_path.write_text(json.dumps(batch), encoding="utf-8")
@@ -1484,16 +1522,25 @@ def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path
     for key in ("runtime_effect", "allowed_runtime_apply", "actual_order_submitted"):
         candidate[key] = True
         publish_candidate()
-        assert validate().stdout.strip() == "retry_required:candidate_contract_hash_missing_or_invalid"
+        assert (
+            validate().stdout.strip()
+            == "retry_required:candidate_contract_hash_missing_or_invalid"
+        )
         candidate[key] = False
     for count in (1, False, None):
         batch["cohorts"][0]["entry_control_sample_count"] = count
         publish_candidate()
-        assert validate().stdout.strip() == "retry_required:candidate_contract_hash_missing_or_invalid"
+        assert (
+            validate().stdout.strip()
+            == "retry_required:candidate_contract_hash_missing_or_invalid"
+        )
     batch["cohorts"][0]["entry_control_sample_count"] = 0
     batch["cohorts"][0]["status"] = "completed"
     publish_candidate()
-    assert validate().stdout.strip() == "retry_required:candidate_contract_hash_missing_or_invalid"
+    assert (
+        validate().stdout.strip()
+        == "retry_required:candidate_contract_hash_missing_or_invalid"
+    )
     batch["cohorts"][0]["status"] = "hold_no_exact_entry_control"
     publish_candidate()
     batch["krx_bounded_live_candidate"]["artifact_sha256"] = "stale"
@@ -1783,7 +1830,8 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "src.engine.verify_threshold_cycle_postclose_chain",
         pending_verify_idx + 1,
     )
-    final_next_checklist_idx = script.rindex(checklist_command)
+    final_next_checklist_idx = script.rindex(checklist_command, 0, pending_verify_idx)
+    post_done_checklist_idx = script.rindex(checklist_command)
     final_propagation_idx = script.rindex("src.engine.pattern_lab_propagation_audit")
     final_ai_source_refresh_idx = script.rindex("--refresh-source-provenance")
     final_ev_idx = script.index(
@@ -1837,6 +1885,12 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < final_verify_idx
         < tuning_control_idx
     )
+    assert (
+        tuning_control_idx
+        < post_done_checklist_idx
+        < script.rindex("src.engine.verify_threshold_cycle_postclose_chain")
+    )
+    assert '--require-summary-handoff "${VERIFY_DISABLED_STAGE_ARGS[@]}"' in script
     assert script.count("src.engine.pattern_lab_propagation_audit") == 2
     assert script.count("--refresh-source-provenance") == 2
     assert (
@@ -2081,7 +2135,7 @@ def test_postclose_wrapper_isolates_main_ai_quality_failures(
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     start = script.index('if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]')
     end = script.index(
-        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]', start
+        'ai_review_json="$PROJECT_DIR/data/report/threshold_cycle_ai_review/', start
     )
     cycle_block = script[start:end]
     harness = "\n".join(

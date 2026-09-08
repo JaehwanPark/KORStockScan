@@ -78,6 +78,9 @@ CJ_CGV_MORNING_20260907_WINDOW = (time(9, 10), time(9, 39))
 YOUNGONE_MIDDAY_20260907_WINDOW = (time(13, 15), time(13, 44))
 SK_TELECOM_MIDDAY_20260907_WINDOW = (time(13, 15), time(13, 24))
 HANSE_MORNING_20260907_WINDOW = (time(9, 30), time(9, 44))
+NHN_MIDDAY_20260908_WINDOW = (time(13, 30), time(13, 49))
+TYM_MORNING_20260908_WINDOW = (time(9, 10), time(9, 59))
+SD_BIOSENSOR_AFTERNOON_20260908_WINDOW = (time(14, 15), time(14, 40))
 PROFILE_REVISION_20260819_EFFECTIVE_DATE = date(2026, 8, 19)
 PROFILE_REVISION_20260821_EFFECTIVE_DATE = date(2026, 8, 21)
 PROFILE_REVISION_20260824_EFFECTIVE_DATE = date(2026, 8, 24)
@@ -86,6 +89,7 @@ PROFILE_REVISION_20260827_EFFECTIVE_DATE = date(2026, 8, 27)
 PROFILE_REVISION_20260828_EFFECTIVE_DATE = date(2026, 8, 28)
 PROFILE_REVISION_20260831_EFFECTIVE_DATE = date(2026, 8, 31)
 PROFILE_REVISION_20260907_EFFECTIVE_DATE = date(2026, 9, 7)
+PROFILE_REVISION_20260908_EFFECTIVE_DATE = date(2026, 9, 8)
 # Compatibility alias for consumers that own the first recommendation transition.
 PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
@@ -181,6 +185,9 @@ SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
         YOUNGONE_MIDDAY_20260907_WINDOW,
         SK_TELECOM_MIDDAY_20260907_WINDOW,
         HANSE_MORNING_20260907_WINDOW,
+        NHN_MIDDAY_20260908_WINDOW,
+        TYM_MORNING_20260908_WINDOW,
+        SD_BIOSENSOR_AFTERNOON_20260908_WINDOW,
     }
 )
 
@@ -1989,6 +1996,189 @@ PROFILES.update(
 )
 
 
+# Explicit 2026-09-07 user-requested recommendations, effective next session.
+PROFILES_20260908_PRIOR = dict(PROFILES)
+PROFILES = dict(PROFILES_20260908_PRIOR)
+PROFILES["nhn_morning"] = replace(
+    PROFILES_20260908_PRIOR["nhn_morning"],
+    policy=_profile(
+        "nhn_morning",
+        "181710",
+        "NHN",
+        "morning",
+        window=(time(9, 40), time(9, 49)),
+        lookback_bars=15,
+        drawdown_pct=1.5,
+        near_low_pct=0.35,
+        entry_offsets_ticks=(0, -1),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["youngone_afternoon"] = replace(
+    PROFILES_20260908_PRIOR["youngone_afternoon"],
+    policy=_profile(
+        "youngone_afternoon",
+        "111770",
+        "영원무역",
+        "afternoon",
+        window=(time(14, 30), time(14, 39)),
+        lookback_bars=15,
+        drawdown_pct=0.75,
+        near_low_pct=0.5,
+        entry_offsets_ticks=(-1, -2),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["doosan_enerbility_late_morning"] = replace(
+    PROFILES_20260908_PRIOR["doosan_enerbility_late_morning"],
+    policy=_profile(
+        "doosan_enerbility_late_morning",
+        "034020",
+        "두산에너빌리티",
+        "late_morning",
+        window=(time(10, 15), time(10, 34)),
+        lookback_bars=30,
+        drawdown_pct=1.0,
+        near_low_pct=0.2,
+        entry_offsets_ticks=(-1, -2),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["nhn_midday"] = _profile(
+    "nhn_midday",
+    "181710",
+    "NHN",
+    "midday",
+    window=(time(13, 30), time(13, 49)),
+    lookback_bars=15,
+    drawdown_pct=0.5,
+    near_low_pct=0.5,
+    entry_offsets_ticks=(0, -1),
+    entry_valid_completed_bars=5,
+    target_ticks=2,
+    runtime_policy_source="user_directed_profile_revision_20260908",
+)
+PROFILES["cj_cgv_late_morning"] = replace(
+    PROFILES_20260908_PRIOR["cj_cgv_late_morning"],
+    policy=_profile(
+        "cj_cgv_late_morning",
+        "079160",
+        "CJ CGV",
+        "late_morning",
+        window=(time(10, 0), time(10, 9)),
+        lookback_bars=15,
+        drawdown_pct=0.5,
+        near_low_pct=0.35,
+        entry_offsets_ticks=(-1, -2),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["fan_ocean_late_morning"] = replace(
+    PROFILES_20260908_PRIOR["fan_ocean_late_morning"],
+    policy=_profile(
+        "fan_ocean_late_morning",
+        "028670",
+        "팬오션",
+        "late_morning",
+        window=(time(10, 5), time(10, 14)),
+        lookback_bars=15,
+        drawdown_pct=0.5,
+        near_low_pct=0.1,
+        entry_offsets_ticks=(0, -1),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["sk_telecom_late_morning"] = replace(
+    PROFILES_20260908_PRIOR["sk_telecom_late_morning"],
+    policy=_profile(
+        "sk_telecom_late_morning",
+        "017670",
+        "SK텔레콤",
+        "late_morning",
+        window=(time(10, 45), time(10, 54)),
+        lookback_bars=30,
+        drawdown_pct=0.5,
+        near_low_pct=0.2,
+        entry_offsets_ticks=(0, -1),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["hanse_morning"] = replace(
+    PROFILES_20260908_PRIOR["hanse_morning"],
+    policy=_profile(
+        "hanse_morning",
+        "105630",
+        "한세실업",
+        "morning",
+        window=(time(9, 30), time(9, 44)),
+        lookback_bars=15,
+        drawdown_pct=0.75,
+        near_low_pct=0.75,
+        entry_offsets_ticks=(-1, -2),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["cj_cgv_midday"] = replace(
+    PROFILES_20260908_PRIOR["cj_cgv_midday"],
+    policy=_profile(
+        "cj_cgv_midday",
+        "079160",
+        "CJ CGV",
+        "midday",
+        window=(time(13, 20), time(13, 29)),
+        lookback_bars=45,
+        drawdown_pct=0.5,
+        near_low_pct=0.75,
+        entry_offsets_ticks=(-1, -2),
+        entry_valid_completed_bars=5,
+        target_ticks=4,
+        runtime_policy_source="user_directed_profile_revision_20260908",
+    ).policy,
+)
+PROFILES["tym_morning"] = _profile(
+    "tym_morning",
+    "002900",
+    "TYM",
+    "morning",
+    window=(time(9, 10), time(9, 59)),
+    lookback_bars=15,
+    drawdown_pct=1.0,
+    near_low_pct=0.75,
+    entry_offsets_ticks=(0, -1),
+    entry_valid_completed_bars=5,
+    target_ticks=2,
+    runtime_policy_source="user_directed_profile_revision_20260908",
+)
+PROFILES["sd_biosensor_afternoon"] = _profile(
+    "sd_biosensor_afternoon",
+    "137310",
+    "에스디바이오센서",
+    "afternoon",
+    window=(time(14, 15), time(14, 40)),
+    lookback_bars=20,
+    drawdown_pct=0.75,
+    near_low_pct=0.75,
+    entry_offsets_ticks=(0, -1),
+    entry_valid_completed_bars=5,
+    target_ticks=2,
+    runtime_policy_source="user_directed_profile_revision_20260908",
+)
+
+
 def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
     if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return PRE_RECOMMENDATION_PROFILES
@@ -2006,6 +2196,8 @@ def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
         return PROFILES_20260831_PRIOR
     if target_date < PROFILE_REVISION_20260907_EFFECTIVE_DATE:
         return PROFILES_20260907_PRIOR
+    if target_date < PROFILE_REVISION_20260908_EFFECTIVE_DATE:
+        return PROFILES_20260908_PRIOR
     return PROFILES
 
 

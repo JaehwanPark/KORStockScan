@@ -13226,6 +13226,20 @@ def _log_entry_pipeline(stock, code, stage, **fields):
         stage,
         merged_fields,
     )
+    if stage == "score65_74_recovery_probe" and fields.get("applied") is True:
+        from src.engine.scalping.score_recovery_economics import runtime_profile
+
+        _log_entry_pipeline(
+            stock,
+            code,
+            "score_recovery_real_economics_observed",
+            applied=True,
+            score_recovery_applied_profile=json.dumps(
+                runtime_profile(_rule), sort_keys=True
+            ),
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+        )
     return event_payload
 
 
@@ -57135,6 +57149,21 @@ def _score65_74_recovery_probe_decision(
             "allowed": False,
             "evaluated": False,
             "score65_74_recovery_probe_skip_reason": "disabled",
+        }
+    from src.engine.scalping.score_recovery_economics import (
+        runtime_profile,
+        runtime_scope_allowed,
+    )
+
+    if not runtime_scope_allowed(
+        _rule("AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION", "runtime_default"),
+        runtime_profile(_rule),
+        _scanner_runtime_event_venue_fields(stock or {}),
+    ):
+        return {
+            "allowed": False,
+            "evaluated": False,
+            "score65_74_recovery_probe_skip_reason": "approved_profile_or_scope_mismatch",
         }
     decision_contract_status = (
         str((ai_decision or {}).get("decision_quality_contract_status") or "")

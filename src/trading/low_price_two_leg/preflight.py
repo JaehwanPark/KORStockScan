@@ -301,9 +301,42 @@ RECOMMENDATION_20260904_PROFILE_MAP = {
 }
 
 
+RECOMMENDATION_20260907_PROFILE_MAP = {
+    "cj_cgv_late_morning": "logic_cj_cgv_late_morning",
+    "cj_cgv_midday": "logic_cj_cgv_midday",
+    "doosan_enerbility_late_morning": "logic_doosan_enerbility_late_morning",
+    "fan_ocean_late_morning": "logic_fan_ocean_late_morning",
+    "hanse_morning": "logic_hanse_morning",
+    "nhn_midday": "existing_181710_midday",
+    "nhn_morning": "logic_nhn_morning",
+    "sd_biosensor_afternoon": "existing_137310_afternoon",
+    "sk_telecom_late_morning": "logic_sk_telecom_late_morning",
+    "tym_morning": "existing_002900_morning",
+    "youngone_afternoon": "logic_youngone_afternoon",
+}
+
+
 def _research_evidence_contract(
     profile: MachineProfile, *, target_date: date | None = None
 ) -> dict:
+    recommendation_20260907_profile_id = (
+        RECOMMENDATION_20260907_PROFILE_MAP.get(profile.profile_id)
+        if target_date is None or target_date >= date(2026, 9, 8)
+        else None
+    )
+    if recommendation_20260907_profile_id:
+        return {
+            "path": DATA_DIR.parent
+            / "docs/audit-reports/2026-09-07-low-price-recommendation-apply-evidence.json",
+            "report_profile_id": recommendation_20260907_profile_id,
+            "sha256": "557d58771956bca4e0649feda1482e8faf0c6730efdc5e88549e3399bd2e8bc5",
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v7",
+            "start_date": "2026-06-05",
+            "end_date": "2026-09-07",
+            "trading_date_count": 65,
+            "window": "2026-06-05_through_2026-09-07_65_trading_days",
+            "source_report_sha256": "2ef00c2cec2520458396361b86847321f2bd39172dacd475818e64960e63425b",
+        }
     recommendation_20260904_profile_id = (
         RECOMMENDATION_20260904_PROFILE_MAP.get(profile.profile_id)
         if target_date is None
@@ -721,6 +754,7 @@ def validate_research_evidence(
         "low_price_two_leg_user_approved_profile_evidence_v4",
         "low_price_two_leg_user_approved_profile_evidence_v5",
         "low_price_two_leg_user_approved_profile_evidence_v6",
+        "low_price_two_leg_user_approved_profile_evidence_v7",
     }:
         return False, "research_report_schema_invalid"
     source = (payload.get("source_meta") or {}).get(evidence_profile.symbol)
@@ -736,12 +770,19 @@ def validate_research_evidence(
         "rolling_high_drawdown_pct": policy.rolling_high_drawdown_pct,
         "rolling_low_proximity_pct": policy.rolling_low_proximity_pct,
     }
-    if schema == "low_price_two_leg_user_approved_profile_evidence_v6":
+    if schema in {
+        "low_price_two_leg_user_approved_profile_evidence_v6",
+        "low_price_two_leg_user_approved_profile_evidence_v7",
+    }:
         source_report = payload.get("source_report")
         if (
             not isinstance(source_report, dict)
             or source_report.get("schema")
-            != "low_price_two_leg_expanded_candidate_research_v5"
+            != (
+                "low_price_two_leg_expanded_candidate_research_v6"
+                if schema.endswith("_v7")
+                else "low_price_two_leg_expanded_candidate_research_v5"
+            )
             or source_report.get("canonical_sha256")
             != contract.get("source_report_sha256")
         ):
@@ -932,6 +973,7 @@ def validate_research_evidence(
                 "low_price_two_leg_user_approved_profile_evidence_v4",
                 "low_price_two_leg_user_approved_profile_evidence_v5",
                 "low_price_two_leg_user_approved_profile_evidence_v6",
+                "low_price_two_leg_user_approved_profile_evidence_v7",
             }
             and int(holdout.get("held_legs", 0) or 0) != 0
         )

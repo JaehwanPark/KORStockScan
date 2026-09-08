@@ -3473,9 +3473,9 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     assert (
         candidates["score65_74_recovery_probe"]["apply_mode"]
-        == "efficient_tradeoff_canary_candidate"
+        == "report_only_calibration"
     )
-    assert candidates["score65_74_recovery_probe"]["calibration_state"] == "adjust_up"
+    assert candidates["score65_74_recovery_probe"]["calibration_state"] == "hold_sample"
     assert (
         candidates["score65_74_recovery_probe"]["source_metrics"]["partial_samples"]
         == 0
@@ -3657,14 +3657,14 @@ def test_score65_74_recovery_probe_does_not_use_raw_panic_adjusted_floor():
         "score65_74_recovery_probe"
     ]
     assert candidate["calibration_state"] == "hold_sample"
-    assert candidate["sample_count"] == 14
+    assert candidate["sample_count"] == 0  # CF volume is not real terminal evidence.
     assert candidate["sample_floor"] == 20
     assert candidate["sample_floor_status"] == "hold_sample"
     assert candidate["recommended_values"]["enabled"] is False
-    assert "sample floor" in candidate["calibration_reason"]
+    assert "real_applied_evidence_missing" in candidate["calibration_reason"]
 
 
-def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_primary_ready():
+def test_score65_74_cf_does_not_promote_even_with_previous_operator_selection():
     report_sources = {
         "schema_version": 1,
         "target_date": "2026-08-18",
@@ -3734,11 +3734,10 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
     candidate = {item["family"]: item for item in report["calibration_candidates"]}[
         "score65_74_recovery_probe"
     ]
-    assert candidate["calibration_state"] == "adjust_up"
-    assert candidate["sample_count"] == 50
-    assert candidate["sample_floor_status"] == "ready"
-    assert candidate["recommended_values"]["enabled"] is True
-    assert candidate["source_metrics"]["entry_unlock_probe_ready"] is True
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["sample_count"] == 0
+    assert candidate["sample_floor_status"] == "hold_sample"
+    assert candidate["source_metrics"].get("entry_unlock_probe_ready") is not True
     assert candidate["source_metrics"]["recommended_state_consistent"] is True
     assert (
         candidate["runtime_handoff_contract"]["preopen_selection_state"]
@@ -3751,7 +3750,7 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
     )
     assert (
         candidate["runtime_handoff_contract"]["recommendation_delta_class"]
-        == "already_selected_preopen_handoff_policy_refresh_or_value_review"
+        == "selected_by_other_authority_recommendation_conflict"
     )
     assert (
         candidate["runtime_handoff_contract"]["same_day_preopen_handoff_state"]
@@ -3771,7 +3770,7 @@ def test_score65_74_recovery_probe_opens_existing_entry_unlock_when_rolling_prim
     assert (
         candidate["runtime_handoff_contract"]["post_apply_attribution_required"] is True
     )
-    assert "bounded entry probe" in candidate["calibration_reason"]
+    assert "real_applied_evidence_missing" in candidate["calibration_reason"]
 
 
 def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
@@ -3818,10 +3817,10 @@ def test_score65_74_recovery_probe_reads_score60_74_alias_metrics():
     candidate = {item["family"]: item for item in report["calibration_candidates"]}[
         "score65_74_recovery_probe"
     ]
-    assert candidate["sample_count"] == 41
-    assert candidate["sample_floor_status"] == "ready"
-    assert candidate["calibration_state"] == "adjust_up"
-    assert candidate["source_metrics"]["entry_unlock_probe_ready"] is True
+    assert candidate["sample_count"] == 0
+    assert candidate["sample_floor_status"] == "hold_sample"
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["source_metrics"].get("entry_unlock_probe_ready") is not True
     assert candidate["source_metrics"]["score60_74_avg_expected_ev_pct"] == 3.2
 
 
@@ -3835,7 +3834,7 @@ def test_threshold_source_denominators_exclude_broad_or_simulated_counts():
                 "wait6579_total_candidates": 15_000,
             },
         )
-        == 7
+        == 0
     )
     assert (
         report_mod._source_sample_count_for_family(
@@ -3885,7 +3884,9 @@ def test_score_recovery_probe_never_promotes_gross_only_counterfactual_ev():
     )
 
 
-def test_score_recovery_drought_uses_rate_without_requiring_absolute_zero_submit():
+def test_score_recovery_real_net_does_not_require_drought():
+    from src.tests.test_score_recovery_net_approval import real_metrics
+
     source_metrics = {
         "score60_74_candidates": 41,
         "score60_74_avg_cost_adjusted_expected_ev_pct": 3.0,
@@ -3897,6 +3898,7 @@ def test_score_recovery_drought_uses_rate_without_requiring_absolute_zero_submit
         "order_bundle_submitted": 1,
         "source_quality_blocked": False,
     }
+    source_metrics.update(real_metrics())
 
     assert report_mod._score65_74_entry_unlock_probe_ready(
         source_metrics,
@@ -3905,14 +3907,14 @@ def test_score_recovery_drought_uses_rate_without_requiring_absolute_zero_submit
     )
 
     source_metrics["submitted_to_budget_unique_pct"] = 15.0
-    assert not report_mod._score65_74_entry_unlock_probe_ready(
+    assert report_mod._score65_74_entry_unlock_probe_ready(
         source_metrics,
         sample_count=41,
         sample_floor=20,
     )
 
     source_metrics["submitted_to_budget_unique_pct"] = -1.0
-    assert not report_mod._score65_74_entry_unlock_probe_ready(
+    assert report_mod._score65_74_entry_unlock_probe_ready(
         source_metrics,
         sample_count=41,
         sample_floor=20,
@@ -8769,21 +8771,31 @@ def test_force_exit_quarantine_does_not_clear_unrelated_ingestion_failure(monkey
     ]
 
 
-def test_owned_scale_in_window_source_distinguishes_zero_from_missing(tmp_path, monkeypatch):
+def test_owned_scale_in_window_source_distinguishes_zero_from_missing(
+    tmp_path, monkeypatch
+):
     target_date = "2026-09-07"
     monkeypatch.setattr(report_mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", tmp_path)
     path = tmp_path / f"scale_in_split_order_plan_{target_date}.json"
     payload = {
-        "schema_version": "scale_in_split_order_plan_v3", "target_date": target_date,
-        "rolling_summary": {"target_date": target_date,
+        "schema_version": "scale_in_split_order_plan_v3",
+        "target_date": target_date,
+        "rolling_summary": {
+            "target_date": target_date,
             "window_policy": "latest_20_report_dates_including_target",
-            "current_source_date_included": True},
-        "recommended_policy": {"runtime_refresh_evidence": {"paired_economic_sample_count": 0}},
+            "current_source_date_included": True,
+        },
+        "recommended_policy": {
+            "runtime_refresh_evidence": {"paired_economic_sample_count": 0}
+        },
     }
     path.write_text(json.dumps(payload))
     family = report_mod._build_scale_in_split_order_plan_family(target_date=target_date)
-    candidate = next(row for row in report_mod._build_calibration_candidates([family], {})
-                     if row["family"] == "scale_in_split_order_plan")
+    candidate = next(
+        row
+        for row in report_mod._build_calibration_candidates([family], {})
+        if row["family"] == "scale_in_split_order_plan"
+    )
     candidate["sample_count"] = 99
     resolution = report_mod._build_window_policy_resolution(candidate, {})
     assert resolution["primary_source_available"] is True
@@ -8792,8 +8804,25 @@ def test_owned_scale_in_window_source_distinguishes_zero_from_missing(tmp_path, 
     assert family["apply_ready"] is False
     payload["rolling_summary"]["target_date"] = "2026-09-04"
     path.write_text(json.dumps(payload))
-    assert report_mod._build_window_policy_resolution(candidate, {})["primary_source_available"] is False
-    candidate["source_metrics"]["report_content_sha256"] = report_mod._json_sha256(payload)
-    assert report_mod._build_window_policy_resolution(candidate, {})["primary_source_available"] is False
+    assert (
+        report_mod._build_window_policy_resolution(candidate, {})[
+            "primary_source_available"
+        ]
+        is False
+    )
+    candidate["source_metrics"]["report_content_sha256"] = report_mod._json_sha256(
+        payload
+    )
+    assert (
+        report_mod._build_window_policy_resolution(candidate, {})[
+            "primary_source_available"
+        ]
+        is False
+    )
     path.unlink()
-    assert report_mod._build_window_policy_resolution(candidate, {})["primary_source_available"] is False
+    assert (
+        report_mod._build_window_policy_resolution(candidate, {})[
+            "primary_source_available"
+        ]
+        is False
+    )

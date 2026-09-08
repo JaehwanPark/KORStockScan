@@ -4,6 +4,26 @@ from pathlib import Path
 from src.engine.automation import tuning_performance_control_tower as mod
 
 
+def test_missing_pnl_is_not_zero_in_control_tower():
+    result = mod._ev_authority(
+        {
+            "daily_ev_summary": {
+                "realized_pnl_krw": None,
+                "realized_pnl_status": "unresolved_trade_review_count_mismatch",
+            }
+        },
+        {},
+    )
+    assert result["realized_pnl_krw"] is None
+    assert result["realized_pnl_status"] == "unresolved_trade_review_count_mismatch"
+    assert (
+        mod._ev_authority({"daily_ev_summary": {"realized_pnl_krw": 0}}, {})[
+            "realized_pnl_krw"
+        ]
+        == 0
+    )
+
+
 def _write_json(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

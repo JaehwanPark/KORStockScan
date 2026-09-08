@@ -1,14 +1,16 @@
 # 장중 수익극대화 모니터링 작업지시문
 
-작성 기준: `2026-09-07 KST`
+작성 기준: `2026-09-08 KST`
 
 현재 가동 중인 키움증권 연동 SCALPING 런타임을 대상으로 EV와 누적 순이익 극대화를 위한 장중 모니터링·보완 작업을 수행한다. 메인 봇, 위젯 매매기계, 에피소드 매매기계는 서로 독립된 주문 owner로 평가하며 주문번호·보유수량·청산 귀속을 혼합하지 않는다.
+
+이 지시문에 따른 모니터링을 명시적으로 요청했을 때만 아래 점검·허용 범위 보완 절차를 실행한다. 문서 인용·열람·현행화는 실행 요청이 아니며, 단순 상태 조회·읽기 전용 검증도 구현이나 재생성을 자동 승인하지 않는다. 문서 수정만 요청받으면 운영 산출물·PID·env·주문을 변경하지 않는다.
 
 현재 튜닝 원칙과 active/open 상태는 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8, 실행 항목은 당일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 `docs/time-based-operations-runbook.md`, producer/consumer와 R0→R6 의존 순서는 `docs/report-based-automation-traceability.md`를 기준으로 한다. 실제 기동 권한은 검증된 당일 PREOPEN apply plan/runtime env/verify와 exact-date machine policy, 이를 읽은 현재 PID의 provenance를 함께 기준으로 한다. 이 문서의 family 예시는 고정 ON 목록이나 재기동 권한이 아니다.
 
 이 문서는 장중 반복 실행 절차다. 매 실행 시작 시 고정 예시를 신뢰하지 말고 현재 PID env, 당일 runtime verify, exact-date policy, broker 계좌·미체결, 설치된 cron/systemd/tmux owner와 최신 source-quality artifact를 다시 읽는다. 코드가 구현돼 있거나 전일 추천에 나타났다는 사실만으로 현재 process 반영 또는 실주문 권한을 인정하지 않는다. 전일 장후 candidate는 당일 PREOPEN handoff 입력일 뿐이고, 당일 apply plan/runtime env/verify와 launcher/PID load receipt가 닫히기 전에는 적용 또는 효과로 보고하지 않는다. runbook·traceability·설치 trigger·실행 snapshot의 단계, 조건 또는 owner가 다르면 mtime이나 우연한 실행 사실로 한쪽을 선택하지 않고 `contract_drift`로 fail-closed한다.
 
-### 현행 운영 우선순위 (`2026-09-07`)
+### 현행 운영 우선순위 (`2026-09-08`)
 
 장중 상세 분석 자원은 다음 순서로 사용한다.
 
@@ -18,7 +20,22 @@
 
 Scalping Entry ADM, Holding/Exit ADM, statistical action weight, LDM policy/runtime, lifecycle AI context/attribution, bucket discovery/refinement, LDM-derived sim scale-in/runtime bridge와 `greenfield_real_environment_authority`는 `scalping_adm_ldm_retirement_20260906`에 따라 영구 퇴역이다. `institutional_flow_context`와 독립 latency recommendation도 퇴역했다. Swing은 OFF이고 bucket/LDM/arm 분석 대상이 아니다. scalp/swing sim 성과 튜닝은 현재 장중 우선작업이 아니며, 실주문 권한 누출·broker 호출·리소스 간섭·퇴역 env 재활성화 여부만 최소 확인한다. historical artifact, 호환 parser 또는 표본 0을 근거로 이 영역의 재생성·수리·ETA·승격 작업을 열지 않는다.
 
-`2026-09-07` 우아한 재기동 acceptance는 [당일 체크리스트](./checklists/2026-09-07-stage2-todo-checklist.md)의 `RuntimeStartupRetirementEnvAcceptance0907`을 근거로 한다. 당시 신규 PID `46656`, 실행 코드 commit `327e8722`, exact runtime mismatch/missing `0/0`, 퇴역 canonical env 15개 OFF, Samsung authority/service와 재기동 전후 broker snapshot 불변을 확인했다. 이 값들은 완료 evidence이지 미래 실행의 고정 기대값이 아니다. 매 모니터링 시 현재 PID·commit·artifact·broker snapshot을 다시 읽는다.
+9/7 기동·병합 receipt는 [전일 체크리스트](./checklists/2026-09-07-stage2-todo-checklist.md)의 완료 기록이다. 특정 과거 PID·commit·선택 family 수를 현재 가동의 기대값으로 고정하지 않는다. 현재 runtime code/hash와 문서-only 변경, 실제 배포와 자연 소비를 분리하고 매 실행의 exact-date receipt를 확인한다.
+
+### 현행 handoff와 자연 확인 owner
+
+아래는 [9/8 체크리스트](./checklists/2026-09-08-stage2-todo-checklist.md)의 기존 항목을 연결한 문서 기준이며 현재 가동 검증 결과가 아니다. 같은 ID를 중복 생성하거나 전일 완료 검토를 다시 OPEN하지 않는다.
+
+| 영역 | 장중 확인할 연결·남은 경계 | 기존 acceptance owner |
+| --- | --- | --- |
+| 전일 장후 요약 | source-date 9/7의 tower→마지막 checklist→strict verifier→controller와 오늘 PREOPEN/PID를 분리. 요약 PASS는 오늘 정책 적용이 아님 | `PostcloseRecoverySourceAcceptance0908` |
+| Entry recheck / submit drought | schema5/exact2, 새 최근 3거래일→controller v4→당일 PREOPEN/PID→exact submit/fill/terminal. 진단 수리와 경제성 분리 | `EntryRecheckNaturalAttribution0907` (9/8로 같은 ID 이관) |
+| Scanner lookup-attention | resource v2/decision v4의 자연 source·경쟁 pair·immutable receipt·PID/R6. marginal CF와 실제 full-fill EV 분리 | `ScannerLookupAttentionNaturalEvidence0908` |
+| Main AI / micro source | #76→#82 v5→frozen optimizer→provider0 metadata binding→consumer와 새 exact 원천. metadata terminal은 Provider 비교·live 승격이 아님 | `AIDecisionActionOutcomeNaturalEvidence0908`, `MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908` |
+| 위젯·저가주 승인 적용 | widget080220와 low-price 기존8/신규3의 9/8 policy/설치 receipt 이후 자연 preflight·PID·신호·custody·실현 EV 확인 | `WidgetEpisodeRecommendationApplyAcceptance0908` |
+| Machine timing | 검증된 9/7 ingress loss 격리·immediate baseline carry와 다음 exact ordered/route/epoch source 분리. 과거일 반복 재실행 금지 | `MachineLifecycleTurnoverObjectiveFollowup0908`, `PostcloseRecoverySourceAcceptance0908` |
+
+근거는 [장후 우선순위 복구 리뷰](./audit-reports/2026-09-08-postclose-priority-repair-review.md)와 [별도 승인 위젯·에피소드 적용 리뷰](./audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)다. #8/#9 및 #11/#119/#23/#49의 완료된 수리는 새 결함·계약 변경·필수 handoff 실패가 입증될 때만 재개한다.
 
 ## 1. 목표
 
@@ -41,6 +58,8 @@ Scalping Entry ADM, Holding/Exit ADM, statistical action weight, LDM policy/runt
 
 단순 가동, 후보 수, 승률 또는 gross MFE가 아니라 실제 체결 가능성, 수수료·세금·spread·slippage를 반영한 EV와 순이익을 최종 기준으로 삼는다. `2026-08-18` 이후 R0→R3 비교 경제성은 매수 수수료 1.5bps, 매도 수수료 1.5bps, 매도 세금 20bps, Provider 비용 0원인 effective-dated 정책 계약을 사용하고, 공식 KOSPI/KOSDAQ master에서 보통주로 확인된 종목만 포함한다. exact broker receipt 손익·비용은 실거래 reconciliation 근거로 별도 보존하되 R0→R3 고정 비교비용을 암묵적으로 대체하지 않는다. 비용모델·master의 effective date 또는 source hash가 맞지 않으면 EV 입력을 차단한다.
 
+실현손익 headline은 같은 owner·거래 집합·terminal·실제 비용으로 대사한다. 미대사/결측이면 `null`과 `realized_pnl_status` 등 직접 사유를 남기고 0원·gross EV·다른 cohort 손익으로 메우지 않는다. 건수 일치만으로 exact 비용 검증을 승인하지 않는다. 9/7 NXT 두 거래의 +453원처럼 과거 체결·손익 귀속을 복원한 것은 데이터 수리 효과이며 오늘 새 수익이나 튜닝의 인과적 개선량이 아니다.
+
 ## 2. 매매기계별 모니터링 범위
 
 ### 2.1 메인 봇 매매기계
@@ -59,6 +78,7 @@ Scalping Entry ADM, Holding/Exit ADM, statistical action weight, LDM policy/runt
 - residual 가격·수량·제출 시점과 취소가 bundle 및 broker 상태와 일치하는지
 - 주문 API 응답과 WS execution receipt의 도착 순서가 바뀌어도 exact 주문번호와 immutable owner로 결속됐는지, 취소·reprice 전에 원주문 terminal absence와 KRX/NXT 전체 잔고가 확인됐는지
 - continuation에서 pyramid가 과차단되지 않았고 하락 구간의 avg-down이 불리한 노출만 키우지 않았는지
+- `avg_down_route_arbitration_observed` v2의 CF route 관찰을 실제 ADD/NO_ADD·주문·체결로 오인하지 않았는지. exact identity/schema/source-only authority 검증 후에만 관찰로 분리하며, order authority가 true/unknown인 잘못된 행은 계속 결손으로 유지했는지
 - 부분익절·runner·trailing·hard/protect/emergency owner의 실행 순서와 실제 체결 지연
 - `entry_cancel_wait_runtime`이 퇴역한 ADM/LDM과 분리된 독립 주문취소 owner인지. 당일 PREOPEN 적용된 standard/breakout/pullback/reserve cancel wait만 주문취소 owner이고 entry-price AI `max_wait_sec`는 advisory라서 live cancel timeout을 직접 덮지 않는지
 - SCALP preset +1.5% TP가 더 이상 profit-taking owner가 아니며, 신규·복구 holding의 legacy preset TP ref가 취소/disabled된 뒤 `scalp_trailing_take_profit` 경로가 이익 실현을 소유하는지. `SCALP_PRESET_TP` 호환 필드는 stop-safety provenance 외 새 주문 권한을 만들지 않는지
@@ -66,7 +86,7 @@ Scalping Entry ADM, Holding/Exit ADM, statistical action weight, LDM policy/runt
 
 `position_sizing_dynamic_formula`가 메인 봇 신규·추가매수 수량의 단일 owner다. 현재 선택 계약 `entry_type_5stage_cap25_v1`은 source-count/time/venue로 `10%/15%/20%/25%/25%` tier를 고르고 절대 25% cap, 95% safe budget과 최소 1주 floor를 유지하며 scale-in은 최초 tier를 재사용한다. NXT·unknown venue·invalid/missing source·복구 불가능한 최초 entry context는 tier 1로 fail-closed한다. `wait6579_ev_cohort`는 raw/source-quality provenance일 뿐이고 historical LDM 또는 은퇴한 독립 entry bridge 권한이 아니다. micro-reversion 또는 AI 판단은 수량·broker guard·hard safety를 직접 바꾸지 않는다. 실제 값은 당일 PREOPEN verify와 현재 PID receipt로 다시 확인한다.
 
-`2026-09-07` 기준 `entry_opportunity_recheck_runtime`은 전일 controller v3를 현행 v4 계약으로 인정할 수 없어 PREOPEN에서 제외됐다. 읽기 전용 v4 재생성 결과가 candidate-ready여도 현재 PID 적용 증거가 아니며 다음 정상 장후 producer→PREOPEN handoff가 소유한다. `entry_split_order_plan`은 `hold_sample`이므로 강제 적용하거나 제출 부족을 이유로 조건을 낮추지 않는다. One-share/rising-missed source 관측과 Entry recheck의 PREOPEN/PID 적용은 별도 분모로 보고한다. 이후 날짜에는 이 문장을 고정 상태로 사용하지 말고 target-date selection diff와 PID env를 다시 확인한다.
+9/7 PREOPEN에서 구 controller v3 때문에 recheck가 제외됐던 것은 과거 receipt다. 9/8에는 현행 v4·새 exact history와 target-date selection diff, 의존 probe, launcher/PID 소비를 다시 대사한다. 읽기 전용 candidate-ready나 전일 수리 완료만으로 ON을 주장하지 않는다. `entry_split_order_plan`도 당일 후보·선택 사유가 `hold_sample`이면 강제 적용하지 않는다. One-share/rising-missed source 관측과 Entry recheck 실적용은 별도 분모이며 현재 owner는 9/8 checklist의 `EntryRecheckNaturalAttribution0907`이다.
 
 #### 메인 봇 상승종목 탐색 포착률과 submit drought 상위원인 감사
 
@@ -146,8 +166,10 @@ promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved
 - 목표 도달 전·후 순서를 executable 가격으로 판정하고 같은 1분봉 고가를 체결 후 수익으로 오인하지 않았는지
 - 미청산 right-censored episode를 손익 0 또는 완료 표본으로 섞지 않았는지
 - 짧은 회전 목적에 비해 open episode가 자본을 과도하게 점유했는지, 반대로 성급한 청산으로 비용 차감 수익을 훼손했는지
-- 메인 봇·에피소드·수동 보유수량을 위젯이 매도하거나 신규 진입 차단 근거로 사용하지 않았는지
+- 메인 봇·에피소드·수동 보유수량을 위젯이 매도하거나 자기 custody로 흡수하지 않았는지. 승인된 machine 공존 정책은 단순 타 owner 보유와 분리하되, user/manual/generic/env/auto veto와 계좌·주문 guard보다 우선하지 않는지
 - expansion recommendation이 `implementation_review_ready`, sample/trading-date/spread/volatility floor와 exact-date handoff를 통과했는지; `research_watch` 등록 또는 collector 가동만으로 policy mutation이나 매매 승격을 주장하지 않았는지
+
+9/8 승인된 widget080220는 exact-date policy/loader receipt와 이후 실제 collector·trader 소비를 분리한다. 기존 프로세스의 날짜 경계 dynamic catalog 갱신을 재기동 필요성으로 오인하지 않는다. collector 08:57 예약은 가동 성공이 아니며 현재 PID/정책/신호 receipt로 확인한다. 나머지 `research_watch` 7건과 미달 signal 후보를 승인 범위에 포함하지 않는다.
 
 위젯의 효율은 후보 수가 아니라 completed episode의 비용 차감 EV, 목표 완료시간, 자본점유시간, 반복 가능성과 owner 정합성으로 평가한다.
 
@@ -155,7 +177,15 @@ promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved
 
 에피소드 매매기계는 특정 종목·venue·시간창의 반복 패턴을 exact-date profile과 독립 process/state/ledger로 집행한다. 현재 삼성전자 시간대 기계와 저가주 two-leg profile을 대표 owner로 본다.
 
-`2026-09-07` PREOPEN 기준 저가주 policy inventory는 53개, runtime active 50개, 명시 제외 3개다. 이는 해당 시점의 적용 evidence이며 이후에는 target-date applied artifact와 각 timer/service preflight를 다시 읽는다. profile 수가 맞아도 실제 예약 시각 전이면 `not_yet_due`이고, preflight·policy hash·owner custody가 닫히지 않았으면 시작 성공으로 보지 않는다. Samsung 오전은 baseline-only이고 정오·오후의 변경은 exact-date bounded policy에서 한 machine·한 entry axis만 허용된다.
+`2026-09-08` 적용 리뷰 기준 저가주 inventory는 56개, runtime eligible 53개, 기존 quarantine 3개다. eligible은 현재 가동 PID 수가 아니다. 별도 사용자 승인 기존8/신규 시간대3의 policy publish·timer 설치가 완료됐으며 미달 추천2는 보류다. 9/7의 inventory53/eligible50은 당시 기록으로 보존한다. 매 실행에서 target-date applied hash·preflight·timer/service·custody를 대사하고 예약 전은 `not_yet_due`로 둔다.
+
+| 9/8 신규 시간대 | Preflight / 기동 예약 KST | 신호 유효 window KST |
+| --- | --- | --- |
+| TYM 오전 | 09:05 / 09:09 | 09:10~09:59 |
+| NHN 정오 | 13:25 / 13:29 | 13:30~13:49 |
+| 에스디바이오센서 오후 | 14:10 / 14:14 | 14:15~14:40 |
+
+예약표는 설치 receipt의 예시이며 실제 설치 계약을 재확인한다. 보유 episode는 당시 target을 유지한다. 팬오션 오전후반의 신규 episode 2→4 tick도 별도 승인된 축에만 해당하며 기존 보유분이나 다른 profile로 확장하지 않는다. Samsung 오전은 baseline-only다. Samsung v9는 actual-policy/as-of 원장·기존 축의 근거 있는 rollback, low-price tuning은 실제 정책 carry를 소유하며 관측 subset만으로 신규 tightening을 승인하지 않는다. 새 상승·반등/진입지연 후보는 `machine_entry_timing_tuning`의 독립 source·경제성·PREOPEN 계약을 따른다.
 
 다음 흐름을 profile/episode/leg별로 재구성한다.
 
@@ -183,13 +213,15 @@ promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved
 
 `microstructure_reaction_context`는 context schema v2와 delivery telemetry v3(`computed`, `payload_included`, `confirmed_sent`, `internal_consumed`, cache identity)를 가진 diagnostic/source-quality 입력이며 직접 runtime-apply 권한이 없다. sole ADM/LDM consumer가 사라진 `institutional_flow_context`는 퇴역 상태라 생성·복구 대상으로 삼지 않는다. micro 결과는 현재 Entry AI 입력 품질, risky micro source-only 관측, 위젯·에피소드 exact signal attribution과 source-quality 개선에만 사용하고 LDM/bucket/prompt-bias 경로를 복원하지 않는다.
 
+context의 finite exact outcome 20은 진단 해석 기준이지 별도 양수 EV·PREOPEN 승격 대기열이 아니다. 아래 경제성 비교는 해당 risky micro/timing 정책 owner의 평가에만 적용하며 context 전달·계측 수리의 완료조건으로 전용하지 않는다.
+
 - 메인 봇 risky micro 관측, 위젯·에피소드의 microstructure attribution을 같은 축에서 비교하되 주문 owner와 정책 선택 권한은 합치지 않는다.
 - mark-price MFE 대신 executable BBO와 target/adverse 선후를 사용한다.
 - ask depletion은 취소·refill·공격적 매수체결·다단계 호가 이동을 분리하고, current ask 한 레벨의 감소만으로 반등 label을 만들지 않는다.
 - quote/BBO/tick context 결손은 0수익으로 보간하지 않고 source-quality gap으로 분리한다.
 - `source_only_candidate`, `recheck_required`, `excluded_excessive_risk`, `excluded_uneconomic_spread`, `source_quality_blocked`를 직접 근거와 함께 보존한다.
 - promotion EV에는 허용된 source-only cohort만 포함하고 recheck 진단 cohort와 실제 filled-terminal 표본 floor를 분리한다.
-- source-only observer의 snapshot freshness, 0B/0D callback p95·p99, queue full/drop, worker/writer error, writer 생존수와 low/critical disk watermark를 확인한다. observer stop은 Provider replay와 R3 승격을 차단하지만 정확한 local label·Provider-floor census 자체를 누락시키는 이유로 사용하지 않는다.
+- source-only observer의 snapshot freshness, 0B/0D callback p95·p99, queue full/drop, worker/writer error, writer 생존수와 low/critical disk watermark를 확인한다. observer stop은 Provider replay와 R3 full-gate 승격을 차단하지만 정확한 local label·Provider-floor census 자체를 누락시키는 이유로 사용하지 않는다.
 
 판정 기준은 `추가 참여율 + 비용차감 source_quality_adjusted_ev_pct + adverse-first/tail loss + 기존 정상 경로 순이익 비훼손`이다.
 
@@ -203,9 +235,13 @@ AI가 사용되는 endpoint마다 세 층을 분리해 점검한다.
 
 각 자연 호출에서 request/trace/snapshot ID, prompt/payload/response hash, prompt/schema/bundle version, latency·token usage와 submit/holding/exit 결과를 연결한다.
 
-Main AI R0→R3의 목적은 현재 프롬프트를 고정 보존하는 것이 아니라, 새로 성숙한 동일 payload/outcome 근거가 들어올 때마다 stage별 Control 대비 더 나은 Candidate 프롬프트를 탐색하고 다음 검토 가능한 manifest를 갱신하는 것이다. 따라서 “사용자가 프롬프트 변경을 원할 때만 실행”하지 않는다. R0 exact source 수집, R1 daily 해석, R2 cumulative/paired 경제성 비교는 자연 표본과 maturity가 생길 때 계속 누적한다. 다만 R3는 source-quality, 동일 payload, complete terminal, 비용 차감 EV와 표본 floor가 닫힌 후보만 만들며 `runtime_effect=false`다. 프롬프트 변경·provider/model 변경·실주문 반영은 별도 review와 target-date PREOPEN/PID 계약 전에는 수행하지 않는다.
+Main AI R0→R3의 목적은 현재 프롬프트를 고정 보존하는 것이 아니라, 새로 성숙한 동일 payload/outcome 근거가 들어올 때마다 stage별 Control 대비 더 나은 Candidate 프롬프트를 탐색하고 다음 검토 가능한 manifest를 갱신하는 것이다. 따라서 “사용자가 프롬프트 변경을 원할 때만 실행”하지 않는다. R0 exact source 수집, R1 daily 해석, R2 cumulative/paired 경제성 비교는 자연 표본과 maturity가 생길 때 계속 누적한다. R3의 `research_candidates`와 full-gate `candidates`를 분리한다. 연구/정상 무표본·부분 정상행 학습을 full-gate 미달이라는 이유로 실패 처리하지 않되, 적용 검토용 후보는 source-quality, 동일 payload, complete terminal, 비용 차감 EV와 해당 표본 floor를 통과해야 한다. 두 출력 모두 자체 `runtime_effect=false`다. 프롬프트 변경·provider/model 변경·실주문 반영은 별도 review와 target-date PREOPEN/PID 계약 전에는 수행하지 않는다.
 
-9/7 현행 #76→#82→#78은 self-hash·격리 cohort·부분 정상행 학습을 이용한 offline 평가 환류다. #81 legacy runtime은 `LEGACY_RUNTIME_AUTHORITY_ENABLED=False`이므로 R3/#82 증가를 실적용 대기로 보고하지 않는다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·PID receipt와 분리한다. 코드 보완 완료와 자연 late-follower generation/경제성 확인은 `AIDecisionActionOutcomeNaturalEvidence0908`에서 별도 판정한다.
+현행 #76→#82→#78은 self-hash·격리 cohort·부분 정상행 학습을 이용한 offline 평가 환류다. #81 legacy runtime은 `LEGACY_RUNTIME_AUTHORITY_ENABLED=False`이므로 R3/#82 증가를 실적용 대기로 보고하지 않는다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·PID receipt와 분리한다. 코드 보완 완료와 자연 late-follower generation/경제성 확인은 `AIDecisionActionOutcomeNaturalEvidence0908`에서 별도 판정한다.
+
+9/7 원천의 자정 이후 복구는 NXT lifecycle eligible 0→2와 metadata consumer terminal을 닫았지만, 당시 Entry exact control은 KRX/NXT 각0이고 holding provider checkpoint는 미충족이었다. market18행·legacy identity2행의 과거 결손과 신규 자연 원천을 구분한다. provider 미실행 source-only 모드에서 producer가 명시한 `exit=2/source_only_blocked_or_deferred`는 단계/artifact를 확인해 source warning으로 분리할 수 있지만 일반 실행 실패·strict verifier 실패를 정상화하는 예외가 아니다. 정상 checkpoint 재사용과 producer의 bounded resumable 상태만 허용하며 terminal schema/provider/receipt rejection을 무제한 새 retry로 재개하지 않는다.
+
+멀티타임프레임 입력은 [Plan Rebase §7](./plan-korStockScanPerformanceOptimization.rebase.md#7-current-open-state-summary)의 별도 사용자 승인 계약을 따른다. `entry_candle_context_v1`·`holding_decision_context_v1`과 공통 `scalping_multi_timeframe_context_v1`은 두 stage schema/하나의 파생 버전이며 세 번째 병렬 payload가 아니다. 지정된 PREMARKET 최종 검증의 binary gate 전에는 source-only, 검증 통과 후에는 승격 receipt가 기록한 검증 완료시각부터 모든 대상 scalping 종목·활성 세션·AI endpoint가 적용 범위다. 세션별 추가 승격·canary 또는 다음 PREOPEN 대기를 새로 요구하지 않는다. 다만 actual payload/trace·`provider!=none`·비교 가능 필수값 `MISMATCH=0`·완성봉·freshness·schema/version·rollback과 각 호출의 venue/session을 확인하고, 전역 적용 범위를 전 endpoint 자연 호출 완료나 수익성 입증으로 바꾸지 않는다. 이 문서 갱신·일반 모니터링은 별도 승격 작업이나 process 재기동 실행을 지시하지 않는다.
 
 micro-reversion은 Main AI에 action label을 주입하는 별도 권한축이 아니다. exact same-epoch BBO·0B/0D, spread, refill/trade backing, venue/session과 후행 action-neutral outcome을 입력 품질·오판 taxonomy에 결속하되 future first-hit이나 사후 MFE를 당시 prompt input으로 역류시키지 않는다. Entry와 holding/exit payload cohort를 합치지 않고 각각 `entry_candle_context_v1`, `holding_decision_context_v1` 경계를 유지한다.
 
@@ -215,7 +251,7 @@ micro-reversion은 Main AI에 action label을 주입하는 별도 권한축이 �
 - 동일 exact payload의 Control/Candidate replay에서 선행 adverse 뒤 회복, 직접 상승과 순서 불명을 구분한다.
 - AI는 직접 주문·수량·broker safety 권한이 아니며 비정상 출력을 임의 BUY로 복구하지 않는다.
 
-장중에는 R0 source가 이후 R1 daily, R2 cumulative, R3 source-only manifest로 이어질 수 있는지 미리 점검한다. exact prepared request census, A/B/C 동일 source pool, action-neutral label, Provider replay receipt, main lifecycle exact join을 분리하고, Provider 일일 budget 또는 observer/source-quality gate 때문에 replay가 미실행된 상태를 판단 실패나 R3 생성 성공으로 포장하지 않는다. Provider replay와 R3는 reviewed 호출량·거래일·common parent·종목 floor 및 lifecycle terminal 계약을 모두 통과할 때만 진행한다.
+장중에는 R0 source가 이후 R1 daily, R2 cumulative, R3 source-only manifest로 이어질 수 있는지 미리 점검한다. exact prepared request census, A/B/C 동일 source pool, action-neutral label, Provider replay receipt, main lifecycle exact join을 분리하고, Provider 일일 budget 또는 observer/source-quality gate 때문에 replay가 미실행된 상태를 모델 오판이나 full-gate 승격 성공으로 포장하지 않는다. Provider replay와 full-gate 후보에는 각각 해당 producer의 reviewed 호출량·거래일·common parent·종목 floor·terminal 계약을 적용한다. source-only materialization·research/metadata 종결을 Provider 실행 완료와 혼동하지 않는다.
 
 생성 파일 크기, materialized request 수 또는 provider/schema 성공만으로 경제적 유효 표본이 있다고 판단하지 않는다. `exact request/response binding → source-quality-valid payload → action-neutral mature outcome → lifecycle terminal join → effective-dated cost/master binding → net-economic eligible row` funnel을 전수 대조한다. 마지막 값이 0이면 최초 0 stage를 찾고, 아직 정해진 maturity deadline 전인 표본과 exact companion/hash·BBO·terminal join이 영구 누락되는 구조적 결손을 분리한다. 결손 row를 0 EV로 보간하거나 대용량 source artifact를 유효 denominator로 대체하지 않는다.
 
@@ -252,6 +288,8 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 - 진입 확인 지연 연구는 완성 1분봉 시각이 아니라 원장에 영속된 실제 `signal_decision_at`만 anchor로 사용한다. 이 값이 없는 legacy episode는 진단에는 남기되 진입시점 정책 표본에서는 제외한다.
 - 수량, provider, bot, broker guard와 legacy custody는 자동 calibration 축이 아니다.
 
+추천을 장중 대사할 때 frozen canonical report와 이후 producer native metadata projection·별도 승인 ledger를 구분한다. 원본 path/row/hash→native ID→승인/구현 disposition→당일 policy/receipt를 연결하며 원본 ID 결손 이력을 지우거나 같은 작업을 두 번 세지 않는다. 9/7 source의 postclose65행과 별도 승인 projection26행을 91개 고유 작업으로 합산하지 않는다. projection은 새 시장/경제성 재생성이 아니고 native ID만으로 실주문 권한이 생기지 않는다.
+
 ### 3.6 퇴역·OFF·비우선 영역 최소 확인
 
 다음 영역은 장중 성과 최적화·표본모집·조건완화 대상이 아니다.
@@ -269,8 +307,10 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 - 메인 봇 PID, 시작 시각, commit, source-dirty, runtime env와 당일 ON/OFF runtime 목록
 - launcher와 bot source commit/hash, exact-date verifier의 PID mismatch/missing, 퇴역 canonical env 15개 explicit OFF. 이후 문서-only commit과 실행 코드 commit 차이는 실제 runtime source diff와 분리한다.
 - 전일 postclose candidate와 당일 PREOPEN apply plan/runtime env/verify의 generation·hash·selection diff, launcher load 시각과 현재 PID의 exact env/policy receipt
+- 전일 요약의 `source_generation_contract`와 checklist `POSTCLOSE_SUMMARY_SOURCES`, 마지막 `--require-summary-handoff` 성공을 실제 source date/hash로 대사. 자정 이후 source-date 9/7 복구와 9/8 runtime을 혼합하지 않고, 이전 PASS artifact로 최신 명령 실패를 가리지 않음. 결손 발견은 영향 owner에 handoff하며 장중 전체 postclose/provider 재실행을 자동 시작하지 않음
 - 위젯·에피소드 systemd service/timer, exact-date policy/profile hash와 실제 process 상태
 - 당일 PREOPEN apply plan/runtime env, active date, policy version, dependency와 operator override
+- operator policy lock과 실행 mutex를 분리. 오래됐거나 새 EV 재검증이 없다는 이유로 운영 override를 해제하지 않음. 실행 lock 파일 존재만으로 stale을 선언하거나 삭제하지 않고 실제 점유 PID/시작시각·owner를 확인
 - 실제 AI provider/failback/timeout/parse 상태와 `provider=none` 발생 여부
 - Kiwoom REST/WS 연결, 가격·호가·체결·분봉 freshness와 venue provenance
 - 공식 보통주 master에 결속된 독립 시장 전체 `as_of rising benchmark`의 source path·hash·수집 시각·선정 정의·전체 census와 scanner 외부 미관측 종목 재현 가능성
@@ -323,10 +363,11 @@ Swing, ADM/LDM/bucket/greenfield, 비우선 scalp/swing sim과 은퇴한 opening
 
 - `time_resolvable_shortage`: producer→intended consumer 경로와 source quality가 정상이고 동일 denominator의 신규 unique 표본이 유입될 수 있으며, maturity와 rolling expiry를 반영해 선언 horizon 안에서 floor에 도달하는 finite 근거가 있는 경우만 사용한다. 무기한 HELD, 유입률 0 또는 양(+) 유입일만 고른 평균은 ETA에 넣지 않는다.
 - `structural_population_exhaustion`: impossible predicate, policy/key mismatch, systematic join/exclusion, missing runtime hook/consumer, eligible upstream 뒤 반복되는 0-conversion, 계약상 최대 관측 가능 수가 floor 미만인 경우다. submit drought나 net-economic eligible 0은 upstream 후보가 많다는 이유만으로 시간 해결형이 아니다.
-- window/sample floor/maturity/effective horizon 또는 source census가 없어 둘 중 하나를 입증할 수 없으면 `blocked_missing_evidence`, 신규 경로의 선언된 최소 관찰창 전이면 `pending_declared_window`로 둔다. 이는 정상 대기 또는 세 번째 최종 shortage class가 아니다.
+- window/sample floor/maturity/effective horizon 또는 source census가 없어 둘 중 하나를 입증할 수 없으면 `blocked_missing_evidence`, 신규 경로의 선언된 최소 관찰창 전이면 `pending_declared_window`로 둔다. 각각 증거 대기와 예정 관찰창 전의 잠정 상태이며 세 번째 최종 shortage class가 아니다. 예정창 전 대기만으로 장애나 구조적 고갈을 확정하지 않는다.
 - 정상 handoff에서 opportunity 자체가 없는 하루, 다음 PREOPEN 전 candidate, 아직 fixed maturity deadline 전인 row는 구조적 고갈이 아니다. 반대로 구현 파일·schedule receipt·report 생성만으로 구조 보완이 해결됐다고 하지 않는다.
 - OFF·퇴역·비우선 family의 0건은 `not_applicable_retired_or_deprioritized`이며 finite ETA나 표본 수집 계획을 요구하지 않는다. current owner로의 권한 누출이 발견된 경우에만 shortage가 아니라 contract defect로 분류한다.
-- 구조 보완 후 `collecting_after_structural_repair`는 review finding 0과 fresh PID/consumer receipt가 닫힌 뒤에만 사용한다. `resolved`는 신규 source-quality-valid unique 표본이 같은 corrected path의 first depleted stage를 실제 통과하고 floor/lineage가 닫힐 때만 허용한다.
+- `repair_status`(코드·진단 수리), `deployment_status`(반영), `shortage_status`(표본), `economic_acceptance`(효과)를 분리한다. `collecting_after_structural_repair`는 review finding0과 수정 경로의 실제 consumer/generation receipt가 있어야 하며, PID 갱신이 필요한 수정일 때만 fresh PID 반영을 추가 확인한다. `shortage_status=resolved`는 그 owner의 first depleted stage·declared denominator/floor·lineage가 닫혔을 때만 허용한다. 진단 수리 자체에 별도 양수 EV·실체결·모든 horizon MFE/MAE·PREOPEN 승격 floor를 붙이지 않는다.
+- 비가역적 과거 ingress/market/identity 결손은 과거 source exclusion으로 고정하고 당시 원천 없이 같은 replay를 반복하지 않는다. 다음 날짜의 신규 source와 수집 경로를 기존 OPEN owner에서 확인한다. 새 원천 유입이 입증돼도 과거 결손이 복원됐다고 바꾸지 않는다.
 - 표본을 맞추기 위한 row 복제, owner·venue·session 병합, right-censored/HELD의 completed 변환, pre-baseline 재사용, child provenance 삭제, sample floor 하향, hard-safety·broker guard·threshold 완화는 금지한다.
 
 장중 shortage 판정은 source-only 계측·parser/schema·report·test·instrumentation 보완과 당일/장후 workorder handoff까지만 권한을 가진다. live threshold, provider, bot, cap, 수량, 주문 또는 safety 변경이 필요하면 `user_authority`로 분리한다.
@@ -335,9 +376,11 @@ Swing, ADM/LDM/bucket/greenfield, 비우선 scalp/swing sim과 은퇴한 opening
 
 명백한 결함이나 수익기회 병목이 확인되면 다음 루프를 수행한다.
 
-`원인 분리 → 단일 owner 확인 → 최소 보완 → 코드리뷰 → clean-baseline real replay → 결함 보완 → 재리뷰 → 허용된 runtime 반영 → post-apply 귀속`
+`원인 분리 → 단일 owner·권한 확인 → 최소 보완 → review/fix/re-review → targeted validation → 허용된 영향 consumer 검증 → 별도 승인된 반영·자연/경제성 acceptance`
 
-현재 우선 owner의 구조적 결함은 읽기 전용 진단만으로 종료하지 않는다. source-quality·parser/schema·report·test·instrumentation·허용된 source-only 범위의 보완은 원인을 확인한 뒤 구현하고 review gate를 닫는다. 퇴역·OFF·비우선 sim의 단순 무표본이나 낮은 EV는 구현 owner가 아니다. 실주문 권한, PREOPEN live env 선택, provider route, bot process, cap, broker/order guard, hard/protect/emergency safety 또는 장중 threshold mutation은 별도 사용자 지시나 유효한 적용 artifact 없이는 변경하지 않는다.
+`korstockscan-review-gate`를 적용해 검토 범위의 미해결 finding이 없어질 때까지 수정·재검증한다. Python은 관련 pytest/compile, shell은 `bash -n`/wrapper 계약을 확인하고 `git diff --check`를 수행한다. 실거래 replay는 해당 수리의 계약에 필요하고 안전한 offline 실행이 허용된 경우에만 clean-baseline exact source로 수행한다. 문서-only는 링크·owner·권한·print-only parser로 닫으며 무관한 trading test·provider 호출·비싼 report 재생성을 요구하지 않는다.
+
+이 지시문을 명시적으로 실행하는 요청에서는 현재 우선 owner의 허용된 구조적 결함을 읽기 전용 진단만으로 종료하지 않는다. source-quality·parser/schema·report·test·instrumentation·허용된 source-only 범위의 보완은 원인을 확인한 뒤 구현하고 review gate를 닫는다. 퇴역·OFF·비우선 sim의 단순 무표본이나 낮은 EV는 구현 owner가 아니다. 실주문 권한, PREOPEN live env 선택, provider route, bot process, cap, broker/order guard, hard/protect/emergency safety 또는 장중 threshold mutation은 이 일반 모니터링의 권한이 아니다. 기존 승인된 자동 consumer의 적용을 확인하는 것과 수동 실행을 구분한다. policy artifact가 있다고 bot 재기동·수동 env/lock/주문 변경 권한을 추론하지 않는다.
 
 - hard safety, stale/conflict, price freshness, broker/account/order/quantity/cooldown을 우회하지 않는다.
 - KRX, `PREMARKET_KRX_LIKE`, NXT 성과를 혼합하지 않는다.
@@ -351,11 +394,17 @@ Swing, ADM/LDM/bucket/greenfield, 비우선 scalp/swing sim과 은퇴한 opening
 - baseline 이후 hard contract gap은 식별 가능한 결손 row/window를 `raw_row_exclusion`으로 제외하는 것이 기본이다. 날짜 전체 차단은 preflight artifact missing/invalid, exclusion 생성 실패 또는 high-volume no-contract 결손을 안정적으로 분리할 수 없을 때만 사용한다. unknown-token finding만으로 날짜 전체를 차단하지 않되 producer/schema review와 workorder handoff는 남긴다.
 - 코드 변경 후 review finding 0과 targeted validation 전에는 재기동·비싼 report 재생성·runtime apply를 하지 않는다.
 - 재기동이 허용된 경우에도 먼저 main/widget/episode/manual owner별 broker 미체결과 전시장 inventory를 대사하고, 우아한 종료·새 PID env verify·WS login/first-data·선택된 runtime owner·중복주문 0건을 사후 확인한다.
-- 키움 최초 WS 수신 전 외부 지연은 코드 결함 원인에서 제외하되 최초 수신 이후 내부 queue·scanner·AI·submit 지연은 측정한다.
+- 외부 지연임이 입증된 최초 WS 수신 전 구간은 내부 처리 지연과 분리한다. 단지 첫 data 이전이라는 이유로 local 로그인/등록/worker 결손을 외부 탓으로 제외하지 않는다. 최초 수신 이후 내부 queue·scanner·AI·submit 지연도 측정한다.
+
+미래 확인은 당일 checklist의 기존 OPEN ID를 재사용하고, 없는 새 후속 작업만 `Due/Slot/TimeWindow/Track`을 갖춰 기록한다. 전일 항목을 이관하면 같은 ID·수용조건·이력을 보존하고 당일 파서에 한 번만 포함되는지 확인한다. 문서/checklist 변경 후 아래 print-only 검증을 실행한다. 외부 Project/Calendar sync 및 token 검사는 실행하지 않는다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
+```
 
 ## 8. 보고
 
-각 항목은 `판정 → 근거 → 다음 액션` 순서로 보고한다.
+각 항목은 `판정 → 근거 → 다음 액션` 순서로 보고한다. 관찰 target date·as-of 시각, source date·generation, 적용일·현재 PID receipt를 함께 기록한다. 단회 점검은 해당 snapshot으로 닫고 지속 모니터링을 요청받았을 때만 지정 종료조건까지 반복한다. 지속 작업 중에는 상태 변화와 현재 대기 이유·다음 확인 조건을 최대 60초 간격으로 공유하며 새 데이터가 없는 구간의 API 호출량이나 중복 worker를 늘리지 않는다.
 
 마지막에는 반드시 다음을 분리한다.
 
@@ -372,9 +421,10 @@ Swing, ADM/LDM/bucket/greenfield, 비우선 scalp/swing sim과 은퇴한 opening
 - 당일 runtime별 정상·결함·자연 표본 부족·미호출·미반영·source-only 상태
 - 퇴역·OFF·비우선 영역: canonical OFF·실주문 누출 0·broker/resource 간섭 여부만 요약하고 정상 무표본에 shortage/ETA를 만들지 않음
 - owner 충돌, 중복 주문, broker reconciliation과 venue provenance 결함
-- 적용한 보완, 현재 process 반영 여부와 rollback 조건
+- 적용한 보완, 코드 review/검증 결과, 현재 process 반영 여부와 rollback 조건; 문서-only/미재생성 범위와 미검증 자연/경제성 acceptance를 별도 공개
+- 별도 승인 추천의 원본/projection/승인 ledger·policy/현재 소비 대사; 중복 집계·미승인 확대 없음, 승인된 신규 신호와 기존 보유 target 분리
 - process 감사: authoritative expected set, PID/cgroup/lock/heartbeat, dead·hung·duplicate·no-op·orphan·unconsumed 분류와 valid-empty 오탐 제외
 - 부족 ledger: stable `shortage_id`, exact floor denominator, required/current/deficit, first depleted stage, funnel count, `time_resolvable_shortage|structural_population_exhaustion|blocked_missing_evidence|pending_declared_window`, finite ETA 또는 waiting 불가 이유, 다음 due·재분류 trigger·acceptance test
 - 아직 해결되지 않은 병목, 다음 표본·재검증·구현 owner
 
-보고서나 runtime 이름의 존재는 효과의 증거가 아니다. `identified → source quality → 당일 PREOPEN/PID 실제 owner/runtime 소비 → executable 체결·terminal outcome → 비용 차감 rolling/cumulative EV → post-apply attribution`이 연결됐을 때만 당일 정상 효과로 판정한다. 장중 생성된 장후/다음-session source-only artifact는 authority에 맞는 intended last consumer와 handoff까지만 보고하고 다음 PREOPEN/PID 소비나 실주문 효과를 선행 주장하지 않는다.
+진단·코드 수리 완료와 실제 경제성 성공은 독립 판정이다. 신규 경제 표본이 없다는 이유만으로 닫힌 수리 검토를 취소하지 않으며, 수리 완료로 실현 EV 개선을 선언하지도 않는다. 보고서나 runtime 이름의 존재는 효과의 증거가 아니다. `identified → source quality → 해당 owner의 승인·실제 runtime 소비 receipt → executable 체결·terminal outcome → 비용 차감 rolling/cumulative EV → post-apply attribution`이 연결됐을 때만 경제성 효과를 판정한다. 소비 receipt는 해당 계약의 PREOPEN/PID 또는 별도 승인 승격 receipt를 사용하며 다른 owner의 추가 승격 gate를 요구하지 않는다. 장중 생성된 장후/다음-session source-only artifact는 authority에 맞는 intended last consumer와 handoff까지만 보고하고 다음 PREOPEN/PID 소비나 실주문 효과를 선행 주장하지 않는다.

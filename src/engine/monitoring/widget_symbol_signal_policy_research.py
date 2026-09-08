@@ -30,6 +30,7 @@ from src.trading.order.tick_utils import (
     move_price_by_ticks,
     move_price_up_by_bps,
 )
+from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
 from src.engine.monitoring.widget_comparison_cost import (
     comparison_cost_contract,
     cost_aware_return_pct,
@@ -1202,7 +1203,7 @@ def build_report(
         for symbol, result in results.items()
         if result["decision"] == "holdout_pass_widget_signal_policy_candidate"
     ]
-    return {
+    report = {
         "schema": REPORT_SCHEMA,
         "status": "complete",
         "decision": (
@@ -1231,6 +1232,21 @@ def build_report(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    return attach_recommendation_contract(report)
+
+
+def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
+    for symbol, row in report["symbols"].items():
+        bind_recommendation(
+            row,
+            producer="widget_symbol_signal_policy_research",
+            scope=f"{symbol}/KRX_REGULAR",
+            axis="symbol_signal_policy",
+            proposal=row.get("selected_policy") or {},
+            consumer="widget_symbol_runtime_policy",
+            acceptance="Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        )
+    return report
 
 
 def _atomic_write(path: Path, text: str) -> None:
