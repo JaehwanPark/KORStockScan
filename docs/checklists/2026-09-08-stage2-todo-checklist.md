@@ -26,6 +26,12 @@
 
 ## 승인 재설계 자연 수용
 
+- [ ] `[PipelineVerbosityNaturalEvidence0908] #73 원본 보존·경량 요약·장후 v2 자연 소비 확인` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: ScalpingLogic`)
+  - Source: [보완 리뷰](../audit-reports/2026-09-08-pipeline-verbosity-remediation-review.md), `data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-09-08.json`, 해당 producer summary/manifest, BUY Funnel과 code-improvement workorder.
+  - Acceptance: report schema2·원본/요약 identity·완료 구간 대사·bounded idle flush 또는 명시적 source gap·native repair handoff 확인. 원본 생략 가능 0은 대기열이 아닌 `no_suppressible_events`로 구분. 기존 PID의 legacy producer 증거는 새 코드 반영으로 간주하지 않으며 다음 별도 승인/정규 기동의 새 producer receipt에서 counts_identity_v2를 확인한다. 과거 요약 결손·identity를 원본에서 복제하거나 같은 과거일 반복 실행으로 합성하지 않는다.
+  - Supplemental acceptance: disk publication과 summary submit의 잠금 분리, active/retry 각 4,096 group bound·high-water wake·bounded retry, 주기 결속 timeout을 확인한다. 새 PID의 `producer_publish_and_submit_v1` health receipt가 exact manifest SHA256·날짜·PID로 report/wrapper까지 소비돼야 성능 관측을 확인하며, 수익 개선이나 raw writer/주문 submit 지연 개선으로 해석하지 않는다. 기존 동일 ID에서 배포·자연 소비를 확인하고 별도 승인/EV floor를 추가하지 않는다.
+  - Boundary: 원본·threshold companion·BUY Funnel 소비 보존, raw suppression OFF. 코드 검증/배포/자연 소비/실제 지연·EV 효과는 독립 상태. 이 항목은 재기동·env/lock/주문 변경이나 별도 승격을 승인하지 않으며 양수 EV·실체결 floor를 진단 수리 조건으로 요구하지 않는다.
+
 - [ ] `[PatternLabSmallNetNaturalEvidence0908] Claude lab v3 순이익·빈도 연구와 단일-owner 전달 자연 확인` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: ScalpingLogic`)
   - Source: [#67/#69 보완 리뷰](../audit-reports/2026-09-08-pattern-lab-small-net-remediation-review.md), `analysis/claude_scalping_pattern_lab/outputs/run_manifest.json`, `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-09-08.json`.
   - 완료 조건: 기존 main paired producer가 실제 매입/매도 총액·비용·순익을 포함한 당일 self-hash source를 자연 생성하고 lab v3가 일별/rolling10거래일/누적을 분리한다. 누락은 null/제외 사유로 남기며 정상 empty와 source failure를 구분한다. manifest 3종 hash → automation → currentness/AI review → EV/workorder의 같은 날짜·generation을 확인한다. ADM/LDM 복구, fallback/latency canary, 2-lab 합의 대기 및 0건 blocker 추천은 새로 만들지 않는다.

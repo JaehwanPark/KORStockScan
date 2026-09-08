@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import gzip
 import json
+import logging
 import math
 import os
 import time
+import threading
 from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from functools import wraps
 from typing import Any, Callable
 
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
@@ -18,8 +22,13 @@ ReasonLabeler = Callable[[str, dict[str, str]], str]
 IgnorePredicate = Callable[[dict[str, Any]], bool]
 
 SUMMARY_SCHEMA_VERSION = 2
-PRODUCER_SUMMARY_SCHEMA_VERSION = 1
-PRODUCER_PARITY_DETAIL_LEVEL = "counts_only_v1"
+PRODUCER_SUMMARY_SCHEMA_VERSION = 2
+PRODUCER_PARITY_DETAIL_LEVEL = "counts_identity_v2"
+IDENTITY_CONTRACT = "canonical_payload_sha256_sum_v1"
+IDENTITY_MODULUS = 1 << 256
+PRODUCER_MAX_GROUPS = 4096
+PRODUCER_MAX_FLUSH_SEC = 3600
+PRODUCER_TIMING_CONTRACT = "producer_publish_and_submit_v1"
 DEFAULT_SUMMARY_DETAIL_LEVEL = "diagnostic_full_v1"
 HIGH_VOLUME_OBSERVATION_STAGES = frozenset(
     {
@@ -172,6 +181,7 @@ class SummaryEvent:
     actual_order_submitted: str
     raw_offset_start: int
     raw_offset_end: int
+    evidence_hash: int = 0
 
 
 def _safe_str(value: Any) -> str:
@@ -211,6 +221,16 @@ def producer_summary_paths(summary_dir: Path, target_date: str) -> tuple[Path, P
         summary_dir / f"pipeline_event_producer_summary_{target_date}.jsonl",
         summary_dir / f"pipeline_event_producer_summary_manifest_{target_date}.json",
     )
+
+
+def producer_health_path(summary_dir: Path, target_date: str, pid: int) -> Path:
+    return summary_dir / f"pipeline_event_producer_health_{target_date}_{pid}.json"
+
+
+def producer_manifest_fingerprint(manifest: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
 
 
 def _parse_iso_datetime(value: str) -> datetime | None:
@@ -420,6 +440,7 @@ class _SummaryAggregate:
         self.sample_per_bucket = max(1, min(int(sample_per_bucket or 1), 6))
         self.include_diagnostics = bool(include_diagnostics)
         self.event_count = 0
+        self.evidence_hash_sum = 0
         self.first_seen: datetime | None = None
         self.last_seen: datetime | None = None
         self.first_record_id = ""
@@ -435,11 +456,15 @@ class _SummaryAggregate:
 
     def add(self, event: SummaryEvent) -> None:
         self.event_count += 1
+        self.evidence_hash_sum = (
+            self.evidence_hash_sum + event.evidence_hash
+        ) % IDENTITY_MODULUS
         if self.first_seen is None:
             self.first_seen = event.emitted_at
             self.first_record_id = event.record_id
             self.first_raw_offset = event.raw_offset_start
-        self.last_seen = event.emitted_at
+        self.first_seen = min(self.first_seen, event.emitted_at)
+        self.last_seen = max(self.last_seen or event.emitted_at, event.emitted_at)
         self.last_record_id = event.record_id
         self.last_raw_offset = event.raw_offset_end
         if not self.include_diagnostics:
@@ -523,14 +548,10 @@ class _SummaryAggregate:
             "reason_label": self.reason_label,
             "actual_order_submitted": self.actual_order_submitted,
             "event_count": self.event_count,
-            "first_seen": (
-                self.first_seen.isoformat(timespec="seconds")
-                if self.first_seen
-                else None
-            ),
-            "last_seen": (
-                self.last_seen.isoformat(timespec="seconds") if self.last_seen else None
-            ),
+            "identity_contract": IDENTITY_CONTRACT,
+            "evidence_hash_sum": f"{self.evidence_hash_sum:064x}",
+            "first_seen": (self.first_seen.isoformat() if self.first_seen else None),
+            "last_seen": (self.last_seen.isoformat() if self.last_seen else None),
             "metric_role": "ops_volume_diagnostic",
             "decision_authority": "diagnostic_aggregation",
             "runtime_effect": False,
@@ -668,6 +689,14 @@ def _summary_event_from_payload(
         actual_order_submitted=actual_order_submitted,
         raw_offset_start=line_start,
         raw_offset_end=line_end,
+        evidence_hash=int.from_bytes(
+            hashlib.sha256(
+                json.dumps(
+                    payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).digest(),
+            "big",
+        ),
     )
 
 
@@ -730,7 +759,7 @@ def _new_aggregate(
 
 
 def _load_summary_rows(
-    summary_path: Path, *, include_samples: bool = True
+    summary_path: Path, *, include_samples: bool = True, strict: bool = False
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     summary_path = existing_or_gzip_path(summary_path)
@@ -744,7 +773,18 @@ def _load_summary_rows(
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
+                if strict:
+                    raise ValueError("invalid producer summary JSONL")
                 continue
+            if strict and (
+                not raw_line.endswith("\n")
+                or not isinstance(payload, dict)
+                or type(payload.get("event_count")) is not int
+                or payload["event_count"] <= 0
+                or _parse_iso_datetime(payload.get("bucket_start")) is None
+                or _parse_iso_datetime(payload.get("bucket_end")) is None
+            ):
+                raise ValueError("invalid producer summary row")
             if isinstance(payload, dict):
                 if not include_samples:
                     rows.append(_slim_summary_row(payload))
@@ -773,9 +813,9 @@ def _rehydrate_summary_for_append(summary_path: Path) -> None:
 
 
 def load_summary_rows(
-    path: Path, *, include_samples: bool = True
+    path: Path, *, include_samples: bool = True, strict: bool = False
 ) -> list[dict[str, Any]]:
-    return _load_summary_rows(path, include_samples=include_samples)
+    return _load_summary_rows(path, include_samples=include_samples, strict=strict)
 
 
 def _slim_summary_row(payload: dict[str, Any]) -> dict[str, Any]:
@@ -794,6 +834,8 @@ def _slim_summary_row(payload: dict[str, Any]) -> dict[str, Any]:
         "reason_label": payload.get("reason_label"),
         "actual_order_submitted": payload.get("actual_order_submitted"),
         "event_count": payload.get("event_count"),
+        "identity_contract": payload.get("identity_contract"),
+        "evidence_hash_sum": payload.get("evidence_hash_sum"),
         "first_seen": payload.get("first_seen"),
         "last_seen": payload.get("last_seen"),
         "second_counts": (
@@ -850,6 +892,7 @@ def update_and_load_pipeline_event_summaries(
         or int(manifest.get("raw_inode") or -1) != int(raw_inode or -1)
         or set(manifest.get("summary_stages") or ()) != set(summary_stages)
         or str(manifest.get("summary_detail_level") or "") != summary_detail_level
+        or (raw_offset == raw_size and manifest.get("raw_mtime_ns") != stat.st_mtime_ns)
         or raw_offset > raw_size
         or not summary_exists
     )
@@ -896,13 +939,12 @@ def update_and_load_pipeline_event_summaries(
                 )
                 if event is not None:
                     key = _aggregate_key(event)
-                    aggregate = groups.setdefault(
-                        key,
-                        _new_aggregate(
+                    aggregate = groups.get(key)
+                    if aggregate is None:
+                        aggregate = groups[key] = _new_aggregate(
                             event,
                             include_diagnostics=(summary_profile != "producer_parity"),
-                        ),
-                    )
+                        )
                     aggregate.add(event)
                     appended_source_events += 1
             last_good_offset = line_end
@@ -932,6 +974,7 @@ def update_and_load_pipeline_event_summaries(
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "raw_path": str(raw_path),
         "raw_inode": raw_inode,
+        "raw_mtime_ns": stat.st_mtime_ns,
         "raw_offset": last_good_offset,
         "raw_size": final_raw_size,
         "summary_path": str(summary_path),
@@ -960,6 +1003,21 @@ def update_and_load_pipeline_event_summaries(
     }
 
 
+def _measure_submit(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        started = time.perf_counter()
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            elapsed = (time.perf_counter() - started) * 1000
+            with self._lock:
+                self._submit_durations.append(elapsed)
+                self._submit_count += 1
+
+    return wrapped
+
+
 class ProducerSummaryCompactor:
     def __init__(
         self,
@@ -969,28 +1027,109 @@ class ProducerSummaryCompactor:
         flush_sec: int = 60,
         sample_per_bucket: int = 2,
         reason_labeler: ReasonLabeler = default_reason_label,
+        auto_flush: bool = False,
     ) -> None:
         self.summary_dir = summary_dir
-        self.mode = mode if mode in {"off", "shadow", "suppress"} else "off"
+        self.requested_mode = mode
+        # No verified consumer-preserving suppression owner exists. A legacy
+        # env value must not silently grant permission to discard source rows.
+        self.mode = (
+            "shadow"
+            if mode == "suppress"
+            else mode
+            if mode in {"off", "shadow"}
+            else "off"
+        )
         self.flush_sec = max(0, int(flush_sec or 0))
+        if self.flush_sec > PRODUCER_MAX_FLUSH_SEC:
+            raise ValueError("producer flush interval exceeds supported 3600 seconds")
         self.sample_per_bucket = max(1, min(int(sample_per_bucket or 2), 6))
         self.reason_labeler = reason_labeler
         self._groups: dict[tuple[str, ...], _SummaryAggregate] = {}
         self._last_flush_monotonic = time.monotonic()
         self._sequence = 0
-        self._event_count = 0
-        self._suppressed_count = 0
-        self._lossless_preserved_count = 0
+        self._lock = threading.RLock()
+        # Disk publication never owns the submit/aggregation lock. One detached
+        # retry batch and one active buffer are each bounded by MAX_GROUPS.
+        self._publish_lock = threading.Lock()
+        self._pending_batch = None
+        self._lossless_by_key: Counter = Counter()
+        self._submit_durations: deque[float] = deque(maxlen=2048)
+        self._submit_count = 0
+        self._rejected_count = 0
+        self._closed = False
+        self._auto_flush = bool(auto_flush)
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._worker: threading.Thread | None = None
+        self.flush_error_count = 0
+        self.last_flush_error: str | None = None
+        self.health_write_error_count = 0
+        if auto_flush and self.enabled:
+            self._worker = threading.Thread(
+                target=self._flush_loop, name="pipeline-summary-flush", daemon=True
+            )
+            self._worker.start()
+
+    def _flush_loop(self) -> None:
+        failed = False
+        while True:
+            if failed:
+                # High-water wakeups must not turn a persistent disk/lock
+                # failure into a per-event retry storm.
+                self._stop.wait(max(1, self.flush_sec))
+            else:
+                self._wake.wait(max(1, self.flush_sec))
+            self._wake.clear()
+            stopping = self._stop.is_set()
+            try:
+                self.flush()
+                failed = False
+            except Exception as exc:
+                failed = True
+                with self._lock:
+                    self.flush_error_count += 1
+                    self.last_flush_error = type(exc).__name__
+                logging.getLogger(__name__).warning(
+                    "producer summary flush failed; raw retained: %s",
+                    type(exc).__name__,
+                )
+            if stopping:
+                return
+
+    def close(self, *, wait: bool = True) -> None:
+        with self._lock:
+            self._closed = True
+        self._stop.set()
+        self._wake.set()
+        if self._worker is None:
+            self.flush()
+        elif wait:
+            self._worker.join(timeout=5)
+            if self._worker.is_alive():
+                raise TimeoutError("producer summary shutdown drain exceeded 5 seconds")
 
     @property
     def enabled(self) -> bool:
         return self.mode in {"shadow", "suppress"}
 
+    @_measure_submit
     def submit(
         self, payload: dict[str, Any], *, threshold_family: str | None = None
     ) -> dict[str, Any]:
+        with self._lock:
+            result = self._record(payload, threshold_family=threshold_family)
+        if result.pop("_flush_requested", False):
+            self.flush()
+        return result
+
+    def _record(
+        self, payload: dict[str, Any], *, threshold_family: str | None
+    ) -> dict[str, Any]:
         if not self.enabled or _safe_str(payload.get("event_type")) != "pipeline_event":
             return {"mode": self.mode, "summary_recorded": False, "suppress_raw": False}
+        if self._closed:
+            raise RuntimeError("producer summary is closed; raw must be retained")
 
         stage = _safe_str(payload.get("stage"))
         lossless = payload_has_lossless_authority(
@@ -1021,90 +1160,197 @@ class ProducerSummaryCompactor:
             }
 
         event_date = event.emitted_at.strftime("%Y-%m-%d")
-        pending_dates = {
-            aggregate.bucket_start.strftime("%Y-%m-%d")
-            for aggregate in self._groups.values()
-        }
-        if pending_dates and pending_dates != {event_date}:
-            # Keep producer-summary provenance on the event's actual date when
-            # a long-running bot crosses midnight.  Flush before adding the
-            # new-day event so counters and rows cannot leak into its manifest.
-            self.flush(target_date=min(pending_dates))
-
+        pending_dates = (
+            set()
+            if self._auto_flush
+            else {
+                aggregate.bucket_start.strftime("%Y-%m-%d")
+                for aggregate in self._groups.values()
+            }
+        )
         key = _aggregate_key(event)
-        self._groups.setdefault(
-            key,
-            _new_aggregate(event, sample_per_bucket=self.sample_per_bucket),
-        ).add(event)
-        self._event_count += 1
-        suppress_raw = bool(self.mode == "suppress" and not lossless)
-        if suppress_raw:
-            self._suppressed_count += 1
+        if len(self._groups) >= PRODUCER_MAX_GROUPS and key not in self._groups:
+            self._rejected_count += 1
+            raise BufferError("producer summary buffer full; raw retained")
+        aggregate = self._groups.get(key)
+        if aggregate is None:
+            aggregate = self._groups[key] = _new_aggregate(
+                event,
+                sample_per_bucket=self.sample_per_bucket,
+                include_diagnostics=False,
+            )
+        aggregate.add(event)
+        suppress_raw = False
         if lossless:
-            self._lossless_preserved_count += 1
-        if (
-            self.flush_sec == 0
-            or (time.monotonic() - self._last_flush_monotonic) >= self.flush_sec
-        ):
-            self.flush(target_date=event_date)
+            self._lossless_by_key[key] += 1
+        if self._auto_flush and len(self._groups) >= max(1, PRODUCER_MAX_GROUPS // 2):
+            self._wake.set()
         return {
             "mode": self.mode,
             "summary_recorded": True,
             "suppress_raw": suppress_raw,
             "lossless": lossless,
+            "_flush_requested": not self._auto_flush
+            and (
+                self.flush_sec == 0
+                or (pending_dates and pending_dates != {event_date})
+                or time.monotonic() - self._last_flush_monotonic >= self.flush_sec
+            ),
         }
 
     def flush(self, *, target_date: str | None = None) -> dict[str, Any]:
-        if not self.enabled or not self._groups:
-            return {
+        with self._publish_lock:
+            with self._lock:
+                dates = {
+                    group.bucket_start.strftime("%Y-%m-%d")
+                    for group in self._groups.values()
+                }
+                work_dates = sorted(dates)
+                if self._pending_batch is not None:
+                    dates.add(self._pending_batch[0])
+                    work_dates.insert(0, self._pending_batch[0])
+                safe_date = _safe_str(target_date)
+                if safe_date and dates and dates != {safe_date}:
+                    raise ValueError(
+                        "producer summary target date does not match pending events"
+                    )
+            result = {
                 "enabled": self.enabled,
                 "mode": self.mode,
                 "status": "no_pending_rows" if self.enabled else "disabled",
                 "flushed_rows": 0,
             }
-        safe_date = _safe_str(target_date)
-        if not safe_date:
-            latest = max(
-                aggregate.last_seen
-                for aggregate in self._groups.values()
-                if aggregate.last_seen is not None
-            )
-            safe_date = latest.strftime("%Y-%m-%d")
+            # Capture dates once, so a continuous stream cannot prevent return.
+            for day in work_dates if self.enabled else []:
+                with self._lock:
+                    if self._pending_batch is None:
+                        keys = [
+                            key
+                            for key, group in self._groups.items()
+                            if group.bucket_start.strftime("%Y-%m-%d") == day
+                        ]
+                        if not keys:
+                            continue
+                        groups = {key: self._groups.pop(key) for key in keys}
+                        lossless = sum(
+                            self._lossless_by_key.pop(key, 0) for key in keys
+                        )
+                        self._pending_batch = (day, groups, lossless)
+                result = self._flush_batch()
+                with self._lock:
+                    self._pending_batch = None
+                    self._last_flush_monotonic = time.monotonic()
+            return result
+
+    def _flush_batch(self) -> dict[str, Any]:
+        safe_date = self._pending_batch[0]
+        started = time.perf_counter()
         self.summary_dir.mkdir(parents=True, exist_ok=True)
         summary_path, manifest_path = producer_summary_paths(
             self.summary_dir, safe_date
         )
+        # Cross-process serialization covers both the append and manifest.
+        # Do not delete this mutex file to recover a worker.
+        with manifest_path.with_suffix(".lock").open("a") as lock_handle:
+            fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            manifest = self._publish(summary_path, manifest_path, safe_date)
+        # Measure through append, close, canonical manifest publication and
+        # mutex release. The separate telemetry receipt's own I/O is excluded.
+        duration_ms = (time.perf_counter() - started) * 1000
+        with self._lock:
+            samples = tuple(self._submit_durations)
+            submit_count = self._submit_count
+            rejected_count = self._rejected_count
+        ordered = sorted(samples)
+        health = {
+            "schema_version": 1,
+            "timing_contract": PRODUCER_TIMING_CONTRACT,
+            "target_date": safe_date,
+            "writer_pid": os.getpid(),
+            "manifest_sha256": producer_manifest_fingerprint(manifest),
+            "last_flush_duration_ms": round(duration_ms, 3),
+            "duration_scope": "summary_and_canonical_manifest_publish_excludes_health_receipt",
+            "submit_sample_window": "last_2048_process_calls",
+            "submit_duration_scope": "summary_submit_only_excludes_raw_writer_and_orders",
+            "submit_sample_count": len(ordered),
+            "submit_count": submit_count,
+            "rejected_summary_count": rejected_count,
+            "submit_p95_ms": round(ordered[math.ceil(len(ordered) * 0.95) - 1], 3)
+            if ordered
+            else None,
+            "submit_p99_ms": round(ordered[math.ceil(len(ordered) * 0.99) - 1], 3)
+            if ordered
+            else None,
+            "submit_max_ms": round(max(ordered), 3) if ordered else None,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        try:
+            # A mode handover can briefly have two compactors in the same PID.
+            # Serialize their receipt writes and never overwrite newer evidence.
+            with manifest_path.with_suffix(".lock").open("a") as health_lock:
+                fcntl.flock(health_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                current = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if producer_manifest_fingerprint(current) == health["manifest_sha256"]:
+                    _write_json(
+                        producer_health_path(self.summary_dir, safe_date, os.getpid()),
+                        health,
+                    )
+        except Exception as exc:
+            # Publication already committed. Never retry its append because
+            # optional telemetry failed; exact hash mismatch reports the gap.
+            self.health_write_error_count += 1
+            logging.getLogger(__name__).warning(
+                "producer timing receipt failed: %s", type(exc).__name__
+            )
+        return {
+            "enabled": True,
+            "mode": self.mode,
+            "status": "ok",
+            **manifest,
+            "last_flush_duration_ms": round(duration_ms, 3),
+        }
+
+    def _publish(
+        self, summary_path: Path, manifest_path: Path, safe_date: str
+    ) -> dict[str, Any]:
         _rehydrate_summary_for_append(summary_path)
-        summary_path.touch(exist_ok=True)
         flushed_rows = 0
         flushed_events = 0
         flush_first_event_at = ""
         flush_last_event_at = ""
-        with summary_path.open("a", encoding="utf-8") as handle:
-            for key in sorted(self._groups):
-                row = self._groups[key].to_row(
-                    target_date=safe_date,
-                    summary_detail_level=DEFAULT_SUMMARY_DETAIL_LEVEL,
+        lines = []
+        groups = self._pending_batch[1]
+        for key in sorted(groups):
+            row = groups[key].to_row(
+                target_date=safe_date,
+                summary_detail_level=PRODUCER_PARITY_DETAIL_LEVEL,
+            )
+            row["schema_version"] = PRODUCER_SUMMARY_SCHEMA_VERSION
+            row["producer_mode"] = self.mode
+            row["source"] = "pipeline_event_logger"
+            lines.append(
+                json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+            )
+            flushed_rows += 1
+            flushed_events += int(row.get("event_count") or 0)
+            first_seen = _safe_str(row.get("first_seen"))
+            last_seen = _safe_str(row.get("last_seen"))
+            if first_seen:
+                flush_first_event_at = (
+                    min(flush_first_event_at, first_seen)
+                    if flush_first_event_at
+                    else first_seen
                 )
-                row["schema_version"] = PRODUCER_SUMMARY_SCHEMA_VERSION
-                row["producer_mode"] = self.mode
-                row["source"] = "pipeline_event_logger"
-                handle.write(
-                    json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
-                )
-                flushed_rows += 1
-                flushed_events += int(row.get("event_count") or 0)
-                first_seen = _safe_str(row.get("first_seen"))
-                last_seen = _safe_str(row.get("last_seen"))
-                if first_seen:
-                    flush_first_event_at = (
-                        min(flush_first_event_at, first_seen)
-                        if flush_first_event_at
-                        else first_seen
-                    )
-                if last_seen:
-                    flush_last_event_at = max(flush_last_event_at, last_seen)
-        existing = _read_json(manifest_path)
+            if last_seen:
+                flush_last_event_at = max(flush_last_event_at, last_seen)
+        existing = (
+            json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest_path.exists()
+            else {}
+        )
+        if not isinstance(existing, dict):
+            raise ValueError("invalid producer manifest")
         previous_rows = int(existing.get("summary_row_count") or 0)
         previous_events = int(existing.get("summary_event_count") or 0)
         existing_first_event_at = _safe_str(existing.get("coverage_first_event_at"))
@@ -1125,23 +1371,42 @@ class ProducerSummaryCompactor:
             "coverage_first_event_at": coverage_first_event_at or None,
             "coverage_last_event_at": coverage_last_event_at or None,
             "mode": self.mode,
+            "requested_mode": self.requested_mode,
+            "summary_detail_level": PRODUCER_PARITY_DETAIL_LEVEL,
+            "identity_contract": IDENTITY_CONTRACT,
+            "timing_contract": PRODUCER_TIMING_CONTRACT,
+            "flush_interval_sec": self.flush_sec,
+            "periodic_flush_enabled": self._worker is not None,
+            "last_writer_pid": os.getpid(),
+            "flush_error_count": self.flush_error_count,
+            "health_write_error_count": self.health_write_error_count,
+            "last_flush_error": self.last_flush_error,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "summary_stages": sorted(PRODUCER_SUMMARY_STAGES),
             "sample_per_bucket": self.sample_per_bucket,
-            "suppressed_count": int(existing.get("suppressed_count") or 0)
-            + self._suppressed_count,
+            "suppressed_count": int(existing.get("suppressed_count") or 0),
             "lossless_preserved_count": int(
                 existing.get("lossless_preserved_count") or 0
             )
-            + self._lossless_preserved_count,
+            + self._pending_batch[2],
             "metric_role": "ops_volume_diagnostic",
             "decision_authority": "diagnostic_aggregation",
             "runtime_effect": False,
-            "raw_suppression_enabled": self.mode == "suppress",
+            "raw_suppression_enabled": False,
         }
-        _write_json(manifest_path, manifest)
-        self._groups.clear()
-        self._suppressed_count = 0
-        self._lossless_preserved_count = 0
-        self._last_flush_monotonic = time.monotonic()
-        return {"enabled": True, "mode": self.mode, "status": "ok", **manifest}
+        serialized = "".join(lines).encode("utf-8")
+        with summary_path.open("a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            initial_size = handle.tell()
+            try:
+                handle.write(serialized)
+                handle.flush()
+                manifest["last_flush_bytes"] = len(serialized)
+                manifest["summary_storage_size_bytes"] = handle.tell()
+                _write_json(manifest_path, manifest)
+            except Exception:
+                # Roll back only this locked append, keeping pending groups for
+                # a bounded retry; never duplicate a partially published batch.
+                handle.truncate(initial_size)
+                raise
+        return manifest

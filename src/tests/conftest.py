@@ -60,6 +60,7 @@ def isolate_module_logs(tmp_path, monkeypatch):
         "S15_CUSTODY_DIR",
         tmp_path / "runtime" / "s15_fast_custody",
     )
+    pipeline_event_logger._flush_producer_summary_at_exit()
     pipeline_event_logger._PRODUCER_COMPACTOR = None
     DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reset()
     # A number of legacy state-handler tests replace these module globals
@@ -75,6 +76,7 @@ def isolate_module_logs(tmp_path, monkeypatch):
 
     yield
 
+    pipeline_event_logger._flush_producer_summary_at_exit()
     pipeline_event_logger._PRODUCER_COMPACTOR = None
     DEFAULT_HOT_PATH_AI_SYMBOL_BUDGET.reset()
     sniper_state_handlers.datetime = _REAL_DATETIME

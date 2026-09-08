@@ -1972,6 +1972,8 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
     "$RAW_SOURCE"
     "$PROJECT_DIR/src/engine/pipeline_event_verbosity_report.py"
     "$PROJECT_DIR/src/engine/pipeline_event_summary.py"
+    "$PROJECT_DIR/src/utils/pipeline_event_logger.py"
+    "$PROJECT_DIR/src/utils/threshold_cycle_registry.py"
   )
   pipeline_producer_summary="$PROJECT_DIR/data/pipeline_event_summaries/pipeline_event_producer_summary_${TARGET_DATE}.jsonl"
   pipeline_producer_summary_gz="${pipeline_producer_summary}.gz"
@@ -1984,8 +1986,14 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
   if [ -s "$pipeline_producer_manifest" ]; then
     pipeline_verbosity_inputs+=("$pipeline_producer_manifest")
   fi
+  for pipeline_producer_health in "$PROJECT_DIR/data/pipeline_event_summaries/pipeline_event_producer_health_${TARGET_DATE}_"*.json; do
+    if [ -s "$pipeline_producer_health" ]; then
+      pipeline_verbosity_inputs+=("$pipeline_producer_health")
+    fi
+  done
   pipeline_verbosity_refresh_decision="run"
-  if [ -s "$pipeline_verbosity_md" ] && json_is_valid "$pipeline_verbosity_json"; then
+  if [ -s "$pipeline_verbosity_md" ] && json_is_valid "$pipeline_verbosity_json" && \
+      env PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE" --check-reusable; then
     pipeline_verbosity_refresh_decision="$(threshold_cycle_ev_refresh_decision \
       "$pipeline_verbosity_json" \
       "$pipeline_verbosity_md" \

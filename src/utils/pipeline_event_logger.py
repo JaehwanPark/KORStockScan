@@ -23,6 +23,7 @@ from src.engine.pipeline_event_summary import (
 )
 
 _WRITE_LOCK = threading.RLock()
+_COMPACTOR_LOCK = threading.RLock()
 _PRODUCER_COMPACTOR: ProducerSummaryCompactor | None = None
 
 _TEXT_INFO_STAGE_KEYWORDS = (
@@ -304,16 +305,24 @@ def _compaction_sample_per_bucket() -> int:
 def _get_producer_compactor() -> ProducerSummaryCompactor | None:
     global _PRODUCER_COMPACTOR
     mode = _compaction_mode()
-    if mode == "off":
-        return None
-    if _PRODUCER_COMPACTOR is None or _PRODUCER_COMPACTOR.mode != mode:
-        _PRODUCER_COMPACTOR = ProducerSummaryCompactor(
-            summary_dir=_summary_dir(),
-            mode=mode,
-            flush_sec=_compaction_flush_sec(),
-            sample_per_bucket=_compaction_sample_per_bucket(),
-        )
-    return _PRODUCER_COMPACTOR
+    with _COMPACTOR_LOCK:
+        if (
+            _PRODUCER_COMPACTOR is not None
+            and _PRODUCER_COMPACTOR.requested_mode != mode
+        ):
+            _PRODUCER_COMPACTOR.close(wait=False)
+            _PRODUCER_COMPACTOR = None
+        if mode == "off":
+            return None
+        if _PRODUCER_COMPACTOR is None:
+            _PRODUCER_COMPACTOR = ProducerSummaryCompactor(
+                summary_dir=_summary_dir(),
+                mode=mode,
+                flush_sec=_compaction_flush_sec(),
+                sample_per_bucket=_compaction_sample_per_bucket(),
+                auto_flush=True,
+            )
+        return _PRODUCER_COMPACTOR
 
 
 def flush_pipeline_event_producer_summary(target_date: str | None = None) -> dict:
@@ -324,7 +333,8 @@ def flush_pipeline_event_producer_summary(target_date: str | None = None) -> dic
 
 def _flush_producer_summary_at_exit() -> None:
     try:
-        flush_pipeline_event_producer_summary()
+        if _PRODUCER_COMPACTOR is not None:
+            _PRODUCER_COMPACTOR.close()
     except Exception as exc:
         log_error(f"[PIPELINE_EVENT] producer summary atexit flush failed: {exc}")
 
@@ -666,8 +676,8 @@ def emit_pipeline_event(
     """Emit legacy text plus a structured event and return persistence outcome.
 
     ``structured_append_succeeded`` means the lossless raw JSONL row reached
-    its physical append boundary.  JSONL-disabled and compaction-suppressed
-    calls return distinct non-success statuses; call-local outcome fields are
+    its physical append boundary. JSONL-disabled calls return a non-success
+    status; summary failure cannot suppress raw. Call-local outcome fields are
     not embedded back into the canonical event row.
     """
     safe_pipeline = str(pipeline or "").strip() or "PIPELINE"
@@ -762,29 +772,22 @@ def emit_pipeline_event(
             + "\n"
         )
 
-    compaction_result = {"suppress_raw": False}
     raw_append_attempted = False
     raw_append_succeeded = False
     compact_append_attempted = False
     compact_append_succeeded = compact_line is None
     compaction_suppressed = False
     append_error: Exception | None = None
+    summary_error: Exception | None = None
     try:
         with _WRITE_LOCK:
-            compactor = _get_producer_compactor()
-            if compactor is not None:
-                compaction_result = compactor.submit(
-                    event_payload, threshold_family=threshold_family
-                )
-            compaction_suppressed = bool(compaction_result.get("suppress_raw"))
-            if not compaction_suppressed:
-                raw_append_attempted = True
-                _append_pipeline_event_jsonl(
-                    _event_path(storage_partition_date),
-                    raw_line,
-                    late_partition=storage_partition_date != emitted_date,
-                )
-                raw_append_succeeded = True
+            raw_append_attempted = True
+            _append_pipeline_event_jsonl(
+                _event_path(storage_partition_date),
+                raw_line,
+                late_partition=storage_partition_date != emitted_date,
+            )
+            raw_append_succeeded = True
             if compact_line is not None:
                 compact_append_attempted = True
                 _append_jsonl(
@@ -796,10 +799,23 @@ def emit_pipeline_event(
         append_error = exc
         log_error(f"[PIPELINE_EVENT] structured append failed: {exc}")
 
+    # Diagnostic failure must never prevent raw or threshold-companion writes.
+    # Its disk flush also must not hold the raw writer's process-wide lock.
+    if raw_append_succeeded:
+        try:
+            compactor = _get_producer_compactor()
+            if compactor is not None:
+                compactor.submit(event_payload, threshold_family=threshold_family)
+        except Exception as exc:
+            summary_error = exc
+            log_error(f"[PIPELINE_EVENT] producer summary failed; raw preserved: {exc}")
+
     if raw_append_succeeded:
         append_status = (
             "raw_appended" if append_error is None else "raw_appended_companion_failed"
         )
+        if summary_error is not None and append_error is None:
+            append_status = "raw_appended_summary_failed"
     elif compaction_suppressed:
         append_status = (
             "raw_suppressed_by_compaction"
@@ -822,6 +838,9 @@ def emit_pipeline_event(
             "structured_append_status": append_status,
             "structured_append_error_type": (
                 type(append_error).__name__ if append_error is not None else None
+            ),
+            "structured_summary_error_type": (
+                type(summary_error).__name__ if summary_error else None
             ),
         }
     )

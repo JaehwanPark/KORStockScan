@@ -186,7 +186,7 @@
 | 70 | Swing pattern automation | swing pattern handoff | swing 후보 변환 | swing 자동화 | OFF | 현재 불필요 지정 유지 | 없음 |
 | 71 | Pattern currentness audit | pattern freshness 검사 | stale 승격 차단 | 낡은 가설 사용 방지 | ON, trigger-gated | 상세검토 대기 | E2 |
 | 72 | Pattern AI review | pattern 후보 AI 검토 | 구현가능 항목 분리 | 무의미한 후보 축소 | ON | 상세검토 대기 | E2 |
-| 73 | Pipeline verbosity | 중복·과다 event 분석 | producer별 비용 측정 | 저장량·runtime 절감 | ON, freshness reuse | 상세검토 대기 | E2 |
+| 73 | Pipeline verbosity | 원본 증거를 보존한 중복·과다 event 진단 | 원본/요약 장애 격리·exact hash 대사·실제 절감 대상 구분 | 경량 요약과 호출 경로의 disk 대기 제거; 실제 봇 지연·순이익 효과는 별도 검증 | ON, exact-date terminal freshness reuse; raw suppression 비활성 | [9/8 보완 리뷰](2026-09-08-pipeline-verbosity-remediation-review.md); 분리 잠금·주기 결속 timeout·hash-bound timing receipt 보완. `PipelineVerbosityNaturalEvidence0908`의 새 PID/자연 소비는 별도 | E2; producer manifest별 기록 mutex 및 분리 publish lock, operator policy lock 아님 |
 | 74 | Source-quality final audit | #11과 동일 producer의 최종 원천 재검사 | EV/PREOPEN/최종 verifier 공통 날짜·승인·generation 검증 및 결함 행 격리 | 잘못된 승인과 verifier 불일치 차단, 정상 입력 보존 | ON, trigger-gated; 공통 품질 gate | [9/8 보완 리뷰](2026-09-08-ws-freshness-source-quality-remediation-review.md); 2차 보완, 자연 v2 소비 별도 | E2 |
 | 75 | Entry split order plan | 최초진입 분할 정책 | 1·2차 가격·타이밍 후보 생성 | 체결률/slippage 개선 | ON | 상세검토 대기 | E2; operator lock 없음 |
 | 76 | AI decision-quality materialization | trace/outcome/replay 입력 준비 | exact cohort 생성 | prompt EV 측정 | ON; 자기해시·부분 성공 학습 계약 | 기존 self-hash/부분 성공 검토 유지; 9/7 source 복구에서 6단계 성공, CF custody 오분류 제거. 원본 결손과 provider 평가·경제성은 별도 | 코드 검증과 자연 산출물 증거 분리 |

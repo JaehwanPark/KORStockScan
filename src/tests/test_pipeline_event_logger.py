@@ -12,7 +12,65 @@ from src.utils import pipeline_event_logger as logger_mod
 
 
 def _reset_logger_state(monkeypatch):
+    logger_mod._flush_producer_summary_at_exit()
     monkeypatch.setattr(logger_mod, "_PRODUCER_COMPACTOR", None)
+
+
+@pytest.mark.parametrize("failure", ["construct", "submit"])
+def test_summary_failure_never_prevents_raw_or_threshold_companion(
+    monkeypatch, tmp_path, failure
+):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        logger_mod, "TRADING_RULES", SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True)
+    )
+    monkeypatch.setattr(logger_mod, "log_error", Mock())
+    compactor = Mock()
+    compactor.submit.side_effect = OSError("summary unavailable")
+    getter = (
+        Mock(side_effect=OSError("summary unavailable"))
+        if failure == "construct"
+        else Mock(return_value=compactor)
+    )
+    monkeypatch.setattr(logger_mod, "_get_producer_compactor", getter)
+    result = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "TEST",
+        "005930",
+        "blocked_strength_momentum",
+        record_id=73,
+        fields={"threshold_family": "strength_momentum"},
+    )
+    assert result["structured_raw_append_attempted"] is True
+    assert result["structured_append_succeeded"] is True
+    assert result["structured_compact_append_succeeded"] is True
+    assert result["structured_append_status"] == "raw_appended_summary_failed"
+    assert result["structured_summary_error_type"] == "OSError"
+    assert len(list((tmp_path / "pipeline_events").glob("*.jsonl"))) == 1
+    assert len(list((tmp_path / "threshold_cycle").glob("*.jsonl"))) == 1
+
+
+def test_failed_raw_append_does_not_create_summary_evidence(monkeypatch):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(
+        logger_mod, "TRADING_RULES", SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True)
+    )
+    getter = Mock()
+    monkeypatch.setattr(logger_mod, "_get_producer_compactor", getter)
+    monkeypatch.setattr(
+        logger_mod,
+        "_append_pipeline_event_jsonl",
+        Mock(side_effect=OSError("raw unavailable")),
+    )
+    monkeypatch.setattr(logger_mod, "log_error", Mock())
+    result = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE", "TEST", "005930", "blocked_strength_momentum"
+    )
+    assert result["structured_append_succeeded"] is False
+    getter.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -819,8 +877,8 @@ def test_emit_pipeline_event_shadow_compaction_keeps_raw_and_writes_producer_sum
     assert manifest["mode"] == "shadow"
     assert manifest["raw_suppression_enabled"] is False
     assert manifest["sample_per_bucket"] == 6
-    assert manifest["coverage_first_event_at"] == payload["emitted_at"][:19]
-    assert manifest["coverage_last_event_at"] == payload["emitted_at"][:19]
+    assert manifest["coverage_first_event_at"] == payload["emitted_at"]
+    assert manifest["coverage_last_event_at"] == payload["emitted_at"]
 
 
 def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
@@ -886,13 +944,10 @@ def test_shadow_compaction_aggregates_identical_high_volume_observation_state(
     assert len(summary_rows) == 1
     assert summary_rows[0]["stage"] == "scalping_scanner_fast_precheck"
     assert summary_rows[0]["event_count"] == 4
-    assert summary_rows[0]["sample_raw_offsets"] == [1, 4]
-    assert (
-        summary_rows[0]["sample_events"][0]["fields"]["summary_field_projection"]
-        == "high_volume_diagnostic_v1"
-    )
-    assert "fast_precheck_result" in summary_rows[0]["field_presence_counts"]
-    assert "source_quality_gate" in summary_rows[0]["field_presence_counts"]
+    assert summary_rows[0]["summary_detail_level"] == "counts_identity_v2"
+    assert len(summary_rows[0]["evidence_hash_sum"]) == 64
+    assert "sample_events" not in summary_rows[0]
+    assert "field_presence_counts" not in summary_rows[0]
 
     manifest_path = (
         tmp_path
@@ -996,10 +1051,10 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
     )
     logger_mod.flush_pipeline_event_producer_summary(preserved["emitted_date"])
 
-    assert suppressed["structured_append_succeeded"] is False
-    assert suppressed["structured_raw_append_attempted"] is False
-    assert suppressed["structured_compaction_suppressed"] is True
-    assert suppressed["structured_append_status"] == "raw_suppressed_by_compaction"
+    assert suppressed["structured_append_succeeded"] is True
+    assert suppressed["structured_raw_append_attempted"] is True
+    assert suppressed["structured_compaction_suppressed"] is False
+    assert suppressed["structured_append_status"] == "raw_appended"
     assert preserved["structured_append_succeeded"] is True
     assert preserved["structured_append_status"] == "raw_appended"
 
@@ -1013,7 +1068,7 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
         for line in raw_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert [row["record_id"] for row in raw_rows] == [2]
+    assert [row["record_id"] for row in raw_rows] == [1, 2]
     summary_path = (
         tmp_path
         / "pipeline_event_summaries"
@@ -1031,8 +1086,10 @@ def test_emit_pipeline_event_suppress_mode_preserves_lossless_allowlist(
         / f"pipeline_event_producer_summary_manifest_{preserved['emitted_date']}.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["raw_suppression_enabled"] is True
-    assert manifest["suppressed_count"] == 1
+    assert manifest["raw_suppression_enabled"] is False
+    assert manifest["requested_mode"] == "suppress"
+    assert manifest["mode"] == "shadow"
+    assert manifest["suppressed_count"] == 0
     assert manifest["lossless_preserved_count"] == 1
 
 
@@ -1085,7 +1142,7 @@ def test_suppress_mode_preserves_high_volume_source_quality_observation(
         / f"pipeline_event_producer_summary_manifest_{payload['emitted_date']}.json"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["raw_suppression_enabled"] is True
+    assert manifest["raw_suppression_enabled"] is False
     assert manifest["suppressed_count"] == 0
     assert manifest["lossless_preserved_count"] == 1
 

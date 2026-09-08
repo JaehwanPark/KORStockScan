@@ -4028,12 +4028,13 @@ def _pipeline_event_verbosity_followup_orders(
         "lifecycle_stage": "ops_volume_diagnostic",
         "target_subsystem": "runtime_instrumentation",
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "route": "instrumentation_order",
         "confidence": "consensus",
         "expected_ev_effect": "none_direct_ops_cpu_io_reduction_only",
         "next_postclose_metric": "pipeline_event_verbosity.parity.ok",
     }
-    if recommended in {"open_shadow_order", "block_suppress_and_fix_shadow"}:
+    if recommended in {"open_shadow_order", "block_suppress_and_fix_shadow", "repair_source_contract"}:
         return [
             {
                 **base,
@@ -4052,25 +4053,8 @@ def _pipeline_event_verbosity_followup_orders(
                 ],
             }
         ]
-    if recommended == "open_suppress_guard_order":
-        return [
-            {
-                **base,
-                "order_id": "order_pipeline_event_compaction_v2_suppress_guard",
-                "title": "Pipeline event compaction V2 suppress guard",
-                "priority": 2,
-                "intent": "Design default-off suppress guard after repeated shadow parity pass; do not enable suppression automatically.",
-                "evidence": evidence,
-                "files_likely_touched": [
-                    "src/utils/pipeline_event_logger.py",
-                    "src/engine/pipeline_event_verbosity_report.py",
-                    "docs/time-based-operations-runbook.md",
-                ],
-                "acceptance_tests": [
-                    "pytest src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py",
-                ],
-            }
-        ]
+    # Historical suppress-candidate artifacts cannot reopen the unreviewed
+    # raw-discard path. Current work is source repair and lightweight summaries.
     return []
 
 

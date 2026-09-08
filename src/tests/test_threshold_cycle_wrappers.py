@@ -639,6 +639,10 @@ def test_postclose_large_reports_use_compact_stdout_and_verified_refresh():
     assert '"$PROJECT_DIR/src/engine/pipeline_event_summary.py"' in script
     assert '"$PROJECT_DIR/src/engine/pipeline_event_verbosity_report.py"' in script
     assert 'json_is_valid "$pipeline_verbosity_json"' in script
+    assert 'src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE" --check-reusable' in script
+    assert 'pipeline_event_producer_health_${TARGET_DATE}_' in script
+    assert 'pipeline_verbosity_inputs+=("$pipeline_producer_health")' in script
+    assert '"$PROJECT_DIR/src/utils/pipeline_event_logger.py"' in script
     assert (
         'skip_triggered_step "pipeline_event_verbosity" "verified_artifacts_fresher_than_inputs"'
         in script
