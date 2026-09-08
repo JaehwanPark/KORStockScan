@@ -18,6 +18,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import math
 import sys
 from collections import defaultdict
 from collections.abc import Iterable, Iterator
@@ -282,6 +283,8 @@ def _parse_trade_review(data: dict[str, Any], server: str) -> list[dict]:
             status == "COMPLETED"
             and profit_rate is not None
             and isinstance(profit_rate, (int, float))
+            and not isinstance(profit_rate, bool)
+            and math.isfinite(profit_rate)
         )
         exit_signal = t.get("exit_signal") or {}
         exit_rule = exit_signal.get("exit_rule") or ""
@@ -307,6 +310,7 @@ def _parse_trade_review(data: dict[str, Any], server: str) -> list[dict]:
                 "status": status,
                 "profit_rate": profit_rate if profit_valid else None,
                 "profit_valid_flag": profit_valid,
+                "profit_basis": "display_snapshot_unverified_not_for_economic_approval",
                 "holding_started_count": holding_started_count,
                 "rec_date": t.get("rec_date", ""),
             }
@@ -342,9 +346,7 @@ def build_trade_fact() -> pd.DataFrame:
         return df
 
     # cohort 컬럼 초기화 (sequence_fact join 후 갱신)
-    df["cohort"] = df["entry_mode"].apply(
-        lambda m: "full_fill" if m == "normal" else "partial_fill"
-    )
+    df["cohort"] = "unknown_fill"
     df.to_csv(OUTPUT_DIR / "trade_fact.csv", index=False, encoding="utf-8")
     print(
         f"  → trade_fact: {len(df)} rows, {parse_errors} parse errors, "
@@ -364,7 +366,7 @@ def _parse_performance_tuning(
 
     row: dict[str, Any] = {"server": server, "date": date_str}
     for col, src_key in FUNNEL_METRIC_MAP.items():
-        row[col] = metrics.get(src_key, 0) or 0
+        row[col] = metrics.get(src_key)
 
     return row
 
@@ -384,6 +386,9 @@ def build_funnel_fact() -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         print("  [WARN] funnel_fact is empty")
+        pd.DataFrame(columns=["server", "date", *FUNNEL_METRIC_MAP]).to_csv(
+            OUTPUT_DIR / "funnel_fact.csv", index=False, encoding="utf-8"
+        )
         return df
     df.to_csv(OUTPUT_DIR / "funnel_fact.csv", index=False, encoding="utf-8")
     print(f"  → funnel_fact: {len(df)} rows, source={dict(source_count)}")
@@ -536,6 +541,11 @@ def _stream_sequence_events(
                 "rebase_integrity_flag": rebase_integrity_flag,
                 "same_ts_multi_rebase_flag": same_ts_multi_rebase,
                 "same_symbol_repeat_flag": same_symbol_repeat_flag,
+                "observed_full_fill": any(
+                    r.get("fill_quality", "").upper() == "FULL_FILL"
+                    for r in rebase_events
+                ),
+                "observed_partial_fill": had_partial,
             }
         )
     return rows
@@ -577,6 +587,9 @@ def build_sequence_fact() -> tuple[pd.DataFrame, dict[str, Any]]:
     }
     if df.empty:
         print("  [WARN] sequence_fact is empty")
+        pd.DataFrame(columns=["trade_id", "date", "symbol"]).to_csv(
+            OUTPUT_DIR / "sequence_fact.csv", index=False, encoding="utf-8"
+        )
         return df, source_meta
     df.to_csv(OUTPUT_DIR / "sequence_fact.csv", index=False, encoding="utf-8")
     print(f"  → sequence_fact: {len(df)} rows, source={dict(source_count)}")
@@ -590,7 +603,12 @@ def enrich_trade_cohort(
     trade_df: pd.DataFrame,
     seq_df: pd.DataFrame,
 ) -> pd.DataFrame:
-    if trade_df.empty or seq_df.empty or "trade_id" not in seq_df.columns:
+    if (
+        trade_df.empty
+        or seq_df.empty
+        or not {"trade_id", "date"} <= set(seq_df.columns)
+        or not {"trade_id", "rec_date"} <= set(trade_df.columns)
+    ):
         return trade_df
 
     # sequence_fact에서 split-entry 판정용 컬럼만 추출
@@ -601,21 +619,37 @@ def enrich_trade_cohort(
         "rebase_integrity_flag",
         "same_symbol_repeat_flag",
         "rebase_count",
+        "observed_full_fill",
+        "observed_partial_fill",
+        "date",
     ]
     seq_key = seq_df[[col for col in seq_join_cols if col in seq_df.columns]].copy()
-    seq_key = seq_key.rename(columns={"trade_id": "trade_id"})
-    # trade_id 기준 중복 제거 (마지막 우선)
-    seq_key = seq_key.drop_duplicates(subset="trade_id", keep="last")
-
-    merged = trade_df.merge(seq_key, on="trade_id", how="left")
+    trade_df = trade_df.copy()
+    for frame in (trade_df, seq_key):
+        frame["trade_id"] = (
+            frame["trade_id"]
+            .astype("string")
+            .str.strip()
+            .str.replace(r"\.0$", "", regex=True)
+        )
+    keys = ["trade_id", "rec_date"]
+    seq_key = seq_key.rename(columns={"date": "rec_date"})
+    # Missing keys must not match each other through pandas' null-equals-null join.
+    seq_key = seq_key.dropna(subset=keys)
+    seq_key = seq_key[seq_key["trade_id"].ne("") & seq_key["rec_date"].ne("")]
+    seq_key = seq_key.drop_duplicates(subset=keys, keep=False)
+    trade_df = trade_df.drop(
+        columns=[c for c in seq_key if c in trade_df and c not in keys]
+    )
+    merged = trade_df.merge(seq_key, on=keys, how="left", validate="many_to_one")
 
     # cohort 재분류
     def classify(row: pd.Series) -> str:
-        if pd.notna(row.get("multi_rebase_flag")) and row["multi_rebase_flag"]:
-            return "split-entry"
-        if row.get("entry_mode") == "fallback":
+        if str(row.get("observed_partial_fill")).lower() == "true":
             return "partial_fill"
-        return "full_fill"
+        if str(row.get("observed_full_fill")).lower() == "true":
+            return "full_fill"
+        return "unknown_fill"
 
     merged["cohort"] = merged.apply(classify, axis=1)
     # suffix 컬럼 정리
@@ -760,7 +794,9 @@ def build_quality_report(
         lines.append(f"- `same_ts_multi_rebase_flag`: {same_ts}건")
 
     lines += ["", "---", "", "## 4. 서버별 파싱 메모", ""]
-    lines.append("- 원격 서버 스냅샷은 본 분석에서 local(main) 기준으로 집계됨.")
+    lines.append(
+        "- local 스냅샷만 사용. 표시용 손익률은 비용/체결 품질 승인 근거가 아님; 검증된 lifecycle 경제성은 별도 집계."
+    )
 
     report_path = OUTPUT_DIR / "data_quality_report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -790,6 +826,11 @@ def write_source_manifest(source_meta: dict[str, Any]) -> None:
 
     manifest = {
         "run_at": datetime.now().isoformat(),
+        "target_date": ANALYSIS_END.isoformat(),
+        "analysis_start": ANALYSIS_START.isoformat(),
+        "analysis_end": ANALYSIS_END.isoformat(),
+        "expected_dates": sorted(expected_date_set),
+        "covered_dates": sorted(expected_date_set & covered_date_set),
         "use_duckdb_primary": bool(USE_DUCKDB_PRIMARY),
         "data_source_mode": data_source_mode,
         "history_coverage_start": covered_dates[0] if covered_dates else None,

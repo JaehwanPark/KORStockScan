@@ -14,16 +14,18 @@ def _env_date(name: str, default: date) -> date:
         return default
     try:
         return date.fromisoformat(raw)
-    except ValueError:
-        return default
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an ISO calendar date: {raw}") from exc
 
 
 # ── 프로젝트 루트 ──────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ── 분석 기간 ──────────────────────────────────────────────────────────────────
-ANALYSIS_START = _env_date("ANALYSIS_START_DATE", date(2026, 4, 20))
-ANALYSIS_END = _env_date("ANALYSIS_END_DATE", date(2026, 4, 20))
+ANALYSIS_START = max(
+    _env_date("ANALYSIS_START_DATE", date(2026, 6, 5)), date(2026, 6, 5)
+)
+ANALYSIS_END = _env_date("ANALYSIS_END_DATE", date.today())
 
 # ── 입력 경로 ──────────────────────────────────────────────────────────────────
 SNAPSHOT_DIR = PROJECT_ROOT / "data" / "report" / "monitor_snapshots"
@@ -34,7 +36,7 @@ REMOTE_SNAPSHOT_DIR = PROJECT_ROOT / "tmp"
 
 # ── 출력 경로 ──────────────────────────────────────────────────────────────────
 LAB_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = LAB_DIR / "outputs"
+OUTPUT_DIR = Path(os.getenv("PATTERN_LAB_OUTPUT_DIR") or LAB_DIR / "outputs")
 
 # ── 서버 레이블 ────────────────────────────────────────────────────────────────
 SERVER_LOCAL = "local"

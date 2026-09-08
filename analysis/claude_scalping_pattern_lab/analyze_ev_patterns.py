@@ -20,36 +20,36 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import numpy as np
+from analysis.claude_scalping_pattern_lab import config
+from analysis.claude_scalping_pattern_lab.economic_evidence import (
+    build_evidence,
+    finite,
+    profit_followups,
+    trading_dates,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from .config import (
         MIN_VALID_PROFIT_SAMPLES,
         OUTPUT_DIR,
-        SERVER_LOCAL,
-        SOFT_STOP_RULES,
         TOP_N_PATTERNS,
-        TRAILING_TP_RULES,
     )
 except ImportError:  # pragma: no cover - direct script execution
     from config import (
         MIN_VALID_PROFIT_SAMPLES,
         OUTPUT_DIR,
-        SERVER_LOCAL,
-        SOFT_STOP_RULES,
         TOP_N_PATTERNS,
-        TRAILING_TP_RULES,
     )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 METRIC_CONTRACT = {
     "metric_role": "primary_ev",
-    "decision_authority": "main_only_completed",
-    "window_policy": "rolling_10d_with_daily_guard",
-    "sample_floor": MIN_VALID_PROFIT_SAMPLES,
-    "primary_decision_metric": "equal_weight_avg_profit_pct",
-    "source_quality_gate": "COMPLETED + numeric profit_rate only; full/partial/split cohorts separated",
+    "decision_authority": "pattern_lab_source_only_existing_strategy_handoff",
+    "window_policy": "daily_rolling_10_trading_days_cumulative_separate",
+    "sample_floor": 0,
+    "primary_decision_metric": "notional_weighted_ev_pct",
+    "source_quality_gate": "self_hashed_main_lifecycle_real_terminal_reconciled_costs; snapshot_metrics_diagnostic_only",
     "forbidden_uses": [
         "runtime_threshold_apply_without_deterministic_guard",
         "broker_order_enable",
@@ -110,6 +110,8 @@ def valid_trades(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     mask = df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+    mask &= df["profit_rate"].map(lambda v: finite(v) is not None)
+    mask &= df["status"].eq("COMPLETED")
     return df[mask].copy()
 
 
@@ -163,7 +165,11 @@ def extract_loss_patterns(df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
 
     # sequence_fact join
     seq_df = _normalize_trade_id(seq_df)
-    if not seq_df.empty and "trade_id" in seq_df.columns:
+    if (
+        not seq_df.empty
+        and {"trade_id", "date"} <= set(seq_df.columns)
+        and "rec_date" in loss_df
+    ):
         loss_df["trade_id"] = loss_df["trade_id"].astype("string").str.strip()
         flag_cols = [
             "multi_rebase_flag",
@@ -171,10 +177,24 @@ def extract_loss_patterns(df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
             "rebase_integrity_flag",
             "same_symbol_repeat_flag",
         ]
-        seq_cols = ["trade_id", *[col for col in flag_cols if col in seq_df.columns]]
-        seq_flags = seq_df[seq_cols].drop_duplicates("trade_id")
+        keys = ["trade_id", "rec_date"]
+        seq_cols = ["trade_id", "date", *[c for c in flag_cols if c in seq_df]]
+        seq_flags = seq_df[seq_cols].rename(columns={"date": "rec_date"})
         seq_flags["trade_id"] = seq_flags["trade_id"].astype("string").str.strip()
-        loss_df = loss_df.merge(seq_flags, on="trade_id", how="left")
+        seq_flags = seq_flags.dropna(subset=keys)
+        seq_flags = seq_flags[
+            seq_flags["trade_id"].ne("") & seq_flags["rec_date"].ne("")
+        ].drop_duplicates(keys, keep=False)
+        # Prepared fields own date-bound flags. Only supplement absent fields
+        # with exact-date unique evidence; never use an ID-only fallback.
+        missing_cols = [c for c in flag_cols if c in seq_flags and c not in loss_df]
+        if missing_cols:
+            loss_df = loss_df.merge(
+                seq_flags[[*keys, *missing_cols]],
+                on=keys,
+                how="left",
+                validate="many_to_one",
+            )
         for col in flag_cols:
             if col in loss_df.columns:
                 loss_df[col] = loss_df[col].fillna(False)
@@ -281,23 +301,40 @@ def decompose_opportunity_cost(funnel_df: pd.DataFrame) -> list[dict]:
     ]:
         if col not in funnel_df.columns:
             continue
-        total = int(funnel_df[col].sum())
-        submitted = (
-            int(funnel_df["submitted_events"].sum())
+        values = funnel_df[col].map(finite)
+        values = pd.to_numeric(values, errors="coerce")
+        values = values.where(values >= 0)
+        if not values.notna().any():
+            continue
+        total = int(values.sum())
+        submitted_values = (
+            pd.to_numeric(funnel_df["submitted_events"].map(finite), errors="coerce")
             if "submitted_events" in funnel_df
-            else 1
+            else pd.Series(dtype=float)
         )
+        submitted_known = (
+            len(submitted_values) == len(values)
+            and submitted_values.notna().all()
+            and values.notna().all()
+            and (submitted_values >= 0).all()
+        )
+        submitted = int(submitted_values.sum()) if submitted_known else 0
         block_ratio = (
-            round(total / (total + submitted) * 100, 1)
-            if (total + submitted) > 0
-            else 0.0
+            None
+            if not submitted_known
+            else (
+                round(total / (total + submitted) * 100, 1)
+                if (total + submitted) > 0
+                else 0.0
+            )
         )
         result.append(
             {
                 "blocker": blocker,
                 "total_blocked": total,
                 "block_ratio": block_ratio,
-                "days": int(funnel_df[col].notna().sum()),
+                "days": int(values.notna().sum()),
+                "metric_role": "funnel_count_not_missed_ev",
             }
         )
 
@@ -312,41 +349,25 @@ _EV_TEMPLATES: dict[str, dict] = {
         "title": "split-entry rebase 수량 정합성 report-only 감사",
         "기대효과": "rebase quantity 이상(cum_gt_requested / same_ts_multi_rebase) 케이스를 분리해 실제 경제 손실과 이벤트 복원 오류를 혼합하지 않게 함",
         "리스크": "false-positive 제거 전 손절 임계값 튜닝 시 결론 왜곡 가능",
-        "필요표본": "rebase_integrity_flag 케이스 20건 이상",
+        "필요표본": "재현 가능한 결함 증거; 경제성/승격 표본 floor 없음",
         "검증지표": "cum_filled_qty > requested_qty 비율, same_ts_multi_rebase_count 분포",
         "적용단계": "report_only_observation",
     },
-    "partial_expand_immediate_recheck": {
-        "title": "partial → fallback 확대 직후 즉시 재평가 report-only",
-        "기대효과": "나쁜 포지션 확대(확대 직후 peak_profit < 0) 코호트 조기 감지",
-        "리스크": "정상 확대 패턴도 일부 차단 가능. report-only 관찰 선행 필수",
-        "필요표본": "partial_then_expand 코호트 30건 이상",
-        "검증지표": "확대 후 90초 내 held_sec soft stop 비율 감소 여부",
-        "적용단계": "report_only_observation",
-    },
     "same_symbol_cooldown": {
-        "title": "동일 종목 split-entry soft-stop 재진입 cooldown report-only",
-        "기대효과": "같은 날 동일 종목 반복 손절 누수 차단",
-        "리스크": "cooldown 중 missed upside 발생 가능 — 차단 건수와 missed upside를 함께 추적해야 함",
-        "필요표본": "same_symbol_repeat_flag 케이스 10건 이상",
-        "검증지표": "same-symbol repeat soft stop 건수, cooldown 차단 후 10분 missed upside",
+        "title": "same-symbol repeat source attribution",
+        "기대효과": "반복 거래의 수익과 손실을 함께 분리해 원인 관찰",
+        "리스크": "반복 횟수만으로 cooldown 또는 매수 차단 불가",
+        "필요표본": "재현 가능한 identity/sequence 증거; 별도 승격 floor 없음",
+        "검증지표": "same_symbol_repeat_flag count; exact lifecycle net economics",
         "적용단계": "report_only_observation",
     },
     "partial_only_timeout": {
-        "title": "partial-only 표류 전용 timeout report-only",
-        "기대효과": "1주 partial만 남긴 채 장시간 표류하는 케이스 조기 정리",
-        "리스크": "full fill 전 짧은 대기 케이스를 오분류할 수 있음",
-        "필요표본": "partial-only 코호트 20건 이상",
-        "검증지표": "partial-only held_sec 중앙값, timeout 이후 실현손익 분포",
+        "title": "partial fill quality source attribution",
+        "기대효과": "partial/full 품질을 분리해 수익률 착시 방지",
+        "리스크": "관찰만으로 timeout/수량/진입조건 변경 불가",
+        "필요표본": "재현 가능한 fill identity 증거; 별도 승격 floor 없음",
+        "검증지표": "partial_then_expand_flag count; exact partial/full net economics",
         "적용단계": "report_only_observation",
-    },
-    "latency_canary_tag_expansion": {
-        "title": "latency canary tag 완화 1축 canary 승인",
-        "기대효과": "tag_not_allowed blocker 감소로 진입 기회 확대",
-        "리스크": "bugfix-only 실표본 관찰 전 추가 완화는 해석 가능성 저하",
-        "필요표본": "bugfix-only canary_applied 건수 50건 이상 (현재 19건)",
-        "검증지표": "latency_canary_applied 증가, low_signal / tag_not_allowed 감소",
-        "적용단계": "canary_only_candidate_after_workorder",
     },
 }
 
@@ -356,6 +377,7 @@ def build_ev_backlog(
     profit_patterns: list[dict],
     opp_cost: list[dict],
     seq_df: pd.DataFrame,
+    economics: dict | None = None,
 ) -> list[dict]:
     backlog: list[dict] = []
 
@@ -370,25 +392,24 @@ def build_ev_backlog(
             if flag in seq_df.columns:
                 flag_counts[flag] = int(seq_df[flag].sum())
 
-    if flag_counts.get("rebase_integrity_flag", 0) > 0:
-        backlog.append(_EV_TEMPLATES["split_entry_rebase_integrity"])
-    if flag_counts.get("partial_then_expand_flag", 0) > 0:
-        backlog.append(_EV_TEMPLATES["partial_expand_immediate_recheck"])
-    if flag_counts.get("same_symbol_repeat_flag", 0) > 0:
-        backlog.append(_EV_TEMPLATES["same_symbol_cooldown"])
-
-    # 손실 패턴 기반 추가
-    for lp in loss_patterns:
-        if lp.get("exit_rule") in SOFT_STOP_RULES and lp.get("cohort") == "split-entry":
-            if _EV_TEMPLATES["partial_only_timeout"] not in backlog:
-                backlog.append(_EV_TEMPLATES["partial_only_timeout"])
-            break
-
-    # 기회비용 기반 추가
-    for oc in opp_cost:
-        if oc["blocker"] == "latency guard miss" and oc["total_blocked"] > 3000:
-            backlog.append(_EV_TEMPLATES["latency_canary_tag_expansion"])
-            break
+    for flag, key in (
+        ("rebase_integrity_flag", "split_entry_rebase_integrity"),
+        ("partial_then_expand_flag", "partial_only_timeout"),
+        ("same_symbol_repeat_flag", "same_symbol_cooldown"),
+    ):
+        if flag_counts.get(flag, 0) > 0:
+            backlog.append(
+                {
+                    **_EV_TEMPLATES[key],
+                    "diagnostic_source": {"field": flag, "count": flag_counts[flag]},
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+            )
+    # Display profit_patterns are intentionally not approval evidence. The
+    # exact-cost all-outcome cohort (including losses) owns economic followups.
+    if economics:
+        backlog.extend(profit_followups(economics))
 
     return backlog
 
@@ -409,11 +430,11 @@ def write_ev_backlog_md(backlog: list[dict]) -> None:
         lines += [
             f"## {i}. {item['title']}",
             "",
-            f"- **기대효과**: {item['기대효과']}",
-            f"- **리스크**: {item['리스크']}",
-            f"- **필요 표본**: {item['필요표본']}",
-            f"- **검증 지표**: {item['검증지표']}",
-            f"- **적용 단계**: `{item['적용단계']}`",
+            f"- **기대효과**: {item.get('기대효과', item.get('expected_effect'))}",
+            f"- **리스크**: {item.get('리스크', item.get('risk'))}",
+            f"- **필요 표본**: {item.get('필요표본', item.get('required_sample'))}",
+            f"- **검증 지표**: {item.get('검증지표', item.get('metric'))}",
+            f"- **적용 단계**: `{item.get('적용단계', item.get('apply_stage'))}`",
             "",
         ]
 
@@ -428,6 +449,32 @@ def write_ev_backlog_md(backlog: list[dict]) -> None:
 def main() -> dict:
     print("[analyze] loading datasets …")
     trade_df, funnel_df, seq_df = load_datasets()
+    target = config.ANALYSIS_END.isoformat()
+    expected = trading_dates(config.ANALYSIS_START, config.ANALYSIS_END)
+    source_path = OUTPUT_DIR / "source_manifest.json"
+    source = json.loads(source_path.read_text()) if source_path.exists() else {}
+    covered = sorted(set(source.get("covered_dates") or []) & set(expected))
+    if source.get("target_date") != target:
+        covered = []
+    for frame, column in (
+        (trade_df, "rec_date"),
+        (funnel_df, "date"),
+        (seq_df, "date"),
+    ):
+        if not frame.empty:
+            frame.drop(
+                (
+                    frame.index[~frame[column].isin(covered)]
+                    if column in frame
+                    else frame.index
+                ),
+                inplace=True,
+            )
+    economics = build_evidence(
+        config.PROJECT_ROOT / "data/report/main_scalping_lifecycle_paired",
+        config.ANALYSIS_START,
+        config.ANALYSIS_END,
+    )
 
     print("[analyze] cohort summary …")
     coh_summary = cohort_summary(trade_df)
@@ -442,13 +489,36 @@ def main() -> dict:
     opp_cost = decompose_opportunity_cost(funnel_df)
 
     print("[analyze] EV backlog …")
-    backlog = build_ev_backlog(loss_patterns, profit_patterns, opp_cost, seq_df)
+    backlog = build_ev_backlog(
+        loss_patterns, profit_patterns, opp_cost, seq_df, economics
+    )
     write_ev_backlog_md(backlog)
 
     result = {
         "schema_version": SCHEMA_VERSION,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "metric_contract": METRIC_CONTRACT,
         "generated_at": datetime.now().isoformat(),
+        "date": target,
+        "economics": economics,
+        "source_isolation": {
+            "schema": "pattern_lab_date_isolation_v1",
+            "target_date": target,
+            "status": (
+                "isolated"
+                if covered or economics["sources"]
+                else "missing_source_contract"
+            ),
+            "included_dates": sorted(set(covered) | set(economics["sources"])),
+            "snapshot_included_dates": covered,
+            "excluded_dates": sorted(
+                set(expected) - set(covered) - set(economics["sources"])
+            ),
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "snapshot_metric_role": "unverified_display_diagnostic_not_economic_approval",
         "cohort_summary": coh_summary,
         "loss_patterns": loss_patterns,
         "profit_patterns": profit_patterns,

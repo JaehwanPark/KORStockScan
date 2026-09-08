@@ -123,7 +123,9 @@ def test_pattern_lab_automation_builds_consensus_orders_and_family_candidates(
         item["allowed_runtime_apply"] is False
         for item in report["code_improvement_orders"]
     )
-    assert report["auto_family_candidates"] == []
+    assert len(report["auto_family_candidates"]) == 1
+    assert report["auto_family_candidates"][0]["allowed_runtime_apply"] is False
+    assert report["existing_family_inputs"][0]["family"] == "score65_74_recovery_probe"
     assert report["ev_report_summary"]["consensus_count"] == 0
     assert report["ev_report_summary"]["code_improvement_order_count"] >= 2
 

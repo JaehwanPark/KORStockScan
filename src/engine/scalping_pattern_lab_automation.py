@@ -10,6 +10,7 @@ from src.engine.lifecycle.retirement import (
 
 import argparse
 import json
+import hashlib
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -90,6 +91,17 @@ def _entry_adm_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
 
 
 def _entry_adm_source_quality_contract(summary: dict[str, Any]) -> dict[str, Any]:
+    if summary.get("status") == "retired":
+        return {
+            "contract_id": "scalp_entry_adm_pattern_lab_source_quality",
+            "source_contract_status": "retired",
+            "sample_floor_status": "not_applicable",
+            "tuning_input_allowed": False,
+            "blocked_reasons": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "restoration_required": False,
+        }
     available = bool(summary.get("available"))
     joined_sample = _safe_int(summary.get("joined_sample"), 0)
     sample_floor = _safe_int(summary.get("sample_floor"), 0)
@@ -153,12 +165,17 @@ def _lab_output_paths(lab_dir: Path, lab_name: str) -> dict[str, Path]:
 
 
 def _lab_freshness(
-    lab_name: str, paths: dict[str, Path], target_date: str
+    lab_name: str,
+    paths: dict[str, Path],
+    target_date: str,
+    *,
+    manifest: dict | None = None,
 ) -> dict[str, Any]:
-    manifest = _load_json(paths["manifest"])
+    if manifest is None:
+        manifest = _load_json(paths["manifest"])
     run_date = _parse_date_prefix(manifest.get("run_at") or manifest.get("executed_at"))
     coverage_end = _parse_date_prefix(
-        manifest.get("history_coverage_end") or manifest.get("analysis_end")
+        manifest.get("analysis_end") or manifest.get("history_coverage_end")
     )
     try:
         next_day = (date.fromisoformat(target_date) + timedelta(days=1)).isoformat()
@@ -283,6 +300,18 @@ def _normalize_route(title: str) -> dict[str, str]:
 def _finding_from_backlog_item(lab: str, item: dict[str, Any]) -> dict[str, Any]:
     title = str(item.get("title") or item.get("제목") or "").strip()
     route = _normalize_route(title)
+    if item.get("diagnostic_source") or item.get("economic_cohort"):
+        family = item.get("owner_family")
+        route = {
+            "route": (
+                "existing_family"
+                if family == "score65_74_recovery_probe"
+                else "instrumentation_order"
+            ),
+            "family": family if family == "score65_74_recovery_probe" else "",
+            "stage": "entry" if family else "runtime_ops",
+            "target_subsystem": "entry_funnel" if family else "runtime_instrumentation",
+        }
     return {
         "finding_id": _slug(title),
         "title": title,
@@ -300,6 +329,9 @@ def _finding_from_backlog_item(lab: str, item: dict[str, Any]) -> dict[str, Any]
             or item.get("required_sample"),
             "metric": item.get("검증지표") or item.get("metric"),
             "apply_stage": item.get("적용단계") or item.get("apply_stage"),
+            "diagnostic_source": item.get("diagnostic_source"),
+            "economic_cohort": item.get("economic_cohort"),
+            "required_owner_evaluation": "rise_rebound_and_incremental_net_ev_with_existing_guards",
         },
     }
 
@@ -319,7 +351,7 @@ def _finding_from_opportunity(lab: str, item: dict[str, Any]) -> dict[str, Any]:
         "target_subsystem": route["target_subsystem"],
         "evidence": {
             "total_blocked": _safe_int(item.get("total_blocked"), 0),
-            "block_ratio": _safe_float(item.get("block_ratio"), 0.0),
+            "block_ratio": item.get("block_ratio"),
             "days": _safe_int(item.get("days"), 0),
         },
     }
@@ -354,12 +386,14 @@ def _extract_findings(
             if finding["title"]:
                 findings.append(finding)
     for item in ev_result.get("opportunity_cost") or []:
-        if isinstance(item, dict):
+        if isinstance(item, dict) and _safe_int(item.get("total_blocked")) > 0:
             finding = _finding_from_opportunity(lab, item)
             if finding["title"]:
                 findings.append(finding)
     for item in observability.get("priority_findings") or []:
         if isinstance(item, dict):
+            if str(item.get("label") or "").lower() == "no acute observability alert":
+                continue
             finding = _finding_from_priority(lab, item)
             if finding["title"]:
                 findings.append(finding)
@@ -368,20 +402,97 @@ def _extract_findings(
 
 def _load_lab(lab_name: str, lab_dir: Path, target_date: str) -> dict[str, Any]:
     paths = _lab_output_paths(lab_dir, lab_name)
-    ev_result = _load_json(paths["ev"])
-    observability = _load_json(paths["observability"])
-    freshness = _lab_freshness(lab_name, paths, target_date)
+    # Parse and hash the same bytes, not a later generation of each file.
+    snapshots = {}
+    for path in (
+        paths["ev"],
+        paths["observability"],
+        lab_dir / "outputs/source_manifest.json",
+    ):
+        try:
+            snapshots[path.name] = path.read_bytes()
+        except OSError:
+            snapshots[path.name] = b""
+
+    def parse_snapshot(path):
+        try:
+            value = json.loads(snapshots[path.name])
+            return current_report_view(value) if isinstance(value, dict) else {}
+        except (ValueError, UnicodeError):
+            return {}
+
+    ev_result = parse_snapshot(paths["ev"])
+    observability = parse_snapshot(paths["observability"])
+    manifest = _load_json(paths["manifest"])
+    freshness = _lab_freshness(lab_name, paths, target_date, manifest=manifest)
+    # v3 isolates missing historical dates; only its explicit source contract
+    # can supersede the legacy all-history gate. Never infer isolation from age.
+    isolation = ev_result.get("source_isolation")
+    isolation = isolation if isinstance(isolation, dict) else {}
+    hashes = manifest.get("generation_sha256")
+    hashes = hashes if isinstance(hashes, dict) else {}
+    v3_generation_valid = all(
+        content and hashes.get(name) == hashlib.sha256(content).hexdigest()
+        for name, content in snapshots.items()
+    )
+    v3_isolation_valid = (
+        ev_result.get("schema_version") == 3
+        and isolation.get("schema") == "pattern_lab_date_isolation_v1"
+        and isolation.get("target_date") == target_date
+        and isolation.get("status") == "isolated"
+        and isolation.get("runtime_effect") is False
+        and isolation.get("allowed_runtime_apply") is False
+        and v3_generation_valid
+        and isinstance(isolation.get("included_dates"), list)
+        and bool(isolation["included_dates"])
+        and all(
+            isinstance(d, str) and "2026-06-05" <= d <= target_date
+            for d in isolation["included_dates"]
+        )
+        and ev_result.get("date") == target_date
+        and ev_result.get("runtime_effect") is False
+        and ev_result.get("allowed_runtime_apply") is False
+        and isinstance(ev_result.get("ev_backlog"), list)
+        and all(
+            isinstance(row, dict)
+            and row.get("runtime_effect") is False
+            and row.get("allowed_runtime_apply") is False
+            for row in ev_result.get("ev_backlog", [])
+        )
+    )
+    if v3_isolation_valid:
+        freshness["source_quality_usable"] = True
+        freshness["tuning_input_allowed"] = freshness["timing_fresh"]
+        freshness["source_isolation"] = isolation
+    if ev_result.get("schema_version") == 3 and not v3_isolation_valid:
+        freshness["tuning_input_allowed"] = False
+        freshness["source_quality_usable"] = False
+        freshness["stale_reason"] = "generation_or_isolation_contract_invalid"
+    if target_date >= "2026-09-08" and ev_result.get("schema_version") != 3:
+        freshness["tuning_input_allowed"] = False
+        freshness["source_quality_usable"] = False
+        freshness["stale_reason"] = "small_net_contract_v3_required"
     findings = (
         _extract_findings(lab_name, ev_result, observability)
         if freshness["tuning_input_allowed"]
         else []
     )
+    retired_findings = [
+        f
+        for f in findings
+        if any(
+            token in str(f.get("title") or "").lower()
+            for token in ("fallback", "latency canary tag")
+        )
+    ]
+    findings = [f for f in findings if f not in retired_findings]
     rejected = []
     if not freshness["tuning_input_allowed"]:
         rejected.append(
             {
                 "lab": lab_name,
-                "reason": (
+                "reason": freshness["stale_reason"]
+                or (
                     "history_coverage_incomplete"
                     if freshness["fresh"] and not freshness["source_quality_usable"]
                     else freshness["stale_reason"]
@@ -398,6 +509,17 @@ def _load_lab(lab_name: str, lab_dir: Path, target_date: str) -> dict[str, Any]:
         },
         "freshness": freshness,
         "findings": findings,
+        "retired_findings": [
+            {
+                **f,
+                "disposition": "removed_or_superseded",
+                "reason": "retired_runtime_axis",
+            }
+            for f in retired_findings
+        ],
+        "economics": (
+            ev_result.get("economics") if freshness["tuning_input_allowed"] else None
+        ),
         "rejected_findings": rejected,
     }
 
@@ -475,9 +597,9 @@ def _auto_family_candidates(findings: list[dict[str, Any]]) -> list[dict[str, An
                 "stage": finding.get("stage") or "unknown",
                 "source_labs": finding.get("source_labs") or [],
                 "evidence": finding.get("evidence") or [],
-                "sample_window": "rolling_10d_with_daily_guard",
-                "sample_floor": 20,
-                "target_metric": "daily_ev_delta_or_missed_upside_reduction",
+                "sample_window": "existing_strategy_owner_rolling_contract",
+                "sample_floor": 0,
+                "target_metric": "cost_adjusted_incremental_ev_and_net_profit_cadence",
                 "safety_guard": list(CALIBRATION_SAFETY_GUARDS),
                 "proposed_runtime_touchpoint": finding.get("target_subsystem")
                 or "scalping_logic",
@@ -505,6 +627,31 @@ def _source_only_order_provenance(order: dict[str, Any]) -> dict[str, Any]:
             else {}
         )
     mapped_family = order.get("mapped_family") or order.get("threshold_family")
+    diagnostic = evidence.get("diagnostic_source")
+    if (
+        isinstance(diagnostic, dict)
+        and isinstance(diagnostic.get("count"), int)
+        and not isinstance(diagnostic["count"], bool)
+        and diagnostic["count"] > 0
+    ):
+        return {
+            "implementation_status": "implemented",
+            "implementation_checks": [
+                {
+                    "name": "exact_source_diagnostic_emitted",
+                    "status": "pass",
+                    **diagnostic,
+                }
+            ],
+            "implementation_provenance": {
+                "implementation_type": "pattern_lab_diagnostic_source_contract",
+                "implemented_scope": "report_fields_only_not_strategy_repair_or_economic_acceptance",
+                "source_metric_snapshot": diagnostic,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "decision_authority": DECISION_AUTHORITY,
+            },
+        }
 
     quantitative_contracts = {
         "order_ai_threshold_miss_ev_recovery": {
@@ -747,10 +894,10 @@ def _code_improvement_orders(
         route = str(finding.get("route") or "evidence_review")
         instrumentation_status = (
             {
-                "implementation_status": "implemented_but_waiting_sample",
+                "implementation_status": "implemented",
                 "implementation_checks": [
                     "pattern lab instrumentation order preserves runtime_effect=false",
-                    "latency_canary or runtime_instrumentation metrics are surfaced as report-only evidence",
+                    "runtime_instrumentation metrics are surfaced as report-only evidence",
                     "daily EV report consumes the order as provenance only",
                 ],
                 "implementation_provenance": {
@@ -811,6 +958,7 @@ def _code_improvement_orders(
                 ],
                 "source_report_type": "scalping_pattern_lab_automation",
                 "decision_authority": DECISION_AUTHORITY,
+                "source_handoff_contract": "single_active_lab_source_only_v2",
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "forbidden_uses": FORBIDDEN_USES,
@@ -838,7 +986,7 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
     consensus, solo = _merge_findings(lab_results)
     accepted_for_family = [
         item
-        for item in consensus
+        for item in consensus + solo
         if item.get("route") in {"existing_family", "auto_family_candidate"}
     ]
     existing_inputs = _existing_family_inputs(accepted_for_family)
@@ -865,6 +1013,8 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             "role": "analysis_review_and_workorder_source",
             "runtime_patch_automation": False,
             "direct_family_design_authority": False,
+            "family_intake_contract": "single_active_lab_source_only_v2",
+            "runtime_approval_owner": "existing_dedicated_family_preopen_contract",
             "downstream_route": "threshold_cycle_ev -> code_improvement_workorder -> implementation_review",
             "forbidden_uses": FORBIDDEN_USES,
             "retired_labs": RETIRED_LABS,
@@ -877,6 +1027,10 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
         "auto_family_candidates": family_candidates,
         "code_improvement_orders": orders,
         "rejected_findings": rejected,
+        "retired_findings": [
+            f for lab in lab_results for f in lab.get("retired_findings", [])
+        ],
+        "economic_evidence": {lab["lab"]: lab.get("economics") for lab in lab_results},
         "scalp_entry_adm_summary": entry_adm_summary,
         "source_quality_contracts": {
             "scalp_entry_adm": entry_adm_source_quality_contract,
@@ -905,6 +1059,7 @@ def build_scalping_pattern_lab_automation_report(target_date: str) -> dict[str, 
             )
             or [],
             "active_labs": [result["lab"] for result in lab_results],
+            "accepted_source_finding_count": len(accepted_for_family),
             "consensus_count": len(consensus),
             "auto_family_candidate_count": len(family_candidates),
             "code_improvement_order_count": len(orders),

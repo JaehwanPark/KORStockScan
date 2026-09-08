@@ -460,6 +460,30 @@ def build_pattern_lab_currentness_audit(
     for lab_name, lab in paths.items():
         analysis_path = lab["analysis_result"]
         analysis_payload = _load_json(analysis_path)
+        if lab_name == "claude_scalping" and target_date >= "2026-09-08":
+            from src.engine.scalping_pattern_lab_automation import _load_lab
+
+            try:
+                loaded = _load_lab("claude", lab["lab_dir"], target_date)
+                current = loaded["freshness"]["tuning_input_allowed"]
+            except (ValueError, TypeError, OSError, KeyError):
+                current = False
+            checks.append(
+                _check(
+                    check_id="claude_small_net_generation_contract",
+                    ok=current,
+                    finding="v3 exact-date generation hashes and isolated-source contract; economic sample count is not a repair gate.",
+                    source_paths=[analysis_path, lab["manifest"]],
+                    order_title="Claude small-net generation contract",
+                    files_likely_touched=[
+                        _source_rel(lab["lab_dir"]),
+                        "src/engine/scalping_pattern_lab_automation.py",
+                    ],
+                    acceptance_tests=[
+                        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_claude_pattern_net_contract.py"
+                    ],
+                )
+            )
         checks.append(
             _check(
                 check_id=f"{lab_name}_metric_contract",

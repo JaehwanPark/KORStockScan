@@ -2536,6 +2536,7 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "acceptance_tests": item.order.get("acceptance_tests") or [],
         "forbidden_uses": item.order.get("forbidden_uses") or [],
         "decision_authority": item.order.get("decision_authority"),
+        "source_handoff_contract": item.order.get("source_handoff_contract"),
         "adm_issue_types": item.order.get("adm_issue_types") or [],
         "automation_reentry": item.automation_reentry,
         "runtime_effect": bool(item.order.get("runtime_effect")),
@@ -3101,8 +3102,8 @@ def _classify_order(
             order=order,
             decision="design_family_candidate",
             reason=(
-                "pattern lab can only propose source-only family design input; LDM/discovery/runtime bridge "
-                "contracts must close before any auto_bounded_live consideration"
+                "pattern lab proposes source-only family design input; the existing dedicated strategy owner "
+                "must validate exact cost-adjusted rolling economics, safety and PREOPEN mapping before runtime use"
             ),
             mapped_family=mapped_family,
             route=route,
@@ -3368,6 +3369,26 @@ def _classify_order(
             route=route,
             confidence=confidence,
             automation_reentry="Keep as rejected finding unless translated into report_only_calibration or bounded canary design.",
+        )
+
+    if (
+        order.get("source_report_type") == "scalping_pattern_lab_automation"
+        and order.get("source_handoff_contract") == "single_active_lab_source_only_v2"
+        and order.get("decision_authority")
+        == "pattern_lab_analysis_workorder_source_only"
+        and order.get("runtime_effect") is False
+        and order.get("allowed_runtime_apply") is False
+        and route == "existing_family"
+        and mapped_family == "score65_74_recovery_probe"
+    ):
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            mapped_family=mapped_family,
+            route=route,
+            confidence=confidence,
+            reason="Validated single-active-lab source handoff; consensus is not required for existing-owner research input.",
+            automation_reentry="Existing score-recovery owner evaluates rise/rebound, exact rolling costs and counterfactual increment; its PREOPEN/runtime guards remain authoritative.",
         )
 
     if confidence == "solo":

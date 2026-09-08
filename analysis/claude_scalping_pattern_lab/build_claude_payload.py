@@ -16,6 +16,7 @@ Claude 투입용 JSON 패키지 빌더.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sys
 from datetime import datetime
@@ -47,14 +48,6 @@ LAB_DIR = Path(__file__).resolve().parent
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
 SCALPING_FEEDBACK_SOURCES = {
     "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-    "lifecycle_decision_matrix": (
-        "lifecycle_decision_matrix",
-        "lifecycle_decision_matrix",
-    ),
-    "lifecycle_bucket_discovery": (
-        "lifecycle_bucket_discovery",
-        "lifecycle_bucket_discovery",
-    ),
     "runtime_approval_summary": (
         "runtime_approval_summary",
         "runtime_approval_summary",
@@ -220,6 +213,9 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
         },
         "tuning_observability": observability,
         "cohort_summary": cohort_stats,
+        "economics": ev_result.get("economics"),
+        "source_isolation": ev_result.get("source_isolation"),
+        "snapshot_metric_role": "unverified_display_diagnostic_not_economic_approval",
         "loss_patterns": ev_result.get("loss_patterns", []),
         "profit_patterns": ev_result.get("profit_patterns", []),
         "opportunity_cost": ev_result.get("opportunity_cost", []),
@@ -227,14 +223,14 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
         "daily_stats": daily_stats,
         "feedback_sources": _load_feedback_sources(),
         "instructions": {
-            "rule_1": "full_fill / partial_fill / split-entry 혼합 해석 금지",
-            "rule_2": "전역 손절 강화 같은 단일축 일반화 결론 금지",
-            "rule_3": "운영 코드 즉시 변경 지시 금지",
+            "rule_1": "Keep venue/session/profile/full/partial/scale-in cohorts separate.",
+            "rule_2": "Do not generalize display snapshots or winner-only patterns into economic approval.",
+            "rule_3": "No runtime mutation. Use the existing strategy owner and PREOPEN contract.",
+            "rule_4": "Optimize cost-adjusted net profit and repeatable cadence, not forced BUY or high fixed return floors.",
             "output_required": [
-                "손실 패턴 Top 5",
-                "수익 패턴 Top 5",
-                "기회비용 회수 후보 Top 5",
-                "EV 개선 우선순위 (report-only observation → canary-only candidate 순)",
+                "Exact-cost all-outcome cohort economics and uncertainty",
+                "Observed trade frequency, net KRW per valid day and capital time",
+                "Source gaps and explicit existing-owner research handoff",
             ],
         },
     }
@@ -397,10 +393,33 @@ def write_final_review_report(
         "## 1. 판정",
         "",
     ]
+    economics = ev_result.get("economics") or {}
+    lines += [
+        "### 검증된 순이익·거래빈도 (실전 승인 아님)",
+        "",
+        f"- 경제성 상태: `{economics.get('status', 'missing')}`",
+        "- 실제 체결금액에서 대사된 수수료·세금을 차감. 체결가격에 반영된 슬리피지는 중복 차감하지 않음.",
+        "- 아래 기존 스냅샷 통계는 비용 미검증 참고치이며 실전 승인 근거가 아님.",
+        "- 상승/반등 조건과 대조군 대비 증분 EV는 기존 전략 owner가 검증. 양수 관측만으로 BUY/승격하지 않음.",
+        "",
+        "| 창 | 코호트 | 완료수 | 순EV(금액가중 %) | 순익 KRW | 유효일당 거래수 | 유효일당 순익 KRW |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for window, block in (economics.get("windows") or {}).items():
+        for c in block.get("cohorts") or []:
+            lines.append(
+                f"| {window} | {c['cohort_id']} / {c['venue']} / {c['fill_class']} | {c['completed_count']} | {c['notional_weighted_ev_pct']:.5f} | {c['net_pnl_krw']:.2f} | {c['completed_per_valid_source_day']:.3f} | {c['net_krw_per_valid_source_day']:.2f} |"
+            )
+    lines += [
+        "",
+        f"- 제외 원천 일수: {len(economics.get('excluded_source_dates') or {})}",
+        f"- 유지보수 재검토 필요: `{economics.get('maintenance_review_due', False)}`",
+        "",
+    ]
 
     # 코호트별 판정
     if coh_summary:
-        lines.append("### 1-1. 코호트별 손익 요약")
+        lines.append("### 1-1. 스냅샷 참고 손익 (비용·체결 품질 미검증)")
         lines.append("")
         lines.append(
             "| 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |"
@@ -501,9 +520,8 @@ def write_final_review_report(
         "",
         "### 2-2. 전역 손절 강화 비권고 이유",
         "",
-        "- 오늘 손절 표본에는 AI score 58~69처럼 낮지 않은 값도 포함됨.",
-        "- 문제의 핵심은 `틱 급변 + 확대 타이밍`이며, 전역 강화는 승자도 함께 절단함.",
-        "- 코호트 분리 없이 단일 임계값 강화 시 full_fill 수익 코호트에 부정적 영향.",
+        "- 관측 패턴만으로 손실 원인이나 임계값 변경 효과를 단정하지 않음.",
+        "- 동일 코호트의 이익·손실·누락 기회와 비용을 함께 평가해야 함.",
         "",
     ]
 
@@ -517,7 +535,9 @@ def write_final_review_report(
         "",
     ]
     report_only_items = [
-        b for b in backlog if b.get("적용단계") == "report_only_observation"
+        b
+        for b in backlog
+        if b.get("적용단계", b.get("apply_stage")) == "report_only_observation"
     ]
     canary_items = [
         b
@@ -529,7 +549,9 @@ def write_final_review_report(
     lines.append("**report-only observation (즉시 시작 가능):**")
     lines.append("")
     for b in report_only_items:
-        lines.append(f"- `{b['title']}` — 검증지표: {b['검증지표']}")
+        lines.append(
+            f"- `{b['title']}` — 검증지표: {b.get('검증지표', b.get('metric'))}"
+        )
     if not report_only_items:
         lines.append("- 없음")
 
@@ -577,6 +599,7 @@ def write_run_manifest(
     manifest = {
         "run_at": datetime.now().isoformat(),
         "version": "1.0.0",
+        "analysis_end": ANALYSIS_END.isoformat(),
         "data_source_mode": "none",
         "history_coverage_start": None,
         "history_coverage_end": None,
@@ -642,6 +665,15 @@ def write_run_manifest(
         p = OUTPUT_DIR / fname
         manifest["outputs"].append({"file": fname, "exists": p.exists()})
 
+    manifest["generation_sha256"] = {
+        name: hashlib.sha256((OUTPUT_DIR / name).read_bytes()).hexdigest()
+        for name in (
+            "ev_analysis_result.json",
+            "tuning_observability_summary.json",
+            "source_manifest.json",
+        )
+        if (OUTPUT_DIR / name).exists()
+    }
     path = OUTPUT_DIR / "run_manifest.json"
     path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"

@@ -1543,13 +1543,56 @@ def _apply_source_contract_resolutions(
     for item in conclusions:
         if not isinstance(item, dict):
             continue
+        # Older provider responses used a generic ID and omitted ADM from the
+        # final reason. Resolve only the exact ADM-only interpretation, never a
+        # mixed/unknown source gap merely because the current ADM is retired.
+        interpretation = payload.get("interpretation")
+        interpretation = interpretation if isinstance(interpretation, dict) else {}
+        review_items = interpretation.get("review_items")
+        review_items = review_items if isinstance(review_items, list) else []
+        matching = [
+            r
+            for r in review_items
+            if isinstance(r, dict) and r.get("review_id") == item.get("review_id")
+        ]
+        contract = (
+            _source_summary(context, "scalping_pattern_lab_automation").get(
+                "source_quality_contracts"
+            )
+            or {}
+        ).get("scalp_entry_adm") or {}
+        followups = item.get("required_followup")
+        exact_retired_adm = (
+            contract.get("source_contract_status") == "retired"
+            and contract.get("runtime_effect") is False
+            and contract.get("allowed_runtime_apply") is False
+            and len(matching) == 1
+            # Known historical ADM-only messages; substring matching also
+            # retires mixed active-source defects and is deliberately forbidden.
+            and str(matching[0].get("reason") or "").strip()
+            in {
+                "scalp_entry_adm source missing",
+                "The scalp_entry_adm source quality contract is in 'instrumentation_gap' "
+                "status due to 'source_report_missing' and 'sample_floor_missing'. "
+                "This indicates the required source report is not present and "
+                "sample floor conditions are unmet, blocking further processing.",
+            }
+            and isinstance(followups, list)
+            and bool(followups)
+            and all(isinstance(value, str) for value in followups)
+            and set(followups)
+            <= {
+                "scalping_pattern_lab_automation_source_report_missing",
+                "scalping_pattern_lab_automation_sample_floor_missing",
+            }
+        )
         retirement_text = " ".join(
             (
                 str(item.get("review_id") or ""),
                 str(item.get("reason") or ""),
             )
         ).lower()
-        retired_scalp_ldm_gap = bool(
+        retired_scalp_ldm_gap = exact_retired_adm or bool(
             "swing_lifecycle" not in retirement_text
             and any(
                 token in retirement_text

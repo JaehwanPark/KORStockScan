@@ -177,9 +177,9 @@
 | 64 | Swing improvement automation | swing 개선 후보 가공 | runtime-approval 입력 | 연구 자동화 | OFF | 현재 불필요 지정 유지 | 없음 |
 | 65 | Swing runtime approval | swing 적용 판정 | full-live 전 fail-closed | 실주문 보호 | OFF | 현재 불필요 지정 유지 | 없음 |
 | 66 | DeepSeek swing lab | swing pattern 탐색 | 독립 후보 생성 | 패턴 다양화 | OFF | 현재 불필요 지정 유지 | 없음 |
-| 67 | Claude scalp pattern lab | scalp pattern 연구 | 최신 pattern 생성 | 신규 가설 발굴 | ON | 상세검토 대기 | E2 |
+| 67 | Claude scalp pattern lab | 검증된 순이익·거래빈도 연구 | 일별/rolling10거래일/누적 경제성 및 가설 생성 | 비용 차감 후 작은 수익의 반복 가능성 평가 | ON / source-only | **코드 보완·상세리뷰 종결, 자연 경제성 대기**; [v3 리뷰](2026-09-08-pattern-lab-small-net-remediation-review.md), `PatternLabSmallNetNaturalEvidence0908` | E2; 독립 실전 승인 lock 없음 |
 | 68 | Gemini scalp pattern lab | 과거 provider lab | 자동실행 제거 | 중복비용 제거 | RETIRED | 상태 확인만 남음 | 없음 |
-| 69 | Scalping pattern automation | pattern을 후보로 변환 | downstream handoff | 연구 방치 방지 | ON | 상세검토 대기 | E2 |
+| 69 | Scalping pattern automation | 단일 활성 lab을 기존 전략 연구 입력으로 전달 | exact generation → EV/workorder → 기존 owner | 불가능한 합의·폐기 ADM/LDM 대기 제거 | ON / source-only | **코드 보완·상세리뷰 종결, 자연 전달 대기**; [v3 리뷰](2026-09-08-pattern-lab-small-net-remediation-review.md). 실전은 기존 전략별 PREOPEN guard 유지 | E2 |
 | 70 | Swing pattern automation | swing pattern handoff | swing 후보 변환 | swing 자동화 | OFF | 현재 불필요 지정 유지 | 없음 |
 | 71 | Pattern currentness audit | pattern freshness 검사 | stale 승격 차단 | 낡은 가설 사용 방지 | ON, trigger-gated | 상세검토 대기 | E2 |
 | 72 | Pattern AI review | pattern 후보 AI 검토 | 구현가능 항목 분리 | 무의미한 후보 축소 | ON | 상세검토 대기 | E2 |

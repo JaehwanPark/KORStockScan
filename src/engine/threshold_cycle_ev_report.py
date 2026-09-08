@@ -827,6 +827,21 @@ def _pattern_lab_automation_summary(
             "gemini_enabled": gemini_enabled,
             "gemini_fresh": bool(summary.get("gemini_fresh")),
             "gemini_retired_reason": summary.get("gemini_retired_reason"),
+            "accepted_source_finding_count": _safe_int(
+                summary.get("accepted_source_finding_count"), 0
+            ),
+            "economic_evidence_status": {
+                name: {
+                    "status": (evidence or {}).get("status"),
+                    "valid_source_days": len((evidence or {}).get("sources") or {}),
+                    "rolling_completed_count": (
+                        ((evidence or {}).get("windows") or {}).get("rolling_10d") or {}
+                    ).get("completed_count"),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                }
+                for name, evidence in (payload.get("economic_evidence") or {}).items()
+            },
             "claude_fresh": bool(summary.get("claude_fresh")),
             "consensus_count": _safe_int(summary.get("consensus_count"), 0),
             "auto_family_candidate_count": _safe_int(

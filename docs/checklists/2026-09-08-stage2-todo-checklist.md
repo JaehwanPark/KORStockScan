@@ -26,6 +26,12 @@
 
 ## 승인 재설계 자연 수용
 
+- [ ] `[PatternLabSmallNetNaturalEvidence0908] Claude lab v3 순이익·빈도 연구와 단일-owner 전달 자연 확인` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: ScalpingLogic`)
+  - Source: [#67/#69 보완 리뷰](../audit-reports/2026-09-08-pattern-lab-small-net-remediation-review.md), `analysis/claude_scalping_pattern_lab/outputs/run_manifest.json`, `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-09-08.json`.
+  - 완료 조건: 기존 main paired producer가 실제 매입/매도 총액·비용·순익을 포함한 당일 self-hash source를 자연 생성하고 lab v3가 일별/rolling10거래일/누적을 분리한다. 누락은 null/제외 사유로 남기며 정상 empty와 source failure를 구분한다. manifest 3종 hash → automation → currentness/AI review → EV/workorder의 같은 날짜·generation을 확인한다. ADM/LDM 복구, fallback/latency canary, 2-lab 합의 대기 및 0건 blocker 추천은 새로 만들지 않는다.
+  - 경제성/전달: 미검증 스냅샷의 gross/zero 복원값은 승인 근거로 쓰지 않는다. full/partial/scale-in, venue/session/profile을 분리한 작은 양수 순EV도 연구 입력으로 전달하되 기존 owner의 상승/반등·증분 순익·승인/PREOPEN/PID 조건을 대체하지 않는다. 합성 회귀 fixture의 성공은 실수익 개선이 아니다.
+  - 유지 판단: 20개 유효 lifecycle 원천 거래일에도 owner-bound 양수 연구 코호트가 없으면 원천/연결 보완 또는 통합·폐기를 재검토한다. 기존 9/7까지의 5개 완료 행에는 매입/매도 총액이 없어 제외됨을 확인했으며, 같은 과거일 반복 실행·값 합성으로 닫지 않는다. 운영 env/lock/봇/주문/provider/quantity/cap/안전 변경과 외부 Project/Calendar sync는 수행하지 않는다.
+
 - [ ] `[DailyThresholdNaturalAcceptance0908] 소액 순이익 승인 계약의 자연 source·PREOPEN·실수익 확인` (`Due: 2026-09-08`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: RuntimeStability`)
   - Source: [9/8 승인 재설계·교차 리뷰](../audit-reports/2026-09-08-small-net-profit-approval-review.md), [9/7 이관 이력](2026-09-07-stage2-todo-checklist.md). stable ID와 미완료 acceptance를 유지하며 과거 완료를 주장하지 않는다.
   - 첫 자연 확인: 다음 정상 코드 로드 이후 `score_recovery_real_economics_observed`의 exact identity/당시 실효 profile → 동일일 lifecycle paired의 실제 매입·매도·비용·순손익 → 같은 장후 Daily의 20거래일 real book을 대사한다. [1~3 후속 보완](../audit-reports/2026-09-08-scanner-daily-net-approval-followup-review.md)에서 기존 Entry split/AI 원천/paired owner를 Daily 앞으로 이동했고 중복 실행은 추가하지 않았다. 새 wrapper snapshot이 이 순서를 소비해야 한다. OFF/실패/source 미도착은 별도 사유로 남기며 과거 profile을 합성하거나 같은 과거일을 반복 재실행해 표본을 만들지 않는다.
