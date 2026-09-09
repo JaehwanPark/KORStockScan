@@ -561,6 +561,17 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
             assert hashlib.sha256(unchanged_source).hexdigest() == (
                 "9170ec9965725ede3f59c00d30877772cb738c1e50013ad3d55cdf35a8ac06d1"
             )
+        if field == "kiwoom_websocket_sha256":
+            # The frozen measurement predates the reviewed 2026-09-08 ingress
+            # backlog repair (7077831a).  Preserve the original receipt while
+            # pinning that exact replacement generation; any further websocket
+            # edit must fail this guard and receive a new compatibility review.
+            assert expected == (
+                "e33771db11090766c613436c98b1e0e9fbed7663fcebf3663fd633612ad0c052"
+            )
+            expected = (
+                "480159f2949566954823a66e09134a288378f58865851884e24fa26fec719065"
+            )
         assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
 
 
