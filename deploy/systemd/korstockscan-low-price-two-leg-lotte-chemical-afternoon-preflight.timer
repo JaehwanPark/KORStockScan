@@ -1,0 +1,11 @@
+[Unit]
+Description=Preflight Lotte Chemical afternoon two-leg episode machine
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 14:15:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=korstockscan-low-price-two-leg-preflight@lotte_chemical_afternoon.service
+
+[Install]
+WantedBy=timers.target

@@ -273,14 +273,19 @@ def test_storage_maintenance_cli_critical_capacity_writes_source_only_status_and
     root = tmp_path / "forward"
     root.mkdir()
     status_path = tmp_path / "reports" / "capacity.json"
-    monkeypatch.setattr(
-        storage_maintenance_module,
-        "_disk_capacity_snapshot",
-        lambda _path: {
+
+    def noisy_capacity(_path):
+        print("dependency diagnostic: must not precede the JSON receipt")
+        return {
             "disk_total_bytes": 1_000,
             "disk_used_bytes": 990,
             "disk_free_bytes": 10,
-        },
+        }
+
+    monkeypatch.setattr(
+        storage_maintenance_module,
+        "_disk_capacity_snapshot",
+        noisy_capacity,
     )
     monkeypatch.setattr(
         sys,
@@ -303,7 +308,10 @@ def test_storage_maintenance_cli_critical_capacity_writes_source_only_status_and
 
     exit_code = storage_maintenance_module.main()
 
-    emitted = json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    emitted = json.loads(captured.out)
+    assert "dependency diagnostic" in captured.err
+    assert "dependency diagnostic" not in captured.out
     artifact = json.loads(status_path.read_text(encoding="utf-8"))
     declared_hash = artifact.pop("artifact_content_sha256")
     assert exit_code == 1

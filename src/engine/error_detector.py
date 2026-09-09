@@ -66,12 +66,24 @@ class ErrorDetectionEngine:
         dry_run: bool = False,
         mode: str = "full",
         run_id: str | None = None,
+        postclose_source_date: str | None = None,
     ):
         if mode not in MODE_DETECTOR_MAP:
             raise ValueError(f"Unsupported error detection mode: {mode}")
         self.dry_run = dry_run
         self.mode = mode
         self.run_id = run_id or uuid.uuid4().hex
+        self.postclose_source_date = postclose_source_date
+        if postclose_source_date is not None:
+            source_day = datetime.strptime(postclose_source_date, "%Y-%m-%d").date()
+            if (
+                source_day.isoformat() != postclose_source_date
+                or mode != "full"
+                or not 0 <= (datetime.now(KST).date() - source_day).days <= 1
+            ):
+                raise ValueError(
+                    "Postclose recovery requires full mode and today or yesterday"
+                )
         self.detectors: list[BaseDetector] = []
         self.expected_detector_ids: list[str] = []
         self.initialization_failures: list[DetectionResult] = []
@@ -94,7 +106,15 @@ class ErrorDetectionEngine:
                 )
                 continue
             try:
-                self.detectors.append(cls(dry_run=self.dry_run))
+                detector = cls(
+                    dry_run=self.dry_run or self.postclose_source_date is not None
+                )
+                if self.postclose_source_date and detector_id in {
+                    "cron_completion",
+                    "artifact_freshness",
+                }:
+                    detector.postclose_source_date = self.postclose_source_date
+                self.detectors.append(detector)
             except Exception as e:
                 log_error(f"Error initializing detector {detector_id}: {e}")
                 self.initialization_failures.append(
@@ -136,6 +156,18 @@ class ErrorDetectionEngine:
                     details={"error": str(e)},
                 )
             results.append(result)
+        if self.postclose_source_date:
+            for result in results:
+                result.details = {
+                    **result.details,
+                    "recovery_observation_scope": (
+                        "exact_source_date"
+                        if result.detector_id
+                        in {"cron_completion", "artifact_freshness"}
+                        else "current_at_recovery"
+                    ),
+                    "postclose_source_date": self.postclose_source_date,
+                }
         return results
 
     def get_summary_severity(self, results: list[DetectionResult]) -> str:
@@ -151,7 +183,16 @@ class ErrorDetectionEngine:
         return {
             "schema_version": REPORT_SCHEMA_VERSION,
             "report_type": REPORT_TYPE,
-            "target_date": now.date().isoformat(),
+            "target_date": self.postclose_source_date or now.date().isoformat(),
+            **(
+                {
+                    "postclose_recovery": True,
+                    "as_of_date": now.date().isoformat(),
+                    "read_only_checks": True,
+                }
+                if self.postclose_source_date
+                else {}
+            ),
             "timestamp": now.isoformat(timespec="seconds"),
             "mode": self.mode,
             "run_id": self.run_id,
@@ -159,7 +200,11 @@ class ErrorDetectionEngine:
             "runtime_effect": False,
             "runtime_mutation": "none",
             "runtime_mutation_scope": "trading_strategy_runtime",
-            "operational_mutation_authority": list(OPERATIONAL_MUTATION_AUTHORITY),
+            "operational_mutation_authority": (
+                []
+                if self.postclose_source_date
+                else list(OPERATIONAL_MUTATION_AUTHORITY)
+            ),
             "operational_mutations": operational_mutations,
             "operational_mutation_count": len(operational_mutations),
             "summary_severity": self.get_summary_severity(results),
@@ -256,6 +301,19 @@ def validate_report_contract(
     else:
         if timestamp_dt.tzinfo is None:
             errors.append("timestamp_timezone_missing")
+        elif report.get("postclose_recovery") is True:
+            try:
+                source_day = datetime.strptime(expected_target_date, "%Y-%m-%d").date()
+                as_of_day = timestamp_dt.astimezone(KST).date()
+                if (
+                    not 0 <= (as_of_day - source_day).days <= 1
+                    or report.get("as_of_date") != as_of_day.isoformat()
+                    or report.get("read_only_checks") is not True
+                    or expected_mode != "full"
+                ):
+                    errors.append("postclose_recovery_date_contract_invalid")
+            except ValueError:
+                errors.append("postclose_recovery_date_contract_invalid")
         elif timestamp_dt.astimezone(KST).date().isoformat() != expected_target_date:
             errors.append("timestamp_target_date_mismatch")
     if report.get("runtime_effect") is not False:
@@ -265,7 +323,12 @@ def validate_report_contract(
     if report.get("runtime_mutation_scope") != "trading_strategy_runtime":
         errors.append("runtime_mutation_scope_mismatch")
     authority = report.get("operational_mutation_authority")
-    if authority != list(OPERATIONAL_MUTATION_AUTHORITY):
+    expected_authority = (
+        []
+        if report.get("postclose_recovery") is True
+        else list(OPERATIONAL_MUTATION_AUTHORITY)
+    )
+    if authority != expected_authority:
         errors.append("operational_mutation_authority_mismatch")
     operational_mutations = report.get("operational_mutations")
     if not isinstance(operational_mutations, list) or not all(
@@ -275,6 +338,8 @@ def validate_report_contract(
         operational_mutations = []
     if report.get("operational_mutation_count") != len(operational_mutations):
         errors.append("operational_mutation_count_mismatch")
+    if report.get("postclose_recovery") is True and operational_mutations:
+        errors.append("postclose_recovery_operational_mutation_forbidden")
 
     results = report.get("results")
     if not isinstance(results, list):
@@ -364,11 +429,18 @@ def main():
     )
     parser.add_argument("--run-id", default="", help="Invocation provenance identifier")
     parser.add_argument(
+        "--postclose-source-date",
+        default=None,
+        help="Explicit source-date recovery; all checks are non-mutating",
+    )
+    parser.add_argument(
         "--report-file", default="", help="Explicit output path for this invocation"
     )
     args = parser.parse_args()
 
     if args.daemon:
+        if args.postclose_source_date:
+            parser.error("Postclose recovery cannot run as a daemon")
         _daemon_loop(args.interval, args.dry_run, args.mode)
         return
 
@@ -376,6 +448,7 @@ def main():
         dry_run=args.dry_run,
         mode=args.mode,
         run_id=args.run_id or None,
+        postclose_source_date=args.postclose_source_date,
     )
     results = engine.run_all()
     report = engine.build_report(results)

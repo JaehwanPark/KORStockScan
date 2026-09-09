@@ -775,7 +775,8 @@ def test_current_and_install_time_profile_symbols_have_machine_owner_scope():
     }
     for symbol in install_time_symbols:
         assert f'"{symbol}":' in install_script
-    owner_scope = expected_machine_symbol_owners(date(2026, 9, 7))
+    owner_scope = expected_machine_symbol_owners(date(2026, 9, 10))
+    assert "011170" not in expected_machine_symbol_owners(date(2026, 9, 9))
     for symbol in {profile.symbol for profile in PROFILES.values()}:
         assert "episode" in owner_scope[symbol]
 
@@ -1515,9 +1516,8 @@ def test_20260821_profile_revision_validates_but_does_not_apply_source_generatio
 
     assert status == "candidate_validated_profile_revision_applied"
     assert revised["policy_mutations"] == []
-    assert (
-        revised["profiles"][profile_id]["policy"]
-        == (PROFILE_20260821_BASELINE_POLICIES[profile_id])
+    assert revised["profiles"][profile_id]["policy"] == (
+        PROFILE_20260821_BASELINE_POLICIES[profile_id]
     )
     assert revised["profiles"][profile_id]["selection_status"] == (
         "profile_revision_same_stage_mutation_not_applied"
@@ -2107,9 +2107,8 @@ def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkey
     assert gateway.buy_calls == [22_650, 22_600]
     assert gateway.liquidity_calls == ["SOR", "SOR"]
     assert submitted["signal_features"]["signal_decision_at"] == first_at.isoformat()
-    assert (
-        submitted["signal_features"]["source_entry_event_id"]
-        == (armed["pending_entry_confirmation"]["source_entry_event_id"])
+    assert submitted["signal_features"]["source_entry_event_id"] == (
+        armed["pending_entry_confirmation"]["source_entry_event_id"]
     )
     assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
     assert (
@@ -2988,9 +2987,9 @@ def test_research_evidence_gate_validates_each_selected_profile(tmp_path):
         )[0]
         for profile in legacy_profiles
     )
-    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"]["scan_start"] = (
-        "13:19"
-    )
+    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"][
+        "scan_start"
+    ] = "13:19"
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert not validate_research_evidence(
         PROFILES["samsung_heavy_midday"], path, expected_sha256=digest
@@ -3460,8 +3459,12 @@ def test_tuning_accepts_ten_share_partial_fill_and_weights_actual_quantity(
 
     assert row["source_quality"] == "pass"
     assert summary["notional_weighted_ev_pct"] == pytest.approx(completed_profit_pct)
-    assert summary["attempted_notional_return_pct_diagnostic"] == pytest.approx(expected_ev, abs=1e-6)
-    assert summary["fill_cohorts"]["full_fill"]["broker_price_fixed_cost_ev_pct"] is None
+    assert summary["attempted_notional_return_pct_diagnostic"] == pytest.approx(
+        expected_ev, abs=1e-6
+    )
+    assert (
+        summary["fill_cohorts"]["full_fill"]["broker_price_fixed_cost_ev_pct"] is None
+    )
     assert summary["fill_cohorts"]["partial_fill"]["completed_legs"] == 1
 
     payload["legs"][1]["quantity"] = 1
@@ -3914,9 +3917,8 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     )
     assert migrated_status == "candidate_applied"
     assert set(migrated["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert (
-        migrated["profiles"]["mirae_asset_morning"]["policy"]
-        == (PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"])
+    assert migrated["profiles"]["mirae_asset_morning"]["policy"] == (
+        PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"]
     )
 
     pre_expanded_v2 = json.loads(json.dumps(candidate))
@@ -3955,9 +3957,8 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     )
     assert expanded_status == "candidate_applied"
     assert set(expanded_applied["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert (
-        expanded_applied["profiles"]["kakao_morning"]["policy"]
-        == (PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"])
+    assert expanded_applied["profiles"]["kakao_morning"]["policy"] == (
+        PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"]
     )
 
     source_gap_report = json.loads(json.dumps(report))
@@ -4637,7 +4638,11 @@ def test_clean_window_loads_legacy_report_and_does_not_impute_missing_dates(tmp_
     )
 
     assert second["schema"] == REPORT_SCHEMA
-    assert set(second["windows"]) == {CLEAN_WINDOW_NAME, "current_policy_cohort", "post_apply_version"}
+    assert set(second["windows"]) == {
+        CLEAN_WINDOW_NAME,
+        "current_policy_cohort",
+        "post_apply_version",
+    }
     coverage = second["clean_baseline_window"]
     assert coverage["available_actual_observation_dates"] == [
         "2026-08-10",

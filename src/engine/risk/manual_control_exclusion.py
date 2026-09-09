@@ -35,6 +35,7 @@ _AUTO_EXCLUSION_SOURCES = frozenset(
 _MANUAL_OPERATOR_EXCLUSION_SOURCES = frozenset({"manual_operator"})
 _MACHINE_OWNER_SCOPE_SOURCES = frozenset({"machine_owner_scope"})
 LEGACY_MACHINE_OWNER_SCOPE_LABELS = {
+    "011170": "lotte_chemical_low_price_two_leg_owner",
     "002900": "tym_low_price_two_leg_owner",
     "005930": "samsung_electronics",
     "006800": "mirae_asset_low_price_two_leg_owner",

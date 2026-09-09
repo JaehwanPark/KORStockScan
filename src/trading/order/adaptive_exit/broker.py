@@ -765,9 +765,9 @@ class RegisteredSellAdapter:
             route=request.route,
             order_date=request.predecessor.trading_date,
             action=request.action,
-            original_order_no=request.predecessor.order_no
-            if request.action == "CANCEL"
-            else "",
+            original_order_no=(
+                request.predecessor.order_no if request.action == "CANCEL" else ""
+            ),
             authority_policy_id=FAMILY,
             authority_policy_hash=self.policy_hash,
         )
@@ -813,9 +813,7 @@ class RegisteredSellAdapter:
             state=(
                 "ORDER_BOUND"
                 if accepted
-                else "INTENT_AMBIGUOUS"
-                if ambiguous
-                else "INTENT_REJECTED"
+                else "INTENT_AMBIGUOUS" if ambiguous else "INTENT_REJECTED"
             ),
             broker_order_no=order.order_no if order else "",
             reason=reason,

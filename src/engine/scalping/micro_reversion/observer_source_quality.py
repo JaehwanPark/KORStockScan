@@ -66,6 +66,84 @@ CANARY_FORBIDDEN_TRUE_FIELDS = (
 )
 
 
+def closed_pre_enqueue_epoch_quarantine_validation(
+    guard: Mapping[str, Any], collector: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Validate exact rejection receipts for a strictly epoch-fenced consumer.
+
+    This is not a whole-date pass. The caller MUST exclude every raw stream,
+    depth and reference row outside ``allowed_sequence_epoch`` before joining.
+    The existing R0/Provider validator deliberately does not call this helper.
+    """
+    from .canary_monitor import timestamp_source_quality_census
+
+    rejected = {"eligible": False, "status": "pre_enqueue_epoch_contract_invalid"}
+    epoch = collector.get("sequence_epoch")
+    if (
+        type(epoch) is not int
+        or epoch <= 0
+        or guard.get("status") != "stopped_clean"
+        or guard.get("stop_required") is not False
+        or guard.get("stop_reasons") != []
+        or guard.get("raw_row_exclusion_required") is not True
+        or collector.get("collector_lifecycle") != "closed"
+        or collector.get("reference_reconciliation_completed") is not True
+        or collector.get("broker_order_forbidden") is not True
+        or any(collector.get(k) is not False for k in CANARY_FORBIDDEN_TRUE_FIELDS)
+    ):
+        return rejected
+    for field in (
+        *CANARY_LOSS_COUNTERS,
+        "stale_sequence_epoch_envelope_count",
+        "path_exchange_timestamp_regression_count",
+        "path_exchange_timestamp_regression_exceeded_count",
+        "path_exchange_timestamp_regression_quarantined_count",
+    ):
+        if type(collector.get(field)) is not int or collector[field] != 0:
+            return {**rejected, "invalid_counter": field}
+    census = timestamp_source_quality_census(dict(collector))
+    if (
+        census.get("exact_rejected_row_exclusion_proven") is not True
+        or guard.get("timestamp_source_quality") != census
+        or guard.get("source_quality_row_exclusions") != census["issues"]
+    ):
+        return rejected
+    receipts = collector["timestamp_rejection_samples"]
+    if len({r["process_pid"] for r in receipts}) != 1 or any(
+        not 0 < r["local_observer_epoch"] <= epoch for r in receipts
+    ):
+        return rejected
+    groups = [
+        (
+            "enqueued_count",
+            "worker_processed_count",
+            "writer_persisted_envelope_count",
+            "path_point_submitted_count",
+        )
+    ]
+    if collector.get("depth_capture_requested") is True:
+        groups.append(
+            (
+                "depth_enqueued_count",
+                "depth_worker_processed_count",
+                "depth_writer_persisted_envelope_count",
+            )
+        )
+    for group in groups:
+        values = [collector.get(k) for k in group]
+        if any(type(v) is not int or v < 0 for v in values) or len(set(values)) != 1:
+            return {**rejected, "status": "pre_enqueue_persistence_mismatch"}
+    return {
+        "eligible": True,
+        "status": "fully_accounted_pre_enqueue_epoch_only",
+        "allowed_sequence_epoch": epoch,
+        "quarantined_row_count": len(receipts),
+        "whole_date_approval": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def timestamp_regression_row_quarantine_validation(
     guard: Mapping[str, Any], collector: Mapping[str, Any]
 ) -> dict[str, Any]:

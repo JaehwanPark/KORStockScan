@@ -5,6 +5,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+RECOVERY_MODE=false
+if [[ "${2:-}" == "--recover-closed-target" ]]; then
+  RECOVERY_MODE=true
+elif [[ -n "${2:-}" ]]; then
+  echo "[FAIL] postclose_finalization reason=unknown_mode"
+  exit 2
+fi
+cleanup_recovery_args=()
+if [[ "${3:-}" == "--recover-storage-only" && "$RECOVERY_MODE" == "true" && $# -eq 3 ]]; then
+  cleanup_recovery_args+=(--recover-storage-only)
+elif [[ -n "${3:-}" || $# -gt 3 ]]; then
+  echo "[FAIL] postclose_finalization reason=unknown_cleanup_recovery_mode"
+  exit 2
+fi
 WAIT_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_WAIT_TIMEOUT_SEC:-5100}"
 POLL_SEC="${POSTCLOSE_FINALIZATION_POLL_SEC:-30}"
 HARD_DEADLINE_KST="${POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-23:20}"
@@ -20,15 +34,35 @@ if [[ ! "$WAIT_TIMEOUT_SEC" =~ ^[0-9]+$ || ! "$POLL_SEC" =~ ^[1-9][0-9]*$ || ! "
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=invalid_wait_config"
   exit 2
 fi
-if [[ "$ALLOW_NONCURRENT_TARGET" != "true" && "$TARGET_DATE" != "$(TZ=Asia/Seoul date +%F)" ]]; then
+if [[ "$RECOVERY_MODE" == "true" ]]; then
+  "$VENV_PY" - "$TARGET_DATE" <<'PY'
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import sys
+day = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
+assert day.isoformat() == sys.argv[1]
+assert 0 <= (datetime.now(ZoneInfo("Asia/Seoul")).date() - day).days <= 1
+PY
+  if ! rg -q "\\[FAIL\\] postclose_finalization .*target_date=${TARGET_DATE}\\b" "$PROJECT_DIR/logs/postclose_finalization_cron.log"; then
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=recovery_requires_prior_failure"
+    exit 2
+  fi
+  WAIT_TIMEOUT_SEC=0
+fi
+if [[ "$RECOVERY_MODE" != "true" && "$ALLOW_NONCURRENT_TARGET" != "true" && "$TARGET_DATE" != "$(TZ=Asia/Seoul date +%F)" ]]; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=noncurrent_target_for_final_detector"
   exit 2
 fi
 
 mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/tmp"
 cd "$PROJECT_DIR"
+exec 8>"$PROJECT_DIR/tmp/postclose_finalization_${TARGET_DATE}.lock"
+if ! flock -n 8; then
+  echo "[SKIP] postclose_finalization target_date=${TARGET_DATE} reason=active_owner"
+  exit 75
+fi
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[START] postclose_finalization target_date=${TARGET_DATE} wait_timeout_sec=${WAIT_TIMEOUT_SEC} hard_deadline_kst=${HARD_DEADLINE_KST} started_at=${started_at}"
+echo "[START] postclose_finalization target_date=${TARGET_DATE} recovery=${RECOVERY_MODE} wait_timeout_sec=${WAIT_TIMEOUT_SEC} hard_deadline_kst=${HARD_DEADLINE_KST} started_at=${started_at}"
 
 predecessor_state() {
   env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" <<'PY'
@@ -161,15 +195,19 @@ PY
 }
 
 run_final_detector() {
+  local detector_args=(full)
+  if [[ "$RECOVERY_MODE" == "true" ]]; then
+    detector_args+=("$TARGET_DATE")
+  fi
   timeout --foreground "${DETECTOR_TIMEOUT_SEC}s" bash "$OWNED_LOG_RUNNER" \
     --owner error_detection_cron \
     --log "$PROJECT_DIR/logs/run_error_detection_cron.log" \
-    bash "$ERROR_DETECTION_RUNNER" full
+    bash "$ERROR_DETECTION_RUNNER" "${detector_args[@]}"
 }
 
 waited=0
 while true; do
-  if [[ "$ALLOW_NONCURRENT_TARGET" != "true" ]]; then
+  if [[ "$RECOVERY_MODE" != "true" && "$ALLOW_NONCURRENT_TARGET" != "true" ]]; then
     current_hm="$(TZ=Asia/Seoul date +%H:%M)"
     current_total=$((10#${current_hm%:*} * 60 + 10#${current_hm#*:}))
     deadline_total=$((10#${HARD_DEADLINE_KST%:*} * 60 + 10#${HARD_DEADLINE_KST#*:}))
@@ -229,7 +267,7 @@ fi
 if ! timeout --foreground "${CLEANUP_TIMEOUT_SEC}s" bash "$OWNED_LOG_RUNNER" \
   --owner log_rotation_cleanup_cron \
   --log "$PROJECT_DIR/logs/log_rotation_cleanup_cron.log" \
-  env TARGET_DATE="$TARGET_DATE" "$CLEANUP_RUNNER" 30; then
+  env TARGET_DATE="$TARGET_DATE" "$CLEANUP_RUNNER" 30 "${cleanup_recovery_args[@]}"; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=cleanup_failed"
   run_final_detector || true
   exit 1

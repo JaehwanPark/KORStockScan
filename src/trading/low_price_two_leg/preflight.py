@@ -325,6 +325,30 @@ RECOMMENDATION_20260908_PROFILE_MAP = {
 def _research_evidence_contract(
     profile: MachineProfile, *, target_date: date | None = None
 ) -> dict:
+    current_profile_id = (
+        {
+            "sk_telecom_morning": "logic_sk_telecom_morning",
+            "kepco_late_morning": "logic_kepco_late_morning",
+            "lotte_chemical_morning": "candidate_011170_morning",
+            "lotte_chemical_afternoon": "candidate_011170_afternoon",
+            "tym_late_morning": "existing_002900_late_morning",
+        }.get(profile.profile_id)
+        if target_date is None or target_date >= date(2026, 9, 10)
+        else None
+    )
+    if current_profile_id:
+        return {
+            "path": DATA_DIR.parent
+            / "docs/audit-reports/2026-09-09-low-price-recommendation-apply-evidence.json",
+            "report_profile_id": current_profile_id,
+            "sha256": "9fd7c9b681f8e3dca3ab47dd2e01c5e5bc31dbee740bd35873a02e98414b5389",
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v7",
+            "start_date": "2026-06-05",
+            "end_date": "2026-09-09",
+            "trading_date_count": 67,
+            "window": "2026-06-05_through_2026-09-09_67_trading_days",
+            "source_report_sha256": "976805125cb3330366ee902eb1d3a4096554435e2bfabbc28e1a1064d74dde78",
+        }
     recommendation_20260908_profile_id = (
         RECOMMENDATION_20260908_PROFILE_MAP.get(profile.profile_id)
         if target_date is None or target_date >= date(2026, 9, 9)

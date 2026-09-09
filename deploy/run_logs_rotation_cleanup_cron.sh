@@ -6,6 +6,13 @@ PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 KORSTOCKSCAN_CODE_ROOT="${KORSTOCKSCAN_CODE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 LOG_DIR="$PROJECT_DIR/logs"
 RETENTION_DAYS="${1:-${LOG_ROTATION_ARCHIVE_RETENTION_DAYS:-30}}"
+STORAGE_ONLY_RECOVERY=false
+if [[ "${2:-}" == "--recover-storage-only" && $# -eq 2 ]]; then
+  STORAGE_ONLY_RECOVERY=true
+elif [[ -n "${2:-}" || $# -gt 2 ]]; then
+  echo "[LOG_CLEANUP_ERROR] unknown recovery mode"
+  exit 2
+fi
 TARGET_DATE="${TARGET_DATE:-$(TZ=Asia/Seoul date +%F)}"
 ACTIVE_LOG_MAX_BYTES="${LOG_ROTATION_ACTIVE_MAX_BYTES:-${KORSTOCKSCAN_LOG_ROTATE_MAX_BYTES:-20971520}}"
 ACTIVE_LOG_BACKUP_COUNT="${LOG_ROTATION_BACKUP_COUNT:-5}"
@@ -102,6 +109,51 @@ if [[ "$MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED" != "true" && "$MICRO_REVERS
 fi
 
 mkdir -p "$LOG_DIR" "$PROJECT_DIR/tmp"
+generic_recovery_receipt=""
+if [[ "$STORAGE_ONLY_RECOVERY" == "true" ]]; then
+  if [[ "$MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED" != "true" || "$MICRO_REVERSION_STORAGE_PURGE_ENABLED" != "false" ]]; then
+    echo "[LOG_CLEANUP_ERROR] storage recovery requires maintenance and forbids purge"
+    exit 2
+  fi
+  generic_recovery_receipt="$("$PYTHON_BIN" - "$LOG_DIR/log_rotation_cleanup_cron.log" "$TARGET_DATE" <<'PY'
+import hashlib
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+target = sys.argv[2]
+day = datetime.strptime(target, "%Y-%m-%d").date()
+now = datetime.now(ZoneInfo("Asia/Seoul"))
+if day.isoformat() != target or not 0 <= (now.date() - day).days <= 1:
+    raise SystemExit("storage recovery requires today or yesterday")
+lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+matching = [line for line in lines if re.match(r"\[(START|DONE|FAIL)\] log_rotation_cleanup\b", line)
+            and f"target_date={target}" in line.split()]
+line = matching[-1] if matching else ""
+if not line.startswith("[FAIL] "):
+    raise SystemExit("storage recovery requires the latest exact-date failure")
+pairs = re.findall(r"(\w+)=(\S+)", line)
+fields = dict(pairs)
+if len(fields) != len(pairs):
+    raise SystemExit("duplicate cleanup receipt fields")
+zero_fields = ("writer_defer_escalated", "writer_defer_state_failures", "active_retention_failures",
+               "archive_compression_failures", "archive_retention_failures", "find_enumeration_failures",
+               "data_maintenance_failures", "compression_verify_failures",
+               "micro_reversion_storage_partition_failures", "micro_reversion_storage_failed_candidates",
+               "micro_reversion_storage_recovery_required")
+if (any(fields.get(key) != "0" for key in zero_fields)
+        or fields.get("micro_reversion_storage_status") != "invalid_result"
+        or fields.get("micro_reversion_storage_failures") != "1"):
+    raise SystemExit("storage recovery cannot reuse incomplete or failed generic cleanup")
+finished = datetime.fromisoformat(fields.get("finished_at", ""))
+if finished.tzinfo is None or not 0 <= (now - finished).total_seconds() <= 3600:
+    raise SystemExit("generic cleanup receipt is not a recent completed attempt")
+print(f"generic_receipt_sha256={hashlib.sha256(line.encode()).hexdigest()} generic_finished_at={fields['finished_at']}")
+PY
+)"
+fi
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 cleanup_run_id="${TARGET_DATE}:$$:$(date +%s%N)"
 echo "[START] log_rotation_cleanup target_date=${TARGET_DATE} archive_retention_days=${RETENTION_DAYS} active_log_retention_days=${ACTIVE_LOG_RETENTION_DAYS} active_log_compress_min_index=${ACTIVE_LOG_COMPRESS_MIN_INDEX} archive_compression_quiet_seconds=${ARCHIVE_COMPRESSION_QUIET_SECONDS} writer_defer_failure_threshold=${WRITER_DEFER_FAILURE_THRESHOLD} system_metric_retention_days=${SYSTEM_METRIC_RETENTION_DAYS} raw_row_exclusion_backup_retention_days=${RAW_ROW_EXCLUSION_BACKUP_RETENTION_DAYS} active_log_max_bytes=${ACTIVE_LOG_MAX_BYTES} active_log_backup_count=${ACTIVE_LOG_BACKUP_COUNT} active_rotation_status=disabled_pending_writer_owner data_maintenance_enabled=${DATA_MAINTENANCE_ENABLED} micro_reversion_storage_maintenance_enabled=${MICRO_REVERSION_STORAGE_MAINTENANCE_ENABLED} micro_reversion_storage_purge_enabled=${MICRO_REVERSION_STORAGE_PURGE_ENABLED} started_at=${started_at}"
@@ -1667,6 +1719,16 @@ if [[ "$DATA_MAINTENANCE_ENABLED" == "true" ]]; then
     fi
     echo "[MICRO_REVERSION_STORAGE] status=${micro_reversion_storage_status} actions=${micro_reversion_storage_action_count} compressed=${micro_reversion_storage_compressed_count} purged=${micro_reversion_storage_purged_count} purge_partial=${micro_reversion_storage_purge_partial_count} purge_enabled=${micro_reversion_storage_purge_enabled} purge_status=${micro_reversion_storage_purge_status} report_artifact_actions=${micro_reversion_report_artifact_action_count} report_artifact_compressed=${micro_reversion_report_artifact_compressed_count} report_artifact_source_bytes=${micro_reversion_report_artifact_source_bytes} report_artifact_failures=${micro_reversion_report_artifact_failure_count} report_artifact_retention_candidates=${micro_reversion_report_artifact_retention_candidate_count} report_artifact_retention_candidate_bytes=${micro_reversion_report_artifact_retention_candidate_bytes} artifact_sets=${micro_reversion_artifact_set_count} artifact_set_terminal=${micro_reversion_artifact_set_terminal_count} artifact_set_superseded=${micro_reversion_artifact_set_superseded_count} artifact_set_incomplete=${micro_reversion_artifact_set_incomplete_count} artifact_set_stale_workorders=${micro_reversion_artifact_set_stale_workorder_count} artifact_set_stale_workorder_bytes=${micro_reversion_artifact_set_stale_workorder_bytes} immutable_source_artifacts=${micro_reversion_immutable_source_artifact_count} immutable_source_artifact_bytes=${micro_reversion_immutable_source_artifact_bytes} checkpoint_journals=${micro_reversion_checkpoint_journal_count} checkpoint_terminal=${micro_reversion_checkpoint_terminal_count} checkpoint_superseded=${micro_reversion_checkpoint_superseded_count} checkpoint_incomplete=${micro_reversion_checkpoint_incomplete_count} checkpoint_stale_workorders=${micro_reversion_checkpoint_stale_workorder_count} checkpoint_stale_workorder_bytes=${micro_reversion_checkpoint_stale_workorder_bytes} provider_budget_ledgers=${micro_reversion_provider_budget_ledger_count} provider_budget_ledger_bytes=${micro_reversion_provider_budget_ledger_bytes} provider_budget_retention_candidates=${micro_reversion_provider_budget_retention_candidate_count} provider_budget_retention_candidate_bytes=${micro_reversion_provider_budget_retention_candidate_bytes} exact_ai_artifacts=${micro_reversion_exact_ai_artifact_count} exact_ai_artifact_bytes=${micro_reversion_exact_ai_artifact_bytes} exact_ai_compressed=${micro_reversion_exact_ai_compressed_count} exact_ai_failures=${micro_reversion_exact_ai_failure_count} exact_ai_retention_candidates=${micro_reversion_exact_ai_retention_candidate_count} exact_ai_retention_candidate_bytes=${micro_reversion_exact_ai_retention_candidate_bytes} daily_owner_status=${micro_reversion_daily_owner_status} daily_owner_partitions=${micro_reversion_daily_owner_partition_count} daily_owner_files=${micro_reversion_daily_owner_file_count} daily_owner_bytes=${micro_reversion_daily_owner_bytes} daily_owner_exact_date_files=${micro_reversion_daily_owner_exact_date_file_count} daily_owner_exact_date_bytes=${micro_reversion_daily_owner_exact_date_bytes} daily_owner_retention_candidates=${micro_reversion_daily_owner_retention_candidate_count} daily_owner_retention_candidate_bytes=${micro_reversion_daily_owner_retention_candidate_bytes} daily_owner_archive_offload_status=${micro_reversion_daily_owner_archive_offload_status} disk_free_bytes_before=${micro_reversion_storage_disk_free_bytes_before} disk_free_bytes_after=${micro_reversion_storage_disk_free_bytes_after} disk_free_bytes_delta=${micro_reversion_storage_disk_free_bytes_delta} retained_physical_bytes_after=${micro_reversion_storage_retained_physical_bytes_after} compressed_target_bytes=${micro_reversion_storage_compressed_target_bytes} bytes_reclaimed=${micro_reversion_storage_bytes_reclaimed} capacity_state=${micro_reversion_storage_capacity_state} capacity_workorder_required=${micro_reversion_storage_capacity_workorder_required} capacity_status_written=${micro_reversion_storage_capacity_status_written} runtime_effect=false order_authority=false provider_authority=false deletion_authority=false archive_offload_authority=false"
   fi
+fi
+
+if [[ "$STORAGE_ONLY_RECOVERY" == "true" ]]; then
+  finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+  if [[ "$micro_reversion_storage_failure_count" -ne 0 ]]; then
+    echo "[FAIL] log_rotation_cleanup target_date=${TARGET_DATE} recovery=storage_only ${generic_recovery_receipt} reason=storage_recovery_failed finished_at=${finished_at}"
+    exit 1
+  fi
+  echo "[DONE] log_rotation_cleanup target_date=${TARGET_DATE} recovery=storage_only ${generic_recovery_receipt} micro_reversion_storage_status=${micro_reversion_storage_status} generic_cleanup_reexecuted=false finished_at=${finished_at}"
+  exit 0
 fi
 
 # Active/writer-owned logs are never renamed, truncated, or shifted here. The

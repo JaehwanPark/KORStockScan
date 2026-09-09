@@ -80,30 +80,36 @@ def runtime(request, tmp_path):
             first_fill_at_ms=NOW - (20000 if trailing else 60000),
         )
         target = registry.order_owner(order_date=DATE, broker_order_no=TARGET.order_no)
-        return OwnerSession(
-            policy,
-            p,
-            ExecutionBounds(
-                3000, 2, 5000, "exit_with_fresh_guard", "retain_manager_and_alert"
-            ),
-            adapter.context,
-            target["intent_id"],
-            "b" * 64,
-            DriverState(
-                ExitState(
-                    p.owner_id,
-                    p.episode_id,
-                    p.lot_id,
-                    policy.policy_hash,
-                    p.position_epoch,
-                    TARGET,
-                    p.open_qty,
+        return (
+            OwnerSession(
+                policy,
+                p,
+                ExecutionBounds(
+                    3000, 2, 5000, "exit_with_fresh_guard", "retain_manager_and_alert"
                 ),
-                DecisionState(
-                    policy.policy_hash, p.position_epoch, p.first_fill_at_ms, p.open_qty
+                adapter.context,
+                target["intent_id"],
+                "b" * 64,
+                DriverState(
+                    ExitState(
+                        p.owner_id,
+                        p.episode_id,
+                        p.lot_id,
+                        policy.policy_hash,
+                        p.position_epoch,
+                        TARGET,
+                        p.open_qty,
+                    ),
+                    DecisionState(
+                        policy.policy_hash,
+                        p.position_epoch,
+                        p.first_fill_at_ms,
+                        p.open_qty,
+                    ),
                 ),
             ),
-        ), snap
+            snap,
+        )
 
     def build(session, *, fail_phase=None, authorize=True):
         def save(payload):
@@ -131,9 +137,9 @@ def runtime(request, tmp_path):
             persist_record=save,
             lock_held=lambda: flags["locked"],
             owner_guard=lambda *a, **k: flags["guard"],
-            authorize_binding=(lambda binding: flags["authorized"])
-            if authorize
-            else None,
+            authorize_binding=(
+                (lambda binding: flags["authorized"]) if authorize else None
+            ),
         )
 
     def tick(port, *, bid=10010, quote=True, seq=None):

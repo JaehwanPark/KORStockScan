@@ -17,6 +17,39 @@ def _force_trading_day(monkeypatch):
     monkeypatch.setattr(cc, "is_krx_trading_day", lambda target: True)
 
 
+def test_recovery_uses_original_source_date_not_midnight_not_yet_due(
+    monkeypatch, tmp_path
+):
+    import src.engine.error_detectors.cron_completion as cc
+
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "_today_kst", lambda: "2026-09-10")
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (0, 20))
+    monkeypatch.setattr(
+        cc,
+        "CRON_JOB_REGISTRY",
+        [
+            {
+                "id": "test_recovery",
+                "log": "tail.log",
+                "window_start": (21, 55),
+                "window_end": (23, 20),
+                "mode": "once",
+                "critical": True,
+            }
+        ],
+    )
+    (tmp_path / "tail.log").write_text(
+        "[DONE] test target_date=2026-09-09 finished_at=2026-09-10T00:19:00\n"
+    )
+    detector = cc.CronCompletionDetector(dry_run=True)
+    detector.postclose_source_date = "2026-09-09"
+    result = detector.check()
+    assert result.details["test_recovery_status"] == "pass"
+    (tmp_path / "tail.log").write_text("[DONE] test target_date=2026-09-10\n")
+    assert detector.check().severity == "fail"
+
+
 class TestCronCompletionDetector:
     @pytest.mark.parametrize(
         "line",

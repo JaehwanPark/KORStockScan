@@ -1495,9 +1495,7 @@ def _calibrate_session(
     provisional_decision = (
         "widget_auto_trade_policy_candidate_ready"
         if selected["ready"] and holdout_ready
-        else selected["reason"]
-        if not selected["ready"]
-        else holdout_reason
+        else selected["reason"] if not selected["ready"] else holdout_reason
     )
     carry_forward_policy = _carry_forward_parameters(previous_runtime_policy)
     carry_forward_calibration_summary = None
@@ -2006,10 +2004,12 @@ def apply_paired_target_selection(
     """Replace the winner-only Samsung selector; freeze every non-target knob."""
     parameters = paired_replay.policy_parameters(previous)
     study = paired_replay.build_study(
-        inputs
-        if not confirmation_axis_changed
-        and not (previous or {}).get("incumbent_recovery_only")
-        else [],
+        (
+            inputs
+            if not confirmation_axis_changed
+            and not (previous or {}).get("incumbent_recovery_only")
+            else []
+        ),
         symbol=symbol,
         session=session,
         parameters=parameters,
@@ -2054,9 +2054,11 @@ def apply_paired_target_selection(
     }
     selected["target_bps"] = selection["selected_value"]
     calibration.update(
-        decision="widget_auto_trade_policy_candidate_ready"
-        if selection["candidate_ready"]
-        else "carry_forward_previous_verified_policy",
+        decision=(
+            "widget_auto_trade_policy_candidate_ready"
+            if selection["candidate_ready"]
+            else "carry_forward_previous_verified_policy"
+        ),
         runtime_selected_policy=selected,
         carry_forward_previous_policy=not selection["candidate_ready"],
         carry_forward_from_policy_id=(previous or {}).get("policy_id"),
@@ -2084,9 +2086,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
             elif calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 block_reason = str(calibration["decision"])
             if block_reason is not None:
-                blocked_sessions.setdefault(spec.symbol, {})[session_name] = (
-                    block_reason
-                )
+                blocked_sessions.setdefault(spec.symbol, {})[
+                    session_name
+                ] = block_reason
                 continue
             if calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 continue

@@ -1602,9 +1602,7 @@ class WidgetSignalAutoTrader:
                 state=(
                     "ORDER_BOUND"
                     if result.accepted
-                    else "INTENT_AMBIGUOUS"
-                    if result.ambiguous
-                    else "INTENT_REJECTED"
+                    else "INTENT_AMBIGUOUS" if result.ambiguous else "INTENT_REJECTED"
                 ),
                 broker_order_no=result.order_no if result.accepted else "",
                 reason=result.return_msg,
@@ -1836,9 +1834,7 @@ class WidgetSignalAutoTrader:
                 else (
                     "order_submit_ambiguous"
                     if result.ambiguous
-                    else "order_submitted"
-                    if result.accepted
-                    else "order_submit_failed"
+                    else "order_submitted" if result.accepted else "order_submit_failed"
                 )
             ),
             spec,
@@ -1985,9 +1981,7 @@ class WidgetSignalAutoTrader:
                 order["status"] = (
                     "FILLED"
                     if filled == requested
-                    else "PARTIAL_CANCELED"
-                    if filled
-                    else "CANCELED"
+                    else "PARTIAL_CANCELED" if filled else "CANCELED"
                 )
             changed = True
             execution_venue_changed = bool(

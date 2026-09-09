@@ -225,9 +225,11 @@ def replay_execution(
         now = clock.now_ms
         quote_key = (
             snapshot.source_epoch,
-            snapshot.quote_sequence
-            if snapshot.quote_sequence is not None
-            else snapshot.sequence,
+            (
+                snapshot.quote_sequence
+                if snapshot.quote_sequence is not None
+                else snapshot.sequence
+            ),
         )
         new_quote = quote_key != last_quote_key
         last_quote_key = quote_key

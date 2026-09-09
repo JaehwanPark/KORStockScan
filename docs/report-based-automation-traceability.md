@@ -921,6 +921,8 @@ daily calibration의 표본 분모도 paired count다. 순수 표본·날짜 부
 
 ## 6. 다음 추적 항목
 
+9/10 low-price 승인 전환: source9/9 expanded research의 native 추천→`2026-09-09-low-price-recommendation-apply-evidence.json`→dated profile revision→기존 PREOPEN policy apply/preflight→각 profile timer/live의 순서다.59개 catalog/기존격리3개,수량10주×2와 기존 custody target은 보존한다. 신규3개 lotte_chemical_morning/lotte_chemical_afternoon/tym_late_morning은9/10 이전 실행 모집단에 넣지 않는다. 설치/검증 receipt와 남은 자연 acceptance는 [승인 복구 리뷰](audit-reports/2026-09-09-postclose-authorized-recovery-review.md) 및9/10 checklist가 소유한다.
+
 미래 작업과 당일 실행 owner는 현재 날짜의 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`가 소유한다. 과거 checklist와 완료 artifact는 archive evidence이며 current OPEN owner로 해석하지 않는다.
 
 
@@ -942,6 +944,8 @@ Daily pipeline input의 `smoothing_force_exit_row_exclusion_v1`은 식별 가능
 
 
 ### 2026-09-07 machine closed-source quarantine handoff
+
+9/10 recovery supplement: low-price durable manual receipt metadata → attribution's applied-registry validation → `verified_manual_timestamp_loss_v1` exclusion preserves manual/original-target separation and never supplies a fill clock. A fully read closed exact market window with zero valid rows emits a separate source-hash-bound `closed_exact_market_window_exclusion_v2`. Timing accepts terminal quarantine only when every affected anchor is accounted, all repairable identity/source gaps are absent, and the canary hash matches; no sample/floor or live guard is relaxed. Explicit failed-source-date finalization recovery uses `--recover-closed-target`, all predecessors/strict handoff and non-mutating seven-detector checks with actual as-of timestamps. Original deadline failures remain historical evidence; normal cron deadlines are unchanged. See the runbook's explicit recovery section.
 
 `machine_microstructure_attribution`은 native widget execution signal ID를 exact owner/symbol/date/session 계약으로 결속한다. 닫힌 collector의 enqueue 전 거절과 복원 불가능한 exact-row receipt 결손은 hash-bound canary의 `immutable_ingress_receipt_loss`로 진단하며 source는 계속 invalid다. `machine_entry_timing_tuning`은 전수 actual anchor source-blocked 및 repairable companion gap0일 때만 기존 exact-source-date quarantine handoff를 사용한다. Verifier/controller는 이 terminal source exclusion과 구조 수리 필요를 구분한다. 자연 표본·정책 승격·PID 소비 완료가 아니며 기존 수량/target/guards와 baseline policy를 바꾸지 않는다. 379-test 및 실제 source replay 근거는 [장후 복구 검토](./audit-reports/2026-09-07-postclose-monitoring-recovery-review.md)에 있다.
 

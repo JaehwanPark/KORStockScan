@@ -1724,6 +1724,287 @@ def test_verified_target_receipt_unknown_time_is_exclusion_not_realized_sample(
     assert not any(a["lifecycle_stage"] == "exit" for a in anchors)
 
 
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "missing_registry",
+        "duplicate",
+        "owner",
+        "date",
+        "status",
+        "clock_status",
+        "applied_time",
+        "quantity",
+        "boolean_quantity",
+        "price",
+        "allocated",
+        "authority",
+        "observed_time",
+        "registry_hash",
+    ],
+)
+def test_manual_timestamp_loss_requires_exact_applied_registry(tmp_path, defect):
+    from src.engine.monitoring.low_price_two_leg_tuning import _sanitize_leg
+    from src.engine.automation.machine_entry_timing_tuning import (
+        _immutable_owner_timestamp_exclusion,
+    )
+    from datetime import date
+
+    day = "2026-09-09"
+    receipt = {
+        "order_no": "0062072",
+        "order_date": day,
+        "symbol": "015760",
+        "source_api": "kt00007",
+        "filled_qty": 10,
+        "fill_price": 33950,
+        "allocated_qty": 10,
+        "allocation_authority": "explicit_owner_whole_position_exit",
+    }
+    raw = {
+        "leg_id": "signal_close",
+        "status": "COMPLETE",
+        "quantity": 10,
+        "entry_price": 34700,
+        "fill_price": 34700,
+        "target_price": 34900,
+        "position_qty": 0,
+        "buy_filled_qty": 10,
+        "target_filled_qty": 10,
+        "target_fill_price": 33950,
+        "buy_filled_at": day + "T09:36:10+09:00",
+        "target_filled_at": "",
+        "target_fill_reconciled_at": day + "T17:15:12+09:00",
+        "exit_fill_source": "broker_verified_manual_sell_receipt",
+        "manual_exit_receipt": receipt,
+    }
+    applied = {
+        k: receipt[k]
+        for k in (
+            "order_no",
+            "order_date",
+            "symbol",
+            "source_api",
+            "filled_qty",
+            "fill_price",
+        )
+    }
+    applied.update(
+        owner_id="kepco_morning",
+        entry_trade_date=day,
+        status="applied",
+        fill_timestamp_status="unavailable_from_dated_order_receipt",
+        applied_at_kst=raw["target_fill_reconciled_at"],
+    )
+    registry = {
+        "schema": "episode_manual_exit_receipt_registry_v1",
+        "receipts": [applied],
+    }
+    if defect == "missing_registry":
+        registry = {}
+    if defect == "duplicate":
+        registry["receipts"].append(dict(applied))
+    if defect == "owner":
+        applied["owner_id"] = "other"
+    if defect == "date":
+        applied["entry_trade_date"] = "2026-09-08"
+    if defect == "status":
+        applied["status"] = "reserved"
+    if defect == "clock_status":
+        applied["fill_timestamp_status"] = "unknown"
+    if defect == "applied_time":
+        applied["applied_at_kst"] = day + "T08:00:00+09:00"
+    if defect == "quantity":
+        applied["filled_qty"] = 9
+    if defect == "boolean_quantity":
+        applied["filled_qty"] = True
+    if defect == "price":
+        applied["fill_price"] = 34000
+    if defect == "allocated":
+        receipt["allocated_qty"] = 9
+    if defect == "authority":
+        receipt["allocation_authority"] = "inferred"
+    if defect == "observed_time":
+        raw["target_filled_at"] = day + "T15:00:00+09:00"
+    leg = _sanitize_leg(raw, 0.23)
+    assert leg["manual_exit_receipt"] == receipt
+    proof = attribution_module._verified_manual_timestamp_loss(
+        leg,
+        symbol="015760",
+        profile_id="kepco_morning",
+        target_date=day,
+        registry=registry,
+        registry_sha256=None if defect == "registry_hash" else "a" * 64,
+    )
+    assert (proof is not None) is (defect is None)
+    if proof:
+        assert leg["target_filled_at"] is None and leg["holding_duration_sec"] is None
+        row = {
+            "owner": "episode",
+            "scope_id": "kepco_morning",
+            "symbol": "015760",
+            "owner_lifecycle_contract_valid": False,
+            "owner_policy_tuning_eligible": False,
+            "owner_terminal_timestamp_exclusion": {
+                "schema": "verified_manual_timestamp_loss_v1",
+                "source_date": day,
+                "scope_id": "kepco_morning",
+                "symbol": "015760",
+                "receipts": [proof],
+                "timing_sample_eligible": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
+        }
+        assert _immutable_owner_timestamp_exclusion(row, date.fromisoformat(day))
+        proof.pop("registry_sha256")
+        assert not _immutable_owner_timestamp_exclusion(row, date.fromisoformat(day))
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "running",
+        "incomplete",
+        "unreadable",
+        "manifest",
+        "nonempty",
+        "source_id",
+        "diagnostic",
+        "scope_invalid",
+        "late_study_only",
+        "last_checkpoint",
+        "raw_timestamp_missing",
+    ],
+)
+def test_closed_exact_window_exclusion_never_creates_valid_samples(defect):
+    from datetime import date
+    from src.engine.automation.machine_entry_timing_tuning import (
+        _closed_market_window_excluded,
+    )
+
+    day = "2026-09-09"
+    anchor = {
+        "anchor_role": "episode_signal_decision_leg",
+        "anchor_at": day + "T10:00:00+09:00",
+        "entry_timing_decision_anchor_valid": True,
+        "source_entry_event_id": "native-signal",
+        "anchor_id": "native-anchor",
+        "symbol": "015760",
+        "expected_venues": ["SOR"],
+        "expected_session_buckets": ["SOR_REGULAR"],
+    }
+    source = {
+        "partition_status": "loaded",
+        "source_contract_ready": True,
+        "source_exclusion_manifest_status": "loaded",
+        "canary_source_quality": {
+            "status": "loaded_pass",
+            "target_day_complete": True,
+            "stopped_clean_closed": True,
+            "source_sha256": "a" * 64,
+        },
+    }
+    window = {"rows": [], "raw_market_rows": []}
+    inventory = {"invalid_contract_row_count": 0, "invalid_contract_scope_counts": {}}
+    if defect == "running":
+        source["canary_source_quality"]["stopped_clean_closed"] = False
+    if defect == "incomplete":
+        source["canary_source_quality"]["target_day_complete"] = False
+    if defect == "unreadable":
+        source["source_contract_ready"] = False
+    if defect == "manifest":
+        source["source_exclusion_manifest_status"] = "invalid"
+    if defect == "nonempty":
+        window["rows"] = [{}]
+    if defect == "late_study_only":
+        window["rows"] = [
+            {"timestamp": datetime.fromisoformat(day + "T10:20:00+09:00")}
+        ]
+        window["raw_market_rows"] = [
+            {"local_receive_timestamp": day + "T10:20:00+09:00"}
+        ]
+    if defect == "last_checkpoint":
+        window["raw_market_rows"] = [
+            {"local_receive_timestamp": day + "T10:00:06+09:00"}
+        ]
+    if defect == "raw_timestamp_missing":
+        window["raw_market_rows"] = [{}]
+    if defect == "source_id":
+        anchor["source_entry_event_id"] = ""
+    if defect == "diagnostic":
+        anchor["anchor_role"] = "episode_signal_bar"
+    if defect == "scope_invalid":
+        inventory["invalid_contract_row_count"] = 1
+    proof = attribution_module._closed_market_window_exclusion(
+        anchor, window, source, inventory, day
+    )
+    assert (proof is not None) is (defect in (None, "late_study_only"))
+    if proof:
+        assert proof["timing_sample_eligible"] is False
+        row = {**anchor, "closed_market_window_exclusion": proof}
+        assert _closed_market_window_excluded(row, date.fromisoformat(day))
+        proof["expected_venues"] = ["NXT"]
+        assert not _closed_market_window_excluded(row, date.fromisoformat(day))
+
+
+def test_receipt_projection_preserves_economics_and_rejects_state_change(tmp_path):
+    from src.engine.monitoring import low_price_two_leg_tuning as producer
+
+    day = "2026-09-09"
+    state_dir, output_dir = tmp_path / "state", tmp_path / "report"
+    state_dir.mkdir()
+    output_dir.mkdir()
+    raw = {
+        "leg_id": "signal_close",
+        "status": "COMPLETE",
+        "quantity": 10,
+        "entry_price": 34700,
+        "fill_price": 34700,
+        "target_price": 34900,
+        "position_qty": 0,
+        "buy_filled_qty": 10,
+        "target_filled_qty": 10,
+        "target_fill_price": 33950,
+        "buy_filled_at": day + "T09:36:10+09:00",
+        "target_filled_at": "",
+        "exit_fill_source": "broker_verified_manual_sell_receipt",
+        "manual_exit_receipt": {"order_no": "12345"},
+    }
+    leg = producer._sanitize_leg(raw, 0.23)
+    leg.pop("manual_exit_receipt")
+    report = {
+        "schema": producer.REPORT_SCHEMA,
+        "target_date": day,
+        "cost_pct": 0.23,
+        "daily": {"profiles": {"kepco_morning": {"legs": [leg]}}},
+        "windows": {"existing_economics": {"realized_pnl": 1896, "missing_cost": None}},
+    }
+    report["artifact_hash"] = producer.report_artifact_hash(report)
+    path = output_dir / f"{producer.REPORT_TYPE}_{day}.json"
+    path.write_text(json.dumps(report))
+    state_path = state_dir / "kepco_morning_state.json"
+    state_path.write_text(json.dumps({"trade_date": day, "legs": [raw]}))
+    updated = producer.refresh_receipt_projection(
+        target_date=day, state_dir=state_dir, output_dir=output_dir
+    )
+    assert updated["windows"] == report["windows"]
+    assert (
+        updated["daily"]["profiles"]["kepco_morning"]["legs"][0]["manual_exit_receipt"]
+        == raw["manual_exit_receipt"]
+    )
+    assert updated["receipt_metadata_projection"]["broker_calls"] == 0
+    assert updated["artifact_hash"] == producer.report_artifact_hash(updated)
+    raw["target_fill_price"] = 33900
+    state_path.write_text(json.dumps({"trade_date": day, "legs": [raw]}))
+    with pytest.raises(ValueError, match="nonmetadata_state_changed"):
+        producer.refresh_receipt_projection(
+            target_date=day, state_dir=state_dir, output_dir=output_dir
+        )
+
+
 def test_episode_manual_stop_loss_keeps_negative_outcome_and_distinct_exit_role(
     tmp_path,
 ):
@@ -3913,6 +4194,123 @@ def _timestamp_quarantine_canary_payload(target_date: str) -> dict:
             },
         },
     }
+
+
+def _pre_enqueue_canary_payload(target_date="2026-09-09"):
+    from src.engine.scalping.micro_reversion.canary_monitor import (
+        timestamp_source_quality_census,
+    )
+
+    payload = _timestamp_quarantine_canary_payload(target_date)
+    c = payload["collector_snapshot"]
+    c.update(
+        {
+            "sequence_epoch": 2,
+            "stale_sequence_epoch_envelope_count": 0,
+            "path_exchange_timestamp_regression_count": 0,
+            "path_exchange_timestamp_regression_quarantined_count": 0,
+            "path_exchange_timestamp_regression_exceeded_count": 0,
+            "invalid_exchange_timestamp_count": 0,
+            "invalid_depth_timestamp_count": 1,
+            "stale_exchange_timestamp_block_count": 0,
+            "timestamp_rejection_sample_total": 1,
+            "timestamp_rejection_samples": [
+                {
+                    "process_pid": 10,
+                    "symbol": "999999",
+                    "item": "999999",
+                    "venue": "KRX",
+                    "realtime_type": "0D",
+                    "local_observer_epoch": 1,
+                    "checked_at_ms": 1788932500000,
+                    "reason": "invalid_or_future_timestamp",
+                    "rejection_stage": "before_observer_enqueue",
+                    "rejection_index": 1,
+                }
+            ],
+        }
+    )
+    census = timestamp_source_quality_census(c)
+    payload["canary_guard"]["timestamp_source_quality"] = census
+    payload["canary_guard"]["source_quality_row_exclusions"] = census["issues"]
+    return payload
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [None, "loss", "missing", "authority", "receipt", "epoch", "persistence", "mixed"],
+)
+def test_pre_enqueue_quarantine_requires_closed_exact_epoch_evidence(defect):
+    payload = _pre_enqueue_canary_payload()
+    g, c = payload["canary_guard"], payload["collector_snapshot"]
+    if defect == "loss":
+        c["observation_queue_full_count"] = 1
+    if defect == "missing":
+        c.pop("writer_error_count")
+    if defect == "authority":
+        c["trading_runtime_effect"] = True
+    if defect == "receipt":
+        c["timestamp_rejection_samples"][0]["rejection_index"] = 2
+    if defect == "epoch":
+        c["timestamp_rejection_samples"][0]["local_observer_epoch"] = 3
+    if defect == "persistence":
+        c["depth_worker_processed_count"] = 0
+    if defect == "mixed":
+        g["source_quality_row_exclusions"].append("unknown_loss")
+    result = attribution_module.closed_pre_enqueue_epoch_quarantine_validation(g, c)
+    assert result["eligible"] is (defect is None)
+    if defect is None:
+        assert result["allowed_sequence_epoch"] == 2
+        assert result["whole_date_approval"] is False
+    assert _timestamp_regression_row_quarantine_validation(g, c)["eligible"] is False
+
+
+def test_pre_enqueue_consumer_fences_market_depth_and_reference_epochs(tmp_path):
+    day = "2026-09-09"
+    root = tmp_path / "observations"
+    partition = root / f"trade_date={day}" / "venue=KRX" / "session=KRX_REGULAR"
+    stamp = f"{day}T15:00:00+09:00"
+    _write_jsonl(
+        partition / "market_stream.jsonl",
+        [
+            _micro_row("999999", stamp, 10000, venue="KRX", sequence_epoch=e)
+            for e in (1, 2, 3)
+        ],
+    )
+    _write_jsonl(
+        partition / "market_depth_stream.jsonl",
+        [_depth_row("999999", stamp, sequence_epoch=e) for e in (1, 2, 3)],
+    )
+    # Excluded references cannot reach the reference validator or an anchor join.
+    _write_jsonl(
+        partition / "market_stream_event_references.jsonl",
+        [
+            {
+                "symbol": "999999",
+                "venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "sequence_epoch": e,
+            }
+            for e in (1, 3)
+        ],
+    )
+    canary = tmp_path / "canary.json"
+    _write_json(canary, _pre_enqueue_canary_payload(day))
+    source, inventory, _ = _micro_context(
+        day,
+        root,
+        {"999999"},
+        [],
+        attribution_module.DEFAULT_SOURCE_EXCLUSION_MANIFEST,
+        canary,
+        datetime(2026, 9, 9, 20, 20, tzinfo=KST),
+    )
+    assert source["source_contract_ready"] is True
+    assert source["canary_source_quality"]["whole_date_approval"] is False
+    assert source["unverified_canary_epoch_row_counts"] == {"1": 3, "3": 3}
+    assert inventory["999999"]["eligible_row_count"] == 1
+    assert inventory["999999"]["depth_row_count"] == 1
+    assert inventory["999999"]["source_excluded_row_count"] == 6
 
 
 def test_timestamp_regression_only_row_quarantine_preserves_remaining_date_source(

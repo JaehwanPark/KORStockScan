@@ -2637,14 +2637,14 @@ def build_threshold_cycle_ev_report(
         and trade_review_win == win
         and trade_review_loss == loss
     )
-    # A different/missing trade snapshot is not the PnL of the headline cohort.
-    # Keep its original value for diagnosis without substituting zero economics.
+    # Counts cannot reconcile exact owner/order/terminal costs. This snapshot
+    # remains diagnostic even when all counts match (including an empty cohort).
     snapshot_pnl = _safe_float(trade_metrics.get("realized_pnl_krw"), None)
     if isinstance(trade_metrics.get("realized_pnl_krw"), bool) or (
         snapshot_pnl is not None and not math.isfinite(snapshot_pnl)
     ):
         snapshot_pnl = None
-    reconciled_pnl = snapshot_pnl if trade_review_count_match else None
+    reconciled_pnl = None
     budget_pass = _safe_int(perf_metrics.get("budget_pass_events"), 0)
     submitted = _safe_int(perf_metrics.get("order_bundle_submitted_events"), 0)
     submitted_rate = round((submitted / budget_pass) * 100.0, 2) if budget_pass else 0.0

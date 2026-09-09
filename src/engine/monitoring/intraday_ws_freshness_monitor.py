@@ -15,6 +15,8 @@ from typing import Any, Iterable, Mapping
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 from src.engine.monitoring.ws_freshness_acceptance import (
+    BOUNDED_REJECTIONS,
+    SOURCE_QUALITY_REJECTIONS,
     RESOLVED_FLOOR,
     BBO_COVERAGE_FLOOR_PCT,
     RIGHT_CENSORED_MAX_PCT,
@@ -57,7 +59,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v15"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v16"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
@@ -1010,6 +1012,20 @@ def _scanner_funnel_event_fingerprint(row: dict[str, Any]) -> str:
         "eviction_reason": str(row.get("eviction_reason") or ""),
         "fast_precheck_result": str(row.get("fast_precheck_result") or ""),
     }
+    if row.get("stage") == "scalping_scanner_prune_bbo_schedule":
+        # Differing declarations are not duplicate mirrors, even when the
+        # logger timestamp and episode identity happen to be identical.
+        payload["schedule_declaration"] = {
+            key: row.get(key)
+            for key in (
+                "scanner_prune_observer_schedule_status",
+                "scanner_prune_observer_scheduled_sample_count",
+                "runtime_effect",
+                "allowed_runtime_apply",
+                "actual_order_submitted",
+                "broker_order_forbidden",
+            )
+        }
     canonical = json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -1311,24 +1327,35 @@ def _update_scanner_funnel_state(
             }
             and "scanner_prune_observer_scheduled_sample_count" in row
         ):
-            count = _positive_integer_metadata(
-                row.get("scanner_prune_observer_scheduled_sample_count")
+            raw_count = row.get("scanner_prune_observer_scheduled_sample_count")
+            count = (
+                _nonnegative_integer_metadata(raw_count)
+                if not isinstance(raw_count, bool)
+                else None
+            )
+            rejected_without_schedule = (
+                count == 0
+                and schedule_status in BOUNDED_REJECTIONS | SOURCE_QUALITY_REJECTIONS
             )
             if (
                 observer_episode_id
                 and count is not None
+                and (count > 0 or rejected_without_schedule)
                 and count <= len(SCANNER_PRUNE_BBO_SAMPLE_OFFSETS_SEC)
                 and _receipt_bool(row.get("runtime_effect")) is False
                 and _receipt_bool(row.get("allowed_runtime_apply")) is False
                 and _receipt_bool(row.get("actual_order_submitted")) is False
                 and _receipt_bool(row.get("broker_order_forbidden")) is True
             ):
-                _merge_immutable_scanner_metadata(
-                    prune,
-                    "prune_observer_scheduled_sample_count",
-                    count,
-                    authoritative=True,
-                )
+                # A bounded rejection declares no sampling horizon. Do not
+                # bind zero as the immutable horizon of a later real schedule.
+                if count > 0:
+                    _merge_immutable_scanner_metadata(
+                        prune,
+                        "prune_observer_scheduled_sample_count",
+                        count,
+                        authoritative=True,
+                    )
             else:
                 prune["metadata_conflicts"] = _append_unique(
                     prune.get("metadata_conflicts"),

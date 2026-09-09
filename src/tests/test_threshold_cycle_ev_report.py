@@ -328,7 +328,10 @@ def test_lifecycle_bucket_windows_summary_separates_daily_and_promotion(
     assert summary["status"] == "retired"
 
 
-def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeypatch):
+@pytest.mark.parametrize("matching_counts", [False, True])
+def test_build_threshold_cycle_ev_report_uses_existing_reports(
+    tmp_path, monkeypatch, matching_counts
+):
     report_dir = tmp_path / "report"
     monitor_dir = report_dir / "monitor_snapshots"
     calibration_dir = report_dir / "threshold_cycle_calibration"
@@ -372,9 +375,9 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         json.dumps(
             {
                 "metrics": {
-                    "completed_trades": 2,
+                    "completed_trades": 3 if matching_counts else 2,
                     "open_trades": 0,
-                    "win_trades": 1,
+                    "win_trades": 2 if matching_counts else 1,
                     "loss_trades": 1,
                     "avg_profit_rate": -0.39,
                     "realized_pnl_krw": -282,
@@ -571,10 +574,15 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         report["daily_ev_summary"]["headline_authority"]
         == "completed_by_source_same_day_real"
     )
-    assert not report["daily_ev_summary"]["trade_review_snapshot_reconciliation"][
-        "count_match"
-    ]
-    assert "trade_review_calibration_count_mismatch" in report["warnings"]
+    assert (
+        report["daily_ev_summary"]["trade_review_snapshot_reconciliation"][
+            "count_match"
+        ]
+        is matching_counts
+    )
+    assert ("trade_review_calibration_count_mismatch" in report["warnings"]) is (
+        not matching_counts
+    )
     assert report["daily_ev_summary"]["realized_pnl_krw"] is None
     assert (
         report["daily_ev_summary"]["trade_review_snapshot_reconciliation"][
@@ -582,9 +590,10 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         ]
         == -282
     )
-    assert (
-        report["daily_ev_summary"]["realized_pnl_status"]
-        == "unresolved_trade_review_count_mismatch"
+    assert report["daily_ev_summary"]["realized_pnl_status"] == (
+        "count_reconciled_snapshot_diagnostic_not_cost_verified"
+        if matching_counts
+        else "unresolved_trade_review_count_mismatch"
     )
     assert report["summary"]["status"] == "warning"
     assert report["summary"]["real_sample"] == 3

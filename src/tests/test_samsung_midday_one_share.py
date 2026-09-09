@@ -36,11 +36,18 @@ from src.trading.samsung_afternoon_one_share.machine import (
 def _isolate_owner_policy_and_registry(tmp_path, monkeypatch):
     from src.trading.order import regular_two_leg_machine as regular_module
 
-    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl"))
-    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "missing_policy.json"))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "registry.jsonl")
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "missing_policy.json")
+    )
     monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-samsung-midday")
-    monkeypatch.setattr(regular_module, "record_market_weakness_blocked_entry",
-                        lambda *_args, **_kwargs: {"status": "test_isolated"})
+    monkeypatch.setattr(
+        regular_module,
+        "record_market_weakness_blocked_entry",
+        lambda *_args, **_kwargs: {"status": "test_isolated"},
+    )
 
 
 def _at(day: int, hour: int, minute: int = 0, second: int = 10) -> datetime:

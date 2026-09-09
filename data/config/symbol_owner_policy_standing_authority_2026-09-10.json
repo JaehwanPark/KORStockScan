@@ -1,0 +1,187 @@
+{
+  "schema": "symbol_owner_policy_standing_authority_v1",
+  "status": "active",
+  "authorization_id": "operator-widget-episode-next-day-approved-20260909-2250",
+  "operator_instruction": "Apply the user-approved 2026-09-10 widget/episode recommendations through existing exact-date owner-isolation, custody, broker and safety gates; add Lotte Chemical episode ownership only from 2026-09-10.",
+  "reviewed_at_kst": "2026-09-09T22:50:32+09:00",
+  "effective_from": "2026-09-10",
+  "expires_after": "2026-12-31",
+  "recurring_exact_date_apply": true,
+  "broker_account_key": "kiwoom-live-primary",
+  "preopen_window": {
+    "start_kst": "07:32:00",
+    "end_kst": "07:54:00"
+  },
+  "scope_contract": "exact_current_widget_episode_symbol_universe",
+  "unresolved_custody_behavior": "skip_symbol_keep_legacy_exclusion",
+  "unregistered_open_order_behavior": "skip_symbol_keep_legacy_exclusion",
+  "minimum_safe_symbol_count": 1,
+  "auto_issue_shared_token": true,
+  "symbols": {
+    "105630": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "111770": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "137310": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "181710": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "475150": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "002900": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "005930": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator",
+        "widget_auto_trade"
+      ]
+    },
+    "006800": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "010140": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "011170": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "015760": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "017670": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "028050": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "028670": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "034020": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator",
+        "widget_auto_trade"
+      ]
+    },
+    "035720": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "042660": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator",
+        "widget_auto_trade"
+      ]
+    },
+    "079160": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    },
+    "080220": {
+      "mode": "COEXIST_ENTRY_ENABLED",
+      "allowed_owners": [
+        "episode",
+        "main_scalping",
+        "manual_operator"
+      ]
+    }
+  },
+  "forbidden_uses": [
+    "migrate_or_infer_legacy_owner_custody",
+    "classify_unregistered_broker_quantity_as_manual_custody",
+    "accept_unregistered_or_ambiguous_open_orders",
+    "change_order_quantity_price_target_threshold_provider_bot_or_cap",
+    "relax_market_broker_account_order_cooldown_or_hard_safety",
+    "stop_or_cancel_broker_orders",
+    "cross_owner_cancel_sell_or_quantity_transfer"
+  ],
+  "artifact_content_sha256": "e62b7d19735e38ced6cb25cc5b9f26e73e2636bd97c0f55dd9c59007e10cd4ed"
+}

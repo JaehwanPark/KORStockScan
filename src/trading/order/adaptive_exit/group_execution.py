@@ -306,9 +306,11 @@ class GroupRunnerExecutor:
     @staticmethod
     def _status(row):
         return {
-            "status": "order_bound"
-            if row["state"] in {"ORDER_BOUND", "ORDER_TERMINAL"}
-            else "recovery_required",
+            "status": (
+                "order_bound"
+                if row["state"] in {"ORDER_BOUND", "ORDER_TERMINAL"}
+                else "recovery_required"
+            ),
             "registry_state": row["state"],
             "intent_id": row["intent_id"],
             "order_no": row.get("broker_order_no"),
@@ -491,9 +493,11 @@ class GroupRunnerExecutor:
             ):
                 raise ValueError("runner_exact_terminal_proof_required")
             return {
-                "status": "runner_terminal"
-                if remaining == 0
-                else "runner_residual_requires_recovery",
+                "status": (
+                    "runner_terminal"
+                    if remaining == 0
+                    else "runner_residual_requires_recovery"
+                ),
                 "runner_filled_qty": snapshot.filled_qty,
                 "runner_remaining_qty": remaining,
                 "terminal_proof_hash": canonical_sha256(proof),
@@ -531,8 +535,10 @@ class GroupRunnerExecutor:
             result
             | deadline
             | {
-                "status": "runner_cancel_pending"
-                if result["status"] == "order_bound"
-                else "recovery_required",
+                "status": (
+                    "runner_cancel_pending"
+                    if result["status"] == "order_bound"
+                    else "recovery_required"
+                ),
             }
         )

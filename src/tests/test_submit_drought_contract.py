@@ -980,6 +980,68 @@ def test_scope_evidence_rejects_date_scope_and_payload_drift():
     assert not validate_scope_evidence(evidence, source_date="2026-09-07", scope=scope)
 
 
+def test_preopen_scrub_preserves_nullable_hash_bound_evidence():
+    from src.engine import threshold_cycle_preopen_apply as preopen
+    from src.tests.test_threshold_cycle_preopen_apply import (
+        _valid_entry_recheck_candidate,
+    )
+
+    candidate = _valid_entry_recheck_candidate()
+    for day in candidate["source_metrics"]["drought_conditional_policy"]["history"]:
+        for index, row in enumerate(day["eligible_scopes"]):
+            evidence = row["sentinel_evidence"]
+            contract = deepcopy(evidence["contract"])
+            contract["optional_diagnostic"] = {"unknown": None, "values": [None]}
+            evidence = make_scope_evidence(
+                {
+                    "schema_version": evidence["report_schema_version"],
+                    "target_date": evidence["target_date"],
+                    "as_of": evidence["as_of"],
+                },
+                row["scope"],
+                contract,
+            )
+            day["eligible_scopes"][index] = scope_summary(
+                row["scope"], {**contract, "sentinel_evidence": evidence}
+            )
+    original = deepcopy(candidate)
+    assert preopen._entry_recheck_drought_candidate_contract_error(candidate) == ""
+    scrubbed = preopen._scrub_removed_contracts(candidate)
+    assert candidate == original
+    assert preopen._entry_recheck_drought_candidate_contract_error(scrubbed) == ""
+    old_rows = original["source_metrics"]["drought_conditional_policy"]["history"]
+    new_rows = scrubbed["source_metrics"]["drought_conditional_policy"]["history"]
+    for old_day, new_day in zip(old_rows, new_rows):
+        for old, new in zip(old_day["eligible_scopes"], new_day["eligible_scopes"]):
+            assert new["sentinel_evidence"] == old["sentinel_evidence"]
+            assert new["sentinel_evidence"] is not old["sentinel_evidence"]
+    new_rows[0]["eligible_scopes"][0]["sentinel_evidence"]["contract"][
+        "optional_diagnostic"
+    ]["unknown"] = 0
+    assert preopen._entry_recheck_drought_candidate_contract_error(scrubbed) == (
+        "drought_sentinel_exact_contract_invalid"
+    )
+
+
+def test_preopen_evidence_preservation_does_not_restore_retired_authority():
+    from src.engine import threshold_cycle_preopen_apply as preopen
+
+    family = sorted(preopen.REMOVED_CALIBRATION_FAMILIES)[0]
+    evidence = {"contract": {"family": family, "unknown": None}, "sha256": "bad"}
+    rows = [
+        {"family": family, "sentinel_evidence": evidence},
+        {"family": "entry_opportunity_recheck_runtime", "sentinel_evidence": evidence},
+    ]
+    scrubbed = preopen._scrub_removed_contracts(rows)
+    assert len(scrubbed) == 1
+    assert scrubbed[0]["sentinel_evidence"] == evidence
+    assert not validate_scope_evidence(
+        scrubbed[0]["sentinel_evidence"],
+        source_date="2026-09-09",
+        scope="KRX|KRX_REGULAR",
+    )
+
+
 @pytest.mark.parametrize(
     "stage", ["blocked_liquidity", "blocked_zero_qty", "entry_armed_expired"]
 )

@@ -1,8 +1,54 @@
 import json
+import pytest
+
+
+def test_scanner_source_repair_emits_its_actual_downstream_contract():
+    from src.engine.build_code_improvement_workorder import (
+        _intraday_ws_freshness_followup_orders,
+    )
+
+    rows = _intraday_ws_freshness_followup_orders(
+        {
+            "workorder_directives": [
+                {
+                    "order_id": "order_scanner_eligible_no_heavy_closed_loop",
+                    "decision": "implement_now",
+                }
+            ]
+        }
+    )
+    assert rows[0]["required_downstream"] == [
+        "intraday_ws_freshness_monitor",
+        "code_improvement_workorder",
+        "runtime_approval_summary",
+        "threshold_cycle_postclose_verification",
+    ]
+    assert rows[0]["runtime_effect"] is False
+    assert rows[0]["allowed_runtime_apply"] is False
+
 
 from src.engine.automation import codex_workorder_runner
 from src.engine import build_code_improvement_workorder as mod
 from src.engine import lifecycle_decision_matrix as ldm_mod
+
+
+def test_panic_report_only_provenance_is_explicit_at_native_row_boundary():
+    from src.engine.automation.postclose_workorder_contract import authority_class
+
+    row = mod._panic_lifecycle_followup_orders(
+        {
+            "calibration_source_bundle": {
+                "source_metrics": {
+                    "panic_sell_defense": {"panic_state": "RECOVERY_WATCH"}
+                }
+            }
+        }
+    )[0]
+    assert row["implementation_provenance"]["allowed_runtime_apply"] is False
+    assert authority_class(row) == "eligible_runtime_effect_false"
+    assert row["actual_order_submitted"] is False
+    assert row["broker_order_forbidden"] is True
+    assert "runtime_approval_summary" in row["required_downstream"]
 
 
 def test_prompt_research_source_preserves_hash_and_reports_corruption(tmp_path):
@@ -1290,6 +1336,43 @@ def test_build_code_improvement_workorder_does_not_escalate_history_implemented_
     assert report["summary"]["repeat_unresolved_escalation_count"] == 0
     assert (
         report["summary"]["selected_implement_now_new_runtime_effect_false_count"] == 0
+    )
+
+
+@pytest.mark.parametrize("source_gap", [False, True])
+def test_repeated_one_share_evidence_is_not_a_new_code_defect(source_gap):
+    order = {
+        "order_id": "order_one_share_evidence",
+        "source_report_type": "one_share_threshold_opportunity",
+        "improvement_type": (
+            "source_quality_gap"
+            if source_gap
+            else "source_only_existing_family_evidence"
+        ),
+        "implementation_status": "source_evidence_candidate",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "implementation_provenance": {
+            "workorder_intake_role": "attach_existing_family_evidence",
+            "source_audit_implementation_status": "implemented",
+        },
+    }
+    item = mod.ClassifiedOrder(
+        order,
+        "attach_existing_family",
+        "evidence",
+        "entry_opportunity_recheck_runtime",
+        "existing_family",
+        "thin",
+        "source-only",
+    )
+    result, ids = mod._escalate_repeated_unresolved_orders(
+        [item],
+        repeat_counts={"order_one_share_evidence": {"count": 3}},
+    )
+    assert bool(ids) is source_gap
+    assert result[0].decision == (
+        "implement_now" if source_gap else "attach_existing_family"
     )
 
 
@@ -3436,6 +3519,17 @@ def test_observation_source_quality_closed_revalidation_attaches_existing_family
         "post_exclusion_revalidation_closed"
     )
     assert classified["terminal_disposition"] == "implemented_revalidation_closed"
+    assert classified["runtime_effect"] is False
+    assert classified["allowed_runtime_apply"] is False
+    from src.engine.verify_threshold_cycle_postclose_chain import (
+        _raw_row_exclusion_handoff_status,
+    )
+
+    handoff = _raw_row_exclusion_handoff_status(
+        report, workorder={"orders": [], "non_selected_orders": [classified]}
+    )
+    assert handoff["status"] == "pass"
+    assert handoff["invalid_contract_reasons"] == []
     assert not codex_workorder_runner.is_safe_implement_now(classified)
 
 

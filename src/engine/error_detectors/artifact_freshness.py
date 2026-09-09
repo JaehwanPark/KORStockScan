@@ -562,8 +562,12 @@ class ArtifactFreshnessDetector(BaseDetector):
         now_ts = time.time()
         now_h, now_m = _kst_time_tuple(now_dt)
         now_total = now_h * 60 + now_m
-        today = _today_kst_str(now_dt)
-        trading_day = is_krx_trading_day(now_dt.date())
+        source_day = getattr(self, "postclose_source_date", None)
+        today = source_day or _today_kst_str(now_dt)
+        past_source_day = bool(source_day and source_day < _today_kst_str(now_dt))
+        if past_source_day:
+            now_total = 24 * 60
+        trading_day = is_krx_trading_day(datetime.strptime(today, "%Y-%m-%d").date())
         details: dict = {}
         issues: list[str] = []
         warnings: list[str] = []
@@ -607,7 +611,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                 window_end = now_dt.replace(
                     hour=we[0], minute=we[1], second=0, microsecond=0
                 )
-                past_window_end = now_dt >= window_end
+                past_window_end = past_source_day or now_dt >= window_end
             exists = artifact_path.exists()
             grace_sec = int(artifact.get("window_grace_sec") or 0)
             in_startup_grace = False

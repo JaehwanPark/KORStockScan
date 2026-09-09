@@ -352,9 +352,7 @@ def load_execution_incidents(
             incident["last_failure_at"] = (
                 max(stamp, previous_stamp).isoformat()
                 if stamp and previous_stamp
-                else stamp.isoformat()
-                if stamp
-                else None
+                else stamp.isoformat() if stamp else None
             )
             incident["status"] = "unresolved"
             incident["unresolved_ambiguity_seen"] |= (

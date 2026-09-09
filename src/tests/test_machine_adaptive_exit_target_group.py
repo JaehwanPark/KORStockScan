@@ -109,13 +109,13 @@ def test_invalid_group_rejected_even_after_rehash(kind):
     elif kind == "partial_buy":
         receipt["entries"][1]["requested_quantity"] = 20
     elif kind == "missing_clock":
-        receipt["entries"][1]["first_fill_observation"]["status"] = (
-            "legacy_first_fill_unavailable"
-        )
+        receipt["entries"][1]["first_fill_observation"][
+            "status"
+        ] = "legacy_first_fill_unavailable"
     elif kind == "prior_day_clock":
-        receipt["entries"][1]["first_fill_observation"]["first_observed_at"] = (
-            "2026-09-08T09:00:00+09:00"
-        )
+        receipt["entries"][1]["first_fill_observation"][
+            "first_observed_at"
+        ] = "2026-09-08T09:00:00+09:00"
     elif kind == "prior_day_ack":
         receipt["target_ack_observed_at"] = "2026-09-08T09:00:01+09:00"
     else:

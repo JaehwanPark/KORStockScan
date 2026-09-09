@@ -18,9 +18,10 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tempfile
 from collections.abc import Sequence
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext, redirect_stdout
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -5370,6 +5371,14 @@ def main() -> int:
         parser.error(str(exc))
     if args.capacity_status_path is not None and not args.apply:
         parser.error("--capacity-status-path requires --apply")
+    # The cleanup wrapper consumes stdout as one strict JSON receipt. Lazy
+    # dependency diagnostics must not corrupt that machine-readable channel.
+    output = sys.stdout
+    with redirect_stdout(sys.stderr):
+        return _run_cli_maintenance(args, parser, output=output)
+
+
+def _run_cli_maintenance(args, parser, *, output) -> int:
     if args.purge_source_exclusions is not None:
         if (
             args.purge_expired
@@ -5484,7 +5493,7 @@ def main() -> int:
             else:
                 result["capacity_status_written"] = True
         exit_code = 0 if result["status"] == "pass" else 1
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2), file=output)
     return exit_code
 
 

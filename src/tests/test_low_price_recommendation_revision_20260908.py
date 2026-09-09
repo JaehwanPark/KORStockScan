@@ -18,7 +18,7 @@ from src.trading.low_price_two_leg.preflight import (
     validate_research_evidence,
 )
 from src.trading.low_price_two_leg.profiles import (
-    PROFILES,
+    PROFILES_20260909_PRIOR as PROFILES,
     PROFILES_20260908_PRIOR,
     get_profile,
 )

@@ -268,7 +268,12 @@ class CronCompletionDetector(BaseDetector):
     def check(self) -> DetectionResult:
         now_h, now_m = _kst_time_tuple()
         now_total = now_h * 60 + now_m
-        trading_day = is_krx_trading_day(date.today())
+        source_day = getattr(self, "postclose_source_date", None)
+        if source_day and source_day < _today_kst():
+            now_total = 24 * 60
+        trading_day = is_krx_trading_day(
+            date.fromisoformat(source_day) if source_day else date.today()
+        )
         details: dict = {}
         issues: list[str] = []
         warnings: list[str] = []
@@ -278,7 +283,7 @@ class CronCompletionDetector(BaseDetector):
             log_path = PROJECT_ROOT / job["log"]
             jid = job["id"]
             critical = job.get("critical", False)
-            today_str = _today_kst()
+            today_str = source_day or _today_kst()
             artifact_status = self._status_artifact_terminal(job, today_str)
             if jid in _disabled_job_ids():
                 details[f"{jid}_status"] = "disabled_by_env"

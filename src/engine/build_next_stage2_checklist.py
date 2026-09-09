@@ -55,6 +55,9 @@ MAIN_AI_QUALITY_SOURCE_GAP_OWNERS = frozenset(
         "MicroReversionIntegratedRouteProof",
         "RuntimeExecutionReceiptCustodyRepair",
         "MainAIQualityMaterializedCompanionBindingRepair",
+        "MainAIMicroExactEconomicIntersectionRepair",
+        "MicroReversionDepthRouteContractRepair",
+        "MainAIAllocatorSubmittedTraceCustodyRepair",
     }
 )
 MAIN_AI_QUALITY_OPTIONAL_NO_AUTHORITY_FIELDS = (
@@ -1311,6 +1314,33 @@ def _build_tasks(
                 "reason_codes에 명시된 source date별 execution report와 materialized "
                 "request/response companion의 exact hash를 재검증하고, 불변 원천에 "
                 "결속할 수 없는 historical row는 합성 없이 제외한다."
+            )
+        elif owner == "MainAIMicroExactEconomicIntersectionRepair":
+            slot = "POSTCLOSE"
+            time_window = "18:00~18:20"
+            title = "main AI micro exact 경제성 교집합 source gap 복구 확인"
+            owner_action = (
+                "동일 primary trace의 paired/mature/sidecar/net-economic 교집합과 "
+                "bridge/source-bundle parent census를 대사한다. 비용·원천 결손을 "
+                "0 또는 대체 parent로 보간하지 않는다."
+            )
+        elif owner == "MicroReversionDepthRouteContractRepair":
+            slot = "POSTCLOSE"
+            time_window = "18:00~18:20"
+            title = "micro depth route별 source 계약 복구 확인"
+            owner_action = (
+                "plain KRX/NXT와 SOR의 원래 route별 depth 합계 계약을 구분하고 "
+                "SOR의 exact component 대사와 invalid row 제외를 유지한다. "
+                "프로토콜 변경은 공식 Kiwoom reference gate를 별도로 따른다."
+            )
+        elif owner == "MainAIAllocatorSubmittedTraceCustodyRepair":
+            slot = "POSTCLOSE"
+            time_window = "18:00~18:20"
+            title = "main AI allocator submitted trace source 결속 복구 확인"
+            owner_action = (
+                "submitted trace와 immutable receipt의 exact join 또는 source-quality "
+                "제외를 확인한다. non-submitted는 not-applicable이며 실제 custody "
+                "원장·주문을 수정할 권한은 없다."
             )
         else:
             slot = "POSTCLOSE"

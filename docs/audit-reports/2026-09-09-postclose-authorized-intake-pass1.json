@@ -1,0 +1,1355 @@
+{
+  "schema": "authorized_recovery_intake_snapshot_v1",
+  "source_date": "2026-09-09",
+  "phase": "pass1_before_ws_zero_rejection_repair",
+  "counts": {
+    "intake_total": 74,
+    "implementation_requested_total": 13,
+    "nonimplementation_total": 61,
+    "eligible_runtime_effect_false_total": 13,
+    "user_authority_total": 0,
+    "invalid_or_missing_authority_total": 0,
+    "eligible_actionable_open": 13,
+    "intake_unaccounted_count": 0,
+    "implement_now_unaccounted_count": 0,
+    "already_implemented_verified_eligible": 0,
+    "implemented_pass1": 0,
+    "implemented_pass2": 0,
+    "blocked_missing_evidence": 0,
+    "blocked_external_dependency": 0,
+    "already_implemented_verified_nonrequest": 0,
+    "observed_no_patch": 22,
+    "deferred": 32,
+    "rejected": 3,
+    "blocked_missing_evidence_nonrequest": 3,
+    "blocked_external_dependency_nonrequest": 0,
+    "invalid_or_missing_authority_nonrequest": 1,
+    "user_authority_nonrequest": 0
+  },
+  "rows_sha256": "4062203047d217395087f8b11e5ab75e2f0a2ceb30c1bd774e0f4877d434f5d4",
+  "issues": [
+    "disposition_evidence_invalid:('main', 'order_entry-prompt-revision-8d1f2fb1740c1769eec7ede1')",
+    "disposition_evidence_invalid:('main', 'order_entry-prompt-revision-f7e1931a9128531084ba87ac')",
+    "disposition_evidence_invalid:('main', 'order_entry_submit_drought_auto_resolution')"
+  ],
+  "rows": [
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:0bdfc39c76573e968028e3e36bea0f840b8249c225566ea71ae456c3c248b563",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "693a662ce128376872de5bc837fbbf91a991a89fca8474675eb360ea73eeb45e",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][2]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][6]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:2c12077e277ea743fbc2add1007b002a6d0fd3412fc31fa51a91d064914412d8",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "076b86de8a9807b27d230ad59d980911059b941be298087002dff36c24ef558f",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][2]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:3287c340cabe4b868a3283e957a49c5ae5bf8494fb936d371c8bd5f20b934400",
+      "decision": null,
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "blocked_missing_evidence",
+      "row_sha256": "4f9890f04785d78dfdb15f6d546cabd1e886f80413444eb0ae114a4c4cee062c",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"operator_observation_candidate_inventory\"][\"candidate_475560_morning\"]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"profiles\"][\"candidate_475560_morning\"][\"observation_candidate\"]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:3bc85678dbc2764e53d5f6cad6f7260a6d89c4c3bee03a285e3e1833d339cfe6",
+      "decision": "recommend_cumulative_logic_candidate_review",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "blocked_missing_evidence",
+      "row_sha256": "50a1f5403233494f11446271b6a8eb43bb14b3efa98d3a81f69279d1d66cedce",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"postclose_logic_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"target_date_logic_attribution\"][49]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:6f447ce5aec156daf03395cbc89a91f2d8c97e715fbe67245965d37bda05fe9d",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "1da6706d0132e2644975fd05afac81ffd0e11f47503e633fb4451c264137801b",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_logic_improvement_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][1]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:9b2e7d6953b3f4baf6c727f181d09d434099204ed42ebf818b77c22b54e1f128",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "f427c9e69afdd724bdd10f429727ef1473be51c2380a38b4fb979a34a0f912d7",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"new_symbol_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][0]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:ddd325314a2acd64163c73098992259186175a6adc9ef54e26ce99dca713eaa1",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "050a6b575d3487a2211cfbfc18a9bbff6e1676c7e4b3d1e58f469239388dca9e",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][1]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][5]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:e258b542608904b9402438aa95401da37c96bed038129ab4d2cd6acaeb4d80c5",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "be8d501a3de4289332f6e6cebf015cb577e48dfc42d94d54928c864ef64c4c2a",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_logic_improvement_recommendations\"][1]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][3]"
+        }
+      ]
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:fd2ddd6ce29e85a68adb8327292d8aef75d33ed1d2f0770aeb7c7e3aeaa546be",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "9a57cd37fbfa95990a5ddf846a9cb7ca709cdca69278877e498997b874227146",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"new_symbol_recommendations\"][1]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][4]"
+        }
+      ]
+    },
+    {
+      "owner": "machine_microstructure_attribution",
+      "native_id": "machine_lifecycle_turnover_policy_research_v1",
+      "decision": "EVIDENCE_ACCUMULATING",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "1d4794c02057a57597b9de82fc7fa97b77f586730bf03f5db4e9dcca2db35d5b",
+      "sources": [
+        {
+          "label": "machine_microstructure_attribution",
+          "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-09.json",
+          "sha256": "3533c0f2be720f2b0180a0f144270a22ddc7aff51b2ad3fc41241c8d4d3373a1",
+          "location": "$[\"objective_followups\"][0]"
+        },
+        {
+          "label": "machine_microstructure_policy_approval",
+          "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-09.json",
+          "sha256": "94b63465aeee08186f44ef298bf05cd8626726f5f33ac315b0a5d80a4b88d2f8",
+          "location": "$[\"objective_followups\"][0]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_ai_threshold_miss_ev_recovery",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "a5d07e9b6522c488a1201559b218675a14fc5cea133f77faf51bc920da8b2591",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[11]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_budget_pass_without_submit",
+      "decision": "design_family_candidate",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "1f3e1b071bf592528a95ee6f177c87b5ffdb0c87cfc9e0fb248f74738862f534",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[13]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "ebd5649f216e7bb4c75dafc7aeb30cbefbf74feddc9e7c3cd1fd5b6748bab7c3",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[20]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "bf473d6a7c3f5417b3ab09442a5aeceb33cc6585eee1117dfee82048d549def1",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[13]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_price_revalidation",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "63b65a89ec4f345a8e9f46fcc071e787a4323e6aa3a44778119544092be1c448",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[21]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_upstream_gate",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "a210eac98a8df7eeb505c3eb1b528cf3c884a42ae3bd97b1a27419e4a99499ce",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[19]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry-prompt-revision-8d1f2fb1740c1769eec7ede1",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "7ef59a818258d1289507274469c6e02c8a5afbbd5a8817970659171e8a94bdf4",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[11]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry-prompt-revision-f7e1931a9128531084ba87ac",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "7117fcffef72d10c9be99465ff0af337c52a157fd590556059580e64dfa7c2d6",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[0]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_broker_receipt_contract_gap_review",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "6e3d036380a313cc43c6ba281fb3899c5e849954a6deca8b0ff8d3a18a137c71",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[14]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_fill_quality_contract_gap_review",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "9781e4e23938a4919d45e81d4ea4cc9f36295b42ed6b16ebe3ef000e2b97a96f",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[15]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_post_submit_contract_gap_review",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "7b6729ba23d920ef1f4a62b1ffd37f6b5c227e5969f9ad4997085e39629eb253",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[16]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_recheck_bounded_maintenance_review",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "ef8b0ff682fb953805472bfac2d30c01854e24b3a7ba7a97194e80d4c9faf95f",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[22]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_recheck_history_transition_review",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "202e3d8dea8dc2aabe2666a4764f93ac16951aaaac7ea4e2cd4f9ad72085286a",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[23]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_source_taxonomy_contract_gap_review",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "00b1e807d67c4edf3c53622332da77837a6c5483b441cc9c9a61dc83a724fd44",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[17]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_submit_drought_auto_resolution",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "1ad3fb999c4b6ee57d53cbbc1cf63e50a3c3a47034284d5dfc84957ecc2b7916",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[12]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_entry_telegram_post_submit_contract_gap_review",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "13c6b164aead4071e31d6681bfca86eafacabf58ca99e19bcd3970ad414793a5",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[18]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_latency_guard_miss_ev_recovery",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "94931fe29544a44497337b12764531d9f7b5229db6586fe185b1964253379faf",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[2]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_market_census_krx_krx_regular",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "34cd9680f7f327fa8716caabe8a5faf74039b4357bbf753c51ba2abb4495effe",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[15]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_market_census_nxt_nxt_aftermarket",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "8da892b38ea638a38bc72ea0e316ec0f3a116233192d4739b175bfac05de2b79",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[16]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_market_census_nxt_nxt_premarket",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "af81c2ada2d32e5fc1bfd85d40d98c90141549d8057a59084239c716de528a53",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[17]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_market_census_nxt_nxt_regular_overlap",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "13cc968f0b910e29dd1ab80f76ae6d8502e17841815f27d95ed01a11bb1116fb",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[18]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_microstructure_v3_evaluation_anchor_contract_missing",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "04a61eceb76e5cc7a41e8195871d78fe0bef6ae0d2ea71f9fb092d783fff2a86",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[6]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_microstructure_v3_evaluation_venue_missing_or_conflicting",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "5d1dedb80ba48b04623507afae1625318622c9fb84e68fa408a62c202f54d617",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[7]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_microstructure_v3_required_holding_payload_missing",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "847352e70dd2fe492a63621ebd8d9a61f6e4506f0ef78df6db7210c7f1a5f48a",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[8]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "8c4a68455afafe596b90140ab573a627342ff192a84630a37a65daf1be4d032e",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[1]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_observation_source_quality_unknown_token_provenance_gap",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "f4e1904a27490e1ab9d07d66917fa7eb2a4995e63f48504b41e0c9e8865c28bf",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[0]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_one_share_threshold_ai_score_near_buy_entry_hook_review",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "2587720c871d6c4fe1b574e7b7c47221756af2738eeca5b89b44ba1f627b7837",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[4]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_one_share_threshold_strength_momentum_vpw_entry_hook_review",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "664de472c327c966362a14505f280be2bb4513a3d934d69592387eb48b93f74a",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[5]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_overbought_gate_miss_ev_recovery",
+      "decision": "design_family_candidate",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "e9d53e940664654d17e188053c222da773323333a84ccc8e26ccdce51997bc08",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[14]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_panic_sell_defense_lifecycle_transition_pack",
+      "decision": "attach_existing_family",
+      "authority_class": "invalid_or_missing_authority",
+      "implementation_requested": false,
+      "final_disposition": "invalid_or_missing_authority",
+      "row_sha256": "bbbbc2e17a14b1f469031867cca92341f4ee437a3b58026a4564e62ac76c56ef",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[12]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_partial_fill_quality_source_attribution",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "0175762cd9bc7c3377d9634a4e48f29dd479c4b81be7316b45cbae8c26559c56",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[6]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_ai_review_followup_2026_09_09",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "d3551342d94d5dab3b6a0f489ca27d38d2efe4d0cb24a9d4d85fc6944811d87d",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[24]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_active_source_forbidden_terms",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "f393e968396dfb87d059b5cae317f75705a001976bb1d1612b8e6ca9ce8ffb20",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[25]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_empty_trade_fact_overwrite_guard",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "cfd66b37149a25c04f4009dfcc36d38046c0dadba3d1145f2ccf9d3ce73912f4",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[26]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_scalping_manifest_freshness",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "a783a789c00b37873c632be42fd7a742bad0f83cbc089f42f1eb499aeb122cd2",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[27]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_scalping_metric_contract",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "8f916a7d1fe177e0428604d0cec2c9f15e6d9d180df7340156e4c323eacfb4dd",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[28]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_scalping_observability_metric_contract",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "30b1374c9fe72be4c05432bda2deb10364c7b4eb2c6d22a34d93c2e26328a821",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[29]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_scalping_observability_source_contract",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "f4480bfce8343551b721a59617c41fbc7d36ec05263175f98508d8e3eb6a5f25",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[30]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_small_net_generation_contract",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "d5e073a3dc52a8eaa3857e967425e23b9f4f877991e6c03eba04abaee7594fe1",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[31]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_pattern_lab_ai_review_contract",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "498e025af11d30e0208cd41aa26f7b3b3449f3ee52da1bae6de36058865cd81f",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[32]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pattern_lab_ai_review_currentness_scalping_ldm_threshold_reentry_sources",
+      "decision": "defer_evidence",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "b6664448a0c00a965ebd0c5edff5c0d87e532665b8d660f4b26e2f38128aa968",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[33]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_pipeline_event_compaction_v2_shadow",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "822b443ce438be6a2202c6b5f60ba07c041ae433dd43bd86ee96520a94668564",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[1]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_rising_missed_classifier_prior_bridge",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "1860b83e8ab50ba494186c6dc1f0a4859415fcce8bec5b50631380d65759ede9",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[8]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_rising_missed_classifier_prior_feedback_bridge",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "b26a96bda76062ca4dbcbf7af0a83474170976d9801f66edd3edd4f22673caf8",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[7]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_rising_missed_entry_turn_bbo_coverage",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "bd7b032e5dafe795423c62d15b9a36108a60d67f8ec97888d368a41d9bf12063",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[3]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_same_symbol_repeat_source_attribution",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "560301899c9c9408e689b732d17f371145fda289df34024bb1e67f9388db69ec",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[9]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_scanner_eligible_no_heavy_closed_loop",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "41f2f5e050c6249f430f45355f85fb03f70fd3b5f965b0ffdcfad24bb4203569",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[2]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_scanner_funnel_executable_bbo_join",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "329696e5afa97a37384ed402c838e54eeb4f19b7aca3709978fd8e7285ab39fe",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[9]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_scanner_scan_generation_conservation_gap",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "c231a2394c5ab92008cedc0b284dfd5370681c42c9bcea63cbc546d8473c9ad2",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[3]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_split_entry_rebase_수량_정합성_report_only_감사",
+      "decision": "attach_existing_family",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "cb7a96a026f88da5b997c45ddfd61d44411dc80bcb1ac43c7f75e9bb9612f98a",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.non_selected_orders[10]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_ws_decision_stage_stale_backoff_attribution",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "145fb7b80b84b0714726bd3f52e96648dc9356981c690af3da47d459d18b8da1",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[4]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_ws_total_stale_escalation",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "8596a8d30f2aebd6266998ff7f5da9b3114fc36ff98469a706da5914cb4b788c",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[5]"
+        }
+      ]
+    },
+    {
+      "owner": "main",
+      "native_id": "order_ws_trade_tick_quiet_low_liquidity_classification",
+      "decision": "implement_now",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": true,
+      "final_disposition": "eligible_actionable_open",
+      "row_sha256": "a666915f903767fee07118cf442351560cc99680e6d9018fae2d122a9a90fcfc",
+      "sources": [
+        {
+          "label": "code_improvement_workorder",
+          "path": "/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-09.json",
+          "sha256": "7af213c0092d3351fe6d5f99be1c9166bb17c7ef29833b055f1b012578726122",
+          "location": "$.orders[10]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:1876a96dff2b6afebb1f445538c9a487def36028174fe64880e497c68d19745a",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "97d833825cceb0ff54f301d0962f3d05a99ff2f6258c6505219cb4ea0f0f7f85",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][1]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:1ed187a6c7bf27db9dd41bb361c3005e4bc961b64036fa65e2159e926ed22322",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "820d007dd9b8764c0f8bbf6aef43aea74c689ccd702e956ced5b556cad85e51f",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][4]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:2eaf06787075f5631a2790102165df3f4813b7c8778c2d1e0bd34d9d264c9334",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "521b74330f5c4d126afc45a60c0e23d27040742e287fc5819e965f0cdf198fc0",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][0]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:519bad7f319ed282a6130f6ef2c55cc353c5cbf7f1de96bea8e07b8448bef3e3",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "0a770657a910b7d9738a4072cf92193f06a0aca3cda62ba8f9522ec46f85dfe9",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][3]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:7ff28758a02a80ced86c9d279c6b46cb0b02a95a5eb6186245551a68d8ee66d2",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "e22c7301185ec05df68ccc9041f9f0d015df57111c7bf44921fc25c8201d1d5d",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][2]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:d3845195b73790a6428270bb61f84eaaa065879844b08240e9995643f52e2b88",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "aa6ba6ae54df2ba423933d57877c4291283d90ce26da6a82f17aef3418ae7138",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][6]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:eb4436766d789ebf29bbd6af11c61eee7341b44a041c5d4280403a6291d009f2",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "742aaa92b49c741b253bae60f4189f96416b8b52a16e90de500b0f8132c2d3dd",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][5]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:1a6aebfa63c42f751b0242e3e18a558d326ca01f58eb3055c6b699316120f216",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "rejected",
+      "row_sha256": "780e31d70b60f19e1ed05f9c1f63f20e20ec2c2c0eea4db9a8341d1882fad387",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"475150\"]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:2991bcc69c56990b25c4b08aaf4fdd60e5d3173a67c6592ec632d5328db3c16d",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "rejected",
+      "row_sha256": "a315b9cb42641c1929c39258797a3c741b8b8a1716b09f3ca75d879200bfcc07",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"006800\"]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:814eab726593d89d0288fe3ad6a3d6fcb3d3dbc4fe5a1d6dff5ca6d17b32d0a0",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "rejected",
+      "row_sha256": "8e02a4846ee9fc8f141bbabd852a444dcc4aa90f98ca76401a4757eb67552d19",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"010140\"]"
+        }
+      ]
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:f4ef9259aaa1ee8420d52ce4303595054ec87d2981b617f425739820921042b3",
+      "decision": "holdout_pass_widget_signal_policy_candidate",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "blocked_missing_evidence",
+      "row_sha256": "db4bcdf982dbe2691e47ae44bdfd0581e0755b2fec7e175842f79e55ac610f5c",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"080220\"]"
+        }
+      ]
+    }
+  ]
+}

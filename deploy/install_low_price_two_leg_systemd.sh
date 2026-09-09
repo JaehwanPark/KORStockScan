@@ -7,6 +7,12 @@ PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 SYSTEMD_DIR="$SCRIPT_DIR/systemd"
 TARGET_DIR="/etc/systemd/system"
 UNITS=(
+  korstockscan-low-price-two-leg-lotte-chemical-morning-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-morning.timer
+  korstockscan-low-price-two-leg-lotte-chemical-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-afternoon.timer
+  korstockscan-low-price-two-leg-tym-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-tym-late-morning.timer
   korstockscan-low-price-two-leg@.service
   korstockscan-low-price-two-leg-preflight@.service
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
@@ -123,6 +129,12 @@ UNITS=(
   korstockscan-low-price-two-leg-sd-biosensor-afternoon.timer
 )
 TIMERS=(
+  korstockscan-low-price-two-leg-lotte-chemical-morning-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-morning.timer
+  korstockscan-low-price-two-leg-lotte-chemical-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-afternoon.timer
+  korstockscan-low-price-two-leg-tym-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-tym-late-morning.timer
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
   korstockscan-low-price-two-leg-samsung-heavy-midday.timer
   korstockscan-low-price-two-leg-samsung-heavy-afternoon-preflight.timer
@@ -273,6 +285,7 @@ from src.engine.risk.manual_control_exclusion import (
 )
 
 owners = {
+    "011170": "lotte_chemical_low_price_two_leg_owner",
     "006800": "mirae_asset_low_price_two_leg_owner",
     "035720": "kakao_low_price_two_leg_owner",
     "015760": "kepco_low_price_two_leg_owner",
@@ -295,4 +308,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed fifty-six lower-price profile timers; retired Daewoo units were removed"
+echo "installed fifty-nine lower-price profile timers; retired Daewoo units were removed"

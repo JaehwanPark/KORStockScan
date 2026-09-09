@@ -2041,7 +2041,8 @@ def _immutable_owner_timestamp_exclusion(
         row.get("owner") == "episode"
         and row.get("owner_lifecycle_contract_valid") is False
         and row.get("owner_policy_tuning_eligible") is False
-        and exclusion.get("schema") == "verified_target_timestamp_loss_v1"
+        and exclusion.get("schema")
+        in {"verified_target_timestamp_loss_v1", "verified_manual_timestamp_loss_v1"}
         and exclusion.get("source_date") == target_date.isoformat()
         and bool(row.get("scope_id"))
         and exclusion.get("scope_id") == row.get("scope_id")
@@ -2052,8 +2053,20 @@ def _immutable_owner_timestamp_exclusion(
         and exclusion.get("allowed_runtime_apply") is False
         and isinstance(receipts, list)
         and 1 <= len(receipts) <= 2
+        and (
+            exclusion["schema"] != "verified_manual_timestamp_loss_v1"
+            or any(
+                isinstance(r, dict) and r.get("receipt_kind") == "manual_operator_exit"
+                for r in receipts
+            )
+        )
         and all(
             isinstance(receipt, dict)
+            and receipt.get("receipt_kind") in {None, "manual_operator_exit"}
+            and (
+                exclusion["schema"] != "verified_target_timestamp_loss_v1"
+                or receipt.get("receipt_kind") is None
+            )
             and isinstance(receipt.get("leg_id"), str)
             and bool(receipt["leg_id"])
             and isinstance(receipt.get("order_no"), str)
@@ -2063,10 +2076,60 @@ def _immutable_owner_timestamp_exclusion(
             and isinstance(receipt.get("receipt_sha256"), str)
             and len(receipt["receipt_sha256"]) == 64
             and all(c in "0123456789abcdef" for c in receipt["receipt_sha256"])
+            and (
+                exclusion["schema"] != "verified_manual_timestamp_loss_v1"
+                or receipt.get("receipt_kind") != "manual_operator_exit"
+                or (
+                    isinstance(receipt.get("registry_sha256"), str)
+                    and len(receipt["registry_sha256"]) == 64
+                    and all(c in "0123456789abcdef" for c in receipt["registry_sha256"])
+                )
+            )
             for receipt in receipts
         )
         and len({receipt["order_no"] for receipt in receipts}) == len(receipts)
         and len({receipt["leg_id"] for receipt in receipts}) == len(receipts)
+    )
+
+
+def _closed_market_window_excluded(row: dict[str, Any], target_date: date) -> bool:
+    proof = row.get("closed_market_window_exclusion")
+    if not isinstance(proof, dict):
+        return False
+    try:
+        anchor_at = datetime.fromisoformat(str(row.get("anchor_at")))
+    except ValueError:
+        return False
+    if anchor_at.tzinfo is None:
+        return False
+    return bool(
+        proof.get("schema") == "closed_exact_market_window_exclusion_v2"
+        and proof.get("source_date") == target_date.isoformat()
+        and proof.get("window_start_at")
+        == (anchor_at - timedelta(seconds=30)).isoformat()
+        and proof.get("window_end_at") == (anchor_at + timedelta(seconds=6)).isoformat()
+        and type(proof.get("enclosing_study_market_row_count")) is int
+        and proof["enclosing_study_market_row_count"] >= 0
+        and all(
+            row.get(k) and proof.get(k) == row[k]
+            for k in (
+                "anchor_id",
+                "anchor_at",
+                "symbol",
+                "source_entry_event_id",
+                "expected_venues",
+                "expected_session_buckets",
+            )
+        )
+        and type(proof.get("matched_market_row_count")) is int
+        and proof["matched_market_row_count"] == 0
+        and proof.get("reason") == "closed_source_has_no_valid_exact_market_window"
+        and proof.get("timing_sample_eligible") is False
+        and proof.get("runtime_effect") is False
+        and proof.get("allowed_runtime_apply") is False
+        and isinstance(proof.get("canary_source_sha256"), str)
+        and len(proof["canary_source_sha256"]) == 64
+        and all(c in "0123456789abcdef" for c in proof["canary_source_sha256"])
     )
 
 
@@ -2081,6 +2144,7 @@ def _report_sample_floor_assessment(
     """Classify why a missing winner cannot be resolved by blind waiting."""
 
     target_actual_rows: list[dict[str, Any]] = []
+    closed_canary_hashes: set[str] = set()
     immutable_ingress_receipt_loss = False
     for source_date, _, payload in reports:
         if source_date != target_date:
@@ -2088,6 +2152,13 @@ def _report_sample_floor_assessment(
         canary = ((payload.get("sources") or {}).get("micro_reversion") or {}).get(
             "canary_source_quality"
         ) or {}
+        if (
+            canary.get("status") in {"loaded_pass", "loaded_pass_with_row_quarantine"}
+            and canary.get("target_day_complete") is True
+            and canary.get("stopped_clean_closed") is True
+            and isinstance(canary.get("source_sha256"), str)
+        ):
+            closed_canary_hashes.add(canary["source_sha256"])
         immutable_ingress_receipt_loss = bool(
             canary.get("immutable_ingress_receipt_loss") is True
             and canary.get("status") == "missing_or_invalid"
@@ -2149,14 +2220,31 @@ def _report_sample_floor_assessment(
         _immutable_owner_timestamp_exclusion(row, target_date)
         for row in target_blocked_rows
     )
+    if (
+        invalid_owner_contract_anchor_count > 0
+        and invalid_owner_contract_anchor_count
+        == immutable_owner_timestamp_excluded_anchor_count
+    ):
+        repairable_receipt_companion_gaps = [
+            gap
+            for gap in repairable_receipt_companion_gaps
+            if gap != "owner_anchor_contract_invalid"
+        ]
     policy_ineligible_anchor_count = sum(
         row.get("owner_policy_tuning_eligible") is False for row in target_blocked_rows
+    )
+    closed_market_window_excluded_count = sum(
+        _closed_market_window_excluded(row, target_date)
+        and row["closed_market_window_exclusion"]["canary_source_sha256"]
+        in closed_canary_hashes
+        for row in target_blocked_rows
     )
     immutable_source_date_quarantine_eligible = bool(
         target_actual_rows
         and len(target_blocked_rows) == len(target_actual_rows)
         and (
             receipt_gap_present
+            or closed_market_window_excluded_count == len(target_actual_rows)
             or (
                 immutable_ingress_receipt_loss
                 and "micro_canary_source_quality_missing_or_invalid" in gap_reasons
@@ -2248,6 +2336,7 @@ def _report_sample_floor_assessment(
         "immutable_source_date_quarantine_eligible": (
             immutable_source_date_quarantine_eligible
         ),
+        "closed_market_window_excluded_anchor_count": closed_market_window_excluded_count,
         "repairable_receipt_companion_gaps": repairable_receipt_companion_gaps,
         "immutable_ingress_receipt_loss": immutable_ingress_receipt_loss,
         "invalid_owner_contract_anchor_count": invalid_owner_contract_anchor_count,

@@ -586,9 +586,11 @@ def build_calibration_policy(
                 # display promotion count. Never tune that count as trade alpha.
                 baseline = (execution_baselines or {}).get(spec.symbol, {}).get(session)
                 study = paired_replay.build_study(
-                    paired_inputs
-                    if spec.symbol == SAMSUNG_CODE and report_issue is None
-                    else [],
+                    (
+                        paired_inputs
+                        if spec.symbol == SAMSUNG_CODE and report_issue is None
+                        else []
+                    ),
                     symbol=spec.symbol,
                     session=session,
                     parameters=paired_replay.policy_parameters(baseline),
