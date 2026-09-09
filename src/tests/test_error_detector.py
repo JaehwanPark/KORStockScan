@@ -316,3 +316,96 @@ def test_error_detection_wrapper_validates_invocation_before_done():
     assert script.index("validate_report_contract") < script.index(
         "[DONE] error detection"
     )
+
+
+def test_recovery_detector_active_lock_is_not_terminal_success(tmp_path):
+    import fcntl
+    import os
+    import subprocess
+
+    project_root = Path(__file__).resolve().parents[2]
+    (tmp_path / "tmp").mkdir()
+    lock_path = tmp_path / "tmp/run_error_detection.lock"
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(
+            [
+                "bash",
+                str(project_root / "deploy/run_error_detection.sh"),
+                "full",
+                "2026-09-09",
+            ],
+            env={**os.environ, "PROJECT_DIR": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    assert result.returncode == 75
+    assert "already running" in result.stdout
+    assert "[DONE]" not in result.stdout
+
+
+def test_postclose_recovery_retains_real_asof_and_disables_all_mutations(monkeypatch):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    import src.engine.error_detector as mod
+
+    yesterday = (
+        datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=1)
+    ).isoformat()
+
+    class TestReadOnly(BaseDetector):
+        category = "system"
+
+        def check(self):
+            assert self.dry_run is True
+            return DetectionResult(self.id, self.category, "pass", "checked")
+
+    registered = {
+        key: type("ReadOnly" + key, (TestReadOnly,), {"id": key})
+        for key in mod.REQUIRED_DETECTOR_IDS
+    }
+    monkeypatch.setattr(mod, "get_registered_detectors", lambda: registered)
+    engine = ErrorDetectionEngine(
+        postclose_source_date=yesterday, run_id="recovery-test"
+    )
+    report = engine.build_report(engine.run_all())
+    assert report["target_date"] == yesterday
+    assert (
+        report["as_of_date"] == datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    )
+    assert report["operational_mutation_authority"] == []
+    assert report["operational_mutation_count"] == 0
+    assert len(report["results"]) == 7
+    kwargs = dict(
+        expected_mode="full",
+        expected_run_id="recovery-test",
+        expected_target_date=yesterday,
+    )
+    assert validate_report_contract(report, **kwargs) == []
+    report["operational_mutations"] = ["stale_lock_cleanup"]
+    report["operational_mutation_count"] = 1
+    assert (
+        "postclose_recovery_operational_mutation_forbidden"
+        in validate_report_contract(report, **kwargs)
+    )
+    report.pop("postclose_recovery")
+    assert "timestamp_target_date_mismatch" in validate_report_contract(
+        report, **kwargs
+    )
+
+
+def test_postclose_recovery_rejects_future_and_stale_dates():
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date()
+    for delta in (-2, 1):
+        with pytest.raises(ValueError):
+            ErrorDetectionEngine(
+                postclose_source_date=(today + timedelta(days=delta)).isoformat()
+            )
+    with pytest.raises(ValueError):
+        ErrorDetectionEngine(
+            mode="health_only", postclose_source_date=today.isoformat()
+        )

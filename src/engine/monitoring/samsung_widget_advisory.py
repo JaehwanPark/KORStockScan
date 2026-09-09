@@ -1579,9 +1579,7 @@ def evaluate_advisory(
     volume_meta["volume_confirmation_mode"] = (
         "absorption_recovery"
         if absorption_recovery_ok
-        else "standard_rebound"
-        if volume_ok
-        else "unconfirmed"
+        else "standard_rebound" if volume_ok else "unconfirmed"
     )
     spread_ok = spread_ticks <= 2
     core_checks = {
@@ -1995,9 +1993,7 @@ def evaluate_advisory(
                     else (
                         "vwap"
                         if vwap_reclaimed
-                        else "recent_resistance"
-                        if resistance_reclaimed
-                        else "none"
+                        else "recent_resistance" if resistance_reclaimed else "none"
                     )
                 ),
                 "vwap_only_structure_confirmed": vwap_only_structure_confirmed,
@@ -4088,9 +4084,7 @@ class ObservationRecorder:
             "observation_kind": (
                 "state_transition"
                 if state_changed
-                else "exit_state_transition"
-                if exit_state_changed
-                else "minute_summary"
+                else "exit_state_transition" if exit_state_changed else "minute_summary"
             ),
             "previous_advisory_state": previous_state,
             "previous_exit_advisory_state": previous_exit_state,
@@ -4664,9 +4658,9 @@ class SamsungWidgetCollector:
             entry_advisory=advisory,
         )
         entry_exit_conflict = _apply_entry_exit_conflict_guard(advisory, exit_advisory)
-        advisory["execution_replay_input"]["non_confirmation_entry_blocked"] = (
-            entry_exit_conflict
-        )
+        advisory["execution_replay_input"][
+            "non_confirmation_entry_blocked"
+        ] = entry_exit_conflict
         if entry_exit_conflict:
             # The promotion filter has already observed this raw entry.  Reset
             # it so a cleared exit warning still needs the configured two/three

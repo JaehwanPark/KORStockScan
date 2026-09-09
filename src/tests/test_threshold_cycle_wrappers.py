@@ -1325,6 +1325,67 @@ def test_postclose_done_controller_retriggers_late_entry_setup_follower_idempote
     assert "systemctl restart" not in script
 
 
+@pytest.mark.parametrize("terminal_after_release", [True, False])
+def test_postclose_follower_rechecks_terminal_after_lock_release(
+    tmp_path: Path, terminal_after_release
+):
+    script = Path("deploy/run_postclose_done_controller.sh").read_text(encoding="utf-8")
+    function = script.split("run_entry_setup_replay_followup() {", 1)[1].split(
+        "\nrun_entry_setup_replay_followup\n", 1
+    )[0]
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    runner = deploy / "run_ai_entry_setup_paired_replay_postclose.sh"
+    runner.write_text('#!/bin/bash\ntouch "$PROJECT_DIR/unexpected_runner"\nexit 99\n')
+    runner.chmod(0o755)
+    harness = r"""
+set -euo pipefail
+RUN_ENTRY_SETUP_REPLAY_FOLLOWUP=true
+DRY_RUN=false
+controller_status=done
+TARGET_DATE=2000-01-01
+ENTRY_SETUP_REPLAY_ACTIVE_WAIT_SEC=1
+ENTRY_SETUP_REPLAY_ACTIVE_POLL_SEC=1
+ENTRY_SETUP_REPLAY_FOLLOWUP_WAIT_SEC=0
+entry_setup_replay_followup_state() {
+  if [[ -f "$PROJECT_DIR/terminal_ready" ]]; then
+    echo terminal_ready:validated_fixture
+  else
+    echo retry_required:consumer_pending
+  fi
+}
+flock() {
+  if [[ "$TERMINAL_AFTER_RELEASE" == true ]]; then
+    touch "$PROJECT_DIR/terminal_ready"
+  fi
+  return 0
+}
+"""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            harness
+            + "\nrun_entry_setup_replay_followup() {"
+            + function
+            + "\nrun_entry_setup_replay_followup\n",
+        ],
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(tmp_path),
+            "TERMINAL_AFTER_RELEASE": str(terminal_after_release).lower(),
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == (0 if terminal_after_release else 99), (
+        result.stderr + result.stdout
+    )
+    assert ("owner=completed_fixed_runner" in result.stdout) is terminal_after_release
+    assert (tmp_path / "unexpected_runner").exists() is not terminal_after_release
+
+
 def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path):
     script = Path("deploy/run_postclose_done_controller.sh").read_text(encoding="utf-8")
     function_start = script.index("entry_setup_replay_followup_state()")

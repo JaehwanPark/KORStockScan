@@ -307,11 +307,15 @@ def _arm(path, *, confirmations, parameters, participation):
                 and (at - entry_at).total_seconds() <= 180,
                 profitable_close_within_180s=net > 0
                 and (at - entry_at).total_seconds() <= 180,
-                close_reason="target"
-                if target_streak >= 2
-                else "existing_force_exit"
-                if forced
-                else "common_horizon_evaluation_only",
+                close_reason=(
+                    "target"
+                    if target_streak >= 2
+                    else (
+                        "existing_force_exit"
+                        if forced
+                        else "common_horizon_evaluation_only"
+                    )
+                ),
                 cost_contract_hash=cost["contract_sha256"],
             )
     if decision_at is None and _stamp(path[-1]["observed_at"]) >= end:
@@ -394,9 +398,7 @@ def build_study(
     expected_venue = (
         "KRX"
         if session == "KRX_REGULAR"
-        else "NXT"
-        if session in {"NXT_PREMARKET", "NXT_AFTERMARKET"}
-        else None
+        else "NXT" if session in {"NXT_PREMARKET", "NXT_AFTERMARKET"} else None
     )
     if expected_venue is None:
         result["status"] = "unsupported_session"
@@ -543,9 +545,9 @@ def build_study(
                     ),
                     "candidate": _arm(
                         path,
-                        confirmations=value
-                        if axis == "confirmations"
-                        else baseline_confirmations,
+                        confirmations=(
+                            value if axis == "confirmations" else baseline_confirmations
+                        ),
                         parameters=changed,
                         participation=participation,
                     ),
@@ -588,9 +590,11 @@ def select_candidate(study, *, previous_value):
     carry["source_diagnostic"] = (
         "replay_input_observed_not_pid_or_economic_acceptance"
         if _positive(current.get("replay_input_count"))
-        else "observation_present_replay_input_missing_check_collector_generation"
-        if _positive(current.get("observation_count"))
-        else "target_session_source_not_observed_check_schedule_and_owner"
+        else (
+            "observation_present_replay_input_missing_check_collector_generation"
+            if _positive(current.get("observation_count"))
+            else "target_session_source_not_observed_check_schedule_and_owner"
+        )
     )
     if study.get("status") != "observed":
         carry["evidence_state"] = study.get("status") or "paired_contract_invalid"
@@ -652,20 +656,23 @@ def select_candidate(study, *, previous_value):
                 for arm in ("baseline", "candidate"):
                     outcomes = [r[arm] for r in rows]
                     sides[arm] = {
-                        "source_quality_adjusted_ev_pct": fmean(
-                            r.get("opportunity_return_pct", 0.0)
-                            if r["status"] == "no_entry"
-                            else r["opportunity_return_pct"]
-                            for r in outcomes
-                        )
-                        if outcomes
-                        else None,
-                        "net_profit_krw_per_source_day": sum(
-                            r["net_pnl_krw"] for r in outcomes
-                        )
-                        / len(days)
-                        if days and outcomes
-                        else None,
+                        "source_quality_adjusted_ev_pct": (
+                            fmean(
+                                (
+                                    r.get("opportunity_return_pct", 0.0)
+                                    if r["status"] == "no_entry"
+                                    else r["opportunity_return_pct"]
+                                )
+                                for r in outcomes
+                            )
+                            if outcomes
+                            else None
+                        ),
+                        "net_profit_krw_per_source_day": (
+                            sum(r["net_pnl_krw"] for r in outcomes) / len(days)
+                            if days and outcomes
+                            else None
+                        ),
                         "worst_net_return_pct": min(
                             (r["net_return_pct"] for r in outcomes), default=None
                         ),
@@ -731,11 +738,15 @@ def select_candidate(study, *, previous_value):
         carry["evidence_state"] = (
             "rolling_evidence_expired"
             if not recent_pair_count
-            else "economic_guard_not_met"
-            if sample_floor_met
-            else "paired_outcome_incomplete"
-            if incomplete_outcomes
-            else "paired_sample_floor_not_met"
+            else (
+                "economic_guard_not_met"
+                if sample_floor_met
+                else (
+                    "paired_outcome_incomplete"
+                    if incomplete_outcomes
+                    else "paired_sample_floor_not_met"
+                )
+            )
         )
     carry.update(
         diagnostics=diagnostics,

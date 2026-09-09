@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 from src.engine.scalping.micro_reversion.observer_source_quality import (
     CANARY_LOSS_COUNTERS as CANARY_LOSS_COUNTERS,
     CANARY_FORBIDDEN_TRUE_FIELDS as CANARY_FORBIDDEN_TRUE_FIELDS,
+    closed_pre_enqueue_epoch_quarantine_validation,
     timestamp_regression_row_quarantine_validation as _timestamp_regression_row_quarantine_validation,
 )
 from src.engine.scalping.micro_reversion.p2_replay import (
@@ -945,9 +946,7 @@ def _widget_state_order_index(
     return index, source
 
 
-def _widget_advisory_event_index(
-    *, target_date: str, report_root: Path
-) -> tuple[
+def _widget_advisory_event_index(*, target_date: str, report_root: Path) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[tuple[str, str, int], dict[str, Any]],
@@ -1868,9 +1867,7 @@ def _widget_actual_execution_inventory(
         execution_venue_alignment_state = (
             "unknown"
             if not all_execution_venues
-            else "aligned"
-            if all_execution_venues == {venue}
-            else "cross_venue"
+            else "aligned" if all_execution_venues == {venue} else "cross_venue"
         )
         timestamp_order_valid = bool(
             signal_at <= first_entry_submit_at
@@ -1987,9 +1984,7 @@ def _widget_actual_execution_inventory(
                     else (
                         source_final_exit_reason
                         if realized and source_final_exit_reason
-                        else "final_exit_fill"
-                        if realized
-                        else "right_censored"
+                        else "final_exit_fill" if realized else "right_censored"
                     )
                 )
             ),
@@ -2053,9 +2048,7 @@ def _widget_actual_execution_inventory(
             "realization_scope": (
                 "partial_manual_exit_cashflow"
                 if partial_manual_realization
-                else "full_widget_episode"
-                if realized
-                else "right_censored"
+                else "full_widget_episode" if realized else "right_censored"
             ),
             "buy_leg_count": len(buy_submit_orders),
             "scale_in_buy_leg_count": sum(
@@ -3026,9 +3019,9 @@ def _widget_inventory(
             scope_id = f"expansion:{symbol}:SOR_REGULAR"
             if scope_id not in row["owner_scope_ids"]:
                 row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][scope_id] = (
-                "prospective_widget_collector_expansion"
-            )
+            row["owner_scope_kinds"][
+                scope_id
+            ] = "prospective_widget_collector_expansion"
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
     actual_anchors, actual_source = _widget_actual_execution_inventory(
@@ -3204,9 +3197,193 @@ def _verified_target_timestamp_loss(
     }
 
 
+def _closed_market_window_exclusion(
+    anchor: dict[str, Any],
+    window: dict[str, Any],
+    source: dict[str, Any],
+    inventory: dict[str, Any],
+    target_date: str,
+) -> dict[str, Any] | None:
+    """Prove a missing entry window; later exit-study rows cannot repair it."""
+    canary = source.get("canary_source_quality") or {}
+    anchor_at = _owner_ts_on_target_date(anchor.get("anchor_at"), target_date)
+    if anchor_at is None:
+        return None
+    # Preserve the pre-signal context and the final 5-second checkpoint's
+    # one-second confirmation window. The enclosing exit study is 30 minutes.
+    window_start = anchor_at - timedelta(seconds=PRE_WINDOW_SEC)
+    window_end = anchor_at + timedelta(seconds=6)
+    for field, timestamp_field in (
+        ("rows", "timestamp"),
+        ("raw_market_rows", "local_receive_timestamp"),
+    ):
+        rows = window.get(field)
+        if not isinstance(rows, list):
+            return None
+        for row in rows:
+            raw_timestamp = row.get(timestamp_field) if isinstance(row, dict) else None
+            timestamp = (
+                raw_timestamp
+                if isinstance(raw_timestamp, datetime)
+                else _parse_owner_ts(raw_timestamp)
+            )
+            if (
+                timestamp is None
+                or timestamp.tzinfo is None
+                or window_start <= timestamp <= window_end
+            ):
+                return None
+    if not (
+        anchor.get("anchor_role") in _TUNING_ENTRY_DECISION_ANCHOR_ROLES
+        and anchor_at is not None
+        and anchor.get("entry_timing_decision_anchor_valid") is not False
+        and bool(anchor.get("source_entry_event_id"))
+        and bool(anchor.get("expected_venues"))
+        and bool(anchor.get("expected_session_buckets"))
+        and source.get("partition_status") == "loaded"
+        and source.get("source_contract_ready") is True
+        and source.get("source_exclusion_manifest_status") == "loaded"
+        and canary.get("status") in {"loaded_pass", "loaded_pass_with_row_quarantine"}
+        and canary.get("target_day_complete") is True
+        and canary.get("stopped_clean_closed") is True
+        and isinstance(canary.get("source_sha256"), str)
+        and len(canary["source_sha256"]) == 64
+        and all(c in "0123456789abcdef" for c in canary["source_sha256"])
+        and inventory.get("invalid_contract_row_count") == 0
+        and not _invalid_contract_count_for_scope(
+            inventory,
+            expected_venues=anchor["expected_venues"],
+            expected_sessions=anchor["expected_session_buckets"],
+        )
+    ):
+        return None
+    return {
+        "schema": "closed_exact_market_window_exclusion_v2",
+        "source_date": target_date,
+        "anchor_id": anchor["anchor_id"],
+        "anchor_at": anchor["anchor_at"],
+        "source_entry_event_id": anchor["source_entry_event_id"],
+        "symbol": anchor["symbol"],
+        "expected_venues": anchor["expected_venues"],
+        "expected_session_buckets": anchor["expected_session_buckets"],
+        "canary_source_sha256": canary["source_sha256"],
+        "matched_market_row_count": 0,
+        "window_start_at": window_start.isoformat(),
+        "window_end_at": window_end.isoformat(),
+        "enclosing_study_market_row_count": len(window["raw_market_rows"]),
+        "reason": "closed_source_has_no_valid_exact_market_window",
+        "timing_sample_eligible": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def _verified_manual_timestamp_loss(
+    leg: dict[str, Any],
+    *,
+    symbol: str,
+    profile_id: str,
+    target_date: str,
+    registry: dict[str, Any],
+    registry_sha256: str | None,
+) -> dict[str, Any] | None:
+    """Exclude a dated, applied manual receipt; never manufacture a fill clock."""
+    receipt = leg.get("manual_exit_receipt")
+    buy_at = _owner_ts_on_target_date(leg.get("buy_filled_at"), target_date)
+    reconciled_at = _owner_ts_on_target_date(
+        leg.get("target_fill_reconciled_at"), target_date
+    )
+    qty, price = leg.get("target_filled_qty"), leg.get("target_fill_price")
+    if not (
+        isinstance(receipt, dict)
+        and registry.get("schema") == "episode_manual_exit_receipt_registry_v1"
+        and isinstance(registry_sha256, str)
+        and len(registry_sha256) == 64
+        and all(c in "0123456789abcdef" for c in registry_sha256)
+        and leg.get("exit_fill_source") == MANUAL_EXIT_FILL_SOURCE
+        and leg.get("target_filled_at") in (None, "")
+        and leg.get("target_fill_timestamp_status") == "unavailable"
+        and leg.get("completed") is True
+        and leg.get("contract_valid") is True
+        and type(qty) is int
+        and qty > 0
+        and type(leg.get("buy_filled_qty")) is int
+        and leg["buy_filled_qty"] == qty
+        and type(price) is int
+        and price > 0
+        and buy_at is not None
+        and reconciled_at is not None
+        and reconciled_at >= buy_at
+        and receipt.get("source_api") == "kt00007"
+        and receipt.get("symbol") == symbol
+        and receipt.get("order_date") == target_date
+        and receipt.get("allocation_authority") == "explicit_owner_whole_position_exit"
+        and type(receipt.get("allocated_qty")) is int
+        and receipt["allocated_qty"] == qty
+        and type(receipt.get("filled_qty")) is int
+        and receipt["filled_qty"] == qty
+        and type(receipt.get("fill_price")) is int
+        and receipt["fill_price"] == price
+        and isinstance(receipt.get("order_no"), str)
+        and receipt["order_no"].isascii()
+        and receipt["order_no"].isdigit()
+        and int(receipt["order_no"]) > 0
+        and isinstance(leg.get("leg_id"), str)
+        and bool(leg["leg_id"])
+        and isinstance(registry.get("receipts"), list)
+    ):
+        return None
+    matches = [
+        r
+        for r in registry["receipts"]
+        if isinstance(r, dict)
+        and r.get("order_date") == target_date
+        and r.get("order_no") == receipt["order_no"]
+    ]
+    if len(matches) != 1:
+        return None
+    applied = matches[0]
+    if not (
+        applied.get("status") == "applied"
+        and applied.get("owner_id") == profile_id
+        and applied.get("entry_trade_date") == target_date
+        and applied.get("fill_timestamp_status")
+        == "unavailable_from_dated_order_receipt"
+        and _owner_ts_on_target_date(applied.get("applied_at_kst"), target_date)
+        == reconciled_at
+        and all(
+            type(applied.get(k)) is type(receipt[k]) and applied[k] == receipt[k]
+            for k in ("source_api", "symbol", "filled_qty", "fill_price")
+        )
+    ):
+        return None
+    return {
+        "leg_id": leg["leg_id"],
+        "order_no": receipt["order_no"],
+        "receipt_sha256": hashlib.sha256(
+            json.dumps(
+                {"leg_receipt": receipt, "applied_receipt": applied},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
+        "receipt_kind": "manual_operator_exit",
+        "registry_sha256": registry_sha256,
+    }
+
+
 def _episode_inventory(
     target_date: str, report_root: Path
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    registry_path = report_root.parent / "runtime" / "episode_manual_exit_receipts.json"
+    try:
+        registry_bytes = registry_path.read_bytes()
+        manual_registry = json.loads(registry_bytes)
+        manual_registry_sha = hashlib.sha256(registry_bytes).hexdigest()
+        if not isinstance(manual_registry, dict):
+            manual_registry = {}
+    except (OSError, ValueError):
+        manual_registry, manual_registry_sha = {}, None
     tuning_path = (
         report_root
         / "low_price_two_leg_tuning"
@@ -3486,6 +3663,15 @@ def _episode_inventory(
                             receipt = _verified_target_timestamp_loss(
                                 leg, symbol=row["symbol"], target_date=target_date
                             )
+                            if receipt is None:
+                                receipt = _verified_manual_timestamp_loss(
+                                    leg,
+                                    symbol=row["symbol"],
+                                    profile_id=profile_id,
+                                    target_date=target_date,
+                                    registry=manual_registry,
+                                    registry_sha256=manual_registry_sha,
+                                )
                             if receipt is not None:
                                 immutable_target_time_receipts.append(receipt)
                     holding_duration_ms = (
@@ -3698,7 +3884,15 @@ def _episode_inventory(
                             anchor["owner_policy_tuning_eligible"] = False
                             if timing_loss_only:
                                 anchor["owner_terminal_timestamp_exclusion"] = {
-                                    "schema": "verified_target_timestamp_loss_v1",
+                                    "schema": (
+                                        "verified_manual_timestamp_loss_v1"
+                                        if any(
+                                            r.get("receipt_kind")
+                                            == "manual_operator_exit"
+                                            for r in immutable_target_time_receipts
+                                        )
+                                        else "verified_target_timestamp_loss_v1"
+                                    ),
                                     "source_date": target_date,
                                     "scope_id": profile_id,
                                     "symbol": row["symbol"],
@@ -4417,6 +4611,13 @@ def _episode_inventory(
                 target_date=target_date,
                 expected_schemas=tuning_schemas,
             ),
+            "manual_exit_timestamp_registry": {
+                "path": str(registry_path),
+                "sha256": manual_registry_sha,
+                "status": "loaded" if manual_registry_sha else "missing_or_invalid",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
             "expanded_candidate_research": _source(
                 expansion_path,
                 expansion,
@@ -4526,9 +4727,7 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
         else (
             f"{symbol}_NX"
             if venue == "NXT"
-            else f"{symbol}_AL"
-            if venue == "SOR"
-            else ""
+            else f"{symbol}_AL" if venue == "SOR" else ""
         )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)
@@ -4795,6 +4994,8 @@ def _micro_context(
         exclusion_manifest_status = "missing_or_invalid"
 
     canary_status = "not_requested"
+    allowed_canary_epoch: int | None = None
+    unverified_epoch_row_counts: Counter[str] = Counter()
     canary_source: dict[str, Any] = {
         "path": str(canary_snapshot_path) if canary_snapshot_path else None,
         "status": canary_status,
@@ -4853,6 +5054,13 @@ def _micro_context(
         row_quarantine_validation = _timestamp_regression_row_quarantine_validation(
             guard, collector
         )
+        if row_quarantine_validation.get("eligible") is not True:
+            epoch_validation = closed_pre_enqueue_epoch_quarantine_validation(
+                guard, collector
+            )
+            if epoch_validation.get("eligible") is True:
+                row_quarantine_validation = epoch_validation
+                allowed_canary_epoch = epoch_validation["allowed_sequence_epoch"]
         isolated_row_quarantine = bool(
             row_quarantine_validation.get("eligible") is True
         )
@@ -4945,6 +5153,8 @@ def _micro_context(
                 else None
             ),
             "row_quarantine_validation": row_quarantine_validation,
+            "allowed_sequence_epoch": allowed_canary_epoch,
+            "whole_date_approval": False if allowed_canary_epoch is not None else None,
             "immutable_ingress_receipt_loss": bool(
                 (canary_payload or {}).get("schema")
                 == "scalp_micro_reversion_canary_monitor_v1"
@@ -4964,6 +5174,11 @@ def _micro_context(
         }
 
     def is_excluded(payload: dict[str, Any]) -> bool:
+        if allowed_canary_epoch is not None:
+            epoch = payload.get("sequence_epoch")
+            if type(epoch) is not int or epoch != allowed_canary_epoch:
+                unverified_epoch_row_counts[str(epoch)] += 1
+                return True
         try:
             scope = (
                 target_date,
@@ -5260,6 +5475,10 @@ def _micro_context(
             "source_exclusion_manifest_path": str(source_exclusion_manifest_path),
             "source_exclusion_manifest_status": exclusion_manifest_status,
             "source_exclusion_scope_count": len(excluded_scopes),
+            "unverified_canary_epoch_row_counts": dict(unverified_epoch_row_counts),
+            "unverified_canary_epoch_row_count": sum(
+                unverified_epoch_row_counts.values()
+            ),
             "canary_source_quality": canary_source,
             "source_contract_ready": source_contract_ready,
         },
@@ -6893,6 +7112,7 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "owner_terminal_timestamp_exclusion": result.get(
             "owner_terminal_timestamp_exclusion"
         ),
+        "closed_market_window_exclusion": result.get("closed_market_window_exclusion"),
         "owner_policy_tuning_eligible": (
             result.get("owner_policy_tuning_eligible") is True
         ),
@@ -8325,6 +8545,15 @@ def build_report(
             clean_baseline_allowed=clean_baseline_allowed,
             registration_receipt_binding=receipt_binding,
         )
+        closed_window = _closed_market_window_exclusion(
+            anchor,
+            windows[anchor["anchor_id"]],
+            micro_source,
+            micro_inventory[anchor["symbol"]],
+            target_date,
+        )
+        if closed_window is not None:
+            result["closed_market_window_exclusion"] = closed_window
         if "rebound_source_frame" in anchor:
             rebound_frames[anchor["anchor_id"]] = project_outcome(
                 anchor["rebound_source_frame"],
@@ -8834,9 +9063,11 @@ def build_report(
         report,
         owner_census=natural_exit_source,
         study_source=rolling_exit_source,
-        study_contract=propose_study_contract(rolling_exit_source)
-        if rolling_exit_source is not None
-        else None,
+        study_contract=(
+            propose_study_contract(rolling_exit_source)
+            if rolling_exit_source is not None
+            else None
+        ),
     )
     if is_krx_trading_day(target_day):
         collection_targets = build_collection_targets(

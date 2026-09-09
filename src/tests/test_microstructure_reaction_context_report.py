@@ -4,6 +4,48 @@ from datetime import datetime, timedelta
 from src.engine.scalping import microstructure_reaction_context as mod
 
 
+def test_sim_holding_delivery_is_separate_from_main_and_leaks_remain():
+    sim = _v3_observation(
+        record_id=None,
+        ai_prompt_type="scalping_holding_score",
+        holding_context_broker_route_authority="simulated_execution_view_only",
+        actual_order_submitted=False,
+        microstructure_reaction_provider_delivery_status="response_received",
+        microstructure_reaction_context_payload_included=False,
+    )
+    result = mod._delivery_observation_summary(
+        [sim, {**sim, "stage": "ai_holding_review"}]
+    )
+    assert result["deprioritized_sim_unique_evaluation_count"] == 1
+    assert result["deprioritized_sim_row_count"] == 2
+    assert result["internal_consumption_required_count"] == 0
+    assert result["delivery_telemetry_v3_unique_count"] == 0
+    assert mod._microstructure_code_improvement_orders(result, "unused.json") == []
+    for changed in (
+        {"actual_order_submitted": True},
+        {"order_submission_declaration_valid": False},
+        {"record_id": "real-record"},
+        {"holding_context_broker_route_authority": "real_execution_view"},
+    ):
+        mixed = mod._delivery_observation_summary([sim, {**sim, **changed}])
+        assert mixed["deprioritized_sim_unique_evaluation_count"] == 0
+        assert mixed["internal_consumption_required_count"] == 1
+
+
+def test_event_parser_preserves_explicit_sim_execution_view():
+    event = {
+        "stage": "ai_holding_review",
+        "fields": {
+            **_v3_observation(),
+            "holding_context_broker_route_authority": "simulated_execution_view_only",
+        },
+    }
+    assert (
+        mod._row_from_event(event)["holding_context_broker_route_authority"]
+        == "simulated_execution_view_only"
+    )
+
+
 def _v3_observation(identity="a", **extra):
     return {
         "stock_code": "005930",

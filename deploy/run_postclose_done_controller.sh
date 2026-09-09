@@ -349,6 +349,14 @@ run_entry_setup_replay_followup() {
     sleep "$ENTRY_SETUP_REPLAY_ACTIVE_POLL_SEC"
   done
 
+  # The fixed runner can finish between the last observation and lock release.
+  # Its final consumer receipt, not the cached pre-release state, owns readiness.
+  followup_state="$(entry_setup_replay_followup_state)"
+  if [[ "$followup_state" == terminal_ready:* ]]; then
+    echo "[SKIP] ai_entry_setup_replay_followup target_date=${TARGET_DATE} reason=${followup_state} owner=completed_fixed_runner"
+    return 0
+  fi
+
   runner_path="$PROJECT_DIR/deploy/run_ai_entry_setup_paired_replay_postclose.sh"
   if [[ ! -x "$runner_path" ]]; then
     echo "[FAIL] ai_entry_setup_replay_followup target_date=${TARGET_DATE} reason=runner_missing_or_not_executable path=${runner_path}" >&2

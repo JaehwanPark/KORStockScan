@@ -1205,6 +1205,9 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
         "record_id": event.get("record_id") or fields.get("record_id"),
         "sim_record_id": fields.get("sim_record_id"),
         "sim_parent_record_id": fields.get("sim_parent_record_id"),
+        "holding_context_broker_route_authority": fields.get(
+            "holding_context_broker_route_authority"
+        ),
         "source_event_stage": fields.get("source_event_stage") or event.get("stage"),
         "stage": event.get("stage"),
         "ai_prompt_type": fields.get("ai_prompt_type"),
@@ -1214,6 +1217,10 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
         "venue": fields.get("venue"),
         "actual_order_submitted": _safe_bool(
             fields.get("actual_order_submitted"), False
+        ),
+        "order_submission_declaration_valid": (
+            "actual_order_submitted" not in fields
+            or _safe_bool(fields.get("actual_order_submitted"), None) is not None
         ),
         "broker_order_forbidden": (
             _safe_bool(fields.get("broker_order_forbidden"), False)
@@ -1598,6 +1605,34 @@ def _delivery_observation_summary(rows):
     defects = {}
     examples = {}
     provenance = {}
+    # Explicit simulator execution-view provenance is not a main live holding
+    # consumer. Preserve raw observations, but do not open main repair orders
+    # for this deprioritized owner. Ambiguous/mixed identities stay diagnostic.
+    scope_groups = {}
+    for row in rows:
+        identity = row.get("microstructure_reaction_evaluation_id")
+        if identity:
+            scope_groups.setdefault(identity, []).append(row)
+    sim_only_ids = {
+        identity
+        for identity, copies in scope_groups.items()
+        if any(
+            row.get("holding_context_broker_route_authority")
+            == "simulated_execution_view_only"
+            for row in copies
+        )
+        and all(
+            row.get("holding_context_broker_route_authority")
+            in (None, "", "simulated_execution_view_only")
+            and row.get("actual_order_submitted") is not True
+            and row.get("order_submission_declaration_valid", True) is True
+            and not row.get("record_id")
+            for row in copies
+        )
+    }
+    sim_only_row_count = sum(
+        row.get("microstructure_reaction_evaluation_id") in sim_only_ids for row in rows
+    )
 
     def defect(cause, identity, row):
         ids = defects.setdefault(cause, set())
@@ -1644,6 +1679,18 @@ def _delivery_observation_summary(rows):
         ids.add(identity)
 
     for index, row in enumerate(rows):
+        if row.get("microstructure_reaction_evaluation_id") in sim_only_ids:
+            continue
+        if (
+            row.get("holding_context_broker_route_authority")
+            == "simulated_execution_view_only"
+            and row.get("actual_order_submitted") is True
+        ):
+            defect(
+                "simulated_execution_view_real_order_authority_conflict",
+                row.get("microstructure_reaction_evaluation_id") or f"row:{index}",
+                row,
+            )
         if row.get("microstructure_reaction_delivery_telemetry_version") != "v3":
             unknown += 1
             continue
@@ -1831,6 +1878,10 @@ def _delivery_observation_summary(rows):
             defect("response_delivery_receipt_missing", identity, copies[-1])
     return {
         "delivery_telemetry_v3_unique_count": len(groups),
+        "delivery_scope": "main_live_or_unresolved_owner",
+        "deprioritized_sim_unique_evaluation_count": len(sim_only_ids),
+        "deprioritized_sim_row_count": sim_only_row_count,
+        "deprioritized_sim_status": "not_applicable_retired_or_deprioritized",
         "delivery_applicability_unknown_row_count": unknown,
         "context_applicable_count": applicable,
         "context_computed_count": computed,

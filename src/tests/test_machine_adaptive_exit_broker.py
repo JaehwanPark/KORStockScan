@@ -46,9 +46,10 @@ def current(**changes):
 
 
 def response(body, headers=None, status=200):
-    return SimpleNamespace(
-        status_code=status, headers=headers or {"cont-yn": "N"}
-    ), body
+    return (
+        SimpleNamespace(status_code=status, headers=headers or {"cont-yn": "N"}),
+        body,
+    )
 
 
 class Transport:

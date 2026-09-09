@@ -696,6 +696,83 @@ def test_explicit_null_schedule_is_invalid_not_legacy_missing_metadata():
     )
 
 
+@pytest.mark.parametrize(
+    "status", sorted(mod.BOUNDED_REJECTIONS | mod.SOURCE_QUALITY_REJECTIONS)
+)
+def test_zero_bounded_rejection_is_not_a_horizon_or_metadata_conflict(status):
+    state = monitor._scanner_funnel_state_from_mapping({})
+    row = {
+        "stage": "scalping_scanner_prune_bbo_schedule",
+        "stock_code": "097520",
+        "scanner_scan_generation_id": "scan-bounded",
+        "scanner_prune_reason": "general_slot_limit",
+        "scanner_prune_observer_episode_id": "episode-bounded",
+        "scanner_prune_observer_schedule_status": status,
+        "scanner_prune_observer_scheduled_sample_count": "0",
+        "runtime_effect": "False",
+        "allowed_runtime_apply": "False",
+        "actual_order_submitted": "False",
+        "broker_order_forbidden": "True",
+    }
+    monitor._update_scanner_funnel_state(state, row, {})
+    episode = monitor._coalesce_prune_observation_episodes(state["prunes"].values())[0]
+    assert not episode.get("metadata_conflicts")
+    assert not episode.get("prune_observer_scheduled_sample_count")
+    assert not episode.get("bbo_observations")
+    assert not episode.get("prune_observer_sample_event_count")
+    monitor._update_scanner_funnel_state(
+        state,
+        {
+            **row,
+            "scanner_prune_observer_schedule_status": "new_episode_scheduled",
+            "scanner_prune_observer_scheduled_sample_count": "10",
+        },
+        {},
+    )
+    episode = monitor._coalesce_prune_observation_episodes(state["prunes"].values())[0]
+    assert not episode.get("metadata_conflicts")
+    assert episode["prune_observer_scheduled_sample_count"] == 10
+    assert (
+        mod.observer_receipt_accounting([episode], 10)["unaccounted_episode_count"] == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"scanner_prune_observer_schedule_status": "new_episode_scheduled"},
+        {"scanner_prune_observer_schedule_status": "unknown"},
+        {"scanner_prune_observer_scheduled_sample_count": None},
+        {"scanner_prune_observer_scheduled_sample_count": False},
+        {"runtime_effect": "True"},
+        {"actual_order_submitted": "True"},
+        {"allowed_runtime_apply": "unknown"},
+        {"broker_order_forbidden": None},
+    ],
+)
+def test_zero_rejection_invalid_authority_or_count_stays_conflicting(override):
+    state = monitor._scanner_funnel_state_from_mapping({})
+    row = {
+        "stage": "scalping_scanner_prune_bbo_schedule",
+        "stock_code": "097520",
+        "scanner_scan_generation_id": "scan-bad",
+        "scanner_prune_reason": "general_slot_limit",
+        "scanner_prune_observer_episode_id": "episode-bad",
+        "scanner_prune_observer_schedule_status": "active_episode_capacity_rejected",
+        "scanner_prune_observer_scheduled_sample_count": 0,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        **override,
+    }
+    monitor._update_scanner_funnel_state(state, row, {})
+    episode = monitor._coalesce_prune_observation_episodes(state["prunes"].values())[0]
+    assert (
+        "scheduled_sample_count_or_authority_invalid" in episode["metadata_conflicts"]
+    )
+
+
 def test_missing_terminal_and_conflicting_mirror_horizons_remain_gaps():
     row = {
         "prune_observer_episode_id": "episode",

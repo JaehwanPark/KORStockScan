@@ -3,6 +3,12 @@ set -euo pipefail
 
 TARGET_DIR="/etc/systemd/system"
 TIMERS=(
+  korstockscan-low-price-two-leg-lotte-chemical-morning-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-morning.timer
+  korstockscan-low-price-two-leg-lotte-chemical-afternoon-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-afternoon.timer
+  korstockscan-low-price-two-leg-tym-late-morning-preflight.timer
+  korstockscan-low-price-two-leg-tym-late-morning.timer
   korstockscan-low-price-two-leg-samsung-heavy-midday-preflight.timer
   korstockscan-low-price-two-leg-samsung-heavy-midday.timer
   korstockscan-low-price-two-leg-samsung-heavy-afternoon-preflight.timer
@@ -121,6 +127,12 @@ TIMERS=(
   korstockscan-low-price-two-leg-sd-biosensor-afternoon.timer
 )
 SERVICES=(
+  korstockscan-low-price-two-leg@lotte_chemical_morning.service
+  korstockscan-low-price-two-leg-preflight@lotte_chemical_morning.service
+  korstockscan-low-price-two-leg@lotte_chemical_afternoon.service
+  korstockscan-low-price-two-leg-preflight@lotte_chemical_afternoon.service
+  korstockscan-low-price-two-leg@tym_late_morning.service
+  korstockscan-low-price-two-leg-preflight@tym_late_morning.service
   korstockscan-low-price-two-leg@samsung_heavy_midday.service
   korstockscan-low-price-two-leg@samsung_heavy_afternoon.service
   korstockscan-low-price-two-leg@daewoo_ec_midday.service

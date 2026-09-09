@@ -17,6 +17,7 @@ from src.engine.lifecycle.retirement import (
 )
 
 import argparse
+from copy import deepcopy
 import hashlib
 import json
 import math
@@ -2677,6 +2678,12 @@ def _scrub_removed_contracts(value: Any) -> Any:
             return None
         scrubbed: dict[str, Any] = {}
         for key, item in value.items():
+            if key == "sentinel_evidence":
+                # This is immutable, hash-bound source evidence, not runtime
+                # authority. Preserve nulls and historical diagnostic fields;
+                # the exact-evidence validator still rejects invalid evidence.
+                scrubbed[key] = deepcopy(item)
+                continue
             if key == "target_env_keys" and isinstance(item, list):
                 scrubbed[key] = [
                     entry

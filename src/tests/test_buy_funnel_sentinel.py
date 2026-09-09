@@ -1,6 +1,8 @@
 import json
 from datetime import date
 
+import pytest
+
 from src.engine import buy_funnel_sentinel as sentinel
 
 
@@ -32,6 +34,86 @@ def _event(
         "emitted_at": f"{target_date}T{hhmmss}",
         "emitted_date": target_date,
     }
+
+
+@pytest.mark.parametrize(
+    "override, expected_unclassified",
+    [
+        ({}, 0),
+        ({"runtime_effect": True}, 1),
+        ({"runtime_effect": "false"}, 1),
+        ({"runtime_effect": None}, 1),
+        ({"decision_authority": "unknown"}, 1),
+        ({"gate_action": "hard_block"}, 1),
+        ({"metric_role": None}, 1),
+        ({"allowed_runtime_apply": True}, 1),
+        ({"hard_block_allowed": True}, 1),
+        ({"actual_order_submitted": True}, 1),
+        ({"order_authority": None}, 1),
+    ],
+)
+def test_gap_risk_context_cannot_replace_prior_terminal(
+    override, expected_unclassified
+):
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 9, 10)
+    fields = {
+        "metric_role": "baseline_prior_feature",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "gate_action": "risk_context_only",
+        **override,
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=index),
+            "ENTRY_PIPELINE",
+            stage,
+            "fixture",
+            "005930",
+            "1",
+            values,
+        )
+        for index, (stage, values) in enumerate(
+            [
+                ("ai_confirmed", {}),
+                ("blocked_ai_score", {}),
+                ("blocked_gap_from_scan", fields),
+            ]
+        )
+    ]
+    exact = sentinel._exact_submit_drought_axis_summary(events)
+    assert exact["attempt_count"] == 1
+    assert exact["submitted_attempt_count"] == 0
+    assert exact["unclassified_terminal_attempt_count"] == expected_unclassified
+    assert exact["axis_terminal_causal_attempt_counts"]["UPSTREAM_GATE"] == (
+        1 - expected_unclassified
+    )
+    assert exact["observation_only_event_counts"].get("blocked_gap_from_scan", 0) == (
+        1 - expected_unclassified
+    )
+    if not override:
+        observation_only = sentinel._exact_submit_drought_axis_summary(events[-1:])
+        assert observation_only["attempt_count"] == 0
+        assert observation_only["observation_only_event_counts"] == {
+            "blocked_gap_from_scan": 1
+        }
+        cache_events = [
+            sentinel._event_from_cache_row(
+                {
+                    "emitted_at": event.emitted_at.isoformat(),
+                    "pipeline": event.pipeline,
+                    "stage": event.stage,
+                    "stock_name": event.stock_name,
+                    "stock_code": event.stock_code,
+                    "record_id": event.record_id,
+                    "fields": {key: str(value) for key, value in event.fields.items()},
+                }
+            )
+            for event in events
+        ]
+        assert sentinel._exact_submit_drought_axis_summary(cache_events) == exact
 
 
 def test_exact_refresh_diagnostics_separate_recovery_from_terminal_and_keep_ai_traces():

@@ -804,6 +804,13 @@ def _intraday_ws_freshness_followup_orders(
             "mapped_family": "scanner_runtime_freshness_funnel",
             "threshold_family": "scanner_runtime_freshness_funnel",
             "improvement_type": "scanner_funnel_source_quality_followup",
+            "required_downstream": raw.get("required_downstream")
+            or [
+                "intraday_ws_freshness_monitor",
+                "code_improvement_workorder",
+                "runtime_approval_summary",
+                "threshold_cycle_postclose_verification",
+            ],
             "confidence": "intraday_unique_lineage_diagnostic",
             "runtime_effect": False,
             "allowed_runtime_apply": False,
@@ -1732,6 +1739,20 @@ def _escalate_repeated_unresolved_orders(
             "deferred",
             "rejected",
         }
+        provenance = item.order.get("implementation_provenance") or {}
+        existing_one_share_evidence = (
+            item.decision == "attach_existing_family"
+            and item.order.get("source_report_type")
+            == "one_share_threshold_opportunity"
+            and item.order.get("improvement_type")
+            == "source_only_existing_family_evidence"
+            and isinstance(provenance, dict)
+            and provenance.get("workorder_intake_role")
+            == "attach_existing_family_evidence"
+            and provenance.get("source_audit_implementation_status") == "implemented"
+            and item.order.get("runtime_effect") is False
+            and item.order.get("allowed_runtime_apply") is False
+        )
         if (
             order_id
             and repeat_count >= repeat_floor
@@ -1744,6 +1765,7 @@ def _escalate_repeated_unresolved_orders(
             and not pattern_lab_design_only
             and not pattern_lab_existing_family_evidence_only
             and not manual_review_only
+            and not existing_one_share_evidence
             and item.order.get("source_report_type") != "market_opportunity_census"
         ):
             escalated_order = dict(item.order)
@@ -4359,6 +4381,12 @@ def _pipeline_event_verbosity_followup_orders(
     ]
     base = {
         "source_report_type": "pipeline_event_verbosity",
+        "required_downstream": [
+            "pipeline_event_verbosity",
+            "code_improvement_workorder",
+            "runtime_approval_summary",
+            "threshold_cycle_postclose_verification",
+        ],
         "lifecycle_stage": "ops_volume_diagnostic",
         "target_subsystem": "runtime_instrumentation",
         "runtime_effect": False,
@@ -4725,6 +4753,7 @@ def _observation_source_quality_followup_orders(
         "lifecycle_stage": "source_quality_gate",
         "target_subsystem": "runtime_instrumentation",
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
         "route": "instrumentation_order",
         "confidence": "audit",
         "expected_ev_effect": "none_direct_source_quality_attribution_only",
@@ -5029,6 +5058,12 @@ def _observation_source_quality_followup_orders(
             {
                 **base,
                 "order_id": "order_observation_source_quality_unknown_token_provenance_gap",
+                "required_downstream": [
+                    "observation_source_quality_audit",
+                    "code_improvement_workorder",
+                    "runtime_approval_summary",
+                    "threshold_cycle_postclose_verification",
+                ],
                 "title": "Observation source-quality unknown-token provenance gap",
                 "priority": 1,
                 "route": "source_quality_warning_producer_fix",
@@ -6309,6 +6344,14 @@ def _panic_lifecycle_followup_orders(
                 "priority": 6,
                 "runtime_effect": False,
                 "implementation_status": panic_sell_implementation_status,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "required_downstream": [
+                    "code_improvement_workorder",
+                    "runtime_approval_summary",
+                    "threshold_cycle_postclose_verification",
+                ],
                 "implementation_checks": [
                     "panic_sell_defense source metrics are present in calibration_source_bundle",
                     "panic_regime_mode and candidate_status are exposed as report-only provenance",
@@ -7295,6 +7338,13 @@ def _build_code_improvement_workorder(
             **item,
             "source_report_type": item.get("source_report_type")
             or "microstructure_reaction_context",
+            "required_downstream": item.get("required_downstream")
+            or [
+                "microstructure_reaction_context",
+                "code_improvement_workorder",
+                "runtime_approval_summary",
+                "threshold_cycle_postclose_verification",
+            ],
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,

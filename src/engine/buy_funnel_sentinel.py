@@ -850,8 +850,36 @@ def _exact_submit_drought_axis_summary(
     missing_axis: Counter[str] = Counter()
     axis_events: Counter[str] = Counter()
     unknown_missing = 0
+    observation_only_events: Counter[str] = Counter()
     for event in events:
         if event.pipeline != "ENTRY_PIPELINE" or _is_swing_blocker_label(event.stage):
+            continue
+        # The legacy stage name is not a veto. Only the producer's explicit
+        # nonblocking contract can remove this observation from causal state;
+        # absent or contradictory authority must remain an unclassified gap.
+        if (
+            event.stage == "blocked_gap_from_scan"
+            and event.fields.get("metric_role") == "baseline_prior_feature"
+            and event.fields.get("decision_authority") == "source_quality_only"
+            # PipelineEvent/cache fields canonically stringify bools with str().
+            and (
+                event.fields.get("runtime_effect") is False
+                or event.fields.get("runtime_effect") == "False"
+            )
+            and event.fields.get("gate_action") == "risk_context_only"
+            and all(
+                event.fields[key] is False or event.fields[key] == "False"
+                for key in (
+                    "allowed_runtime_apply",
+                    "hard_block_allowed",
+                    "order_authority",
+                    "actual_order_submitted",
+                    "trading_runtime_effect",
+                )
+                if key in event.fields
+            )
+        ):
+            observation_only_events[event.stage] += 1
             continue
         if event.stage not in relevant and not event.stage.startswith("blocked_"):
             continue
@@ -1233,6 +1261,7 @@ def _exact_submit_drought_axis_summary(
         },
         "terminal_causal_attempt_count": states["blocked"],
         "terminal_causal_partition_disjoint": True,
+        "observation_only_event_counts": dict(observation_only_events),
         "missing_exact_attempt_key_event_count": missing,
         "stage_order_violation_event_count": violations,
         "attempt_ledger": ledger,

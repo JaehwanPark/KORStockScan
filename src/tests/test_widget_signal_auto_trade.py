@@ -840,9 +840,9 @@ def test_widget_discards_malformed_persisted_entry_confirmation(tmp_path, monkey
         _fixed_entry_timing_policy(3),
     )
     trader.run_once(now)
-    trader._state["symbols"]["999999"]["pending_entry_confirmation"]["delay_sec"] = (
-        "invalid"
-    )
+    trader._state["symbols"]["999999"]["pending_entry_confirmation"][
+        "delay_sec"
+    ] = "invalid"
     next_at = now + timedelta(seconds=1)
     box["payload"] = _payload(next_at, entry_id="ENTRY-1")
 

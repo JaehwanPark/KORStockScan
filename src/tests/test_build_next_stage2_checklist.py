@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.engine import build_next_stage2_checklist as mod
+from src.engine import sync_docs_backlog_to_project as backlog_sync
 from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
 
 
@@ -1709,6 +1710,65 @@ def test_build_next_stage2_checklist_hands_off_main_ai_source_gap_workorders(
         in title
         for title in parsed_titles
     )
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        "MainAIMicroExactEconomicIntersectionRepair",
+        "MicroReversionDepthRouteContractRepair",
+        "MainAIAllocatorSubmittedTraceCustodyRepair",
+        "UnknownFutureOwner",
+    ],
+)
+@pytest.mark.parametrize("authority_tampered", [False, True])
+def test_main_ai_new_source_owners_keep_exact_contract_and_fail_closed(
+    monkeypatch, tmp_path, owner, authority_tampered
+) -> None:
+    _docs, ev_dir, *_rest = _patch_dirs(monkeypatch, tmp_path)
+    source_date = "2026-09-09"
+    _write_json(
+        ev_dir / f"threshold_cycle_ev_{source_date}.json",
+        {"runtime_apply": {"runtime_change": False}},
+    )
+    report = _main_ai_quality_report(source_date, [owner])
+    if authority_tampered:
+        report["source_only_gap_workorders"][0]["order_authority"] = True
+        report["source_gap_diagnostics"]["workorders"] = report[
+            "source_only_gap_workorders"
+        ]
+    report["artifact_content_sha256"] = mod._canonical_sha256(
+        {k: v for k, v in report.items() if k != "artifact_content_sha256"}
+    )
+    _write_json(
+        mod.MAIN_AI_QUALITY_REPORT_DIR
+        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
+        report,
+    )
+    summary = mod.build_next_stage2_checklist(source_date)
+    text = Path(summary["path"]).read_text(encoding="utf-8")
+    if authority_tampered or owner == "UnknownFutureOwner":
+        assert "[MainAIQualitySourceGapArtifactContract0910]" in text
+        assert f"[MainAIQualitySourceGap{owner}0910]" not in text
+    else:
+        assert f"[MainAIQualitySourceGap{owner}0910]" in text
+        assert "[MainAIQualitySourceGapArtifactContract0910]" not in text
+        assert report["source_only_gap_workorders"][0]["acceptance_test"] in text
+        assert "quantity/cap" in text
+        assert "공식 raw execution envelope" not in text
+        monkeypatch.setenv("DOC_CHECKLIST_PATH", summary["path"])
+        # Exercise the parser only on this generated fixture, not host docs
+        # or both the absolute and relative spelling of the same file.
+        monkeypatch.setattr(
+            backlog_sync, "_checklist_doc_candidates", lambda: [Path(summary["path"])]
+        )
+        assert (
+            sum(
+                f"MainAIQualitySourceGap{owner}0910" in task.title
+                for task in parse_checklist_tasks()
+            )
+            == 1
+        )
 
 
 def test_build_next_stage2_checklist_preserves_full_main_ai_acceptance_contract(

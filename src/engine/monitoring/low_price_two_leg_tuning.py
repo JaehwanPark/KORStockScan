@@ -86,6 +86,9 @@ APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
 PROFILE_FIRST_OPERATIONAL_DATES = {
+    "lotte_chemical_morning": date(2026, 9, 10),
+    "lotte_chemical_afternoon": date(2026, 9, 10),
+    "tym_late_morning": date(2026, 9, 10),
     "nhn_midday": date(2026, 9, 8),
     "tym_morning": date(2026, 9, 8),
     "sd_biosensor_afternoon": date(2026, 9, 8),
@@ -887,6 +890,7 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
             if isinstance(raw.get("target_exit_reconciliation_receipt"), dict)
             else None
         ),
+        "manual_exit_receipt": (dict(manual_receipt) if manual_receipt else None),
         "realization_date": realization_date or None,
         "holding_duration_sec": (
             round(holding_duration_sec, 3) if holding_duration_sec is not None else None
@@ -2167,6 +2171,64 @@ def _live_realized_pnl_loader() -> RealizedPnlLoader:
     return load
 
 
+def refresh_receipt_projection(
+    *, target_date: str, state_dir: Path, output_dir: Path
+) -> dict:
+    """Refresh missing receipt metadata without re-querying or recalculating economics."""
+    path = output_dir / f"{REPORT_TYPE}_{target_date}.json"
+    original = path.read_bytes()
+    report = json.loads(original)
+    if (
+        report.get("schema") != REPORT_SCHEMA
+        or report.get("target_date") != target_date
+        or report.get("artifact_hash") != report_artifact_hash(report)
+    ):
+        raise ValueError("receipt_projection_parent_contract_invalid")
+    sources = []
+    for profile_id, row in report["daily"]["profiles"].items():
+        manual_legs = [
+            leg
+            for leg in row.get("legs", [])
+            if leg.get("exit_fill_source") == MANUAL_EXIT_FILL_SOURCE
+        ]
+        if not manual_legs:
+            continue
+        state_path = state_dir / f"{profile_id}_state.json"
+        raw_bytes = state_path.read_bytes()
+        state = json.loads(raw_bytes)
+        if state.get("trade_date") != target_date:
+            raise ValueError("receipt_projection_state_date_mismatch")
+        raw_legs = state.get("legs") or []
+        for leg in manual_legs:
+            matches = [item for item in raw_legs if item.get("leg_id") == leg["leg_id"]]
+            if len(matches) != 1:
+                raise ValueError("receipt_projection_leg_identity_mismatch")
+            projected = _sanitize_leg(matches[0], report["cost_pct"])
+            if any(
+                leg.get(key) != value
+                for key, value in projected.items()
+                if key != "manual_exit_receipt"
+            ):
+                raise ValueError("receipt_projection_nonmetadata_state_changed")
+            leg["manual_exit_receipt"] = projected["manual_exit_receipt"]
+        sources.append(
+            {"path": str(state_path), "sha256": hashlib.sha256(raw_bytes).hexdigest()}
+        )
+    report["receipt_metadata_projection"] = {
+        "schema": "low_price_manual_receipt_metadata_projection_v1",
+        "parent_sha256": hashlib.sha256(original).hexdigest(),
+        "source_date": target_date,
+        "state_sources": sources,
+        "economics_recomputed": False,
+        "broker_calls": 0,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    report["generated_at_kst"] = datetime.now(tz=KST).isoformat(timespec="seconds")
+    report["artifact_hash"] = report_artifact_hash(report)
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", required=True)
@@ -2177,18 +2239,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--applied-policy-dir", type=Path, default=APPLIED_DIR)
     parser.add_argument("--cost-pct", type=float, default=DEFAULT_ROUND_TRIP_COST_PCT)
     parser.add_argument("--skip-broker-realized-pnl", action="store_true")
+    parser.add_argument("--refresh-receipts-only", action="store_true")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
-    report = build_report(
-        target_date=args.target_date,
-        state_dir=args.state_dir,
-        output_dir=args.output_dir,
-        source_quality_dir=args.source_quality_dir,
-        applied_dir=args.applied_policy_dir,
-        cost_pct=args.cost_pct,
-        realized_pnl_loader=(
-            None if args.skip_broker_realized_pnl else _live_realized_pnl_loader()
-        ),
+    report = (
+        refresh_receipt_projection(
+            target_date=args.target_date,
+            state_dir=args.state_dir,
+            output_dir=args.output_dir,
+        )
+        if args.refresh_receipts_only
+        else build_report(
+            target_date=args.target_date,
+            state_dir=args.state_dir,
+            output_dir=args.output_dir,
+            source_quality_dir=args.source_quality_dir,
+            applied_dir=args.applied_policy_dir,
+            cost_pct=args.cost_pct,
+            realized_pnl_loader=(
+                None if args.skip_broker_realized_pnl else _live_realized_pnl_loader()
+            ),
+        )
     )
     candidate = build_candidate(report, candidate_dir=args.candidate_dir)
     valid, reason = validate_candidate(candidate, source_report=report)

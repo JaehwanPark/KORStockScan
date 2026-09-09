@@ -13,6 +13,20 @@ WRAPPER = REPO_ROOT / "deploy/run_postclose_finalization.sh"
 TARGET_DATE = "2026-09-02"
 
 
+def test_storage_lane_recovery_requires_explicit_closed_target_recovery(tmp_path):
+    result = subprocess.run(
+        ["bash", str(WRAPPER), TARGET_DATE, "", "--recover-storage-only"],
+        env={**os.environ, "PROJECT_DIR": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 2
+    assert "unknown_cleanup_recovery_mode" in result.stdout
+    script = WRAPPER.read_text()
+    assert '"$CLEANUP_RUNNER" 30 "${cleanup_recovery_args[@]}"' in script
+
+
 def _write_executable(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body, encoding="utf-8")
@@ -139,6 +153,63 @@ def test_finalization_waits_for_exact_terminal_chain_then_cleans_and_detects(tmp
     detector_done = result.stdout.index("[DONE] postclose_final_detector")
     assert finalization_done < detector_done
     assert "detector_handoff=started" in result.stdout
+
+
+@pytest.mark.parametrize("prior_failure", [True, False])
+@pytest.mark.parametrize("controller_failed", [True, False])
+def test_explicit_recovery_requires_failure_and_retains_source_date(
+    tmp_path, prior_failure, controller_failed
+):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    day = (datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=1)).isoformat()
+    project = tmp_path / "project"
+    (project / "logs").mkdir(parents=True)
+    (project / "src").symlink_to(REPO_ROOT / "src", target_is_directory=True)
+    (project / "logs/postclose_finalization_cron.log").write_text(
+        f"[FAIL] postclose_finalization target_date={day} reason=same_date_hard_deadline\n"
+        if prior_failure
+        else ""
+    )
+    controller_dir = project / "data/report/postclose_done_controller"
+    controller_dir.mkdir(parents=True)
+    (controller_dir / f"postclose_done_controller_{day}.json").write_text(
+        json.dumps(
+            {"date": day, "status": "failed" if controller_failed else "waiting"}
+        ),
+        encoding="utf-8",
+    )
+    detector = project / "detector.sh"
+    cleanup = project / "cleanup.sh"
+    _write_executable(detector, 'printf "%s\\n" "$@" > "$PROJECT_DIR/detector-args"\n')
+    _write_executable(cleanup, 'touch "$PROJECT_DIR/cleanup-called"\n')
+    _write_executable(
+        project / "bin/systemctl",
+        'printf "LoadState=masked\\nUnitFileState=masked\\nActiveState=inactive\\n"\n',
+    )
+    env = _base_env(project, cleanup, detector)
+    env["PATH"] = str(project / "bin") + os.pathsep + env.get("PATH", os.defpath)
+    # Fixture-only predecessor status; never inspect the host's actual units.
+    result = subprocess.run(
+        ["bash", str(WRAPPER), day, "--recover-closed-target"],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode != 0
+    assert not (project / "cleanup-called").exists()
+    if prior_failure:
+        reason = (
+            "predecessor_terminal_failure"
+            if controller_failed
+            else "predecessor_timeout"
+        )
+        assert f"reason={reason}" in result.stdout
+        assert (project / "detector-args").read_text().splitlines() == ["full", day]
+    else:
+        assert "recovery_requires_prior_failure" in result.stdout
+        assert not (project / "detector-args").exists()
 
 
 def test_finalization_timeout_preserves_cleanup_and_still_runs_detector(tmp_path):

@@ -10,20 +10,28 @@ MODE="${1:-full}"
 
 LOCK_FILE="${PROJECT_DIR}/tmp/run_error_detection.lock"
 LOG_FILE="${PROJECT_DIR}/logs/run_error_detection.log"
-REPORT_FILE="${PROJECT_DIR}/data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json"
+POSTCLOSE_SOURCE_DATE="${2:-}"
+TARGET_DATE="${POSTCLOSE_SOURCE_DATE:-$(TZ=Asia/Seoul date +%F)}"
+REPORT_FILE="${PROJECT_DIR}/data/report/error_detection/error_detection_${TARGET_DATE}.json"
 CPU_AFFINITY="${ERROR_DETECTION_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity health)}"
 RUN_ID="cron-$(TZ=Asia/Seoul date +%Y%m%dT%H%M%S)-$$"
 RUN_REPORT_FILE="${PROJECT_DIR}/tmp/error_detection_${RUN_ID}.json"
-TARGET_DATE="$(TZ=Asia/Seoul date +%F)"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 touch "$LOG_FILE"
 cd "$PROJECT_DIR"
-trap 'rm -f "$RUN_REPORT_FILE"' EXIT
+# Keep each explicit recovery attempt as audit evidence, including a failed
+# report that cannot replace the previous canonical generation.
+if [[ -z "$POSTCLOSE_SOURCE_DATE" ]]; then
+    trap 'rm -f "$RUN_REPORT_FILE"' EXIT
+fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
     echo "$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S') [SKIP] error detection already running mode=${MODE}" | tee -a "$LOG_FILE"
+    if [[ -n "$POSTCLOSE_SOURCE_DATE" ]]; then
+        exit 75
+    fi
     exit 0
 fi
 
@@ -37,6 +45,9 @@ cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.error_detector \
     --mode "$MODE" \
     --run-id "$RUN_ID" \
     --report-file "$RUN_REPORT_FILE")
+if [[ -n "$POSTCLOSE_SOURCE_DATE" ]]; then
+    cmd+=(--postclose-source-date "$POSTCLOSE_SOURCE_DATE")
+fi
 if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
     cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
@@ -68,6 +79,8 @@ errors = validate_report_contract(
     expected_run_id=expected_run_id,
     expected_target_date=expected_target_date,
 )
+if report.get("postclose_recovery") is True and report.get("summary_severity") == "fail":
+    errors.append("postclose_recovery_unresolved_failure")
 if errors:
     print(f"[ERROR] invocation report contract invalid errors={','.join(errors)}")
     raise SystemExit(1)

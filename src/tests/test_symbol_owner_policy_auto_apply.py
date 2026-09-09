@@ -186,7 +186,10 @@ def test_expected_scope_covers_all_current_widget_and_episode_symbols():
     }
     assert all("main_scalping" in owners for owners in scope.values())
     assert all("manual_operator" in owners for owners in scope.values())
-    assert set(LEGACY_MACHINE_OWNER_SCOPE_LABELS) == set(scope)
+    assert set(scope) < set(LEGACY_MACHINE_OWNER_SCOPE_LABELS)
+    assert set(LEGACY_MACHINE_OWNER_SCOPE_LABELS) == set(
+        expected_machine_symbol_owners(date(2026, 9, 10))
+    )
 
 
 def test_auto_apply_skips_stale_registry_symbol_and_applies_safe_subset(

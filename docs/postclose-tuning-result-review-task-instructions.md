@@ -438,6 +438,7 @@ source9/9부터 승인된 구현/review workflow는 확인한 disposition을 [�
 
 - controller JSON `done`만으로 끝내지 않고 controller cron log의 최신 DONE을 확인한다.
 - fixed 21:05 runner와 controller follower가 날짜별 replay lock으로 중복되지 않았는지 확인한다.
+- active fixed runner의 lock이 해제된 직후에는 최신 batch/consumer terminal을 다시 검증한다. 대기 중 읽은 `retry_required`를 그대로 재사용해 이미 끝난 follower를 다시 실행하지 않으며, 재검증에서도 미완료인 경우에만 기존 bounded runner/lock 계약을 따른다. source9/9의22:20 경계 재실행과 [복구 리뷰](audit-reports/2026-09-09-postclose-monitoring-review.md)는 코드 수리·그 run의 실제 재실행·다음 자연 경계 확인을 분리한다.
 - batch는 `completed_offline_only`, consumer는 terminal path/hash 검증 상태여야 한다.
 - 21:05 follower는 `terminal detailed → #82 calibration v5 → #78 optimizer(당일 선택 고정) → provider0 batch metadata-only 재결속 → #79 holding manifest → #80 consumer` 순서와 같은 generation/hash를 확인한다. 정상 paired 행의 부분 성공 학습과 producer 전체 실패 terminal을 분리하며 학습 가능을 live promotion 성공으로 바꾸지 않는다.
 - [9/9 Main AI 보완](audit-reports/2026-09-09-entry-ai-micro-profit-implementation-review.md)의 기존 reaction 실제 payload/전송·optional exact 비용 companion·무참여 연구 교체·단일 사례 prompt 초안이 #76/#82/#78/#80에 같은 parent/hash로 전달됐는지 확인한다. 비용 결손은 null이며 연구 proxy·초안 생성·Provider0 metadata는 실제 판단 개선/실주문 경제성이 아니다. 검증된 새 source가 없는데 동일 replay/Provider 호출을 반복하지 않는다.

@@ -1,0 +1,584 @@
+{
+  "schema": "user_authorized_widget_episode_successor_ledger_v1",
+  "source_date": "2026-09-09",
+  "effective_date": "2026-09-10",
+  "approval": "user_explicit_2026-09-09T22:50:32+09:00",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "relationship": "21-row subset/successor of 72-row canonical intake; never add as unique recommendations",
+  "validation": "docs/audit-reports/2026-09-09-postclose-authorized-recovery-validation.md",
+  "approved_evidence": "docs/audit-reports/2026-09-09-low-price-recommendation-apply-evidence.json",
+  "counts": {
+    "total": 21,
+    "implemented_pass1": 5,
+    "already_implemented_verified": 1
+  },
+  "rows": [
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:0bdfc39c76573e968028e3e36bea0f840b8249c225566ea71ae456c3c248b563",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "693a662ce128376872de5bc837fbbf91a991a89fca8474675eb360ea73eeb45e",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][2]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][6]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Existing calibration half EV is negative (Youngone -0.00087% or Doosan -0.003339%); preserve baseline. User approval does not waive source/economic guard.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:2c12077e277ea743fbc2add1007b002a6d0fd3412fc31fa51a91d064914412d8",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "076b86de8a9807b27d230ad59d980911059b941be298087002dff36c24ef558f",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][2]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Existing calibration half EV is negative (Youngone -0.00087% or Doosan -0.003339%); preserve baseline. User approval does not waive source/economic guard.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:3287c340cabe4b868a3283e957a49c5ae5bf8494fb936d371c8bd5f20b934400",
+      "decision": null,
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "blocked_missing_evidence",
+      "row_sha256": "4f9890f04785d78dfdb15f6d546cabd1e886f80413444eb0ae114a4c4cee062c",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"operator_observation_candidate_inventory\"][\"candidate_475560_morning\"]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"profiles\"][\"candidate_475560_morning\"][\"observation_candidate\"]"
+        }
+      ],
+      "original_final_disposition": "blocked_missing_evidence",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:3bc85678dbc2764e53d5f6cad6f7260a6d89c4c3bee03a285e3e1833d339cfe6",
+      "decision": "recommend_cumulative_logic_candidate_review",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "blocked_missing_evidence",
+      "row_sha256": "50a1f5403233494f11446271b6a8eb43bb14b3efa98d3a81f69279d1d66cedce",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"postclose_logic_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"target_date_logic_attribution\"][49]"
+        }
+      ],
+      "original_final_disposition": "blocked_missing_evidence",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:6f447ce5aec156daf03395cbc89a91f2d8c97e715fbe67245965d37bda05fe9d",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "implemented_pass1",
+      "row_sha256": "1da6706d0132e2644975fd05afac81ffd0e11f47503e633fb4451c264137801b",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_logic_improvement_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][1]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": "logic_sk_telecom_morning",
+      "reason": "Explicit user approval 2026-09-09 22:50:32; existing v7 source/cost/calibration/holdout guards passed. Exact-date profile/evidence/preflight/launcher and timers prepared for 2026-09-10; current custody unchanged.",
+      "execution_effective_date": "2026-09-10",
+      "deployment": "scheduled_existing_dated_loader",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:9b2e7d6953b3f4baf6c727f181d09d434099204ed42ebf818b77c22b54e1f128",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "implemented_pass1",
+      "row_sha256": "f427c9e69afdd724bdd10f429727ef1473be51c2380a38b4fb979a34a0f912d7",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"new_symbol_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][0]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": "candidate_011170_morning",
+      "reason": "Explicit user approval 2026-09-09 22:50:32; existing v7 source/cost/calibration/holdout guards passed. Exact-date profile/evidence/preflight/launcher and timers prepared for 2026-09-10; current custody unchanged.",
+      "execution_effective_date": "2026-09-10",
+      "deployment": "scheduled_existing_dated_loader",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:ddd325314a2acd64163c73098992259186175a6adc9ef54e26ce99dca713eaa1",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "implemented_pass1",
+      "row_sha256": "050a6b575d3487a2211cfbfc18a9bbff6e1676c7e4b3d1e58f469239388dca9e",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][1]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][5]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": "existing_002900_late_morning",
+      "reason": "Explicit user approval 2026-09-09 22:50:32; existing v7 source/cost/calibration/holdout guards passed. Exact-date profile/evidence/preflight/launcher and timers prepared for 2026-09-10; current custody unchanged.",
+      "execution_effective_date": "2026-09-10",
+      "deployment": "scheduled_existing_dated_loader",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:e258b542608904b9402438aa95401da37c96bed038129ab4d2cd6acaeb4d80c5",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "implemented_pass1",
+      "row_sha256": "be8d501a3de4289332f6e6cebf015cb577e48dfc42d94d54928c864ef64c4c2a",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"existing_symbol_logic_improvement_recommendations\"][1]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][3]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": "logic_kepco_late_morning",
+      "reason": "Explicit user approval 2026-09-09 22:50:32; existing v7 source/cost/calibration/holdout guards passed. Exact-date profile/evidence/preflight/launcher and timers prepared for 2026-09-10; current custody unchanged.",
+      "execution_effective_date": "2026-09-10",
+      "deployment": "scheduled_existing_dated_loader",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:fd2ddd6ce29e85a68adb8327292d8aef75d33ed1d2f0770aeb7c7e3aeaa546be",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "implemented_pass1",
+      "row_sha256": "9a57cd37fbfa95990a5ddf846a9cb7ca709cdca69278877e498997b874227146",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"new_symbol_recommendations\"][1]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-09.json",
+          "sha256": "362b22217dd46da839ab9eb0795ee37e3e5aa438a1091532ea65ef4a906c16a5",
+          "location": "$[\"recommendations\"][4]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": "candidate_011170_afternoon",
+      "reason": "Explicit user approval 2026-09-09 22:50:32; existing v7 source/cost/calibration/holdout guards passed. Exact-date profile/evidence/preflight/launcher and timers prepared for 2026-09-10; current custody unchanged.",
+      "execution_effective_date": "2026-09-10",
+      "deployment": "scheduled_existing_dated_loader",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "machine_microstructure_attribution",
+      "native_id": "machine_lifecycle_turnover_policy_research_v1",
+      "decision": "EVIDENCE_ACCUMULATING",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "observed_no_patch",
+      "row_sha256": "1d4794c02057a57597b9de82fc7fa97b77f586730bf03f5db4e9dcca2db35d5b",
+      "sources": [
+        {
+          "label": "machine_microstructure_attribution",
+          "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-09.json",
+          "sha256": "3533c0f2be720f2b0180a0f144270a22ddc7aff51b2ad3fc41241c8d4d3373a1",
+          "location": "$[\"objective_followups\"][0]"
+        },
+        {
+          "label": "machine_microstructure_policy_approval",
+          "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-09.json",
+          "sha256": "94b63465aeee08186f44ef298bf05cd8626726f5f33ac315b0a5d80a4b88d2f8",
+          "location": "$[\"objective_followups\"][0]"
+        }
+      ],
+      "original_final_disposition": "observed_no_patch",
+      "implementation_profile": null,
+      "reason": "Source-only timing/exit research retains missing ordered BBO/first-fill/path evidence and missing initial adaptive-exit envelope/launcher enrollment; no first activation.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:1876a96dff2b6afebb1f445538c9a487def36028174fe64880e497c68d19745a",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "97d833825cceb0ff54f301d0962f3d05a99ff2f6258c6505219cb4ea0f0f7f85",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][1]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:1ed187a6c7bf27db9dd41bb361c3005e4bc961b64036fa65e2159e926ed22322",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "820d007dd9b8764c0f8bbf6aef43aea74c689ccd702e956ced5b556cad85e51f",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][4]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:2eaf06787075f5631a2790102165df3f4813b7c8778c2d1e0bd34d9d264c9334",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "521b74330f5c4d126afc45a60c0e23d27040742e287fc5819e965f0cdf198fc0",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][0]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:519bad7f319ed282a6130f6ef2c55cc353c5cbf7f1de96bea8e07b8448bef3e3",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "0a770657a910b7d9738a4072cf92193f06a0aca3cda62ba8f9522ec46f85dfe9",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][3]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:7ff28758a02a80ced86c9d279c6b46cb0b02a95a5eb6186245551a68d8ee66d2",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "e22c7301185ec05df68ccc9041f9f0d015df57111c7bf44921fc25c8201d1d5d",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][2]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:d3845195b73790a6428270bb61f84eaaa065879844b08240e9995643f52e2b88",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "aa6ba6ae54df2ba423933d57877c4291283d90ce26da6a82f17aef3418ae7138",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][6]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:eb4436766d789ebf29bbd6af11c61eee7341b44a041c5d4280403a6291d009f2",
+      "decision": "research_watch",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "deferred",
+      "row_sha256": "742aaa92b49c741b253bae60f4189f96416b8b52a16e90de500b0f8132c2d3dd",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-09.json",
+          "sha256": "644bf381dd50ebc1f93d8bbced94d45bd7e7408773983e5866e45eb16b087345",
+          "location": "$[\"recommendations\"][5]"
+        }
+      ],
+      "original_final_disposition": "deferred",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:1a6aebfa63c42f751b0242e3e18a558d326ca01f58eb3055c6b699316120f216",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "rejected",
+      "row_sha256": "780e31d70b60f19e1ed05f9c1f63f20e20ec2c2c0eea4db9a8341d1882fad387",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"475150\"]"
+        }
+      ],
+      "original_final_disposition": "rejected",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:2991bcc69c56990b25c4b08aaf4fdd60e5d3173a67c6592ec632d5328db3c16d",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "rejected",
+      "row_sha256": "a315b9cb42641c1929c39258797a3c741b8b8a1716b09f3ca75d879200bfcc07",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"006800\"]"
+        }
+      ],
+      "original_final_disposition": "rejected",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:814eab726593d89d0288fe3ad6a3d6fcb3d3dbc4fe5a1d6dff5ca6d17b32d0a0",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "rejected",
+      "row_sha256": "8e02a4846ee9fc8f141bbabd852a444dcc4aa90f98ca76401a4757eb67552d19",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"010140\"]"
+        }
+      ],
+      "original_final_disposition": "rejected",
+      "implementation_profile": null,
+      "reason": "Original reviewed recommendation retained; no new execution or economic acceptance inferred.",
+      "execution_effective_date": null,
+      "deployment": "not_newly_deployed",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:f4ef9259aaa1ee8420d52ce4303595054ec87d2981b617f425739820921042b3",
+      "decision": "holdout_pass_widget_signal_policy_candidate",
+      "authority_class": "eligible_runtime_effect_false",
+      "implementation_requested": false,
+      "final_disposition": "already_implemented_verified",
+      "row_sha256": "db4bcdf982dbe2691e47ae44bdfd0581e0755b2fec7e175842f79e55ac610f5c",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-09.json",
+          "sha256": "4e74812acb225e56e1c1e69813aaa249269a446a873422482c708609df2ffd81",
+          "location": "$[\"symbols\"][\"080220\"]"
+        }
+      ],
+      "original_final_disposition": "blocked_missing_evidence",
+      "implementation_profile": "widget_080220",
+      "reason": "Existing publisher produced effective 2026-09-10 policy; source report selected 080220 and loader verification passed. Tomorrow PID and natural outcomes pending.",
+      "execution_effective_date": "2026-09-10",
+      "deployment": "scheduled_existing_dated_loader",
+      "natural_acceptance": "pending_not_inferred",
+      "economic_acceptance": "not_proven_by_implementation"
+    }
+  ]
+}

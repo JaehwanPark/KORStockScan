@@ -21,6 +21,89 @@ def _generation_gzip(source: Path) -> Path:
     return matches[0]
 
 
+@pytest.mark.parametrize(
+    "defect", [None, "generic_failure", "missing_field", "latest_start", "stale"]
+)
+def test_storage_only_recovery_requires_complete_generic_receipt(tmp_path, defect):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    repo = Path(__file__).resolve().parents[2]
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    day = now.date().isoformat()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (tmp_path / "tmp").mkdir()
+    root = tmp_path / "data/observations/scalp_micro_reversion_forward"
+    root.mkdir(parents=True)
+    state = tmp_path / "tmp/log_rotation_cleanup_writer_defer_state.json"
+    state.write_text("preserve previous generic lane state")
+    active = logs / "threshold_cycle_postclose_cron.log"
+    active.write_text("oversized closed owner evidence" * 100)
+    original = active.read_bytes()
+    fields = dict.fromkeys(
+        (
+            "writer_defer_escalated",
+            "writer_defer_state_failures",
+            "active_retention_failures",
+            "archive_compression_failures",
+            "archive_retention_failures",
+            "find_enumeration_failures",
+            "data_maintenance_failures",
+            "compression_verify_failures",
+            "micro_reversion_storage_partition_failures",
+            "micro_reversion_storage_failed_candidates",
+            "micro_reversion_storage_recovery_required",
+        ),
+        "0",
+    )
+    fields.update(
+        target_date=day,
+        micro_reversion_storage_status="invalid_result",
+        micro_reversion_storage_failures="1",
+        finished_at=now.isoformat(),
+    )
+    if defect == "generic_failure":
+        fields["data_maintenance_failures"] = "1"
+    if defect == "missing_field":
+        fields.pop("compression_verify_failures")
+    if defect == "stale":
+        fields["finished_at"] = (now - timedelta(hours=2)).isoformat()
+    receipt = "[FAIL] log_rotation_cleanup " + " ".join(
+        f"{k}={v}" for k, v in fields.items()
+    )
+    if defect == "latest_start":
+        receipt += f"\n[START] log_rotation_cleanup target_date={day}"
+    (logs / "log_rotation_cleanup_cron.log").write_text(receipt + "\n")
+    result = subprocess.run(
+        [
+            "bash",
+            str(repo / "deploy/run_logs_rotation_cleanup_cron.sh"),
+            "30",
+            "--recover-storage-only",
+        ],
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(tmp_path),
+            "KORSTOCKSCAN_CODE_ROOT": str(repo),
+            "PYTHON_BIN": str(repo / ".venv/bin/python"),
+            "TARGET_DATE": day,
+            "LOG_ROTATION_ACTIVE_MAX_BYTES": "8",
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert (result.returncode == 0) is (defect is None), result.stdout + result.stderr
+    assert active.read_bytes() == original
+    assert state.read_text() == "preserve previous generic lane state"
+    if defect is None:
+        assert "generic_cleanup_reexecuted=false" in result.stdout
+        assert "generic_receipt_sha256=" in result.stdout
+    else:
+        assert "[DONE]" not in result.stdout
+
+
 def test_log_rotation_cleanup_defers_active_rotation_preserves_open_backups_and_runs_peers(
     tmp_path,
 ):

@@ -37,9 +37,7 @@ def path(day=DAY, hour=10, *, confirmation=False):
         bid = (
             9990
             if sec < 40
-            else (10030 if confirmation else 10060)
-            if sec < 90
-            else 9900
+            else (10030 if confirmation else 10060) if sec < 90 else 9900
         )
         ask = 10040 if confirmation and sec >= 30 else 10000
         rows.append(

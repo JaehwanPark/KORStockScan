@@ -1,0 +1,11 @@
+[Unit]
+Description=Preflight TYM late morning two-leg episode machine
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:55:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=korstockscan-low-price-two-leg-preflight@tym_late_morning.service
+
+[Install]
+WantedBy=timers.target

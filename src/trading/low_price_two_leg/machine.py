@@ -110,7 +110,11 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
         deliberately limited to zero-exposure, fully terminal ledgers.
         """
 
-        if any("adaptive_exit_session" in leg for leg in self._state.get("legs", []) if isinstance(leg, dict)):
+        if any(
+            "adaptive_exit_session" in leg
+            for leg in self._state.get("legs", [])
+            if isinstance(leg, dict)
+        ):
             return
         if not self._state or self._state.get("trade_date") == now.date().isoformat():
             return

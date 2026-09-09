@@ -196,9 +196,9 @@ def plan_runner_release(
         "runner_lot_ids": list(runner_lot_ids),
         "runner_open_qty_lower_bound": low,
         "runner_open_qty_upper_bound": high,
-        "allocation_status": "quantity_unambiguous"
-        if low == high
-        else "lot_fill_allocation_required",
+        "allocation_status": (
+            "quantity_unambiguous" if low == high else "lot_fill_allocation_required"
+        ),
         "cancel_quantity": None,
         "live_partial_cancel_supported": False,
         "authority": dict(AUTHORITY),

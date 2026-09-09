@@ -462,9 +462,7 @@ def build_policy(
         "status": (
             "verified"
             if symbols
-            else "observation_only"
-            if observation_symbols
-            else "no_ready_policy"
+            else "observation_only" if observation_symbols else "no_ready_policy"
         ),
         "policy_version": (
             f"widget_symbol_runtime_policy_{effective_date.isoformat()}_"

@@ -744,9 +744,11 @@ def bind_ordered_paths(source, windows, *, source_contract_gap=None, evaluated_a
                             + ",".join(feature.get("source_gap_reasons", []))
                         )
                     levels = [
-                        (level["price"], level["quantity"])
-                        if isinstance(level, dict)
-                        else (level[1], level[2])
+                        (
+                            (level["price"], level["quantity"])
+                            if isinstance(level, dict)
+                            else (level[1], level[2])
+                        )
                         for level in d["bid_levels"]
                     ]
                     left_bid = feature["anchor_depth"]["bid"]
