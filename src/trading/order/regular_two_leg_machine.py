@@ -289,9 +289,11 @@ class SamsungRegularTwoLegMachine:
             if not isinstance(leg, dict):
                 continue
             try:
-                inferred_filled_qty = int(leg.get("position_qty", 0) or 0) + int(
-                    leg.get("target_filled_qty", 0) or 0
-                ) + int(leg.get("adaptive_exit_filled_qty", 0) or 0)
+                inferred_filled_qty = (
+                    int(leg.get("position_qty", 0) or 0)
+                    + int(leg.get("target_filled_qty", 0) or 0)
+                    + int(leg.get("adaptive_exit_filled_qty", 0) or 0)
+                )
             except (TypeError, ValueError):
                 if SESSION_KEY in leg:
                     raise ValueError("adaptive_exit_owner_quantity_requires_recovery")
@@ -890,7 +892,11 @@ class SamsungRegularTwoLegMachine:
             return "TARGET_OPEN"
         if self._position_qty() > 0:
             return "HELD"
-        if "ADAPTIVE_EXIT_FLAT" in statuses and statuses <= {"ADAPTIVE_EXIT_FLAT", "COMPLETE", "NO_FILL"}:
+        if "ADAPTIVE_EXIT_FLAT" in statuses and statuses <= {
+            "ADAPTIVE_EXIT_FLAT",
+            "COMPLETE",
+            "NO_FILL",
+        }:
             return "ADAPTIVE_EXIT_FLAT"
         if statuses <= {"NO_FILL"}:
             return "NO_TRADE"
@@ -2908,7 +2914,11 @@ class SamsungRegularTwoLegMachine:
     def run_until_terminal(self, *, interval_sec: float = 2.0) -> dict:
         while True:
             state = self.run_once()
-            if state.get("status") in {"COMPLETE", "NO_TRADE", "HELD", "BLOCKED", "ADAPTIVE_EXIT_FLAT"} and not self.adaptive_exit_manager_required():
+            if (
+                state.get("status")
+                in {"COMPLETE", "NO_TRADE", "HELD", "BLOCKED", "ADAPTIVE_EXIT_FLAT"}
+                and not self.adaptive_exit_manager_required()
+            ):
                 return state
             time_module.sleep(self._next_loop_delay_sec(interval_sec=interval_sec))
 
