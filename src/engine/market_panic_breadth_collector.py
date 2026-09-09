@@ -60,6 +60,7 @@ MARKET_WEAKNESS_RELEASE_SEVERE_MARGIN_PCT = 5.0
 MARKET_WEAKNESS_RELEASE_STOCK_MARGIN_PCT = 10.0
 MARKET_WEAKNESS_MIN_MARKET_INDEX_COUNT = 2
 MARKET_WEAKNESS_MIN_INDUSTRY_SAMPLE_COUNT = 3
+EMPTY_MARKET_RESPONSE_MAX_ATTEMPTS = 2
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -1231,29 +1232,111 @@ def fetch_kiwoom_market_breadth(
 
     url = kiwoom_utils.get_api_url("/api/dostk/sect")
     parsed_rows: list[dict[str, Any]] = []
+    market_requests: dict[str, dict[str, Any]] = {}
     for inds_cd, source_market in (("001", "KOSPI"), ("101", "KOSDAQ")):
-        payloads = kiwoom_utils.fetch_kiwoom_api_continuous(
-            url=url,
-            token=token,
-            api_id="ka20003",
-            payload={"inds_cd": inds_cd},
-            use_continuous=False,
-            request_owner="market_panic_breadth_collector",
-            request_class="source_only",
-            request_code=inds_cd,
-        )
-        parsed_rows.extend(
-            parse_kiwoom_industry_rows(payloads, source_market=source_market)
-        )
+        market_rows: list[dict[str, Any]] = []
+        attempt_receipts: list[dict[str, Any]] = []
+        for semantic_attempt in range(1, EMPTY_MARKET_RESPONSE_MAX_ATTEMPTS + 1):
+            payloads, request_meta = kiwoom_utils.fetch_kiwoom_api_continuous(
+                url=url,
+                token=token,
+                api_id="ka20003",
+                payload={"inds_cd": inds_cd},
+                use_continuous=False,
+                return_meta=True,
+                request_owner="market_panic_breadth_collector",
+                request_class="runtime_required",
+                request_code=inds_cd,
+            )
+            market_rows = parse_kiwoom_industry_rows(
+                payloads,
+                source_market=source_market,
+            )
+            response_codes = [
+                str(payload.get("return_code", payload.get("rt_cd", "0")))
+                for payload in payloads
+                if isinstance(payload, dict)
+            ]
+            retryable_semantic_empty = bool(
+                not market_rows
+                and payloads
+                and request_meta.get("last_http_status_code") == 200
+                and request_meta.get("read_rate_control_status") == "admitted"
+                and request_meta.get("rate_limit_detected") is not True
+                and response_codes
+                and all(code == "0" for code in response_codes)
+            )
+            attempt_receipts.append(
+                {
+                    "semantic_attempt": semantic_attempt,
+                    "parsed_row_count": len(market_rows),
+                    "response_page_count": len(payloads),
+                    "response_codes": response_codes,
+                    "retryable_semantic_empty": retryable_semantic_empty,
+                    "request_attempt_count": request_meta.get(
+                        "request_attempt_count"
+                    ),
+                    "last_http_status_code": request_meta.get(
+                        "last_http_status_code"
+                    ),
+                    "read_rate_control_status": request_meta.get(
+                        "read_rate_control_status"
+                    ),
+                    "read_rate_control_reason": request_meta.get(
+                        "read_rate_control_reason"
+                    ),
+                    "rate_limit_detected": request_meta.get(
+                        "rate_limit_detected"
+                    ),
+                    "rate_limit_retry_exhausted": request_meta.get(
+                        "rate_limit_retry_exhausted"
+                    ),
+                }
+            )
+            if market_rows:
+                break
+            if not retryable_semantic_empty:
+                break
+        parsed_rows.extend(market_rows)
+        terminal_attempt = attempt_receipts[-1]
+        market_requests[source_market] = {
+            "inds_cd": inds_cd,
+            "status": (
+                "ready"
+                if market_rows
+                else (
+                    "empty_after_bounded_retry"
+                    if terminal_attempt["retryable_semantic_empty"]
+                    else "transport_or_admission_unavailable"
+                )
+            ),
+            "semantic_attempt_count": len(attempt_receipts),
+            "empty_response_retry_used": len(attempt_receipts) > 1,
+            "parsed_row_count": len(market_rows),
+            "attempts": attempt_receipts,
+        }
+    missing_markets = sorted(
+        market
+        for market, receipt in market_requests.items()
+        if receipt["status"] != "ready"
+    )
     return parsed_rows, {
         "transport": "kiwoom_rest",
         "endpoint": "/api/dostk/sect",
         "api_ids": ["ka20003"],
+        "request_class": "runtime_required",
+        "request_priority_reason": (
+            "operator_approved_market_weakness_entry_guard_freshness"
+        ),
         "request_payloads": [{"inds_cd": "001"}, {"inds_cd": "101"}],
+        "market_requests": market_requests,
+        "all_markets_ready": not missing_markets,
+        "missing_markets": missing_markets,
+        "empty_market_response_max_attempts": EMPTY_MARKET_RESPONSE_MAX_ATTEMPTS,
         "doc_basis": {
             "rest_api": "https://openapi.kiwoom.com/m/guide/apiguide",
             "official_repository_commit": ("234560d213acd8871ae344b5481aecd2f30287fa"),
-            "official_repository_retrieved_at": "2026-09-03T12:04:23+09:00",
+            "official_repository_retrieved_at": "2026-09-09T10:29:22+09:00",
             "official_repository_paths": [
                 "kiwoom/_data/kiwoom_api_spec.json#ka20003",
                 "kiwoom/specs.py",
@@ -1301,7 +1384,12 @@ def build_market_panic_breadth_report(
             parsed_rows = []
 
     summary = summarize_breadth(parsed_rows)
-    source_quality_status = "ok" if parsed_rows else "missing_live_breadth_rows"
+    source_quality_status = (
+        "ok"
+        if parsed_rows
+        and (rows is not None or source.get("all_markets_ready") is True)
+        else "missing_live_breadth_rows"
+    )
     if errors:
         source_quality_status = "fetch_error"
     as_of_text = as_of.isoformat(timespec="seconds")

@@ -200,6 +200,42 @@ def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
             issues.append(f"timestamp_source_metric_missing_or_invalid:{field}")
         elif count > 0:
             issues.append(f"timestamp_source_rejected_before_enqueue:{field}={count}")
+    rejection_total = snapshot.get("timestamp_rejection_sample_total")
+    rejection_samples = snapshot.get("timestamp_rejection_samples")
+    invalid_trade_count = counts.get("invalid_exchange_timestamp_count")
+    invalid_depth_count = counts.get("invalid_depth_timestamp_count", 0)
+    expected_rejection_total = (
+        invalid_trade_count + invalid_depth_count
+        if type(invalid_trade_count) is int and type(invalid_depth_count) is int
+        else None
+    )
+    receipts_are_valid = bool(
+        isinstance(rejection_samples, (list, tuple))
+        and all(_valid_timestamp_rejection_receipt(sample) for sample in rejection_samples)
+    )
+    receipt_type_counts_match = bool(
+        receipts_are_valid
+        and sum(sample["realtime_type"] == "0B" for sample in rejection_samples)
+        == invalid_trade_count
+        and sum(sample["realtime_type"] == "0D" for sample in rejection_samples)
+        == invalid_depth_count
+        and sum(
+            sample["realtime_type"] == "0B"
+            and sample["reason"] == "stale_exchange_timestamp"
+            for sample in rejection_samples
+        )
+        == counts.get("stale_exchange_timestamp_block_count")
+    )
+    sample_population_complete = bool(
+        type(rejection_total) is int
+        and rejection_total > 0
+        and expected_rejection_total == rejection_total
+        and isinstance(rejection_samples, (list, tuple))
+        and len(rejection_samples) == rejection_total
+        and receipt_type_counts_match
+        and [sample.get("rejection_index") for sample in rejection_samples]
+        == list(range(1, rejection_total + 1))
+    )
     return {
         "metric_role": "source_quality_gate",
         "decision_authority": "source_only_provider_replay_hold_no_collector_stop",
@@ -215,8 +251,40 @@ def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
         "counts": counts,
         "issues": issues,
         "rejection_stage": "before_observer_enqueue",
-        "exact_rejected_row_exclusion_proven": False,
+        "rejection_receipt_count": (
+            len(rejection_samples)
+            if isinstance(rejection_samples, (list, tuple))
+            else None
+        ),
+        "rejection_receipt_expected_count": expected_rejection_total,
+        "rejection_receipt_coverage_status": (
+            "complete_current_process"
+            if sample_population_complete
+            else "bounded_tail_or_invalid"
+        ),
+        "exclusion_granularity": "exact_pre_enqueue_callback_receipt",
+        "exact_rejected_row_exclusion_proven": sample_population_complete,
     }
+
+
+def _valid_timestamp_rejection_receipt(sample: Any) -> bool:
+    if not isinstance(sample, dict):
+        return False
+    return bool(
+        type(sample.get("process_pid")) is int
+        and sample["process_pid"] > 0
+        and str(sample.get("symbol") or "").strip()
+        and str(sample.get("item") or "").strip()
+        and str(sample.get("venue") or "").strip()
+        and sample.get("realtime_type") in {"0B", "0D"}
+        and type(sample.get("local_observer_epoch")) is int
+        and sample["local_observer_epoch"] >= 0
+        and type(sample.get("checked_at_ms")) is int
+        and sample["checked_at_ms"] > 0
+        and sample.get("reason")
+        in {"stale_exchange_timestamp", "invalid_or_future_timestamp"}
+        and sample.get("rejection_stage") == "before_observer_enqueue"
+    )
 
 
 def evaluate_canary_snapshot(

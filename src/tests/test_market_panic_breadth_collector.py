@@ -105,7 +105,7 @@ def test_fetch_market_breadth_binds_each_response_to_request_market(monkeypatch)
 
     def fake_fetch(**kwargs):
         inds_cd = kwargs["payload"]["inds_cd"]
-        return [
+        return ([
             {
                 "all_inds_idex": [
                     {
@@ -120,7 +120,14 @@ def test_fetch_market_breadth_binds_each_response_to_request_market(monkeypatch)
                     },
                 ]
             }
-        ]
+        ], {
+            "request_attempt_count": 1,
+            "last_http_status_code": 200,
+            "read_rate_control_status": "admitted",
+            "read_rate_control_reason": "within_limit",
+            "rate_limit_detected": False,
+            "rate_limit_retry_exhausted": False,
+        })
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
 
@@ -133,6 +140,110 @@ def test_fetch_market_breadth_binds_each_response_to_request_market(monkeypatch)
         ("102", "KOSDAQ"),
     ]
     assert source["request_payloads"] == [{"inds_cd": "001"}, {"inds_cd": "101"}]
+    assert source["all_markets_ready"] is True
+    assert source["missing_markets"] == []
+    assert source["request_class"] == "runtime_required"
+    assert source["market_requests"]["KOSPI"]["semantic_attempt_count"] == 1
+
+
+def test_fetch_market_breadth_retries_empty_market_once_and_preserves_gap(monkeypatch):
+    from src.utils import kiwoom_utils
+
+    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://x{path}")
+    calls = {"001": 0, "101": 0}
+
+    def fake_fetch(**kwargs):
+        inds_cd = kwargs["payload"]["inds_cd"]
+        calls[inds_cd] += 1
+        rows = [{"return_code": 0, "all_inds_idex": []}]
+        if inds_cd == "001" and calls[inds_cd] == 2:
+            rows = [
+                {
+                    "all_inds_idex": [
+                        {"stk_cd": "001", "stk_nm": "KOSPI", "flu_rt": "0.1"}
+                    ]
+                }
+            ]
+        return rows, {
+            "request_attempt_count": 1,
+            "last_http_status_code": 200,
+            "read_rate_control_status": "admitted",
+            "read_rate_control_reason": "within_limit",
+            "rate_limit_detected": False,
+            "rate_limit_retry_exhausted": False,
+        }
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows, source = collector.fetch_kiwoom_market_breadth("token")
+
+    assert [(row["code"], row["source_market"]) for row in rows] == [
+        ("001", "KOSPI")
+    ]
+    assert calls == {"001": 2, "101": 2}
+    assert source["all_markets_ready"] is False
+    assert source["missing_markets"] == ["KOSDAQ"]
+    assert source["market_requests"]["KOSPI"]["empty_response_retry_used"] is True
+    assert source["market_requests"]["KOSDAQ"]["status"] == (
+        "empty_after_bounded_retry"
+    )
+
+
+def test_fetch_market_breadth_does_not_retry_admission_or_transport_gap(monkeypatch):
+    from src.utils import kiwoom_utils
+
+    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda path: f"https://x{path}")
+    calls = {"001": 0, "101": 0}
+
+    def fake_fetch(**kwargs):
+        inds_cd = kwargs["payload"]["inds_cd"]
+        calls[inds_cd] += 1
+        assert kwargs["request_class"] == "runtime_required"
+        return [], {
+            "request_attempt_count": 0,
+            "last_http_status_code": None,
+            "read_rate_control_status": "deferred",
+            "read_rate_control_reason": "shared_read_rate_wait_budget_exhausted",
+            "rate_limit_detected": False,
+            "rate_limit_retry_exhausted": False,
+        }
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
+
+    rows, source = collector.fetch_kiwoom_market_breadth("token")
+
+    assert rows == []
+    assert calls == {"001": 1, "101": 1}
+    assert source["all_markets_ready"] is False
+    assert all(
+        receipt["status"] == "transport_or_admission_unavailable"
+        for receipt in source["market_requests"].values()
+    )
+
+
+def test_partial_live_market_response_is_not_labeled_source_quality_ok(monkeypatch):
+    monkeypatch.setattr(
+        collector,
+        "fetch_kiwoom_market_breadth",
+        lambda _token: (
+            [{"code": "001", "name": "KOSPI", "change_pct": 0.1}],
+            {
+                "transport": "kiwoom_rest",
+                "all_markets_ready": False,
+                "missing_markets": ["KOSDAQ"],
+            },
+        ),
+    )
+
+    report = collector.build_market_panic_breadth_report(
+        "2026-09-09",
+        as_of=datetime.fromisoformat("2026-09-09T10:00:00+09:00"),
+        token="token",
+    )
+
+    assert report["source_quality"]["status"] == "missing_live_breadth_rows"
+    assert report["source_quality"]["sample_count"] == 1
+    assert report["market_weakness_observation"]["source_quality_ready"] is False
 
 
 def test_summarize_breadth_sets_report_only_risk_off_advisory():

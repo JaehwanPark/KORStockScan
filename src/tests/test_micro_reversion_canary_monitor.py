@@ -227,6 +227,126 @@ def test_timestamp_rejections_require_source_exclusion_without_auto_stop(field):
     )
 
 
+def test_complete_timestamp_rejection_receipts_prove_exact_current_process_exclusion():
+    samples = tuple(
+        {
+            "process_pid": 123,
+            "symbol": symbol,
+            "item": symbol,
+            "venue": "KRX",
+            "realtime_type": "0D",
+            "local_observer_epoch": 1,
+            "checked_at_ms": 1_000 + index,
+            "reason": "stale_exchange_timestamp",
+            "rejection_stage": "before_observer_enqueue",
+            "rejection_index": index,
+        }
+        for index, symbol in enumerate(("002070", "355150"), start=1)
+    )
+    result = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            invalid_depth_timestamp_count=2,
+            stale_exchange_timestamp_block_count=0,
+            timestamp_rejection_sample_total=2,
+            timestamp_rejection_samples=samples,
+            depth_capture_requested=True,
+            depth_capture_active=True,
+            depth_writer_count=0,
+            depth_writer_alive_count=0,
+            **{key: 0 for key in _DEPTH_ZERO_STOP_COUNTERS},
+            **{key: 0 for key in _DEPTH_ROW_EXCLUSION_COUNTERS},
+        ),
+        _guard(),
+    )
+
+    timestamp = result["timestamp_source_quality"]
+    assert timestamp["exact_rejected_row_exclusion_proven"] is True
+    assert timestamp["rejection_receipt_coverage_status"] == (
+        "complete_current_process"
+    )
+    assert timestamp["rejection_receipt_count"] == 2
+    assert timestamp["rejection_receipt_expected_count"] == 2
+
+
+def test_bounded_timestamp_rejection_tail_does_not_claim_complete_exclusion():
+    samples = [
+        {
+            "process_pid": 123,
+            "symbol": "002070",
+            "item": "002070",
+            "venue": "KRX",
+            "realtime_type": "0B",
+            "local_observer_epoch": 1,
+            "checked_at_ms": 1_000 + index,
+            "reason": "stale_exchange_timestamp",
+            "rejection_stage": "before_observer_enqueue",
+            "rejection_index": index,
+        }
+        for index in range(9, 73)
+    ]
+    result = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            invalid_exchange_timestamp_count=72,
+            stale_exchange_timestamp_block_count=72,
+            timestamp_rejection_sample_total=72,
+            timestamp_rejection_samples=samples,
+        ),
+        _guard(),
+    )
+
+    timestamp = result["timestamp_source_quality"]
+    assert timestamp["exact_rejected_row_exclusion_proven"] is False
+    assert timestamp["rejection_receipt_coverage_status"] == (
+        "bounded_tail_or_invalid"
+    )
+
+
+def test_malformed_timestamp_rejection_receipt_fails_closed_without_exception():
+    result = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            invalid_exchange_timestamp_count=1,
+            timestamp_rejection_sample_total=1,
+            timestamp_rejection_samples=[None],
+        ),
+        _guard(),
+    )
+
+    timestamp = result["timestamp_source_quality"]
+    assert timestamp["exact_rejected_row_exclusion_proven"] is False
+    assert timestamp["rejection_receipt_coverage_status"] == (
+        "bounded_tail_or_invalid"
+    )
+
+
+def test_timestamp_rejection_receipt_type_count_mismatch_fails_closed():
+    sample = {
+        "process_pid": 123,
+        "symbol": "002070",
+        "item": "002070",
+        "venue": "KRX",
+        "realtime_type": "0D",
+        "local_observer_epoch": 1,
+        "checked_at_ms": 1_000,
+        "reason": "stale_exchange_timestamp",
+        "rejection_stage": "before_observer_enqueue",
+        "rejection_index": 1,
+    }
+    result = evaluate_canary_snapshot(
+        _healthy_snapshot(
+            invalid_exchange_timestamp_count=1,
+            stale_exchange_timestamp_block_count=1,
+            timestamp_rejection_sample_total=1,
+            timestamp_rejection_samples=[sample],
+        ),
+        _guard(),
+    )
+
+    assert (
+        result["timestamp_source_quality"]["exact_rejected_row_exclusion_proven"]
+        is False
+    )
+
+
 @pytest.mark.parametrize("value", [None, -1, True, "bad", 0.5, float("inf")])
 def test_missing_timestamp_census_is_not_healthy_source_evidence(value):
     result = evaluate_canary_snapshot(
@@ -499,6 +619,42 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
     }
     for field, path in evidence_files.items():
         expected = baseline[field]
+        if field == "benchmark_module_sha256":
+            # Keep the frozen callback-latency benchmark receipt while
+            # pinning the reviewed 2026-09-09 source-quality-only census
+            # correction.  No callback, writer, stop, or trading authority
+            # path changed.
+            assert expected == (
+                "3c703102ac68ab70315377b907f584dff4efb399d8818ebe84f6b6ba9f26cfd7"
+            )
+            expected = (
+                "84d54124b2d14c263c90cb6853a59d66b19b5546046f368792b7c4000cffc638"
+            )
+            tree = ast.parse(path.read_bytes())
+            census_functions = [
+                node
+                for node in tree.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name
+                in {
+                    "timestamp_source_quality_census",
+                    "_valid_timestamp_rejection_receipt",
+                }
+            ]
+            assert hashlib.sha256(
+                ast.dump(
+                    ast.Module(body=census_functions, type_ignores=[]),
+                    include_attributes=False,
+                ).encode()
+            ).hexdigest() == (
+                "fac1550b0c453b2298a6e39727bb0bf1e47c69da6e5b25017ecf0ff833bda0b1"
+            )
+            tree.body = [node for node in tree.body if node not in census_functions]
+            assert hashlib.sha256(
+                ast.dump(tree, include_attributes=False).encode()
+            ).hexdigest() == (
+                "7048eb4130afeb6a5069a0a545082a788e11b42166a4194de0285eb25cc21336"
+            )
         if field == "path_journal_sha256":
             # The callback baseline remains frozen.  The 2026-09-09 EBS-backed
             # compatibility change only raises PathStoragePolicy's projection
