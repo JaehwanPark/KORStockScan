@@ -20,6 +20,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from src.trading.order.tick_utils import get_tick_size, move_price_by_ticks
+from src.trading.market.confirmation_window import (
+    FEATURE_VERSION,
+    build_confirmation_window,
+)
 from src.utils.constants import DATA_DIR
 
 DYNAMIC_CONFIRMATION_SCHEMA = "machine_dynamic_micro_confirmation_replay_v2"
@@ -31,6 +35,7 @@ DEFAULT_LIVE_SNAPSHOT_PATH = DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "late
 CHECKPOINTS_SEC = (0, 1, 3, 5)
 
 DYNAMIC_CONFIRMATION_METRIC_CONTRACT = {
+    "feature_version": FEATURE_VERSION,
     "metric_role": "per_signal_causal_micro_confirmation_source_only_replay",
     "decision_authority": "source_only_confirmation_replay_no_order_authority",
     "window_policy": "past_only_at_each_0_1_3_5_second_checkpoint",
@@ -241,6 +246,43 @@ def build_dynamic_micro_confirmation_checkpoints(
         if isinstance(checkpoint_bundle.get("checkpoint_reports"), Mapping)
         else {}
     )
+
+    def feature_bbo(report: Any) -> dict[str, Any] | None:
+        horizons = report.get("horizons") if isinstance(report, Mapping) else None
+        feature = (
+            horizons[0] if isinstance(horizons, list) and len(horizons) == 1 else {}
+        )
+        endpoint = (
+            feature.get("endpoint_depth") if isinstance(feature, Mapping) else None
+        )
+        if not isinstance(endpoint, Mapping):
+            return None
+        at_ms = _finite(endpoint.get("at_ms"))
+        cutoff = _finite(feature.get("checkpoint_at_ms"))
+        bid, ask = _finite(endpoint.get("bid")), _finite(endpoint.get("ask"))
+        quantity = _finite(endpoint.get("quantity"))
+        return {
+            "observed": feature.get("eligible_for_feature_ablation") is True,
+            "depth_backed": quantity is not None and quantity > 0,
+            "best_bid": bid,
+            "best_ask": ask,
+            "sequence_epoch": endpoint.get("epoch"),
+            "spread_bps": round((ask - bid) / bid * 10_000, 6) if bid and ask else None,
+            "quote_age_from_signal_ms": (
+                cutoff - at_ms if cutoff is not None and at_ms is not None else None
+            ),
+            "quote_age_from_horizon_ms": (
+                cutoff - at_ms if cutoff is not None and at_ms is not None else None
+            ),
+        }
+
+    canonical_anchor = feature_bbo(checkpoint_reports.get("0"))
+    if canonical_anchor is not None:
+        causal_anchor_bid = _finite(canonical_anchor.get("best_bid"))
+        causal_anchor_epoch = canonical_anchor.get("sequence_epoch")
+        reference_age = _finite(canonical_anchor.get("quote_age_from_signal_ms"))
+        if reference_age is None or not 0 <= reference_age <= 1500:
+            causal_anchor_bid = None
     bundle_contract_valid = bool(
         checkpoint_bundle.get("schema")
         == "machine_entry_confirmation_checkpoint_ask_depletion_v1"
@@ -287,6 +329,9 @@ def build_dynamic_micro_confirmation_checkpoints(
             )
         )
         ask_report = checkpoint_reports.get(str(checkpoint_sec))
+        canonical_bbo = feature_bbo(ask_report)
+        if canonical_bbo is not None:
+            bbo = canonical_bbo
         ask = ask_horizon(ask_report, checkpoint_sec)
         ask_context = (
             ask_report.get("context")
@@ -330,6 +375,7 @@ def build_dynamic_micro_confirmation_checkpoints(
             bundle_contract_valid
             and isinstance(ask_report, Mapping)
             and ask_report.get("schema") == "scalp_micro_reversion_ask_depletion_v2"
+            and ask_report.get("feature_version") == FEATURE_VERSION
             and ask_report.get("runtime_effect") is False
             and ask_report.get("trading_runtime_effect") is False
             and ask_report.get("trading_decision_effect") is False
@@ -348,7 +394,7 @@ def build_dynamic_micro_confirmation_checkpoints(
             and isinstance(ask, Mapping)
             and isinstance(ask_horizon_ms, int)
             and not isinstance(ask_horizon_ms, bool)
-            and 0 < ask_horizon_ms <= 1_000
+            and ask_horizon_ms == 1_000
             and binding.get("window_horizon_ms") == ask_horizon_ms
             and binding.get("binding_policy")
             == "past_only_0b_0d_window_ending_at_exact_checkpoint"
@@ -379,7 +425,9 @@ def build_dynamic_micro_confirmation_checkpoints(
             and bbo_epoch == causal_anchor_epoch == ask_epoch
         )
         source_eligible = bool(
-            bbo.get("observed") is True
+            canonical_anchor is not None
+            and canonical_bbo is not None
+            and bbo.get("observed") is True
             and isinstance(ask, Mapping)
             and ask.get("eligible_for_feature_ablation") is True
             and same_causal_epoch
@@ -424,10 +472,25 @@ def build_dynamic_micro_confirmation_checkpoints(
             else None
         )
         checkpoints[checkpoint_sec] = {
+            **{
+                key: ask.get(key) if isinstance(ask, Mapping) else None
+                for key in (
+                    "feature_version",
+                    "window_source_sha256",
+                    "best_ask_depletion_velocity_qty_per_sec",
+                    "unexplained_or_cancel_like_depletion_ratio",
+                    "refill_half_life_ms",
+                )
+            },
             "checkpoint_sec": checkpoint_sec,
             "causal_past_only": True,
             "future_outcome_input_used": False,
             "source_quality_status": "eligible" if source_eligible else "source_gap",
+            "source_gap_reasons": (
+                list(ask.get("source_gap_reasons") or [])
+                if isinstance(ask, Mapping)
+                else []
+            ),
             "bbo_observed": bbo.get("observed"),
             "depth_backed": bbo.get("depth_backed"),
             "same_sequence_epoch": same_causal_epoch,
@@ -492,6 +555,9 @@ def _checkpoint_status(
         reasons.append("future_outcome_input_contract_invalid")
     if row.get("source_quality_status") != "eligible":
         reasons.append("checkpoint_source_quality_ineligible")
+        gaps = row.get("source_gap_reasons")
+        if isinstance(gaps, list):
+            reasons.extend(gap for gap in gaps[:32] if isinstance(gap, str))
     if row.get("bbo_observed") is not True:
         reasons.append("checkpoint_bbo_missing")
     if row.get("depth_backed") is not True:
@@ -616,7 +682,7 @@ def _checkpoint_status(
         "bid_return_reference": bid_return_reference,
         "bid_recovery_from_low_bps": bid_recovery,
         "bid_recovery_reference": row.get("bid_recovery_reference"),
-        "spread_bps": spread_bps,
+        "spread_bps": round(spread_bps, 6) if spread_bps is not None else None,
         "quote_age_ms": quote_age_ms,
         "modeled_target_price": modeled_target_price,
         "net_edge_after_cost_bps": net_edge_after_cost_bps,
@@ -864,117 +930,67 @@ def build_live_dynamic_confirmation_checkpoint(
             (signal_value + timedelta(seconds=checkpoint_sec)).timestamp() * 1_000
         )
         late_ms = now_ms - checkpoint_at_ms
-        window_start_ms = checkpoint_at_ms - 1_000
-        current_depth = next(
-            (
-                value
-                for value in current_depth_rows
-                if int(value.get("received_at_ms") or 0) <= now_ms
-            ),
-            None,
+        feature = build_confirmation_window(
+            depth_rows=current_depth_rows,
+            trade_rows=recent_trades,
+            item=item,
+            epoch=depth_epoch,
+            checkpoint_at_ms=checkpoint_at_ms,
+            maximum_age_ms=int(policy.maximum_quote_age_ms),
         )
-        starting_depth = next(
-            (
-                value
-                for value in current_depth_rows
-                if int(value.get("received_at_ms") or 0) <= window_start_ms
-            ),
-            None,
-        )
-        # Do not substitute a quote after the one-second window start. Missing
-        # causal depth is a source gap and falls back to the owner's existing
-        # guards at the terminal checkpoint; it is never imputed as depletion.
-        current_bid = _finite(
-            current_depth.get("best_bid")
-            if isinstance(current_depth, Mapping)
-            else None
-        )
-        current_ask = _finite(
-            current_depth.get("best_ask")
-            if isinstance(current_depth, Mapping)
-            else None
-        )
-        current_ask_qty = _finite(
-            current_depth.get("best_ask_qty")
-            if isinstance(current_depth, Mapping)
-            else None
-        )
-        start_bid = _finite(
-            starting_depth.get("best_bid")
-            if isinstance(starting_depth, Mapping)
-            else None
-        )
-        start_ask = _finite(
-            starting_depth.get("best_ask")
-            if isinstance(starting_depth, Mapping)
-            else None
-        )
-        start_ask_qty = _finite(
-            starting_depth.get("best_ask_qty")
-            if isinstance(starting_depth, Mapping)
-            else None
-        )
-        if anchor_best_bid is None:
-            anchor_best_bid = start_bid
-        anchor_bid = _finite(anchor_best_bid)
-        depth_received_ms = int(
-            current_depth.get("received_at_ms")
-            if isinstance(current_depth, Mapping)
-            else 0
-        )
-        trade_observed_ms = int(float(trade.get("observed_epoch") or 0) * 1_000)
-        quote_age_ms = max(now_ms - depth_received_ms, now_ms - trade_observed_ms)
-        window_trades = [
-            value
-            for value in recent_trades
-            if window_start_ms
-            < int(value.get("received_at_ms") or 0)
-            <= checkpoint_at_ms + max(0, late_ms)
-        ]
-        buy_qty = sum(
-            int(value.get("volume") or 0)
-            for value in window_trades
-            if value.get("aggressor_side") == "BUY"
-        )
-        sell_qty = sum(
-            int(value.get("volume") or 0)
-            for value in window_trades
-            if value.get("aggressor_side") == "SELL"
-        )
-        depletion_qty = (
-            max(start_ask_qty - current_ask_qty, 0.0)
-            if start_ask == current_ask
-            and start_ask_qty is not None
-            and current_ask_qty is not None
-            else (
-                start_ask_qty
-                if start_ask is not None
-                and current_ask is not None
-                and current_ask > start_ask
-                and start_ask_qty is not None
-                else 0.0
-            )
-        )
-        if depletion_qty > 0:
-            trade_backed_ratio = min(1.0, buy_qty / depletion_qty)
-        elif buy_qty + sell_qty > 0:
-            trade_backed_ratio = buy_qty / (buy_qty + sell_qty)
-        else:
-            trade_backed_ratio = None
-        refill_ratio = (
-            max(current_ask_qty + buy_qty - start_ask_qty, 0.0) / start_ask_qty
-            if start_ask == current_ask
-            and start_ask_qty is not None
-            and start_ask_qty > 0
-            and current_ask_qty is not None
-            else (
-                0.0
-                if start_ask is not None
-                and current_ask is not None
-                and current_ask > start_ask
+        reasons.extend(feature["source_gap_reasons"])
+        projection_complete = True
+        for receipt, endpoint_key in (
+            (trade, "endpoint_trade"),
+            (depth, "endpoint_depth"),
+        ):
+            receipt_time = _finite(receipt.get("observed_epoch"))
+            endpoint_receipt = feature.get(endpoint_key) or {}
+            if (
+                receipt_time is not None
+                and int(receipt_time * 1000) <= checkpoint_at_ms
+                and receipt.get("route_sequence") is not None
+                and receipt.get("route_sequence") != endpoint_receipt.get("sequence")
+            ):
+                projection_complete = False
+                reasons.append("route_snapshot_endpoint_sequence_not_projected")
+        current_depth = feature.get("endpoint_depth") or {}
+        starting_depth = feature.get("anchor_depth") or {}
+        current_bid = _finite(current_depth.get("bid"))
+        current_ask = _finite(current_depth.get("ask"))
+        current_ask_qty = _finite(current_depth.get("quantity"))
+        start_bid = _finite(starting_depth.get("bid"))
+        start_ask = _finite(starting_depth.get("ask"))
+        start_ask_qty = _finite(starting_depth.get("quantity"))
+        # The checkpoint-zero quote is the pre-signal bid reference, not the
+        # quote one second before the signal. Later checkpoints carry it.
+        if anchor_best_bid is None and checkpoint_sec == 0:
+            reference_age = checkpoint_at_ms - int(current_depth.get("at_ms") or 0)
+            anchor_best_bid = (
+                current_bid
+                if 0 <= reference_age <= policy.maximum_quote_age_ms
                 else None
             )
+        anchor_bid = _finite(anchor_best_bid)
+        depth_received_ms = int(current_depth.get("at_ms") or 0)
+        quote_age_ms = checkpoint_at_ms - depth_received_ms
+        live_quote_age_ms = now_ms - depth_received_ms
+        trade_backed_ratio = feature["aggressive_buy_trade_backed_ratio"]
+        refill_ratio = feature["refill_ratio"]
+        checkpoint.update(
+            {
+                key: feature.get(key)
+                for key in (
+                    "feature_version",
+                    "window_source_sha256",
+                    "best_ask_depletion_velocity_qty_per_sec",
+                    "unexplained_or_cancel_like_depletion_ratio",
+                    "refill_half_life_ms",
+                )
+            }
         )
+        checkpoint["live_quote_age_ms"] = live_quote_age_ms
+        checkpoint["checkpoint_lateness_ms"] = late_ms
         prior_bids = [
             value
             for value in (_finite(item) for item in prior_checkpoint_bids or ())
@@ -1013,13 +1029,15 @@ def build_live_dynamic_confirmation_checkpoint(
         owner_limit = _finite(owner_entry_limit_price)
         source_ready = bool(
             same_epoch
+            and feature["eligible_for_feature_ablation"] is True
+            and projection_complete
             and 0 <= late_ms <= 1_500
             and current_bid is not None
             and current_bid > 0
             and current_ask is not None
             and current_ask >= current_bid
             and current_ask_qty is not None
-            and current_ask_qty >= 0
+            and current_ask_qty > 0
             and start_bid is not None
             and start_bid > 0
             and start_ask is not None
@@ -1027,6 +1045,7 @@ def build_live_dynamic_confirmation_checkpoint(
             and start_ask_qty is not None
             and start_ask_qty > 0
             and 0 <= quote_age_ms <= policy.maximum_quote_age_ms
+            and 0 <= live_quote_age_ms <= policy.maximum_quote_age_ms
             and trade_backed_ratio is not None
             and refill_ratio is not None
             and bid_return is not None
@@ -1078,11 +1097,7 @@ def build_live_dynamic_confirmation_checkpoint(
                 ),
                 "aggressive_buy_trade_backed_ratio": trade_backed_ratio,
                 "refill_ratio": refill_ratio,
-                "downward_reprice_observed": bool(
-                    start_ask is not None
-                    and current_ask is not None
-                    and current_ask < start_ask
-                ),
+                "downward_reprice_observed": feature["downward_reprice_observed"],
             }
         )
         anchor = {
@@ -1226,6 +1241,20 @@ def advance_live_dynamic_confirmation(
                 [
                     *checkpoint.get("source_gap_reasons", []),
                     source_status,
+                ]
+            )
+        )
+    if prior_anchor and (
+        prior_anchor.get("sequence_epoch") != derived_anchor.get("sequence_epoch")
+        or prior_anchor.get("item") != derived_anchor.get("item")
+    ):
+        checkpoint["source_quality_status"] = "source_gap"
+        checkpoint["same_sequence_epoch"] = False
+        checkpoint["source_gap_reasons"] = sorted(
+            set(
+                [
+                    *checkpoint.get("source_gap_reasons", []),
+                    "signal_anchor_route_or_epoch_changed",
                 ]
             )
         )

@@ -1809,6 +1809,13 @@ def _aggregate_rows(
             else None
         ),
         "candidate_status": candidate_status,
+        "source_readiness": (
+            "ready"
+            if candidate_status == "auto_bounded_candidate_ready"
+            else candidate_status
+        ),
+        "economic_promotion_readiness": "separate_exact_challenger_replay_required",
+        "readiness_is_runtime_approval": False,
         "allowed_runtime_apply": False,
     }
 

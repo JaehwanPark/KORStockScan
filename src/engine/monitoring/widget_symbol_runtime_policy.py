@@ -25,6 +25,7 @@ from src.engine.monitoring.widget_symbol_signal_policy_research import (
     resolve_completed_research_end_date,
 )
 from src.engine.monitoring.samsung_widget_contract import KST
+from src.engine.monitoring.widget_execution_quality import EXECUTION_OWNER
 from src.trading.order.episode_quantity import EPISODE_LEG_QUANTITY
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
@@ -255,6 +256,34 @@ def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
 def _validated_selected_policy(result: object) -> dict[str, Any] | None:
     if not isinstance(result, dict):
         return None
+    if "component_selection" in result:
+        from src.engine.monitoring.widget_signal_quality import select_policy_component
+
+        try:
+            comparison = result["component_comparison"]
+            selection = select_policy_component(comparison)
+            chosen = comparison["arms"][selection["selected_arm"]]
+            expected = {
+                key: value
+                for key, value in chosen["parameters"].items()
+                if key not in {"segment_start_time", "segment_end_time"}
+            }
+            if (
+                selection != result["component_selection"]
+                or expected != result.get("selected_policy")
+                or any(
+                    result.get(window) != chosen.get(window)
+                    for window in (
+                        "calibration",
+                        "calibration_first_half",
+                        "calibration_second_half",
+                        "holdout",
+                    )
+                )
+            ):
+                return None
+        except (KeyError, ValueError, TypeError, AttributeError):
+            return None
     calibration = result.get("calibration")
     first = result.get("calibration_first_half")
     second = result.get("calibration_second_half")
@@ -344,6 +373,11 @@ def build_policy(
     )
     symbols: dict[str, Any] = {}
     observation_symbols: dict[str, Any] = {}
+    quality_by_symbol = research.get("execution_quality_by_symbol")
+    require_execution_quality = (
+        source_date >= date(2026, 9, 9) or quality_by_symbol is not None
+    )
+    quality_blocks: dict[str, str] = {}
     for symbol, name in SYMBOLS.items():
         result = (research.get("symbols") or {}).get(symbol)
         if research.get("schema") == REPORT_SCHEMA and isinstance(result, dict):
@@ -367,6 +401,47 @@ def build_policy(
         selected = _validated_selected_policy(result)
         if selected is None:
             continue
+        if (
+            source_date >= date(2026, 9, 9)
+            and isinstance(result.get("component_comparison"), dict)
+            and result["component_comparison"].get("arms")
+            and "component_selection" not in result
+        ):
+            quality_blocks[symbol] = "component_selection_contract_missing"
+            continue
+        if require_execution_quality:
+            quality = (
+                quality_by_symbol.get(symbol)
+                if isinstance(quality_by_symbol, dict)
+                else None
+            )
+            if (
+                not isinstance(quality, dict)
+                or quality.get("schema") != "widget_execution_incidents_v1"
+                or quality.get("symbol") != symbol
+                or quality.get("owner") != EXECUTION_OWNER
+                or quality.get("session") != "KRX_REGULAR"
+                or quality.get("source_target_date") != source_date.isoformat()
+                or quality.get("runtime_apply_allowed") is not True
+                or quality.get("source_gap_count") != 0
+                or quality.get("unresolved_incident_count") != 0
+                or quality.get("same_day_failure_event_count") != 0
+                or not isinstance(quality.get("incidents"), list)
+                or quality.get("incident_count") != len(quality.get("incidents", []))
+                or any(
+                    not isinstance(item, dict)
+                    or item.get("status")
+                    not in {
+                        "resolved_exact_full_fill",
+                        "resolved_exact_zero_fill_cancel",
+                        "resolved_exact_manual_custody_flat",
+                        "closed_definitive_rejection_no_order",
+                    }
+                    for item in quality.get("incidents", [])
+                )
+            ):
+                quality_blocks[symbol] = "execution_incident_unresolved_or_source_gap"
+                continue
         symbols[symbol] = {
             "name": name,
             **selected,
@@ -387,7 +462,9 @@ def build_policy(
         "status": (
             "verified"
             if symbols
-            else "observation_only" if observation_symbols else "no_ready_policy"
+            else "observation_only"
+            if observation_symbols
+            else "no_ready_policy"
         ),
         "policy_version": (
             f"widget_symbol_runtime_policy_{effective_date.isoformat()}_"
@@ -403,6 +480,11 @@ def build_policy(
         "authority": POLICY_AUTHORITY,
         "owner": OWNER,
         "symbols": symbols,
+        **(
+            {"execution_quality_blocks": quality_blocks}
+            if require_execution_quality
+            else {}
+        ),
         "observation_symbols": observation_symbols,
         "metric_contract": METRIC_CONTRACT,
         "runtime_effect": bool(symbols),

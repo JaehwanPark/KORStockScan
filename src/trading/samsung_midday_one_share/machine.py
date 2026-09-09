@@ -34,6 +34,7 @@ class SamsungMiddayOneShareMachine(SamsungRegularTwoLegMachine):
         policy: MiddayOneSharePolicy = DEFAULT_POLICY,
         live_enabled: bool = False,
         ownership_source: Callable[[object], str] = _episode_ownership_source,
+        adaptive_exit_services=None,
     ) -> None:
         super().__init__(
             gateway=gateway,
@@ -44,4 +45,5 @@ class SamsungMiddayOneShareMachine(SamsungRegularTwoLegMachine):
             legacy_schema="samsung_midday_one_share_state_v1",
             live_enabled=live_enabled,
             ownership_source=ownership_source,
+            adaptive_exit_services=adaptive_exit_services,
         )

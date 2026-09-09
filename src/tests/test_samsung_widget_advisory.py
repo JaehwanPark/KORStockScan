@@ -13,6 +13,15 @@ from src.engine.monitoring import samsung_widget_contract as contract
 KST = ZoneInfo("Asia/Seoul")
 
 
+def _later_observation(payload, seconds=10):
+    return {
+        **payload,
+        "observed_at": (
+            datetime.fromisoformat(payload["observed_at"]) + timedelta(seconds=seconds)
+        ).isoformat(),
+    }
+
+
 def test_kiwoom_signed_price_is_normalized_to_absolute_price():
     assert advisory._positive_int("-262500") == 262_500
     assert advisory._positive_int("+262500") == 262_500
@@ -931,7 +940,7 @@ def test_domestic_ready_requires_two_consecutive_observations():
 
     filter_ = advisory.AdvisoryPromotionFilter()
     first = filter_.apply(raw)
-    second = filter_.apply(raw)
+    second = filter_.apply(_later_observation(raw))
     assert first["state"] == "WATCH"
     assert first["entry_price_low"] is None
     assert first["entry_price_high"] is None
@@ -1347,9 +1356,9 @@ def test_promotion_filter_keeps_caution_until_ready_is_confirmed():
     filter_ = advisory.AdvisoryPromotionFilter()
 
     assert filter_.apply(caution)["state"] == "WATCH"
-    assert filter_.apply(caution)["state"] == "ENTRY_CAUTION"
-    assert filter_.apply(ready)["state"] == "ENTRY_CAUTION"
-    assert filter_.apply(ready)["state"] == "ENTRY_READY"
+    assert filter_.apply(_later_observation(caution))["state"] == "ENTRY_CAUTION"
+    assert filter_.apply(_later_observation(ready, 20))["state"] == "ENTRY_CAUTION"
+    assert filter_.apply(_later_observation(ready, 30))["state"] == "ENTRY_READY"
 
 
 def test_promotion_filter_applies_bounded_three_observation_calibration():
@@ -1369,8 +1378,14 @@ def test_promotion_filter_applies_bounded_three_observation_calibration():
     }
 
     first = filter_.apply(ready, required_confirmations=3, calibration_policy=policy)
-    second = filter_.apply(ready, required_confirmations=3, calibration_policy=policy)
-    third = filter_.apply(ready, required_confirmations=3, calibration_policy=policy)
+    second = filter_.apply(
+        _later_observation(ready), required_confirmations=3, calibration_policy=policy
+    )
+    third = filter_.apply(
+        _later_observation(ready, 20),
+        required_confirmations=3,
+        calibration_policy=policy,
+    )
 
     assert first["state"] == "WATCH"
     assert second["state"] == "WATCH"
@@ -1390,16 +1405,16 @@ def test_promotion_filter_applies_ready_to_caution_demotion_immediately():
     )
     filter_ = advisory.AdvisoryPromotionFilter()
     filter_.apply(ready)
-    filter_.apply(ready)
+    filter_.apply(_later_observation(ready))
 
-    assert filter_.apply(caution)["state"] == "ENTRY_CAUTION"
+    assert filter_.apply(_later_observation(caution, 20))["state"] == "ENTRY_CAUTION"
 
 
 def test_promotion_confirmation_does_not_cross_session_or_trading_day():
     regular = advisory.evaluate_advisory(**_ready_input())
     filter_ = advisory.AdvisoryPromotionFilter()
     assert filter_.apply(regular)["state"] == "WATCH"
-    assert filter_.apply(regular)["state"] == "ENTRY_READY"
+    assert filter_.apply(_later_observation(regular))["state"] == "ENTRY_READY"
 
     aftermarket_time = datetime(2026, 8, 3, 15, 45, 5, tzinfo=KST)
     aftermarket = {
@@ -1408,7 +1423,7 @@ def test_promotion_confirmation_does_not_cross_session_or_trading_day():
         "observed_at": aftermarket_time.isoformat(),
     }
     assert filter_.apply(aftermarket)["state"] == "WATCH"
-    assert filter_.apply(aftermarket)["state"] == "ENTRY_READY"
+    assert filter_.apply(_later_observation(aftermarket))["state"] == "ENTRY_READY"
 
     next_day = {
         **regular,
@@ -1421,11 +1436,13 @@ def test_promotion_filter_restores_widget_only_state_across_collector_restart():
     ready = advisory.evaluate_advisory(**_ready_input())
     first_filter = advisory.AdvisoryPromotionFilter()
     first_filter.apply(ready)
-    confirmed = first_filter.apply(ready)
+    confirmed = first_filter.apply(_later_observation(ready))
 
     restored_filter = advisory.AdvisoryPromotionFilter()
     assert restored_filter.restore(confirmed) is True
-    assert restored_filter.apply(ready)["state"] == "ENTRY_READY"
+    assert (
+        restored_filter.apply(_later_observation(ready, 20))["state"] == "ENTRY_READY"
+    )
 
 
 def test_premarket_auxiliary_can_only_downgrade_before_0930():

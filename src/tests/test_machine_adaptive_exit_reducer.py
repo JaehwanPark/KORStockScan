@@ -89,6 +89,37 @@ def test_partial_target_then_residual_sell_with_exact_cumulative_fills():
     assert reduce_event(state, final).phase == "FLAT"
 
 
+def test_third_sell_cannot_reuse_first_sell_order_identity():
+    state = residual()
+    for idx, order in enumerate((SELL, OrderKey("2026-09-09", "125"))):
+        for kind, params in (
+            ("EXIT_SUBMIT_INTENT", {"quantity": 10}),
+            ("EXIT_SUBMITTED", {"order": order, "receipt_hash": "ack"}),
+            (
+                "EXIT_TERMINAL",
+                {
+                    "order": order,
+                    "receipt_hash": "exact",
+                    "exact_terminal_reconciled": True,
+                },
+            ),
+        ):
+            state = reduce_event(
+                state, replace(event(kind, **params), event_id=f"{idx}:{kind}")
+            )
+    state = reduce_event(
+        state, replace(event("EXIT_SUBMIT_INTENT", quantity=10), event_id="third")
+    )
+    with pytest.raises(ValueError, match="new_sell_receipt"):
+        reduce_event(
+            state,
+            replace(
+                event("EXIT_SUBMITTED", order=SELL, receipt_hash="ack"),
+                event_id="third:ack",
+            ),
+        )
+
+
 def test_crash_before_or_after_api_does_not_grant_resubmit():
     state = reduce_event(residual(), event("EXIT_SUBMIT_INTENT", quantity=10))
     assert reduce_event(state, event("EXIT_SUBMIT_INTENT", quantity=10)) == state

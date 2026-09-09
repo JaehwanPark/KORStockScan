@@ -200,7 +200,10 @@ def test_sequence_gap_and_reconnect_do_not_synthesize_continuity():
 def trail_inputs(*, bid=10065, age=20_000):
     policy, p, snap, clock, state = inputs(age=age, bid=bid, support=True)
     policy = replace(
-        policy, mode="fast_partial_trailing", trail=TrailPolicy(30, 0.5, 3, 2, 0.1)
+        policy,
+        mode="fast_partial_trailing",
+        trail=TrailPolicy(30, 0.5, 3, 2, 0.1),
+        runner_lot_ids=(p.lot_id,),
     )
     return policy, p, snap, clock, state
 
@@ -209,6 +212,14 @@ def test_fast_pretarget_intent_does_not_initialize_high_water_before_cancel():
     d = evaluate_exit(*trail_inputs())
     assert d.action == "REQUEST_TRAIL_ARM"
     assert d.high_water is None and d.stop_price is None
+
+
+def test_nonrunner_lot_keeps_original_target_in_trailing_only_mode():
+    policy, p, snapshot, clock, state = trail_inputs()
+    p = replace(p, lot_id="nonrunner")
+    result = evaluate_exit(policy, p, snapshot, clock, state)
+    assert result.action == "KEEP_TARGET"
+    assert result.reason == "lot_not_selected_for_trailing"
 
 
 def test_tight_target_geometry_is_not_fixed_by_weakening_costs():
@@ -250,3 +261,13 @@ def test_trail_only_moves_up_and_hard_deadline_dominates():
 def test_invalid_policies_have_no_implicit_permissive_defaults(patch):
     with pytest.raises(ValueError):
         replace(inputs()[0], **patch)
+
+
+def test_first_checkpoint_accepts_available_fresh_quote_just_before_fill():
+    policy, p, s, clock, old = inputs()
+    s = replace(
+        s, quote_at_ms=p.first_fill_at_ms - 1, observed_at_ms=p.first_fill_at_ms
+    )
+    clock = replace(clock, now_ms=p.first_fill_at_ms)
+    result = evaluate_exit(policy, p, s, clock, old)
+    assert result.action not in ("SOURCE_GAP", "RECOVERY_REQUIRED")

@@ -17,6 +17,7 @@ from typing import Any, Mapping
 from src.trading.order.entry_liquidity_guard import (
     EXECUTABLE_MICRO_CONFIRMATION_MODE,
 )
+from src.trading.market.confirmation_window import FEATURE_VERSION
 from src.trading.market.micro_confirmation import (
     SAMSUNG_RISE_REBOUND_POLICY,
     dynamic_policy_for_scope,
@@ -236,6 +237,7 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
                 payload.get("schema") != SCHEMA
                 or not isinstance(dynamic_confirmation, dict)
                 or dynamic_confirmation.get("mode") != DYNAMIC_MODE
+                or dynamic_confirmation.get("feature_version") != FEATURE_VERSION
                 or dynamic_confirmation.get("policy_id") != expected_policy.policy_id
                 or dynamic_confirmation.get("policy") != expected_policy.as_dict()
                 or dynamic_confirmation.get("checkpoints_sec") != [0, 1, 3, 5]
@@ -561,6 +563,30 @@ def load_applied_policy(
     )
     if source_report.resolve() != expected_source_report.resolve():
         return None, "entry_timing_source_report_path_invalid"
+    if "source_evidence_snapshot" in payload:
+        expected_snapshot = (
+            policy_dir
+            / "evidence"
+            / f"{payload['source_report_canonical_sha256']}.json"
+        )
+        if payload.get("source_evidence_snapshot") != str(expected_snapshot.resolve()):
+            return None, "entry_timing_source_evidence_path_invalid"
+        # A frozen evidence generation is not permission to ignore a newly
+        # reported owner veto. Diagnostic-only refreshes are harmless; a
+        # same-stage mutation remains an explicit fail-closed invalidation.
+        try:
+            latest_report = json.loads(source_report.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            latest_report = None
+        if (
+            isinstance(latest_report, dict)
+            and latest_report.get("target_date") == payload.get("source_date")
+            and latest_report.get("effective_date") == payload.get("target_date")
+            and isinstance(latest_report.get("same_stage_owner_guard"), dict)
+            and latest_report["same_stage_owner_guard"].get("mutation_present") is True
+        ):
+            return None, "entry_timing_current_same_stage_owner_veto"
+        source_report = expected_snapshot
     try:
         source_payload = json.loads(source_report.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -665,6 +691,13 @@ def resolve_entry_confirmation_policy(
         "policy_hash": payload.get("policy_hash") if payload else None,
         "target_date": target_date.isoformat(),
         "source_date": payload.get("source_date") if payload else None,
+        "source_report_canonical_sha256": (
+            payload.get("source_report_canonical_sha256") if payload else None
+        ),
+        "source_evidence_snapshot": (
+            payload.get("source_evidence_snapshot") if payload else None
+        ),
+        "feature_version": FEATURE_VERSION,
         "axis": "entry_confirmation",
     }
     if payload is None:

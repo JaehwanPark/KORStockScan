@@ -52,6 +52,8 @@ from src.engine.monitoring.widget_comparison_cost import (
     round_trip_cost_pct,
 )
 from src.utils.market_day import is_krx_trading_day
+from src.engine.monitoring.widget_signal_quality import confirmation_comparison
+from src.engine.monitoring import widget_paired_policy_replay as paired_replay
 
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CALIBRATION_HORIZON_MINUTES = 10
@@ -79,6 +81,19 @@ CALIBRATION_CONTRACT = {
         "automatic_collector_creation_or_service_start",
     ],
 }
+
+
+def _calibration_contract(target_date: date) -> dict[str, Any]:
+    if target_date < paired_replay.SELECTION_START_DATE:
+        return CALIBRATION_CONTRACT
+    return {
+        **CALIBRATION_CONTRACT,
+        **{
+            key: paired_replay.CONTRACT[key]
+            for key in ("window_policy", "sample_floor", "source_quality_gate")
+        },
+        "selection_evidence_role": "paired_cost_ev_existing_confirmation_axis",
+    }
 
 
 @dataclass(frozen=True)
@@ -191,6 +206,9 @@ def build_and_write_evaluation(
         symbol_code=spec.symbol,
         expected_sessions=spec.expected_sessions,
         target_return_pct=spec.target_return_pct,
+    )
+    daily["confirmation_comparison"] = confirmation_comparison(
+        rows, target_date=target_date
     )
     if write:
         _atomic_write(_daily_report_path(spec, target_date), daily)
@@ -479,6 +497,8 @@ def _select_session_policy(
         "source_quality_adjusted_ev_pct": (
             round(adjusted_ev, 6) if adjusted_ev is not None else None
         ),
+        "selection_evidence_role": "unpaired_opportunity_proxy_heuristic_not_causal_uplift",
+        "causal_confirmation_ev_delta_pct": None,
         "round_trip_cost_pct": comparison_cost_contract(cost_as_of_date)[
             "round_trip_cost_pct"
         ],
@@ -498,10 +518,20 @@ def build_calibration_policy(
     daily_reports: dict[str, dict[str, Any]],
     policy_dir: Path = DEFAULT_POLICY_DIR,
     specs: tuple[WidgetSpec, ...] = WIDGET_SPECS,
+    execution_baselines: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     effective_date = _next_krx_trading_date(target_date)
     comparison_cost = comparison_cost_contract(target_date)
     loader = WidgetCalibrationPolicyLoader(policy_dir)
+    if (
+        execution_baselines is None
+        and target_date >= paired_replay.SELECTION_START_DATE
+    ):
+        from src.trading.widget_auto_trade.policy import WidgetAutoTradePolicyLoader
+
+        execution_baselines = WidgetAutoTradePolicyLoader(
+            include_symbol_expansion=False
+        ).resolve_all(observed_date=target_date)
     symbols: dict[str, Any] = {}
     report_symbols: dict[str, Any] = {}
     all_daily_reports_verified = True
@@ -528,6 +558,16 @@ def build_calibration_policy(
                 )
             )
         sessions: dict[str, Any] = {}
+        paired_inputs, paired_sources = (
+            paired_replay.load_inputs(
+                list(spec.observation_dir.glob(f"{spec.observation_prefix}_*.jsonl")),
+                symbol=spec.symbol,
+                target_date=target_date,
+            )
+            if target_date >= paired_replay.SELECTION_START_DATE
+            and spec.symbol == SAMSUNG_CODE
+            else ([], {})
+        )
         for session in spec.expected_sessions:
             previous = loader.resolve(
                 symbol=spec.symbol,
@@ -541,6 +581,54 @@ def build_calibration_policy(
                 daily_report_issue=report_issue,
                 cost_as_of_date=target_date,
             )
+            if target_date >= paired_replay.SELECTION_START_DATE:
+                # Event-driven widgets do not obtain trading authority from the
+                # display promotion count. Never tune that count as trade alpha.
+                baseline = (execution_baselines or {}).get(spec.symbol, {}).get(session)
+                study = paired_replay.build_study(
+                    paired_inputs
+                    if spec.symbol == SAMSUNG_CODE and report_issue is None
+                    else [],
+                    symbol=spec.symbol,
+                    session=session,
+                    parameters=paired_replay.policy_parameters(baseline),
+                    baseline_confirmations=previous[
+                        "required_actionable_confirmations"
+                    ],
+                    axis="confirmations",
+                    values=(2, 3),
+                    target_date=target_date,
+                    source_audit=paired_sources,
+                )
+                paired_replay.bind_incumbent(study, baseline)
+                selection = paired_replay.select_candidate(
+                    study, previous_value=previous["required_actionable_confirmations"]
+                )
+                selected_metrics = next(
+                    (
+                        item["windows"]["base"]
+                        for item in selection.get("diagnostics", [])
+                        if item["value"] == selection["selected_value"]
+                    ),
+                    {},
+                )
+                calibration_metrics = selected_metrics.get("calibration") or {}
+                sessions[session].update(
+                    required_actionable_confirmations=selection["selected_value"],
+                    decision=selection["decision"],
+                    reason=selection["evidence_state"],
+                    paired_source_diagnostic=selection.get("source_diagnostic"),
+                    selection_evidence_role="paired_cost_ev_existing_axis",
+                    proxy_source_quality_adjusted_ev_pct=sessions[session][
+                        "source_quality_adjusted_ev_pct"
+                    ],
+                    source_quality_adjusted_ev_pct=(
+                        calibration_metrics.get("candidate") or {}
+                    ).get("source_quality_adjusted_ev_pct"),
+                    paired_selected_windows=selected_metrics,
+                    paired_economics={"study": study, "selection": selection},
+                    rollback_condition="previous verified value on source/paired acceptance failure; existing safety unchanged",
+                )
         symbols[spec.symbol] = {
             "name": spec.name,
             "strategy_profile": spec.strategy_profile,
@@ -555,6 +643,9 @@ def build_calibration_policy(
             "excluded_cumulative_report_count": len(excluded_reports),
             "excluded_cumulative_reports": excluded_reports,
             "sessions": sessions,
+            "confirmation_comparison": (daily or {}).get("confirmation_comparison"),
+            "downstream_signal_eligibility_effect": True,
+            "direct_order_authority": False,
         }
     policy_version = (
         f"widget_advisory_policy_{effective_date.isoformat()}_from_"
@@ -574,8 +665,10 @@ def build_calibration_policy(
         ),
         "symbols": symbols,
         "comparison_cost_contract": comparison_cost,
-        "metric_contract": CALIBRATION_CONTRACT,
+        "metric_contract": _calibration_contract(target_date),
         "widget_runtime_effect": True,
+        "downstream_signal_eligibility_effect": True,
+        "direct_order_authority": False,
         "trading_runtime_effect": False,
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -590,11 +683,13 @@ def build_calibration_policy(
         "all_daily_reports_verified": all_daily_reports_verified,
         "symbols": report_symbols,
         "comparison_cost_contract": comparison_cost,
-        "metric_contract": CALIBRATION_CONTRACT,
+        "metric_contract": _calibration_contract(target_date),
         "policy_path": str(
             policy_dir / f"{POLICY_FILE_PREFIX}_{effective_date.isoformat()}.json"
         ),
         "widget_runtime_effect": True,
+        "downstream_signal_eligibility_effect": True,
+        "direct_order_authority": False,
         "trading_runtime_effect": False,
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -618,8 +713,6 @@ def _policy_verification_issues(
         or policy.get("authority") != POLICY_AUTHORITY
     ):
         issues.append("policy_identity_contract_mismatch")
-    if policy.get("metric_contract") != CALIBRATION_CONTRACT:
-        issues.append("policy_metric_contract_mismatch")
     if (
         policy.get("widget_runtime_effect") is not True
         or policy.get("trading_runtime_effect") is not False
@@ -640,6 +733,10 @@ def _policy_verification_issues(
     except ValueError:
         issues.append("policy_source_target_date_invalid")
         source_target_date = None
+    if source_target_date is not None and policy.get(
+        "metric_contract"
+    ) != _calibration_contract(source_target_date):
+        issues.append("policy_metric_contract_mismatch")
     if (
         source_target_date is not None
         and effective_date is not None
@@ -670,6 +767,29 @@ def _policy_verification_issues(
                 <= MAX_REQUIRED_CONFIRMATIONS
             ):
                 issues.append(f"session_policy_invalid:{spec.symbol}:{session}")
+            if (
+                source_target_date is not None
+                and source_target_date >= paired_replay.SELECTION_START_DATE
+            ):
+                paired = (session_policy or {}).get("paired_economics") or {}
+                if not isinstance(paired, dict) or not paired_replay.selection_valid(
+                    paired.get("study"),
+                    paired.get("selection"),
+                    symbol=spec.symbol,
+                    session=session,
+                    target_date=source_target_date,
+                    axis="confirmations",
+                    selected_value=confirmations,
+                ):
+                    issues.append(
+                        f"session_paired_economics_invalid:{spec.symbol}:{session}"
+                    )
+                elif paired["selection"].get(
+                    "candidate_ready"
+                ) is True and not paired_replay.incumbent_valid(paired["study"]):
+                    issues.append(
+                        f"session_incumbent_binding_invalid:{spec.symbol}:{session}"
+                    )
     return issues
 
 

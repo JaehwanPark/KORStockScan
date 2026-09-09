@@ -57,6 +57,7 @@ from src.engine.monitoring.samsung_widget_contract import (
 from src.engine.monitoring.widget_advisory_calibration_policy import (
     WidgetCalibrationPolicyLoader,
 )
+from src.engine.monitoring.widget_paired_policy_replay import capture_input
 from src.engine.monitoring.samsung_widget_entry_notify import (
     SamsungWidgetEntryTelegramNotifier,
 )
@@ -1578,7 +1579,9 @@ def evaluate_advisory(
     volume_meta["volume_confirmation_mode"] = (
         "absorption_recovery"
         if absorption_recovery_ok
-        else "standard_rebound" if volume_ok else "unconfirmed"
+        else "standard_rebound"
+        if volume_ok
+        else "unconfirmed"
     )
     spread_ok = spread_ticks <= 2
     core_checks = {
@@ -1992,7 +1995,9 @@ def evaluate_advisory(
                     else (
                         "vwap"
                         if vwap_reclaimed
-                        else "recent_resistance" if resistance_reclaimed else "none"
+                        else "recent_resistance"
+                        if resistance_reclaimed
+                        else "none"
                     )
                 ),
                 "vwap_only_structure_confirmed": vwap_only_structure_confirmed,
@@ -2802,6 +2807,7 @@ class AdvisoryPromotionFilter:
         self._streak = 0
         self._visible_state = "DATA_WAIT"
         self._last_observed_at: datetime | None = None
+        self._confirmation_trace: list[dict[str, Any]] = []
 
     @staticmethod
     def _scope_for(advisory: dict[str, Any]) -> str:
@@ -2838,6 +2844,7 @@ class AdvisoryPromotionFilter:
         self._streak = 0
         self._visible_state = "DATA_WAIT"
         self._last_observed_at = None
+        self._confirmation_trace = []
 
     def apply(
         self,
@@ -2862,6 +2869,7 @@ class AdvisoryPromotionFilter:
         else:
             observed_at = None
         if scope_key != self._scope_key:
+            self._confirmation_trace = []
             self._scope_key = scope_key
             self._last_raw_state = None
             self._streak = 0
@@ -2877,8 +2885,29 @@ class AdvisoryPromotionFilter:
             self._streak = 0
             self._visible_state = "DATA_WAIT"
         raw_state = str(result.get("raw_state") or result.get("state") or "DATA_WAIT")
+        # Retain the inputs hidden by a WATCH promotion so compact minute rows
+        # can reconstruct the existing 2/3 confirmation arms. No order authority.
+        self._confirmation_trace.append(
+            {
+                key: result.get(key)
+                for key in (
+                    "observed_at",
+                    "session",
+                    "state",
+                    "raw_state",
+                    "entry_price_low",
+                    "entry_price_high",
+                    "invalidation_price",
+                    "source_quality_status",
+                    "execution_replay_input",
+                )
+            }
+        )
+        self._confirmation_trace = self._confirmation_trace[-8:]
         if raw_state == self._last_raw_state:
-            self._streak += 1
+            self._streak += int(
+                observed_at is None or observed_at != self._last_observed_at
+            )
         else:
             self._last_raw_state = raw_state
             self._streak = 1
@@ -2909,6 +2938,11 @@ class AdvisoryPromotionFilter:
         self._last_observed_at = observed_at
         result["confirmation_streak"] = self._streak
         result["required_actionable_confirmations"] = required_confirmations
+        result["confirmation_input_trace"] = {
+            "schema": "widget_confirmation_input_trace_v1",
+            "rows": list(self._confirmation_trace),
+            "runtime_effect": False,
+        }
         if isinstance(calibration_policy, dict):
             result["calibration_policy"] = {
                 key: calibration_policy.get(key)
@@ -4054,7 +4088,9 @@ class ObservationRecorder:
             "observation_kind": (
                 "state_transition"
                 if state_changed
-                else "exit_state_transition" if exit_state_changed else "minute_summary"
+                else "exit_state_transition"
+                if exit_state_changed
+                else "minute_summary"
             ),
             "previous_advisory_state": previous_state,
             "previous_exit_advisory_state": previous_exit_state,
@@ -4592,6 +4628,9 @@ class SamsungWidgetCollector:
             session=context.name,
             observed_date=decision_now.date(),
         )
+        advisory["execution_replay_input"] = capture_input(
+            advisory, symbol=SAMSUNG_CODE, venue=context.market_venue, bbo=bbo
+        )
         advisory = self.promotion_filter.apply(
             advisory,
             required_confirmations=int(
@@ -4624,7 +4663,11 @@ class SamsungWidgetCollector:
             source_quality=exit_source_quality,
             entry_advisory=advisory,
         )
-        if _apply_entry_exit_conflict_guard(advisory, exit_advisory):
+        entry_exit_conflict = _apply_entry_exit_conflict_guard(advisory, exit_advisory)
+        advisory["execution_replay_input"]["non_confirmation_entry_blocked"] = (
+            entry_exit_conflict
+        )
+        if entry_exit_conflict:
             # The promotion filter has already observed this raw entry.  Reset
             # it so a cleared exit warning still needs the configured two/three
             # consecutive confirmations instead of reappearing immediately.

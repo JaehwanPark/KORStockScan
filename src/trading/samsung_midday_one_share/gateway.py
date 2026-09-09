@@ -172,6 +172,7 @@ class KiwoomMiddayOneShareGateway:
         payload: dict[str, str],
         cont_yn: str = "N",
         next_key: str = "",
+        fresh: bool = False,
     ) -> tuple[requests.Response, dict[str, Any]]:
         active_token = self._token()
 
@@ -199,7 +200,7 @@ class KiwoomMiddayOneShareGateway:
         kwargs: dict[str, Any] = {}
         if self.read_retry_sleep is not None:
             kwargs["sleep"] = self.read_retry_sleep
-        if api_id == KT00007_API_ID:
+        if not fresh and api_id == KT00007_API_ID:
             kwargs.update(
                 {
                     "cache": self._account_read_cache,
@@ -220,6 +221,26 @@ class KiwoomMiddayOneShareGateway:
             endpoint=f"{self.base_url}{endpoint}",
             request_owner="samsung_midday_episode_read",
             **kwargs,
+        )
+
+    def adaptive_exit_adapter(
+        self, *, registry, context, policy_hash, write_guard=None
+    ):
+        """Build a disabled-by-default adapter; does not attach an exit loop."""
+        from src.trading.order.adaptive_exit.broker import RegisteredSellAdapter
+
+        if context.owner_type != "episode":
+            raise ValueError("episode_owner_required")
+        return RegisteredSellAdapter(
+            post=lambda **kwargs: self._post(**kwargs, fresh=True),
+            registry=registry,
+            context=context,
+            symbol="005930",
+            routes=("SOR",),
+            policy_hash=policy_hash,
+            maximum_quantity=EPISODE_LEG_QUANTITY,
+            require_write_authority=self._require_write_authority,
+            write_guard=write_guard,
         )
 
     def _require_write_authority(self) -> None:

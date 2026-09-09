@@ -253,7 +253,7 @@ class KiwoomSharedTokenOrderGateway:
             .strip()
         )
         request_url = kiwoom_utils.get_api_url(endpoint)
-        read_api = api_id == "kt00007"
+        read_api = api_id in {"kt00007", "ka10075"}
         if read_api and self.shared_read_control_enabled:
             admission = kiwoom_utils.acquire_kiwoom_read_capacity(
                 token=active_token,
@@ -302,6 +302,37 @@ class KiwoomSharedTokenOrderGateway:
                 response_code=body.get("return_code", body.get("rt_cd")),
             )
         return response, body if isinstance(body, dict) else {}
+
+    def adaptive_exit_adapter(
+        self, *, registry, context, code, policy_hash, write_guard=None
+    ):
+        """No live enablement: caller must provide the frozen owner write guard."""
+        from src.trading.order.adaptive_exit.broker import RegisteredSellAdapter
+
+        if context.owner_type != "widget_auto_trade":
+            raise ValueError("widget_owner_required")
+
+        def require_production():
+            if (
+                kiwoom_utils.get_api_url("/api/dostk/ordr")
+                != "https://api.kiwoom.com/api/dostk/ordr"
+            ):
+                raise PermissionError(
+                    "adaptive_exit_orders_require_production_endpoint"
+                )
+
+        return RegisteredSellAdapter(
+            post=self._post,
+            registry=registry,
+            context=context,
+            symbol=code,
+            routes=("KRX", "SOR", "NXT"),
+            policy_hash=policy_hash,
+            maximum_quantity=None,
+            require_write_authority=require_production,
+            write_guard=write_guard,
+            new_route=resolve_widget_broker_route,
+        )
 
     def entry_liquidity_snapshot(
         self, *, code: str, route: str

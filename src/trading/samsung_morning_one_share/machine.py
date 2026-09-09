@@ -14,6 +14,7 @@ from src.trading.order.episode_quantity import (
     EPISODE_TOTAL_QUANTITY,
 )
 from src.trading.order.owner_custody_registry import OwnerRegistryError
+from src.trading.order.adaptive_exit.source import record_first_fill_observation
 from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
 from src.trading.config.machine_entry_timing_policy import (
     DYNAMIC_MODE,
@@ -78,6 +79,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         policy: MorningOneSharePolicy = DEFAULT_POLICY,
         live_enabled: bool = False,
         ownership_source: Callable[[object], str] = _episode_ownership_source,
+        adaptive_exit_services=None,
     ) -> None:
         super().__init__(
             gateway=gateway,
@@ -88,6 +90,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             legacy_schema="samsung_morning_one_share_state_v1",
             live_enabled=live_enabled,
             ownership_source=ownership_source,
+            adaptive_exit_services=adaptive_exit_services,
         )
 
     def _validate_state_contract(self, now: datetime) -> bool:
@@ -241,6 +244,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             }
         )
         self._own_order(result.order_no)
+        self._record_adaptive_target_source(leg)
         self._record(
             now,
             "target_submitted",
@@ -405,6 +409,12 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             )
             return
         if snapshot.found:
+            record_first_fill_observation(
+                leg,
+                previous_filled_qty=leg.get("buy_filled_qty", 0),
+                filled_qty=snapshot.filled_qty,
+                observed_at=now.astimezone(KST).isoformat(),
+            )
             leg["last_buy_reconciled_at"] = now.astimezone(KST).isoformat()
             leg["last_buy_remaining_qty"] = int(snapshot.remaining_qty)
             leg["last_buy_reconcile_source_ok"] = True
@@ -1001,8 +1011,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             source_entry_event_id = str(
                 pending_confirmation.get("source_entry_event_id")
                 or (
-                    f"samsung_morning_two_leg:{route}:"
-                    f"{signal_bar}:{signal_decision_at}"
+                    f"samsung_morning_two_leg:{route}:{signal_bar}:{signal_decision_at}"
                 )
             )
             if pending_mode == DYNAMIC_MODE:

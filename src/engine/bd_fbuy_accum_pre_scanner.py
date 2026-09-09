@@ -911,7 +911,7 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                 }
             types[realtime_type] = normalized
         recent_trades = []
-        for source in list(trades.get(route_key) or ())[:16]:
+        for source in list(trades.get(route_key) or ())[:120]:
             if not isinstance(source, dict):
                 continue
             received_at_ms = source.get("received_at_ms")
@@ -931,6 +931,7 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                     "transport_epoch": transport_epoch,
                     "received_at_ms": received_at_ms,
                     "price": _safe_int(source.get("price")),
+                    "route_sequence": source.get("route_sequence"),
                     "volume": _safe_int(source.get("volume")),
                     "best_bid": _safe_int(source.get("best_bid")),
                     "best_ask": _safe_int(source.get("best_ask")),
@@ -939,7 +940,7 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                 }
             )
         recent_depth = []
-        for source in list(depths.get(route_key) or ())[:16]:
+        for source in list(depths.get(route_key) or ())[:120]:
             if not isinstance(source, dict):
                 continue
             received_at_ms = source.get("received_at_ms")
@@ -965,6 +966,9 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                     "transport_epoch": transport_epoch,
                     "received_at_ms": received_at_ms,
                     "best_ask": _safe_int((asks[0] or {}).get("price")),
+                    "route_sequence": source.get("route_sequence"),
+                    "ask_levels": asks[:5],
+                    "bid_levels": bids[:5],
                     "best_ask_qty": _safe_int((asks[0] or {}).get("quantity")),
                     "best_bid": _safe_int((bids[0] or {}).get("price")),
                     "best_bid_qty": _safe_int((bids[0] or {}).get("quantity")),
@@ -975,6 +979,8 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                 "realtime_types": types,
                 "recent_trades": recent_trades,
                 "recent_depth": recent_depth,
+                "sequence_authority": "local_projection_continuity_not_exchange_completeness",
+                "window_capacity_rows_per_type": 120,
             }
     return result
 

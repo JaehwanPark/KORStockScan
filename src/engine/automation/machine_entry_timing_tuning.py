@@ -22,6 +22,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.machine_entry_confirmation_study import build_study
 from src.engine.monitoring.machine_rebound_reentry_evaluation import (
     SECTION as REBOUND_SECTION,
     build_evaluation as build_rebound_evaluation,
@@ -71,6 +72,7 @@ from src.trading.market.micro_confirmation import (
     modeled_dynamic_target_price,
     validate_dynamic_micro_confirmation_replay,
 )
+from src.trading.market.confirmation_window import FEATURE_VERSION
 from src.trading.order.tick_utils import get_tick_size, move_price_by_ticks
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
@@ -328,6 +330,28 @@ def _same_stage_owner_guard(
     )
     current_widget = _read_json(current_widget_path)
     next_widget = _read_json(next_widget_path)
+    if (
+        isinstance(next_widget, dict)
+        and next_widget.get("effective_date") == effective_date.isoformat()
+    ):
+        confirmation_changes = [
+            f"{symbol}|{session}"
+            for symbol, symbol_row in (next_widget.get("symbols") or {}).items()
+            if isinstance(symbol_row, dict)
+            for session, row in (symbol_row.get("sessions") or {}).items()
+            if isinstance(row, dict)
+            and row.get("advisory_confirmation_changed") is True
+        ]
+        if confirmation_changes:
+            owners.append(
+                {
+                    "path": str(next_widget_path),
+                    "schema": next_widget.get("schema"),
+                    "policy_mutation_count": len(confirmation_changes),
+                    "reason": "existing_widget_advisory_confirmation_axis_selected",
+                    "scopes": confirmation_changes,
+                }
+            )
     entry_fields = (
         "enabled",
         "new_entry_runtime_eligible",
@@ -612,6 +636,20 @@ def _dynamic_baseline_observation(
         return None
     replay_valid = _dynamic_replay_contract_valid(row=row, replay=replay)
     if not replay_valid:
+        return None
+    return _decision_economic_baseline(source_date=source_date, row=row, replay=replay)
+
+
+def _decision_economic_baseline(
+    *, source_date: date, row: dict[str, Any], replay: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Cost/terminal validation shared with explicitly non-promotable ablations.
+
+    The promotion caller must first validate its canonical policy replay. The
+    study caller supplies a causal ablation decision, never a runtime policy.
+    """
+    outcome = row.get("owner_outcome")
+    if not isinstance(outcome, dict):
         return None
     baseline_gross = _finite(outcome.get("gross_no_slippage_return_pct"))
     reported_net = _finite(outcome.get("cost_aware_net_return_pct"))
@@ -952,7 +990,10 @@ def _dynamic_baseline_observation(
             abs_tol=1e-6,
         )
         or _finite(row.get("owner_round_trip_cost_pct")) != cost_pct
-        or not first_hit_valid
+        # An actual immediate fill/terminal pair and a deterministic no-entry
+        # control do not depend on a hypothetical 300-second first-hit label.
+        # Delayed executable counterfactuals still require their exact label.
+        or (terminal_action == "ENTER" and selected_delay != 0 and not first_hit_valid)
     ):
         return None
     baseline_net = baseline_gross - cost_pct
@@ -989,9 +1030,16 @@ def _dynamic_baseline_observation(
         "comparison_cost_contract_sha256": cost_contract.get("contract_sha256"),
         "round_trip_cost_pct": cost_pct,
         "first_hit_label_checkpoint_sec": terminal_checkpoint_sec,
-        "counterfactual_first_hit_state": first_hit.get("state"),
+        "first_hit_label_quality": (
+            "eligible" if first_hit_valid else "unavailable_or_invalid"
+        ),
+        "counterfactual_first_hit_state": (
+            first_hit.get("state") if first_hit_valid else None
+        ),
         "counterfactual_timeout_net_return_pct": _finite(
             first_hit_outcome.get("timeout_cost_aware_net_return_pct")
+            if first_hit_valid
+            else None
         ),
     }
 
@@ -1165,14 +1213,27 @@ def _dynamic_candidate_observation(
     *, source_date: date, row: dict[str, Any]
 ) -> dict[str, Any] | None:
     baseline = _dynamic_baseline_observation(source_date=source_date, row=row)
+    return _candidate_from_decision_baseline(
+        source_date=source_date,
+        row=row,
+        baseline=baseline,
+        replay=row.get("dynamic_confirmation_source_only_replay") or {},
+    )
+
+
+def _candidate_from_decision_baseline(
+    *,
+    source_date: date,
+    row: dict[str, Any],
+    baseline: dict[str, Any] | None,
+    replay: dict[str, Any],
+) -> dict[str, Any] | None:
     if baseline is None or baseline["terminal_action"] != "ENTER":
         return baseline
     delay_sec = int(baseline["selected_delay_sec"])
     if delay_sec == 0:
         return baseline
-    selected_decision = (
-        row["dynamic_confirmation_source_only_replay"].get("checkpoint_decisions") or []
-    )[-1]
+    selected_decision = (replay.get("checkpoint_decisions") or [])[-1]
     selected_horizon = (row.get("entry_confirmation_bbo_horizons") or {}).get(
         str(delay_sec)
     )
@@ -1215,6 +1276,20 @@ def _dynamic_candidate_observation(
         "exit_execution_class": delayed.get("exit_execution_class"),
         "outcome_basis": f"dynamic_{delayed['outcome_basis']}",
     }
+
+
+def _study_economic_observer(
+    *, source_date: date, row: dict[str, Any], replay: dict[str, Any]
+) -> dict[str, Any] | None:
+    baseline = _decision_economic_baseline(
+        source_date=source_date, row=row, replay=replay
+    )
+    return _candidate_from_decision_baseline(
+        source_date=source_date,
+        row=row,
+        replay=replay,
+        baseline=baseline,
+    )
 
 
 def _evaluate_dynamic_cohort(
@@ -1861,15 +1936,28 @@ def _cohort_sample_floor_assessment(
         default=0,
     )
     completed_floor = MIN_COMPLETED_OUTCOMES
+    observed_days_floor = MIN_OBSERVED_DAYS
+    lifecycle_floor = MIN_UNIQUE_LIFECYCLES
+    lifecycle_count = max(
+        (int(row.get("unique_decision_lifecycles") or 0) for row in alternatives),
+        default=0,
+    )
     if dynamic_evaluation is not None:
         completed_count = int(dynamic_evaluation["completed_outcome_count"])
         observed_days = int(dynamic_evaluation["observed_trading_days"])
         completed_floor = DYNAMIC_MIN_COMPLETED_OUTCOMES
+        observed_days_floor = DYNAMIC_MIN_OBSERVED_DAYS
+        lifecycle_floor = DYNAMIC_MIN_UNIQUE_LIFECYCLES
+        lifecycle_count = int(dynamic_evaluation.get("unique_decision_lifecycles") or 0)
     remaining = max(completed_floor - completed_count, 0)
     completed_per_source_day = (
         completed_count / len(eligible_source_dates) if eligible_source_dates else 0.0
     )
-    if completed_count >= completed_floor:
+    if (
+        completed_count >= completed_floor
+        and observed_days >= observed_days_floor
+        and lifecycle_count >= lifecycle_floor
+    ):
         state = "sample_floor_met"
         projected_days = 0
     elif policy_eligible_count == 0 and blocked_count > 0:
@@ -1883,7 +1971,19 @@ def _cohort_sample_floor_assessment(
         projected_days = None
     else:
         state = "natural_sample_wait"
-        projected_days = math.ceil(remaining / completed_per_source_day)
+        projected_days = (
+            max(
+                math.ceil(remaining / completed_per_source_day),
+                observed_days_floor - observed_days,
+                math.ceil(
+                    max(lifecycle_floor - lifecycle_count, 0)
+                    * len(eligible_source_dates)
+                    / lifecycle_count
+                ),
+            )
+            if completed_per_source_day > 0 and lifecycle_count > 0
+            else None
+        )
     if state == "sample_floor_met":
         shortage_classification_status = "not_applicable_floor_met"
         shortage_class = None
@@ -1917,6 +2017,9 @@ def _cohort_sample_floor_assessment(
         "completed_outcome_count": completed_count,
         "observed_trading_days": observed_days,
         "completed_outcome_floor": completed_floor,
+        "observed_trading_days_floor": observed_days_floor,
+        "unique_decision_lifecycles": lifecycle_count,
+        "unique_lifecycle_floor": lifecycle_floor,
         "confirmation_mode": (
             DYNAMIC_MODE if dynamic_evaluation is not None else FIXED_DELAY_MODE
         ),
@@ -2261,19 +2364,22 @@ def build_report(
             "alternatives": alternatives,
             "selected": selected,
             "per_signal_dynamic_confirmation_source_only": dynamic_confirmation,
+            "feature_ablation_study": build_study(
+                cohort_rows=rows,
+                economic_observer=_study_economic_observer,
+            ),
             "sample_floor_assessment": _cohort_sample_floor_assessment(
                 cohort_key=key,
                 cohort_rows=rows,
                 alternatives=alternatives,
                 source_report_dates=source_report_dates,
-                dynamic_evaluation=(
-                    dynamic_confirmation
-                    if dynamic_policy_for_scope(
-                        owner=owner, scope_id=scope_id, symbol=symbol
-                    )
-                    == SAMSUNG_RISE_REBOUND_POLICY
-                    else None
-                ),
+                dynamic_evaluation=dynamic_confirmation,
+            ),
+            "fixed_delay_sample_floor_assessment": _cohort_sample_floor_assessment(
+                cohort_key=key,
+                cohort_rows=rows,
+                alternatives=alternatives,
+                source_report_dates=source_report_dates,
             ),
         }
         cohorts.append(cohort)
@@ -2530,6 +2636,7 @@ def build_applied_policy(
                 symbol=winner["symbol"],
             )
             scope_payload["dynamic_confirmation"] = {
+                "feature_version": FEATURE_VERSION,
                 "mode": DYNAMIC_MODE,
                 "policy_id": confirmation_policy.policy_id,
                 "policy": confirmation_policy.as_dict(),
@@ -2682,6 +2789,7 @@ def render_markdown(report: dict[str, Any], applied: dict[str, Any]) -> str:
             "- Policy publication: "
             f"`{(report.get('policy_publication') or {}).get('status', 'not_evaluated')}`.",
             f"- Candidate scope count: `{len(applied['scopes'])}`.",
+            "- Four-arm study: see cohorts[].feature_ablation_study for same-population cost comparisons and chronological holdout; research does not select a runtime policy.",
             "",
         ]
     )
@@ -2703,10 +2811,23 @@ def write_outputs(
     applied_path = policy_path(
         date.fromisoformat(applied["target_date"]), policy_dir=policy_dir
     )
+    source_hash = canonical_sha256(report)
+    if publish_policy and applied.get("source_report_canonical_sha256") != source_hash:
+        raise ValueError("entry_timing_publication_source_hash_mismatch")
     _atomic_write_json(report_path, report)
     _atomic_write_text(markdown_path, render_markdown(report, applied))
     if publish_policy:
-        _atomic_write_json(applied_path, applied)
+        evidence_path = policy_dir / "evidence" / f"{source_hash}.json"
+        # Publish evidence first; a later report refresh cannot silently change
+        # the generation consumed by an already-issued exact-date policy.
+        _atomic_write_json(evidence_path, report)
+        _atomic_write_json(
+            applied_path,
+            {
+                **applied,
+                "source_evidence_snapshot": str(evidence_path.resolve()),
+            },
+        )
         return report_path, markdown_path, applied_path
     return report_path, markdown_path, None
 

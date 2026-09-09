@@ -18,6 +18,7 @@ from src.engine.automation.machine_entry_timing_tuning import (
     write_outputs,
 )
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.trading.market.confirmation_window import FEATURE_VERSION
 from src.trading.market.micro_confirmation import (
     SAMSUNG_RISE_REBOUND_POLICY,
     build_dynamic_micro_confirmation_checkpoints,
@@ -124,7 +125,7 @@ def _entry_row(source_date: date, index: int) -> dict:
             "context": {"sequence_epoch": 7},
             "horizons": [
                 {
-                    "horizon_ms": 900,
+                    "horizon_ms": 1000,
                     "eligible_for_feature_ablation": True,
                     "aggressive_buy_trade_backed_ratio": 0.2,
                     "refill_ratio": 0.1,
@@ -151,6 +152,7 @@ def _entry_row(source_date: date, index: int) -> dict:
         "checkpoint_reports": {
             str(checkpoint): {
                 "schema": "scalp_micro_reversion_ask_depletion_v2",
+                "feature_version": FEATURE_VERSION,
                 "context": {
                     "symbol": row["symbol"],
                     "venue": "KRX",
@@ -158,7 +160,8 @@ def _entry_row(source_date: date, index: int) -> dict:
                     "sequence_epoch": 7,
                     "anchor_event_local_receive_timestamp_ms": int(
                         (
-                            anchor_at + timedelta(seconds=checkpoint, milliseconds=-900)
+                            anchor_at
+                            + timedelta(seconds=checkpoint, milliseconds=-1000)
                         ).timestamp()
                         * 1_000
                     ),
@@ -174,9 +177,9 @@ def _entry_row(source_date: date, index: int) -> dict:
                         anchor_at + timedelta(seconds=checkpoint)
                     ).isoformat(),
                     "window_started_at": (
-                        anchor_at + timedelta(seconds=checkpoint, milliseconds=-900)
+                        anchor_at + timedelta(seconds=checkpoint, milliseconds=-1000)
                     ).isoformat(),
-                    "window_horizon_ms": 900,
+                    "window_horizon_ms": 1000,
                     "binding_policy": (
                         "past_only_0b_0d_window_ending_at_exact_checkpoint"
                     ),
@@ -184,7 +187,7 @@ def _entry_row(source_date: date, index: int) -> dict:
                 },
                 "horizons": [
                     {
-                        "horizon_ms": 900,
+                        "horizon_ms": 1000,
                         "eligible_for_feature_ablation": True,
                         "aggressive_buy_trade_backed_ratio": (
                             0.2 if checkpoint == 0 else 0.8
@@ -210,6 +213,28 @@ def _entry_row(source_date: date, index: int) -> dict:
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    for checkpoint in (0, 1, 3, 5):
+        point = (
+            row["entry_confirmation_bbo_anchor"]
+            if checkpoint == 0
+            else row["entry_confirmation_bbo_horizons"][str(checkpoint)]
+        )
+        cutoff_ms = int((anchor_at + timedelta(seconds=checkpoint)).timestamp() * 1000)
+        feature = row["entry_confirmation_checkpoint_ask_depletion"][
+            "checkpoint_reports"
+        ][str(checkpoint)]["horizons"][0]
+        feature.update(
+            feature_version=FEATURE_VERSION,
+            checkpoint_at_ms=cutoff_ms,
+            best_ask_depletion_velocity_qty_per_sec=80.0,
+            endpoint_depth={
+                "bid": point["best_bid"],
+                "ask": point["best_ask"],
+                "quantity": 100,
+                "epoch": 7,
+                "at_ms": cutoff_ms - 50,
+            },
+        )
     checkpoints = {
         checkpoint: {
             "checkpoint_sec": checkpoint,
@@ -343,6 +368,9 @@ def _samsung_rising_entry_row(source_date: date, index: int) -> dict:
     row = _entry_row(source_date, index)
     row["scope_id"] = row["entry_timing_scope_id"] = "midday"
     row["entry_confirmation_bbo_anchor"]["best_bid"] = 98.9
+    row["entry_confirmation_checkpoint_ask_depletion"]["checkpoint_reports"]["0"][
+        "horizons"
+    ][0]["endpoint_depth"]["bid"] = 98.9
     row["entry_confirmation_bbo_anchor"]["spread_bps"] = (100 / 98.9 - 1) * 10_000
     checkpoints = build_dynamic_micro_confirmation_checkpoints(
         anchor_bbo=row["entry_confirmation_bbo_anchor"],
@@ -1693,8 +1721,11 @@ def test_cohort_sample_projection_uses_all_source_days_since_first_seen(
     assert assessment["shortage_class"] == "time_resolvable_shortage"
     assert assessment["source_report_day_count_since_scope_first_seen"] == 5
     assert assessment["completed_outcomes_per_source_day"] == 0.4
-    assert assessment["remaining_completed_outcome_count"] == 18
-    assert assessment["projected_additional_trading_days_at_observed_yield"] == 45
+    assert assessment["remaining_completed_outcome_count"] == 6
+    assert assessment["projected_additional_trading_days_at_observed_yield"] == 15
+    fixed = report["cohorts"][0]["fixed_delay_sample_floor_assessment"]
+    assert fixed["remaining_completed_outcome_count"] == 18
+    assert fixed["projected_additional_trading_days_at_observed_yield"] == 45
 
 
 def test_worse_delayed_ask_is_included_as_negative_paired_uplift() -> None:

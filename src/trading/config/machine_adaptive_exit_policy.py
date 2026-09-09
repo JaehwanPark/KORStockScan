@@ -26,6 +26,36 @@ AUTHORITY = {
 }
 
 
+def parse_exit_policy(payload: Mapping[str, Any]):
+    """Strict parser shared by research and policy loading; hash is content-bound."""
+    from src.trading.order.adaptive_exit.models import ExitPolicy, TrailPolicy
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("exit_policy_not_mapping")
+    raw = dict(payload)
+    expected = canonical_sha256({k: v for k, v in raw.items() if k != "policy_hash"})
+    if raw.get("policy_hash") != expected:
+        raise ValueError("exit_policy_content_hash_mismatch")
+    try:
+        if isinstance(raw.get("runner_lot_ids"), list):
+            raw["runner_lot_ids"] = tuple(raw["runner_lot_ids"])
+        if raw.get("trail") is not None:
+            raw["trail"] = TrailPolicy(**raw["trail"])
+        return ExitPolicy(**raw)
+    except (TypeError, KeyError) as exc:
+        raise ValueError("exit_policy_schema_invalid") from exc
+
+
+def make_policy_payload(*, scope_key: str, parameters: Mapping[str, Any]) -> dict:
+    """Emit all frozen grid points; never optimize risk bounds from outcomes."""
+    if "policy_hash" in parameters or "scope_key" in parameters:
+        raise ValueError("grid_cannot_override_scope_or_hash")
+    raw = dict(parameters) | {"scope_key": scope_key}
+    raw["policy_hash"] = canonical_sha256(raw)
+    parse_exit_policy(raw)
+    return raw
+
+
 def canonical_sha256(payload: Mapping[str, Any]) -> str:
     """Hash the child only; the containing report's byte hash is external."""
     return hashlib.sha256(
