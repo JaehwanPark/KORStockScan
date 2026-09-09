@@ -2012,6 +2012,18 @@ def _build_next_stage2_checklist_locked(
     if existing:
         auto_block = _merge_preserved_auto_tasks(existing, auto_block)
 
+    from src.engine.automation.postclose_recommendation_intake import (
+        EFFECTIVE_DATE,
+        build_intake,
+        markdown_section,
+    )
+
+    if source_date >= EFFECTIVE_DATE:
+        intake = build_intake(EV_REPORT_DIR.parent, source_date)
+        auto_block = auto_block.replace(
+            AUTO_START, AUTO_START + "\n" + markdown_section(intake), 1
+        )
+
     auto_block = auto_block.replace(
         AUTO_START, AUTO_START + "\n" + checklist_marker(handoff_receipt), 1
     )

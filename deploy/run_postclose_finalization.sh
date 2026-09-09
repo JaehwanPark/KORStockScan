@@ -10,12 +10,13 @@ POLL_SEC="${POSTCLOSE_FINALIZATION_POLL_SEC:-30}"
 HARD_DEADLINE_KST="${POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-23:20}"
 CLEANUP_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600}"
 DETECTOR_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600}"
+SUMMARY_TIMEOUT_SEC="${POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600}"
 ALLOW_NONCURRENT_TARGET="${POSTCLOSE_FINALIZATION_ALLOW_NONCURRENT_TARGET:-false}"
 OWNED_LOG_RUNNER="${POSTCLOSE_FINALIZATION_OWNED_LOG_RUNNER:-$SCRIPT_DIR/run_with_owned_log.sh}"
 CLEANUP_RUNNER="${POSTCLOSE_FINALIZATION_CLEANUP_RUNNER:-$SCRIPT_DIR/run_logs_rotation_cleanup_cron.sh}"
 ERROR_DETECTION_RUNNER="${POSTCLOSE_FINALIZATION_ERROR_DETECTION_RUNNER:-$SCRIPT_DIR/run_error_detection.sh}"
 
-if [[ ! "$WAIT_TIMEOUT_SEC" =~ ^[0-9]+$ || ! "$POLL_SEC" =~ ^[1-9][0-9]*$ || ! "$CLEANUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$DETECTOR_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$HARD_DEADLINE_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+if [[ ! "$WAIT_TIMEOUT_SEC" =~ ^[0-9]+$ || ! "$POLL_SEC" =~ ^[1-9][0-9]*$ || ! "$CLEANUP_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$DETECTOR_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$SUMMARY_TIMEOUT_SEC" =~ ^[1-9][0-9]*$ || ! "$HARD_DEADLINE_KST" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=invalid_wait_config"
   exit 2
 fi
@@ -141,9 +142,13 @@ checks["dashboard_log"] = latest_marker(
     project / "logs/dashboard_db_archive_cron.log", "dashboard_db_archive"
 )
 
+if target_date >= "2026-09-09":
+    from src.engine.automation.postclose_summary_handoff import installed_producer_terminal_states
+    checks.update(installed_producer_terminal_states(target_date, report_dir=project / "data/report"))
+
 failed = sorted(key for key, value in checks.items() if value.startswith("fail"))
 waiting = sorted(
-    key for key, value in checks.items() if value != "done" and key not in failed
+    key for key, value in checks.items() if value not in {"done", "done_off_masked"} and key not in failed
 )
 detail = ",".join(f"{key}:{checks[key]}" for key in sorted(checks))
 if failed:
@@ -205,6 +210,21 @@ while true; do
   sleep "$POLL_SEC"
   waited=$((waited + POLL_SEC))
 done
+
+if [[ "$TARGET_DATE" > "2026-09-08" ]]; then
+  # Independent 20:10/21:15 producers may finish after main's original DONE.
+  # Reuse the controller with an explicit summary-only action allowlist. No EV,
+  # provider, workorder producer, live apply, or whole-wrapper recovery here.
+  if ! timeout --kill-after=10s "${SUMMARY_TIMEOUT_SEC}s" env PYTHONPATH=. \
+    POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED=false "$VENV_PY" \
+    -m src.engine.automation.postclose_done_controller --date "$TARGET_DATE" \
+    --summary-handoff-only --max-attempts 2 --predecessor-timeout-sec 0; then
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=summary_handoff_refresh_failed"
+    run_final_detector || true
+    exit 1
+  fi
+  echo "[INFO] postclose_finalization summary_handoff_verified target_date=${TARGET_DATE}"
+fi
 
 if ! timeout --foreground "${CLEANUP_TIMEOUT_SEC}s" bash "$OWNED_LOG_RUNNER" \
   --owner log_rotation_cleanup_cron \

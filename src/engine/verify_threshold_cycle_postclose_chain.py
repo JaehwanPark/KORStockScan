@@ -95,7 +95,7 @@ def _workorder_source_fingerprint_issues(
     if not isinstance(entries, list):
         return (
             ["code_improvement_workorder_source_fingerprint_missing"]
-            if workorder.get("schema_version") == 1
+            if workorder.get("schema_version") in (1, 2)
             else []
         )
     issues: list[str] = []
@@ -126,7 +126,9 @@ def _workorder_source_fingerprint_issues(
                 f"code_improvement_workorder_source_fingerprint_unreadable:{label}"
             )
             continue
-        if int(entry.get("size_bytes") or -1) != len(payload):
+        if type(entry.get("size_bytes")) is not int or entry["size_bytes"] != len(
+            payload
+        ):
             issues.append(
                 f"code_improvement_workorder_source_fingerprint_size_mismatch:{label}"
             )
@@ -5894,6 +5896,8 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
 def _code_improvement_workorder_contract_status(
     workorder: dict[str, Any], *, target_date: str
 ) -> dict[str, Any]:
+    from src.engine.automation.postclose_workorder_contract import contract_issues
+
     summary = (
         workorder.get("summary") if isinstance(workorder.get("summary"), dict) else {}
     )
@@ -5949,7 +5953,10 @@ def _code_improvement_workorder_contract_status(
             and contract.get("implementation_only_closure_allowed") is False
         ):
             missing_contract_order_ids.append(str(order.get("order_id") or ""))
-    issues: list[str] = []
+    issues = [
+        f"code_improvement_workorder_{issue}"
+        for issue in contract_issues(workorder, target_date)
+    ]
     if duplicate_warnings:
         issues.append("code_improvement_workorder_duplicate_order_warning_present")
     if duplicate_order_ids:
