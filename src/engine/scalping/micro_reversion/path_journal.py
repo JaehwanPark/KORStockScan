@@ -530,7 +530,7 @@ class PathStoragePolicy:
     max_open_segments: int = 2_000
     max_partition_shards: int = 8
     max_partition_total_bytes: int = 4 * 1024 * 1024 * 1024
-    max_projected_partition_bytes: int = 2 * 1024 * 1024 * 1024
+    max_projected_partition_bytes: int = 4 * 1024 * 1024 * 1024
     projection_horizon_sec: int = 6 * 60 * 60 + 30 * 60
     projection_min_elapsed_sec: int = 5 * 60
 
@@ -551,6 +551,10 @@ class PathStoragePolicy:
             raise ValueError("partition total bytes must cover at least one shard")
         if self.max_projected_partition_bytes <= 0:
             raise ValueError("projected partition byte limit must be positive")
+        if self.max_projected_partition_bytes > self.max_partition_total_bytes:
+            raise ValueError(
+                "projected partition byte limit must not exceed partition total bytes"
+            )
         if self.projection_horizon_sec <= 0 or self.projection_min_elapsed_sec <= 0:
             raise ValueError("projection timing must be positive")
 

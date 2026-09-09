@@ -499,6 +499,43 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
     }
     for field, path in evidence_files.items():
         expected = baseline[field]
+        if field == "path_journal_sha256":
+            # The callback baseline remains frozen.  The 2026-09-09 EBS-backed
+            # compatibility change only raises PathStoragePolicy's projection
+            # stop from 2 GiB to its existing 4 GiB hard partition bound.  Pin
+            # both the reviewed replacement and the rest of the module so a
+            # callback/writer-path edit still invalidates this guard.
+            assert expected == (
+                "60c47a9d69586d32c26483d92265a90acce24f430278c7e1632f8189d360dc01"
+            )
+            expected = (
+                "48c9e60e7108d7da84cb57af26ff80cd35ce759e4dbfa558411867168a2c98b2"
+            )
+            tree = ast.parse(path.read_bytes())
+            policy_class = next(
+                node
+                for node in tree.body
+                if isinstance(node, ast.ClassDef)
+                and node.name == "PathStoragePolicy"
+            )
+            assert hashlib.sha256(
+                ast.dump(policy_class, include_attributes=False).encode()
+            ).hexdigest() == (
+                "2d228fde3f32cacbbf38c8a89c73d4b457a95622b6bfbce3364885d8a30dc00d"
+            )
+            tree.body = [
+                node
+                for node in tree.body
+                if not (
+                    isinstance(node, ast.ClassDef)
+                    and node.name == "PathStoragePolicy"
+                )
+            ]
+            assert hashlib.sha256(
+                ast.dump(tree, include_attributes=False).encode()
+            ).hexdigest() == (
+                "1613c7672802d68fbbe2d07069f83ff88d8b8c96436d66cc5fb7a8d7ca09a929"
+            )
         if field == "storage_maintenance_sha256":
             # Explicit post-measurement compatibility, not a new benchmark.
             # See 2026-09-08-intraday-due-work-execution.md. Only the offline

@@ -506,6 +506,21 @@ def test_writer_projection_guard_stops_unsustainable_daily_rate(
     assert metrics.journal_projected_partition_bytes > 1
 
 
+def test_default_projection_limit_matches_bounded_partition_total() -> None:
+    policy = PathStoragePolicy()
+
+    assert policy.max_projected_partition_bytes == 4 * 1024 * 1024 * 1024
+    assert policy.max_projected_partition_bytes == policy.max_partition_total_bytes
+
+
+def test_projection_limit_cannot_exceed_bounded_partition_total() -> None:
+    with pytest.raises(ValueError, match="must not exceed partition total bytes"):
+        PathStoragePolicy(
+            max_partition_total_bytes=4 * 1024 * 1024 * 1024,
+            max_projected_partition_bytes=4 * 1024 * 1024 * 1024 + 1,
+        )
+
+
 def test_canonical_stream_retains_sequence_when_exchange_clock_regresses(
     tmp_path: Path,
 ) -> None:
