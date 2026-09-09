@@ -1927,7 +1927,9 @@ def _cohort_sample_floor_assessment(
     }
 
 
-def _immutable_owner_timestamp_exclusion(row: dict[str, Any], target_date: date) -> bool:
+def _immutable_owner_timestamp_exclusion(
+    row: dict[str, Any], target_date: date
+) -> bool:
     exclusion = row.get("owner_terminal_timestamp_exclusion")
     if not isinstance(exclusion, dict):
         return False
