@@ -21,6 +21,7 @@ from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 from src.database.db_manager import is_swing_real_watching_enabled
 from src.engine.bd_fbuy_accum_pre_scanner import write_ws_snapshot
 from src.engine.monitoring.market_halt_windows import append_market_session_event
+from src.engine.monitoring.ws_receive_expectation import classify_receive_gap
 from src.engine.sniper_time import (
     describe_scalping_buy_windows,
     is_scalping_prewarm_time_allowed,
@@ -1613,6 +1614,10 @@ class KiwoomWSManager:
                         "broker_order_forbidden": True,
                     }
                 )
+        rows = [
+            classify_receive_gap(row, datetime.fromtimestamp(now_value, tz=KST))
+            for row in rows
+        ]
         return {
             "generated_at_ts": now_value,
             "stale_after_sec": stale_after_sec,

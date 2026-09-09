@@ -3228,6 +3228,26 @@ def test_ws_item_effective_venue_does_not_invent_integrated_underlying_venue():
     assert KiwoomWSManager._ws_item_effective_venue("005930_AL") == ""
 
 
+def test_subscription_snapshot_opening_gap_is_not_a_no_tick_repair():
+    from datetime import datetime
+
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("005930")
+    manager._registered_items_by_code["005930"] = ("005930_NX",)
+    manager._required_realtime_types_by_code["005930"] = ("0B", "0D")
+    gap = datetime.fromisoformat("2026-09-10T08:55:00+09:00").timestamp()
+    row = manager.get_subscription_freshness_snapshot(["005930"], now_ts=gap)["rows"][0]
+    assert row["freshness_state"] == "expected_market_quiet"
+    assert row["observed_freshness_state"] == "no_tick"
+    assert row["repair_recommended"] is False
+    assert row["required_realtime_received"] is False
+    assert row["required_realtime_missing_types"] == ["0B", "0D"]
+    opened = datetime.fromisoformat("2026-09-10T09:00:30+09:00").timestamp()
+    row = manager.get_subscription_freshness_snapshot(["005930"], now_ts=opened)["rows"][0]
+    assert row["freshness_state"] == "no_tick"
+    assert row["repair_recommended"] is True
+
+
 def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(
     monkeypatch,
 ):

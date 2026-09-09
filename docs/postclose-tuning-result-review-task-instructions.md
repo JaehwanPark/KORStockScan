@@ -228,6 +228,8 @@ jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_
 
 단순 elapsed time만으로 hang을 선언하지 않는다. 다음을 함께 확인한다.
 
+WS 무수신은 [장중 §4.2.1](intraday-monitoring-task-instructions.md#421-동시호가nxt-휴장-구간의-수신-기대)을 먼저 적용한다. 정상 평일08:50~09:00(확인된 NXT-only09:00:30까지)은 event/원 snapshot 시각·route 기준 `expected_market_quiet`이며 연속매매 무수신만으로 장애/recovery workorder를 만들지 않는다. 장후 현재 시각으로 과거 quiet를 stale로 바꾸지 않고, 개장 후 실제 결손·LOGIN/REG/연결/저장 실패·원천 제외·주문 freshness guard는 유지한다.
+
 - latest stage marker와 최근 log mtime
 - output artifact 또는 checkpoint의 size/mtime 증가
 - PID/child PID, process state, CPU·memory·I/O 변화

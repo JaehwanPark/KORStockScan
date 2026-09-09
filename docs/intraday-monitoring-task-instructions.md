@@ -353,6 +353,18 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 - clean baseline 이전 데이터가 rolling/EV/runtime 판정에 혼입되지 않았는지
 - runbook/설치 cron·systemd/tmux registry가 선언한 expected process별 MainPID/cgroup/lock/heartbeat, 최근 progress marker, output과 실제 consumer
 
+### 4.2.1 동시호가·NXT 휴장 구간의 수신 기대
+
+정상 평일 **08:50~09:00 KST**의 연속매매 0B/0D 무수신·age 증가는 단독으로 subscription 장애가 아니다. NXT-only는 메인마켓 시작 **09:00:30**까지 같은 구분을 적용한다. KRX/SOR 또는 KRX가 섞인 등록은09:00에 이 예외가 끝나며, 알 수 없는 route/시각은 임의 면제하지 않는다. 예상체결·호가·연결 제어 패킷까지 반드시 중단된다는 뜻은 아니다.
+
+- 이 구간의08:50~08:55 PREOPEN·08:55~09:00 scout 체크리스트는 **전일 source→당일 정책/hash→PID 연결** 확인이다. 현재 체결수·수신속도·시장 포착률을 요구하거나 체결 무수신만으로 FAIL/재기동/REMOVE→REG를 지시하지 않는다.
+- `ws_opening_receive_expectation_v1`은 `expected_market_quiet`와 원래 age/관찰 상태·resume 시각을 별도 기록한다. WS freshness 진단 및 #89 report의 absence-only subscription/quiet workorder 분모에서 분리하며 실제 freshness·first-receipt 성공을 만들지 않는다. 수신 기반 dashboard는08:49:30 이후 생성된 same-date/확인된 route 파일만 해당 구간 동안 과거 진단 자료로 사용할 수 있고 `current_freshness_usable=false`다. 더 오래된/잘못된 schema/다른 날짜 파일은 계속 결손이다.
+- LOGIN/연결/REG ACK 오류, 실제 미등록·route 불일치, queue/drop·writer/disk/parser 실패는 정상 휴지로 덮지 않는다. 진입·주문 stale/price/broker guard도 그대로이며 과거 호가를 실행 가능한 fresh 자료로 승격하지 않는다. 정상 휴지 여부와 별개로 실제 signal에 필요한 입력창이 없으면 timing/경제성 제외는 유지한다.
+- 08:50 이전부터 이미 stale했던 원천은 휴지 예외로 덮지 않는다. quiet-only 창의 수신 결손 진단률은 null/평가 분모0이지 정상0% 수신 성공이 아니며 혼합 창에서도 quiet를 장애율 분모에서 분리한다.
+- 재평가 시 새 명시적 오류·복구 지시는 과거 quiet의 보존 필드보다 우선한다. dashboard 투영도 오류 필드를 보존하고, 잘못된 age는 `receive_age_contract_invalid`로 유지하여 정상 무수신으로 바꾸지 않는다. 등록 route가 없는 fallback은 제시된 route들을 함께 확인하므로 관측 NXT와 KRX/SOR 정보가 섞이면09:00 이후 면제하지 않는다. 개장 후 저장된 no_tick marker도 복구 권고 집계로 복원한다.
+- KRX09:00·NXT-only09:00:30 이후에는 현재 as-of로 예외를 다시 계산하고 기존 freshness/수집 SLA로 재개 여부를 확인한다.09:05~09:20에는 실제 입력→판단→제출 귀속을 대사한다. 영속된 quiet marker나 장후 실행 시각으로 과거 event의 판정을 바꾸지 않는다.
+- [9/10 구현 리뷰](audit-reports/2026-09-10-ws-opening-auction-quiet-review.md)는 코드 검증 기록이다. 기존 short-lived #89 producer는 다음 실행에서 새 코드를 읽지만 실행 중 WS PID의 reload/재기동은 별도 승인·receipt가 필요하다. 이 계약은 자동 재기동 승인이 아니다.
+
 ## 5. 당일 runtime 판정
 
 당일 runtime과 policy는 이름이나 로그 존재만으로 정상 판정하지 않는다. 실제 owner·stage·eligible 표본에 연결해 다음 상태로 분류한다.

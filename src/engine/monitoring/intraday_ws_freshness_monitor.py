@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.ws_receive_expectation import (
+    classify_receive_gap,
+    receive_expectation,
+)
 from src.engine.monitoring.ws_freshness_acceptance import (
     BOUNDED_REJECTIONS,
     SOURCE_QUALITY_REJECTIONS,
@@ -59,7 +63,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v16"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v18"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
@@ -3993,6 +3997,11 @@ def _rate_pct(count: int, total: int) -> float:
     return round((float(count) / float(total) * 100.0), 4) if total else 0.0
 
 
+def _receive_gap_rate(count: int, total: int, quiet: int) -> float | None:
+    # A quiet-only window is not a measured zero-fault continuous session.
+    return None if quiet and total == quiet else _rate_pct(count, total - quiet)
+
+
 def _counter_rows(
     counter: Counter, *, limit: int = 20, key_name: str = "key"
 ) -> list[dict[str, Any]]:
@@ -4059,8 +4068,26 @@ def _resolve_snapshot(
         return selected_path, {}, provenance
     snapshot_age_sec = (as_of - generated_at).total_seconds()
     provenance["snapshot_age_sec"] = snapshot_age_sec
+    # The dashboard is written on incoming REAL packets. A bounded opening
+    # pause can leave the last pre-pause file unchanged without a writer fault.
+    # Keep it diagnostic-only; never call its old quotes currently fresh.
+    opening_gap_snapshot = False
+    if not historical and snapshot_age_sec > DEFAULT_STALE_SEC:
+        diagnostic_rows = _snapshot_rows(payload, stale_ms=DEFAULT_STALE_SEC * 1000)
+        opening_gap_snapshot = bool(
+            diagnostic_rows
+            and generated_at
+            >= as_of.replace(hour=8, minute=50, second=0, microsecond=0)
+            - timedelta(seconds=DEFAULT_STALE_SEC)
+            and all(
+                receive_expectation(row, as_of)["scheduled_quiet"]
+                for row in diagnostic_rows
+            )
+        )
     if snapshot_age_sec < 0 or (
-        not historical and snapshot_age_sec > DEFAULT_STALE_SEC
+        not historical
+        and snapshot_age_sec > DEFAULT_STALE_SEC
+        and not opening_gap_snapshot
     ):
         provenance["selection_reason"] = (
             "snapshot_future_dated" if snapshot_age_sec < 0 else "snapshot_stale"
@@ -4070,8 +4097,12 @@ def _resolve_snapshot(
         provenance.update(
             {
                 "selected": True,
-                "current_freshness_usable": not historical,
-                "selection_reason": "explicit_path",
+                "current_freshness_usable": not historical and not opening_gap_snapshot,
+                "selection_reason": (
+                    "scheduled_opening_gap_snapshot"
+                    if opening_gap_snapshot
+                    else "explicit_path"
+                ),
                 "subscription_state_available": bool(
                     isinstance(payload.get("rows"), list)
                     or isinstance(payload.get("symbols"), list)
@@ -4086,12 +4117,23 @@ def _resolve_snapshot(
         {
             "source": "same_day_live_dashboard_snapshot_fallback",
             "selected": True,
-            "current_freshness_usable": not historical,
-            "selection_reason": "same_day_schema_match",
+            "current_freshness_usable": not historical and not opening_gap_snapshot,
+            "selection_reason": (
+                "scheduled_opening_gap_snapshot"
+                if opening_gap_snapshot
+                else "same_day_schema_match"
+            ),
             "subscription_state_available": False,
         }
     )
     return selected_path, payload, provenance
+
+
+def _invalid_receive_age(value: Any) -> bool:
+    if value is None:
+        return False
+    age = _to_float(value)
+    return isinstance(value, bool) or age is None or not math.isfinite(age) or age < 0
 
 
 def _dashboard_snapshot_rows(
@@ -4160,6 +4202,20 @@ def _dashboard_snapshot_rows(
                 ),
                 "last_trade_cum_volume": last_trade_cum_volume,
                 "trade_tick_quiet": trade_tick_quiet,
+                "receive_age_contract_invalid": bool(
+                    raw.get("receive_age_contract_invalid")
+                    or (
+                        raw.get("last_realtime_type_ages_ms") is not None
+                        and not isinstance(raw["last_realtime_type_ages_ms"], dict)
+                    )
+                    or any(
+                        _invalid_receive_age(value)
+                        for value in _dictish(
+                            raw.get("last_realtime_type_ages_ms")
+                        ).values()
+                    )
+                    or _invalid_receive_age(raw.get("last_0b_age_ms"))
+                ),
                 "repair_recommended": False,
                 "repair_reason": "dashboard_snapshot_subscription_state_unavailable",
                 "observed_market_route": str(
@@ -4168,6 +4224,30 @@ def _dashboard_snapshot_rows(
                 "observed_market_suffix": str(raw.get("last_ws_market_suffix") or ""),
                 "snapshot_row_authority": "live_dashboard_observation_only",
                 "subscription_state_available": False,
+                # Projection must not erase independent source failures or
+                # conflicting route evidence before receive-gap classification.
+                **{
+                    key: raw[key]
+                    for key in (
+                        "connected",
+                        "login_ok",
+                        "subscription_ack_ok",
+                        "storage_healthy",
+                        "connection_error",
+                        "subscription_error",
+                        "storage_error",
+                        "parse_error",
+                        "subscribed",
+                        "repair_reason",
+                        "repair_recommended",
+                        "recommended_repair",
+                        "required_realtime_missing_types",
+                        "market_data_market_route",
+                        "market_route",
+                        "venue",
+                    )
+                    if key in raw
+                },
             }
         )
     return rows
@@ -4186,6 +4266,17 @@ def _snapshot_rows(
         if not isinstance(raw, dict):
             continue
         row = dict(raw)
+        row["receive_age_contract_invalid"] = bool(
+            raw.get("receive_age_contract_invalid")
+            or any(
+                _invalid_receive_age(raw.get(field))
+                for field in (
+                    "last_receive_age_sec",
+                    "last_0b_age_sec",
+                    "last_0d_age_sec",
+                )
+            )
+        )
         for field in ("last_receive_age_sec", "last_0b_age_sec", "last_0d_age_sec"):
             age = _to_float(raw.get(field))
             row[field] = (
@@ -4294,6 +4385,40 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
     if not trade_tick_quiet and quiet_by_age:
         trade_tick_quiet = True
 
+    diagnostic_receive_age = row.get("last_receive_age_sec")
+    if diagnostic_receive_age is None and (age_0b is not None or age_0d is not None):
+        diagnostic_receive_age = (
+            min(age for age in (age_0b, age_0d) if age is not None) / 1000
+        )
+    receive_diagnostic = classify_receive_gap(
+        {
+            **row,
+            "last_receive_age_sec": diagnostic_receive_age,
+            "freshness_state": freshness_state
+            or ("stale" if both_stale else "fresh" if trade_tick_quiet else ""),
+            "trade_tick_quiet": trade_tick_quiet,
+        },
+        _event_time(row),
+    )
+    expected_market_quiet = receive_diagnostic["expected_market_quiet"]
+    if expected_market_quiet:
+        subscription_stale = False
+        trade_tick_quiet = False
+        both_stale = False
+        quiet_by_age = False
+    else:
+        # A saved quiet marker may have just expired. Count the restored
+        # no-tick/repair observation, including rows with no numeric ages.
+        subscription_stale = subscription_stale or bool(
+            _boolish(receive_diagnostic.get("repair_recommended"))
+            or receive_diagnostic.get("repair_reason")
+            in {"subscription_no_tick", "subscription_stale"}
+            or receive_diagnostic.get("freshness_state") in {"no_tick", "stale"}
+        )
+        trade_tick_quiet = trade_tick_quiet or bool(
+            receive_diagnostic.get("trade_tick_quiet")
+        )
+
     submit_related = "submit" in stage.lower() or "order_bundle" in stage.lower()
     scout_related = "scout" in stage.lower() or "rising_missed" in json.dumps(
         row, ensure_ascii=False
@@ -4351,6 +4476,8 @@ def _pipeline_event_class(row: dict[str, Any], *, stale_ms: float) -> dict[str, 
         "stock_code": str(row.get("stock_code") or ""),
         "stock_name": str(row.get("stock_name") or ""),
         "time_bucket": _time_bucket(row),
+        "expected_market_quiet": expected_market_quiet,
+        "receive_expectation": receive_diagnostic["receive_expectation"],
         "trade_tick_quiet": bool(trade_tick_quiet),
         "subscription_stale": bool(subscription_stale),
         "decision_stage_stale_backoff": decision_stage_stale_backoff,
@@ -4434,16 +4561,25 @@ def _snapshot_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 subscription_stale_like_rows.append(row)
     total = len(rows)
     stale_like = len(subscription_stale_like_rows)
+    expected_quiet = sum(row.get("expected_market_quiet") is True for row in rows)
     return {
         "row_count": total,
+        "expected_market_quiet_count": expected_quiet,
+        "receive_gap_evaluable_row_count": total - expected_quiet,
         "freshness_state_counts": dict(states),
         "repair_reason_counts": dict(repair_reasons),
         "subscription_stale_like_count": stale_like,
-        "subscription_stale_like_rate_pct": _rate_pct(stale_like, total),
+        "subscription_stale_like_rate_pct": _receive_gap_rate(
+            stale_like, total, expected_quiet
+        ),
         "observed_stale_like_count": len(observed_stale_like_rows),
-        "observed_stale_like_rate_pct": _rate_pct(len(observed_stale_like_rows), total),
+        "observed_stale_like_rate_pct": _receive_gap_rate(
+            len(observed_stale_like_rows), total, expected_quiet
+        ),
         "trade_tick_quiet_count": len(quiet_rows),
-        "trade_tick_quiet_rate_pct": _rate_pct(len(quiet_rows), total),
+        "trade_tick_quiet_rate_pct": _receive_gap_rate(
+            len(quiet_rows), total, expected_quiet
+        ),
         "trade_tick_quiet_cumulative_volume_provenance_counts": dict(
             quiet_cumulative_volume_provenance
         ),
@@ -5065,6 +5201,7 @@ def build_report(
     history_report_dir: Path | None = None,
 ) -> dict[str, Any]:
     target_date = target_date or date.today().isoformat()
+    generated_at = generated_at or datetime.now(KST).isoformat()
     stale_ms = float(stale_sec) * 1000.0
     paths = _source_paths(target_date)
     if pipeline_path is not None:
@@ -5153,6 +5290,7 @@ def build_report(
             for key in (
                 "trade_tick_quiet",
                 "subscription_stale",
+                "expected_market_quiet",
                 "decision_stage_stale_backoff",
                 "both_ws_stale",
                 "fresh_0d_stale_0b",
@@ -5169,6 +5307,7 @@ def build_report(
             for key in (
                 "trade_tick_quiet",
                 "subscription_stale",
+                "expected_market_quiet",
                 "decision_stage_stale_backoff",
                 "both_ws_stale",
                 "provider_none",
@@ -5287,6 +5426,12 @@ def build_report(
             else max(0.0, snapshot_provenance.get("snapshot_age_sec") or 0) * 1000
         ),
     )
+    snapshot_as_of = (
+        _snapshot_generated_at({"generated_at": snapshot_provenance["snapshot_as_of"]})
+        if finalize
+        else _snapshot_generated_at({"generated_at": generated_at})
+    )
+    snapshot_rows = [classify_receive_gap(row, snapshot_as_of) for row in snapshot_rows]
     if finalize:
         for row in snapshot_rows:
             row["freshness_state"] = (
@@ -5351,18 +5496,26 @@ def build_report(
         "row_count_by_source": dict(row_count_by_source),
         "pipeline_counts": dict(counts),
         "pipeline_event_count": total_events,
+        "receive_gap_evaluable_event_count": total_events
+        - int(counts.get("expected_market_quiet", 0)),
         "pipeline_rates": {
-            "trade_tick_quiet_rate_pct": _rate_pct(
-                int(counts.get("trade_tick_quiet", 0)), total_events
+            "trade_tick_quiet_rate_pct": _receive_gap_rate(
+                int(counts.get("trade_tick_quiet", 0)),
+                total_events,
+                int(counts.get("expected_market_quiet", 0)),
             ),
-            "subscription_stale_rate_pct": _rate_pct(
-                int(counts.get("subscription_stale", 0)), total_events
+            "subscription_stale_rate_pct": _receive_gap_rate(
+                int(counts.get("subscription_stale", 0)),
+                total_events,
+                int(counts.get("expected_market_quiet", 0)),
             ),
             "decision_stage_stale_backoff_rate_pct": _rate_pct(
                 int(counts.get("decision_stage_stale_backoff", 0)), total_events
             ),
-            "both_ws_stale_rate_pct": _rate_pct(
-                int(counts.get("both_ws_stale", 0)), total_events
+            "both_ws_stale_rate_pct": _receive_gap_rate(
+                int(counts.get("both_ws_stale", 0)),
+                total_events,
+                int(counts.get("expected_market_quiet", 0)),
             ),
             "provider_none_rate_pct": _rate_pct(
                 int(counts.get("provider_none", 0)), total_events

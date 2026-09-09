@@ -397,6 +397,8 @@ recheck·lookup-attention·AI 등 미완료 자연 acceptance는 [9/9 checklist]
 
 ### 6.1 이번 문서 현행화 검증
 
+9/10 동시호가 후속: [무수신 진단 보완](2026-09-10-ws-opening-auction-quiet-review.md)과 [장중 §4.2.1](../intraday-monitoring-task-instructions.md#421-동시호가nxt-휴장-구간의-수신-기대)에 따라08:50~09:00 PREOPEN/scout 확인은 정책·PID 연결이며 현재 체결 수신을 요구하지 않는다. 확인된 NXT-only는09:00:30까지 expected quiet, 이후 기존 SLA로 수신·소비를 확인한다. 이전/이후 실제 원천 결손과 연결/저장 실패는 그대로 추적하고 이번 수리를 현재 WS PID 반영으로 확대하지 않는다.
+
 9/9 18:30까지의 후속 기록을 반영한 장후 지시문·본 진행표 §6의 공동 최우선 갱신은 문서 모드로 재검증했다. 두 문서 local link/anchor119개·print-only parser36개, 현재9/9 OPEN20개와 지시문 연결 owner11개 각각1회, 신규 checkbox0·`git diff --check` PASS를 확인했다. 이 수치는 아래10:13 기준 검증의 후속이며 합산하지 않는다. 기존 코드 수리·18:26 위젯 배포·18:30 적응형 청산 부분 구현 receipt는 인용 근거이지 이번에 실행한 작업이 아니다. 문서 검토 범위 미해결 finding0이며 장후 실행·운영 산출물 재생성·PID/env/정책/주문 변경은 하지 않았다.
 
 `korstockscan-review-gate`의 문서 모드로 과거/현재 owner, 원천 날짜·후속 generation, 코드/배포/자연/경제성 경계와 링크를 검토했다. review index1~119 보존, local link/anchor87개, print-only parser35건(현재9/9 checklist OPEN19건; 직접 연결한 OPEN owner15개 각각1회), 신규 checkbox0 및 `git diff --check`를 확인했다. 최초 index 검사는 §6의 우선순위 숫자까지 셌으므로 §4의 실제119개 행만 검사하도록 바로잡아 재통과했다. 이는 문서 검증이며 무관한 dirty 코드의 전체 리뷰/테스트, 새 운영 모니터링·Provider/계좌 호출·재기동·산출물 재생성은 실행하지 않았다.
