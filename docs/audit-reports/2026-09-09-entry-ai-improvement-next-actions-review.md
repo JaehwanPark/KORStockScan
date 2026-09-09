@@ -4,7 +4,7 @@
 
 ## 판정
 
-**추가 보완 필요. 지금 우선할 작업은 sparse 원천 판정 정합성, 안전 보정 시 exact request 보존, 기존 micro 입력 보완의 실제 PID 소비 확인이다.** 비용 label과 versioned prompt 연구의 후속 연결도 필요하지만, 이들을 실주문 허가나 수익 실현으로 해석하지 않는다.
+**추가 보완 필요. 지금 우선할 작업은 sparse 원천 판정 정합성과 안전 보정 시 exact request 보존이다.** 기존 micro 입력 누락은 아래 P1-C의 후속 확인에서 다른 세션의 재기동 뒤 정상 경로 전달이 확인됐다. 같은 보완을 재구현·재기동하지 않는다. 비용 label과 versioned prompt 연구의 후속 연결도 필요하지만, 이들을 실주문 허가나 수익 실현으로 해석하지 않는다.
 
 목표는 단순 BUY 증가가 아니라 비용 후 작은 양수 기회의 반복 포착이다. 입력 결손 때문에 WAIT한 사례, 모델이 정상적으로 DROP한 사례, 후처리로 행동이 바뀐 사례, 이후 제출·체결에서 막힌 사례를 다른 분모로 평가해야 한다. 이번 점검에서는 기존 안전·수량·주문·신선도 guard를 완화하지 않았다.
 
@@ -32,13 +32,19 @@
 - 개선: 모델 응답과 로컬 transport/identity를 분리하고, 보정 후 원본 메타데이터를 신뢰된 로컬 경로에서 복원·보존한다. raw → repaired → runtime mapping을 구분하고 source-unusable은 원천/판단 불가 분류로 남긴다. 정상 INSUFFICIENT_DATA의 schema 수용과 경제성 입력 제외를 분리한다. 안전 WAIT와 probe 불허는 유지한다.
 - 완료: 실제 위 반례와 합성 테스트에서 original request/envelope/provider receipt 및 final hash가 일관되고, 하나의 요청이 두 독립 모델 판단으로 집계되지 않는다. #82는 원천 불가를 모델 false-WAIT/false-DROP 손실로 학습하지 않아야 한다.
 
-### P1-C: 기존 micro 보완 코드와 현재 실제 요청 사이의 적용 공백
+### P1-C: 이전 PID의 micro 적용 공백과 새 PID에서의 후속 확인
 
 - 고정 관찰창의 저장된 최종 요청에서 Entry `analyze_target` 70개, Holding 85개 모두 reaction 필드가 없었다. Entry 중 trace와 exact request ID가 연결된 51개는 모두 V2.13이다.
 - 추가로 12:18의 exact pipeline receipt에서 계산됨·전송 안 됨을 확인했다. Entry request `analyze_target:201490:1788923934112:0e436d68`, Holding request `holding_score:327260:1788923907806:caf06a64` 모두 `computed=True`, context `ok`, `payload_included=False`, `context_sent=False`, provider `response_received`였다. Holding의 내부 source-quality 소비와 모델 전달은 다르다.
 - 현 작업트리의 Entry hot/Holding canonical projection 코드는 존재하고 관련 단위 테스트는 통과한다. 두 소스 파일 mtime은 10:45:45로 현재 PID 시작보다 늦다. 오래된 로드 코드 가능성을 뒷받침하지만 mtime만으로 PID 메모리 버전을 확정하지 않는다. **현재 실전 전달이 닫히지 않았다는 사실은 최종 payload와 receipt로 확인했다.**
 - 개선: 기존 보완의 배포 commit/코드 hash와 다음 승인된 기동 receipt를 결속하고 실제 request JSON에서 동일 context ID/필드·provider receipt까지 확인한다. 이번 점검은 재기동 권한이 아니며 다른 세션의 기동 owner와 조정한다.
 - V2.14/V2.15는 별도 `deterministic_setup_ledger_only` provider 입력을 사용한다. replay context에 micro가 있다고 최종 모델도 읽었다고 판정하면 안 된다. 필요 시 기존 setup ledger 내 유효 micro fact 투영을 별도 version/hash 검토한다. 새 미래 outcome을 live 입력에 넣지 않는다.
+
+12:27 후속 확인: 다른 세션이 [정오 배포](./2026-09-09-midday-main-deployment-review.md)를 수행했다. 새 PID310359/12:20:56 시작을 직접 확인했으며, 이 세션이 재기동·커밋한 것이 아니다. 별도 세션의 전체 커밋에는 이 리뷰의 초기본도 포함됐다.
+
+- `12:20:56 <= timestamp < 12:26:00`의 새 최종 요청은 Entry5/5·Holding9/9에 reaction 필드가 있다. 정상 Entry4개와 Holding9개의 pipeline receipt에서 payload 포함·sent=true·response_received를 확인했다. Entry 예는 `analyze_target:043260:1788924253240:ac180ee6`, context `5d8cc37fa16e46648b8886cadf50b1f6`이다. 같은 요청의 여러 event는 독립 요청 수로 합산하지 않는다.
+- 따라서 일반 경로의 기존 projection 적용 공백은 해소 확인이다. 다만 새 Entry5개 중1개는 P1-B의 unusable 보정을 거쳐 다시 partial trace가 되고, payload 포함=true인데 sent=false/not_attempted로 기록됐다. 이는 새로운 micro 필드 누락이 아니라 기존 보정 시 transport metadata 소실의 추가 자연 반례다.
+- P1-C를 별도 재구현/재기동 작업으로 유지하지 않고 잔여 오류는 P1-B로 통합한다. 모델이 필드를 실제 판단에 활용했는지와 비용 후 효과는 별도 미검증이다.
 
 ## 2. 장후 체인·비용·prompt 연구의 현재 상태
 
@@ -72,14 +78,48 @@
 ## 3. 권고 실행 순서와 완료 기준
 
 1. **P1-A+B 구현·회귀 검증:** canonical sparse 판정 공유 → 보정 메타데이터 보존 → INSUFFICIENT_DATA schema/학습 제외 분리. 변경 전 위 19개 반례를 테스트로 고정한다. 새 strategy axis를 추가하지 않는다.
-2. **P1-C 배포 수용 확인:** 기존 micro projection 코드와 실제 PID/request의 차이를 닫는다. code review → 승인된 기동 owner → 실제 provider payload receipt 순서다. 단위 테스트 성공만으로 배포 완료 처리하지 않는다.
+2. **P1-C 중복 작업 제거:** 다른 세션의 새 PID에서 일반 micro 전달을 확인했으므로 재구현·재기동을 반복하지 않는다. 보정 경로의 sent 오분류는 P1-B에 통합하고, 정상 전달과 판단 활용·경제성 효과는 분리한다.
 3. **비용·prompt 연구 연결:** 기존 7개 사례의 exact net-label 생산 자격, #82 비용/원인 진단, #78 초안 → 등록 검토 → 기존 bounded offline 평가의 intended consumer를 결속한다. 모르는 비용·성과는 null로 둔다.
 4. **오늘 자연 handoff:** KRX/NXT 분리, accepted/excluded 이유·source hash, #82→#78→#80 및 기존 workorder/요약/strict verifier의 same-generation 전달을 검증한다. source-only 수리 완료, 배포, 자연 소비, 비용 후 경제성을 각각 보고한다. 장후 전체 재실행은 권고하지 않는다.
 
 기존 실행 owner는 당일 체크리스트의 `AIDecisionActionOutcomeNaturalEvidence0908`, native workorder 전달은 `MainAIQualitySourceGapArtifactContract0909`, 실제 제출 병목/경제성은 `EntryRecheckNaturalAttribution0907`이다. 이 문서의 P1 번호는 리뷰 위치이며 새 recommendation ID나 runtime 승인이 아니다.
 
-## 4. 검증과 경계
+## 4. 최초 읽기 전용 점검의 검증과 경계 (후속 구현 전 기록)
 
 - targeted pytest 36개 PASS(optimizer/consumer 전부 및 micro 전달 회귀), 별도 선택 5개 PASS 중 4개 중복: 고유 37개다.
 - 기존 테스트가 모두 통과해도 P1-A/B는 미수정이다. 특히 기존 unusable→WAIT 테스트에는 transport identity 보존 assertion이 없어 순수 함수 재현으로 누락을 확인했다. 코드 finding 0을 주장하지 않는다.
 - 수정 범위는 이 리뷰 문서와 기존 체크리스트 owner의 점검 연결이다. review-gate의 문서·owner·권한·parser 검증을 적용한다. 코드·정책·runtime artifact·Provider/broker 호출·재기동·커밋/푸시·외부 sync는 하지 않았다.
+- print-only parser 36 tasks / 기존 해당 owner 1개, 문서 상대 링크 결손0, `git diff --check` PASS. 진단 집계의 임시 Counter 오류는 tuple 변환으로 재실행하여 닫았으며 원천·코드 파일 변경은 없었다.
+
+## 5. 사용자 후속 구현 지시에 따른 보완 결과
+
+위 §1~4는 최초 진단 당시 기록이다. 후속 구현에서는 `korstockscan-review-gate`의 producer/consumer·원천 격리·권한·회귀 검증을 적용했다. 이번 작업은 전체 장후 재실행이나 현재 매매 PID 변경이 아니다.
+
+| 보완 | 구현과 최종 소비 계약 | 기대효과 / 한계 |
+| --- | --- | --- |
+| P1-A sparse 판정 | 기존 `entry_candle_context`에 관측 sparse predicate를 두고 실제 V2.13 분석과 exact control 검증이 공유한다. source=fresh, 명시적 Provider 허용, ka10080 관측행/무합성 provenance, blocker 없음이 필요하다. KRX만 일괄 제외하던 조건은 제거했다. | 고정 창의 실제 sparse 입력19/19가 새 코드에서 fresh_dual. 없는 lookback은 null이며 stale quote·불명확 결손은 계속 제외한다. BUY·submit·수익19건이 아니다. |
+| P1-B safe WAIT·identity | 전체 응답 안전 보정 후에도 원래 request/envelope/Provider receipt를 보존한다. INSUFFICIENT_DATA는 WAIT·up/down null·probe 비활성인 유효 응답으로 검증하되 경제성 control에서는 명시적으로 제외한다. | 원모델 DROP→안전 WAIT와 정상 모델 WAIT를 구분하고 partial trace/sent 오분류를 방지한다. 과거 aidt 행을 exact로 소급 변경하지 않는다. |
+| 비용 생산 자격 | 상세 CLI가 label 유무와 독립적으로 bridge를 읽는다. 전체 원천 commitment와 exact trace/종목/시장/세션/시각/payload/envelope를 검증한 후 기존 label-ready/current-ablation 판정 함수를 그대로 사용한다. | label 결손을 비용0·순수익0으로 해석하지 않는다. parent 중복제거 flag들을 새 결합 gate로 만들지 않는다. |
+| #82→#78→#80/#91 | 사례별 비용/null·기존 producer 자격/탈락 사유가 calibration과 초안에 남는다. #78이 native recommendation ID를 발급하고 #80과 #91은 동일 calibration/date/hash·초안 재구성·권한을 검증한다. #91 v7은 ID·원본 결정·초안 본문·반례·비용·source hash를 보존한다. | 초안이 보고서 안에만 머무르지 않고 기존 source-only 구현/review intake에 도달한다. 임의 새 버전 등록, Provider 호출, 실전 prompt 적용 권한은 생기지 않는다. |
+
+### 실제 비용 사례 7건 대사 (9/8 보존 원천, 메모리상 검증)
+
+24/24 요청을 저장된 exact payload와 기존 bridge self hash `c1f3a608064cc73ca34738dc0fccb713cef64dab8dbb421eaeeeda31b9de929b`에 결속했다. 작은 기회 execution-proxy 사례7건의 검증된 비용 label은 여전히0이며 다음의 원천 사유가 있다.
+
+| 요청 / 사례 | 기존 생산자 판정 |
+| --- | --- |
+| `010950:1788855416473:191757e0`, `010950:1788855432491:18a70c23` (각 `analyze_target:` prefix) | sidecar는 유효하지만 `bridge_primary_horizon_not_mature`. 요구된10초 창의 비용 경로가 없다. 두 사례 모두1초만 mature이며 이를10초 경제성으로 전용하지 않는다. |
+| `000720:1788860203884:815d576e`, `052690:1788861602227:80dd6417`, `052690:1788861606148:58d52e33`, `052690:1788862740885:e902eef5` | `not_applicable_no_shock_event`; 현재 micro timestamp 계약이 성립하지 않는다. 일반 base prompt 표본으로는 유지한다. |
+| `000720:1788860385029:c1f7933e` | `source_unavailable_no_sidecar`, current timestamp invalid. quantity/execution basis/liquidity/source-quality 결손도 함께 보존한다. |
+
+7건 모두 `producer_materializable=false`, 비용 후 수익/target-first는 null이다. 원천 없는 과거 결과를 반복 재생성하지 않고 기존 `MainAIMicroExactEconomicIntersectionRepair`와 현재 일일 자연 evidence owner로 전달한다. 실제 full/partial fill·terminal 순손익은 별도다.
+
+### 조건·자동화 최종 판정
+
+- 불합리한 조건으로 입증된 KRX sparse 일괄 제외는 제거했다. 반면 각 lookback, 정확한 시각/시장/세션, 요구 청산창의 비용 증거와 실주문 안전조건은 유지한다. 10초 자료가 없는데1초 결과로 대체하는 것은 허들 개선이 아니다.
+- 단일 사례의 source-only prompt 초안/리뷰 전달은 실체결·양수 EV·5일을 기다리지 않는다. 최근 유효5 source일/5 parent/3종목은 기존 등록 후보의 무참여 연구 교체 조건으로만 유지하며 live gate가 아니다. 현재1일의 NXT 표본만으로 이를 과도하다고 판정하거나 KRX에 전용하지 않는다.
+- 기존20:10 main과21:05 follower의 상세→#82→당일 선택 고정 #78→metadata rebind→#79/#80을 유지한다. #91은 새 optimizer를 source fingerprint에 포함하고 기존 요약/strict verifier·controller의 source-drift 복구 대상이 된다. 새 cron/Provider budget/매매 owner는 만들지 않았다.
+- 디스크의 코드 수정은 현재 장기 실행 PID 적용 증거가 아니다. 후속 Python 작업은 새 코드로 실행되지만, live adapter는 승인된 정상 기동과 원래 request ID·sent receipt의 자연 확인이 필요하다. 이 세션은 재기동·live env/lock/threshold 변경·Provider/broker 호출·canonical report 재생성·커밋/푸시를 하지 않았다.
+- 새 초안의 버전 등록과 실제 bounded 비교는 기존 source-only review workorder가 소유한다. 지원 KRX V2.14/V2.15 승격·PREOPEN/PID와 #81 legacy OFF는 그대로다. “초안 전달 자동화”를 “새 prompt 자동 실전 배포”로 보고하지 않는다.
+
+최종 검증: #80 exact 초안 소비/손상 격리, #91 실제 builder의 native ID·본문·비용 전달 및 원문 무변형/손상 원천의 repair 분기를 보완한 뒤 **13개 관련 모듈의 pytest 1,124개 PASS**. Python compile, `git diff --check`, print-only parser 36 tasks/기존 AI owner1개 PASS. 신규 문서 링크 결손0이며 전체 링크 검사에서 남은5개는 기존 체크리스트가 가리키는 오늘 장후 예정 artifact로 `not_yet_due`다. 이 수리 범위의 재리뷰에서 미해결 P0~P2 코드 finding0이다. Provider/broker 호출·실시간 적용·새 prompt 경제성 검증은 수행하지 않았다. 기존 사용자/다른 세션의 산출물·문서는 보존한다. 코드 종결, 배포, 자연 표본/소비와 비용 후 수익 acceptance를 혼동하지 않는다.

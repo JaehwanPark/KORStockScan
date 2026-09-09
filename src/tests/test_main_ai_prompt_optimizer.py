@@ -121,6 +121,204 @@ def test_research_window_does_not_require_orders_and_does_not_normalize_source_a
     assert calibration.entry_research_progress(rows)["offline_rotation_due"] is False
 
 
+def test_prompt_revision_native_id_cost_cases_and_workorder_handoff(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import main_ai_prompt_consumer as consumer
+    from src.engine import build_code_improvement_workorder as workorders
+
+    evidence = _zero_participation_evidence()
+    evidence["entry_research_progress"]["small_opportunity_cost_cases"] = [
+        {
+            "decision_trace_id": "parent-0",
+            "status": "source_unavailable",
+            "cost_adjusted_end_return_pct": None,
+        }
+    ]
+    cal = calibration._with_artifact_content_sha256(
+        {
+            "target_date": "2026-09-09",
+            "candidate_summaries": [evidence],
+            "schema": optimizer.ACTION_OUTCOME_CALIBRATION_SCHEMA,
+            **optimizer.SOURCE_ONLY_AUTHORITY,
+        }
+    )
+    drafts = optimizer._prompt_revision_proposals(
+        cal, effective_venue="KRX", session_bucket="KRX_REGULAR"
+    )
+    report = {
+        "schema": optimizer.SCHEMA,
+        "target_date": "2026-09-09",
+        **optimizer.SOURCE_ONLY_AUTHORITY,
+        "source_bindings": {
+            "action_outcome_calibration_artifact_content_sha256": cal[
+                "artifact_content_sha256"
+            ]
+        },
+        "stage_optimizers": {
+            "entry": {
+                "cohort_optimizers": [
+                    {
+                        "effective_venue": "KRX",
+                        "session_bucket": "KRX_REGULAR",
+                        "prompt_revision_proposals": drafts,
+                    }
+                ]
+            }
+        },
+    }
+    report["artifact_content_sha256"] = optimizer._canonical_sha256(report)
+    orders = consumer.prompt_revision_review_workorders(
+        report, "2026-09-09", calibration_report=cal
+    )
+    assert len(orders) == 1
+    assert orders[0]["order_id"] == "order_" + drafts[0]["recommendation_id"]
+    assert orders[0]["cost_evidence_by_case"][0]["cost_adjusted_end_return_pct"] is None
+    assert orders[0]["runtime_registry_mutation_allowed"] is False
+    assert orders[0]["provider_authority"] is False
+    assert orders[0]["source_calibration_sha256"] == cal["artifact_content_sha256"]
+    for changed in (
+        {**report, "target_date": "2026-09-08"},
+        {**report, "artifact_content_sha256": "0" * 64},
+    ):
+        blocked = consumer.prompt_revision_review_workorders(
+            changed, "2026-09-09", calibration_report=cal
+        )
+        assert blocked[0]["order_id"] == "order_entry_prompt_revision_source_contract"
+    assert (
+        consumer.prompt_revision_review_workorders(report, "2026-09-09")[0]["decision"]
+        == "code_patch_required"
+    )
+    for mutation in ("foreign_case", "malformed_bindings", "provider_authority"):
+        changed = json.loads(json.dumps(report))
+        if mutation == "malformed_bindings":
+            changed["source_bindings"] = ["invalid"]
+        elif mutation == "provider_authority":
+            changed["provider_authority"] = True
+        else:
+            draft = changed["stage_optimizers"]["entry"]["cohort_optimizers"][0][
+                "prompt_revision_proposals"
+            ][0]
+            draft["case_ids"] = ["foreign-case"]
+            draft.pop("proposal_content_sha256")
+            draft["proposal_content_sha256"] = optimizer._canonical_sha256(draft)
+        changed.pop("artifact_content_sha256")
+        changed["artifact_content_sha256"] = optimizer._canonical_sha256(changed)
+        assert (
+            consumer.prompt_revision_review_workorders(
+                changed, "2026-09-09", calibration_report=cal
+            )[0]["order_id"]
+            == "order_entry_prompt_revision_source_contract"
+        )
+
+    report_dir = tmp_path / "reports"
+    monkeypatch.setattr(workorders, "_workorder_isolated_source_mode", lambda: False)
+    original_load = workorders._load_source_json
+    monkeypatch.setattr(
+        workorders,
+        "_load_source_json",
+        lambda path, **kwargs: (
+            original_load(path, **kwargs) if path.is_relative_to(report_dir) else {}
+        ),
+    )
+    monkeypatch.setattr(workorders, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(
+        workorders,
+        "AI_DECISION_ACTION_OUTCOME_CALIBRATION_DIR",
+        report_dir / "calibration",
+    )
+    monkeypatch.setattr(
+        workorders, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir / "workorders"
+    )
+    monkeypatch.setattr(workorders, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
+    _write(
+        report_dir
+        / "main_ai_prompt_optimizer"
+        / "main_ai_prompt_optimizer_2026-09-09.json",
+        report,
+    )
+    _write(
+        report_dir
+        / "calibration"
+        / "ai_decision_action_outcome_calibration_2026-09-09.json",
+        cal,
+    )
+    built = workorders.build_code_improvement_workorder(
+        "2026-09-09", include_swing=False
+    )
+    emitted = next(
+        row for row in built["orders"] if row["order_id"] == orders[0]["order_id"]
+    )
+    assert emitted["decision"] == "implement_now"
+    assert emitted["source_decision"] == "objective_followup_required"
+    assert emitted["recommendation_id"] == drafts[0]["recommendation_id"]
+    assert emitted["proposal_content_sha256"] == drafts[0]["proposal_content_sha256"]
+    assert emitted["proposed_appendix"] == drafts[0]["proposed_appendix"]
+    assert emitted["cost_evidence_by_case"] == drafts[0]["cost_evidence_by_case"]
+    assert emitted["provider_authority"] is False
+    assert built["source"]["main_ai_prompt_optimizer"]
+
+    # The final #80 consumer and #91 intake must agree on the same native ID.
+    optimizer_path = tmp_path / "consumer-optimizer.json"
+    prepared_path = consumer.quality.micro_reversion_prepared_request_path("2026-09-09")
+    prepared = {
+        "schema": "main_ai_quality_micro_prepared_requests_v1",
+        "target_date": "2026-09-09",
+        "status": "prepared_requests_ready",
+        "prepared_requests": [],
+        **optimizer.SOURCE_ONLY_AUTHORITY,
+    }
+    prepared["artifact_content_sha256"] = optimizer._canonical_sha256(prepared)
+    report["status"] = "ready_source_only_continuous_search"
+    report["source_bindings"]["prepared_request_sha256"] = optimizer._canonical_sha256(
+        prepared
+    )
+    report.pop("artifact_content_sha256")
+    report["artifact_content_sha256"] = optimizer._canonical_sha256(report)
+    monkeypatch.setattr(
+        optimizer, "report_paths", lambda _: (optimizer_path, tmp_path / "optimizer.md")
+    )
+    monkeypatch.setattr(
+        consumer,
+        "_read_json",
+        lambda path: (
+            report
+            if path == optimizer_path
+            else prepared if path == prepared_path else {}
+        ),
+    )
+    monkeypatch.setattr(
+        optimizer, "_latest_action_outcome_calibration", lambda _: (cal, None, [])
+    )
+    monkeypatch.setattr(consumer, "_entry_base_paths", lambda *args, **kwargs: ([], {}))
+    monkeypatch.setattr(
+        consumer, "_holding_base_paths", lambda *args, **kwargs: ([], {})
+    )
+    delivered = consumer.build_report("2026-09-09")
+    assert delivered["prompt_revision_review_order_ids"] == [orders[0]["order_id"]]
+    assert delivered["prompt_revision_proposal_rejections"] == []
+    assert delivered["prompt_revision_proposals"] == drafts
+    report["stage_optimizers"]["entry"]["cohort_optimizers"][0][
+        "prompt_revision_proposals"
+    ][0]["case_ids"] = ["foreign-case"]
+    draft = report["stage_optimizers"]["entry"]["cohort_optimizers"][0][
+        "prompt_revision_proposals"
+    ][0]
+    draft.pop("proposal_content_sha256")
+    draft["proposal_content_sha256"] = optimizer._canonical_sha256(draft)
+    report.pop("artifact_content_sha256")
+    report["artifact_content_sha256"] = optimizer._canonical_sha256(report)
+    rejected = consumer.build_report("2026-09-09")
+    assert rejected["prompt_revision_proposals"] == []
+    assert (
+        "prompt_revision_exact_calibration_contract_invalid"
+        in rejected["prompt_revision_proposal_rejections"]
+    )
+    assert rejected["prompt_revision_review_order_ids"] == [
+        "order_entry_prompt_revision_source_contract"
+    ]
+
+
 def test_old_exposure_does_not_hide_recent_five_date_nonparticipation():
     evidence = _zero_participation_evidence()
     progress = evidence["entry_research_progress"]

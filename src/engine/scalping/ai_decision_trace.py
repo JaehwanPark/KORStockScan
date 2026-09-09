@@ -1589,6 +1589,8 @@ def record_ai_decision_trace(
             outcome_label_exclusion_reasons.append(
                 "explicit_ai_decision_outcome_ineligible"
             )
+        if merged.get("edge_state") == "INSUFFICIENT_DATA":
+            outcome_label_exclusion_reasons.append("insufficient_decision_source")
         if preflight_allowed is False:
             outcome_label_exclusion_reasons.append("input_preflight_not_allowed")
         if (

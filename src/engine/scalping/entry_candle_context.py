@@ -60,6 +60,26 @@ OBSERVATION_CONTRACT = {
 }
 
 
+def observed_sparse_decision_window_eligible(
+    source_quality_status: Any, decision_window: Any
+) -> bool:
+    """Recognize the producer's observed-row contract, not arbitrary bar gaps.
+
+    Venue/route identity, current-bar freshness and each strategy's lookback
+    requirements remain caller-owned. No bars or unavailable returns are filled.
+    """
+    return bool(
+        isinstance(decision_window, dict)
+        and source_quality_status == "fresh_consistent"
+        and decision_window.get("status") == "sparse_observed_minutes"
+        and decision_window.get("provider_call_allowed") is True
+        and decision_window.get("sparse_observed_minutes") is True
+        and decision_window.get("minute_bar_policy")
+        == "ka10080_observed_rows_no_synthetic_fill"
+        and not decision_window.get("blockers")
+    )
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
     return raw in {"1", "true", "yes", "on"}

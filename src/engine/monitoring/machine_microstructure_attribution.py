@@ -56,6 +56,9 @@ from src.engine.scalping.micro_reversion.collection_targets import (
 from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
     build_rolling_paired_policy_research,
 )
+from src.engine.monitoring.machine_adaptive_exit_replay import (
+    build_adaptive_exit_source_census,
+)
 from src.engine.monitoring.machine_market_weakness_response import (
     build_machine_market_weakness_response,
     COUNTERFACTUAL_MAX_QUOTE_AGE_SEC,
@@ -8773,6 +8776,9 @@ def build_report(
         },
         "producer_consumer_gaps": gaps,
     }
+    # Separate v2 source census, not a successor live recommendation or an
+    # implicit waiver of the v1 approval contract. Parent byte hash is external.
+    report["rolling_policy_research_v2"] = build_adaptive_exit_source_census(report)
     if is_krx_trading_day(target_day):
         collection_targets = build_collection_targets(
             report,
@@ -8937,6 +8943,23 @@ def render_markdown(report: dict[str, Any]) -> str:
                     + "`."
                 ),
                 "- Runtime family registration, PREOPEN apply, orders, and current owner policy remain unchanged.",
+                "",
+            ]
+        )
+    adaptive = report.get("rolling_policy_research_v2")
+    if isinstance(adaptive, dict):
+        population = adaptive.get("population_contract") or {}
+        lines.extend(
+            [
+                "## Adaptive Exit Source Census (v2, source-only)",
+                "",
+                f"- Status: `{adaptive.get('status')}`; observed unique lifecycles: "
+                f"`{population.get('observed_unique_lifecycles', 0)}`.",
+                "- Attribution anchors are not the complete owner episode population. "
+                "Legacy timeout marks do not prove ordered cancel/fill execution.",
+                "- Net EV: not evaluated; PREOPEN and runtime adapter: not connected. "
+                "Existing target orders and owner policies are unchanged.",
+                f"- Next action: `{adaptive.get('next_action')}`.",
                 "",
             ]
         )

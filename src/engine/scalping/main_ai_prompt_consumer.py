@@ -944,11 +944,22 @@ def _path_summary(cohorts: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
 def _prompt_research_projection(report: Mapping[str, Any]) -> dict[str, Any]:
     proposals, routes, rejections = [], [], []
-    for stage_name, stage in (report.get("stage_optimizers") or {}).items():
+    stages = report.get("stage_optimizers") or {}
+    if not isinstance(stages, Mapping):
+        stages = {}
+        rejections.append("prompt_revision_stage_contract_invalid")
+    for stage_name, stage in stages.items():
+        if not isinstance(stage, Mapping) or not isinstance(
+            stage.get("cohort_optimizers") or [], list
+        ):
+            rejections.append("prompt_revision_stage_contract_invalid")
+            continue
         for cohort in stage.get("cohort_optimizers") or []:
             if not isinstance(cohort, Mapping):
+                rejections.append("prompt_revision_cohort_contract_invalid")
                 continue
             selected = cohort.get("selected_challenger") or {}
+            selected = selected if isinstance(selected, Mapping) else {}
             routes.append(
                 {
                     "stage": stage_name,
@@ -963,10 +974,24 @@ def _prompt_research_projection(report: Mapping[str, Any]) -> dict[str, Any]:
                     ),
                 }
             )
-            for proposal in cohort.get("prompt_revision_proposals") or []:
+            raw_proposals = cohort.get("prompt_revision_proposals") or []
+            if not isinstance(raw_proposals, list):
+                rejections.append("prompt_revision_proposal_contract_invalid")
+                continue
+            for proposal in raw_proposals:
                 if not (
                     isinstance(proposal, Mapping)
                     and proposal.get("schema") == "entry_prompt_revision_proposal_v1"
+                    and isinstance(proposal.get("recommendation_id"), str)
+                    and proposal["recommendation_id"].startswith(
+                        "entry-prompt-revision-"
+                    )
+                    and isinstance(proposal.get("next_action"), str)
+                    and bool(proposal.get("next_action"))
+                    and proposal.get("decision") == "objective_followup_required"
+                    and proposal.get("provider_authority") is False
+                    and proposal.get("order_authority") is False
+                    and proposal.get("runtime_registry_mutation_allowed") is False
                     and stage_name == "entry"
                     and proposal.get("effective_venue") == cohort.get("effective_venue")
                     and proposal.get("session_bucket") == cohort.get("session_bucket")
@@ -988,6 +1013,97 @@ def _prompt_research_projection(report: Mapping[str, Any]) -> dict[str, Any]:
         "registered_runtime_review_routes": routes,
         "prompt_revision_proposal_rejections": rejections,
     }
+
+
+def prompt_revision_review_workorders(
+    report: Mapping[str, Any],
+    target_date: str,
+    *,
+    calibration_report: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Project native research IDs to the existing code-review intake, not live."""
+    if not report:
+        return []
+    valid = (
+        report.get("schema") == optimizer.SCHEMA
+        and report.get("target_date") == target_date
+        and optimizer._embedded_content_sha256_valid(report, "artifact_content_sha256")
+        and optimizer._source_only_authority_valid(report)
+        and report.get("provider_authority") is False
+        and report.get("order_authority") is False
+    )
+    projection = _prompt_research_projection(report) if valid else {}
+    proposals = projection.get("prompt_revision_proposals") or []
+    bindings = report.get("source_bindings")
+    if proposals and not (
+        isinstance(calibration_report, dict)
+        and calibration_report.get("schema")
+        == optimizer.ACTION_OUTCOME_CALIBRATION_SCHEMA
+        and calibration_report.get("target_date") == target_date
+        and optimizer._source_only_authority_valid(calibration_report)
+        and calibration_report.get("provider_authority") is False
+        and calibration_report.get("order_authority") is False
+        and optimizer.calibration_source._artifact_content_sha256_valid(
+            calibration_report
+        )
+        and isinstance(bindings, Mapping)
+        and bindings.get("action_outcome_calibration_artifact_content_sha256")
+        == calibration_report.get("artifact_content_sha256")
+    ):
+        valid = False
+    if valid and proposals:
+        # A self-hashed draft is not sufficient: it must be the deterministic
+        # proposal derived from this exact calibration generation and cohort.
+        for proposal in proposals:
+            expected = optimizer._prompt_revision_proposals(
+                calibration_report,
+                effective_venue=proposal["effective_venue"],
+                session_bucket=proposal["session_bucket"],
+            )
+            if proposal not in expected:
+                valid = False
+                break
+    ids = [proposal["recommendation_id"] for proposal in proposals]
+    if (
+        not valid
+        or projection.get("prompt_revision_proposal_rejections")
+        or len(ids) != len(set(ids))
+    ):
+        return [
+            {
+                "order_id": "order_entry_prompt_revision_source_contract",
+                "title": "Repair exact-date prompt revision source contract",
+                "decision": "code_patch_required",
+                "target_subsystem": "runtime_instrumentation",
+                "source_report_type": "main_ai_prompt_optimizer",
+                "source_artifact_sha256": report.get("artifact_content_sha256"),
+                "implementation_status": "source_quality_gap_open",
+                **optimizer.SOURCE_ONLY_AUTHORITY,
+                "files_likely_touched": [
+                    "src/engine/scalping/main_ai_prompt_consumer.py"
+                ],
+                "acceptance_tests": [
+                    "pytest -q src/tests/test_main_ai_prompt_consumer.py src/tests/test_main_ai_prompt_optimizer.py"
+                ],
+                "intent": "Repair source date/hash, native ID uniqueness or source-only proposal authority; never apply an invalid draft.",
+            }
+        ]
+    return [
+        {
+            **proposal,
+            "order_id": "order_" + proposal["recommendation_id"],
+            "title": "Review versioned Entry prompt patch and bounded offline evaluation",
+            "source_report_type": "main_ai_prompt_optimizer",
+            "source_artifact_sha256": report["artifact_content_sha256"],
+            "source_target_date": target_date,
+            "source_calibration_sha256": calibration_report["artifact_content_sha256"],
+            "target_subsystem": "runtime_instrumentation",
+            "lifecycle_stage": "entry",
+            "route": "instrumentation_order",
+            "intent": proposal["next_action"],
+        }
+        for proposal in proposals
+    ]
 
 
 def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
@@ -1039,6 +1155,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     calibration_sha = optimizer_sources.get(
         "action_outcome_calibration_artifact_content_sha256"
     )
+    calibration = {}
     if calibration_sha:
         calibration, _, calibration_errors = (
             optimizer._latest_action_outcome_calibration(target_date)
@@ -1170,9 +1287,29 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         )
         for row in entry_paths
     )
+    research_projection = _prompt_research_projection(
+        optimizer_report if not blockers else {}
+    )
+    if (
+        research_projection["prompt_revision_proposals"]
+        or research_projection["prompt_revision_proposal_rejections"]
+    ):
+        review_orders = prompt_revision_review_workorders(
+            optimizer_report, target_date, calibration_report=calibration
+        )
+        research_projection["prompt_revision_review_order_ids"] = [
+            row["order_id"] for row in review_orders
+        ]
+        if any(row["decision"] == "code_patch_required" for row in review_orders):
+            # Invalid optional research must not masquerade as a delivered
+            # draft, nor discard otherwise valid base replay/control paths.
+            research_projection["prompt_revision_proposals"] = []
+            research_projection["prompt_revision_proposal_rejections"].append(
+                "prompt_revision_exact_calibration_contract_invalid"
+            )
     body: dict[str, Any] = {
         "schema": SCHEMA,
-        **_prompt_research_projection(optimizer_report if not blockers else {}),
+        **research_projection,
         "r3_research_handoff": _r3_research_handoff(target_date),
         "target_date": target_date,
         "generated_at": datetime.now(quality.KST).isoformat(timespec="seconds"),

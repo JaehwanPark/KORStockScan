@@ -65,6 +65,9 @@ from src.engine.scalping.ai_decision_trace import (
     DECISION_LAYERS_SCHEMA,
     replay_source_input,
 )
+from src.engine.scalping.entry_candle_context import (
+    observed_sparse_decision_window_eligible,
+)
 from src.engine.scalping.entry_candidate_lifecycle_state import (
     component_is_complete as candidate_lifecycle_component_is_complete,
     event_path as candidate_lifecycle_event_path,
@@ -2218,6 +2221,7 @@ def _payload_contract(payload: dict[str, Any]) -> dict[str, Any]:
                     "decision_window_status": (
                         str(decision_window.get("status") or "") or None
                     ),
+                    "decision_window_blockers": decision_window.get("blockers"),
                     "decision_window_provider_call_allowed": decision_window.get(
                         "provider_call_allowed"
                     ),
@@ -2440,7 +2444,17 @@ def _final_decision_response_findings(trace: dict[str, Any]) -> list[str]:
             and (
                 not isinstance(response.get("evidence"), dict)
                 or not isinstance(response.get("edge_state"), str)
-                or response.get("edge_state") not in {"EDGE", "NO_EDGE"}
+                or response.get("edge_state")
+                not in {"EDGE", "NO_EDGE", "INSUFFICIENT_DATA"}
+            )
+        )
+        or (
+            response.get("edge_state") == "INSUFFICIENT_DATA"
+            and (
+                response.get("action") != "WAIT"
+                or response.get("expected_upside_pct") is not None
+                or response.get("expected_downside_pct") is not None
+                or response.get("entry_probe_intent") is True
             )
         )
     ):
@@ -2495,6 +2509,11 @@ def _captured_control_fields(trace: dict[str, Any]) -> dict[str, Any]:
 
 def _natural_control_contract_findings(trace: dict[str, Any]) -> list[str]:
     findings = _final_decision_response_findings(trace)
+    response = trace.get("decision_quality_final_response")
+    if isinstance(response, dict) and response.get("edge_state") == "INSUFFICIENT_DATA":
+        # A valid source-unusable WAIT is not a corrupt response or evidence
+        # that the model missed an executable opportunity.
+        findings.append("natural_control_insufficient_decision_source")
     semantic_validator_version = str(
         trace.get("semantic_validator_version") or ""
     ).strip()
@@ -2670,18 +2689,17 @@ def _exact_trace_payload_findings(
             and (_number(context.get("decision_window_missing_bar_count")) or 0) == 0
         ):
             return True
-        # ka10080 omits minutes with no trades.  Those observed-row gaps are
-        # exact input, not reconstructed missing data.  Preserve the sparse
-        # quality dimension while allowing the natural call into the baseline;
-        # individual unavailable lookback features remain null in the payload.
-        return bool(
-            status == "sparse_observed_minutes"
-            and context.get("decision_window_sparse_observed_minutes") is True
-            and context.get("decision_window_minute_bar_policy")
-            == "ka10080_observed_rows_no_synthetic_fill"
-            and context.get("source_quality_status") == "fresh_consistent"
-            and str(context.get("venue") or "").upper() == "NXT"
-            and str(context.get("session") or "").lower() == "nxt_aftermarket"
+        return observed_sparse_decision_window_eligible(
+            context.get("source_quality_status"),
+            {
+                "status": status,
+                "provider_call_allowed": provider_allowed,
+                "sparse_observed_minutes": context.get(
+                    "decision_window_sparse_observed_minutes"
+                ),
+                "minute_bar_policy": context.get("decision_window_minute_bar_policy"),
+                "blockers": context.get("decision_window_blockers"),
+            },
         )
 
     if contexts_with_decision_quality and not any(
@@ -5564,7 +5582,12 @@ def build_anticipatory_reversal_analysis_v1(
     )
     candle_fresh = bool(
         str(source_quality.get("status") or "") == "fresh_consistent"
-        and str(decision_window.get("status") or "") == "fresh_consistent"
+        and (
+            str(decision_window.get("status") or "") == "fresh_consistent"
+            or observed_sparse_decision_window_eligible(
+                source_quality.get("status"), decision_window
+            )
+        )
         and decision_window.get("provider_call_allowed") is not False
         and completed_bar_count >= 1
     )
@@ -23985,6 +24008,127 @@ def _verified_net_entry_opportunity(label: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _load_cost_aware_companions(
+    target_date: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load optional sources independently, including when no label exists yet."""
+    sources = []
+    for path in (
+        micro_reversion_action_neutral_label_path(target_date),
+        micro_reversion_bridge_report_path(target_date),
+    ):
+        try:
+            sources.append(_load_json(path))
+        except (OSError, ValueError, TypeError) as exc:
+            sources.append(
+                {
+                    "source_load_error": f"cost_aware_source_load_failed:{type(exc).__name__}"
+                }
+            )
+    return sources[0], sources[1]
+
+
+def _cost_label_source_eligibility(
+    requests: list[dict[str, Any]],
+    bridge: Mapping[str, Any] | None,
+    *,
+    target_date: str,
+) -> dict[str, dict[str, Any]]:
+    """Explain the existing label producer's exclusions; never synthesize labels."""
+    from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+        TACTICAL_EVIDENCE_SCHEMA,
+    )
+
+    if not isinstance(bridge, Mapping):
+        return {}
+    try:
+        anchor = _micro_reversion_outcome_source_commitment(
+            bridge, expected_target_date=target_date
+        )
+        label_ready, label_rejected = _micro_reversion_label_ready_bridge_rows(
+            bridge, target_date=target_date, _outcome_commitment_already_validated=True
+        )
+        current_ready, current_rejected = (
+            _micro_reversion_current_ablation_ready_bridge_rows(label_ready)
+        )
+    except (KeyError, TypeError, ValueError):
+        return {}
+    by_trace = {row["decision_trace_id"]: row for row in bridge["rows"]}
+    result = {}
+    for request in requests:
+        trace_id = str(request.get("decision_trace_id") or "")
+        row = by_trace.get(trace_id)
+        if not row or request.get("stage") != "entry":
+            continue
+        evidence = row[TACTICAL_EVIDENCE_SCHEMA]
+        if not (
+            _normalize_stock_code(request.get("stock_code"))
+            == _normalize_stock_code(evidence.get("stock_code"))
+            and _venue(request.get("effective_venue"))
+            == _venue(evidence.get("trace_effective_venue"))
+            and _session(request.get("session_bucket"))
+            == _session(evidence.get("trace_session_bucket"))
+            and _parse_ts(request.get("decision_ts")) is not None
+            and _parse_ts(request.get("decision_ts"))
+            == _parse_ts(evidence.get("trace_decision_ts"))
+            and request.get("payload_sha256")
+            == evidence.get("source_provider_payload_sha256")
+            and request.get("request_envelope_sha256")
+            == evidence.get("source_request_envelope_sha256")
+            and isinstance(_replay_exact_payload(request.get("exact_payload")), dict)
+            and _sha256(_replay_exact_payload(request["exact_payload"]))
+            == evidence.get("source_exact_payload_sha256")
+        ):
+            continue
+        flags = {
+            name: row.get(key) is True
+            for name, key in (
+                ("paired_parent", "primary_paired_parent_wave_stage_row"),
+                ("mature_parent", "primary_mature_outcome_parent_wave_stage_row"),
+                ("economic_parent", "primary_economic_parent_wave_stage_row"),
+                (
+                    "current_exact_parent",
+                    "primary_current_ablation_source_parent_wave_stage_row",
+                ),
+            )
+        }
+        result[str(request.get("paired_replay_id") or trace_id)] = {
+            "schema": "entry_cost_label_source_eligibility_v1",
+            "decision_trace_id": trace_id,
+            "source_date": target_date,
+            "source_bridge_content_sha256": anchor["bridge_report_content_sha256"],
+            "source_evidence_sha256": evidence.get("evidence_sha256"),
+            "producer_owner": "MainAIMicroExactEconomicIntersectionRepair",
+            "sidecar_status": row.get("ask_depletion_sidecar_status"),
+            **flags,
+            "primary_flags_role": "independent_parent_dedup_census_not_combined_gate",
+            "producer_materializable": trace_id in current_ready,
+            "missing_producer_conditions": [
+                reason
+                for reason in (
+                    label_rejected.get(trace_id),
+                    current_rejected.get(trace_id),
+                )
+                if reason
+            ],
+            "outcome_source_blockers": list(
+                row["future_outcome"].get("source_quality_blockers") or []
+            ),
+            "outcome_eligibility_blockers": list(
+                row["future_outcome"].get("outcome_eligibility_blockers") or []
+            ),
+            "next_action": (
+                "verify_existing_action_neutral_label_materialization"
+                if trace_id in current_ready
+                else "retain_exact_exclusion_and_collect_missing_source"
+            ),
+            "label_generated": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    return result
+
+
 def _paired_cost_aware_outcomes(
     *,
     target_date: str,
@@ -24022,6 +24166,9 @@ def _paired_cost_aware_outcomes(
             source["source_gap_reason"] = str(exc)
         else:
             source.update(status="validated_source_only", source_gap_reason=None)
+    eligibility = _cost_label_source_eligibility(
+        requests, source_bridge_report, target_date=target_date
+    )
     diagnostics = {}
     for request in requests:
         trace = str(request.get("decision_trace_id") or "")
@@ -24058,6 +24205,15 @@ def _paired_cost_aware_outcomes(
         if reason:
             diagnostic["source_gap_reason"] = reason
         diagnostic["source_artifact_content_sha256"] = source["artifact_content_sha256"]
+        source_eligibility = eligibility.get(
+            str(request.get("paired_replay_id") or trace)
+        )
+        if source_eligibility:
+            diagnostic["producer_eligibility"] = {
+                **source_eligibility,
+                "label_generated": diagnostic["status"]
+                == "verified_counterfactual_after_cost",
+            }
         diagnostics[str(request.get("paired_replay_id") or trace)] = diagnostic
     source["request_count"] = len(diagnostics)
     source["verified_request_count"] = sum(
@@ -31544,22 +31700,11 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                     }
                 )
-            try:
-                net_outcome_artifact = (
-                    _load_json(micro_reversion_action_neutral_label_path(args.date))
-                    if args.mode == "detailed"
-                    else {}
-                )
-                net_source_bridge_report = (
-                    _load_json(micro_reversion_bridge_report_path(args.date))
-                    if net_outcome_artifact
-                    else None
-                )
-            except (OSError, ValueError, TypeError) as exc:
-                net_outcome_artifact = {
-                    "source_load_error": f"cost_aware_source_load_failed:{type(exc).__name__}"
-                }
-                net_source_bridge_report = None
+            net_outcome_artifact, net_source_bridge_report = (
+                _load_cost_aware_companions(args.date)
+                if args.mode == "detailed"
+                else ({}, {})
+            )
             report = build_paired_replay_report(
                 target_date=args.date,
                 requests=evaluated_requests,

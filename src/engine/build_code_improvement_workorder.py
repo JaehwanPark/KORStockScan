@@ -61,7 +61,7 @@ MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_cont
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 2
-WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v6"
+WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v7"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -1888,6 +1888,25 @@ def _load_source_json(path: Path, *, isolated_source_mode: bool) -> dict[str, An
     return _load_json(path)
 
 
+def _load_prompt_research_source(
+    path: Path, *, isolated_source_mode: bool
+) -> dict[str, Any]:
+    """Preserve self-hashed research and distinguish corrupt from absent input."""
+    if not _source_path_enabled(path, isolated_source_mode=isolated_source_mode):
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        return {"source_read_error": type(exc).__name__}
+    return (
+        payload
+        if isinstance(payload, dict) and payload
+        else {"source_read_error": "invalid_prompt_research_object"}
+    )
+
+
 def _load_market_census_source(
     path: Path, *, isolated_source_mode: bool
 ) -> dict[str, Any]:
@@ -2748,6 +2767,39 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
                     "implementation_scope",
                     "acceptance",
                     "census_contract_valid",
+                )
+            }
+        )
+        serialized["source_decision"] = item.order.get("decision")
+    if item.order.get("source_report_type") == "main_ai_prompt_optimizer":
+        serialized.update(
+            {
+                key: item.order.get(key)
+                for key in (
+                    "recommendation_id",
+                    "source_artifact_sha256",
+                    "source_target_date",
+                    "source_calibration_sha256",
+                    "owner",
+                    "parent_prompt_version",
+                    "parent_prompt_hash",
+                    "candidate_contract_sha256",
+                    "effective_venue",
+                    "session_bucket",
+                    "case_ids",
+                    "cost_evidence_by_case",
+                    "proposal_content_sha256",
+                    "proposed_appendix",
+                    "counterexamples",
+                    "patch_type",
+                    "next_action",
+                    "provider_authority",
+                    "order_authority",
+                    "runtime_authority",
+                    "runtime_registry_mutation_allowed",
+                    "provider_budget_increase_allowed",
+                    "evidence_basis",
+                    "rollback_prompt_hash",
                 )
             }
         )
@@ -6798,6 +6850,14 @@ def build_code_improvement_workorder(
     ai_decision_action_outcome_calibration_path = (
         _ai_decision_action_outcome_calibration_path(target_date)
     )
+    prompt_optimizer_path = (
+        REPORT_DIR
+        / "main_ai_prompt_optimizer"
+        / f"main_ai_prompt_optimizer_{target_date}.json"
+    )
+    prompt_optimizer = _load_prompt_research_source(
+        prompt_optimizer_path, isolated_source_mode=isolated_source_mode
+    )
     codebase_performance_path = _codebase_performance_report_path(target_date)
     codebase_performance = _load_source_json(
         codebase_performance_path, isolated_source_mode=isolated_source_mode
@@ -6929,6 +6989,7 @@ def build_code_improvement_workorder(
         "ai_decision_action_outcome_calibration": (
             ai_decision_action_outcome_calibration_path
         ),
+        "main_ai_prompt_optimizer": prompt_optimizer_path,
         "codebase_performance_workorder": codebase_performance_path,
         "pattern_lab_currentness_audit": pattern_lab_currentness_path,
         "pattern_lab_ai_review": pattern_lab_ai_review_path,
@@ -7178,6 +7239,9 @@ def build_code_improvement_workorder(
         lifecycle_report=lifecycle_report,
     )
     from src.engine.scalping.entry_recheck_review import intake_review_orders
+    from src.engine.scalping.main_ai_prompt_consumer import (
+        prompt_revision_review_workorders,
+    )
 
     drought_review_orders = intake_review_orders(drought_controller, target_date)
     buy_funnel_sentinel_order_ids = {
@@ -7229,6 +7293,14 @@ def build_code_improvement_workorder(
         *_codebase_performance_followup_orders(codebase_performance),
         *buy_funnel_sentinel_orders,
         *drought_review_orders,
+        *prompt_revision_review_workorders(
+            prompt_optimizer,
+            target_date,
+            calibration_report=_load_prompt_research_source(
+                ai_decision_action_outcome_calibration_path,
+                isolated_source_mode=isolated_source_mode,
+            ),
+        ),
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(
         ev_report,
@@ -7765,6 +7837,7 @@ def build_code_improvement_workorder(
             "ai_decision_action_outcome_calibration": source_ref(
                 "ai_decision_action_outcome_calibration"
             ),
+            "main_ai_prompt_optimizer": source_ref("main_ai_prompt_optimizer"),
             "codebase_performance_workorder": source_ref(
                 "codebase_performance_workorder"
             ),

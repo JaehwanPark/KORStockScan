@@ -4215,8 +4215,16 @@ def test_decision_quality_v2_13_clean_wait_maps_to_guarded_probe(monkeypatch):
 
 def test_decision_quality_v2_13_repairs_unusable_non_buy_to_safe_wait():
     engine = _build_engine()
+    transport = {
+        "openai_request_id": "exact-request",
+        "ai_request_envelope_sha256": "a" * 64,
+        "openai_response_id": "exact-response",
+        "provider_called": True,
+        "openai_endpoint_name": "analyze_target",
+    }
     result = engine._normalize_decision_quality_entry_result(
         {
+            **transport,
             "edge_state": "NO_EDGE",
             "action": "DROP",
             "expected_upside_pct": 0.2,
@@ -4247,6 +4255,11 @@ def test_decision_quality_v2_13_repairs_unusable_non_buy_to_safe_wait():
         "unusable_source_fail_closed_wait"
     ]
     assert result["decision_quality_model_action"] == "DROP"
+    assert {key: result.get(key) for key in transport} == transport
+    assert result["ai_decision_outcome_eligible"] is False
+    assert result["decision_quality_runtime_action_mapping"] == (
+        "source_unusable_to_safe_wait"
+    )
 
 
 def test_decision_quality_v2_7_repairs_early_session_drop_to_guarded_wait_probe():

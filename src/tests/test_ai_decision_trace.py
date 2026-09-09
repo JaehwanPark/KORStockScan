@@ -2028,6 +2028,43 @@ def test_final_control_response_never_mixes_raw_model_evidence(
     ]
 
 
+def test_insufficient_decision_source_is_valid_trace_not_economic_control(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import ai_decision_quality as quality
+
+    _enable(monkeypatch, tmp_path)
+    trace.record_ai_decision_trace(
+        {
+            "openai_request_id": "exact-unusable-request",
+            "action": "WAIT",
+            "edge_state": "INSUFFICIENT_DATA",
+            "confidence": 0,
+            "expected_upside_pct": None,
+            "expected_downside_pct": None,
+            "evidence": {"trigger": "insufficient"},
+            "decision_quality_live_adapter": "v2_13",
+            "decision_quality_model_evidence": {"trigger": "failed"},
+            "entry_probe_intent": False,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_13",
+        result_source="live",
+        provider_called=True,
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    assert row["request_id"] == "exact-unusable-request"
+    assert row["outcome_label_eligible"] is False
+    assert row["outcome_label_exclusion_reasons"] == ["insufficient_decision_source"]
+    assert quality._final_decision_response_findings(row) == []
+    assert "natural_control_insufficient_decision_source" in (
+        quality._natural_control_contract_findings(row)
+    )
+    assert "natural_control_final_response_invalid" not in (
+        quality._natural_control_contract_findings(row)
+    )
+
+
 def test_pending_outcome_is_recovered_without_duplicate_trace_after_write_failure(
     monkeypatch, tmp_path
 ):

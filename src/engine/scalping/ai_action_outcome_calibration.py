@@ -702,6 +702,9 @@ def entry_research_progress(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "recheck_terminal_status": "not_inferred_from_arm",
         "small_opportunity_case_ids": cases,
         "small_opportunity_basis": "execution_proxy_not_fee_tax_verified_net",
+        "small_opportunity_cost_cases": cost_aware_opportunity_diagnostic(
+            [row for row in rows if str(row["decision_trace_id"]) in cases]
+        )["case_ledger"],
         "research_window": {"source_dates": 5, "exact_parents": 5, "symbols": 3},
         "research_window_pass": floor,
         "offline_rotation_due": rotate,
@@ -717,16 +720,27 @@ def entry_research_progress(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def cost_aware_opportunity_diagnostic(rows: list[dict[str, Any]]) -> dict[str, Any]:
     verified = []
     gaps: Counter[str] = Counter()
+    case_ledger = []
     for row in rows:
         diagnostic = row.get("entry_cost_aware_opportunity")
+        case = {
+            "decision_trace_id": row.get("decision_trace_id"),
+            "source_date": row.get("source_date"),
+            "status": "source_unavailable",
+            "cost_adjusted_end_return_pct": None,
+            "counterfactual_net_target_first": None,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        case_ledger.append(case)
         if not isinstance(diagnostic, dict):
-            gaps[
-                (
-                    "legacy_no_cost_aware_diagnostic"
-                    if diagnostic is None
-                    else "invalid_cost_aware_diagnostic"
-                )
-            ] += 1
+            reason = (
+                "legacy_no_cost_aware_diagnostic"
+                if diagnostic is None
+                else "invalid_cost_aware_diagnostic"
+            )
+            gaps[reason] += 1
+            case["source_gap_reason"] = reason
             continue
         if (
             diagnostic.get("schema") == "entry_cost_aware_opportunity_v1"
@@ -748,15 +762,34 @@ def cost_aware_opportunity_diagnostic(rows: list[dict[str, Any]]) -> dict[str, A
             )
         ):
             verified.append(diagnostic)
+            case.update(
+                status="verified_counterfactual_after_cost",
+                cost_adjusted_end_return_pct=diagnostic["cost_adjusted_end_return_pct"],
+                counterfactual_net_target_first=diagnostic[
+                    "counterfactual_net_target_first"
+                ],
+                label_content_sha256=diagnostic["label_content_sha256"],
+            )
         else:
             reason = diagnostic.get("source_gap_reason")
-            gaps[
-                (
-                    reason
-                    if isinstance(reason, str) and reason
-                    else "invalid_cost_aware_diagnostic"
-                )
-            ] += 1
+            reason = (
+                reason
+                if isinstance(reason, str) and reason
+                else "invalid_cost_aware_diagnostic"
+            )
+            gaps[reason] += 1
+            case["source_gap_reason"] = reason
+        eligibility = diagnostic.get("producer_eligibility")
+        if (
+            isinstance(eligibility, dict)
+            and eligibility.get("schema") == "entry_cost_label_source_eligibility_v1"
+            and eligibility.get("decision_trace_id") == row.get("decision_trace_id")
+            and eligibility.get("runtime_effect") is False
+            and eligibility.get("allowed_runtime_apply") is False
+            and _is_sha256(eligibility.get("source_bridge_content_sha256"))
+            and _is_sha256(eligibility.get("source_evidence_sha256"))
+        ):
+            case["producer_eligibility"] = dict(eligibility)
     return {
         "schema": "entry_cost_aware_opportunity_summary_v1",
         "input_count": len(rows),
@@ -766,6 +799,7 @@ def cost_aware_opportunity_diagnostic(rows: list[dict[str, Any]]) -> dict[str, A
         ),
         "source_gap_count": sum(gaps.values()),
         "source_gap_counts": dict(gaps),
+        "case_ledger": case_ledger,
         "realized_net_pnl_krw": None,
         "runtime_apply_authority": False,
     }

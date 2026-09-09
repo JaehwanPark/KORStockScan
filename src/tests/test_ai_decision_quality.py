@@ -1459,11 +1459,14 @@ def test_control_manifest_rejects_explicit_sparse_canonical_decision_window():
     )
 
 
-def test_control_manifest_accepts_exact_sparse_no_trade_minute_contract():
+@pytest.mark.parametrize(
+    "venue,session", [("NXT", "NXT_AFTERMARKET"), ("KRX", "KRX_REGULAR")]
+)
+def test_control_manifest_accepts_exact_sparse_no_trade_minute_contract(venue, session):
     payload = _payload()
-    payload.update({"effective_venue": "NXT", "session_bucket": "NXT_AFTERMARKET"})
+    payload.update({"effective_venue": venue, "session_bucket": session})
     payload["sanitized_user_input"]["entry_candle_context"].update(
-        {"venue": "NXT", "session": "nxt_aftermarket"}
+        {"venue": venue, "session": session.lower()}
     )
     payload["sanitized_user_input"]["entry_candle_context"]["source_quality"] = {
         "status": "fresh_consistent",
@@ -1487,8 +1490,8 @@ def test_control_manifest_accepts_exact_sparse_no_trade_minute_contract():
         traces=[
             {
                 **_trace(),
-                "effective_venue": "NXT",
-                "session_bucket": "NXT_AFTERMARKET",
+                "effective_venue": venue,
+                "session_bucket": session,
             }
         ],
         payloads=[payload],
@@ -1547,7 +1550,7 @@ def test_control_manifest_rejects_sparse_context_spoofed_across_trace_venue():
     assert report["excluded_counts"]["canonical_context_venue_session_mismatch"] == 1
 
 
-def test_control_manifest_keeps_krx_sparse_window_out_of_primary_cohort():
+def test_control_manifest_rejects_krx_sparse_window_without_producer_provenance():
     payload = _payload()
     payload["sanitized_user_input"]["entry_candle_context"].update(
         {"venue": "KRX", "session": "krx_regular"}
@@ -1561,6 +1564,7 @@ def test_control_manifest_keeps_krx_sparse_window_out_of_primary_cohort():
             "max_consecutive_missing_bar_count": 1,
             "sparse_observed_minutes": True,
             "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
+            "blockers": ["unidentified_bar_loss"],
         },
     }
     report = quality.build_control_manifest(
@@ -4057,6 +4061,56 @@ def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
         "detailed_analysis_stage_not_implemented"
     )
     assert "candidate_input" not in unsupported
+
+
+@pytest.mark.parametrize(
+    "window_patch,quality_status,expected",
+    [
+        ({}, "fresh_consistent", "fresh_dual"),
+        ({"provider_call_allowed": False}, "fresh_consistent", "unusable"),
+        ({"provider_call_allowed": "true"}, "fresh_consistent", "unusable"),
+        ({"sparse_observed_minutes": False}, "fresh_consistent", "unusable"),
+        ({"minute_bar_policy": "unknown"}, "fresh_consistent", "unusable"),
+        ({"blockers": ["route_conflict"]}, "fresh_consistent", "unusable"),
+        ({}, "blocked", "unusable"),
+        ({"completed_bar_count": 0}, "fresh_consistent", "unusable"),
+    ],
+)
+def test_sparse_source_analysis_preserves_provenance_and_missing_lookbacks(
+    window_patch, quality_status, expected
+):
+    packet = {
+        "features": {
+            "quote_fresh_for_entry": True,
+            "quote_stale": False,
+            "quote_age_ms": 500,
+            "tick_context_stale": False,
+            "tick_latest_age_ms": 1000,
+        },
+        "entry_candle_context": {
+            "source_quality": {
+                "status": quality_status,
+                "decision_window": {
+                    "status": "sparse_observed_minutes",
+                    "provider_call_allowed": True,
+                    "completed_bar_count": 61,
+                    "sparse_observed_minutes": True,
+                    "minute_bar_policy": "ka10080_observed_rows_no_synthetic_fill",
+                    **window_patch,
+                },
+            },
+            "structure": {"returns_pct": {"3": None, "5": None, "10": None}},
+        },
+    }
+    analysis = quality.build_v2_13_recovery_confirmation_analysis_v1(packet)
+    assert analysis["source_mode"] == expected
+    assert analysis["precursors"]["return_3m_pct"] is None
+    assert analysis["clean_continuation_probe"]["eligible"] is False
+    packet["features"].update(quote_age_ms=6000, quote_stale=True)
+    assert (
+        quality.build_v2_13_recovery_confirmation_analysis_v1(packet)["source_mode"]
+        == "unusable"
+    )
 
 
 def test_anticipatory_reversal_allows_fresh_wide_spread_offline_probe(
@@ -7278,6 +7332,51 @@ def test_exact_net_companion_reaches_entry_calibration_without_changing_base_met
     rejected = build()
     assert len(rejected["paired_comparisons"]) == 1
     assert "hash_mismatch" in rejected["cost_aware_outcome_source"]["source_gap_reason"]
+
+
+def test_cost_companion_loader_keeps_bridge_without_label(monkeypatch, tmp_path):
+    label_path = tmp_path / "labels.json"
+    bridge_path = tmp_path / "bridge.json"
+    monkeypatch.setattr(
+        quality, "micro_reversion_action_neutral_label_path", lambda _: label_path
+    )
+    monkeypatch.setattr(
+        quality, "micro_reversion_bridge_report_path", lambda _: bridge_path
+    )
+    bridge_path.write_text('{"sentinel": "source_only_bridge"}', encoding="utf-8")
+    artifact, bridge = quality._load_cost_aware_companions("2026-09-09")
+    assert artifact == {}
+    assert bridge == {"sentinel": "source_only_bridge"}
+    label_path.write_text("{invalid", encoding="utf-8")
+    artifact, bridge = quality._load_cost_aware_companions("2026-09-09")
+    assert artifact["source_load_error"].startswith("cost_aware_source_load_failed:")
+    assert bridge == {"sentinel": "source_only_bridge"}
+
+
+def test_missing_net_label_retains_verified_producer_eligibility_not_zero_profit():
+    _, materialized, bridge = _micro_reversion_action_neutral_bridge_fixture()
+    request = deepcopy(materialized["requests"][0])
+    day = materialized["target_date"]
+    diagnostics, source = quality._paired_cost_aware_outcomes(
+        target_date=day, requests=[request], artifact=None, source_bridge_report=bridge
+    )
+    row = diagnostics[request["paired_replay_id"]]
+    assert source["verified_request_count"] == 0
+    assert row["cost_adjusted_end_return_pct"] is None
+    assert row["source_gap_reason"] == "exact_cost_aware_label_artifact_missing"
+    assert (
+        row["producer_eligibility"]["decision_trace_id"] == request["decision_trace_id"]
+    )
+    assert row["producer_eligibility"]["label_generated"] is False
+    assert row["producer_eligibility"]["allowed_runtime_apply"] is False
+    request["request_envelope_sha256"] = "0" * 64
+    assert (
+        quality._cost_label_source_eligibility([request], bridge, target_date=day) == {}
+    )
+    bridge["report_content_sha256"] = "0" * 64
+    assert (
+        quality._cost_label_source_eligibility([request], bridge, target_date=day) == {}
+    )
 
 
 def test_current_target_date_rejects_cross_date_fixed_followthrough_endpoint():

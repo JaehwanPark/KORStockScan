@@ -5,6 +5,25 @@ from src.engine import build_code_improvement_workorder as mod
 from src.engine import lifecycle_decision_matrix as ldm_mod
 
 
+def test_prompt_research_source_preserves_hash_and_reports_corruption(tmp_path):
+    from src.engine.scalping import main_ai_prompt_consumer as consumer
+
+    path = tmp_path / "optimizer.json"
+    assert mod._load_prompt_research_source(path, isolated_source_mode=False) == {}
+    original = {"historical_audit": {"entry_adm": {"status": "retired"}}}
+    path.write_text(json.dumps(original), encoding="utf-8")
+    assert (
+        mod._load_prompt_research_source(path, isolated_source_mode=False) == original
+    )
+    for text in ("{bad", "[]", "{}"):
+        path.write_text(text, encoding="utf-8")
+        source = mod._load_prompt_research_source(path, isolated_source_mode=False)
+        assert source.get("source_read_error")
+        orders = consumer.prompt_revision_review_workorders(source, "2026-09-09")
+        assert orders[0]["order_id"] == "order_entry_prompt_revision_source_contract"
+        assert orders[0]["runtime_effect"] is False
+
+
 def test_buy_funnel_workorder_uses_selected_venue_session_summary():
     report = {
         "classification": {
@@ -180,13 +199,13 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     assert report["generation_id"].startswith("2026-05-08-")
     assert report["schema_version"] == 2
     assert report["producer_contract_version"] == (
-        "code_improvement_workorder_producer_v6"
+        "code_improvement_workorder_producer_v7"
     )
     assert len(report["generation_hash"]) == 64
     assert report["generation_inputs"] == {
         "source_hash": report["source_hash"],
         "schema_version": 2,
-        "producer_contract_version": "code_improvement_workorder_producer_v6",
+        "producer_contract_version": "code_improvement_workorder_producer_v7",
         "max_orders": 5,
         "include_swing": True,
     }

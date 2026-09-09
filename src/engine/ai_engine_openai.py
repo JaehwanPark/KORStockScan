@@ -2544,7 +2544,10 @@ class GPTSniperEngine:
                 )
             )
             if repair_codes and not repaired_errors:
-                payload = repaired
+                # The fail-closed repair may replace the model response in
+                # full. Retain locally attached request/transport provenance;
+                # validated repaired model fields still take precedence.
+                payload = {**payload, **repaired}
                 contract_errors = []
                 repair_fields = {
                     "decision_quality_contract_repair_applied": True,
@@ -3175,6 +3178,7 @@ class GPTSniperEngine:
             }
 
         candidate_action = str(payload.get("action") or "DROP").upper()
+        source_unusable = payload.get("edge_state") == "INSUFFICIENT_DATA"
         # Observation only: retain the validated decision before the existing
         # BUY-to-WAIT/probe adapter changes action, evidence and reason codes.
         repaired_response = {
@@ -3353,10 +3357,24 @@ class GPTSniperEngine:
                 else (
                     "v2_13_clean_wait_to_bounded_wait_probe"
                     if v2_13_clean_wait_probe_selected
-                    else "model_action_preserved"
+                    else (
+                        "source_unusable_to_safe_wait"
+                        if source_unusable and action == "WAIT"
+                        else "model_action_preserved"
+                    )
                 )
             ),
             "decision_quality_repaired_response": repaired_response,
+            **(
+                {
+                    "ai_decision_outcome_eligible": False,
+                    "ai_decision_outcome_exclusion_reason": (
+                        "insufficient_decision_source"
+                    ),
+                }
+                if source_unusable
+                else {}
+            ),
             "entry_probe_intent": entry_probe_intent,
             "entry_probe_intent_status": (
                 (

@@ -735,12 +735,26 @@ def _prompt_revision_proposals(calibration, *, effective_venue, session_bucket):
             continue
         body = {
             "schema": "entry_prompt_revision_proposal_v1",
+            "recommendation_id": "entry-prompt-revision-"
+            + _canonical_sha256(
+                [
+                    version,
+                    evidence["candidate_prompt_sha256"],
+                    evidence.get("candidate_contract_sha256"),
+                    effective_venue,
+                    session_bucket,
+                    sorted(set(cases)),
+                ]
+            )[:24],
+            "owner": "AIDecisionActionOutcomeNaturalEvidence0908",
+            "decision": "objective_followup_required",
             "parent_prompt_version": version,
             "parent_prompt_hash": evidence["candidate_prompt_sha256"],
             "candidate_contract_sha256": evidence.get("candidate_contract_sha256"),
             "effective_venue": effective_venue,
             "session_bucket": session_bucket,
             "case_ids": sorted(set(cases)),
+            "cost_evidence_by_case": progress.get("small_opportunity_cost_cases") or [],
             "evidence_basis": "small_target_execution_proxy_not_verified_net_profit",
             "failure_hypothesis": "small_target_soft_risk_may_be_treated_as_hard_rejection",
             "patch_type": "review_only_appendix_for_new_version",
@@ -766,6 +780,23 @@ def _prompt_revision_proposals(calibration, *, effective_venue, session_bucket):
                 "armed_recheck_without_valid_followup",
             ],
             "next_action": "review_versioned_patch_then_existing_bounded_offline_batch",
+            "implementation_status": "pending_versioned_prompt_contract_review",
+            "files_likely_touched": [
+                "src/engine/ai_prompt_contracts.py",
+                "src/engine/scalping/ai_decision_quality.py",
+                "src/engine/scalping/micro_reversion/main_ai_prompt_optimizer.py",
+            ],
+            "required_downstream": [
+                "code_improvement_workorder",
+                "main_ai_prompt_consumer",
+                "existing_bounded_offline_paired_replay",
+            ],
+            "acceptance_tests": [
+                "pytest -q src/tests/test_main_ai_prompt_optimizer.py src/tests/test_main_ai_prompt_consumer.py src/tests/test_ai_decision_quality.py",
+                "Parent prompt stays immutable; reviewed new version/hash and schema are explicit.",
+                "Same exact parents, verified cost outcomes and counterexamples reach bounded offline evaluation.",
+                "No provider budget increase, same-day selection mutation or inherited live authority.",
+            ],
             "runtime_registry_mutation_allowed": False,
             "provider_budget_increase_allowed": False,
             "rollback_prompt_hash": evidence["candidate_prompt_sha256"],

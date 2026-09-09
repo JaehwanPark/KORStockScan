@@ -66,6 +66,8 @@ PREOPEN applied-policy 검증으로만 소비한다. 이전 주문·보유는 �
 
 ## 1. 자동화 단계
 
+9/9 [후속 sparse·lineage 보완](./audit-reports/2026-09-09-entry-ai-improvement-next-actions-review.md#5-사용자-후속-구현-지시에-따른-보완-결과): Entry canonical observed-sparse 계약을 live 분석/exact control에서 공유하며 정상 INSUFFICIENT_DATA WAIT는 schema-invalid가 아니라 경제성 제외다. 상세 CLI는 비용 label이 없어도 검증된 bridge의 기존 label/current-ablation 자격과 exact 요청을 결속한다. 사례별 비용/null·탈락 사유→#82→#78 native prompt revision→#80 및 #91(`code_improvement_workorder_producer_v7`)로 전달한다. #91은 optimizer를 source fingerprint에 포함하고 native ID·원본 결정·본문/반례·원천 hash·비권한 필드를 보존한다. 같은 calibration generation의 초안을 재구성하여 검증하고 불일치는 source-only repair로 분리한다. 기존 controller/strict verifier의 source-drift 복구를 따르며 새 cron·Provider 호출·prompt registry mutation·live 자동승인 권한은 없다.
+
 9/9 [Entry AI·micro 구현 리뷰](./audit-reports/2026-09-09-entry-ai-micro-profit-implementation-review.md)의 additive 계약: 기존 #76 상세 CLI는 당일 action-neutral 비용 label/bridge companion을 선택적으로 읽고 deep source 및 exact 요청 hash를 검증해 `entry_cost_aware_opportunity_v1`을 만든다. 결손/손상 companion은 직접 사유를 남기며 정상 base 연구를 차단하지 않는다. 이 필드와 비용 증거 hash→#82 비용 진단/`entry_prompt_research_progress_v1`→#78의 최근 유효5 source일 무참여 연구 교체·단일 사례 prompt 초안→#80의 초안 hash/권한 검증과 등록 runtime owner 표시가 기존 자연 실행 경로다. 같은 날 실행 선택/frozen hash·Provider checkpoint/budget은 유지한다. 연구 교체에 실체결/순이익을 선행 요구하지 않고, 임의 초안의 live 등록 권한도 만들지 않는다. KRX 기존 one-share exploration은 누적 arm10/종목3을 사용하며 같은 당일 floor를 중복 요구하지 않는다. 실제 성과 승격·source·continuation·PREOPEN/PID·broker guard는 유지한다. 신규 cron/producer/order owner는 없다.
 
 | 단계 | 상태 | 의미 | live 영향 |
