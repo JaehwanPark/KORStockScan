@@ -414,7 +414,12 @@ def _ev_authority(
 
 
 def _selected_runtime(
-    apply_plan: dict[str, Any], threshold_ev: dict[str, Any]
+    apply_plan: dict[str, Any],
+    threshold_ev: dict[str, Any],
+    manifest: dict[str, Any] | None = None,
+    *,
+    target_date: str | None = None,
+    pid_receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_apply = (
         threshold_ev.get("runtime_apply")
@@ -424,6 +429,82 @@ def _selected_runtime(
     selected = apply_plan.get("auto_apply_selected")
     if not isinstance(selected, list):
         selected = []
+    planned = [
+        item["family"]
+        for item in selected
+        if isinstance(item, dict)
+        and isinstance(item.get("family"), str)
+        and item["family"]
+    ]
+    manifest = manifest if isinstance(manifest, dict) else {}
+    manifest_families = manifest.get("selected_families")
+    dated = target_date or apply_plan.get("target_date")
+    has_manifest = (
+        isinstance(dated, str)
+        and bool(dated)
+        and manifest.get("target_date") == dated
+        and isinstance(manifest_families, list)
+        and all(isinstance(family, str) and family for family in manifest_families)
+        and len(set(manifest_families)) == len(manifest_families)
+    )
+    verified = apply_plan.get("runtime_env_handoff_verification")
+    verified = verified if isinstance(verified, dict) else {}
+    verified_families = verified.get("selected_families")
+    has_verified = (
+        has_manifest
+        and verified.get("status") == "pass"
+        and verified.get("target_date") == dated == apply_plan.get("target_date")
+        and manifest.get("source_date") == apply_plan.get("source_date")
+        and isinstance(verified_families, list)
+        and all(isinstance(family, str) and family for family in verified_families)
+        and sorted(verified_families) == sorted(manifest_families)
+    )
+    final = manifest_families if has_manifest else []
+    pid_receipt = pid_receipt if isinstance(pid_receipt, dict) else {}
+    receipt_families = pid_receipt.get("selected_families")
+    pid_contract_matches = (
+        has_manifest
+        and pid_receipt.get("target_date") == dated
+        and isinstance(receipt_families, list)
+        and all(isinstance(family, str) for family in receipt_families)
+        and sorted(receipt_families) == sorted(final)
+        and type(pid_receipt.get("pid")) is int
+        and pid_receipt["pid"] > 0
+        and pid_receipt.get("pid_env_available") is True
+        and pid_receipt.get("pid_passed") is True
+    )
+    differences = []
+    if has_manifest:
+        for family in sorted(set(planned) ^ set(final)):
+            item = next(
+                (
+                    row
+                    for row in selected
+                    if isinstance(row, dict) and row.get("family") == family
+                ),
+                {},
+            )
+            env = item.get("env_overrides")
+            env = env if isinstance(env, dict) else {}
+            manifest_env = manifest.get("env_overrides")
+            manifest_env = manifest_env if isinstance(manifest_env, dict) else {}
+            enabled = {
+                key: value for key, value in env.items() if key.endswith("_ENABLED")
+            }
+            differences.append(
+                {
+                    "family": family,
+                    "planned": family in planned,
+                    "manifest_selected": family in final,
+                    "planned_disable": item.get("runtime_disable_family"),
+                    "planned_change_class": item.get("selection_change_class"),
+                    "planned_decision_reason": item.get("decision_reason"),
+                    "planned_enabled_values": enabled,
+                    "manifest_values_for_planned_enabled_keys": {
+                        key: manifest_env.get(key) for key in enabled
+                    },
+                }
+            )
     return {
         "apply_plan_status": apply_plan.get("status"),
         "apply_mode": apply_plan.get("apply_mode"),
@@ -431,10 +512,42 @@ def _selected_runtime(
         "target_date": apply_plan.get("target_date"),
         "runtime_change": _safe_bool(apply_plan.get("runtime_change")),
         "threshold_ev_runtime_change": _safe_bool(runtime_apply.get("runtime_change")),
-        "selected_family_count": len(selected),
-        "selected_families": [
-            str(item.get("family") or "") for item in selected if isinstance(item, dict)
-        ],
+        "planned_family_count": len(planned),
+        "planned_families": planned,
+        "selected_family_count": len(final) if has_manifest else None,
+        "selected_families": final if has_manifest else None,
+        "selection_evidence": (
+            "manifest_selection_receipt_consistent"
+            if has_verified
+            else (
+                "manifest_selection_unverified"
+                if has_manifest
+                else "unverified_plan_only"
+            )
+        ),
+        "planned_only_families": (
+            sorted(set(planned) - set(final)) if has_manifest else None
+        ),
+        "manifest_only_families": (
+            sorted(set(final) - set(planned)) if has_manifest else None
+        ),
+        "selection_differences": differences,
+        "current_runtime_validation": "not_performed_by_summary",
+        "economic_acceptance": "not_proven_by_selection",
+        "pid_consumption": "not_verified_by_apply_plan",
+        "historical_pid_receipt": {
+            "status": (
+                "reported_pass_matching_date_and_families"
+                if pid_contract_matches
+                else "unmatched_or_failed" if pid_receipt else "missing"
+            ),
+            "pid": pid_receipt.get("pid"),
+            "target_date": pid_receipt.get("target_date"),
+            "pid_passed": pid_receipt.get("pid_passed"),
+            "as_of": pid_receipt.get("generated_at") or pid_receipt.get("verified_at"),
+            "manifest_sha256": pid_receipt.get("manifest_sha256"),
+            "current_process_identity_revalidated": False,
+        },
         "post_apply_attribution": (
             apply_plan.get("post_apply_attribution")
             if isinstance(apply_plan.get("post_apply_attribution"), dict)
@@ -1452,8 +1565,8 @@ def _markdown(report: dict[str, Any]) -> str:
         f"needs_followup `{workorder['needs_followup_workorder_count']}`.",
         f"- pattern lab AI review source orders `{workorder['pattern_lab_ai_review_source_order_count']}`, "
         f"pattern lab currentness source orders `{workorder['pattern_lab_currentness_source_order_count']}`.",
-        "- 해석: `implement_now`는 자동 repo 수정이 아니라 `runtime_effect=false` intake다. "
-        "사용자가 Codex 구현을 지시한 경우에만 코드 작업이다.",
+        "- 해석: `implement_now`는 실전 권한이 아닌 source-only intake다. "
+        "명시적 구현 또는 장후 모니터링 지시의 허용 범위에서 review/fix 후 처리한다.",
         "",
         "## Runtime Summary",
         "",
@@ -1469,6 +1582,24 @@ def _markdown(report: dict[str, Any]) -> str:
     for label, status in report["sources"].items():
         lines.append(
             f"- {label}: `{status['path']}` exists={str(status['exists']).lower()} json_valid={str(status['json_valid']).lower()}"
+        )
+    if report.get("recommendation_intake"):
+        from src.engine.automation.postclose_recommendation_intake import (
+            markdown_section,
+        )
+
+        lines.extend(["", markdown_section(report["recommendation_intake"])])
+        selected = report["selected_runtime"]
+        lines.extend(
+            [
+                "",
+                "## PREOPEN 계획과 선택 근거",
+                "",
+                f"- planned `{selected['planned_family_count']}` / manifest-selected `{selected['selected_family_count']}`; evidence `{selected['selection_evidence']}`.",
+                f"- plan-only `{selected['planned_only_families']}` / manifest-only `{selected['manifest_only_families']}`.",
+                "- 명시적 OFF/선택 차이의 원문 근거는 JSON `selected_runtime.selection_differences`에 보존한다.",
+                "- PID 소비·현재 런타임 재검증·비용 후 경제성은 이 요약으로 입증하지 않는다.",
+            ]
         )
     lines.append("")
     return "\n".join(lines)
@@ -1856,7 +1987,23 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "swing_lifecycle_bucket_discovery": swing_bucket,
         },
         "ev_authority": ev,
-        "selected_runtime": _selected_runtime(apply_plan, threshold_ev),
+        "selected_runtime": _selected_runtime(
+            apply_plan,
+            threshold_ev,
+            _load_json(
+                REPORT_ROOT_DIR.parent
+                / "threshold_cycle"
+                / "runtime_env"
+                / f"threshold_runtime_env_{target_date}.json"
+            ),
+            target_date=target_date,
+            pid_receipt=_load_json(
+                REPORT_ROOT_DIR.parent
+                / "threshold_cycle"
+                / "runtime_env"
+                / f"threshold_runtime_env_verify_{target_date}.json"
+            ),
+        ),
         "runtime_approval": runtime,
         "runtime_apply_gap_audit": runtime_gap_audit,
         "conversion_first_summary": conversion_first,
@@ -1871,15 +2018,23 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "sources": sources,
         "warnings": warnings,
     }
-    assert_sources_unchanged(handoff_receipt, handoff_paths)
+    from src.engine.automation.postclose_recommendation_intake import (
+        EFFECTIVE_DATE,
+        build_intake,
+    )
+
+    if target_date >= EFFECTIVE_DATE:
+        report["recommendation_intake"] = build_intake(REPORT_ROOT_DIR, target_date)
     report["source_generation_contract"] = handoff_receipt
+    json_text = json.dumps(
+        report, ensure_ascii=False, indent=2, sort_keys=True, default=str
+    )
+    markdown_text = _markdown(report)
+    assert_sources_unchanged(handoff_receipt, handoff_paths)
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str),
-        encoding="utf-8",
-    )
-    md_path.write_text(_markdown(report), encoding="utf-8")
+    json_path.write_text(json_text, encoding="utf-8")
+    md_path.write_text(markdown_text, encoding="utf-8")
     return report
 
 

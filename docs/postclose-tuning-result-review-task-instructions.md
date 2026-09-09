@@ -347,6 +347,8 @@ Pass 1 전에 현재 generation의 main/위젯/에피소드 추천 **전수**를
 
 Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 필요한 범위만 재생성한다.
 
+source9/9부터 승인된 구현/review workflow는 확인한 disposition을 [전수 handoff 리뷰 §7.1](audit-reports/2026-09-09-workorder-summary-preopen-handoff-review.md#71-처리-receipt와-과도한-조건-방지)의 `postclose_recommendation_dispositions` companion에 현재 native ID·row/source hash·review/test/direct-consumer 근거로 기록한다. 이 기록은 별도 live 승인이나 새 사용자 개입을 요구하는 단계가 아니라 현재 허용된 구현 pass의 결과 기록이다. upstream 재생성으로 source hash가 달라지면 새 원장의 동일 ID를 대사한 뒤 유효한 검증 근거만 재결속한다. companion을 근거 없이 만들거나 과거 원장의 완료를 일괄 복사하지 않는다. 운영 요약은 companion이 없어도 미검증/차단 상태를 명시할 수 있으며, 요약 성공과 구현 완료를 구분한다.
+
 - 재생성 전 old generation path/hash/status를 저장한다.
 - 중간 producer 실패 시 이전 정상 generation을 덮어쓰지 않는다.
 - AI 단계는 valid checkpoint를 재사용한다.
@@ -433,6 +435,9 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 ### 8.7 Finalization과 error detector
 
 - finalization은 main postclose, controller/follower, tuning monitoring, dashboard archive의 exact-date terminal을 기다린다.
+- 9/9 source부터 설치된 widget evaluation·machine final refresh unit의 당일 시작/성공 terminal도 확인한다. 실행 중이면 기존 bounded wait, 실패이면 cleanup 금지다. 명시적 masked-OFF는 `done_off_masked`로 분리하며 이전 날짜 성공이나 단순 timer disabled를 당일 성공으로 바꾸지 않는다.
+- 선행 terminal 뒤 기존 controller의 `--summary-handoff-only`가 최대2회 시도로 늦은21:15 source에 필요한 일반 verifier→tower→checklist→strict만 갱신한다. summary 단계는600초 process-group timeout/강제종료 grace10초이며 upstream producer·EV·Provider·Codex·매매 process·정책 변경은 allowlist 밖이다. 실패하면 cleanup을 생략하고 detector 후 FAIL로 닫는다. 원 controller wrapper/replay의 terminal 시각은 보존하고 finalization의 `summary_handoff_verified`와 갱신된 controller JSON/strict를 마지막 요약 closure 근거로 추가한다.
+- `recommendation_intake`는 selected/non-selected와 main/widget/episode의 native ID·원문 decision·현재 disposition·원천/행 hash를 전수 대사한다. 실제 본문 digest/보존식도 검증하므로 source marker만 남은 요약은 PASS가 아니다. 선택적 exact-generation disposition companion은 승인된 구현/review workflow가 발급하며 과거 frozen/별도승인 ledger를 덮어쓰지 않는다. 운영 DONE, 구현 fixed-point, 증거 차단, PREOPEN 계획/manifest 및 저장 PID receipt/현재 PID·경제성은 별도다. 형식·source 수리에 양수EV·실체결·추가 표본 floor를 요구하지 않는다.
 - predecessor fail/timeout이면 cleanup이 실행되지 않아야 한다.
 - predecessor가 모두 성공한 뒤 cleanup DONE → `[DONE] postclose_finalization ... detector_handoff=started` → `[DONE] postclose_final_detector`를 확인한다. 중간 finalization DONE은 detector self-audit 순환 방지 marker일 뿐 최종 성공이 아니며, 이후 detector 실패의 최신 FAIL이 우선한다.
 - 기본 predecessor wait 5100초/23:20 KST hard deadline과 cleanup·detector 각 600초 상한을 확인한다. predecessor 실패/timeout이면 cleanup은 건너뛰되 bounded detector를 실행하고 finalization FAIL로 닫는 현행 계약을 따른다.

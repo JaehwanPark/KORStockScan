@@ -1724,7 +1724,10 @@ def build_postclose_done_controller(
     require_codex_completed: bool = False,
     dry_run: bool = False,
     command_runner: CommandRunner | None = None,
+    summary_handoff_only: bool = False,
 ) -> dict[str, Any]:
+    if summary_handoff_only and (allow_wrapper_rerun or require_codex_completed):
+        raise ValueError("summary_handoff_only_forbids_wrapper_and_codex")
     command_runner = command_runner or _run_command
     attempts: list[dict[str, Any]] = []
     actions_done: list[dict[str, Any]] = []
@@ -1821,6 +1824,18 @@ def build_postclose_done_controller(
         actions = _recovery_actions(
             target_date, final_verifier, allow_wrapper_rerun=allow_wrapper_rerun
         )
+        if summary_handoff_only and any(
+            action.action
+            not in {
+                "verify_pre_summary_chain",
+                "verify_postclose_chain",
+                "refresh_tuning_performance_control_tower",
+                "refresh_next_stage2_checklist",
+            }
+            for action in actions
+        ):
+            blocked_reasons = ["summary_handoff_only_requires_upstream_repair"]
+            break
         if not actions:
             blocked_reasons = issues or [f"verifier_status={verifier_status}"]
             break
@@ -1950,6 +1965,12 @@ def build_postclose_done_controller(
         "status": status,
         "dry_run": dry_run,
         "allow_wrapper_rerun": allow_wrapper_rerun,
+        "summary_handoff_only": summary_handoff_only,
+        "recommendation_intake": (
+            final_verifier["summary_handoff"].get("recommendation_intake")
+            if isinstance(final_verifier.get("summary_handoff"), dict)
+            else None
+        ),
         "root_cause": root_cause,
         "selected_recovery_action": selected_recovery_action,
         "latest_failed_tail_stage": latest_failed_tail_stage,
@@ -2032,6 +2053,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--allow-wrapper-rerun", action="store_true")
     parser.add_argument(
+        "--summary-handoff-only",
+        action="store_true",
+        help="Only refresh summaries/checklist/strict; never rerun producers or Codex",
+    )
+    parser.add_argument(
         "--require-codex-completed",
         action="store_true",
         default=os.environ.get(
@@ -2051,6 +2077,7 @@ def main(argv: list[str] | None = None) -> int:
         allow_wrapper_rerun=args.allow_wrapper_rerun,
         require_codex_completed=args.require_codex_completed,
         dry_run=args.dry_run,
+        summary_handoff_only=args.summary_handoff_only,
     )
     print(
         json.dumps(

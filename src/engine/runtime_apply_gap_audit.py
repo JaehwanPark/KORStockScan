@@ -883,14 +883,14 @@ def _source_dimension_gap_directives(summary: dict[str, Any]) -> list[dict[str, 
 
 
 def _workorder_order_ids(payloads: dict[str, Any]) -> set[str]:
+    from src.engine.automation.postclose_workorder_contract import all_orders
+
     workorder = (
         payloads.get("code_improvement_workorder")
         if isinstance(payloads.get("code_improvement_workorder"), dict)
         else {}
     )
-    orders = (
-        workorder.get("orders") if isinstance(workorder.get("orders"), list) else []
-    )
+    orders = all_orders(workorder)
     return {
         str(item.get("order_id") or "") for item in orders if isinstance(item, dict)
     }

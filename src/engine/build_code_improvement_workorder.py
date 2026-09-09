@@ -8,6 +8,7 @@ import json
 import math
 import re
 from collections import Counter
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -61,7 +62,7 @@ MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_cont
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 2
-WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v7"
+WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v8"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -148,11 +149,41 @@ class ClassifiedOrder:
     decision_source: str | None = None
 
 
+_SOURCE_READS: ContextVar[dict[str, str | None] | None] = ContextVar(
+    "workorder_source_reads", default=None
+)
+
+
+class WorkorderSourceChanged(RuntimeError):
+    pass
+
+
+def _read_source_bytes(path: Path) -> bytes:
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = None
+    reads = _SOURCE_READS.get()
+    if reads is not None:
+        key = str(path.resolve())
+        sha = hashlib.sha256(raw).hexdigest() if raw is not None else None
+        if key in reads and reads[key] != sha:
+            raise WorkorderSourceChanged(
+                f"workorder_source_changed_between_reads:{path}"
+            )
+        reads[key] = sha
+    if raw is None:
+        raise FileNotFoundError(path)
+    return raw
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     if retired_artifact(path):
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_read_source_bytes(path))
+    except WorkorderSourceChanged:
+        raise
     except Exception:
         return {}
     return current_report_view(payload) if isinstance(payload, dict) else {}
@@ -162,10 +193,7 @@ def _file_fingerprint(path: Path, label: str) -> dict[str, Any]:
     exists = path.exists()
     payload = b""
     if exists:
-        try:
-            payload = path.read_bytes()
-        except OSError:
-            payload = b""
+        payload = path.read_bytes()
     stat = path.stat() if exists else None
     return {
         "label": label,
@@ -181,6 +209,13 @@ def _source_fingerprint(source_paths: dict[str, Path]) -> dict[str, Any]:
     files = [
         _file_fingerprint(path, label) for label, path in sorted(source_paths.items())
     ]
+    reads = _SOURCE_READS.get() or {}
+    for entry in files:
+        key = str(Path(entry["path"]).resolve())
+        if key in reads and reads[key] != entry["sha256"]:
+            raise WorkorderSourceChanged(
+                f"workorder_source_changed_after_read:{entry['label']}"
+            )
     hash_input = json.dumps(
         files, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
@@ -218,13 +253,25 @@ def _generation_fingerprint(
 
 
 def _previous_workorder_lineage(
-    previous_report: dict[str, Any], current_orders: list[dict[str, Any]]
+    previous_report: dict[str, Any],
+    current_orders: list[dict[str, Any]],
+    current_non_selected_orders: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    previous_orders = (
-        previous_report.get("orders")
-        if isinstance(previous_report.get("orders"), list)
-        else []
-    )
+    from src.engine.automation.postclose_workorder_contract import all_orders, digest
+
+    previous_selected = previous_report.get("orders")
+    previous_selected = previous_selected if isinstance(previous_selected, list) else []
+    previous_selected_ids = {
+        row["order_id"]
+        for row in previous_selected
+        if isinstance(row, dict) and isinstance(row.get("order_id"), str)
+    }
+    current_selected_ids = {
+        row["order_id"]
+        for row in current_orders
+        if isinstance(row, dict) and isinstance(row.get("order_id"), str)
+    }
+    previous_orders = all_orders(previous_report)
     previous_by_id = {
         str(order.get("order_id")): order
         for order in previous_orders
@@ -232,7 +279,7 @@ def _previous_workorder_lineage(
     }
     current_by_id = {
         str(order.get("order_id")): order
-        for order in current_orders
+        for order in [*current_orders, *(current_non_selected_orders or [])]
         if isinstance(order, dict) and order.get("order_id") not in (None, "")
     }
     previous_ids = set(previous_by_id)
@@ -252,6 +299,18 @@ def _previous_workorder_lineage(
         "removed_order_ids": sorted(previous_ids - current_ids),
         "unchanged_order_ids": sorted(current_ids & previous_ids),
         "decision_changed_order_ids": decision_changed,
+        "contract_changed_order_ids": sorted(
+            key
+            for key in previous_ids & current_ids
+            if digest(previous_by_id[key]) != digest(current_by_id[key])
+        ),
+        "comparison_scope": "all_selected_and_non_selected_native_orders",
+        "new_selected_order_ids": sorted(
+            current_selected_ids - previous_selected_ids, key=str
+        ),
+        "removed_selected_order_ids": sorted(
+            previous_selected_ids - current_selected_ids, key=str
+        ),
     }
 
 
@@ -1895,7 +1954,7 @@ def _load_prompt_research_source(
     if not _source_path_enabled(path, isolated_source_mode=isolated_source_mode):
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_read_source_bytes(path))
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as exc:
@@ -1916,13 +1975,12 @@ def _load_market_census_source(
     verifying this source's integrity. Missing optional sources remain absent;
     existing malformed sources produce a visible integrity diagnostic.
     """
-    if (
-        not _source_path_enabled(path, isolated_source_mode=isolated_source_mode)
-        or not path.exists()
-    ):
+    if not _source_path_enabled(path, isolated_source_mode=isolated_source_mode):
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_read_source_bytes(path))
+    except FileNotFoundError:
+        return {}
     except (OSError, ValueError):
         return {"source_read_error": "invalid_or_unreadable_census_json"}
     return (
@@ -2694,8 +2752,8 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "source_handoff_contract": item.order.get("source_handoff_contract"),
         "adm_issue_types": item.order.get("adm_issue_types") or [],
         "automation_reentry": item.automation_reentry,
-        "runtime_effect": bool(item.order.get("runtime_effect")),
-        "allowed_runtime_apply": bool(item.order.get("allowed_runtime_apply")),
+        "runtime_effect": item.order.get("runtime_effect"),
+        "allowed_runtime_apply": item.order.get("allowed_runtime_apply"),
         "actual_order_submitted": item.order.get("actual_order_submitted"),
         "broker_order_forbidden": item.order.get("broker_order_forbidden"),
         "strategy_effect": bool(item.order.get("strategy_effect")),
@@ -2753,6 +2811,11 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "raw_row_exclusion_context": item.order.get("raw_row_exclusion_context"),
         "terminal_disposition": item.order.get("terminal_disposition"),
     }
+    from src.engine.automation.postclose_workorder_contract import AUTHORITY_FLAGS
+
+    serialized.update(
+        {key: item.order[key] for key in AUTHORITY_FLAGS if key in item.order}
+    )
     if item.order.get("source_report_type") == "market_opportunity_census":
         serialized.update(
             {
@@ -6771,6 +6834,18 @@ def _is_swing_scoped_order(order: dict[str, Any]) -> bool:
 def build_code_improvement_workorder(
     target_date: str, *, max_orders: int = 12, include_swing: bool = True
 ) -> dict[str, Any]:
+    token = _SOURCE_READS.set({})
+    try:
+        return _build_code_improvement_workorder(
+            target_date, max_orders=max_orders, include_swing=include_swing
+        )
+    finally:
+        _SOURCE_READS.reset(token)
+
+
+def _build_code_improvement_workorder(
+    target_date: str, *, max_orders: int = 12, include_swing: bool = True
+) -> dict[str, Any]:
     target_date = str(target_date).strip()
     effective_max_orders = max(1, int(max_orders))
     isolated_source_mode = _workorder_isolated_source_mode()
@@ -7879,12 +7954,13 @@ def build_code_improvement_workorder(
         },
         "source_fingerprint": source_fingerprint["files"],
         "policy": {
-            "runtime_patch_automation": "lifecycle_bucket_discovery_patch_candidate_only",
-            "user_intervention_point": "none_for_bucket_discovery_classification",
+            "runtime_patch_automation": "source_only_intake_not_runtime_authority",
+            "user_intervention_point": "explicit_implementation_or_authorized_monitoring_invocation",
             "post_implementation_reentry": "postclose reports and daily EV consume the updated source metrics automatically",
             "recommended_operator_instruction": (
-                "lifecycle bucket discovery hook gap은 자동 patch 후보를 만들고, self code review + fix "
-                "2-pass + targeted tests 통과 전에는 runtime env로 소비하지 않는다."
+                "Preserve every native ID and authority; implement eligible source-only orders only "
+                "under explicit implementation or authorized monitoring scope. Review, fix, validate "
+                "and re-intake new or changed orders. Existing policy consumers own guarded runtime apply."
             ),
         },
         "summary": {
@@ -8164,28 +8240,33 @@ def build_code_improvement_workorder(
         ],
         "deferred_or_rejected_count": deferred_or_rejected_count,
         "next_codex_session": {
-            "instruction": "Paste the generated markdown into Codex and ask: '이 code improvement workorder를 순서대로 구현하고 검증해줘.'",
+            "instruction": "Use an explicit implementation request or the authorized postclose monitoring invocation; reconcile all native IDs without granting runtime authority.",
             "workorder_markdown": str(code_improvement_workorder_paths(target_date)[1]),
         },
     }
-    report["lineage"] = _previous_workorder_lineage(previous_report, report["orders"])
+    from src.engine.automation.postclose_workorder_contract import inventory
+
+    report["inventory_contract"] = inventory(report)
+    report["lineage"] = _previous_workorder_lineage(
+        previous_report, report["orders"], report["non_selected_orders"]
+    )
     report["summary"]["new_selected_order_count"] = len(
-        report["lineage"]["new_order_ids"]
+        report["lineage"]["new_selected_order_ids"]
     )
     report["summary"]["removed_selected_order_count"] = len(
-        report["lineage"]["removed_order_ids"]
+        report["lineage"]["removed_selected_order_ids"]
     )
     report["summary"]["decision_changed_order_count"] = len(
         report["lineage"]["decision_changed_order_ids"]
     )
+    json_text = json.dumps(report, ensure_ascii=False, indent=2)
+    markdown_text = render_code_improvement_workorder_markdown(report)
+    if _source_fingerprint(source_paths) != source_fingerprint:
+        raise WorkorderSourceChanged("workorder_sources_changed_during_render")
     json_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(
-        render_code_improvement_workorder_markdown(report), encoding="utf-8"
-    )
+    json_path.write_text(json_text, encoding="utf-8")
+    md_path.write_text(markdown_text, encoding="utf-8")
     return report
 
 
@@ -8208,7 +8289,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "",
         "- Postclose 자동화가 생성한 `code_improvement_order`를 Codex 실행용 작업지시서로 변환한다.",
         "- 입력은 scalping pattern lab automation, swing lifecycle improvement automation, swing pattern lab automation을 함께 포함할 수 있다.",
-        "- 이 문서는 repo/runtime을 직접 변경하지 않는다. 사용자가 이 문서를 Codex 세션에 넣고 구현을 요청하는 지점만 사람 개입으로 남긴다.",
+        "- 이 문서는 repo/runtime을 직접 변경하지 않는다. 명시적 구현 또는 장후 모니터링 지시의 허용된 source-only 구현 범위에서 실행한다.",
         "- 구현 후 자동화체인 재투입은 다음 postclose report, threshold calibration, daily EV report가 담당한다.",
         "",
         "## Source",
@@ -8241,10 +8322,10 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "",
         "## 운영 원칙",
         "",
-        "- `runtime_effect=false` order만 구현 대상으로 본다.",
+        "- native ID와 consumer/acceptance가 있으며 `runtime_effect=false`, `allowed_runtime_apply=false`가 strict boolean으로 확인된 권한 내 order만 구현한다.",
         "- fallback 재개, shadow 재개, safety guard 우회는 구현하지 않는다.",
         "- runtime 영향이 생길 수 있는 변경은 feature flag, threshold family metadata, provenance, safety guard를 같이 닫는다.",
-        "- 새 family는 `allowed_runtime_apply=false`에서 시작하고, 구현/테스트/guard 완료 후에만 auto_bounded_live 후보가 될 수 있다.",
+        "- 새 family의 구현/테스트는 실전 등록·승인을 대신하지 않는다. 기존 family별 자동 적용 계약 또는 별도 명시적 권한이 필요하다.",
         "- 구현 후에는 관련 테스트와 parser 검증을 실행하고, 다음 postclose daily EV에서 metric을 확인한다.",
         "- 같은 날짜 workorder를 재생성하면 `generation_id`와 `lineage` diff로 신규/삭제/판정변경 order를 먼저 확인한다.",
         "",
@@ -8252,7 +8333,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "",
         "- Pass 1: `implement_now` 중 instrumentation/report/provenance 구현만 먼저 수행한다.",
         "- Regeneration: 관련 postclose report와 이 workorder를 재생성하고 `lineage` diff를 확인한다.",
-        "- Pass 2: 재생성 후 새로 생긴 `runtime_effect=false` order만 추가 구현한다.",
+        "- Pass 2: 전체 selected/non-selected native ID의 new/decision_changed/contract_changed를 재판정하고 허용된 source-only 항목을 추가 구현한다.",
         "- Final freeze: `generation_id`, `source_hash`, 신규/삭제/판정변경 order를 최종 보고에 남긴다.",
         f"- 권장 지시문: `{policy.get('recommended_operator_instruction')}`",
         "",

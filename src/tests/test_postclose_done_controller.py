@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from src.engine.automation import postclose_done_controller as mod
 
 
@@ -103,11 +105,60 @@ def test_summary_recovery_closes_strictly_within_last_attempt(monkeypatch, tmp_p
         return 0
 
     report = mod.build_postclose_done_controller(
-        "2026-06-03", max_attempts=1, command_runner=runner
+        "2026-06-03", max_attempts=1, command_runner=runner, summary_handoff_only=True
     )
     assert report["status"] == "done"
     assert len(strict_calls) == 2
     assert report["actions"][-1]["action"] == "verify_postclose_chain"
+    assert report["summary_handoff_only"] is True
+
+
+@pytest.mark.parametrize("flag", ["allow_wrapper_rerun", "require_codex_completed"])
+def test_summary_only_mode_cannot_gain_execution_authority(flag):
+    with pytest.raises(ValueError, match="forbids_wrapper_and_codex"):
+        mod.build_postclose_done_controller(
+            "2026-09-09", summary_handoff_only=True, **{flag: True}
+        )
+
+
+def test_summary_only_mode_rejects_upstream_repairs_before_running_any(
+    monkeypatch, tmp_path
+):
+    report_dir = tmp_path / "report"
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "OUTPUT_DIR", report_dir / "postclose_done_controller")
+    _write_succeeded_status(report_dir)
+    _write_json(
+        report_dir
+        / "threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-06-03.json",
+        {"status": "fail", "missing_downstream_links": ["upstream_missing"]},
+    )
+    monkeypatch.setattr(
+        mod,
+        "_recovery_actions",
+        lambda *args, **kwargs: [
+            mod.RecoveryAction(
+                "refresh_next_stage2_checklist", ["allowed_but_incomplete"], "fixture"
+            ),
+            mod.RecoveryAction(
+                "refresh_code_improvement_workorder_final", ["forbidden"], "fixture"
+            ),
+        ],
+    )
+    calls = []
+
+    def runner(cmd, env=None):
+        calls.append(cmd)
+        return 2
+
+    result = mod.build_postclose_done_controller(
+        "2026-06-03", command_runner=runner, summary_handoff_only=True
+    )
+    assert result["status"] != "done"
+    assert result["blocked_reasons"] == [
+        "summary_handoff_only_requires_upstream_repair"
+    ]
+    assert len(calls) == 1  # Initial strict verifier only; no partial recovery.
 
 
 def _write_json(path, payload):

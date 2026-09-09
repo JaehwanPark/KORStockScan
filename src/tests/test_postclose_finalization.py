@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WRAPPER = REPO_ROOT / "deploy/run_postclose_finalization.sh"
 TARGET_DATE = "2026-09-02"
@@ -198,5 +200,57 @@ def test_finalization_reserves_same_date_margin_before_midnight():
     assert "POSTCLOSE_FINALIZATION_HARD_DEADLINE_KST:-23:20" in script
     assert "POSTCLOSE_FINALIZATION_CLEANUP_TIMEOUT_SEC:-600" in script
     assert "POSTCLOSE_FINALIZATION_DETECTOR_TIMEOUT_SEC:-600" in script
+    assert "POSTCLOSE_FINALIZATION_SUMMARY_TIMEOUT_SEC:-600" in script
     assert script.count('timeout --foreground "${') == 2
+    assert 'timeout --kill-after=10s "${SUMMARY_TIMEOUT_SEC}s"' in script
     assert "reason=same_date_hard_deadline" in script
+
+
+@pytest.mark.parametrize("refresh_rc", [0, 9])
+def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
+    tmp_path, monkeypatch, refresh_rc
+):
+    monkeypatch.setattr(sys.modules[__name__], "TARGET_DATE", "2026-09-09")
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "src").symlink_to(REPO_ROOT / "src", target_is_directory=True)
+    _write_ready_predecessors(project)
+    from src.engine.automation.postclose_recommendation_intake import source_paths
+
+    for path in source_paths(project / "data/report", TARGET_DATE).values():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"target_date": TARGET_DATE}), encoding="utf-8")
+    cleanup, detector = project / "bin/cleanup.sh", project / "bin/detector.sh"
+    _write_executable(cleanup, 'printf "cleanup\\n" >> "$PROJECT_DIR/order.txt"\n')
+    _write_executable(detector, 'printf "detector\\n" >> "$PROJECT_DIR/order.txt"\n')
+    systemctl = project / "bin/systemctl"
+    _write_executable(
+        systemctl,
+        "printf '%s\\n' 'LoadState=loaded' 'UnitFileState=static' 'ActiveState=inactive' 'Result=success' 'ExecMainStartTimestamp=2026-09-09 21:15:00 KST'\n",
+    )
+    python = project / "bin/python"
+    _write_executable(
+        python,
+        'if [[ "${1:-}" == "-m" ]]; then\n'
+        '  [[ "$2" == "src.engine.automation.postclose_done_controller" ]]\n'
+        '  [[ " $* " == *" --summary-handoff-only "* ]]\n'
+        '  printf "summary\\n" >> "$PROJECT_DIR/order.txt"\n'
+        f'  exit {refresh_rc}\nfi\nexec "$REAL_PY" "$@"\n',
+    )
+    env = {
+        **_base_env(project, cleanup, detector),
+        "VENV_PY": str(python),
+        "REAL_PY": sys.executable,
+        "PATH": f"{project / 'bin'}:{os.environ['PATH']}",
+    }
+    result = subprocess.run(
+        ["bash", str(WRAPPER), TARGET_DATE], env=env, text=True, capture_output=True
+    )
+    assert result.returncode == (0 if refresh_rc == 0 else 1), (
+        result.stdout + result.stderr
+    )
+    assert (project / "order.txt").read_text().splitlines() == (
+        ["summary", "cleanup", "detector"]
+        if refresh_rc == 0
+        else ["summary", "detector"]
+    )
