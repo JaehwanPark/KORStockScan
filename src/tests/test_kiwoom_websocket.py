@@ -3243,7 +3243,9 @@ def test_subscription_snapshot_opening_gap_is_not_a_no_tick_repair():
     assert row["required_realtime_received"] is False
     assert row["required_realtime_missing_types"] == ["0B", "0D"]
     opened = datetime.fromisoformat("2026-09-10T09:00:30+09:00").timestamp()
-    row = manager.get_subscription_freshness_snapshot(["005930"], now_ts=opened)["rows"][0]
+    row = manager.get_subscription_freshness_snapshot(["005930"], now_ts=opened)[
+        "rows"
+    ][0]
     assert row["freshness_state"] == "no_tick"
     assert row["repair_recommended"] is True
 
@@ -3399,3 +3401,347 @@ def test_remove_before_reg_string_false_does_not_send_remove(monkeypatch):
 
     payloads = [json.loads(payload) for payload in fake_ws.sent]
     assert [payload["trnm"] for payload in payloads] == ["REG"]
+
+
+@pytest.mark.parametrize(
+    "terminal", ["sent", "stop", "epoch", "date", "removed", "reblocked", "budget"]
+)
+def test_micro_observer_boot_route_defer_keeps_cooldown_and_authority(
+    monkeypatch, terminal
+):
+    import concurrent.futures
+
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    manager.subscribed_codes = {"005930"}
+    manager._registered_items_by_code = {"005930": ("005930_AL",)}
+    manager._micro_reversion_observation_items_by_code = {
+        "005930": ("005930", "005930_NX", "005930_AL")
+    }
+    manager._initialize_micro_reversion_registration_receipt(
+        items=["005930", "005930_NX", "005930_AL"],
+        effective_date=datetime.now(kiwoom_websocket.KST).date().isoformat(),
+        source="test",
+    )
+    now = [1000.0]
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now[0])
+    monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "8")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1" if terminal == "budget" else "56"
+    )
+    manager._recent_reg_request_ts["005930"] = 999.0
+    scheduled = []
+
+    def schedule(coro, loop):
+        future = concurrent.futures.Future()
+        scheduled.append((coro, future))
+        return future
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", schedule)
+
+    async def sleep(delay):
+        now[0] += delay
+        if terminal == "reblocked" and delay >= 7.0:
+            manager._recent_reg_request_ts["005930"] = now[0]
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", sleep)
+    for _ in range(2):
+        manager.execute_subscribe(
+            ["005930", "005930_NX"],
+            force=True,
+            observation_only=True,
+            remove_before_reg=False,
+            realtime_types=("0B", "0D"),
+            source="test",
+        )
+    assert len(scheduled) == 1
+    assert manager.websocket.sent == []
+    if terminal == "stop":
+        manager._stop_event.set()
+    if terminal == "epoch":
+        manager._market_data_transport_epoch += 1
+    if terminal == "date":
+        manager._micro_reversion_registration_receipt["effective_date"] = "2026-06-05"
+    if terminal == "removed":
+        manager._micro_reversion_observation_items_by_code.clear()
+    coro, future = scheduled[0]
+    asyncio.run(coro)
+    future.set_result(None)
+    assert not manager._micro_reversion_deferred_reg_codes
+    assert not manager._pending_loop_futures
+    assert "005930" not in manager._micro_reversion_observation_only_codes
+    assert (
+        manager._micro_reversion_registration_receipt["items"]["005930_NX"][
+            "received_realtime_types"
+        ]
+        == []
+    )
+    if terminal == "sent":
+        packets = [json.loads(p) for p in manager.websocket.sent]
+        assert len(packets) == 1
+        assert packets[0]["trnm"] == "REG"
+        assert packets[0]["refresh"] == "1"
+        assert {i for row in packets[0]["data"] for i in row["item"]} == {
+            "005930",
+            "005930_NX",
+            "005930_AL",
+        }
+        assert {t for row in packets[0]["data"] for t in row["type"]} == {"0B", "0D"}
+        assert (
+            manager._micro_reversion_registration_receipt["items"]["005930_NX"][
+                "registration_dispatch_status"
+            ]
+            == "deferred_dispatched_first_data_pending"
+        )
+    else:
+        assert manager.websocket.sent == []
+    if terminal in {"budget", "reblocked"}:
+        assert (
+            manager._micro_reversion_registration_receipt["items"]["005930_NX"][
+                "registration_dispatch_status"
+            ]
+            == "deferred_terminal_gap"
+        )
+
+
+def test_old_deferred_registration_callback_does_not_clear_new_dispatch():
+    manager = KiwoomWSManager("test-token")
+    previous, current = object(), object()
+    manager._micro_reversion_deferred_reg_codes["005930"] = current
+    with manager.lock:
+        manager._release_deferred_micro_registration(["005930"], previous)
+    assert manager._micro_reversion_deferred_reg_codes["005930"] is current
+
+
+def test_micro_deferred_registration_schedule_failure_is_explicit(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager._micro_reversion_observation_items_by_code = {"005930": ("005930_NX",)}
+    manager._initialize_micro_reversion_registration_receipt(
+        items=["005930_NX"],
+        effective_date=datetime.now(kiwoom_websocket.KST).date().isoformat(),
+        source="test",
+    )
+
+    def fail(coro, loop):
+        raise RuntimeError("loop_closed")
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", fail)
+    with pytest.raises(RuntimeError, match="loop_closed"):
+        manager._defer_missing_micro_registration(["005930"], source="test")
+    assert not manager._micro_reversion_deferred_reg_codes
+    assert (
+        manager._micro_reversion_registration_receipt["items"]["005930_NX"][
+            "registration_dispatch_status"
+        ]
+        == "deferred_schedule_failed"
+    )
+
+
+@pytest.mark.parametrize(
+    "change", ["epoch", "target", "receipt", "inflight_epoch", "late_budget"]
+)
+def test_micro_deferred_reg_rechecks_generation_at_wire_boundary(monkeypatch, change):
+    import concurrent.futures
+
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.websocket = _FakeWS([])
+    manager.subscribed_codes = {"005930"}
+    manager._registered_items_by_code = {"005930": ("005930_AL",)}
+    items = ("005930", "005930_NX", "005930_AL")
+    manager._micro_reversion_observation_items_by_code = {"005930": items}
+    day = datetime.now(kiwoom_websocket.KST).date().isoformat()
+    manager._initialize_micro_reversion_registration_receipt(
+        items=items, effective_date=day, source="test"
+    )
+    original_receipt = manager._micro_reversion_registration_receipt
+    captured = []
+    monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "56")
+
+    def schedule(coro, loop):
+        future = concurrent.futures.Future()
+        captured.append((coro, future))
+        return future
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", schedule)
+
+    async def sleep(delay):
+        if delay == 0.1:
+            if change == "epoch":
+                manager._market_data_transport_epoch += 1
+            elif change == "target":
+                manager._micro_reversion_observation_items_by_code.clear()
+            elif change == "receipt":
+                manager._initialize_micro_reversion_registration_receipt(
+                    items=items, effective_date=day, source="replacement"
+                )
+            elif change == "late_budget":
+                monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "1")
+            manager._session_ready.set()
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", sleep)
+    if change == "inflight_epoch":
+        manager._session_ready.set()
+
+        async def send(packet):
+            manager.websocket.sent.append(packet)
+            manager._market_data_transport_epoch += 1
+            manager._registered_items_by_code.clear()
+
+        manager.websocket.send = send
+    manager._defer_missing_micro_registration(["005930"], source="test")
+    coro, future = captured[0]
+    asyncio.run(coro)
+    future.set_result(None)
+    assert len(manager.websocket.sent) == (1 if change == "inflight_epoch" else 0)
+    assert "005930_NX" not in manager._registered_items_by_code.get("005930", ())
+    assert not manager._micro_reversion_deferred_reg_codes
+    assert original_receipt["items"]["005930_NX"]["received_realtime_types"] == []
+    status = original_receipt["items"]["005930_NX"]["registration_dispatch_status"]
+    if change == "late_budget":
+        assert status == "deferred_terminal_gap"
+    else:
+        assert status.startswith("deferred_cancelled_")
+    if change == "receipt":
+        assert (
+            "registration_dispatch_status"
+            not in manager._micro_reversion_registration_receipt["items"]["005930_NX"]
+        )
+
+
+def test_micro_deferred_partial_dispatch_status_and_late_callback(monkeypatch):
+    import concurrent.futures
+
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    codes = ["005930", "000660"]
+    manager.subscribed_codes = set(codes)
+    manager._registered_items_by_code = {c: (c + "_AL",) for c in codes}
+    manager._micro_reversion_observation_items_by_code = {
+        c: (c, c + "_NX", c + "_AL") for c in codes
+    }
+    manager._initialize_micro_reversion_registration_receipt(
+        items=[
+            i
+            for items in manager._micro_reversion_observation_items_by_code.values()
+            for i in items
+        ],
+        effective_date=datetime.now(kiwoom_websocket.KST).date().isoformat(),
+        source="test",
+    )
+    now = [1000.0]
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now[0])
+    monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "8")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "56")
+    manager._recent_reg_request_ts = {c: 999.0 for c in codes}
+    captured = []
+
+    def schedule(coro, loop):
+        future = concurrent.futures.Future()
+        captured.append((coro, future))
+        return future
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", schedule)
+
+    async def sleep(delay):
+        now[0] += delay
+        if delay > 1:
+            manager._recent_reg_request_ts["000660"] = now[0]
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", sleep)
+    manager._defer_missing_micro_registration(codes, source="test")
+    coro, old_future = captured[0]
+    asyncio.run(coro)
+    rows = manager._micro_reversion_registration_receipt["items"]
+    assert (
+        rows["005930_NX"]["registration_dispatch_status"]
+        == "deferred_dispatched_first_data_pending"
+    )
+    assert rows["000660_NX"]["registration_dispatch_status"] == "deferred_terminal_gap"
+    # A completed coroutine's late cancellation callback must not overwrite the
+    # same row after a subsequent bounded request takes ownership.
+    manager._defer_missing_micro_registration(["000660"], source="new_request")
+    assert (
+        rows["000660_NX"]["registration_dispatch_status"]
+        == "deferred_existing_reg_cooldown"
+    )
+    old_future.cancel()
+    assert (
+        rows["000660_NX"]["registration_dispatch_status"]
+        == "deferred_existing_reg_cooldown"
+    )
+    new_coro, new_future = captured[1]
+    new_future.cancel()
+    new_coro.close()
+    assert rows["000660_NX"]["registration_dispatch_status"] == "deferred_cancelled"
+    assert not manager._micro_reversion_deferred_reg_codes
+    assert not manager._pending_loop_futures
+
+
+def test_replacement_micro_manifest_can_schedule_before_old_future_finishes(
+    monkeypatch,
+):
+    import concurrent.futures
+
+    manager = KiwoomWSManager("test-token")
+    manager._started = True
+    manager.loop = SimpleNamespace(is_running=lambda: True)
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    items = ("005930", "005930_NX", "005930_AL")
+    manager.subscribed_codes = {"005930"}
+    manager._registered_items_by_code = {"005930": ("005930_AL",)}
+    manager._micro_reversion_observation_items_by_code = {"005930": items}
+    day = datetime.now(kiwoom_websocket.KST).date().isoformat()
+    captured = []
+
+    def schedule(coro, loop):
+        future = concurrent.futures.Future()
+        captured.append((coro, future))
+        return future
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "run_coroutine_threadsafe", schedule)
+    monkeypatch.setenv("KORSTOCKSCAN_WS_REG_RECENT_TTL_SEC", "0")
+    monkeypatch.setenv("KORSTOCKSCAN_WS_MAX_REG_ITEMS", "56")
+
+    async def sleep(delay):
+        pass
+
+    monkeypatch.setattr(kiwoom_websocket.asyncio, "sleep", sleep)
+    for source in ["old", "replacement"]:
+        manager._initialize_micro_reversion_registration_receipt(
+            items=items, effective_date=day, source=source
+        )
+        manager._defer_missing_micro_registration(["005930"], source=source)
+    assert len(captured) == 2
+    old_coro, old_future = captured[0]
+    asyncio.run(old_coro)
+    old_future.cancel()
+    assert manager.websocket.sent == []
+    assert (
+        manager._micro_reversion_registration_receipt["items"]["005930_NX"][
+            "registration_dispatch_status"
+        ]
+        == "deferred_existing_reg_cooldown"
+    )
+    coro, future = captured[1]
+    asyncio.run(coro)
+    future.set_result(None)
+    assert len(manager.websocket.sent) == 1
+    assert (
+        manager._micro_reversion_registration_receipt["items"]["005930_NX"][
+            "registration_dispatch_status"
+        ]
+        == "deferred_dispatched_first_data_pending"
+    )
+    assert not manager._micro_reversion_deferred_reg_codes
+    assert not manager._pending_loop_futures

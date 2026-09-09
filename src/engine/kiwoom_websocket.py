@@ -354,6 +354,7 @@ class KiwoomWSManager:
         self._last_dashboard_snapshot_at = 0.0
         self._dashboard_snapshot_write_inflight = False
         self._recent_reg_request_ts = {}
+        self._micro_reversion_deferred_reg_codes = {}
         self._alternate_route_request_ts = {}
         self._persistent_repair_request_ts = {}
         self._persistent_repair_window_epochs = deque()
@@ -4434,8 +4435,11 @@ class KiwoomWSManager:
         realtime_types=None,
         replacement_codes=(),
         trading_promotion_codes=(),
+        dispatch_guard=None,
     ):
         try:
+            if dispatch_guard is not None and not dispatch_guard():
+                return
             remove_before_reg = self._flag_enabled(remove_before_reg, default=False)
             requested_realtime_types = self._normalize_required_realtime_types(
                 realtime_types
@@ -4490,7 +4494,9 @@ class KiwoomWSManager:
             )
 
             for _ in range(100):
-                if self._stop_event.is_set():
+                if self._stop_event.is_set() or (
+                    dispatch_guard is not None and not dispatch_guard()
+                ):
                     return
                 if self.websocket and self._session_ready.is_set():
                     break
@@ -4538,6 +4544,20 @@ class KiwoomWSManager:
                         for item in register_items
                         if self._normalize_code(item) in batch_code_set
                     ]
+                    if dispatch_guard is not None:
+                        # Login/batch waits can admit other registrations. Apply
+                        # the same budget again to the actual outgoing batch.
+                        batch_codes, batch_items, _ = (
+                            self._apply_registered_item_budget(
+                                batch_codes,
+                                batch_items,
+                                enforce=enforce_item_budget,
+                                replacement_codes=replacement_code_set,
+                            )
+                        )
+                        if not batch_codes:
+                            continue
+                        batch_code_set = set(batch_codes)
                     reg_packet = {
                         "trnm": "REG",
                         "grp_no": "1",
@@ -4547,7 +4567,13 @@ class KiwoomWSManager:
                             for realtime_type in requested_realtime_types
                         ],
                     }
+                    if dispatch_guard is not None and not dispatch_guard():
+                        return
                     await self.websocket.send(json.dumps(reg_packet))
+                    # An in-flight send cannot be recalled; never bind its local
+                    # receipt to a replacement connection or source generation.
+                    if dispatch_guard is not None and not dispatch_guard():
+                        return
                     reg_sent_at = time.time()
                     with self.lock:
                         self.subscribed_codes.update(batch_codes)
@@ -4600,6 +4626,173 @@ class KiwoomWSManager:
         except Exception as e:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
+
+    def _release_deferred_micro_registration(self, codes, dispatch_token):
+        # Caller holds self.lock. Old callbacks cannot clear a newer dispatch.
+        for code in codes:
+            if self._micro_reversion_deferred_reg_codes.get(code) is dispatch_token:
+                self._micro_reversion_deferred_reg_codes.pop(code, None)
+
+    def _defer_missing_micro_registration(self, codes, *, source):
+        """Retain one source-only route request through the existing REG cooldown."""
+        dispatch_token = object()
+        with self.lock:
+            receipt = self._micro_reversion_registration_receipt
+            effective_date = receipt.get("effective_date")
+            epoch = self._market_data_transport_epoch
+            desired_by_code = {}
+            for code in codes:
+                desired = set(
+                    self._micro_reversion_observation_items_by_code.get(code) or ()
+                )
+                registered = set(self._registered_items_by_code.get(code) or ())
+                if (
+                    desired - registered
+                    and code not in self._micro_reversion_deferred_reg_codes
+                ):
+                    self._micro_reversion_deferred_reg_codes[code] = dispatch_token
+                    desired_by_code[code] = sorted(desired)
+            pending = list(desired_by_code)
+            if not pending:
+                return
+            delay = (
+                max(
+                    max(
+                        0.0,
+                        self._recent_reg_ttl_sec()
+                        - (
+                            time.time()
+                            - float(self._recent_reg_request_ts.get(code) or 0)
+                        ),
+                    )
+                    for code in pending
+                )
+                + 0.05
+            )
+
+        def invalid_reason():
+            if self._stop_event.is_set() or not self._started:
+                return "process_stopping"
+            with self.lock:
+                if (
+                    self._market_data_transport_epoch != epoch
+                    or self._micro_reversion_registration_receipt is not receipt
+                    or receipt.get("effective_date") != effective_date
+                    or datetime.now(KST).date().isoformat() != effective_date
+                ):
+                    return "generation_changed"
+                if any(
+                    self._micro_reversion_deferred_reg_codes.get(code)
+                    is not dispatch_token
+                    or set(
+                        self._micro_reversion_observation_items_by_code.get(code) or ()
+                    )
+                    != set(items)
+                    for code, items in desired_by_code.items()
+                ):
+                    return "target_changed"
+            return ""
+
+        def mark(status, selected_codes=None):
+            with self.lock:
+                # Keep this dispatch's history even if the canonical receipt was
+                # replaced, but never overwrite its successor's rows or status.
+                for code in pending if selected_codes is None else selected_codes:
+                    if (
+                        self._micro_reversion_registration_receipt is receipt
+                        and self._micro_reversion_deferred_reg_codes.get(code)
+                        is not dispatch_token
+                    ):
+                        continue
+                    for item in desired_by_code[code]:
+                        row = receipt.get("items", {}).get(item)
+                        if isinstance(row, dict):
+                            row["registration_dispatch_status"] = status
+
+        async def deferred():
+            try:
+                await asyncio.sleep(delay)
+                reason = invalid_reason()
+                if reason:
+                    mark("deferred_cancelled_" + reason)
+                    return
+                with self.lock:
+                    missing = {
+                        code: sorted(
+                            set(items)
+                            - set(self._registered_items_by_code.get(code) or ())
+                        )
+                        for code, items in desired_by_code.items()
+                    }
+                allowed, blocked = self._filter_recent_reg_targets(
+                    [code for code, items in missing.items() if items]
+                )
+                if allowed:
+                    await self._send_reg(
+                        [item for code in allowed for item in desired_by_code[code]],
+                        replace_existing=False,
+                        enforce_item_budget=True,
+                        remove_before_reg=False,
+                        source=source,
+                        realtime_types=("0B", "0D"),
+                        dispatch_guard=lambda: not invalid_reason(),
+                    )
+                reason = invalid_reason()
+                if reason:
+                    mark("deferred_cancelled_" + reason)
+                    return
+                # Per-code local dispatch is not acknowledgement or first data.
+                for code, items in missing.items():
+                    with self.lock:
+                        outstanding = set(items) - set(
+                            self._registered_items_by_code.get(code) or ()
+                        )
+                    mark(
+                        (
+                            "deferred_terminal_gap"
+                            if code in blocked or outstanding
+                            else "deferred_dispatched_first_data_pending"
+                        ),
+                        [code],
+                    )
+            except (asyncio.CancelledError, concurrent.futures.CancelledError):
+                mark("deferred_cancelled")
+                raise
+            except Exception:
+                mark("deferred_failed")
+                raise
+            finally:
+                with self.lock:
+                    self._release_deferred_micro_registration(pending, dispatch_token)
+
+        mark("deferred_existing_reg_cooldown")
+        coroutine = deferred()
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
+        except Exception:
+            coroutine.close()
+            mark("deferred_schedule_failed")
+            with self.lock:
+                self._release_deferred_micro_registration(pending, dispatch_token)
+            raise
+        with self._pending_future_lock:
+            self._pending_loop_futures.add(future)
+
+        def completed(fut):
+            with self._pending_future_lock:
+                self._pending_loop_futures.discard(fut)
+            try:
+                fut.result()
+            except (asyncio.CancelledError, concurrent.futures.CancelledError):
+                mark("deferred_cancelled")
+            except Exception as exc:
+                mark("deferred_failed")
+                log_error(f"[WS] source-only deferred REG failed: {type(exc).__name__}")
+            finally:
+                with self.lock:
+                    self._release_deferred_micro_registration(pending, dispatch_token)
+
+        future.add_done_callback(completed)
 
     def execute_subscribe(
         self,
@@ -4698,6 +4891,10 @@ class KiwoomWSManager:
                     "⏳ [WS] 최근 REG 중복 생략: "
                     f"codes={skipped_recent} ttl_sec={self._recent_reg_ttl_sec():.1f}"
                 )
+                if observation_only:
+                    self._defer_missing_micro_registration(
+                        skipped_recent, source=source
+                    )
 
         if new_targets and send_ready:
             replace_existing = not bool(self.subscribed_codes)
@@ -4919,6 +5116,9 @@ class KiwoomWSManager:
         self, *, items, effective_date, source
     ):
         now_ts = time.time()
+        # A replacement manifest must be able to schedule its missing routes;
+        # old futures remain bounded and fail their generation guard.
+        self._micro_reversion_deferred_reg_codes.clear()
         existing = self._micro_reversion_registration_receipt
         existing_items = (
             existing.get("items")
@@ -4931,6 +5131,7 @@ class KiwoomWSManager:
         for item in sorted(set(items)):
             previous = existing_items.get(item)
             row = dict(previous) if isinstance(previous, dict) else {}
+            row.pop("registration_dispatch_status", None)
             row.setdefault("required_realtime_types", ["0B", "0D"])
             row.setdefault("received_realtime_types", [])
             row.setdefault("receipt_count_by_type", {})
@@ -5163,7 +5364,7 @@ class KiwoomWSManager:
             "📌 [WS] micro-reversion source-only 관측 집합 반영: "
             f"requested_symbols={len(new_items_by_code)} "
             f"requested_items={sum(len(value) for value in new_items_by_code.values())} "
-            f"subscribed_now={len(subscribe_items)} "
+            f"dispatch_requested_items={len(subscribe_items)} "
             f"retired={len(retired_or_changed)} "
             f"runtime_protected={len(set(new_items_by_code) & protected_codes)} "
             "trading_runtime_effect=false"

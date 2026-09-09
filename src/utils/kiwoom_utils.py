@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import time
 import threading
@@ -512,11 +513,15 @@ def get_kiwoom_base_url():
                 if "dev" in str(target_path).lower()
                 else "🚀 [PROD/REAL]"
             )
-            print(f"⚙️ Kiwoom API 스위치 온: {mode_str} 목적지 -> {base_url}")
+            # Keep machine-readable CLI stdout free of import-time diagnostics.
+            print(
+                f"⚙️ Kiwoom API 스위치 온: {mode_str} 목적지 -> {base_url}",
+                file=sys.stderr,
+            )
             return base_url
     except Exception as e:
-        log_info(f"⚠️ 설정 파일 로드 실패: {e}. 실투자 URL로 폴백합니다.")
-        print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}")
+        # Startup diagnostics must stay on stderr even if file logging fails.
+        print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}", file=sys.stderr)
         return "https://api.kiwoom.com"
 
 

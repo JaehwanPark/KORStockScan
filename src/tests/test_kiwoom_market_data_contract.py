@@ -6,6 +6,32 @@ from src.engine import sniper_strength_shadow_feedback
 from src.utils import kiwoom_utils
 
 
+def test_base_url_diagnostic_preserves_json_stdout(tmp_path, monkeypatch, capsys):
+    import json
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"KIWOOM_BASE_URL":"https://example.test"}')
+    monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
+    print(json.dumps({"base_url": kiwoom_utils.get_kiwoom_base_url()}))
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"base_url": "https://example.test"}
+    assert "https://example.test" in captured.err
+
+
+def test_base_url_failure_diagnostic_preserves_json_stdout(
+    tmp_path, monkeypatch, capsys
+):
+    import json
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text("invalid-json")
+    monkeypatch.setattr(kiwoom_utils, "CONFIG_PATH", config_path)
+    print(json.dumps({"base_url": kiwoom_utils.get_kiwoom_base_url()}))
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"base_url": "https://api.kiwoom.com"}
+    assert "폴백" in captured.err
+
+
 def _clear_market_data_cache():
     with kiwoom_utils._MARKET_DATA_CACHE_LOCK:
         kiwoom_utils._MARKET_DATA_CACHE.clear()
