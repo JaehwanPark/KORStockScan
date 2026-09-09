@@ -211,7 +211,9 @@ def timestamp_source_quality_census(snapshot: dict[str, Any]) -> dict[str, Any]:
     )
     receipts_are_valid = bool(
         isinstance(rejection_samples, (list, tuple))
-        and all(_valid_timestamp_rejection_receipt(sample) for sample in rejection_samples)
+        and all(
+            _valid_timestamp_rejection_receipt(sample) for sample in rejection_samples
+        )
     )
     receipt_type_counts_match = bool(
         receipts_are_valid

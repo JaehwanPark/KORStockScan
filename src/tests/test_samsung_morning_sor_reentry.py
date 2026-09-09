@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pytest
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -25,6 +26,15 @@ from src.trading.samsung_morning_one_share.reentry import (
     prior_reentry_allows_new_first_episode,
     runtime_ledgers_allow_service_start,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_owner_registry(tmp_path, monkeypatch):
+    # Historical fake gateways must not consume the workstation's live custody.
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner_registry.jsonl")
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-samsung-reentry")
 
 
 def _at(hour: int, minute: int) -> datetime:
@@ -509,6 +519,144 @@ def test_reentry_targets_are_two_ticks_and_closed_unfilled_positions_are_held(tm
     assert prior_reentry_allows_new_first_episode(
         state_path, target_date=date(2026, 8, 14)
     ) == (False, "prior_reentry_order_or_position_unresolved")
+
+
+def _cancelled_no_trade_payload():
+    return {
+        "schema": "samsung_morning_sor_reentry_two_leg_state_v1",
+        "trade_date": "2026-08-13",
+        "status": "NO_TRADE",
+        "attempt_consumed": True,
+        "position_qty": 0,
+        "owner_registry_reconciliation_required": False,
+        "owned_order_nos": ["0022725", "0022729", "0023329", "0023331"],
+        "legs": [
+            {
+                "leg_id": str(index),
+                "quantity": 10,
+                "status": "NO_FILL",
+                "position_qty": 0,
+                "buy_filled_qty": 0,
+                "target_filled_qty": 0,
+                "last_buy_remaining_qty": 0,
+                "last_buy_reconcile_source_ok": True,
+                "buy_order_no": order,
+                "buy_order_date": "2026-08-13",
+                "last_buy_reconciled_at": "2026-08-13T09:44:04+09:00",
+                "buy_cancel_attempted_at": "2026-08-13T09:44:02+09:00",
+                "buy_cancel_attempt_count": 1,
+                "buy_cancel_requested": False,
+                "buy_cancel_ambiguous": False,
+                "buy_cancel_terminal_failure": False,
+                "buy_owner_registry_reconciliation_required": False,
+                "buy_cancel_owner_registry_reconciliation_required": False,
+                "target_owner_registry_reconciliation_required": False,
+                "target_order_no": "",
+                "target_quantity": 0,
+                "target_submit_attempt_count": 0,
+                "target_owner_registry_intent_id": "",
+            }
+            for index, order in enumerate(("0022725", "0022729"))
+        ],
+    }
+
+
+def test_prior_cancelled_no_trade_allows_next_day_without_mutating_ledger(tmp_path):
+    path = tmp_path / "reentry.json"
+    path.write_text(json.dumps(_cancelled_no_trade_payload()), encoding="utf-8")
+    original = path.read_bytes()
+    assert prior_reentry_allows_new_first_episode(
+        path, target_date=date(2026, 8, 14)
+    ) == (True, "prior_reentry_terminal_clear")
+    assert runtime_ledgers_allow_service_start(
+        reentry_path=path,
+        first_episode_path=tmp_path / "absent.json",
+        target_date=date(2026, 8, 14),
+    ) == (True, "prior_reentry_terminal_clear")
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("status", "BUY_CANCEL_PENDING"),
+        ("position_qty", 1),
+        ("position_qty", False),
+        ("position_qty", None),
+        ("position_qty", "0"),
+        ("buy_filled_qty", 1),
+        ("target_filled_qty", 1),
+        ("quantity", True),
+        ("quantity", 0),
+        ("quantity", 30),
+        ("last_buy_remaining_qty", 1),
+        ("last_buy_remaining_qty", None),
+        ("last_buy_remaining_qty", False),
+        ("last_buy_reconcile_source_ok", False),
+        ("last_buy_reconcile_source_ok", None),
+        ("last_buy_reconcile_source_ok", "true"),
+        ("buy_cancel_requested", True),
+        ("buy_cancel_ambiguous", True),
+        ("buy_cancel_ambiguous", None),
+        ("buy_cancel_terminal_failure", True),
+        ("buy_owner_registry_reconciliation_required", True),
+        ("buy_cancel_owner_registry_reconciliation_required", True),
+        ("target_owner_registry_reconciliation_required", True),
+        ("buy_order_no", ""),
+        ("buy_order_no", "0022729"),
+        ("buy_order_no", "9999999"),
+        ("buy_order_date", "2026-08-12"),
+        ("target_order_no", "0099999"),
+        ("target_quantity", 1),
+        ("target_submit_attempt_count", 1),
+        ("target_owner_registry_intent_id", "pending"),
+        ("last_buy_reconciled_at", ""),
+        ("last_buy_reconciled_at", None),
+        ("last_buy_reconciled_at", "2026-08-13T09:44:04"),
+        ("last_buy_reconciled_at", "2026-08-12T09:44:04+09:00"),
+        ("buy_cancel_attempted_at", "2026-08-13T09:44:05+09:00"),
+        ("buy_cancel_attempted_at", ""),
+        ("buy_cancel_attempt_count", 0),
+        ("buy_cancel_attempt_count", True),
+    ],
+)
+def test_prior_cancelled_no_trade_rejects_unproven_leg(tmp_path, key, value):
+    payload = _cancelled_no_trade_payload()
+    payload["legs"][0][key] = value
+    path = tmp_path / "reentry.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert (
+        prior_reentry_allows_new_first_episode(path, target_date=date(2026, 8, 14))[0]
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("position_qty", 1),
+        ("position_qty", "0"),
+        ("position_qty", False),
+        ("attempt_consumed", False),
+        ("owner_registry_reconciliation_required", True),
+        ("owner_registry_reconciliation_required", None),
+        ("owned_order_nos", []),
+        ("owned_order_nos", ["0022725", "0022729", "unknown"]),
+        ("owned_order_nos", ["0022725", "0022729", "0022725"]),
+        ("legs", []),
+        ("legs", [None, None]),
+        ("status", "HELD"),
+    ],
+)
+def test_prior_cancelled_no_trade_rejects_unproven_episode(tmp_path, key, value):
+    payload = _cancelled_no_trade_payload()
+    payload[key] = value
+    path = tmp_path / "reentry.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert (
+        prior_reentry_allows_new_first_episode(path, target_date=date(2026, 8, 14))[0]
+        is False
+    )
 
 
 def test_prior_reentry_position_blocks_next_day_first_episode(tmp_path):

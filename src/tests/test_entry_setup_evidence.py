@@ -955,6 +955,9 @@ def test_v2_14_detailed_replay_composes_risk_only_response(monkeypatch):
         "build_v2_13_recovery_confirmation_analysis_v1",
         lambda *_args, **_kwargs: {
             **_recovery_analysis(clean=True),
+            # This test exercises an economically comparable composed BUY.
+            # Missing exposure costs are intentionally excluded by the report.
+            "execution_cost": {"conservative_execution_cost_pct": 0.2},
             "analysis_sha256": "recovery-analysis-hash",
         },
     )

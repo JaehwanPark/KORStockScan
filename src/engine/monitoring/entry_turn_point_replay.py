@@ -558,6 +558,50 @@ def decode_pre_anchor_ws_bbo_bundle(
     return _bundled_pre_anchor_ws_bbos(row)
 
 
+def source_readiness_diagnostic(replay):
+    """Do not mistake a hook receipt or an economic floor for source closure."""
+    source_gaps = dict(replay.get("source_quality_gap_counts") or {})
+    extraction_gaps = dict(replay.get("bbo_extraction_gap_counts") or {})
+    pending = {
+        k: v
+        for k, v in source_gaps.items()
+        if "pending_horizon" in k or "not_mature" in k
+    }
+    unresolved = {k: v for k, v in source_gaps.items() if k not in pending}
+    if not replay.get("candidate_count"):
+        state = "no_candidate_evidence"
+    elif not replay.get("runtime_instrumentation_reflected"):
+        state = "runtime_receipt_not_observed"
+    elif unresolved or extraction_gaps:
+        state = "source_quality_investigation_required"
+    elif pending:
+        state = "pending_declared_maturity"
+    else:
+        state = (
+            "comparison_sample_floor_pending"
+            if not (replay.get("acceptance") or {}).get("all_floors_met")
+            else "source_comparison_ready"
+        )
+    return {
+        "schema": "entry_turn_source_readiness_v1",
+        "status": state,
+        "owner": "scanner_existing_ws_bbo_observation",
+        "source_gap_counts": unresolved,
+        "extraction_gap_counts": extraction_gaps,
+        "pending_maturity_counts": pending,
+        "counts_are_overlapping_diagnostics_not_unique_candidates": True,
+        "next_action": (
+            "inspect_exact_route_time_provenance_and_isolate_invalid_rows"
+            if state == "source_quality_investigation_required"
+            else state
+        ),
+        "finite_eta": None,
+        "repair_requires_positive_ev_or_promotion_floor": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _master_date(path: Path) -> date | None:
     prefix = "micro_reversion_symbol_master_"
     name = path.name

@@ -10,6 +10,27 @@ import json
 from collections import Counter, defaultdict
 from datetime import timedelta
 
+from src.engine.sniper_time import scalping_same_session_entry_cutoff_blocked
+
+
+def scope_exclusion(row, parse_ts):
+    """Exclude only an immutable guard, never infer a historical PID's windows.
+
+    Clock-derived strategy cohorts are not physical quote venues. In particular
+    NXT overlap coverage cannot prove what the main KRX strategy should trade.
+    Keep those rows in the broad census with an explicit unresolved scope.
+    """
+    anchor = parse_ts(row.get("first_census_at"))
+    if anchor is None:
+        return "invalid_opportunity_time"
+    if scalping_same_session_entry_cutoff_blocked(anchor):
+        return "intended_new_buy_hard_cutoff"
+    if row.get("session") == "NXT_REGULAR_OVERLAP":
+        return "main_overlap_route_policy_unproven"
+    if str(row.get("session") or "").startswith("OUTSIDE_"):
+        return "outside_supported_market_session"
+    return None
+
 
 def report_sha256(report):
     return hashlib.sha256(
@@ -115,6 +136,8 @@ def scoped_diagnostics(
                 or row.get("listing_market") not in {"KOSPI", "KOSDAQ"}
             ):
                 excluded["master_unverified_or_not_common_equity"] += 1
+            elif scope_exclusion(row, parse_ts):
+                excluded[scope_exclusion(row, parse_ts)] += 1
             elif anchor not in captures[key] or not any(
                 start <= anchor and anchor + timedelta(seconds=validity_sec) <= end
                 for start, end in intervals
@@ -146,7 +169,23 @@ def scoped_diagnostics(
             ),
             "whole_market_coverage_claim_allowed": False,
             "scope": "verified_common_equity_contiguous_primary_capture_windows_only",
-            "source_fetch_pool_visibility": "promotion_prune_proxy_not_full_fetch_pool_census",
+            "source_fetch_pool_visibility": (
+                "partial_exact_adapter_pool_receipts_not_raw_api_universe"
+                if any(
+                    r.get("source_fetch_observed_exact")
+                    or r.get("candidate_pool_observed_exact")
+                    for r in eligible
+                )
+                else "promotion_prune_proxy_not_full_fetch_pool_census"
+            ),
+            "exact_fetch_episode_count": sum(
+                r.get("source_fetch_observed_exact") is True for r in eligible
+            ),
+            "exact_pool_episode_count": sum(
+                r.get("candidate_pool_observed_exact") is True for r in eligible
+            ),
+            "scope_contract": "hard_cutoff_excluded_exact_runtime_windows_not_assumed",
+            "runtime_buy_window_receipt_verified": False,
             "raw_episode_count": len(grouped[key]),
             "eligible_episode_count": count,
             "excluded_episode_count": sum(excluded.values()),
@@ -177,7 +216,7 @@ def scoped_diagnostics(
             ),
         }
     return {
-        "schema_version": "market_opportunity_scoped_review_v1",
+        "schema_version": "market_opportunity_scoped_review_v2",
         "metric_role": "funnel_count",
         "decision_authority": "source_only_scanner_coverage_audit",
         "runtime_effect": False,
@@ -216,6 +255,16 @@ def diagnostic_followups(scoped, target_date):
             "intended_consumer": "code_improvement_workorder",
             "implementation_scope": "source_only_parser_report_instrumentation",
             "acceptance": "exact first blocker and isolated capture-window conservation; no live changes",
+            "files_likely_touched": [
+                "src/engine/monitoring/market_opportunity_census.py",
+                "src/engine/monitoring/market_opportunity_review.py",
+                "src/scanners/scanner_source_census.py",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_market_opportunity_review.py src/tests/test_scanner_source_census.py",
+                "hard-cutoff exclusions, exact premarket route, first missing stage and source receipt conservation remain non-live",
+            ],
+            "required_downstream": ["code_improvement_workorder"],
             "reason": summary["next_action"],
             "evidence": {
                 k: summary[k]

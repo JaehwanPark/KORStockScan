@@ -14,6 +14,7 @@ from src.engine.scalping.entry_recheck_economics import LEDGER_KEY, terminal_eco
 from src.engine.scalping.entry_recheck_policy import (
     ATTRIBUTION_VERSION,
     SCOPES,
+    canonical_wait_probe_contract,
     finite_number,
     runtime_scope,
 )
@@ -807,6 +808,14 @@ def evaluate_blocked_ai_score_recheck(
             probe_intent_status or "not_reported"
         ),
         "entry_opportunity_recheck_ai_recovery_trigger": recovery_trigger or "-",
+        "entry_opportunity_recheck_canonical_probe_candidate": canonical_wait_probe_contract(
+            action=action,
+            contract_status=contract_status,
+            edge_state=edge_state,
+            probe_intent=probe_intent,
+            probe_intent_status=probe_intent_status,
+            recovery_trigger=recovery_trigger,
+        ),
         "entry_opportunity_recheck_microstructure_confirmed": micro_confirmed,
     }
     base.update(dict(microstructure_fields or {}))
@@ -903,12 +912,13 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
-    if not (
-        contract_status == "pass"
-        and edge_state == "EDGE"
-        and probe_intent
-        and probe_intent_status == "eligible_wait_probe"
-        and recovery_trigger == "recovery_required"
+    if not canonical_wait_probe_contract(
+        action=action,
+        contract_status=contract_status,
+        edge_state=edge_state,
+        probe_intent=probe_intent,
+        probe_intent_status=probe_intent_status,
+        recovery_trigger=recovery_trigger,
     ):
         return _decision(
             allowed=False,

@@ -43,6 +43,69 @@ from src.engine.scalping.entry_setup_evidence import (
 from src.engine import bedrock_nova_provider
 
 
+def test_reaction_context_reaches_entry_and_canonical_holding_payload(monkeypatch):
+    from src.engine import ai_engine_openai as module
+    from src.engine.scalping_feature_packet import (
+        build_scalping_feature_audit_fields,
+        finalize_scalping_feature_delivery_audit_fields,
+        settle_scalping_feature_delivery,
+    )
+
+    engine = _build_engine()
+    packet = {
+        "microstructure_reaction_context_version": "microstructure_reaction_context_v2",
+        "microstructure_reaction_context_id": "same-context",
+        "microstructure_reaction_context_status": "ok",
+        "microstructure_reaction_ask_sweep_score": 0,
+        "microstructure_reaction_venue": "KRX",
+        "future_first_hit": "net_target_first",
+        "realized_pnl": 10000,
+    }
+    entry = engine._build_entry_screen_hot_payload(
+        {"curr": 10000},
+        [],
+        [],
+        feature_packet=packet,
+    )
+    assert entry["features"]["microstructure_reaction_context_id"] == "same-context"
+    assert entry["features"]["microstructure_reaction_ask_sweep_score"] == 0
+    assert "future_first_hit" not in entry["features"]
+    monkeypatch.setattr(
+        module, "holding_decision_context_model_payload", lambda _: {"enabled": True}
+    )
+    holding = json.loads(
+        engine._build_scalping_holding_score_v2_context(
+            "test",
+            "005930",
+            {"curr": 10000},
+            [],
+            [],
+            {},
+            feature_packet=packet,
+            holding_context={"enabled": True},
+        )
+    )
+    reaction = holding["market_flow_features"]["microstructure_reaction_context"]
+    assert reaction["microstructure_reaction_context_id"] == "same-context"
+    assert "realized_pnl" not in reaction
+    assert (
+        holding["market_flow_features"]["duplicate_legacy_feature_bundle_omitted"]
+        is True
+    )
+    for payload in (entry, holding):
+        audit = finalize_scalping_feature_delivery_audit_fields(
+            build_scalping_feature_audit_fields(packet),
+            json.dumps(payload),
+        )
+        assert audit["microstructure_reaction_context_payload_included"] is True
+        assert audit["microstructure_reaction_context_sent"] is False
+        audit["microstructure_provider_delivery_status"] = "response_received"
+        settled = settle_scalping_feature_delivery(audit)
+        assert settled["microstructure_reaction_context_sent"] is True
+        reused = settle_scalping_feature_delivery(settled, cache_hit=True)
+        assert reused["microstructure_reaction_context_sent"] is False
+
+
 def _build_engine():
     engine = GPTSniperEngine.__new__(GPTSniperEngine)
     engine.api_call_lock = threading.Lock()

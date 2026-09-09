@@ -6,6 +6,7 @@ from datetime import datetime
 from statistics import mean
 
 from src.engine.scalping.microstructure_reaction_context import (
+    CONTEXT_VERSION as MICROSTRUCTURE_REACTION_CONTEXT_VERSION,
     DEFAULT_QUOTE_STALE_MS as SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
     microstructure_delivery_fields,
     normalize_quote_stale_threshold,
@@ -29,6 +30,27 @@ _MICROSTRUCTURE_REACTION_PROVIDER_KEYS = frozenset(
         "microstructure_reaction_source_quality",
     }
 )
+
+
+def microstructure_reaction_model_fields(packet):
+    """Project existing as-of context into a stage payload, never future labels."""
+    if (
+        not isinstance(packet, dict)
+        or packet.get("microstructure_reaction_context_version")
+        != MICROSTRUCTURE_REACTION_CONTEXT_VERSION
+    ):
+        return {}
+    keys = _MICROSTRUCTURE_REACTION_PROVIDER_KEYS | {
+        "microstructure_reaction_context_version",
+        "microstructure_reaction_context_id",
+        "microstructure_reaction_reference_time",
+        "microstructure_reaction_reference_price",
+        "microstructure_reaction_venue",
+        "microstructure_reaction_quote_stale_threshold_ms",
+        "microstructure_reaction_tick_aggressor_pressure_usable",
+        "microstructure_reaction_tick_aggressor_trusted_count",
+    }
+    return {key: packet[key] for key in sorted(keys) if key in packet}
 
 
 def _safe_number(value, default=0.0):

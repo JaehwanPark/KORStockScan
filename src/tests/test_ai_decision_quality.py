@@ -7106,6 +7106,62 @@ def test_micro_reversion_bridge_outcome_adapts_action_neutral_seconds_label():
     assert label["quantity_authority"] == ("standardized_one_share_observation_only")
     assert label["notional_net_profit_eligible"] is False
     assert label["outcome_embedded_in_provider_input"] is False
+    net = quality._verified_net_entry_opportunity(label)
+    assert net["status"] == "verified_counterfactual_after_cost"
+    assert net["counterfactual_net_target_first"] is True
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+
+    summary = calibration.cost_aware_opportunity_diagnostic(
+        [
+            {
+                "decision_trace_id": label["decision_trace_id"],
+                "entry_cost_aware_opportunity": net,
+            },
+            {"decision_trace_id": "wrong-parent", "entry_cost_aware_opportunity": net},
+            {
+                "decision_trace_id": label["decision_trace_id"],
+                "entry_cost_aware_opportunity": {**net, "label_content_sha256": None},
+            },
+            {"entry_cost_aware_opportunity": ["malformed"]},
+            {
+                "entry_cost_aware_opportunity": {
+                    "status": "source_unavailable",
+                    "counterfactual_net_target_first": True,
+                }
+            },
+            {},
+        ]
+    )
+    assert summary["input_count"] == 6
+    assert (
+        summary["verified_counterfactual_count"]
+        == summary["net_target_first_count"]
+        == 1
+    )
+    assert summary["source_gap_count"] == 5
+    assert summary["realized_net_pnl_krw"] is None
+    assert (
+        net["cost_adjusted_end_return_pct"] == primary["cost_adjusted_end_return_pct"]
+    )
+    assert net["realized_net_pnl_krw"] is None
+    assert net["cost_aware_actionable_episode_count"] is None
+    assert net["additional_cost_subtracted_here"] is False
+    tampered = deepcopy(label)
+    tampered["symbol_master_artifact_sha256"] = "x" * 64
+    assert (
+        quality._verified_net_entry_opportunity(tampered)["status"]
+        == "source_unavailable"
+    )
+    assert (
+        quality._verified_net_entry_opportunity(
+            {
+                "decision_stage": "entry",
+                "entry_path_first_hit": "target_first",
+                "entry_path_target_pct": 0.3,
+            }
+        )["counterfactual_net_target_first"]
+        is None
+    )
     assert "source_bridge_report" not in artifact
     assert artifact["bridge_report_artifact_sha256"] == quality._sha256(bridge_report)
     assert "source_bridge_report" not in label
@@ -7118,6 +7174,110 @@ def test_current_materialized_report_rejects_resealed_cross_date_evidence():
 
     with pytest.raises(ValueError, match="current_target_date_mismatch"):
         quality._validate_micro_reversion_materialized_report(materialized)
+
+
+def test_exact_net_companion_reaches_entry_calibration_without_changing_base_metric(
+    tmp_path,
+):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    from src.engine.scalping.micro_reversion import (
+        main_ai_prompt_optimizer as optimizer,
+    )
+    from src.tests.test_ai_action_outcome_calibration import _write_json
+
+    _, materialized, bridge = _micro_reversion_action_neutral_bridge_fixture()
+    artifact = quality.build_micro_reversion_action_neutral_outcome_labels(
+        materialized_report=materialized,
+        bridge_report=bridge,
+    )
+    label = artifact["labels"][0]
+    day = artifact["target_date"]
+    request = deepcopy(materialized["requests"][0])
+    request["candidate"] = {"prompt_version": "candidate_v1"}
+    request["anticipatory_reversal_analysis"] = {
+        "execution_cost": {"conservative_execution_cost_pct": 0.2}
+    }
+    result = {
+        "decision_trace_id": request["decision_trace_id"],
+        "paired_replay_id": request["paired_replay_id"],
+        "stage": "entry",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "status": "pass",
+        "same_payload_confirmed": True,
+        "control_response": {"action": "DROP"},
+        "candidate_response": {"action": "WAIT"},
+    }
+    base_label = {
+        "decision_trace_id": request["decision_trace_id"],
+        "decision_stage": "entry",
+        "source_quality_status": "pass",
+        "horizon_metrics": {
+            "10m": {"end_return_pct": 0.32, "mfe_pct": 0.4, "mae_pct": -0.1}
+        },
+    }
+
+    def build():
+        return quality.build_paired_replay_report(
+            target_date=day,
+            requests=[request],
+            results=[result],
+            labels=[base_label],
+            net_outcome_artifact=artifact,
+            net_source_bridge_report=bridge,
+        )
+
+    report = build()
+    row = report["paired_comparisons"][0]
+    assert row["outcome_return_pct"] == 0.32
+    net = row["entry_cost_aware_opportunity"]
+    assert net["status"] == "verified_counterfactual_after_cost"
+    assert (
+        net["cost_adjusted_end_return_pct"]
+        == quality._micro_reversion_primary_metric(label)[
+            "cost_adjusted_end_return_pct"
+        ]
+    )
+    assert net["cost_aware_actionable_episode_count"] is None
+    _write_json(
+        tmp_path
+        / "report"
+        / calibration.PAIRED_SUBDIR
+        / f"ai_prompt_detailed_paired_replay_{day}_net.json",
+        {"target_date": day, "paired_comparisons": [row]},
+    )
+    cal = calibration.build_report(target_date=day, data_root=tmp_path)
+    advisory = optimizer._action_outcome_advisory(
+        cal,
+        stage="entry",
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        candidate_prompt_version="candidate_v1",
+    )
+    assert (
+        advisory["cost_aware_opportunity_diagnostic"]["verified_counterfactual_count"]
+        == 1
+    )
+    assert advisory["cost_aware_opportunity_diagnostic"]["realized_net_pnl_krw"] is None
+    for key, replacement in (
+        ("effective_venue", "NXT"),
+        ("request_envelope_sha256", "wrong"),
+        ("decision_ts", "2026-08-14T09:00:18+09:00"),
+        ("exact_payload", {}),
+    ):
+        original = request[key]
+        request[key] = replacement
+        rejected = build()
+        assert len(rejected["paired_comparisons"]) == 1
+        assert (
+            rejected["paired_comparisons"][0]["entry_cost_aware_opportunity"]["status"]
+            == "source_unavailable"
+        )
+        request[key] = original
+    artifact["artifact_content_sha256"] = "0" * 64
+    rejected = build()
+    assert len(rejected["paired_comparisons"]) == 1
+    assert "hash_mismatch" in rejected["cost_aware_outcome_source"]["source_gap_reason"]
 
 
 def test_current_target_date_rejects_cross_date_fixed_followthrough_endpoint():

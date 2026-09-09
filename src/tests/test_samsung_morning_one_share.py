@@ -31,7 +31,11 @@ from src.trading.samsung_morning_one_share import service as service_module
 
 
 @pytest.fixture(autouse=True)
-def _isolate_market_weakness_counterfactual_writer(monkeypatch):
+def _isolate_market_weakness_counterfactual_writer(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner_registry.jsonl")
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "test-samsung-morning")
     monkeypatch.setattr(
         regular_machine_module,
         "record_market_weakness_blocked_entry",

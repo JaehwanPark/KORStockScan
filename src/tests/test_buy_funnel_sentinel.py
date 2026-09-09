@@ -34,6 +34,213 @@ def _event(
     }
 
 
+def test_exact_refresh_diagnostics_separate_recovery_from_terminal_and_keep_ai_traces():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 9, 10)
+    events = []
+
+    def add(stage, record_id, **fields):
+        events.append(
+            sentinel.PipelineEvent(
+                start + timedelta(seconds=len(events)),
+                "ENTRY_PIPELINE",
+                stage,
+                "fixture",
+                "005930",
+                str(record_id),
+                fields,
+            )
+        )
+
+    for rid in (1, 2, 3, 4):
+        add("ai_confirmed", rid)
+        add("budget_pass", rid)
+        add(
+            "latency_block",
+            rid,
+            pre_submit_quote_refresh_applied=(rid != 4),
+            reason="latency_state_danger",
+            pre_submit_quote_refresh_reason=(
+                "observer_quote_fresh" if rid != 4 else "observer_quote_missing"
+            ),
+            latency_danger_reasons="spread_too_wide",
+        )
+        if rid == 4:
+            continue
+        add("latency_pass", rid, pre_submit_quote_refresh_applied=True)
+        if rid == 3:
+            add("order_bundle_submitted", rid)
+        else:
+            add(
+                "pre_submit_entry_ai_authority_guard_block",
+                rid,
+                entry_ai_submit_authority_reason=(
+                    "fresh_ai_wait_observation_only_probe_veto"
+                    if rid == 1
+                    else "entry_ai_result_stale_or_untrusted"
+                ),
+                entry_ai_submit_authority_action="WAIT" if rid == 1 else "DROP",
+                entry_ai_submit_authority_decision_trace_id=(
+                    "selected" if rid == 1 else "not_available"
+                ),
+                pre_submit_entry_ai_authority_retry_original_model_action=(
+                    "DROP" if rid == 1 else "WAIT"
+                ),
+                pre_submit_entry_ai_authority_retry_model_action=(
+                    "WAIT" if rid == 1 else "DROP"
+                ),
+                pre_submit_entry_ai_authority_retry_contract_status=(
+                    "pass" if rid == 1 else "semantic_rejected"
+                ),
+                pre_submit_entry_ai_authority_retry_decision_trace_id=f"retry-{rid}",
+            )
+    result = sentinel._summarize_events(
+        events, start_at=start, end_at=start + timedelta(minutes=1)
+    )
+    d = result["quote_freshness_refresh_transition_diagnostics"]
+    assert d["refresh_not_applied_blocked"] == 1
+    assert d["refresh_applied_still_blocked"] == 3
+    assert d["refresh_applied_latency_pass"] == 3
+    assert d["refresh_applied_still_blocked_reason_counts"] == {"spread_too_wide": 3}
+    assert d["next_ai_blocker_counts"] == {
+        "fresh_wait_veto": 1,
+        "semantic_contract_rejected": 1,
+    }
+    assert (
+        result["exact_attempt_contract"]["axis_terminal_causal_attempt_counts"][
+            "LATENCY_PRE_SUBMIT"
+        ]
+        == 1
+    )
+    ai = result["entry_ai_authority_diagnostics"]
+    assert ai["count"] == 2
+    assert ai["attempts"][0]["original_model_action"] == "DROP"
+    assert ai["attempts"][0]["selected_authority_action"] == "WAIT"
+    assert ai["attempts"][1]["selected_trace_id"] == "not_available"
+    assert ai["attempts"][1]["retry_trace_id"] == "retry-2"
+    contract = sentinel._entry_submit_drought_contract(
+        sentinel._classify(result, None, as_of=start + timedelta(minutes=1)), result
+    )
+    assert contract["entry_ai_authority_diagnostics"] == ai
+    assert contract["recheck_input_diagnostics"]["category_counts"] == {
+        "input_gap": 1,
+        "normal_veto": 1,
+    }
+
+
+def test_terminal_cash_provenance_and_canonical_probe_are_not_runtime_permission():
+    from datetime import datetime, timedelta
+    from src.engine.automation.submit_drought_contract import (
+        make_scope_evidence,
+        validate_scope_evidence,
+    )
+    from src.engine.scalping.entry_recheck_policy import scope_summary
+
+    start = datetime(2026, 9, 9, 10)
+    events = []
+
+    def add(stage, rid, **fields):
+        events.append(
+            sentinel.PipelineEvent(
+                start + timedelta(seconds=len(events)),
+                "ENTRY_PIPELINE",
+                stage,
+                "fixture",
+                "005930",
+                str(rid),
+                fields,
+            )
+        )
+
+    for rid, status in enumerate(
+        ("valid", "missing", "invalid", "not_reported"), start=1
+    ):
+        add("ai_confirmed", rid)
+        add(
+            "blocked_zero_qty",
+            rid,
+            kt00011_cash_orderable_contract_status=status,
+            cash_orderable_qty_cap="0",
+            general_entry_margin_authority_reason="applied_margin_rate_not_margin_eligible",
+        )
+    add("ai_confirmed", 5)
+    add(
+        "blocked_ai_score",
+        5,
+        ai_decision_model_action="WAIT",
+        entry_recheck_contract_status="pass",
+        entry_recheck_edge_state="EDGE",
+        entry_recheck_probe_intent=True,
+        entry_recheck_probe_intent_status="eligible_wait_probe",
+        entry_recheck_recovery_trigger="recovery_required",
+    )
+    end = start + timedelta(minutes=1)
+    summary = sentinel._summarize_events(events, start_at=start, end_at=end)
+    assert summary["zero_qty_diagnostics"]["category_counts"] == {
+        "broker_cash_capacity_nonpositive": 1,
+        "cash_capacity_source_gap": 2,
+        "cash_capacity_provenance_unavailable": 1,
+    }
+    diagnostic = summary["recheck_input_diagnostics"]
+    assert diagnostic["canonical_probe_candidate_count"] == 1
+    assert diagnostic["axis_addressable_attempt_count"] == 1
+    assert diagnostic["attempts"][0]["runtime_eligibility"] == "not_evaluated"
+    assert diagnostic["allowed_runtime_apply"] is False
+    contract = sentinel._entry_submit_drought_contract(
+        sentinel._classify(summary, None, as_of=end), summary
+    )
+    scope = "KRX|KRX_REGULAR"
+    evidence = make_scope_evidence(
+        {"schema_version": 6, "target_date": "2026-09-09", "as_of": end.isoformat()},
+        scope,
+        contract,
+    )
+    assert validate_scope_evidence(evidence, source_date="2026-09-09", scope=scope)
+    controller_row = scope_summary(scope, {**contract, "sentinel_evidence": evidence})
+    assert (
+        controller_row["sentinel_evidence"]["contract"]["recheck_input_diagnostics"]
+        == diagnostic
+    )
+
+
+def test_unknown_probe_evidence_is_not_measured_zero_and_stale_is_not_semantic_failure():
+    from datetime import datetime
+    from src.tests.submit_drought_fixtures import make_report
+
+    report = make_report("2026-09-09", samples=1)
+    diagnostic = report["entry_submit_drought_contract"]["recheck_input_diagnostics"]
+    assert diagnostic["canonical_probe_candidate_count"] == 0
+    assert diagnostic["canonical_probe_candidate_unknown_count"] == 1
+    assert diagnostic["attempts"][0]["canonical_probe_candidate"] is None
+    fields = {
+        "entry_ai_submit_authority_confirmed_age_sec": "91",
+        "entry_ai_submit_authority_max_prior_age_sec": "90",
+    }
+    event = sentinel.PipelineEvent(
+        datetime(2026, 9, 9, 10),
+        "ENTRY_PIPELINE",
+        "pre_submit_entry_ai_authority_guard_block",
+        "fixture",
+        "005930",
+        "1",
+        fields,
+    )
+    assert sentinel._ai_authority_diagnostic(event)["category"] == "authority_stale"
+    fields["entry_ai_submit_authority_confirmed_age_sec"] = "90"
+    assert (
+        sentinel._ai_authority_diagnostic(event)["category"]
+        == "authority_untrusted_or_unknown"
+    )
+    fields["pre_submit_entry_ai_authority_retry_contract_status"] = "semantic_rejected"
+    assert (
+        sentinel._ai_authority_diagnostic(event)["category"]
+        == "semantic_contract_rejected"
+    )
+    fields["entry_ai_submit_authority_reason"] = "fresh_ai_drop_real_buy_veto"
+    assert sentinel._ai_authority_diagnostic(event)["category"] == "fresh_drop_veto"
+
+
 def test_submit_drought_is_classified_without_cross_venue_denominator(
     monkeypatch, tmp_path
 ):

@@ -72,6 +72,13 @@ from src.engine.sniper_time import (
 )
 from src.utils.constants import TRADING_RULES
 from src.utils.pipeline_event_logger import emit_pipeline_event
+from src.scanners.scanner_source_census import (
+    observe_cycle,
+    observe_fetch,
+    observe_pool,
+    source_cycle_id,
+    source_target_venue,
+)
 from sqlalchemy import func, or_
 
 SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
@@ -2460,6 +2467,9 @@ def _merge_candidate(candidate_pool, raw_target, source):
     )
 
     current["SourceSet"].add(source)
+    source_venue = raw_target.get("ScannerSourceVenue")
+    if source_venue in {"KRX", "NXT"}:
+        current.setdefault("ScannerSourceVenues", set()).add(source_venue)
     if name:
         current["Name"] = name
 
@@ -4881,6 +4891,7 @@ def promote_candidates(
     candidate_venue_fields = scalping_session_venue_provenance(now_ts)
     scan_generation_id = f"SCANGEN-{os.getpid()}-{int(float(now_ts or 0.0) * 1000)}-{time.monotonic_ns()}"
     ranked_targets = list(ranked_targets or [])
+    observe_pool(ranked_targets, generation=scan_generation_id)
     for target in ranked_targets:
         target.pop("_LookupResourceEvidence", None)
     ranked_candidate_count = len(ranked_targets)
@@ -5875,11 +5886,28 @@ def _fetch_scan_source(source_name, fetcher, *args, **kwargs):
     try:
         targets = fetcher(*args, **kwargs) or []
         observed_epoch = time.time()
+        observe_fetch(
+            source_name,
+            targets,
+            status="returned" if targets else "empty_adapter_return_unproven_upstream",
+            request_venue={"1": "KRX", "2": "NXT"}.get(
+                str(kwargs.get("stex_tp")), "UNKNOWN"
+            ),
+        )
         return [
-            {**target, "ScannerPriceObservedEpoch": observed_epoch}
+            {
+                **target,
+                "ScannerPriceObservedEpoch": observed_epoch,
+                "ScannerSourceCycleId": source_cycle_id(),
+                "ScannerSourceVenue": source_target_venue(
+                    target.get("Code") or target.get("code"),
+                    {"1": "KRX", "2": "NXT"}.get(str(kwargs.get("stex_tp")), "UNKNOWN"),
+                ),
+            }
             for target in targets
         ]
     except Exception as exc:
+        observe_fetch(source_name, [], status=f"fetch_exception:{type(exc).__name__}")
         log_error(f"🚨 [SCALPING 스캐너] {source_name} 조회 실패: {exc}")
         return []
 
@@ -6535,6 +6563,7 @@ def _log_low_rebound_source_observation(
     )
 
 
+@observe_cycle
 def run_scalper_iteration(
     *,
     token,

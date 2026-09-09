@@ -69,6 +69,93 @@ def _first_episode_payload_complete(payload: object, target_date: date) -> bool:
     )
 
 
+def _submitted_no_trade_terminal(payload: dict, trade_date: date) -> bool:
+    """Accept only two submitted, broker-reconciled zero-fill terminal legs.
+
+    NO_TRADE alone is insufficient: rejected/unsubmitted orders and ambiguous
+    cancellation or custody must not gain next-day authority from this branch.
+    """
+    legs = payload.get("legs")
+    owned = payload.get("owned_order_nos")
+    if (
+        payload.get("status") != "NO_TRADE"
+        or payload.get("attempt_consumed") is not True
+        or type(payload.get("position_qty")) is not int
+        or payload["position_qty"] != 0
+        or payload.get("owner_registry_reconciliation_required") is not False
+        or not isinstance(legs, list)
+        or len(legs) != 2
+        or not isinstance(owned, list)
+        or not all(
+            isinstance(number, str)
+            and number.isascii()
+            and number.isdigit()
+            and len(number) == 7
+            for number in owned
+        )
+        or len(set(owned)) != len(owned)
+    ):
+        return False
+    buy_orders: set[str] = set()
+    for leg in legs:
+        if not isinstance(leg, dict) or leg.get("status") != "NO_FILL":
+            return False
+        if (
+            type(leg.get("quantity")) is not int
+            or leg["quantity"] not in SUPPORTED_OWNED_LEG_QUANTITIES
+        ):
+            return False
+        for key in (
+            "position_qty",
+            "buy_filled_qty",
+            "target_filled_qty",
+            "last_buy_remaining_qty",
+            "target_quantity",
+            "target_submit_attempt_count",
+        ):
+            if type(leg.get(key)) is not int or leg[key] != 0:
+                return False
+        for key in (
+            "buy_cancel_requested",
+            "buy_cancel_ambiguous",
+            "buy_cancel_terminal_failure",
+            "buy_owner_registry_reconciliation_required",
+            "buy_cancel_owner_registry_reconciliation_required",
+            "target_owner_registry_reconciliation_required",
+        ):
+            if leg.get(key) is not False:
+                return False
+        order_no = leg.get("buy_order_no")
+        if (
+            not isinstance(order_no, str)
+            or not order_no
+            or order_no not in owned
+            or order_no in buy_orders
+            or leg.get("buy_order_date") != trade_date.isoformat()
+            or leg.get("last_buy_reconcile_source_ok") is not True
+            or leg.get("target_order_no") != ""
+            or leg.get("target_owner_registry_intent_id") != ""
+            or type(leg.get("buy_cancel_attempt_count")) is not int
+            or leg["buy_cancel_attempt_count"] < 1
+        ):
+            return False
+        try:
+            reconciled_at = datetime.fromisoformat(leg["last_buy_reconciled_at"])
+            cancelled_at = datetime.fromisoformat(leg["buy_cancel_attempted_at"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if (
+            reconciled_at.tzinfo is None
+            or cancelled_at.tzinfo is None
+            or reconciled_at.astimezone(KST).date() != trade_date
+            or cancelled_at.astimezone(KST).date() != trade_date
+            or cancelled_at > reconciled_at
+        ):
+            return False
+        buy_orders.add(order_no)
+    return True
+
+
 def prior_reentry_allows_new_first_episode(
     path: Path = DEFAULT_REENTRY_STATE_PATH, *, target_date: date
 ) -> tuple[bool, str]:
@@ -136,6 +223,7 @@ def prior_reentry_allows_new_first_episode(
     )
     if position_qty == 0 and (
         (safe_status and (empty_terminal or completed_terminal))
+        or _submitted_no_trade_terminal(payload, parsed_trade_date)
         or safe_precondition_block
     ):
         return True, "prior_reentry_terminal_clear"

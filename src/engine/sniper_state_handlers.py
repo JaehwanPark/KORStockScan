@@ -2916,8 +2916,21 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
         context["kt00011_error"] = str(exc)
         return context
 
-    if not isinstance(snapshot, dict) or snapshot.get("error"):
-        context["kt00011_error"] = str((snapshot or {}).get("error") or "kt00011_empty")
+    if not isinstance(snapshot, dict) or not snapshot or snapshot.get("error"):
+        context["kt00011_error"] = str(
+            (snapshot.get("error") or "kt00011_empty")
+            if isinstance(snapshot, dict)
+            else "kt00011_response_invalid"
+        )
+        if (
+            not snapshot
+            or not isinstance(snapshot, dict)
+            or snapshot.get("capacity_source_contract_invalid")
+        ):
+            context["cash_orderable_qty_cap"] = 0
+            context["kt00011_cash_orderable_contract_status"] = (
+                "invalid" if snapshot else "missing"
+            )
         return context
 
     account_deposit = max(0, _safe_int(snapshot.get("deposit"), 0))
@@ -2953,6 +2966,25 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
     context["kt00011_requested_unit_price"] = max(
         0, _safe_int(snapshot.get("requested_unit_price"), unit_price)
     )
+    for field in (
+        "capacity_contract_version",
+        "capacity_field_statuses",
+        "cash_orderable_contract_status",
+        "applied_orderable_contract_status",
+        "requested_stock_code",
+        "capacity_observed_at",
+        "capacity_source_sha256",
+        "return_code",
+    ):
+        context[f"kt00011_{field}"] = snapshot.get(field, "not_reported")
+    if snapshot.get("cash_orderable_contract_status") in {"missing", "invalid"}:
+        # A partial successful response is not an uncapped kt00001 fallback,
+        # nor proof of cash shortfall authorizing the margin exception.
+        context["kt00011_error"] = (
+            "kt00011_cash_capacity_contract_"
+            + snapshot["cash_orderable_contract_status"]
+        )
+        context["cash_orderable_qty_cap"] = 0
     return context
 
 
@@ -3004,6 +3036,11 @@ def _apply_scalping_margin_one_share_authority(
         reason = "applied_margin_tier_unrecognized"
     elif margin_rate not in {20, 30, 40, 50, 60}:
         reason = "applied_margin_rate_not_margin_eligible"
+    elif resolved.get("kt00011_applied_orderable_contract_status") in {
+        "missing",
+        "invalid",
+    }:
+        reason = "applied_margin_capacity_contract_invalid"
     elif margin_qty < 1:
         reason = "applied_margin_orderable_qty_below_one"
     elif margin_amount < price:
@@ -3130,6 +3167,20 @@ def _general_entry_margin_budget_log_fields(
 ) -> dict[str, Any]:
     context = budget_context or {}
     return {
+        **{
+            key: context.get(key, "not_reported")
+            for key in (
+                "kt00011_capacity_contract_version",
+                "kt00011_capacity_field_statuses",
+                "kt00011_cash_orderable_contract_status",
+                "kt00011_applied_orderable_contract_status",
+                "kt00011_requested_stock_code",
+                "kt00011_requested_unit_price",
+                "kt00011_capacity_observed_at",
+                "kt00011_capacity_source_sha256",
+                "kt00011_return_code",
+            )
+        },
         "general_entry_margin_one_share_authorized": bool(
             context.get("general_entry_margin_one_share_authorized", False)
         ),

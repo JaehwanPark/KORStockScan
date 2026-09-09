@@ -991,21 +991,38 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
     if not results:
         return {}
 
+    if not isinstance(results, (list, tuple)):
+        return {
+            "error": "kt00011 response container invalid",
+            "capacity_source_contract_invalid": True,
+        }
     data = results[0] or {}
+    if not isinstance(data, dict):
+        return {
+            "error": "kt00011 response invalid",
+            "raw": data,
+            "capacity_source_contract_invalid": True,
+        }
     raw_return_code = data.get("return_code")
     if raw_return_code in (None, ""):
         raw_return_code = data.get("rt_cd")
     if raw_return_code in (None, ""):
         return {
             "error": "kt00011 return_code missing",
+            "capacity_source_contract_invalid": True,
             "return_code": None,
             "raw": data,
         }
     try:
+        if isinstance(raw_return_code, bool) or not re.fullmatch(
+            r"-?[0-9]+", str(raw_return_code).strip()
+        ):
+            raise ValueError("non-integer return code")
         rt_code = int(raw_return_code)
     except (TypeError, ValueError):
         return {
             "error": "kt00011 return_code invalid",
+            "capacity_source_contract_invalid": True,
             "return_code": raw_return_code,
             "raw": data,
         }
@@ -1024,14 +1041,17 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
         try:
             clean = str(v).replace(",", "").replace("+", "").replace("%", "").strip()
             return int(float(clean))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return 0
 
     def to_pct(v):
         if v in (None, ""):
             return 0
         try:
-            clean = str(v).replace(",", "").replace("+", "").replace("%", "").strip()
+            clean = str(v).strip()
+            if not re.fullmatch(r"[+]?[0-9]+(?:\.0+)?%?", clean):
+                return 0
+            clean = clean.rstrip("%")
             parsed = float(clean)
             # Official kt00011 margin tiers are discrete integer percentages.
             # Never round a malformed/unknown fractional rate into an eligible
@@ -1054,8 +1074,71 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
     applied_margin_rate = to_pct(data.get("aplc_rt"))
     applied_tier = tiers.get(applied_margin_rate)
 
+    # Keep missing/invalid capacity distinct from an explicitly reported zero.
+    # Official amounts/quantities are signed integers; negative capacity is
+    # known nonpositive capacity, never converted to an absolute value.
+    capacity_fields = ["min_ord_alow_amt", "min_ord_alowq"]
+    if applied_tier is not None:
+        capacity_fields += [
+            f"profa_{applied_margin_rate}ord_alow_amt",
+            f"profa_{applied_margin_rate}ord_alowq",
+        ]
+    statuses = {}
+    values = {}
+    for field in capacity_fields:
+        raw_value = data.get(field)
+        value_text = str(raw_value).strip() if raw_value is not None else ""
+        if not value_text:
+            status, value = "missing", 0
+        elif isinstance(raw_value, bool) or not re.fullmatch(
+            r"[+-]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)", value_text
+        ):
+            status, value = "invalid", 0
+        else:
+            value = int(value_text.replace(",", ""))
+            status = (
+                "valid_zero"
+                if value == 0
+                else ("valid_positive" if value > 0 else "valid_negative")
+            )
+        statuses[field], values[field] = status, value
+
+    def pair_status(fields):
+        states = [statuses[field] for field in fields]
+        return (
+            "invalid"
+            if "invalid" in states
+            else ("missing" if "missing" in states else "valid")
+        )
+
+    if applied_tier is not None:
+        applied_tier["orderable_amount"] = values[capacity_fields[2]]
+        applied_tier["orderable_qty"] = values[capacity_fields[3]]
+
     return {
         "error": "",
+        "capacity_contract_version": 1,
+        "capacity_field_statuses": statuses,
+        "cash_orderable_contract_status": pair_status(capacity_fields[:2]),
+        "applied_orderable_contract_status": (
+            pair_status(capacity_fields[2:]) if applied_tier else "unrecognized_tier"
+        ),
+        "requested_stock_code": str(req_code),
+        "capacity_observed_at": datetime.now(_KST).isoformat(timespec="milliseconds"),
+        "capacity_source_sha256": hashlib.sha256(
+            json.dumps(
+                {
+                    "stock_code": str(req_code),
+                    "unit_price": payload.get("uv"),
+                    "return_code": rt_code,
+                    "fields": {key: data.get(key) for key in capacity_fields},
+                    "applied_margin_rate_raw": data.get("aplc_rt"),
+                },
+                sort_keys=True,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest(),
+        "return_code": rt_code,
         "stock_margin_rate": to_pct(data.get("stk_profa_rt")),
         "account_margin_rate": to_pct(data.get("profa_rt")),
         "applied_margin_rate": applied_margin_rate,
@@ -1072,8 +1155,8 @@ def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
         "unpaid_amount": to_i(data.get("uncla")),
         "orderable_substitute": to_i(data.get("ord_pos_repl")),
         "orderable_cash": to_i(data.get("ord_alowa")),
-        "cash_only_orderable_amount": to_i(data.get("min_ord_alow_amt")),
-        "cash_only_orderable_qty": to_i(data.get("min_ord_alowq")),
+        "cash_only_orderable_amount": values["min_ord_alow_amt"],
+        "cash_only_orderable_qty": values["min_ord_alowq"],
         "cash_only_prev_reuse_amount": to_i(data.get("min_pred_reu_amt")),
         "cash_only_today_reuse_amount": to_i(data.get("min_tdy_reu_amt")),
         "tiers": tiers,
@@ -2605,6 +2688,7 @@ def get_top_fluctuation_ka10027(
     request_class=REQUEST_CLASS_RUNTIME_REQUIRED,
     read_rate_max_wait_sec=None,
     return_meta=False,
+    max_pages_limit=None,
 ):
     """
     [ka10027] 전일대비등락률상위요청
@@ -2639,6 +2723,9 @@ def get_top_fluctuation_ka10027(
     # pages to let scanner-side source caps inspect beyond the first top-20 page.
     # The official example caps continuous retrieval at 10 pages.
     max_pages = max(1, min(10, (output_limit + 19) // 20))
+    if max_pages_limit is not None:
+        # Source-only callers may reduce, never expand, the existing budget.
+        max_pages = min(max_pages, max(1, int(max_pages_limit)))
     fetch_result = fetch_kiwoom_api_continuous(
         url=url,
         token=token,

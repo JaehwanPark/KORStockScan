@@ -1273,21 +1273,15 @@ def fetch_kiwoom_market_breadth(
                     "response_page_count": len(payloads),
                     "response_codes": response_codes,
                     "retryable_semantic_empty": retryable_semantic_empty,
-                    "request_attempt_count": request_meta.get(
-                        "request_attempt_count"
-                    ),
-                    "last_http_status_code": request_meta.get(
-                        "last_http_status_code"
-                    ),
+                    "request_attempt_count": request_meta.get("request_attempt_count"),
+                    "last_http_status_code": request_meta.get("last_http_status_code"),
                     "read_rate_control_status": request_meta.get(
                         "read_rate_control_status"
                     ),
                     "read_rate_control_reason": request_meta.get(
                         "read_rate_control_reason"
                     ),
-                    "rate_limit_detected": request_meta.get(
-                        "rate_limit_detected"
-                    ),
+                    "rate_limit_detected": request_meta.get("rate_limit_detected"),
                     "rate_limit_retry_exhausted": request_meta.get(
                         "rate_limit_retry_exhausted"
                     ),
@@ -1386,8 +1380,7 @@ def build_market_panic_breadth_report(
     summary = summarize_breadth(parsed_rows)
     source_quality_status = (
         "ok"
-        if parsed_rows
-        and (rows is not None or source.get("all_markets_ready") is True)
+        if parsed_rows and (rows is not None or source.get("all_markets_ready") is True)
         else "missing_live_breadth_rows"
     )
     if errors:

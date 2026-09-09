@@ -67,6 +67,37 @@ def test_default_off_blocks_without_order_authority():
     assert decision.fields["allowed_runtime_apply"] is False
     assert decision.fields["actual_order_submitted"] is False
     assert decision.fields["broker_order_forbidden"] is True
+    assert (
+        decision.fields["entry_opportunity_recheck_canonical_probe_candidate"] is True
+    )
+
+
+def test_canonical_probe_diagnostics_do_not_bypass_runtime_guards_or_score_prior():
+    for overrides, expected in (
+        ({"ai_score": 20}, True),
+        ({"ai_score": 99}, True),
+        ({"latency_state": "DANGER"}, False),
+        ({"ws_age_ms": 1501}, False),
+        ({"microstructure_confirmed": False}, False),
+    ):
+        decision = _decision(**overrides)
+        assert (
+            decision.fields["entry_opportunity_recheck_canonical_probe_candidate"]
+            is True
+        )
+        assert decision.allowed is expected
+    for overrides in (
+        {"ai_action": "DROP"},
+        {"ai_probe_intent_status": "not_eligible"},
+        {"ai_contract_status": "semantic_rejected"},
+        {"ai_edge_state": "NO_EDGE"},
+        {"ai_recovery_trigger": "observation_only"},
+    ):
+        decision = _decision(**overrides)
+        assert not decision.fields[
+            "entry_opportunity_recheck_canonical_probe_candidate"
+        ]
+        assert not decision.allowed
 
 
 def test_new_evaluation_never_inherits_previous_order_custody():

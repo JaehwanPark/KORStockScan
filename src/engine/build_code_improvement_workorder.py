@@ -798,7 +798,8 @@ def _market_census_followup_orders(report, target_date):
         valid = (
             report.get("target_date") == target_date
             and report.get("report_type") == "market_opportunity_census"
-            and report.get("schema_version") == "market_opportunity_census_v4"
+            and report.get("schema_version")
+            in {"market_opportunity_census_v4", "market_opportunity_census_v5"}
             and report.get("artifact_sha256") == report_sha256(report)
             and contract.get("runtime_effect") is False
             and contract.get("allowed_runtime_apply") is False
@@ -854,6 +855,9 @@ def _market_census_followup_orders(report, target_date):
                     "intended_consumer",
                     "implementation_scope",
                     "acceptance",
+                    "files_likely_touched",
+                    "acceptance_tests",
+                    "required_downstream",
                     "reason",
                     "evidence",
                 )

@@ -642,6 +642,135 @@ def _transition_rows(
     return rows_by_cohort, source_reports, source_contract_summary, cohort_conflicts
 
 
+def entry_research_progress(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Bound offline search without borrowing the live exposure floor.
+
+    Call only on the hash-verified, conflict-deduplicated cohort. A rotation
+    explores another prompt; it is not rejection of an armed recheck policy.
+    """
+    all_dates = sorted(
+        {str(row["source_date"]) for row in rows if row.get("source_date")}
+    )
+    dates = all_dates[-5:]
+    cohort_parent_count = len(rows)
+    rows = [row for row in rows if row.get("source_date") in dates]
+    traces = sorted({str(row["decision_trace_id"]) for row in rows})
+    symbols = {str(row["stock_code"]) for row in rows if row.get("stock_code")}
+    exposed = sum(
+        str(row.get("candidate_action") or "").upper() in EXPOSURE_ACTIONS
+        or row.get("candidate_exposure_selected") is True
+        for row in rows
+    )
+    armed = sum(row.get("candidate_probe_armed") is True for row in rows)
+    cases = sorted(
+        {
+            str(row["decision_trace_id"])
+            for row in rows
+            if set(row.get("candidate_error_taxonomy") or [])
+            & {
+                "false_drop_small_profit_execution_proxy",
+                "false_wait_small_profit_execution_proxy",
+            }
+        }
+    )
+    floor = len(dates) >= 5 and len(traces) >= 5 and len(symbols) >= 3
+    rotate = bool(floor and exposed == 0 and cases)
+    return {
+        "schema": "entry_prompt_research_progress_v1",
+        "status": (
+            "bounded_offline_rotation_due"
+            if rotate
+            else (
+                "pending_declared_research_window"
+                if not floor
+                else (
+                    "no_observed_small_opportunity"
+                    if not cases
+                    else "participating_candidate_economic_review"
+                )
+            )
+        ),
+        "source_dates": dates,
+        "window_policy": "last_five_valid_source_dates_within_exact_candidate_cohort",
+        "cohort_exact_parent_count": cohort_parent_count,
+        "exact_parent_ids": traces,
+        "exact_parent_count": len(traces),
+        "unique_symbol_count": len(symbols),
+        "candidate_exposure_count": exposed,
+        "candidate_probe_arm_count": armed,
+        "probe_arm_is_execution": False,
+        "recheck_terminal_status": "not_inferred_from_arm",
+        "small_opportunity_case_ids": cases,
+        "small_opportunity_basis": "execution_proxy_not_fee_tax_verified_net",
+        "research_window": {"source_dates": 5, "exact_parents": 5, "symbols": 3},
+        "research_window_pass": floor,
+        "offline_rotation_due": rotate,
+        "rotation_is_economic_rejection": False,
+        "positive_net_profit_demonstrated": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "provider_budget_increase_allowed": False,
+        "decision_authority": "bounded_offline_prompt_search_only",
+    }
+
+
+def cost_aware_opportunity_diagnostic(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    verified = []
+    gaps: Counter[str] = Counter()
+    for row in rows:
+        diagnostic = row.get("entry_cost_aware_opportunity")
+        if not isinstance(diagnostic, dict):
+            gaps[
+                (
+                    "legacy_no_cost_aware_diagnostic"
+                    if diagnostic is None
+                    else "invalid_cost_aware_diagnostic"
+                )
+            ] += 1
+            continue
+        if (
+            diagnostic.get("schema") == "entry_cost_aware_opportunity_v1"
+            and diagnostic.get("status") == "verified_counterfactual_after_cost"
+            and diagnostic.get("runtime_effect") is False
+            and diagnostic.get("allowed_runtime_apply") is False
+            and _number(diagnostic.get("cost_adjusted_end_return_pct")) is not None
+            and type(diagnostic.get("counterfactual_net_target_first")) is bool
+            and diagnostic.get("decision_trace_id") == row.get("decision_trace_id")
+            and diagnostic.get("realized_net_pnl_krw") is None
+            and all(
+                _is_sha256(diagnostic.get(key))
+                for key in (
+                    "label_content_sha256",
+                    "action_neutral_path_sha256",
+                    "cost_profile_artifact_sha256",
+                    "symbol_master_artifact_sha256",
+                )
+            )
+        ):
+            verified.append(diagnostic)
+        else:
+            reason = diagnostic.get("source_gap_reason")
+            gaps[
+                (
+                    reason
+                    if isinstance(reason, str) and reason
+                    else "invalid_cost_aware_diagnostic"
+                )
+            ] += 1
+    return {
+        "schema": "entry_cost_aware_opportunity_summary_v1",
+        "input_count": len(rows),
+        "verified_counterfactual_count": len(verified),
+        "net_target_first_count": sum(
+            item["counterfactual_net_target_first"] for item in verified
+        ),
+        "source_gap_count": sum(gaps.values()),
+        "source_gap_counts": dict(gaps),
+        "realized_net_pnl_krw": None,
+        "runtime_apply_authority": False,
+    }
+
+
 def _transition_summary(
     candidate_identity: tuple[str, str, str, str, str],
     rows: Iterable[dict[str, Any]],
@@ -995,6 +1124,12 @@ def _transition_summary(
         "false_drop_count": false_drop_count,
         "false_drop_rate_pct": false_drop_rate_pct,
         "small_profit_opportunity_diagnostic": small_opportunity_diagnostic,
+        "cost_aware_opportunity_diagnostic": (
+            cost_aware_opportunity_diagnostic(values) if stage == "entry" else None
+        ),
+        "entry_research_progress": (
+            entry_research_progress(values) if stage == "entry" else None
+        ),
         "control_source_quality_adjusted_ev_pct": (
             fmean(control_raw_values) if control_raw_values else None
         ),

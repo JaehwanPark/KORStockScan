@@ -498,6 +498,36 @@ def test_runtime_rejects_preexisting_activation_without_current_phase_contract(
     assert resolved["status"] == "fallback_activation_contract_invalid"
 
 
+def test_sparse_daily_arms_use_cumulative_exploration_floor_only():
+    detailed = _valid_detailed_report()
+    detailed["candidate_probe_arm_decision_count"] = 2
+    detailed["candidate_probe_arm_unique_symbol_count"] = 1
+    detailed["candidate_probe_arm_sample_floor"] = {"pass": False}
+    detailed["cumulative_learning"]["candidate_exposure_decision_count"] = 0
+    detailed["cumulative_learning"]["candidate_exposure_unique_symbol_count"] = 0
+    errors = policy._exploration_source_errors(
+        source_errors=[], detailed_report=detailed
+    )
+    assert errors == []
+    detailed["cumulative_learning"]["candidate_probe_arm_decision_count"] = 9
+    assert (
+        "cumulative_probe_arm_counts_below_floor"
+        in policy._exploration_source_errors(
+            source_errors=[],
+            detailed_report=detailed,
+        )
+    )
+    assert (
+        "runtime_contract_disabled:KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"
+        in policy._exploration_source_errors(
+            source_errors=[
+                "runtime_contract_disabled:KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"
+            ],
+            detailed_report=detailed,
+        )
+    )
+
+
 def test_failed_promotion_writes_inactive_preopen_fallback(monkeypatch, tmp_path):
     _configure_paths(monkeypatch, tmp_path)
     detailed = _valid_detailed_report()

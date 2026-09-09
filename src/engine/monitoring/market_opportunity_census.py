@@ -34,6 +34,7 @@ from src.engine.monitoring.market_opportunity_review import (
     report_sha256,
 )
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
+from src.scanners.scanner_source_census import decode_receipt
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import (
@@ -51,7 +52,7 @@ except ImportError:  # pragma: no cover - non-Unix fallback
 KST = timezone(timedelta(hours=9))
 REPORT_TYPE = "market_opportunity_census"
 SNAPSHOT_SCHEMA_VERSION = "market_opportunity_census_v1"
-REPORT_SCHEMA_VERSION = "market_opportunity_census_v4"
+REPORT_SCHEMA_VERSION = "market_opportunity_census_v5"
 # Backward-compatible snapshot schema alias used by existing capture fixtures.
 SCHEMA_VERSION = SNAPSHOT_SCHEMA_VERSION
 SNAPSHOT_DIR = DATA_DIR / "market_opportunity_census"
@@ -304,6 +305,8 @@ def _normalize_event_venue(value: Any) -> str:
     text = str(value or "").strip().upper()
     if not text:
         return "UNKNOWN"
+    if text == "PREMARKET_KRX_LIKE":
+        return text  # Logical strategy cohort; physical NXT requires route proof.
     if (
         "INTEGRATED" in text
         or "COMBINED" in text
@@ -359,6 +362,8 @@ def _normalized_source_payload_sha256(
 
 def _session_for_capture(*, venue: str, captured_at: datetime) -> str:
     minute = captured_at.hour * 60 + captured_at.minute
+    if venue == "PREMARKET_KRX_LIKE":
+        return "PREMARKET_KRX_LIKE" if 480 <= minute < 540 else "UNKNOWN"
     if venue == "KRX":
         if 8 * 60 + 30 <= minute < 9 * 60:
             return "PREMARKET_KRX_LIKE"
@@ -828,11 +833,15 @@ def capture_market_snapshots(
     captured_at_text = observed_at.isoformat()
     records: list[dict[str, Any]] = []
 
-    for raw_venue in venues:
+    # All primary scopes precede optional panels. Materialize iterables once.
+    venues = tuple(venues)
+    panels = tuple(dict.fromkeys(panels))
+    panels = tuple(sorted(panels, key=lambda p: p != "liquid_common"))
+    for raw_venue, scope_panels in ((v, (p,)) for p in panels for v in venues):
         venue = str(raw_venue).strip().upper()
         if venue not in VENUE_REQUEST_CODES:
             raise ValueError(f"unsupported venue: {raw_venue}")
-        for raw_panel in panels:
+        for raw_panel in scope_panels:
             panel = str(raw_panel).strip()
             if panel not in PANEL_CONTRACTS:
                 raise ValueError(f"unsupported panel: {raw_panel}")
@@ -863,6 +872,7 @@ def capture_market_snapshots(
                     request_class="source_only",
                     read_rate_max_wait_sec=1.25,
                     return_meta=True,
+                    max_pages_limit=1,
                 )
                 if (
                     isinstance(fetch_result, tuple)
@@ -886,8 +896,18 @@ def capture_market_snapshots(
                 fetched = []
                 source_error = source_error or "ka10027_response_not_list"
 
+            # Real captures are known only after the response, not at batch start.
+            panel_observed_at = (
+                observed_at if captured_at is not None else datetime.now(KST)
+            )
+            if panel_observed_at.date().isoformat() != target_date:
+                raise ValueError("capture crossed target-date boundary")
+            captured_at_text = panel_observed_at.isoformat()
+
             rows = []
             for rank, item in enumerate(fetched[:limit], start=1):
+                if not isinstance(item, dict):
+                    continue
                 code = _safe_code(item.get("Code"))
                 if not code:
                     continue
@@ -994,7 +1014,7 @@ def capture_market_snapshots(
                     "venue": venue,
                     "session": _session_for_capture(
                         venue=venue,
-                        captured_at=observed_at,
+                        captured_at=panel_observed_at,
                     ),
                     "panel": panel,
                     "source": {
@@ -1002,6 +1022,15 @@ def capture_market_snapshots(
                         "api_id": "ka10027",
                         "path": "/api/dostk/rkinfo",
                         "request_contract": request_contract,
+                        "capture_budget": {
+                            "priority": (
+                                "primary" if panel == "liquid_common" else "secondary"
+                            ),
+                            "max_pages": 1,
+                            "requested_limit": limit,
+                            "returned_rows": len(rows),
+                            "scope": "returned_first_page_only_not_complete_market",
+                        },
                         "normalized_source_payload_sha256": (
                             normalized_source_payload_sha256
                         ),
@@ -1565,7 +1594,8 @@ def _promoted_ws_bbo_observations(
         observed_at = _parse_ts(observation.get("observed_at"))
         code = _safe_code(observation.get("stock_code"))
         raw_venue = str(observation.get("venue") or "").strip().upper()
-        venue = "KRX" if raw_venue == "PREMARKET_KRX_LIKE" else raw_venue
+        # Decoder already validates same-epoch exact 0D NXT for this cohort.
+        venue = "NXT" if raw_venue == "PREMARKET_KRX_LIKE" else raw_venue
         if (
             observed_at is None
             or observed_at.date().isoformat() != target_date
@@ -1778,10 +1808,12 @@ def _load_stage_index(
     ) = None,
     executable_bbo_gap_counts: Counter[str] | None = None,
     observer_runtime_receipts: list[dict[str, Any]] | None = None,
+    scanner_source_receipts: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, list[dict[str, Any]]]]:
     index: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
         lambda: defaultdict(list)
     )
+    premarket_route_promotions: set[tuple[str, str]] = set()
     reverse_stage: dict[str, list[str]] = defaultdict(list)
     for logical_stage, raw_stages in PIPELINE_STAGE_MAP.items():
         for raw_stage in raw_stages:
@@ -1792,6 +1824,68 @@ def _load_stage_index(
         code = _safe_code(row.get("stock_code"))
         ts = _parse_ts(row.get("emitted_at"))
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        if (
+            raw_stage
+            in {
+                "scalping_scanner_source_fetch_census",
+                "scalping_scanner_candidate_pool_census",
+            }
+            and ts is not None
+            and ts.date().isoformat() == target_date
+        ):
+            decoded = decode_receipt(fields)
+            if scanner_source_receipts is not None:
+                scanner_source_receipts.append(
+                    {
+                        "emitted_at": ts.isoformat(),
+                        "stage": raw_stage,
+                        "source_cycle_id": fields.get("scanner_source_cycle_id"),
+                        "scan_generation_id": fields.get("scanner_scan_generation_id"),
+                        "rows_sha256": fields.get("scanner_source_rows_sha256"),
+                        "declared_counts": {
+                            k: fields.get(f"scanner_source_{k}_count")
+                            for k in ("input", "output", "rejected", "omitted")
+                        },
+                        "source_name": fields.get("scanner_source_name"),
+                        "status": fields.get("scanner_source_status"),
+                        "contract_valid": decoded is not None,
+                        "row_count": len(decoded) if decoded is not None else None,
+                        "unknown_route_count": (
+                            sum(r["venue"] == "UNKNOWN" for r in decoded)
+                            if decoded is not None
+                            else None
+                        ),
+                    }
+                )
+            if decoded is not None:
+                logical_stage = (
+                    "source_seen"
+                    if raw_stage == "scalping_scanner_source_fetch_census"
+                    else "candidate_evaluated"
+                )
+                for item in decoded:
+                    index[item["stock_code"]][logical_stage].append(
+                        {
+                            "raw_stage": raw_stage,
+                            "ts": ts,
+                            "venue": item["venue"],
+                            "session": (
+                                _session_for_capture(
+                                    venue=item["venue"], captured_at=ts
+                                )
+                                if item["venue"] in VENUE_REQUEST_CODES
+                                else "UNKNOWN"
+                            ),
+                            "scanner_scan_generation_id": fields.get(
+                                "scanner_scan_generation_id"
+                            ),
+                            "scanner_source_cycle_id": fields.get(
+                                "scanner_source_cycle_id"
+                            ),
+                            "reason": fields.get("scanner_source_status"),
+                        }
+                    )
+            continue
         if (
             raw_stage == "scalping_scanner_prune_bbo_source_loaded"
             and ts is not None
@@ -1857,6 +1951,12 @@ def _load_stage_index(
             observations, gap_reasons = _promoted_ws_bbo_observations(
                 row, target_date=target_date
             )
+            promotion = _lineage_value(fields.get("scanner_promotion_id"))
+            if promotion and any(
+                o["venue"] == "NXT" and o["session"] == "NXT_PREMARKET"
+                for o in observations
+            ):
+                premarket_route_promotions.add((code, promotion))
             if executable_bbo_index is not None:
                 for observation in observations:
                     executable_bbo_index.setdefault(
@@ -1901,7 +2001,7 @@ def _load_stage_index(
             "venue": event_venue,
             "session": (
                 _session_for_capture(venue=event_venue, captured_at=ts)
-                if event_venue in VENUE_REQUEST_CODES
+                if event_venue in {*VENUE_REQUEST_CODES, "PREMARKET_KRX_LIKE"}
                 else "UNKNOWN"
             ),
             "record_id": _lineage_value(
@@ -1922,6 +2022,7 @@ def _load_stage_index(
                 logical_stage == "runtime_watch_attached"
                 and stage_row["runtime_target_attach_outcome"] != "attached"
             ):
+                index[code]["runtime_watch_attach_attempted"].append(stage_row)
                 continue
             index[code][logical_stage].append(stage_row)
 
@@ -1945,7 +2046,7 @@ def _load_stage_index(
             }
             ai_row["session"] = (
                 _session_for_capture(venue=ai_row["venue"], captured_at=ts)
-                if ai_row["venue"] in VENUE_REQUEST_CODES
+                if ai_row["venue"] in {*VENUE_REQUEST_CODES, "PREMARKET_KRX_LIKE"}
                 else "UNKNOWN"
             )
             index[code]["entry_ai_trace"].append(ai_row)
@@ -1958,6 +2059,35 @@ def _load_stage_index(
                 index[code]["entry_ai_provider_called"].append(ai_row)
     except FileNotFoundError:
         pass
+    for code, stages in index.items():
+        proven_records = set()
+        for rows in stages.values():
+            for row in rows:
+                if (
+                    row.get("venue") == "PREMARKET_KRX_LIKE"
+                    and row.get("session") == "PREMARKET_KRX_LIKE"
+                    and (code, row.get("scanner_promotion_id"))
+                    in premarket_route_promotions
+                ):
+                    row.update(
+                        venue="NXT",
+                        session="NXT_PREMARKET",
+                        venue_binding="exact_pre_anchor_route_and_promotion",
+                    )
+                    if row.get("record_id"):
+                        proven_records.add(row["record_id"])
+        for stage in ("entry_ai_trace", "entry_ai_provider_called"):
+            for row in stages.get(stage, []):
+                if (
+                    row.get("venue") == "PREMARKET_KRX_LIKE"
+                    and row.get("session") == "PREMARKET_KRX_LIKE"
+                    and row.get("record_id") in proven_records
+                ):
+                    row.update(
+                        venue="NXT",
+                        session="NXT_PREMARKET",
+                        venue_binding="exact_pre_anchor_route_and_record",
+                    )
     if executable_bbo_index is not None:
         _deduplicate_executable_bbo_index(executable_bbo_index)
     return index
@@ -2312,7 +2442,7 @@ def _coverage_row(
             require_venue=require_venue,
             require_session=require_lineage,
         )
-        for stage in STAGE_ORDER
+        for stage in (*STAGE_ORDER, "runtime_watch_attach_attempted")
     }
     lineage_status = "not_requested_noncausal"
     lineage_promotion_id = ""
@@ -2493,7 +2623,11 @@ def _coverage_row(
             else (
                 "candidate_not_promoted"
                 if flags["candidate_evaluated"]
-                else "scanner_discovery_gap_or_unobserved"
+                else (
+                    "scanner_fetch_seen_pool_unobserved"
+                    if flags["source_seen"]
+                    else "scanner_discovery_gap_or_unobserved"
+                )
             )
         )
     else:
@@ -2502,11 +2636,17 @@ def _coverage_row(
         else:
             no_ai_reason = "entry_ai_provider_reached"
             for stage, reason in (
+                ("runtime_watch_attached", "scanner_runtime_attach_gap"),
                 ("fast_precheck", "scanner_fast_precheck_gap"),
                 ("heavy_eval", "scanner_heavy_eval_gap"),
                 ("entry_ai_trace", "entry_ai_trace_gap"),
                 ("entry_ai_provider_called", "entry_ai_preflight_or_transport_block"),
             ):
+                if stage == "runtime_watch_attached" and any(
+                    flags[s] for s in ("fast_precheck", "heavy_eval", "entry_ai_trace")
+                ):
+                    # Downstream execution proves consumption, not its receipt.
+                    continue
                 if not flags[stage]:
                     no_ai_reason = reason
                     break
@@ -2559,12 +2699,36 @@ def _coverage_row(
         }
     )
 
+    source_cycles = {
+        str(row["scanner_source_cycle_id"])
+        for row in candidate_rows["source_seen"]
+        if row.get("scanner_source_cycle_id")
+    }
+    pool_cycles = {
+        str(row["scanner_source_cycle_id"])
+        for row in candidate_rows["candidate_evaluated"]
+        if row.get("scanner_source_cycle_id")
+    }
     return {
         **{
             key: (value.isoformat() if isinstance(value, datetime) else value)
             for key, value in episode.items()
         },
         "stage_reached": flags,
+        "runtime_attach_attempts": [
+            {
+                "at": row["ts"].isoformat(),
+                "outcome": row.get("runtime_target_attach_outcome"),
+                "reason": row.get("reason"),
+            }
+            for row in candidate_rows.get("runtime_watch_attach_attempted", [])
+        ],
+        "handoff_receipt_gaps": (
+            ["runtime_watch_attached"]
+            if not flags["runtime_watch_attached"]
+            and any(flags[s] for s in ("fast_precheck", "heavy_eval", "entry_ai_trace"))
+            else []
+        ),
         "first_stage_at": {
             key: value.isoformat() if value is not None else None
             for key, value in first_times.items()
@@ -2579,6 +2743,21 @@ def _coverage_row(
             and stage_at >= first_census_at
         },
         "stage_raw_events": stage_raw_events,
+        "source_fetch_observed_exact": "scalping_scanner_source_fetch_census"
+        in stage_raw_events["source_seen"],
+        "candidate_pool_observed_exact": "scalping_scanner_candidate_pool_census"
+        in stage_raw_events["candidate_evaluated"],
+        "source_pool_cycle_join": {
+            "matched_cycle_ids": sorted(source_cycles & pool_cycles),
+            "source_cycle_count": len(source_cycles),
+            "pool_cycle_count": len(pool_cycles),
+            "status": (
+                "exact_cycle_pair_observed"
+                if source_cycles & pool_cycles
+                else "unproven_no_same_cycle_pair"
+            ),
+            "independent_stage_reach_is_not_conversion_pair": True,
+        },
         "stage_reason_codes": stage_reason_codes,
         "first_stage_reason_code": first_stage_reason_code,
         "scanner_lineage": {
@@ -3075,6 +3254,7 @@ def build_report(
     executable_bbo_index: dict[str, dict[str, dict[str, list[dict[str, Any]]]]] = {}
     executable_bbo_gap_counts: Counter[str] = Counter()
     observer_runtime_receipts: list[dict[str, Any]] = []
+    scanner_source_receipts: list[dict[str, Any]] = []
     stage_index = _load_stage_index(
         events_path,
         trace_path,
@@ -3082,6 +3262,7 @@ def build_report(
         executable_bbo_index=executable_bbo_index,
         executable_bbo_gap_counts=executable_bbo_gap_counts,
         observer_runtime_receipts=observer_runtime_receipts,
+        scanner_source_receipts=scanner_source_receipts,
     )
     latest_observer_runtime_receipt = max(
         observer_runtime_receipts,
@@ -3637,6 +3818,29 @@ def build_report(
         "target_date": target_date,
         "report_started_at": report_started_at.isoformat(),
         "generated_at": generated_at.isoformat(),
+        "scanner_source_census": {
+            "status": (
+                "runtime_receipt_not_observed"
+                if not scanner_source_receipts
+                else (
+                    "source_contract_invalid"
+                    if not any(r["contract_valid"] for r in scanner_source_receipts)
+                    else (
+                        "partial_valid_receipts"
+                        if not all(r["contract_valid"] for r in scanner_source_receipts)
+                        else "observed"
+                    )
+                )
+            ),
+            "receipt_count": len(scanner_source_receipts),
+            "invalid_receipt_count": sum(
+                not r["contract_valid"] for r in scanner_source_receipts
+            ),
+            "scope": "bounded_adapter_returns_not_raw_api_universe",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "receipts": scanner_source_receipts,
+        },
         "status": (
             "ok"
             if valid_snapshots and not instrumentation_blockers
@@ -3834,6 +4038,9 @@ def build_report(
             "installed_trigger_contract": trigger_contract,
             "funnel_instrumentation_contract": {
                 "source_seen": sorted(PIPELINE_STAGE_MAP["source_seen"]),
+                "exact_adapter_source_seen": "scalping_scanner_source_fetch_census",
+                "exact_ranked_pool": "scalping_scanner_candidate_pool_census",
+                "adapter_pool_contract": "same_source_cycle_bounded_hash_conservation_exact_route_not_raw_api_universe",
                 "candidate_evaluated": sorted(
                     PIPELINE_STAGE_MAP["candidate_evaluated"]
                 ),
@@ -4243,7 +4450,31 @@ def main() -> None:
         print(
             json.dumps(
                 {
-                    "status": "captured_source_only",
+                    "status": (
+                        "captured_source_only"
+                        if any(r["row_count"] for r in records)
+                        else "source_only_unavailable"
+                    ),
+                    "valid_capture_records": sum(
+                        r["source_quality_status"] == "ok" for r in records
+                    ),
+                    "unavailable_capture_records": sum(
+                        r["source_quality_status"] != "ok" for r in records
+                    ),
+                    "capture_scope_status": [
+                        {
+                            k: r[k]
+                            for k in (
+                                "venue",
+                                "panel",
+                                "captured_at",
+                                "row_count",
+                                "source_quality_status",
+                                "source_error",
+                            )
+                        }
+                        for r in records
+                    ],
                     "captured_records": captured_count,
                     "snapshot_path": str(snapshot_path),
                     "external_bbo_budget_path": str(bbo_budget_path),

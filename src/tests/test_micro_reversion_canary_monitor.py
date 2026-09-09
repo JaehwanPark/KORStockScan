@@ -296,9 +296,7 @@ def test_bounded_timestamp_rejection_tail_does_not_claim_complete_exclusion():
 
     timestamp = result["timestamp_source_quality"]
     assert timestamp["exact_rejected_row_exclusion_proven"] is False
-    assert timestamp["rejection_receipt_coverage_status"] == (
-        "bounded_tail_or_invalid"
-    )
+    assert timestamp["rejection_receipt_coverage_status"] == ("bounded_tail_or_invalid")
 
 
 def test_malformed_timestamp_rejection_receipt_fails_closed_without_exception():
@@ -313,9 +311,7 @@ def test_malformed_timestamp_rejection_receipt_fails_closed_without_exception():
 
     timestamp = result["timestamp_source_quality"]
     assert timestamp["exact_rejected_row_exclusion_proven"] is False
-    assert timestamp["rejection_receipt_coverage_status"] == (
-        "bounded_tail_or_invalid"
-    )
+    assert timestamp["rejection_receipt_coverage_status"] == ("bounded_tail_or_invalid")
 
 
 def test_timestamp_rejection_receipt_type_count_mismatch_fails_closed():
@@ -627,8 +623,10 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
             assert expected == (
                 "3c703102ac68ab70315377b907f584dff4efb399d8818ebe84f6b6ba9f26cfd7"
             )
+            # Black-only normalization of the reviewed census generation;
+            # both AST pins below remain unchanged, as does the frozen receipt.
             expected = (
-                "84d54124b2d14c263c90cb6853a59d66b19b5546046f368792b7c4000cffc638"
+                "6626103c12138ff0a893f70c89931276c46b92a72d62875e2aaea7dec1629144"
             )
             tree = ast.parse(path.read_bytes())
             census_functions = [
@@ -671,8 +669,7 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
             policy_class = next(
                 node
                 for node in tree.body
-                if isinstance(node, ast.ClassDef)
-                and node.name == "PathStoragePolicy"
+                if isinstance(node, ast.ClassDef) and node.name == "PathStoragePolicy"
             )
             assert hashlib.sha256(
                 ast.dump(policy_class, include_attributes=False).encode()
@@ -683,8 +680,7 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
                 node
                 for node in tree.body
                 if not (
-                    isinstance(node, ast.ClassDef)
-                    and node.name == "PathStoragePolicy"
+                    isinstance(node, ast.ClassDef) and node.name == "PathStoragePolicy"
                 )
             ]
             assert hashlib.sha256(

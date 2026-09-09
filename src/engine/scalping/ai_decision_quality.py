@@ -16836,6 +16836,7 @@ def build_micro_reversion_three_arm_evaluation(
                 "end_return_pct": end_return_pct,
                 "cost_adjusted_outcome_pct": cost_adjusted_outcome_pct,
                 "cost_adjusted_outcome_basis": cost_adjusted_outcome_basis,
+                "entry_cost_aware_opportunity": _verified_net_entry_opportunity(label),
                 "action_neutral_outcome_ev_pct": cost_adjusted_outcome_pct,
                 "action_neutral_outcome_ev_basis": cost_adjusted_outcome_basis,
                 "mfe_pct": mfe_pct,
@@ -23924,6 +23925,148 @@ def _small_entry_opportunity(
     }
 
 
+def _verified_net_entry_opportunity(label: Mapping[str, Any]) -> dict[str, Any]:
+    """Use the existing executable cost/master/path verifier, never a gross proxy.
+
+    The source owns costs and spread treatment. Subtracting them here again
+    would understate small returns. Actual owner safety and fills stay separate.
+    """
+    result = {
+        "schema": "entry_cost_aware_opportunity_v1",
+        "status": "source_unavailable",
+        "counterfactual_net_target_first": None,
+        "cost_adjusted_end_return_pct": None,
+        "realized_net_pnl_krw": None,
+        "realized_pnl_status": "counterfactual_not_broker_realization",
+        "cost_aware_actionable_episode_count": None,
+        "actionable_status": "as_of_owner_safety_eligibility_not_bound",
+        "metric_role": "cost_aware_opportunity_diagnostic",
+        "decision_authority": "diagnostic_source_only",
+        "window_policy": "declared_primary_mature_horizon_only",
+        "sample_floor": "one_verified_exact_action_neutral_path",
+        "primary_decision_metric": "cost_adjusted_end_return_pct",
+        "source_quality_gate": "existing_exact_cost_master_path_validator",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": [
+            "realized_pnl_claim",
+            "automatic_buy",
+            "gross_proxy_net_imputation",
+        ],
+    }
+    if label.get("decision_stage") == "holding":
+        result["status"] = "not_applicable_stage"
+        return result
+    try:
+        if label.get("decision_stage") != "entry":
+            raise ValueError("not_entry_outcome")
+        _validate_micro_reversion_action_neutral_label(dict(label))
+        metric = _micro_reversion_primary_metric(dict(label)) or {}
+        value = _number(metric.get("cost_adjusted_end_return_pct"))
+        if value is None or metric.get("counterfactual_only") is not True:
+            raise ValueError("verified_executable_cost_adjusted_path_missing")
+    except (TypeError, ValueError, KeyError) as exc:
+        result["source_gap_reason"] = str(exc)
+        return result
+    result.update(
+        {
+            "status": "verified_counterfactual_after_cost",
+            "counterfactual_net_target_first": metric.get("first_hit")
+            == "net_target_first",
+            "cost_adjusted_end_return_pct": value,
+            "decision_trace_id": label.get("decision_trace_id"),
+            "label_content_sha256": label.get("label_content_sha256"),
+            "action_neutral_path_sha256": metric.get("action_neutral_path_sha256"),
+            "cost_profile_artifact_sha256": label.get("cost_profile_artifact_sha256"),
+            "symbol_master_artifact_sha256": label.get("symbol_master_artifact_sha256"),
+            "additional_cost_subtracted_here": False,
+        }
+    )
+    return result
+
+
+def _paired_cost_aware_outcomes(
+    *,
+    target_date: str,
+    requests: list[dict[str, Any]],
+    artifact: dict[str, Any] | None,
+    source_bridge_report: Mapping[str, Any] | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Bind optional executable labels without excluding valid base research."""
+    source = {
+        "status": "source_unavailable",
+        "artifact_content_sha256": (artifact or {}).get("artifact_content_sha256"),
+        "source_gap_reason": "exact_cost_aware_label_artifact_missing",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    labels = {}
+    if artifact:
+        try:
+            if artifact.get("source_load_error"):
+                raise ValueError(str(artifact["source_load_error"]))
+            if artifact.get("schema") != MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA:
+                raise ValueError("exact_cost_aware_label_artifact_schema_invalid")
+            _validate_micro_reversion_outcome_label_artifact(
+                artifact,
+                source_bridge_report=source_bridge_report,
+                expected_target_date=target_date,
+            )
+            for label in artifact["labels"]:
+                trace = label["decision_trace_id"]
+                if trace in labels:
+                    raise ValueError("exact_cost_aware_label_duplicate_parent")
+                labels[trace] = label
+        except (KeyError, TypeError, ValueError) as exc:
+            labels = {}
+            source["source_gap_reason"] = str(exc)
+        else:
+            source.update(status="validated_source_only", source_gap_reason=None)
+    diagnostics = {}
+    for request in requests:
+        trace = str(request.get("decision_trace_id") or "")
+        label = labels.get(trace)
+        diagnostic = _verified_net_entry_opportunity({})
+        reason = source["source_gap_reason"] or "exact_cost_aware_label_parent_missing"
+        if label:
+            evidence = label["source_tactical_evidence"]
+            exact_payload = _replay_exact_payload(request.get("exact_payload"))
+            identity_matches = bool(
+                request.get("stage") == label.get("decision_stage") == "entry"
+                and _normalize_stock_code(request.get("stock_code"))
+                == _normalize_stock_code(label.get("stock_code"))
+                and _venue(request.get("effective_venue"))
+                == _venue(label.get("effective_venue"))
+                and _session(request.get("session_bucket"))
+                == _session(label.get("session_bucket"))
+                and _parse_ts(request.get("decision_ts")) is not None
+                and _parse_ts(request.get("decision_ts"))
+                == _parse_ts(label.get("decision_ts"))
+                and request.get("payload_sha256")
+                == evidence.get("source_provider_payload_sha256")
+                and request.get("request_envelope_sha256")
+                == evidence.get("source_request_envelope_sha256")
+                and isinstance(exact_payload, dict)
+                and _sha256(exact_payload)
+                == evidence.get("source_exact_payload_sha256")
+            )
+            if identity_matches:
+                diagnostic = _verified_net_entry_opportunity(label)
+                reason = diagnostic.get("source_gap_reason")
+            else:
+                reason = "exact_cost_aware_label_request_binding_mismatch"
+        if reason:
+            diagnostic["source_gap_reason"] = reason
+        diagnostic["source_artifact_content_sha256"] = source["artifact_content_sha256"]
+        diagnostics[str(request.get("paired_replay_id") or trace)] = diagnostic
+    source["request_count"] = len(diagnostics)
+    source["verified_request_count"] = sum(
+        row["status"] == "verified_counterfactual_after_cost"
+        for row in diagnostics.values()
+    )
+    return diagnostics, source
+
+
 def _paired_report_request_view(request: Mapping[str, Any]) -> dict[str, Any]:
     """Return the exact provider-free request representation persisted by R0."""
 
@@ -23962,12 +24105,20 @@ def build_paired_replay_report(
     labels: list[dict[str, Any]] | None = None,
     execution_selection: dict[str, Any] | None = None,
     prepared_requests: list[dict[str, Any]] | None = None,
+    net_outcome_artifact: dict[str, Any] | None = None,
+    net_source_bridge_report: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     results = list(results or [])
     economic_source_exclusions: list[dict[str, Any]] = []
     candidate_execution_requested = bool(results or execution_selection is not None)
     prepared_census_provided = prepared_requests is not None
     all_prepared_requests = list(prepared_requests or requests)
+    net_diagnostics, net_source = _paired_cost_aware_outcomes(
+        target_date=target_date,
+        requests=requests,
+        artifact=net_outcome_artifact,
+        source_bridge_report=net_source_bridge_report,
+    )
     if execution_selection is None:
         execution_selection = {
             "policy": "complete_evaluated_request_census",
@@ -24303,6 +24454,14 @@ def build_paired_replay_report(
                 "first_hit": first_hit,
                 "entry_path_first_hit": entry_path_first_hit or None,
                 "entry_small_profit_opportunity": small_opportunity,
+                "entry_cost_aware_opportunity": (
+                    net_diagnostics.get(
+                        str(request.get("paired_replay_id") or trace_id),
+                        _verified_net_entry_opportunity({}),
+                    )
+                    if comparison_stage == "entry"
+                    else None
+                ),
                 "entry_path_target_pct": preferred.get("entry_path_target_pct"),
                 "entry_path_adverse_pct": preferred.get("entry_path_adverse_pct"),
                 "profit_opportunity_threshold_pct": (
@@ -25859,6 +26018,7 @@ def build_paired_replay_report(
         "net_profit_status": "not_available_without_notional_and_fill_join",
         "buckets": buckets,
         "paired_comparisons": comparable_rows,
+        "cost_aware_outcome_source": net_source,
         "requests": report_requests,
         "results": results,
         **OFFLINE_CONTRACT,
@@ -31384,6 +31544,22 @@ def main(argv: list[str] | None = None) -> int:
                         ),
                     }
                 )
+            try:
+                net_outcome_artifact = (
+                    _load_json(micro_reversion_action_neutral_label_path(args.date))
+                    if args.mode == "detailed"
+                    else {}
+                )
+                net_source_bridge_report = (
+                    _load_json(micro_reversion_bridge_report_path(args.date))
+                    if net_outcome_artifact
+                    else None
+                )
+            except (OSError, ValueError, TypeError) as exc:
+                net_outcome_artifact = {
+                    "source_load_error": f"cost_aware_source_load_failed:{type(exc).__name__}"
+                }
+                net_source_bridge_report = None
             report = build_paired_replay_report(
                 target_date=args.date,
                 requests=evaluated_requests,
@@ -31391,6 +31567,8 @@ def main(argv: list[str] | None = None) -> int:
                 labels=replay_labels,
                 execution_selection=execution_selection,
                 prepared_requests=prepared_requests,
+                net_outcome_artifact=net_outcome_artifact,
+                net_source_bridge_report=net_source_bridge_report,
             )
             if args.mode == "detailed":
                 report["schema"] = DETAILED_PAIRED_SCHEMA

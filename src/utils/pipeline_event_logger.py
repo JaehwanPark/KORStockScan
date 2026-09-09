@@ -454,6 +454,17 @@ def _project_fields_for_compact_stream(
 
 def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, str]:
     if stage in {
+        "scalping_scanner_source_fetch_census",
+        "scalping_scanner_candidate_pool_census",
+    }:
+        # Keep the bounded row batch once in lossless JSON, not duplicated in
+        # text_payload. No compaction/suppression of the canonical fields.
+        return {
+            key: value
+            for key, value in fields.items()
+            if key != "scanner_source_rows_json"
+        } | {"text_field_projection": "scanner_source_batch_hash_only_v1"}
+    if stage in {
         "avg_down_route_arbitration_observed",
         "avg_down_exit_replay_frame_observed",
         "strategy_owner_replay_seed_observed",

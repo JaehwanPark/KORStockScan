@@ -613,6 +613,27 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="scanner_prune_bbo_observation_only",
     ),
+    **{
+        stage: StageContract(
+            required_fields=(
+                *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
+                "allowed_runtime_apply",
+                "scanner_source_cycle_id",
+                "scanner_source_status",
+                "scanner_source_input_count",
+                "scanner_source_output_count",
+                "scanner_source_rejected_count",
+                "scanner_source_omitted_count",
+                "scanner_source_rows_json",
+                "scanner_source_rows_sha256",
+            ),
+            decision_authority="scanner_adapter_pool_observation_only",
+        )
+        for stage in (
+            "scalping_scanner_source_fetch_census",
+            "scalping_scanner_candidate_pool_census",
+        )
+    },
     "scalping_scanner_iteration_timing": StageContract(
         required_fields=(
             *REAL_EXECUTION_DIAGNOSTIC_FIELDS,
@@ -5388,6 +5409,8 @@ def _row_contract_violations(
     ):
         invalid.append("avg_down_paired_terminal_source_contract")
     if stage in {
+        "scalping_scanner_source_fetch_census",
+        "scalping_scanner_candidate_pool_census",
         "scalping_scanner_prune_bbo_source_loaded",
         "scalping_scanner_iteration_timing",
         "scalping_scanner_low_rebound_source_observed",
@@ -5399,6 +5422,14 @@ def _row_contract_violations(
         or not _contract_bool(fields.get("broker_order_forbidden"), True)
     ):
         invalid.append("scanner_source_only_observation_authority_contract")
+    if stage in {
+        "scalping_scanner_source_fetch_census",
+        "scalping_scanner_candidate_pool_census",
+    }:
+        from src.scanners.scanner_source_census import decode_receipt
+
+        if decode_receipt(fields) is None:
+            invalid.append("scanner_source_census_hash_or_conservation_invalid")
     if stage == "scalping_scanner_prune_bbo_source_loaded":
         configured_epoch = _safe_float(
             fields.get("scanner_prune_observer_configured_epoch")

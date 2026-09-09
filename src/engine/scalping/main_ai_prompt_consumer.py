@@ -942,6 +942,54 @@ def _path_summary(cohorts: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _prompt_research_projection(report: Mapping[str, Any]) -> dict[str, Any]:
+    proposals, routes, rejections = [], [], []
+    for stage_name, stage in (report.get("stage_optimizers") or {}).items():
+        for cohort in stage.get("cohort_optimizers") or []:
+            if not isinstance(cohort, Mapping):
+                continue
+            selected = cohort.get("selected_challenger") or {}
+            routes.append(
+                {
+                    "stage": stage_name,
+                    "effective_venue": cohort.get("effective_venue"),
+                    "session_bucket": cohort.get("session_bucket"),
+                    "candidate_prompt_version": selected.get("prompt_version"),
+                    **optimizer.calibration_source.runtime_review_route(
+                        selected.get("prompt_version"),
+                        stage_name,
+                        cohort.get("effective_venue"),
+                        cohort.get("session_bucket"),
+                    ),
+                }
+            )
+            for proposal in cohort.get("prompt_revision_proposals") or []:
+                if not (
+                    isinstance(proposal, Mapping)
+                    and proposal.get("schema") == "entry_prompt_revision_proposal_v1"
+                    and stage_name == "entry"
+                    and proposal.get("effective_venue") == cohort.get("effective_venue")
+                    and proposal.get("session_bucket") == cohort.get("session_bucket")
+                    and _valid_source_only(proposal)
+                    and proposal.get("proposal_content_sha256")
+                    == optimizer._canonical_sha256(
+                        {
+                            k: v
+                            for k, v in proposal.items()
+                            if k != "proposal_content_sha256"
+                        }
+                    )
+                ):
+                    rejections.append("prompt_revision_proposal_contract_invalid")
+                    continue
+                proposals.append(dict(proposal))
+    return {
+        "prompt_revision_proposals": proposals,
+        "registered_runtime_review_routes": routes,
+        "prompt_revision_proposal_rejections": rejections,
+    }
+
+
 def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     parsed_date = date.fromisoformat(target_date)
     if parsed_date < optimizer.CLEAN_BASELINE_DATE:
@@ -1124,6 +1172,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     )
     body: dict[str, Any] = {
         "schema": SCHEMA,
+        **_prompt_research_projection(optimizer_report if not blockers else {}),
         "r3_research_handoff": _r3_research_handoff(target_date),
         "target_date": target_date,
         "generated_at": datetime.now(quality.KST).isoformat(timespec="seconds"),
@@ -1208,12 +1257,8 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
             "profit_improvement_demonstrated": profit_demonstrated,
             "runtime_prompt_update_allowed": False,
             "runtime_prompt_update_blockers": [
-                "isolated_5d_ev_and_net_profit_guard_not_closed",
-                "isolated_10d_ev_and_net_profit_guard_not_closed",
-                "isolated_20d_ev_and_net_profit_guard_not_closed",
-                "p10_tail_guard_not_closed",
-                "terminal_custody_and_post_apply_attribution_guard_not_closed",
-                "new_prompt_live_family_not_registered",
+                "this_consumer_has_no_runtime_apply_authority",
+                "legacy_main_ai_runtime_authority_retired",
             ],
             "future_profit_improving_output_likelihood": (
                 "evidence_supported"

@@ -13,6 +13,146 @@ from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as opti
 from src.engine.scalping import ai_action_outcome_calibration as calibration
 
 
+def _zero_participation_evidence():
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    rows = [
+        {
+            "decision_trace_id": f"parent-{i}",
+            "source_date": f"2026-09-{day:02d}",
+            "stock_code": f"{i % 3:06d}",
+            "candidate_action": "WAIT",
+            "candidate_exposure_selected": False,
+            "candidate_probe_armed": True,
+            "candidate_error_taxonomy": ["false_wait_small_profit_execution_proxy"],
+        }
+        for i, day in enumerate((1, 2, 3, 4, 7))
+    ]
+    return {
+        "candidate_prompt_version": version,
+        "candidate_prompt_sha256": optimizer.ENTRY_CANDIDATE_PROMPT_SHA256[version],
+        "candidate_contract_sha256": "b" * 64,
+        "stage": "entry",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "source_integrity_complete": True,
+        "candidate_exposure_count": 0,
+        "exact_trace_count": 5,
+        "unique_symbol_count": 3,
+        "source_date_count": 5,
+        "source_dates": [r["source_date"] for r in rows],
+        "entry_research_progress": calibration.entry_research_progress(rows),
+    }
+
+
+def test_zero_participation_rotates_offline_without_live_exposure_floor():
+    evidence = _zero_participation_evidence()
+
+    def select():
+        return optimizer._select_entry_challenger(
+            "legacy",
+            [],
+            effective_venue="KRX",
+            session_bucket="KRX_REGULAR",
+            calibration={"candidate_summaries": [evidence]},
+        )
+
+    assert evidence["entry_research_progress"]["candidate_probe_arm_count"] == 5
+    assert select()["prompt_version"] == optimizer.ENTRY_CANDIDATE_ORDER[1]
+    evidence["entry_research_progress"]["exact_parent_ids"].append("parent-0")
+    assert select()["prompt_version"] == optimizer.ENTRY_CANDIDATE_ORDER[0]
+    evidence["entry_research_progress"]["exact_parent_ids"] = ["one"] * 5
+    assert select()["prompt_version"] == optimizer.ENTRY_CANDIDATE_ORDER[0]
+    evidence = _zero_participation_evidence()
+    evidence["source_integrity_complete"] = False
+    assert select()["prompt_version"] == optimizer.ENTRY_CANDIDATE_ORDER[0]
+
+
+def test_single_case_can_generate_offline_prompt_draft_not_live_or_provider_apply():
+    evidence = _zero_participation_evidence()
+    evidence["entry_research_progress"]["small_opportunity_case_ids"] = ["parent-0"]
+    drafts = optimizer._prompt_revision_proposals(
+        {"candidate_summaries": [evidence]},
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+    )
+    assert len(drafts) == 1
+    draft = drafts[0]
+    assert draft["proposed_appendix"].isascii()
+    assert draft["allowed_runtime_apply"] is False
+    assert draft["provider_authority"] is False
+    assert draft["parent_prompt_hash"] == draft["rollback_prompt_hash"]
+    assert draft["proposal_content_sha256"] == optimizer._canonical_sha256(
+        {k: v for k, v in draft.items() if k != "proposal_content_sha256"}
+    )
+    assert (
+        optimizer._prompt_revision_proposals(
+            {"candidate_summaries": [evidence]},
+            effective_venue="NXT",
+            session_bucket="NXT_AFTERMARKET",
+        )
+        == []
+    )
+    for invalid in ([{"unhashable": "case"}], ["foreign-parent"], "not-a-list"):
+        evidence["entry_research_progress"]["small_opportunity_case_ids"] = invalid
+        assert (
+            optimizer._prompt_revision_proposals(
+                {"candidate_summaries": [evidence]},
+                effective_venue="KRX",
+                session_bucket="KRX_REGULAR",
+            )
+            == []
+        )
+
+
+def test_research_window_does_not_require_orders_and_does_not_normalize_source_absence():
+    assert (
+        calibration.entry_research_progress([])["status"]
+        == "pending_declared_research_window"
+    )
+    rows = [
+        {
+            "decision_trace_id": "t",
+            "source_date": "2026-09-09",
+            "stock_code": "005930",
+            "candidate_action": "BUY",
+        }
+    ]
+    assert calibration.entry_research_progress(rows)["candidate_exposure_count"] == 1
+    assert calibration.entry_research_progress(rows)["offline_rotation_due"] is False
+
+
+def test_old_exposure_does_not_hide_recent_five_date_nonparticipation():
+    evidence = _zero_participation_evidence()
+    progress = evidence["entry_research_progress"]
+    rows = [
+        {
+            "decision_trace_id": parent,
+            "source_date": day,
+            "stock_code": f"{index % 3:06d}",
+            "candidate_action": "WAIT",
+            "candidate_error_taxonomy": ["false_wait_small_profit_execution_proxy"],
+        }
+        for index, (parent, day) in enumerate(
+            zip(progress["exact_parent_ids"], progress["source_dates"])
+        )
+    ]
+    rows.append(
+        {
+            "decision_trace_id": "old-buy",
+            "source_date": "2026-08-31",
+            "stock_code": "005930",
+            "candidate_action": "BUY",
+        }
+    )
+    evidence.update(
+        {"exact_trace_count": 6, "candidate_exposure_count": 1, "source_date_count": 6}
+    )
+    evidence["source_dates"].insert(0, "2026-08-31")
+    evidence["entry_research_progress"] = calibration.entry_research_progress(rows)
+    assert optimizer._research_rotation_due(evidence) is True
+    assert "old-buy" not in evidence["entry_research_progress"]["exact_parent_ids"]
+
+
 def test_calibration_ascii_digest_accepts_nonascii_and_rejects_tampering(
     monkeypatch, tmp_path
 ):
@@ -119,8 +259,9 @@ def test_follower_requires_valid_calibration_and_current_source_generation(
     )
 
 
+@pytest.mark.parametrize("research_only", [False, True])
 def test_calibration_selected_version_reaches_existing_batch_consumer(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, research_only
 ):
     from src.tests.test_ai_action_outcome_calibration import _economic_row, _write_json
     from src.engine.scalping import entry_setup_paired_replay_batch as batch
@@ -132,7 +273,24 @@ def test_calibration_selected_version_reaches_existing_batch_consumer(
     monkeypatch.setattr(optimizer, "ACTION_OUTCOME_CALIBRATION_DIR", cal_dir)
     monkeypatch.setattr(optimizer, "REPORT_DIR", tmp_path / "optimizer")
     version = optimizer.ENTRY_CANDIDATE_ORDER[0]
-    for source_day, offset in (("2026-09-04", 0), (day, 20)):
+    dates = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", day]
+    for date_index, source_day in enumerate(dates if research_only else dates[-2:]):
+        offset = date_index * 20
+        rows = [_economic_row(i, -0.1) for i in range(offset, offset + 20)]
+        if research_only:
+            for row in rows:
+                row.update(
+                    {
+                        "candidate_action": "WAIT",
+                        "candidate_exposure_selected": False,
+                        "candidate_probe_armed": True,
+                        "candidate_primary_decision_value_pct": 0.0,
+                        "delta_pct": 0.0,
+                        "candidate_error_taxonomy": [
+                            "false_wait_small_profit_execution_proxy"
+                        ],
+                    }
+                )
         _write_json(
             detail_dir
             / f"ai_prompt_detailed_paired_replay_{source_day}_candidate.json",
@@ -148,9 +306,7 @@ def test_calibration_selected_version_reaches_existing_batch_consumer(
                         }
                     }
                 ],
-                "paired_comparisons": [
-                    _economic_row(i, -0.1) for i in range(offset, offset + 20)
-                ],
+                "paired_comparisons": rows,
             },
         )
     _write(
@@ -170,6 +326,24 @@ def test_calibration_selected_version_reaches_existing_batch_consumer(
     assert plan[("KRX", "KRX_REGULAR")] == optimizer.ENTRY_CANDIDATE_ORDER[1]
     assert source["artifact_content_sha256"] == report["artifact_content_sha256"]
     assert report["runtime_effect"] is False
+    if research_only:
+        from src.engine.scalping import main_ai_prompt_consumer as consumer
+
+        cohort = report["stage_optimizers"]["entry"]["cohort_optimizers"][0]
+        selected = cohort["selected_challenger"]
+        assert selected["calibration_screened_out_versions"] == []
+        assert selected["calibration_research_rotated_versions"] == [version]
+        projected = consumer._prompt_research_projection(report)
+        assert len(projected["prompt_revision_proposals"]) == 1
+        assert projected["prompt_revision_proposal_rejections"] == []
+        assert (
+            projected["registered_runtime_review_routes"][0]["owner"]
+            == "entry_setup_live_policy"
+        )
+        cohort["prompt_revision_proposals"][0]["allowed_runtime_apply"] = True
+        rejected = consumer._prompt_research_projection(report)
+        assert rejected["prompt_revision_proposals"] == []
+        assert rejected["prompt_revision_proposal_rejections"]
 
 
 def test_refresh_freezes_executed_day_and_preserves_next_session_recommendation(
@@ -440,6 +614,7 @@ def test_optimizer_continues_candidate_until_isolated_promotion_floor_closes(
         "action": "continue_current_challenger_new_mature_parents_only",
         "reason": "promotion_sample_floor_not_complete",
         "calibration_screened_out_versions": [],
+        "calibration_research_rotated_versions": [],
     }
     assert (
         report["result_feasibility"][

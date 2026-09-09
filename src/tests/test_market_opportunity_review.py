@@ -129,6 +129,152 @@ def test_unhashed_anchor_does_not_enter_valid_interval():
     assert scope["eligible_episode_count"] == 0
 
 
+@pytest.mark.parametrize("hour,minute,expected", [(11, 0, 1), (15, 10, 0), (15, 20, 0)])
+def test_actionable_scope_excludes_hard_cutoff_but_preserves_broad_count(
+    hour, minute, expected
+):
+    base = datetime(2026, 9, 8, hour, minute, tzinfo=census.KST)
+    scope = _scoped([_episode(base)], _captures(base, [0, 300, 600]))[
+        "by_venue_session"
+    ]["KRX|KRX_REGULAR"]
+    assert scope["raw_episode_count"] == 1
+    assert scope["eligible_episode_count"] == expected
+    assert scope["conservation_delta"] == 0
+    assert not scope["runtime_buy_window_receipt_verified"]
+    if not expected:
+        assert scope["exclusion_counts"] == {"intended_new_buy_hard_cutoff": 1}
+
+
+def test_premarket_logical_cohort_requires_exact_route_and_matching_promotion(tmp_path):
+    from src.tests.test_market_opportunity_census import _promoted_ws_bundle_event
+
+    base = datetime(2026, 9, 8, 8, 10, tzinfo=census.KST)
+    bundle = _promoted_ws_bundle_event(base)
+    fields = bundle["fields"]
+    fields.update(
+        effective_venue="PREMARKET_KRX_LIKE", market_session_bucket="krx_like_premarket"
+    )
+    samples = json.loads(fields["rising_missed_entry_turn_bbo_samples"])
+    for sample in samples:
+        sample.update(
+            effective_venue="PREMARKET_KRX_LIKE",
+            market_session_bucket="krx_like_premarket",
+            observed_venue="NXT",
+            market_route="nxt_only",
+            observed_item="005930_NX",
+        )
+    fields["rising_missed_entry_turn_bbo_samples"] = json.dumps(samples)
+    promotion = {
+        "stage": "scalping_scanner_candidate_promoted",
+        "stock_code": "005930",
+        "emitted_at": base.isoformat(),
+        "fields": {
+            "scanner_promotion_id": "PROM-1",
+            "effective_venue": "PREMARKET_KRX_LIKE",
+        },
+    }
+    path = tmp_path / "pipeline.jsonl"
+    _write_jsonl(path, [promotion])
+    index = census._load_stage_index(
+        path, tmp_path / "absent.jsonl", target_date="2026-09-08"
+    )
+    assert index["005930"]["scanner_promoted"][0]["venue"] == "PREMARKET_KRX_LIKE"
+    for native_id, expected in (
+        ("PROM-OTHER", "PREMARKET_KRX_LIKE"),
+        ("PROM-1", "NXT"),
+    ):
+        promotion["fields"]["scanner_promotion_id"] = native_id
+        _write_jsonl(path, [promotion, bundle])
+        bbo = {}
+        index = census._load_stage_index(
+            path,
+            tmp_path / "absent.jsonl",
+            target_date="2026-09-08",
+            executable_bbo_index=bbo,
+        )
+        row = index["005930"]["scanner_promoted"][0]
+        assert row["venue"] == expected
+        assert bbo["005930"]["NXT"]["NXT_PREMARKET"]
+    samples[0]["observed_item"] = "005930"
+    fields["rising_missed_entry_turn_bbo_samples"] = json.dumps(samples)
+    _write_jsonl(path, [promotion, bundle])
+    index = census._load_stage_index(
+        path, tmp_path / "absent.jsonl", target_date="2026-09-08"
+    )
+    assert index["005930"]["scanner_promoted"][0]["venue"] == "PREMARKET_KRX_LIKE"
+
+
+def test_attach_absent_is_first_gap_unless_downstream_proves_consumption():
+    base = datetime(2026, 9, 8, 10, tzinfo=census.KST)
+    event = {"ts": base, "venue": "KRX", "scanner_promotion_id": "P1", "record_id": "1"}
+    index = {"005930": {"scanner_promoted": [event]}}
+    args = dict(after=base, require_venue=True, require_lineage=True)
+    episode = {**_episode(base), "first_census_at": base}
+    row = census._coverage_row(episode, index, **args)
+    assert row["terminal_coverage_reason"] == "scanner_runtime_attach_gap"
+    index["005930"]["fast_precheck"] = [event]
+    row = census._coverage_row(episode, index, **args)
+    assert row["terminal_coverage_reason"] == "scanner_heavy_eval_gap"
+    assert row["handoff_receipt_gaps"] == ["runtime_watch_attached"]
+    index["005930"]["runtime_watch_attach_attempted"] = [
+        {
+            **event,
+            "runtime_target_attach_outcome": "watching_skipped",
+            "reason": "existing_owner",
+        },
+        {**event, "scanner_promotion_id": "OTHER", "reason": "wrong_promotion"},
+    ]
+    row = census._coverage_row(episode, index, **args)
+    assert len(row["runtime_attach_attempts"]) == 1
+    assert row["runtime_attach_attempts"][0]["reason"] == "existing_owner"
+
+
+def test_capture_primary_first_page_before_secondary_without_extra_budget():
+    calls = []
+
+    def fetch(token, **kw):
+        calls.append(kw)
+        return [{"Code": "005930", "Price": 1000}]
+
+    records = census.capture_market_snapshots(
+        "not-used",
+        target_date="2026-09-08",
+        captured_at=datetime(2026, 9, 8, 10, tzinfo=census.KST),
+        venues=(v for v in ("KRX", "NXT")),
+        panels=(p for p in ("all", "liquid_common")),
+        fetcher=fetch,
+    )
+    assert [(r["panel"], r["venue"]) for r in records] == [
+        ("liquid_common", "KRX"),
+        ("liquid_common", "NXT"),
+        ("all", "KRX"),
+        ("all", "NXT"),
+    ]
+    assert all(
+        c["max_pages_limit"] == 1 and c["request_class"] == "source_only" for c in calls
+    )
+    assert all(r["source"]["capture_budget"]["max_pages"] == 1 for r in records)
+
+
+@pytest.mark.parametrize("limit,expected", [(None, 10), (1, 1), (100, 10)])
+def test_collector_page_bound_does_not_expand_or_change_other_callers(
+    monkeypatch, limit, expected
+):
+    from src.utils import kiwoom_utils
+
+    calls = []
+
+    def fetch(**kw):
+        calls.append(kw)
+        return [], {}
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
+    kiwoom_utils.get_top_fluctuation_ka10027(
+        "fixture", limit=200, max_pages_limit=limit
+    )
+    assert calls[0]["max_pages"] == expected
+
+
 def test_actual_reject_shape_reaches_correct_report_reason(tmp_path):
     base = datetime(2026, 9, 8, 10, tzinfo=census.KST)
     common = {"scanner_promotion_id": "PROM-1", "effective_venue": "KRX"}

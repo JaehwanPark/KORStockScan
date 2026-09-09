@@ -379,6 +379,10 @@ def _action_outcome_advisory(
         "candidate_contract_sha256": row.get("candidate_contract_sha256"),
         "review_classification": row.get("review_classification"),
         "source_integrity_complete": row.get("source_integrity_complete"),
+        "entry_research_progress": row.get("entry_research_progress"),
+        "cost_aware_opportunity_diagnostic": row.get(
+            "cost_aware_opportunity_diagnostic"
+        ),
         "candidate_primary_decision_ev_delta_pct": row.get(
             "candidate_primary_decision_ev_delta_pct"
         ),
@@ -656,6 +660,121 @@ def _detailed_reports(target_date: str) -> list[dict[str, Any]]:
     )
 
 
+def _research_rotation_due(evidence: Mapping[str, Any]) -> bool:
+    progress = evidence.get("entry_research_progress")
+    if not isinstance(progress, Mapping):
+        return False
+    parents = progress.get("exact_parent_ids")
+    dates = progress.get("source_dates")
+    cases = progress.get("small_opportunity_case_ids")
+    if not all(isinstance(value, list) for value in (parents, dates, cases)):
+        return False
+    if not all(isinstance(x, str) and x for x in parents + dates + cases):
+        return False
+    evidence_dates = evidence.get("source_dates")
+    if not isinstance(evidence_dates, list) or not all(
+        isinstance(day, str) and day for day in evidence_dates
+    ):
+        return False
+    return bool(
+        progress.get("schema") == "entry_prompt_research_progress_v1"
+        and progress.get("offline_rotation_due") is True
+        and progress.get("allowed_runtime_apply") is False
+        and progress.get("runtime_effect") is False
+        and progress.get("research_window_pass") is True
+        and type(progress.get("candidate_exposure_count")) is int
+        and progress["candidate_exposure_count"] == 0
+        and progress.get("window_policy")
+        == "last_five_valid_source_dates_within_exact_candidate_cohort"
+        and progress.get("cohort_exact_parent_count")
+        == evidence.get("exact_trace_count")
+        and len(parents) == len(set(parents)) == progress.get("exact_parent_count")
+        and len(parents)
+        <= (_native_nonnegative_int(evidence.get("exact_trace_count")) or 0)
+        and len(set(parents)) >= 5
+        and len(dates) == len(set(dates))
+        and dates == sorted(set(evidence_dates))[-5:]
+        and len(set(dates)) >= 5
+        and (_native_nonnegative_int(progress.get("unique_symbol_count")) or 0) >= 3
+        and progress.get("unique_symbol_count")
+        <= (_native_nonnegative_int(evidence.get("unique_symbol_count")) or 0)
+        and cases
+        and set(cases) <= set(parents)
+    )
+
+
+def _prompt_revision_proposals(calibration, *, effective_venue, session_bucket):
+    """Emit concrete offline patch drafts from verified isolated error cases."""
+    proposals = []
+    for evidence in calibration.get("candidate_summaries") or []:
+        if not isinstance(evidence, Mapping):
+            continue
+        version = evidence.get("candidate_prompt_version")
+        progress = evidence.get("entry_research_progress") or {}
+        if not isinstance(progress, Mapping):
+            continue
+        cases = progress.get("small_opportunity_case_ids")
+        parents = progress.get("exact_parent_ids")
+        if not (
+            evidence.get("stage") == "entry"
+            and evidence.get("effective_venue") == effective_venue
+            and evidence.get("session_bucket") == session_bucket
+            and evidence.get("source_integrity_complete") is True
+            and version in ENTRY_CANDIDATE_ORDER
+            and evidence.get("candidate_prompt_sha256")
+            == _expected_entry_prompt_sha256(version)
+            and isinstance(cases, list)
+            and cases
+            and isinstance(parents, list)
+            and all(isinstance(case, str) and case for case in cases + parents)
+            and set(cases) <= set(parents)
+            and progress.get("schema") == "entry_prompt_research_progress_v1"
+            and progress.get("runtime_effect") is False
+            and progress.get("allowed_runtime_apply") is False
+        ):
+            continue
+        body = {
+            "schema": "entry_prompt_revision_proposal_v1",
+            "parent_prompt_version": version,
+            "parent_prompt_hash": evidence["candidate_prompt_sha256"],
+            "candidate_contract_sha256": evidence.get("candidate_contract_sha256"),
+            "effective_venue": effective_venue,
+            "session_bucket": session_bucket,
+            "case_ids": sorted(set(cases)),
+            "evidence_basis": "small_target_execution_proxy_not_verified_net_profit",
+            "failure_hypothesis": "small_target_soft_risk_may_be_treated_as_hard_rejection",
+            "patch_type": "review_only_appendix_for_new_version",
+            "evaluation_population": "same_exact_parent_payload_and_action_neutral_outcome",
+            "actuator_contract": calibration_source.runtime_review_route(
+                version, "entry", effective_venue, session_bucket
+            ),
+            "candidate_registration_status": "new_version_and_hash_review_required",
+            "proposed_appendix": (
+                "Evaluate the declared target against verified roundtrip fees, tax, "
+                "executable prices and fill feasibility. Do not require a large gross "
+                "move when a smaller positive net opportunity meets the existing "
+                "risk contract. Separate hard negatives from recheckable soft risk. "
+                "Ask depletion alone is not confirmation: distinguish trade-backed "
+                "consumption from cancellation, refill and collapsing bid support. "
+                "Missing cost or source evidence is unknown, not zero or permission "
+                "to buy. Preserve every existing output schema and execution guard."
+            ),
+            "counterexamples": [
+                "gross_positive_but_negative_after_cost",
+                "ask_cancellation_followed_by_refill_or_bid_collapse",
+                "stale_or_cross_epoch_quote",
+                "armed_recheck_without_valid_followup",
+            ],
+            "next_action": "review_versioned_patch_then_existing_bounded_offline_batch",
+            "runtime_registry_mutation_allowed": False,
+            "provider_budget_increase_allowed": False,
+            "rollback_prompt_hash": evidence["candidate_prompt_sha256"],
+            **SOURCE_ONLY_AUTHORITY,
+        }
+        proposals.append({**body, "proposal_content_sha256": _canonical_sha256(body)})
+    return proposals
+
+
 def _select_entry_challenger(
     legacy_challenger: str,
     detailed: list[dict[str, Any]],
@@ -665,6 +784,7 @@ def _select_entry_challenger(
     calibration: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     screened_out: list[str] = []
+    research_rotated: list[str] = []
     by_version: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in detailed:
         if (
@@ -704,6 +824,12 @@ def _select_entry_challenger(
                 )
             )
             if contract_matches and evidence.get("source_integrity_complete") is True:
+                # Rotation is research scheduling, not a promotion or economic
+                # rejection. Do not require BUYs to explore a nonparticipating
+                # challenger, and never select an unregistered live actuator.
+                if _research_rotation_due(evidence):
+                    research_rotated.append(version)
+                    continue
                 if evidence.get("review_classification") in {
                     "review_ready",
                     "thin_positive_review",
@@ -714,6 +840,7 @@ def _select_entry_challenger(
                         "reason": "calibration_positive_validate_on_new_exact_parents",
                         "calibration_used_for_offline_selection": True,
                         "calibration_screened_out_versions": list(screened_out),
+                        "calibration_research_rotated_versions": list(research_rotated),
                     }
                 if (
                     sufficient
@@ -740,6 +867,7 @@ def _select_entry_challenger(
                 "action": "start_new_challenger_evaluation",
                 "reason": "first_untested_supported_challenger",
                 "calibration_screened_out_versions": list(screened_out),
+                "calibration_research_rotated_versions": list(research_rotated),
             }
         if any(row.get("promotion_quality_gate_pass") is True for row in evaluations):
             return {
@@ -747,6 +875,7 @@ def _select_entry_challenger(
                 "action": "freeze_as_runtime_candidate_pending_r2_r3",
                 "reason": "at_least_one_isolated_cohort_passed_quality_gate",
                 "calibration_screened_out_versions": list(screened_out),
+                "calibration_research_rotated_versions": list(research_rotated),
             }
         if any(
             not (row.get("promotion_evidence_floor") or {}).get("pass")
@@ -757,12 +886,14 @@ def _select_entry_challenger(
                 "action": "continue_current_challenger_new_mature_parents_only",
                 "reason": "promotion_sample_floor_not_complete",
                 "calibration_screened_out_versions": list(screened_out),
+                "calibration_research_rotated_versions": list(research_rotated),
             }
     return {
         "prompt_version": legacy_challenger,
         "action": "candidate_registry_exhausted_generate_new_prompt_patch",
         "reason": "all_supported_challengers_evaluated_without_promotion",
         "calibration_screened_out_versions": list(screened_out),
+        "calibration_research_rotated_versions": list(research_rotated),
     }
 
 
@@ -1092,6 +1223,12 @@ def build_report(
                 }
             )
             cohort_item = cohort_optimizers[-1]
+            if stage == "entry":
+                cohort_item["prompt_revision_proposals"] = _prompt_revision_proposals(
+                    action_outcome_calibration,
+                    effective_venue=venue,
+                    session_bucket=session,
+                )
             cohort_contract = cohort_item.get("contract_drift") or {}
             champion = cohort_item.get("champion") or {}
             legacy = cohort_item.get("legacy_r0_challenger") or {}
@@ -1142,8 +1279,8 @@ def build_report(
             "reuse_when": "same_parent_same_prompt_sha_same_input_bundle_hash",
             "provider_budget_scope": "new_or_changed_cells_only",
             "champion_rollover": (
-                "only_after_stage_and_cohort_isolated_5d_10d_20d_EV_net_profit_"
-                "p10_tail_HELD_guards_and_post_apply_attribution"
+                "registered_runtime_owner_exact_stage_cohort_cost_evidence_"
+                "and_preopen_guards_only_no_global_parallel_floor"
             ),
         }
 

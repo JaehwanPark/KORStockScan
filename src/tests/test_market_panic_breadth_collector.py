@@ -105,29 +105,32 @@ def test_fetch_market_breadth_binds_each_response_to_request_market(monkeypatch)
 
     def fake_fetch(**kwargs):
         inds_cd = kwargs["payload"]["inds_cd"]
-        return ([
+        return (
+            [
+                {
+                    "all_inds_idex": [
+                        {
+                            "stk_cd": inds_cd,
+                            "stk_nm": "종합(KOSPI)" if inds_cd == "001" else "코스닥",
+                            "flu_rt": "-1.0",
+                        },
+                        {
+                            "stk_cd": "002" if inds_cd == "001" else "102",
+                            "stk_nm": "대형주",
+                            "flu_rt": "-1.2",
+                        },
+                    ]
+                }
+            ],
             {
-                "all_inds_idex": [
-                    {
-                        "stk_cd": inds_cd,
-                        "stk_nm": "종합(KOSPI)" if inds_cd == "001" else "코스닥",
-                        "flu_rt": "-1.0",
-                    },
-                    {
-                        "stk_cd": "002" if inds_cd == "001" else "102",
-                        "stk_nm": "대형주",
-                        "flu_rt": "-1.2",
-                    },
-                ]
-            }
-        ], {
-            "request_attempt_count": 1,
-            "last_http_status_code": 200,
-            "read_rate_control_status": "admitted",
-            "read_rate_control_reason": "within_limit",
-            "rate_limit_detected": False,
-            "rate_limit_retry_exhausted": False,
-        })
+                "request_attempt_count": 1,
+                "last_http_status_code": 200,
+                "read_rate_control_status": "admitted",
+                "read_rate_control_reason": "within_limit",
+                "rate_limit_detected": False,
+                "rate_limit_retry_exhausted": False,
+            },
+        )
 
     monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fake_fetch)
 
@@ -177,9 +180,7 @@ def test_fetch_market_breadth_retries_empty_market_once_and_preserves_gap(monkey
 
     rows, source = collector.fetch_kiwoom_market_breadth("token")
 
-    assert [(row["code"], row["source_market"]) for row in rows] == [
-        ("001", "KOSPI")
-    ]
+    assert [(row["code"], row["source_market"]) for row in rows] == [("001", "KOSPI")]
     assert calls == {"001": 2, "101": 2}
     assert source["all_markets_ready"] is False
     assert source["missing_markets"] == ["KOSDAQ"]

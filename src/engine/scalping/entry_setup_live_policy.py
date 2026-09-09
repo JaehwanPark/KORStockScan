@@ -760,8 +760,13 @@ def _exploration_source_errors(
     cumulative = cumulative if isinstance(cumulative, dict) else {}
     cumulative_floor = cumulative.get("exploration_evidence_floor")
     cumulative_floor = cumulative_floor if isinstance(cumulative_floor, dict) else {}
-    if daily_floor.get("pass") is not True:
-        errors.append("daily_probe_arm_floor_not_passed")
+    # The reviewed exploration contract is cumulative 10 arms / 3 symbols.
+    # Requiring the same floor again in every daily batch prevents sparse but
+    # valid accumulated evidence from reaching that existing bounded owner.
+    # Keep daily source integrity and the declared diagnostic, not a second
+    # promotion floor. Full performance and continuation guards are unchanged.
+    if type(daily_floor.get("pass")) is not bool:
+        errors.append("daily_probe_arm_diagnostic_missing_or_invalid")
     if cumulative_floor.get("pass") is not True:
         errors.append("cumulative_probe_arm_floor_not_passed")
     try:

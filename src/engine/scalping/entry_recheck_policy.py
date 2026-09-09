@@ -127,6 +127,31 @@ def trading_dates(target: str, baseline: str, limit: int) -> list[str]:
     return sorted(result)
 
 
+def canonical_wait_probe_contract(
+    *,
+    action: Any,
+    contract_status: Any,
+    edge_state: Any,
+    probe_intent: Any,
+    probe_intent_status: Any,
+    recovery_trigger: Any,
+) -> bool:
+    """Shared AI-input predicate, NOT runtime eligibility or broker authority."""
+    intent = (
+        probe_intent != 0
+        if isinstance(probe_intent, (int, float))
+        else str(probe_intent).strip().lower() in {"true", "1", "yes", "y", "on"}
+    )
+    return bool(
+        str(action or "").strip().upper() in {"WAIT", "WAIT_REQUOTE"}
+        and str(contract_status or "").strip().lower() == "pass"
+        and str(edge_state or "").strip().upper() == "EDGE"
+        and intent
+        and str(probe_intent_status or "").strip().lower() == "eligible_wait_probe"
+        and str(recovery_trigger or "").strip().lower() == "recovery_required"
+    )
+
+
 def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
     counts = (
         raw.get("stage_unique") if isinstance(raw.get("stage_unique"), dict) else {}

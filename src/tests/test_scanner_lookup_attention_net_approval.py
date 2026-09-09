@@ -12,6 +12,7 @@ from src.engine.scalping import scanner_lookup_attention_policy as policy
 from src.tests.test_scanner_lookup_attention_tuning import (
     _passing_rows,
     _write_live_pair,
+    _observation_event,
 )
 
 
@@ -109,6 +110,121 @@ def test_frozen_v1_diagnostics_remain_valid_without_new_approval_hurdle(tmp_path
         {k: v for k, v in payload.items() if k != "artifact_sha256"}
     )
     assert tuning.validate_artifact_pair(report, payload, target=source_date) == []
+
+
+def test_zero_candidate_completion_is_not_unqualified_time_resolvable_wait():
+    report = {
+        "target_date": "2026-09-09",
+        "status": "hold_sample",
+        "lineage": {},
+        "cohort_funnel": {
+            "candidate": {"valid_observation_count": 71, "completed_outcome_count": 0}
+        },
+    }
+    result = tuning._economic_acceptance(report)
+    assert (
+        result["next_action"]
+        == "trace_exact_candidate_conversion_via_buy_funnel_before_waiting"
+    )
+    assert (
+        result["approval_feasibility"]["base_book"]["finite_eta_trading_days"] is None
+    )
+    assert result["allowed_runtime_apply"] is False
+    assert (
+        tuning._economic_acceptance(report, legacy_v2=True)["next_action"]
+        == "keep_collecting"
+    )
+
+
+def test_frozen_v2_diagnostics_remain_valid(tmp_path):
+    source_date = date(2026, 9, 17)
+    report, payload = _write_live_pair(tmp_path, source_date)
+    report["economic_acceptance"] = tuning._economic_acceptance(report, legacy_v2=True)
+    report["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in report.items() if k != "artifact_sha256"}
+    )
+    payload["source_report_artifact_sha256"] = report["artifact_sha256"]
+    payload["artifact_sha256"] = policy.canonical_sha256(
+        {k: v for k, v in payload.items() if k != "artifact_sha256"}
+    )
+    assert tuning.validate_artifact_pair(report, payload, target=source_date) == []
+
+
+def test_conversion_diagnostic_does_not_hide_bounded_maintenance():
+    report = {
+        "target_date": "2026-10-05",
+        "status": "hold_sample",
+        "lineage": {},
+        "cohort_funnel": {
+            "candidate": {"valid_observation_count": 71, "completed_outcome_count": 0}
+        },
+    }
+    result = tuning._economic_acceptance(report)
+    assert result["maintenance_review_due"]
+    assert result["next_action"] == "review_integrate_or_retire_no_evidence_or_edge"
+
+
+def test_conversion_receipt_dates_and_local_logger_timestamp():
+    markers = {
+        "fast_precheck": {"at": "2026-09-09T10:00:02"},
+        "heavy_eval": {"at": "2026-09-09T01:00:03+00:00"},
+        "entry_decision": {"at": "2026-09-09T09:59:59+09:00"},
+        "submit": {"at": "2026-09-10T10:00:03+09:00"},
+        "invalid": {"at": "2026-09-09-no-time"},
+    }
+    assert set(
+        tuning._conversion_markers_after_attach(markers, "2026-09-09T10:00:00")
+    ) == {"fast_precheck", "heavy_eval"}
+
+
+def test_conversion_collector_joins_exact_scope_and_keeps_post_attach_receipt(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(tuning, "EVENT_DIR", tmp_path)
+    monkeypatch.setattr(tuning, "REPORT_DIR", tmp_path / "reports")
+    monkeypatch.setattr(tuning, "POLICY_DIR", tmp_path / "policies")
+    monkeypatch.setattr(tuning, "PREOPEN_DIR", tmp_path / "applied")
+    observation = _observation_event()
+
+    def marker(stamp, stage="scalping_scanner_fast_precheck", **fields):
+        return {
+            "stage": stage,
+            "stock_code": "005930",
+            "emitted_at": stamp,
+            "emitted_date": "2026-09-02",
+            "fields": {
+                "runtime_record_id": 1,
+                "scanner_promotion_id": "SCANPROM-005930-1",
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+                **fields,
+            },
+        }
+
+    events = [
+        marker("2026-09-02T09:30:59"),
+        observation,
+        marker("2026-09-02T09:31:01"),
+        marker(
+            "2026-09-02T09:31:02",
+            "scalping_scanner_heavy_eval_completion",
+            scanner_promotion_id="SCANPROM-OTHER",
+        ),
+        marker(
+            "2026-09-02T09:31:02",
+            "scalping_scanner_heavy_eval_completion",
+            effective_venue="NXT",
+        ),
+    ]
+    (tmp_path / "pipeline_events_2026-09-02.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in events)
+    )
+    rows, _ = tuning.collect_lineage(date(2026, 9, 2))
+    assert len(rows) == 1
+    assert set(rows[0]["conversion_receipts"]) == {"fast_precheck"}
+    diagnostic = tuning._conversion_diagnostics(rows)
+    assert diagnostic["first_unobserved_stage_counts"] == {"heavy_eval": 1}
+    assert diagnostic["controller_policy_input"] is False
 
 
 @pytest.mark.parametrize("value", [0, -0.01, 0.02])

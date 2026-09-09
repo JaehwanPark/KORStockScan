@@ -1091,6 +1091,39 @@ def test_rising_missed_report_connects_projected_milestones_to_turn_replay(
         if order["order_id"] == "order_rising_missed_entry_turn_bbo_coverage"
     ]
     assert len(coverage_orders) == 1
+    from src.engine.monitoring.rising_missed_scout_workorder import (
+        _append_intraday_feedback_workorders,
+    )
+    from src.engine.build_code_improvement_workorder import (
+        _rising_missed_scout_followup_orders,
+    )
+
+    forwarded = []
+    _append_intraday_feedback_workorders(
+        forwarded, intraday_feedback={"code_improvement_orders": coverage_orders}
+    )
+    central = _rising_missed_scout_followup_orders(
+        {"code_improvement_orders": forwarded}
+    )
+    assert central[0]["source_readiness"] == coverage_orders[0]["source_readiness"]
+    assert (
+        central[0]["economic_acceptance_criteria"]
+        == coverage_orders[0]["economic_acceptance_criteria"]
+    )
+    assert central[0]["order_id"] == coverage_orders[0]["order_id"]
+    assert central[0]["allowed_runtime_apply"] is False
+    assert "source_readiness" in coverage_orders[0]
+    assert not coverage_orders[0]["source_readiness"][
+        "repair_requires_positive_ev_or_promotion_floor"
+    ]
+    assert (
+        "exact_ws_bbo_join_coverage_pct>=95"
+        not in coverage_orders[0]["acceptance_tests"]
+    )
+    assert (
+        "exact_ws_bbo_join_coverage_pct>=95"
+        in coverage_orders[0]["economic_acceptance_criteria"]
+    )
     assert coverage_orders[0]["implementation_status"] == (
         "implemented_source_quality_contract_waiting_sample"
     )

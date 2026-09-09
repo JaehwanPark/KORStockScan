@@ -13,7 +13,7 @@ prices, quantity, providers, or safety guards.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 import gzip
 import json
@@ -394,6 +394,30 @@ def _runtime_policy_expectation(observation_date: date) -> dict[str, Any]:
     }
 
 
+def _conversion_timestamp(value):
+    try:
+        stamp = datetime.fromisoformat(str(value))
+        # Pipeline logger emits local KST without an offset; follow its existing
+        # consumer contract, also accepting explicit-offset receipts.
+        kst = ZoneInfo("Asia/Seoul")
+        return stamp.astimezone(kst) if stamp.tzinfo else stamp.replace(tzinfo=kst)
+    except (TypeError, ValueError):
+        return None
+
+
+def _conversion_markers_after_attach(markers, observed_at):
+    anchor = _conversion_timestamp(observed_at)
+    if anchor is None:
+        return {}
+    return {
+        stage: receipt
+        for stage, receipt in markers.items()
+        if (stamp := _conversion_timestamp(receipt.get("at"))) is not None
+        and stamp.date() == anchor.date()
+        and stamp >= anchor
+    }
+
+
 def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect exact lookup observations and full-fill receipt classifications."""
 
@@ -403,6 +427,7 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
     fill_receipts: defaultdict[tuple[int, str, str], list[dict[str, Any]]] = (
         defaultdict(list)
     )
+    conversion_receipts = defaultdict(dict)
     invalid_observation_count = 0
     invalid_runtime_policy_provenance_count = 0
     parse_stats = {
@@ -434,6 +459,54 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                 event.get("fields") if isinstance(event.get("fields"), dict) else {}
             )
             stage = str(event.get("stage") or "")
+            conversion_stage = {
+                "scalping_scanner_fast_precheck": "fast_precheck",
+                "scalping_scanner_heavy_eval_completion": "heavy_eval",
+                "scalp_entry_action_decision_snapshot": "entry_decision",
+                "pre_submit_entry_ai_authority_guard_block": "entry_decision",
+                "entry_submit_revalidation_block": "submit_guard",
+                "entry_submit_revalidation_warning": "submit_guard",
+                "order_bundle_submitted": "submit",
+            }.get(stage)
+            if conversion_stage:
+                exact_key = _observation_key(
+                    {
+                        **fields,
+                        "runtime_record_id": fields.get("runtime_record_id")
+                        or event.get("record_id"),
+                    },
+                    event.get("stock_code"),
+                )
+                venue = str(
+                    fields.get("effective_venue") or fields.get("venue") or ""
+                ).upper()
+                session = str(fields.get("market_session_bucket") or "")
+                stamp = str(event.get("emitted_at") or "")
+                parsed_stamp = _conversion_timestamp(stamp)
+                scope_key = (*exact_key, event_file_date.isoformat(), venue, session)
+                if (
+                    exact_key[0] > 0
+                    and exact_key[1].startswith("SCANPROM-")
+                    and re.fullmatch(r"\d{6}", str(event.get("stock_code") or ""))
+                    and parsed_stamp is not None
+                    and parsed_stamp.date() == event_file_date
+                ):
+                    marker = {
+                        "at": stamp,
+                        "stage": stage,
+                        "reason": str(
+                            fields.get("reason")
+                            or fields.get("block_reason")
+                            or fields.get("decision")
+                            or ""
+                        ),
+                    }
+                    old = conversion_receipts[scope_key].get(conversion_stage)
+                    # Presence diagnostic uses the last exact receipt, not a
+                    # first-hit/latency metric. A pre-attach receipt must not
+                    # hide a subsequent receipt from the same exact lineage.
+                    if old is None or parsed_stamp > _conversion_timestamp(old["at"]):
+                        conversion_receipts[scope_key][conversion_stage] = marker
             if event_file_date >= resource_start and stage in {
                 "scalping_scanner_candidate_promoted",
                 "scalping_scanner_candidate_pruned",
@@ -860,7 +933,18 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
                 )
             )
         )
-        rows.append({**observation, "fill_class": fill_class})
+        exact_scope = (
+            *key,
+            observation["observation_date"],
+            observation["effective_venue"],
+            observation["market_session_bucket"],
+        )
+        markers = _conversion_markers_after_attach(
+            conversion_receipts.get(exact_scope, {}), observation["observed_at"]
+        )
+        rows.append(
+            {**observation, "fill_class": fill_class, "conversion_receipts": markers}
+        )
     rows.sort(
         key=lambda row: (
             row["observation_date"],
@@ -1989,7 +2073,7 @@ def _approval_feasibility(book):
 
 
 def _economic_acceptance(
-    report: dict[str, Any], *, legacy_v1: bool = False
+    report: dict[str, Any], *, legacy_v1: bool = False, legacy_v2: bool = False
 ) -> dict[str, Any]:
     """Bounded maintenance evidence, never an additional promotion/BUY gate."""
     lineage = report.get("lineage") or {}
@@ -2090,6 +2174,22 @@ def _economic_acceptance(
             for cohort_rows in [[r for r in valid_rows if r["cohort"] == cohort]]
         },
     }
+    if not legacy_v1 and not legacy_v2:
+        result["schema"] = "scanner_lookup_attention_natural_acceptance_v3"
+        candidate_funnel = (report.get("cohort_funnel") or {}).get("candidate") or {}
+        if (
+            status == "hold_sample"
+            and not due
+            and candidate_funnel.get("valid_observation_count", 0) > 0
+            and candidate_funnel.get("completed_outcome_count", 0) == 0
+        ):
+            result["next_action"] = (
+                "trace_exact_candidate_conversion_via_buy_funnel_before_waiting"
+            )
+            result["blocking_stage"] = "candidate_to_full_completed_conversion_unproven"
+        result["conversion_diagnostic_owner"] = (
+            "buy_funnel_sentinel -> entry_recheck_drought_controller"
+        )
     if legacy_v1:
         # Reproduce frozen diagnostic metadata without imposing new fields on
         # previously valid policy/report pairs. Economic approval is unchanged.
@@ -2117,6 +2217,60 @@ def _economic_acceptance(
             )
         )
     return result
+
+
+def _conversion_diagnostics(observations):
+    rows = []
+    for row in observations:
+        receipts = row.get("conversion_receipts") or {}
+        first = next(
+            (
+                s
+                for s in ("fast_precheck", "heavy_eval", "entry_decision", "submit")
+                if s not in receipts
+            ),
+            "fill_or_terminal",
+        )
+        rows.append(
+            {
+                "record_id": row["recommendation_id"],
+                "scanner_promotion_id": row["scanner_promotion_id"],
+                "stock_code": row["stock_code"],
+                "date": row["observation_date"],
+                "venue": row["effective_venue"],
+                "session": row["market_session_bucket"],
+                "cohort": (
+                    "candidate"
+                    if row["lookup_attention_snapshot_score"] > MIN_SCORE
+                    else "control"
+                ),
+                "first_unobserved_stage": first,
+                "fill_class": row["fill_class"],
+                "receipts": receipts,
+            }
+        )
+    return {
+        "schema": "scanner_lookup_conversion_diagnostics_v1",
+        "metric_role": "funnel_count",
+        "decision_authority": "diagnostic_only_no_runtime_mutation",
+        "window_policy": "same_record_promotion_symbol_date_venue_session_after_attach",
+        "sample_floor": "one_exact_observation",
+        "primary_decision_metric": "first_unobserved_stage_counts",
+        "source_quality_gate": "exact_identity_no_symbol_only_join",
+        "forbidden_uses": FORBIDDEN_USES,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "missing_receipt_is_not_proof_of_actual_block": True,
+        "receipt_selection": "last_exact_stage_receipt_not_first_hit_or_latency",
+        "observation_count": len(rows),
+        "first_unobserved_stage_counts": dict(
+            Counter(r["first_unobserved_stage"] for r in rows)
+        ),
+        "intended_consumer": "scanner_lookup_attention_tuning_markdown",
+        "next_review_owner": "buy_funnel_sentinel -> entry_recheck_drought_controller",
+        "controller_policy_input": False,
+        "rows": rows,
+    }
 
 
 def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -2218,6 +2372,7 @@ def build_artifacts(target: date) -> tuple[dict[str, Any], dict[str, Any]]:
             "policy": "exclude_exact_invalid_lookup_observation_rows",
         },
         "cohort_funnel": cohort_funnel,
+        "conversion_diagnostics": _conversion_diagnostics(observations),
         "resource_allocation_pair": resource_allocation,
         "resource_pair_rows": resource_pair_rows,
         "source_quality": quality,
@@ -2439,6 +2594,8 @@ def validate_artifact_pair(
                 report,
                 legacy_v1=acceptance.get("schema")
                 == "scanner_lookup_attention_natural_acceptance_v1",
+                legacy_v2=acceptance.get("schema")
+                == "scanner_lookup_attention_natural_acceptance_v2",
             ):
                 issues.append("economic_acceptance_not_reproducible")
         except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
@@ -2813,6 +2970,7 @@ def _markdown(report: dict[str, Any]) -> str:
             f"- economic contract: `{base.get('economic_contract_version', 'legacy_fixed_uplift')}`; candidate/control robust SE: `{base['candidate'].get('net_return_robust_se_pct')}` / `{base['control'].get('net_return_robust_se_pct')}`",
             "- economic rule: positive candidate net and candidate/control increment after 2-SE robustness margins; no fixed minimum uplift; not a causal confidence interval.",
             f"- natural acceptance / bounded maintenance: `{report.get('economic_acceptance', {})}`",
+            f"- exact conversion receipt gaps (not actual veto counts): `{(report.get('conversion_diagnostics') or {}).get('first_unobserved_stage_counts', {})}`",
             f"- candidate net per capital-hour: `{base['candidate'].get('net_per_capital_hour')}`; missing duration remains null, not an approval blocker.",
             f"- candidate/control observations: `{candidate_funnel.get('valid_observation_count', 0)}/{control_funnel.get('valid_observation_count', 0)}`",
             f"- candidate/control full-fill: `{candidate_funnel.get('full_fill_observation_count', 0)}/{control_funnel.get('full_fill_observation_count', 0)}`",

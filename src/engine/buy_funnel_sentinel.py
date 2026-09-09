@@ -28,6 +28,10 @@ from src.engine.automation.submit_drought_contract import (
     UPSTREAM_TERMINAL_STAGES as UPSTREAM_BLOCK_STAGES,
 )
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
+from src.engine.scalping.entry_recheck_policy import (
+    canonical_wait_probe_contract,
+    finite_number,
+)
 
 MANUAL_EXCLUDED_STOCKS = {
     ("제룡전기", "033100"),
@@ -2276,6 +2280,11 @@ def _summarize_events(
         and _event_refresh_attempted(event)
         and not _event_refresh_applied(event)
     }
+    refresh_applied_blocked_keys = {
+        key
+        for event, key in refresh_scope_events
+        if event.stage == "latency_block" and _event_refresh_applied(event)
+    }
     refresh_latency_passes = [
         (event, key)
         for event, key in refresh_scope_events
@@ -2297,6 +2306,8 @@ def _summarize_events(
     }
     post_refresh_downstream_counter: Counter[str] = Counter()
     post_refresh_downstream_stage_counter: Counter[str] = Counter()
+    post_refresh_ai_counter: Counter[str] = Counter()
+    post_refresh_reason_counter: Counter[str] = Counter()
     for first_latency_pass, key in refresh_latency_passes:
         events_for_key = events_by_key.get(key) or []
         next_event = None
@@ -2323,7 +2334,26 @@ def _summarize_events(
         post_refresh_downstream_counter[bucket] += 1
         if next_event is not None:
             post_refresh_downstream_stage_counter[next_event.stage] += 1
+            next_reason = _field_first(
+                next_event.fields,
+                (
+                    "entry_ai_submit_authority_reason",
+                    "reason",
+                    "block_reason",
+                    "decision",
+                ),
+            )
+            post_refresh_reason_counter[
+                f"{next_event.stage}:{next_reason or 'not_reported'}"
+            ] += 1
+            if next_event.stage in ENTRY_AI_AUTHORITY_GUARD_STAGES:
+                post_refresh_ai_counter[
+                    _ai_authority_diagnostic(next_event)["category"]
+                ] += 1
     _apply_terminal_summary_gaps(exact_attempt_contract, terminal_summary_gaps)
+    terminal_diagnostics = _terminal_attempt_diagnostics(
+        exact_attempt_contract, events_by_key
+    )
     for stage, count in exact_attempt_contract[
         "denominator_exact_attempt_counts"
     ].items():
@@ -2400,6 +2430,7 @@ def _summarize_events(
         },
         "budget_ai_lineage": budget_ai_lineage,
         "exact_attempt_contract": exact_attempt_contract,
+        **terminal_diagnostics,
         "stage_missing_exact_attempt_key_events": {
             stage: int(
                 exact_attempt_contract[
@@ -2438,6 +2469,35 @@ def _summarize_events(
         "quote_freshness_still_latency_blocked_after_refresh_count": len(
             refresh_blocked_after_attempt_keys
         ),
+        "quote_freshness_refresh_transition_diagnostics": {
+            "version": 1,
+            "count_basis": "exact_attempt_transition_sets_not_disjoint_terminals",
+            "legacy_still_blocked_semantics": "refresh_not_applied_blocked",
+            "refresh_not_applied_blocked": len(refresh_blocked_after_attempt_keys),
+            "refresh_applied_still_blocked": len(refresh_applied_blocked_keys),
+            "refresh_applied_latency_pass": len(
+                {key for _, key in refresh_latency_passes}
+            ),
+            "refresh_applied_still_blocked_reason_counts": dict(
+                Counter(
+                    reason
+                    for reason, key in {
+                        (reason, key)
+                        for event, key in refresh_scope_events
+                        if event.stage == "latency_block"
+                        and _event_refresh_applied(event)
+                        for reason in _latency_danger_reason_labels(event)
+                    }
+                )
+            ),
+            "next_ai_blocker_counts": dict(sorted(post_refresh_ai_counter.items())),
+            "next_blocker_reason_counts": dict(
+                sorted(post_refresh_reason_counter.items())
+            ),
+            "next_blocker_count_basis": "ordered_latency_pass_occurrences",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "quote_freshness_refresh_latency_pass_count": refresh_latency_pass_count,
         "quote_freshness_refresh_latency_pass_record_count": len(
             {event.record_id for event, _ in refresh_latency_passes}
@@ -2474,6 +2534,252 @@ def _summarize_events(
 def _same_time_on_date(target_date: str, source: datetime) -> datetime:
     base = _parse_target_date(target_date)
     return datetime.combine(base, source.time())
+
+
+def _ai_authority_diagnostic(event: PipelineEvent) -> dict[str, Any]:
+    """Preserve retry and selected authority separately; never backfill a trace."""
+    fields = event.fields
+    retry = "pre_submit_entry_ai_authority_retry_"
+    selected = "entry_ai_submit_authority_"
+    reason = _safe_str(fields.get(selected + "reason"))
+    contract = _safe_str(fields.get(retry + "contract_status")).lower()
+    source = _safe_str(fields.get(retry + "result_source")).lower()
+    evaluation = _safe_str(fields.get(retry + "evaluation_status")).lower()
+    age = finite_number(fields.get(selected + "confirmed_age_sec"))
+    max_age = finite_number(fields.get(selected + "max_prior_age_sec"))
+    if reason == "fresh_ai_drop_real_buy_veto":
+        category = "fresh_drop_veto"
+    elif reason == "fresh_ai_wait_observation_only_probe_veto":
+        category = "fresh_wait_veto"
+    elif (
+        source == "input_preflight_blocked"
+        or evaluation == "not_evaluated_provider_or_preflight"
+    ):
+        category = "input_preflight_gap"
+    elif contract == "semantic_rejected":
+        category = "semantic_contract_rejected"
+    elif age is not None and max_age is not None and max_age >= 0 and age > max_age:
+        category = "authority_stale"
+    else:
+        category = "authority_untrusted_or_unknown"
+    return {
+        "category": category,
+        "owner": (
+            "ai_decision_quality/ai_action_outcome_calibration"
+            if category in {"fresh_wait_veto", "fresh_drop_veto"}
+            else "entry_ai_contract_source_quality"
+        ),
+        "authority_reason": reason or "not_reported",
+        "original_model_action": fields.get(
+            retry + "original_model_action", "not_reported"
+        ),
+        "postprocessed_action": fields.get(retry + "model_action", "not_reported"),
+        "runtime_action_mapping": fields.get(
+            retry + "runtime_action_mapping", "not_reported"
+        ),
+        "selected_authority_action": fields.get(selected + "action", "not_reported"),
+        "selected_trace_id": fields.get(selected + "decision_trace_id", "not_reported"),
+        "selected_result_source": fields.get(
+            selected + "result_source", "not_reported"
+        ),
+        "selected_confirmed_at": fields.get(selected + "confirmed_at", "not_reported"),
+        "selected_latest_attempt_trusted": fields.get(
+            selected + "latest_attempt_trusted", "not_reported"
+        ),
+        "retry_trace_id": fields.get(retry + "decision_trace_id", "not_reported"),
+        "retry_snapshot_id": fields.get(retry + "snapshot_id", "not_reported"),
+        "retry_contract_status": contract or "not_reported",
+        "retry_result_source": source or "not_reported",
+        "retry_evaluation_status": evaluation or "not_reported",
+        "selected_age_sec": age,
+        "selected_max_age_sec": max_age,
+        "economic_correctness": "not_evaluated",
+    }
+
+
+def _terminal_attempt_diagnostics(exact, events_by_key):
+    """Source-only subcauses on the existing exact terminal denominator."""
+    ai_rows, cash_rows, probe_rows = [], [], []
+    addressable_stages = {
+        "blocked_ai_score",
+        "ai_score_50_buy_hold_override",
+        "wait65_79_ev_candidate",
+        "first_ai_wait",
+        "pre_submit_entry_ai_authority_guard_block",
+    }
+    for row in exact["attempt_ledger"]:
+        if row["state"] != "blocked":
+            continue
+        event = next(
+            (
+                event
+                for event in reversed(events_by_key.get(row["attempt_key"], []))
+                if event.stage == row["terminal_stage"]
+            ),
+            None,
+        )
+        if event is None:
+            continue
+        identity = {
+            key: row.get(key)
+            for key in (
+                "attempt_key",
+                "producer_attempt_id",
+                "parent_promotion_id",
+                "record_id",
+            )
+        }
+        identity.update(
+            terminal_stage=event.stage, terminal_at=event.emitted_at.isoformat()
+        )
+        fields = event.fields
+        if event.stage in ENTRY_AI_AUTHORITY_GUARD_STAGES:
+            ai_rows.append({**identity, **_ai_authority_diagnostic(event)})
+        if event.stage in BUDGET_BLOCKER_STAGES:
+            status = fields.get(
+                "kt00011_cash_orderable_contract_status", "not_reported"
+            )
+            if status in {"missing", "invalid"}:
+                category = "cash_capacity_source_gap"
+            elif _safe_str(fields.get("kt00011_error")):
+                category = "cash_capacity_query_error"
+            elif (
+                status == "valid"
+                and finite_number(fields.get("cash_orderable_qty_cap")) == 0
+            ):
+                category = "broker_cash_capacity_nonpositive"
+            elif status != "valid":
+                category = "cash_capacity_provenance_unavailable"
+            else:
+                category = "other_sizing_cap"
+            cash_rows.append(
+                {
+                    **identity,
+                    "category": category,
+                    "owner": "cash_budget/position_sizing_source_quality",
+                    **{
+                        key: fields.get(key, "not_reported")
+                        for key in (
+                            "kt00011_cash_orderable_contract_status",
+                            "kt00011_capacity_field_statuses",
+                            "kt00011_requested_stock_code",
+                            "kt00011_requested_unit_price",
+                            "kt00011_capacity_observed_at",
+                            "kt00011_capacity_source_sha256",
+                            "cash_orderable_amount",
+                            "cash_orderable_qty_cap",
+                            "binding_caps",
+                            "pre_cap_qty",
+                            "general_entry_margin_authority_reason",
+                            "general_entry_margin_rate",
+                            "general_entry_margin_one_share_authorized",
+                        )
+                    },
+                }
+            )
+        if event.stage in addressable_stages:
+            # Only one coherent input namespace; never mix retry and selected AI.
+            prefix = "entry_opportunity_recheck_ai_"
+            if prefix + "contract_status" not in fields:
+                prefix = "entry_recheck_"
+            action = (
+                fields.get(prefix + "action")
+                if prefix.startswith("entry_opportunity")
+                else fields.get("ai_decision_model_action")
+            )
+            candidate = canonical_wait_probe_contract(
+                action=action,
+                contract_status=fields.get(prefix + "contract_status"),
+                edge_state=fields.get(prefix + "edge_state"),
+                probe_intent=fields.get(prefix + "probe_intent"),
+                probe_intent_status=fields.get(prefix + "probe_intent_status"),
+                recovery_trigger=fields.get(prefix + "recovery_trigger"),
+            )
+            ai_category = (
+                _ai_authority_diagnostic(event)["category"]
+                if event.stage in ENTRY_AI_AUTHORITY_GUARD_STAGES
+                else ""
+            )
+            contract = _safe_str(fields.get(prefix + "contract_status")).lower()
+            source_gap = fields.get("entry_recheck_source_usable") in {
+                False,
+                "False",
+                "false",
+            }
+            if not candidate and contract not in {"pass", "semantic_rejected"}:
+                candidate = None
+            if ai_category in {"fresh_wait_veto", "fresh_drop_veto"}:
+                # These are explicit final vetoes, not missing eligibility data.
+                candidate = False
+            category = (
+                "canonical_probe_candidate"
+                if candidate
+                else (
+                    "normal_veto"
+                    if ai_category in {"fresh_wait_veto", "fresh_drop_veto"}
+                    else (
+                        "input_gap"
+                        if ai_category or source_gap or contract == "semantic_rejected"
+                        else (
+                            "normal_veto"
+                            if contract == "pass"
+                            and str(action).upper() in {"DROP", "WAIT", "WAIT_REQUOTE"}
+                            else "not_evaluated"
+                        )
+                    )
+                )
+            )
+            probe_rows.append(
+                {
+                    **identity,
+                    "category": category,
+                    "canonical_probe_candidate": candidate,
+                    "runtime_eligibility": "not_evaluated",
+                    "runtime_policy_state": (
+                        "off"
+                        if fields.get("entry_opportunity_recheck_reason") == "disabled"
+                        else "not_reported"
+                    ),
+                    "runtime_reason": fields.get(
+                        "entry_opportunity_recheck_reason", "not_reported"
+                    ),
+                    "owner": (
+                        "entry_opportunity_recheck_runtime"
+                        if candidate
+                        else "ai_decision_quality/entry_ai_contract_source_quality"
+                    ),
+                }
+            )
+
+    def bundle(rows):
+        return {
+            "version": 1,
+            "count_basis": "exact_terminal_attempts",
+            "count": len(rows),
+            "category_counts": dict(
+                sorted(Counter(r["category"] for r in rows).items())
+            ),
+            "attempts": rows,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+
+    return {
+        "entry_ai_authority_diagnostics": bundle(ai_rows),
+        "zero_qty_diagnostics": bundle(cash_rows),
+        "recheck_input_diagnostics": {
+            **bundle(probe_rows),
+            "axis_addressable_attempt_count": len(probe_rows),
+            "canonical_probe_candidate_count": sum(
+                r["canonical_probe_candidate"] is True for r in probe_rows
+            ),
+            "canonical_probe_candidate_unknown_count": sum(
+                r["canonical_probe_candidate"] is None for r in probe_rows
+            ),
+            "candidate_count_basis": "confirmed_inputs_only_unknown_is_not_zero_opportunity",
+            "activation_gate_changed": False,
+        },
+    }
 
 
 def _event_refresh_attempted(event: PipelineEvent) -> bool:
@@ -2715,6 +3021,10 @@ def _latency_drought_root_cause_summary(current: dict[str, Any]) -> dict[str, An
         ),
         "latency_root_cause_counts": dict(buckets),
         "quote_freshness_attribution": {
+            "refresh_transition_diagnostics": current.get(
+                "quote_freshness_refresh_transition_diagnostics",
+                {"status": "not_reported"},
+            ),
             "runtime_effect": False,
             "decision_authority": "submit_drought_quote_freshness_attribution_only",
             "forbidden_uses": [
@@ -3130,6 +3440,14 @@ def _entry_submit_drought_contract(
             "supporting_diagnostic_axes"
         ],
         "exact_attempt_contract": observation_breakdown["exact_attempt_contract"],
+        **{
+            key: session_summary.get(key, {"status": "not_reported"})
+            for key in (
+                "entry_ai_authority_diagnostics",
+                "zero_qty_diagnostics",
+                "recheck_input_diagnostics",
+            )
+        },
         "causal_bottleneck_axes": observation_breakdown["causal_bottleneck_axes"],
         "observation_only_axes": observation_breakdown["observation_only_axes"],
         "no_current_signal_axes": observation_breakdown["no_current_signal_axes"],
@@ -3271,6 +3589,10 @@ def _entry_submit_drought_observation_breakdown(
             ),
             "observed_count": int(session_summary.get("upstream_block_unique", 0) or 0),
             "evidence": {
+                "zero_qty_diagnostics": session_summary.get("zero_qty_diagnostics", {}),
+                "recheck_input_diagnostics": session_summary.get(
+                    "recheck_input_diagnostics", {}
+                ),
                 "upstream_blocker_top": (
                     upstream_blockers if isinstance(upstream_blockers, list) else []
                 ),
@@ -3395,6 +3717,9 @@ def _entry_submit_drought_observation_breakdown(
             ),
             "observed_count": entry_ai_authority_guard_unique,
             "evidence": {
+                "authority_diagnostics": session_summary.get(
+                    "entry_ai_authority_diagnostics", {}
+                ),
                 "entry_ai_authority_guard_unique": entry_ai_authority_guard_unique,
                 "entry_ai_authority_guard_events": int(
                     session_summary.get("entry_ai_authority_guard_events", 0) or 0
@@ -3410,8 +3735,9 @@ def _entry_submit_drought_observation_breakdown(
                 "order_bundle_submitted_unique": submitted_unique,
             },
             "next_repair_action": (
-                "join exact AI authority reason, executable BBO, and target/adverse "
-                "first-hit outcomes before proposing a bounded one-share probe"
+                "route exact input/semantic/age gaps to the AI contract owner; "
+                "route fresh WAIT/DROP and raw-to-final action differences to "
+                "AI decision/outcome evaluation; do not treat them as eligible probes"
             ),
             **exact_axis_contract(
                 "ENTRY_AI_AUTHORITY_REVALIDATION",
@@ -3844,6 +4170,10 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"latency_recovered={quote_freshness.get('latency_pass_recovered_count', 0)}, "
         f"submitted_after_refresh={quote_freshness.get('order_bundle_submitted_after_refresh_count', 0)}`",
         f"- quote refresh downstream: `{quote_freshness.get('latency_pass_recovered_downstream_counts') or {}}`",
+        f"- refresh transitions (overlapping exact attempt sets): `{quote_freshness.get('refresh_transition_diagnostics') or {}}`",
+        f"- AI authority subcauses: `{(session.get('entry_ai_authority_diagnostics') or {}).get('category_counts', {})}`",
+        f"- zero-qty subcauses: `{(session.get('zero_qty_diagnostics') or {}).get('category_counts', {})}`",
+        f"- recheck input classes (not runtime eligibility): `{(session.get('recheck_input_diagnostics') or {}).get('category_counts', {})}`",
         "",
         "## 금지된 자동변경",
         "",

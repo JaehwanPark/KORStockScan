@@ -7108,6 +7108,11 @@ def build_report(
         if entry_turn_runtime_reflected
         else "runtime_receipt_not_observed"
     )
+    from src.engine.monitoring.entry_turn_point_replay import (
+        source_readiness_diagnostic,
+    )
+
+    entry_turn_source_readiness = source_readiness_diagnostic(entry_turn_point_replay)
     if _safe_int(entry_turn_point_replay.get("candidate_count")) > 0 and not _boolish(
         entry_turn_acceptance.get("all_floors_met")
     ):
@@ -7132,6 +7137,7 @@ def build_report(
                     "source_only_entry_turn_bbo_coverage_no_runtime_mutation"
                 ),
                 "implementation_status": entry_turn_implementation_status,
+                "source_readiness": entry_turn_source_readiness,
                 "implementation_provenance": {
                     "implementation_type": (
                         "bounded_existing_subscription_exact_route_0d_bbo_ring"
@@ -7154,6 +7160,7 @@ def build_report(
                         )
                     ),
                     "sample_status": entry_turn_sample_status,
+                    "source_readiness": entry_turn_source_readiness,
                     "remaining_gap": (
                         "source_quality_and_economic_sample_floors"
                         if entry_turn_runtime_reflected
@@ -7208,6 +7215,12 @@ def build_report(
                     "src/engine/monitoring/rising_missed_intraday_feedback.py",
                 ],
                 "acceptance_tests": [
+                    "PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_entry_turn_point_replay.py src/tests/test_rising_missed_scout_workorder.py",
+                    "exact route/time/provenance defects and pending maturity remain distinct in source_readiness through scout/workorder consumers",
+                    "diagnostic repair does not require positive EV, live fills or promotion floors",
+                    "runtime_effect=false, allowed_runtime_apply=false, actual_order_submitted=false, broker_order_forbidden=true",
+                ],
+                "economic_acceptance_criteria": [
                     "exact_ws_bbo_join_coverage_pct>=95",
                     "pre_anchor_bbo_coverage_pct>=95",
                     "paired_coverage_pct>=95",

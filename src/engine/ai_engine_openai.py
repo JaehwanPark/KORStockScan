@@ -54,6 +54,7 @@ from src.engine.scalping_feature_packet import (
     finalize_scalping_feature_delivery_audit_fields,
     settle_scalping_feature_delivery,
     microstructure_payload_included,
+    microstructure_reaction_model_fields,
 )
 from src.engine.scalping.microstructure_reaction_context import (
     infer_tick_aggressor_side,
@@ -6131,6 +6132,7 @@ class GPTSniperEngine:
             for key in hot_feature_keys
             if isinstance(feature_packet, dict) and key in feature_packet
         }
+        features.update(microstructure_reaction_model_fields(feature_packet))
         payload = {
             "input_schema": "entry_screen_hot_v1",
             "current": {
@@ -9886,6 +9888,12 @@ class GPTSniperEngine:
                 },
             }
         )
+        # The canonical holding context replaces candle/tape views, but does
+        # not contain the independently computed reaction context. Preserve
+        # that context in the existing stage payload instead of dropping it.
+        reaction_fields = microstructure_reaction_model_fields(packet)
+        if reaction_fields:
+            market_flow_features["microstructure_reaction_context"] = reaction_fields
         payload = {
             "input_schema": "holding_score_v2",
             "position_context": {
