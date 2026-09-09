@@ -11,6 +11,8 @@ import json
 import os
 import tempfile
 import time as time_module
+from dataclasses import asdict
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Protocol
@@ -49,6 +51,23 @@ from src.trading.order.owner_custody_registry import (
     default_order_owner_registry,
 )
 from src.trading.order.tick_utils import move_price_by_ticks
+from src.trading.order.adaptive_exit.source import (
+    record_first_fill_observation,
+    record_target_observation,
+)
+from src.trading.order.adaptive_exit.owner_loop import (
+    SESSION_KEY,
+    OwnerLoopServices,
+    manager_required,
+    step_session,
+)
+from src.trading.order.adaptive_exit.runtime import OwnerSession
+from src.trading.order.adaptive_exit.models import Clock
+from src.trading.order.adaptive_exit.terminal import (
+    TERMINAL_KEY,
+    validate_terminal,
+    same_terminal,
+)
 from src.trading.config.machine_entry_timing_policy import (
     DYNAMIC_MODE,
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
@@ -168,6 +187,7 @@ class SamsungRegularTwoLegMachine:
         entry_timing_scope_id: str | None = None,
         entry_timing_session: str = "KRX_REGULAR",
         owner_registry: OrderOwnerRegistry | None = None,
+        adaptive_exit_services: OwnerLoopServices | None = None,
     ) -> None:
         self.gateway = gateway
         self.state_path = Path(state_path)
@@ -185,6 +205,7 @@ class SamsungRegularTwoLegMachine:
         self.entry_timing_scope_id = entry_timing_scope_id or strategy_name
         self.entry_timing_session = entry_timing_session
         self.owner_registry = owner_registry or default_order_owner_registry()
+        self.adaptive_exit_services = adaptive_exit_services
         self._state = self._load_state()
 
     def _legacy_state(self, payload: dict) -> dict:
@@ -240,21 +261,20 @@ class SamsungRegularTwoLegMachine:
         except FileNotFoundError:
             return {}
         except (OSError, json.JSONDecodeError) as exc:
-            return {
-                "schema": self.schema,
-                "trade_date": "",
-                "status": "BLOCKED",
-                "attempt_consumed": True,
-                "signal_features": {},
-                "legs": [],
-                "position_qty": 0,
-                "blocked_reason": f"state_unreadable:{type(exc).__name__}",
-                "owned_order_nos": [],
-                "last_action": "blocked_state_load",
-                "audit": [],
-            }
+            # A later _block/save must not replace unknown custody with an
+            # empty synthetic journal, especially after target cancellation.
+            raise ValueError("episode_owner_state_unreadable") from exc
         if not isinstance(payload, dict):
             return self._invalid_loaded_state("state_schema_invalid")
+        if (
+            any(
+                SESSION_KEY in leg
+                for leg in payload.get("legs", [])
+                if isinstance(leg, dict)
+            )
+            or payload.get("adaptive_exit_history")
+        ) and payload.get("schema") != self.schema:
+            raise ValueError("adaptive_exit_state_schema_requires_recovery")
         if payload.get("schema") == self.legacy_schema:
             return self._legacy_state(payload)
         if payload.get("schema") != self.schema:
@@ -271,8 +291,10 @@ class SamsungRegularTwoLegMachine:
             try:
                 inferred_filled_qty = int(leg.get("position_qty", 0) or 0) + int(
                     leg.get("target_filled_qty", 0) or 0
-                )
+                ) + int(leg.get("adaptive_exit_filled_qty", 0) or 0)
             except (TypeError, ValueError):
+                if SESSION_KEY in leg:
+                    raise ValueError("adaptive_exit_owner_quantity_requires_recovery")
                 return self._invalid_loaded_state("state_leg_numeric_field_invalid")
             leg.setdefault("buy_filled_qty", inferred_filled_qty)
             leg.setdefault("target_quantity", inferred_filled_qty)
@@ -324,6 +346,18 @@ class SamsungRegularTwoLegMachine:
                 os.fsync(handle.fileno())
             os.chmod(temp_name, 0o600)
             os.replace(temp_name, self.state_path)
+            if any(
+                SESSION_KEY in leg
+                for leg in self._state.get("legs", [])
+                if isinstance(leg, dict)
+            ) or self._state.get("adaptive_exit_history"):
+                directory_fd = os.open(
+                    self.state_path.parent, os.O_RDONLY | os.O_DIRECTORY
+                )
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         finally:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
@@ -856,6 +890,8 @@ class SamsungRegularTwoLegMachine:
             return "TARGET_OPEN"
         if self._position_qty() > 0:
             return "HELD"
+        if "ADAPTIVE_EXIT_FLAT" in statuses and statuses <= {"ADAPTIVE_EXIT_FLAT", "COMPLETE", "NO_FILL"}:
+            return "ADAPTIVE_EXIT_FLAT"
         if statuses <= {"NO_FILL"}:
             return "NO_TRADE"
         if statuses <= {"NO_FILL", "COMPLETE"} and "COMPLETE" in statuses:
@@ -877,6 +913,7 @@ class SamsungRegularTwoLegMachine:
             self._block(now, "state_date_or_quantity_invalid")
             return False
         allowed_statuses = {
+            "ADAPTIVE_EXIT_FLAT",
             "READY",
             "BUY_SUBMITTING",
             "BUY_OPEN",
@@ -970,6 +1007,7 @@ class SamsungRegularTwoLegMachine:
                 return False
             leg_order_nos: list[str] = []
             allowed_leg_statuses = {
+                "ADAPTIVE_EXIT_FLAT",
                 "PLANNED",
                 "BUY_SUBMITTING",
                 "BUY_OPEN",
@@ -1028,6 +1066,7 @@ class SamsungRegularTwoLegMachine:
                     self._block(now, "state_leg_position_status_mismatch")
                     return False
                 zero_position_statuses = {
+                    "ADAPTIVE_EXIT_FLAT",
                     "PLANNED",
                     "BUY_SUBMITTING",
                     "NO_FILL",
@@ -1039,7 +1078,15 @@ class SamsungRegularTwoLegMachine:
                 if leg_position > 0 and fill_price <= 0:
                     self._block(now, "state_leg_fill_price_missing")
                     return False
-                if leg_position != buy_filled_qty - target_filled_qty:
+                exit_filled = leg.get("adaptive_exit_filled_qty", 0)
+                if (
+                    type(exit_filled) is not int
+                    or exit_filled < 0
+                    or (exit_filled and SESSION_KEY not in leg)
+                ):
+                    self._block(now, "state_adaptive_exit_quantity_invalid")
+                    return False
+                if leg_position != buy_filled_qty - target_filled_qty - exit_filled:
                     self._block(now, "state_leg_fill_position_mismatch")
                     return False
                 if target_quantity and target_quantity != buy_filled_qty:
@@ -1097,7 +1144,10 @@ class SamsungRegularTwoLegMachine:
             )
             self._record(now, "blocked_date_rollover")
             return False
+        history = deepcopy(self._state.get("adaptive_exit_history", []))
         self._state = _fresh_state(now, self.schema)
+        if history:
+            self._state["adaptive_exit_history"] = history
         self._record(now, "daily_state_initialized")
         return True
 
@@ -1210,6 +1260,59 @@ class SamsungRegularTwoLegMachine:
                 )
             )
 
+    def _record_adaptive_target_source(self, leg: dict) -> None:
+        """Source-only receipt shared with the morning override; no order effect."""
+        try:
+            route = str(leg.get("route") or getattr(self.policy, "route", ""))
+            profile = getattr(self, "profile", None)
+            scope_id = (
+                profile.profile_id
+                if profile is not None
+                else f"samsung:{self.strategy_name}"
+            )
+            session = (
+                profile.session
+                if profile is not None
+                else ("NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR")
+            )
+            policy = json.loads(
+                json.dumps(asdict(self.policy), default=lambda value: value.isoformat())
+            )
+            record_target_observation(
+                leg,
+                owner="episode",
+                profile=scope_id,
+                symbol=str(self.policy.symbol),
+                session=session,
+                target={
+                    "order_date": leg["target_order_date"],
+                    "order_no": leg["target_order_no"],
+                    "route": route,
+                    "quantity": leg["target_quantity"],
+                    "price": leg["target_price"],
+                },
+                entries=[
+                    {
+                        "episode_id": f"{scope_id}:{self._state['trade_date']}",
+                        "lot_id": leg["leg_id"],
+                        "order_date": leg["buy_order_date"],
+                        "order_no": leg["buy_order_no"],
+                        "quantity": leg["buy_filled_qty"],
+                        "requested_quantity": leg["quantity"],
+                        "price": leg["fill_price"],
+                        "first_fill_observation": leg.get(
+                            "adaptive_exit_first_fill_observation"
+                        ),
+                    }
+                ],
+                entry_policy=policy,
+                observed_at=datetime.now(KST).isoformat(),
+            )
+        except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as exc:
+            leg["adaptive_exit_source_gap"] = (
+                f"target_observation_invalid:{type(exc).__name__}"
+            )
+
     def _submit_target(self, now: datetime, leg: dict) -> None:
         if (
             int(leg.get("position_qty", 0) or 0) <= 0
@@ -1317,6 +1420,7 @@ class SamsungRegularTwoLegMachine:
             }
         )
         self._own_order(result.order_no)
+        self._record_adaptive_target_source(leg)
         self._record(
             now,
             "target_submitted",
@@ -1716,6 +1820,12 @@ class SamsungRegularTwoLegMachine:
             )
             return
         if snapshot.found:
+            record_first_fill_observation(
+                leg,
+                previous_filled_qty=leg.get("buy_filled_qty", 0),
+                filled_qty=snapshot.filled_qty,
+                observed_at=_iso(now),
+            )
             leg["last_buy_reconciled_at"] = _iso(now)
             leg["last_buy_remaining_qty"] = int(snapshot.remaining_qty)
             leg["last_buy_reconcile_source_ok"] = True
@@ -2503,12 +2613,241 @@ class SamsungRegularTwoLegMachine:
 
         observed = (now or datetime.now(tz=KST)).astimezone(KST)
         result = self._run_once_impl(observed)
-        if observe_owner_terminal(state=self._state, now=observed):
+        if not any(
+            SESSION_KEY in leg
+            for leg in self._state.get("legs", [])
+            if isinstance(leg, dict)
+        ) and observe_owner_terminal(state=self._state, now=observed):
             self._save()
         return result
 
+    def adaptive_exit_manager_required(self) -> bool:
+        legs = [
+            leg
+            for leg in self._state.get("legs", [])
+            if isinstance(leg, dict) and SESSION_KEY in leg
+        ]
+        if manager_required(leg[SESSION_KEY] for leg in legs):
+            return True
+        try:
+            for leg in legs:
+                validate_terminal(
+                    leg.get(TERMINAL_KEY), OwnerSession.from_payload(leg[SESSION_KEY])
+                )
+        except (ValueError, TypeError, KeyError):
+            return True
+        return False
+
+    def _validate_adaptive_leg(self, leg: dict, session: OwnerSession) -> None:
+        s, p = session.driver.orders, session.position
+        expected = self._episode_owner_context(
+            leg=leg, action="adaptive_exit", ordinal=1
+        )
+        scope = session.policy.scope_key.split("|")
+        if (
+            scope
+            != [
+                "episode",
+                self.entry_timing_scope_id,
+                self.policy.symbol,
+                scope[3],
+                self.entry_timing_session,
+            ]
+            or p.lot_id != leg["leg_id"]
+            or p.episode_id != expected.position_id
+            or session.context.owner_id != expected.owner_id
+            or session.context.position_id != expected.position_id
+            or session.context.owner_type != expected.owner_type
+            or s.target.trading_date != leg.get("target_order_date")
+            or s.target.order_no != leg.get("target_order_no")
+            or session.target_intent_id != leg.get("target_owner_registry_intent_id")
+            or p.open_qty != leg.get("buy_filled_qty")
+            or p.open_qty != leg.get("target_quantity")
+            or p.entry_price != leg.get("fill_price")
+            or p.original_target != leg.get("target_price")
+            or s.target_filled_qty != leg.get("target_filled_qty")
+            or s.exit_filled_qty != leg.get("adaptive_exit_filled_qty", 0)
+            or s.open_qty != leg.get("position_qty")
+        ):
+            raise ValueError("adaptive_exit_original_lot_binding_mismatch")
+
+    def _run_adaptive_owner_once(self, now: datetime) -> dict:
+        """Resume frozen lots before rollover or legacy target reconciliation."""
+        services = self.adaptive_exit_services
+        if isinstance(services, OwnerLoopServices) and services.lock_held() is not True:
+            result = self.snapshot()
+            result["adaptive_exit_loop_status"] = "original_owner_lock_required"
+            return result
+        legs = self._state["legs"]
+        try:
+            sessions = [
+                (leg, OwnerSession.from_payload(leg[SESSION_KEY]))
+                for leg in legs
+                if SESSION_KEY in leg
+            ]
+            for leg, session in sessions:
+                self._validate_adaptive_leg(leg, session)
+            if self._state.get("status") == "BLOCKED":
+                raise ValueError("adaptive_exit_owner_state_blocked")
+            if (
+                self._state.get("pending_entry_confirmation")
+                or self._state.get("owner_registry_reconciliation_required")
+                or any(
+                    leg.get("buy_owner_registry_reconciliation_required")
+                    or leg.get("target_owner_registry_reconciliation_required")
+                    or leg.get("buy_cancel_owner_registry_reconciliation_required")
+                    for leg in legs
+                )
+            ):
+                raise ValueError("adaptive_exit_existing_owner_recovery_required")
+            if not self._validate_state_contract(now):
+                return self.snapshot()
+            if any(
+                leg.get("status")
+                in {
+                    "PLANNED",
+                    "BUY_OPEN",
+                    "BUY_SUBMITTING",
+                    "BUY_CANCEL_PENDING",
+                    "BUY_CANCEL_SUBMITTING",
+                    "TARGET_SUBMITTING",
+                }
+                for leg in legs
+            ):
+                raise ValueError("adaptive_exit_pending_entry_requires_owner_recovery")
+            if not self.live_enabled:
+                raise ValueError("adaptive_exit_owner_disabled")
+            for leg, session in sessions:
+
+                def persist(payload, *, owned_leg=leg):
+                    prior = deepcopy(self._state)
+                    updated = OwnerSession.from_payload(payload).driver.orders
+                    owned_leg.update(
+                        {
+                            SESSION_KEY: payload,
+                            "position_qty": updated.open_qty,
+                            "target_filled_qty": updated.target_filled_qty,
+                            "adaptive_exit_filled_qty": updated.exit_filled_qty,
+                            "status": (
+                                "ADAPTIVE_EXIT_FLAT"
+                                if updated.phase == "FLAT"
+                                else "TARGET_OPEN"
+                            ),
+                            "adaptive_exit_realized_pnl_status": "unreconciled_exact_fill_cost_required",
+                        }
+                    )
+                    self._sync_aggregate()
+                    try:
+                        self._save()
+                    except BaseException:
+                        self._state = prior
+                        raise
+
+                reason = step_session(
+                    session=session,
+                    services=self.adaptive_exit_services,
+                    adapter_factory=lambda guard: self.gateway.adaptive_exit_adapter(
+                        registry=self.owner_registry,
+                        context=session.context,
+                        policy_hash=session.policy.policy_hash,
+                        write_guard=guard,
+                    ),
+                    persist_record=persist,
+                    clock=Clock(int(now.timestamp() * 1000), 0),
+                    persist_terminal=lambda receipt, owned_leg=leg: (
+                        self._persist_adaptive_terminal(owned_leg, receipt)
+                    ),
+                )
+                leg["adaptive_exit_loop_status"] = reason
+                if (
+                    isinstance(services, OwnerLoopServices)
+                    and services.lock_held() is not True
+                ):
+                    return self.snapshot()
+            # Unselected target lots retain their original owner and protection.
+            for leg in legs:
+                if SESSION_KEY not in leg:
+                    if leg.get("status") == "TARGET_OPEN":
+                        self._reconcile_target(now, leg)
+                    elif leg.get("status") == "POSITION_OPEN":
+                        self._submit_target(now, leg)
+            if self._state.get("trade_date") != now.date().isoformat():
+                self._roll_adaptive_terminal(now)
+        except (ValueError, TypeError, PermissionError, OwnerRegistryError) as exc:
+            self._state["adaptive_exit_loop_status"] = str(exc)
+        if not isinstance(services, OwnerLoopServices) or services.lock_held() is True:
+            self._save()
+        return self.snapshot()
+
+    def _persist_adaptive_terminal(self, leg, receipt):
+        session = OwnerSession.from_payload(leg[SESSION_KEY])
+        validate_terminal(receipt, session)
+        if TERMINAL_KEY in leg:
+            validate_terminal(leg[TERMINAL_KEY], session)
+            same_terminal(leg[TERMINAL_KEY], receipt)
+            return
+        prior = deepcopy(self._state)
+        leg[TERMINAL_KEY] = receipt
+        try:
+            self._save()
+        except BaseException:
+            self._state = prior
+            raise
+
+    def _roll_adaptive_terminal(self, now):
+        """Hand a closed prior day to the existing entry owner, never re-buy here."""
+        services = self.adaptive_exit_services
+        if (
+            not isinstance(services, OwnerLoopServices)
+            or services.lock_held() is not True
+        ):
+            return
+        legs = self._state["legs"]
+        if (
+            any(
+                leg.get("status") not in {"ADAPTIVE_EXIT_FLAT", "COMPLETE", "NO_FILL"}
+                for leg in legs
+            )
+            or self._position_qty()
+        ):
+            return
+        for leg in legs:
+            if SESSION_KEY not in leg:
+                continue
+            session = OwnerSession.from_payload(leg[SESSION_KEY])
+            validate_terminal(leg.get(TERMINAL_KEY), session)
+            if services.authorize_binding(session.binding) is not True:
+                raise ValueError("frozen_policy_authority_missing")
+            if (
+                self.owner_registry.owner_position_qty(
+                    session.context.position_id, symbol=self.policy.symbol
+                )
+                != 0
+            ):
+                raise ValueError("adaptive_terminal_owner_custody_not_flat")
+        prior = deepcopy(self._state)
+        history = deepcopy(prior.get("adaptive_exit_history", []))
+        history.append({k: v for k, v in prior.items() if k != "adaptive_exit_history"})
+        if services.lock_held() is not True:
+            return
+        self._state = {
+            **_fresh_state(now, self.schema),
+            "adaptive_exit_history": history,
+        }
+        try:
+            self._save()
+        except BaseException:
+            self._state = prior
+            raise
+
     def _run_once_impl(self, now: datetime | None = None) -> dict:
         now = (now or datetime.now(tz=KST)).astimezone(KST)
+        if any(
+            SESSION_KEY in leg
+            for leg in self._state.get("legs", [])
+            if isinstance(leg, dict)
+        ):
+            return self._run_adaptive_owner_once(now)
         if self._state and self._state.get("status") == "BLOCKED":
             return self.snapshot()
         if self._state and not self._validate_state_contract(now):
@@ -2569,7 +2908,7 @@ class SamsungRegularTwoLegMachine:
     def run_until_terminal(self, *, interval_sec: float = 2.0) -> dict:
         while True:
             state = self.run_once()
-            if state.get("status") in {"COMPLETE", "NO_TRADE", "HELD", "BLOCKED"}:
+            if state.get("status") in {"COMPLETE", "NO_TRADE", "HELD", "BLOCKED", "ADAPTIVE_EXIT_FLAT"} and not self.adaptive_exit_manager_required():
                 return state
             time_module.sleep(self._next_loop_delay_sec(interval_sec=interval_sec))
 

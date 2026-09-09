@@ -40,6 +40,7 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
         state_path: Path | None = None,
         live_enabled: bool = False,
         ownership_source: Callable[[object], str] = _episode_ownership_source,
+        adaptive_exit_services=None,
     ) -> None:
         self.profile = profile
         super().__init__(
@@ -54,6 +55,7 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             entry_timing_owner="episode",
             entry_timing_scope_id=profile.profile_id,
             entry_timing_session=profile.session,
+            adaptive_exit_services=adaptive_exit_services,
         )
 
     def _validate_state_contract(self, now) -> bool:
@@ -108,6 +110,8 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
         deliberately limited to zero-exposure, fully terminal ledgers.
         """
 
+        if any("adaptive_exit_session" in leg for leg in self._state.get("legs", []) if isinstance(leg, dict)):
+            return
         if not self._state or self._state.get("trade_date") == now.date().isoformat():
             return
         try:

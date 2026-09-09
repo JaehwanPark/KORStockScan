@@ -12,6 +12,7 @@ import json
 from datetime import date
 from pathlib import Path
 from typing import Any
+from src.engine.monitoring import widget_paired_policy_replay as paired_replay
 
 DEFAULT_POLICY_DIR = Path("data/runtime/widget_advisory_calibration")
 POLICY_FILE_PREFIX = "widget_advisory_policy"
@@ -97,6 +98,24 @@ def _selection_from_payload(
     )
     if confirmations is None:
         return None
+    if source_target_date >= paired_replay.SELECTION_START_DATE:
+        paired = session_policy.get("paired_economics") or {}
+        if not isinstance(paired, dict):
+            return None
+        if not paired_replay.selection_valid(
+            paired.get("study"),
+            paired.get("selection"),
+            symbol=symbol,
+            session=session,
+            target_date=source_target_date,
+            axis="confirmations",
+            selected_value=confirmations,
+        ):
+            return None
+        if paired["selection"].get(
+            "candidate_ready"
+        ) is True and not paired_replay.incumbent_valid(paired["study"]):
+            return None
     return {
         "symbol": symbol,
         "session": session,
@@ -107,6 +126,11 @@ def _selection_from_payload(
         "load_status": "dated_policy_loaded",
         "decision": session_policy.get("decision"),
         "reason": session_policy.get("reason"),
+        **(
+            {"paired_source_diagnostic": paired["selection"].get("source_diagnostic")}
+            if source_target_date >= paired_replay.SELECTION_START_DATE
+            else {}
+        ),
         "authority": POLICY_AUTHORITY,
         "widget_runtime_effect": True,
         "trading_runtime_effect": False,

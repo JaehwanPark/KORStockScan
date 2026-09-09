@@ -41,11 +41,18 @@ class ExitPolicy:
     max_quote_age_ms: int
     max_observation_gap_ms: int
     trail: TrailPolicy | None
+    # Stable owner lot roles, not percentages guessed from current inventory.
+    # Unselected lots retain target/time policy; allocation is never inferred.
+    runner_lot_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not all(
             isinstance(v, str) and v for v in (self.policy_hash, self.scope_key)
-        ) or self.mode not in ("time_progress_exit", "fast_partial_trailing"):
+        ) or self.mode not in (
+            "time_progress_exit",
+            "fast_partial_trailing",
+            "time_progress_and_trailing",
+        ):
             raise ValueError("invalid_policy_identity_or_mode")
         positive = (self.soft_sec, self.extension_sec, self.loss_budget_pct)
         if not all(finite(v) and v > 0 for v in positive):
@@ -63,19 +70,31 @@ class ExitPolicy:
             for v in (self.max_quote_age_ms, self.max_observation_gap_ms)
         ):
             raise ValueError("invalid_source_bounds")
-        if self.mode == "time_progress_exit" and self.trail is not None:
+        if (
+            not isinstance(self.runner_lot_ids, tuple)
+            or any(not isinstance(v, str) or not v for v in self.runner_lot_ids)
+            or len(set(self.runner_lot_ids)) != len(self.runner_lot_ids)
+        ):
+            raise ValueError("invalid_explicit_runner_lot_allocation")
+        if self.mode == "time_progress_exit" and (
+            self.trail is not None or self.runner_lot_ids
+        ):
             raise ValueError("combined_mode_not_supported")
-        if self.mode == "fast_partial_trailing":
+        if self.mode in ("fast_partial_trailing", "time_progress_and_trailing"):
             t = self.trail
-            if not isinstance(t, TrailPolicy) or not (
-                finite(t.fast_sec)
-                and 0 < t.fast_sec <= self.soft_sec
-                and finite(t.min_progress)
-                and 0 < t.min_progress < 1
-                and positive_int(t.gap_ticks)
-                and positive_int(t.transition_buffer_ticks)
-                and finite(t.minimum_net_cushion_pct)
-                and t.minimum_net_cushion_pct > 0
+            if (
+                not self.runner_lot_ids
+                or not isinstance(t, TrailPolicy)
+                or not (
+                    finite(t.fast_sec)
+                    and 0 < t.fast_sec <= self.soft_sec
+                    and finite(t.min_progress)
+                    and 0 < t.min_progress < 1
+                    and positive_int(t.gap_ticks)
+                    and positive_int(t.transition_buffer_ticks)
+                    and finite(t.minimum_net_cushion_pct)
+                    and t.minimum_net_cushion_pct > 0
+                )
             ):
                 raise ValueError("invalid_trail_bounds")
 
@@ -110,6 +129,9 @@ class Snapshot:
     bid_levels: tuple[tuple[float, int], ...]
     supportive: bool | None
     improvement_bps: float | None
+    # Optional canonical quote identity. A new evaluation is not necessarily
+    # new executable depth; modeled fills must not reuse the same quote.
+    quote_sequence: int | None = None
 
 
 @dataclass(frozen=True)

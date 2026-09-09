@@ -110,6 +110,37 @@ def test_build_policy_promotes_only_holdout_passed_symbol():
     )
 
 
+def test_execution_quality_handoff_is_consumed_without_disabling_observation(tmp_path):
+    from src.engine.monitoring.widget_execution_quality import load_execution_incidents
+
+    research = _research()
+    research["execution_quality_by_symbol"] = {
+        symbol: load_execution_incidents(
+            symbol,
+            target_date=date(2026, 8, 11),
+            session="KRX_REGULAR",
+            event_dir=tmp_path,
+        )
+        for symbol in SYMBOLS
+    }
+    policy = runtime.build_policy(research)
+    assert set(policy["symbols"]) == {"006800"}
+    research["execution_quality_by_symbol"]["006800"]["runtime_apply_allowed"] = False
+    blocked = runtime.build_policy(research)
+    assert "006800" not in blocked["symbols"]
+    assert "006800" in blocked["observation_symbols"]
+    assert "006800" in blocked["execution_quality_blocks"]
+
+
+def test_new_source_date_requires_execution_quality_but_old_policy_shape_is_preserved():
+    research = _research()
+    assert "execution_quality_blocks" not in runtime.build_policy(research)
+    research["end_date"] = "2026-09-09"
+    policy = runtime.build_policy(research)
+    assert policy["symbols"] == {}
+    assert "006800" in policy["execution_quality_blocks"]
+
+
 def test_build_policy_preserves_calibrated_anchor_and_early_history_contract():
     research = _research()
     selected = research["symbols"]["006800"]["selected_policy"]

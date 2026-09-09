@@ -95,7 +95,13 @@ def replay_decisions(
     }
 
 
-def build_adaptive_exit_source_census(report: Mapping[str, Any]) -> dict[str, Any]:
+def build_adaptive_exit_source_census(
+    report: Mapping[str, Any],
+    *,
+    owner_census: Mapping | None = None,
+    study_contract: Mapping | None = None,
+    study_source: Mapping | None = None,
+) -> dict[str, Any]:
     """Attach a hash-bound v2 child to the existing attribution owner.
 
     The available population is attribution anchors, NOT all account episodes.
@@ -209,5 +215,60 @@ def build_adaptive_exit_source_census(report: Mapping[str, Any]) -> dict[str, An
         "next_owner": "machine_lifecycle_turnover_policy_research",
         "next_action": "bind_first_fill_lot_epoch_and_ordered_post_target_path_before_execution_replay",
     }
+    # Whole catalog research is independent of anchor counts and legacy v1
+    # promotion. It has no new broker/runtime authority.
+    from src.trading.order.adaptive_exit.source import (
+        OwnerScope,
+        catalog_from_owner_inventories,
+    )
+    from .machine_adaptive_exit_study import run_study
+
+    try:
+        catalog_errors = []
+        catalog = catalog_from_owner_inventories(
+            (consumers.get("widget_postclose_tuning") or {}).get("symbols"),
+            (consumers.get("episode_machine_postclose_tuning") or {}).get("profiles"),
+            errors=catalog_errors,
+        )
+        if isinstance(owner_census, Mapping) and owner_census.get(
+            "canonical_sha256"
+        ) == canonical_sha256(owner_census):
+            catalog = tuple(
+                sorted(
+                    set(catalog)
+                    | {
+                        OwnerScope(**row["scope"])
+                        for row in owner_census.get("scopes", {}).values()
+                        if isinstance(row, Mapping)
+                        and isinstance(row.get("scope"), Mapping)
+                    }
+                )
+            )
+            payload["natural_owner_census"] = owner_census
+        payload["all_scope_study"] = run_study(
+            target_date=report.get("target_date"),
+            catalog=catalog,
+            source=study_source if study_source is not None else owner_census,
+            contract=study_contract,
+        )
+        payload["all_scope_study"]["catalog_exclusions"] = catalog_errors
+        if payload["all_scope_study"]["status"] == "study_evaluated":
+            payload["next_action"] = (
+                "review_native_research_candidates_and_complete_owned_sell_adapter_approved_envelope_preopen"
+            )
+        if study_contract is not None:
+            payload["study_contract"] = study_contract
+        if catalog_errors:
+            payload["all_scope_study"]["all_owner_episode_census_complete"] = False
+        payload["all_scope_study"]["canonical_sha256"] = canonical_sha256(
+            payload["all_scope_study"]
+        )
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        payload["all_scope_study"] = {
+            "status": "catalog_contract_gap",
+            "error": str(exc),
+            "authority": dict(AUTHORITY),
+            "policy_promotion_candidates": [],
+        }
     payload["canonical_sha256"] = canonical_sha256(payload)
     return payload

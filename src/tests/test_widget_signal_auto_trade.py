@@ -840,9 +840,9 @@ def test_widget_discards_malformed_persisted_entry_confirmation(tmp_path, monkey
         _fixed_entry_timing_policy(3),
     )
     trader.run_once(now)
-    trader._state["symbols"]["999999"]["pending_entry_confirmation"][
-        "delay_sec"
-    ] = "invalid"
+    trader._state["symbols"]["999999"]["pending_entry_confirmation"]["delay_sec"] = (
+        "invalid"
+    )
     next_at = now + timedelta(seconds=1)
     box["payload"] = _payload(next_at, entry_id="ENTRY-1")
 
@@ -1397,12 +1397,14 @@ def test_samsung_scale_in_is_new_exposure_blocked_by_market_weakness(
     monkeypatch.setattr(
         engine,
         "record_market_weakness_blocked_entry",
-        lambda *_args, **kwargs: counterfactual_calls.append(kwargs)
-        or {
-            "status": "recorded",
-            "observation_id": "scale-in-counterfactual",
-            "path": "test-only",
-        },
+        lambda *_args, **kwargs: (
+            counterfactual_calls.append(kwargs)
+            or {
+                "status": "recorded",
+                "observation_id": "scale-in-counterfactual",
+                "path": "test-only",
+            }
+        ),
     )
     trader.run_once(now)
     _fill(gateway, "B1", qty=10, price=100_000)
@@ -1933,10 +1935,20 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert take_profit["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
     assert take_profit["parent_entry_signal_id"] == "ENTRY-1"
     assert take_profit["limit_price"] == 236_500
+    target_receipt = next(
+        iter(take_profit["adaptive_exit_target_observations"].values())
+    )
+    assert target_receipt["target"]["route"] == "SOR"
+    assert target_receipt["target"]["order_no"] == take_profit["order_no"]
+    assert target_receipt["entries"][0]["episode_id"] == "ENTRY-1"
+    assert target_receipt["authority"]["allowed_runtime_apply"] is False
     entry_order = state["symbols"]["999999"]["orders"][0]
     assert entry_order["market_venue"] == "KRX"
     assert entry_order["broker_route"] == "SOR"
     assert entry_order["broker_execution_venue"] == "NXT"
+    assert entry_order["adaptive_exit_first_fill_observation"]["first_observed_at"] == (
+        now.isoformat()
+    )
     assert recorder.events[-1]["schema"] == engine.EVENT_SCHEMA
     assert recorder.events[-1]["order_role"] == engine.ORDER_ROLE_TAKE_PROFIT
     assert recorder.events[-1]["parent_entry_signal_id"] == "ENTRY-1"
@@ -2334,7 +2346,9 @@ def test_samsung_equal_share_policy_blocks_unvalidated_nxt_entry(tmp_path, monke
             active=True, market_venue="NXT", name="NXT_PREMARKET"
         ),
         snapshot_is_fresh=lambda payload, now: True,
-        advisory_contract_is_valid=lambda advisory, snapshot_observed_at, context, evaluated_at: True,
+        advisory_contract_is_valid=lambda advisory, snapshot_observed_at, context, evaluated_at: (
+            True
+        ),
     )
     spec = WidgetSpec(
         code="005930",

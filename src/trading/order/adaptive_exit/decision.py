@@ -30,6 +30,8 @@ def evaluate_exit(
     snapshot: Snapshot,
     clock: Clock,
     previous_state: DecisionState,
+    *,
+    final_exit_requested: bool = False,
 ) -> ExitDecision:
     """Return intent only. Never infer a fill, cancel, or broker-ready order.
 
@@ -50,6 +52,8 @@ def evaluate_exit(
     def answer(action: str, reason: str, **fields: object) -> ExitDecision:
         return replace(base, action=action, reason=reason, **fields)
 
+    if type(final_exit_requested) is not bool:
+        return answer("RECOVERY_REQUIRED", "final_exit_authority_invalid")
     if not all(
         isinstance(v, str) and v
         for v in (
@@ -80,7 +84,7 @@ def evaluate_exit(
     if type(old.trail_active) is not bool:
         return answer("RECOVERY_REQUIRED", "trail_state_invalid")
     if old.trail_active and (
-        policy.mode != "fast_partial_trailing"
+        policy.mode not in ("fast_partial_trailing", "time_progress_and_trailing")
         or not all(finite(v) and v > 0 for v in (old.high_water, old.stop_price))
         or old.stop_price >= old.high_water
     ):
@@ -130,7 +134,13 @@ def evaluate_exit(
         or s.position_epoch != p.position_epoch
     ):
         return answer("SOURCE_GAP", "snapshot_identity_missing_or_mismatched")
-    if not p.first_fill_at_ms <= s.quote_at_ms <= s.observed_at_ms <= clock.now_ms:
+    # A still-fresh quote received just BEFORE first fill is available as-of
+    # the first evaluation. Requiring exact post-fill quote time at that first
+    # checkpoint made almost every natural path impossible to evaluate.
+    if not (
+        0 < s.quote_at_ms <= s.observed_at_ms <= clock.now_ms
+        and p.first_fill_at_ms <= s.observed_at_ms
+    ):
         return answer("SOURCE_GAP", "snapshot_time_not_past_fill")
     if clock.now_ms - s.quote_at_ms > policy.max_quote_age_ms:
         return answer("SOURCE_GAP", "stale_quote")
@@ -187,6 +197,15 @@ def evaluate_exit(
     base = replace(
         base, executable_bid=bid, worst_bid=worst, progress=progress, net_return_pct=net
     )
+    runner_selected = p.lot_id in policy.runner_lot_ids
+    if old.trail_active and not runner_selected:
+        return answer("RECOVERY_REQUIRED", "active_trail_runner_binding_mismatch")
+    # The original owner validates and durably binds its final-exit signal.
+    # It supersedes alpha timing/runner selection, never executable-data safety.
+    if final_exit_requested:
+        return answer("REQUEST_EARLY_EXIT", "original_owner_final_exit")
+    if policy.mode == "fast_partial_trailing" and not runner_selected:
+        return answer("KEEP_TARGET", "lot_not_selected_for_trailing")
     # Risk limits request an exit only with a valid executable snapshot.
     if policy.hard_wall_sec is not None and wall_ms >= policy.hard_wall_sec * 1000:
         return answer("REQUEST_EARLY_EXIT", "hard_wall_deadline")
@@ -215,12 +234,15 @@ def evaluate_exit(
 
     if type(s.supportive) is not bool or not finite(s.improvement_bps):
         return answer("SOURCE_GAP", "support_or_improvement_missing")
-    if policy.mode == "fast_partial_trailing":
+    if runner_selected and policy.mode in (
+        "fast_partial_trailing",
+        "time_progress_and_trailing",
+    ):
         t = policy.trail
         floor = p.entry_price * (1 + p.round_trip_cost_pct / 100)
         gap = t.gap_ticks * p.tick_size
         ceiling = p.original_target - t.transition_buffer_ticks * p.tick_size
-        if floor + gap >= ceiling:
+        if floor + gap >= ceiling and policy.mode == "fast_partial_trailing":
             return answer("KEEP_TARGET", "unsupported_trailing_geometry")
         if (
             active_ms <= t.fast_sec * 1000
@@ -233,7 +255,8 @@ def evaluate_exit(
         ):
             # No high-water is set until cancel terminal + fresh arm validation.
             return answer("REQUEST_TRAIL_ARM", "fast_supported_pretarget_approach")
-        return answer("KEEP_TARGET", "trail_arm_predicate_not_met")
+        if policy.mode == "fast_partial_trailing":
+            return answer("KEEP_TARGET", "trail_arm_predicate_not_met")
 
     deadline = old.extension_until_active_ms or int(policy.soft_sec * 1000)
     if active_ms < deadline:

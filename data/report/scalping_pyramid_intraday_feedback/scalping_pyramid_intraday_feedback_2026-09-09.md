@@ -1,6 +1,6 @@
 # 2026-09-09 Scalping Pyramid Intraday Feedback
 
-- generated_at: 2026-09-09T12:15:01+09:00
+- generated_at: 2026-09-09T19:45:01+09:00
 - decision_authority: source_only_pyramid_intraday_feedback_no_runtime_mutation
 - runtime_effect: false
 - allowed_runtime_apply: false
@@ -8,12 +8,12 @@
 
 ## Summary
 
-- pyramid_feedback_row_count: 6
+- pyramid_feedback_row_count: 11
 - closed_pyramid_row_count: 0
 - pyramid_would_have_helped_count: 0
 - pyramid_correctly_blocked_count: 0
 - pyramid_overheat_or_reversal_risk_count: 0
-- pyramid_open_unresolved_count: 6
+- pyramid_open_unresolved_count: 11
 - one_share_event_count: 0
 - one_share_closed_count: 0
 - one_share_pyramid_opportunity_count: 0
@@ -53,19 +53,24 @@
 
 ## Blocker Metrics
 
-- blocker=profit_not_enough sample=3 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
+- blocker=profit_not_enough sample=8 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 - blocker=pyramid_quality_blocked:ai_score_below_min,buy_pressure_below_min,tick_accel_stale,micro_context_stale sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 - blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_stale,micro_context_stale sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 - blocker=trend_not_strong sample=1 recovered_rate=0.00 reversal_rate=0.00 blocked_then_recovered_rate=0.00
 
 ## Rows
 
-- record_id= code=126340 name=비나텍 label=pyramid_open_unresolved blocker=pyramid_quality_blocked:ai_score_below_min,buy_pressure_below_min,tick_accel_stale,micro_context_stale profit=1.76 final=None ai=59.0 tick=0.0 micro_vwap=0.0
-- record_id= code=047050 name=포스코인터내셔널 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.12 final=None ai=50.0 tick=0.667 micro_vwap=-6.54
-- record_id= code=000500 name=가온전선 label=pyramid_open_unresolved blocker=trend_not_strong profit=1.31 final=None ai=62.0 tick=0.0 micro_vwap=0.0
+- record_id= code=126340 name=비나텍 label=pyramid_open_unresolved blocker=pyramid_quality_blocked:ai_score_below_min,buy_pressure_below_min,tick_accel_stale,micro_context_stale profit=1.76 final=None ai=50.0 tick=0.873 micro_vwap=-12.05
+- record_id= code=000500 name=가온전선 label=pyramid_open_unresolved blocker=trend_not_strong profit=1.31 final=None ai=50.0 tick=0.857 micro_vwap=0.58
 - record_id= code=001440 name=대한전선 label=pyramid_open_unresolved blocker=pyramid_quality_blocked:ai_score_below_min,tick_accel_stale,micro_context_stale profit=2.22 final=None ai=69.0 tick=0.0 micro_vwap=0.0
 - record_id= code=006340 name=대원전선 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.42 final=None ai=49.0 tick=1.0 micro_vwap=-16.17
 - record_id= code=454910 name=두산로보틱스 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.6 final=None ai=61.0 tick=0.0 micro_vwap=0.0
+- record_id= code=009830 name=한화솔루션 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.75 final=None ai=50.0 tick=0.0 micro_vwap=0.0
+- record_id= code=322000 name=HD현대에너지솔루션 label=pyramid_open_unresolved blocker=profit_not_enough profit=1.03 final=None ai=56.0 tick=0.0 micro_vwap=0.0
+- record_id= code=011170 name=롯데케미칼 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.82 final=None ai=50.0 tick=0.0 micro_vwap=0.0
+- record_id= code=047050 name=포스코인터내셔널 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.64 final=None ai=50.0 tick=0.0 micro_vwap=-21.73
+- record_id= code=484870 name=엠앤씨솔루션 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.62 final=None ai=62.0 tick=0.0 micro_vwap=0.0
+- record_id= code=006650 name=대한유화 label=pyramid_open_unresolved blocker=profit_not_enough profit=0.85 final=None ai=50.0 tick=0.0 micro_vwap=0.0
 
 ## Real Scale-In Performance Rows
 

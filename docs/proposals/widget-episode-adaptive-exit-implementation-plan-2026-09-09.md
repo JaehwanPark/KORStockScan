@@ -1,16 +1,40 @@
 # 위젯·에피소드 적응형 청산 상세 구현계획
 
-작성: `2026-09-09 KST` · 최신 상태: `PARTIAL_OFFLINE_IMPLEMENTATION` · 실거래 활성화: `NOT_AUTHORIZED`.
+작성: `2026-09-09 KST` · 최신 상태: `PARTIAL_ALL_SCOPE_IMPLEMENTATION` · 실거래 활성화: `PENDING_APPROVED_ENVELOPE_AND_INTEGRATION`.
 
 상위 [검토 제안서](widget-episode-adaptive-exit-plan-2026-09-09.md)의 시간/진행률 조기청산과 빠른 접근 일부 잔량 trailing을 구현 가능한 작업 단위로 분해한다. 최초 요청은 상세계획 작성이었고, 이후 사용자가 코드 구현·반복 리뷰를 지시했다. 실제 완료/미완료 경계는 아래 후속 구현 상태와 [구현 리뷰](../audit-reports/2026-09-09-widget-episode-adaptive-exit-implementation-review.md)를 우선한다. 본문의 WP0~WP9·신규 schema/경로는 전체 목표 설계이며, 일부 코드 존재를 전체 구현·자동 적용 완료 또는 producer native 추천 ID로 해석하지 않는다.
 
 ### 후속 구현 상태
 
-- WP2의 순수 판정·상태 reducer와 replay 공통 호출을 구현했다. 시간/진행률·지지, 1회 유예, 첫 fill 시계/수량 epoch, executable bid VWAP와 최악 bid 분리, trailing 사전 판정·stop 단조성 및 취소/접수/체결 상태를 테스트한다. 아직 실제 owner state에 붙은 주문 adapter는 아니다.
-- WP0/WP3는 부분 구현이다. 기존 attribution의 `rolling_policy_research_v2`에 `machine_adaptive_exit_source_census_v1` child와 Markdown 소비를 연결했다. 이는 완성된 경제성 evidence schema가 아니라 신규 exit 계약 결손을 보이는 source census다. v1 추천·gate는 그대로다.
-- 신규 연구 평가 helper는 사전 고정 계약의 primary 절대 EV/순이익 개선·holdout 비훼손·tail·coverage를 검증하고, 성숙 표본의 무유입일/rolling expiry/명시적 최대 용량을 반영한 조건부 ETA를 제공한다. 실제 paired 경제성 집계·purge 계산·execution stress와 공통 approval dispatch는 미완료이며 helper 통과도 PREOPEN eligibility를 발급하지 않는다.
-- WP1 자연 계측/정규화, WP4/5 주문 전환·loader/생존성, WP6 trailing 실제 arm/취소/체결, WP7 PREOPEN publisher/등록, WP8/9 실제 적용·경제성은 미완료다. 위험값·첫 scope·취소 후 최종 잔량 처리의 미결정 사항은 §3/§12를 따른다. 임의 숫자를 넣어 OFF 코드가 주문하게 하지 않는다.
-- 아래 최초 계획 작성 당시의 ‘수정하지 않았다’는 문장은 이력이다. 현행 코드 변경은 위 리뷰에 한정하고 기존 목표주문·gateway·runtime policy/PID/cron/systemd는 변경하지 않았다.
+- 사용자는 **전체 종목·전체 프로필 코드 지원/연구**와 **후보 자동 산출, 승인된 범위에서만 자동 적용**을 지시했다. 첫 연구 scope를 다시 선택하도록 요구하지 않는다. 실제 숫자 envelope·기존 보유 이관·현재 프로세스 재기동을 승인한 것으로 확대하지 않는다. 최신 근거는 [전체 scope 보완 리뷰](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md)다.
+- WP2는 조기청산·trailing·결합의 세 모드와 명시적 runner lot 배분을 지원한다. 지정되지 않은 lot을 전량 trailing으로 바꾸지 않으며 합산 target의 부분취소 미지원은 연구에서 별도 격리한다.
+- WP0/WP3는 전체 catalog → 엄격한 정규화 입력 → 공통 execution base/stress replay → episode 단위 paired EV/순이익·purge/holdout·회전 지표 → native 연구 후보까지 확장했다. 후속 재개에서 기존 attribution의 owner state/동일 stream read → 자연 census → 연속 관측일 history → 자동 연구 grid → child/Markdown을 연결했다. 미생성 optional 입력 파일 의존은 제거했다. 코드 연결/fixture E2E와 실제 배포 이후의 자연 생성은 구분한다.
+- WP1은 위젯·공통 two-leg·별도 Samsung 오전에 최초 체결 **관측시각**과 접수된 target의 lot/정책/주문번호·응답 관측시각을 불변 계측한다. 기존 `buy_filled_at` 의미를 바꾸거나 과거 보유의 첫 시각을 발명하지 않는다. 기존 정규화 원천에서 target 완료와 독립적인20분 연구 경로를 재사용하고, 부분매수·합산 target·교체 epoch·원천/예산 결손은 분모에 남긴다. 거래소 체결시각 복원·실제 PID 계측 소비는 완료로 주장하지 않는다.
+- WP4/WP5/WP6은5개 gateway→구체 port/session→**위젯 및 공통 two-leg의 실제 `run_once` 소비 분기**까지 연결했다([최신 리뷰 §9](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#9-실제-owner-loop-연결과-custody-보존)). 원 target/lot/registry 결속, 부분체결·교체 SELL 수량, 잠금 상실 시 저장 금지, 날짜/카탈로그 변경 시 session 보존, episode manager 종료 조건을 모의 검증했다. constructor의 `OwnerLoopServices`는 기본 없음이며 실제 launcher의 승인·시세·거래정지 시계·전체 safety 서비스는 아직 설치하지 않았다. 비용 미대사 수량 종료는 `ADAPTIVE_EXIT_FLAT`/별도 위젯 잔량 view로 분리하고 기존 수익 완료/새 BUY로 전환하지 않는다. 합산 target/runner 배분·pending BUY/새 source EXIT의 승인된 중재·전일 주문/미정의 취소/거절 복구·정확한 체결가/비용 원장 반영과 다음 episode handoff→승인 envelope/dispatch/PREOPEN publisher(WP7)·신규 session enrollment가 미완료다. 연구 hash/후보는 활성화 권한이 아니다.
+- source9/8의 위젯19·episode136 연구 scope/30 lifecycle은 당시 이력이다. 후속 source9/9 owner-state 읽기 전용 census에서는61 scope(등록 low-price56+Samsung route/profile5), complete56 scope·기존 filled lot19·신규 target/first-fill 결속0을 확인했다. 위젯 당일 accepted BUY scope는0이며 두 분모를 합산하지 않는다. WP8/9 실적용·순이익 개선은 미검증이다. gateway 코드는 확장했으나 실제 목표주문·runtime policy/PID/cron/systemd는 변경하지 않았다.
+- 아래 최초 계획 작성 당시의 ‘수정하지 않았다’·‘코드 미구현’ 문장은 이력이다. 현행 구현 경계는 이 절과 최신 리뷰를 따른다. 신규 연구에 상대1%·5/10/20일 동시 양수·모든 조기매도 양수·첫 활성화 전 새 exit 실체결을 요구하지 않는다. 위험값 누락과 미완성 소비 경로를 floor 완화로 숨기지 않는다.
+
+### 최신 후속: 수량 종료와 다음 진입 연결 (§10)
+
+[최신 리뷰 §10](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#10-수량-종료-원장과-기존-다음-진입-handoff)이 위§9 bullet의 후속 상태다. 원 target/교체 SELL exact 수량 terminal→위젯 일반 orders/완료 횟수/기존 다음 신호 gate, 공통 two-leg 당일 횟수 보존→전일 전체 종료 archive→기존 다음 날짜 entry owner를 연결했다. 재시작·저장 실패·날짜/retention의 증거 보존과 전일 완료의 당일 cap 오집계를 보완했다. 수량0은 익절/순이익 성공이 아니며 **정확한 체결금액/비용 대사는 아직 미완료**다. 비용 결손은 null로 보존하고 다음 진입에 별도 경제성 대기 gate를 추가하지 않는다. 최초 승인 envelope와 실제 서비스 설치/정책 발행·enrollment, 합산 target/runner·source EXIT/BUY 중재 및 미해결 전일 broker 복구는 남아 있다. 운영/PID/실주문을 변경한 것은 아니다.
+
+### 최신 후속: 공통 체결 통보와 종료 대사 (§11)
+
+최신 후속은 [§11 공통 체결 통보/종료 대사 순서 보완](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#11-공통-체결-통보와-종료-대사-순서-충돌-보완)이다. WS terminal 선행 시에도 별도의 exact 수량 대사 proof가 원 종료 consumer까지 전달되도록 수리했다. 일반 terminal 멱등성·구 증거·소유권/잔량 안전 조건은 유지한다. 이는 수신 순서에 따른 반복 진입 단절의 코드 수리이며 정확한 비용/순이익·최초 실제 자동 활성화 완료가 아니다. 다음 실행 가능 중재/전일 복구와 외부 정산 원천 gap을 분리해 기존 checklist owner에서 이어간다.
+
+### 최신 후속: 위젯 원 EXIT 단일 owner 중재 (§12)
+
+[리뷰 §12](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#12-위젯-원래-exit와-적응형-청산-단일-owner-중재)는 원 producer와 동결 실행정책이 허용한 위젯 final EXIT를 불변 receipt로 접수해 기존 adaptive driver의 취소/잔량 대사/SELL로 연결한다. 접수 뒤 원천 부재·재시작에도 의도는 유지하며 원천/접수 시각, 원 포지션·정책·lot, fresh BBO·잠금/전체 safety는 검증한다. 미제출 entry confirmation만 철회하고 실제 pending BUY·합산 target/runner·legacy/force-flat·전일 주문 복구는 별도 미완료다. 새 경제성/표본 gate나 실제 자동 활성화는 없으며 원 정책 검증 callback의 실제 launcher 공급·승인 envelope/PREOPEN/enrollment·정확한 비용 consumer는 남아 있다. 이 상태가 위§9~11의 source EXIT 전체 미구현 문구에 대한 후속이다.
+
+### 최신 후속: 합산 target 계산·진단 (§13)
+
+최신 [§16](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#16-group-부분취소와-첫-runner-sellttl-연결)은 승인 action 불변 저장→첫 부분취소→exact 해제량의 첫 runner 지정가 SELL→TTL 취소/runner 수량 terminal을 opt-in으로 연결했다. 기존 target 잔량 예약·단일-lot 전량 terminal guard를 유지하며 ACK/재시작은 재전송 권한이 아니다. runner 종료도 group flat/손익/새 진입 완료가 아니다. 아래§15의 모든 주문 action 미구현은 이전 상태이며, 실제 group 판단 producer·whole-target/잔량·거절/전일 복구와 group 전체 terminal/owner handoff, 최초 numeric envelope/실제 validator·PREOPEN/enrollment/launcher는 여전히 미완료다. 자연 연구 false/exclusion과 실제 운영은 변경하지 않았다.
+
+현재 후속 [§15](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#15-동결-runner-배분과-group-증거-소비-coordinator)는 명시적 runner 회계/전체 lot 순서·취소 전 동결→account/dated-target 단일 저장 슬롯→기존 partial proof/예약 소비 coordinator를 구현했다. 내부 회계를 실제 broker lot별 손익으로 바꾸지 않으며 `sell_authority=false`인 시점별 수량 receipt로 끝난다. 아래§14의 배분/coordinator 전체 미구현은 이전 상태이고, 현재 **group 판단/취소 action→runner SELL/TTL/terminal·whole-target/복구·원 owner handoff와 실제 launcher/enrollment**는 아직 미완료다. 최초 numeric envelope/validator·PREOPEN publisher 및 자연/경제성은 별도이며 코드 지원을 활성화로 보고하지 않는다.
+
+후속 [§14](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#14-부분취소-확인과-원장-예약-보존-연결)에서 정상 부분취소 요청 전량 확인의 dated/current proof→registry 단일 append/잔량 예약 보존을 구현했다. 아래§13의 실제 proof/예약 미구현은 이전 기록이다. 이 opt-in primitive의 소비자인 동결 회계/runner 배분·group coordinator·runner SELL은 아직 없으며 실제 활성화가 아니다. 일부확인/거절·전일 복구는 별도 구현으로 남기고 불가능한 full-request 수량을 계속 기다리는 정상 대기로 처리하지 않는다. 최초 승인 envelope/PREOPEN/enrollment/launcher·자연 소비·경제성은 별도다.
+
+[리뷰 §13](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md#13-합산-target-배분부분취소-계산-계약과-장후-진단-연결)은 WP4/6의 선행 group 계산·source 진단 범위다. 불변 BUY lot/합산 target와 현재 원장을 대사하고 runner 잔량 하한/상한·부분취소 후 예약/미예약 수량 보존을 검증한다. 기존21:15 census→study→Markdown에 연결했지만 live group coordinator·부분취소 proof/예약 해제/runner SELL은 미구현이다. 실제 합산 SELL의 lot 귀속을 임의 FIFO/비례로 만들지 않으며, 존재하지 않는 broker lot label을 기다리는 대신 동결 owner 회계 배분 계약을 구현해야 한다. 실제 정책/PID/주문·자연 report는 변경하지 않았다. 현재 다음 순서와 검증은§13 및 기존 checklist owner를 따른다.
 
 ## 1. 범위와 첫 릴리스 결정
 
@@ -300,7 +324,7 @@ N_min과 위험 수치가 미정인 것은 설계 gate의 명시적 미결정이
 
 ## 12. 승인 전 미결정·handoff·계획 검증
 
-실전 활성화 전에 남은 결정은 (1) 첫 owner/profile, (2) 시간/가격 손실·세션 경계 정책, (3) sell 가격/TTL/최종 잔량 처리, (4) runner leg/lot, (5) 경제성 평가창/N_min/허용 tail, (6) 실제 process 배포·복구 권한이다. 이는 이 계획에서 숨긴 TODO가 아니라 §3에 따라 비어 있으면 자동 차단되는 activation 입력이다. 구현 자체가 이 값들을 임의 채우지 않아야 한다.
+연구·구현 대상은 사용자 지시에 따라 전체 owner/profile이다. 실전 활성화 전에 남은 결정은 (1) 실제 활성화 envelope의 scope·기간, (2) 시간/가격 손실·세션 경계 정책, (3) sell 가격/TTL/최종 잔량 처리, (4) runner leg/lot, (5) 경제성 평가창/N_min/허용 tail, (6) 실제 process 배포·복구 권한이다. 후보 수치는 자동 연구에서 제안하되 승인 수치로 가장하지 않는다. 이는 §3에 따라 비어 있으면 차단되는 activation 입력이며, 이미 승인된 범위 안에서 매일 별도 수동 승인을 반복 요구하는 설계가 아니다. 미완성 자연 source/owner adapter/PREOPEN 코드는 승인값 대기와 별도로 추적한다.
 
 향후 원천/계획 수용은 [오늘 체크리스트](../checklists/2026-09-09-stage2-todo-checklist.md)의 기존 `MachineLifecycleTurnoverObjectiveFollowup0909`에 연결한다. 해당 항목의 source-only 권한은 유지한다. 실행 승인 시에만 필요한 구현·배포 단계를 현재 checklist에 이관하며 계획 번호를 producer native ID로 발명하지 않는다. 완료된 entry timing 상세검토는 새 exit 설계가 생겼다는 이유만으로 재개하지 않는다.
 

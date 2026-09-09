@@ -1106,6 +1106,7 @@ def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
             "checkpoint_reports": {
                 str(checkpoint): {
                     "schema": "scalp_micro_reversion_ask_depletion_v2",
+                    "feature_version": "machine_confirmation_fixed_price_window_v1",
                     "context": {
                         "symbol": "005930",
                         "venue": "KRX",
@@ -1114,7 +1115,7 @@ def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
                         "anchor_event_local_receive_timestamp_ms": int(
                             (
                                 datetime.fromisoformat("2026-08-27T10:00:00+09:00")
-                                + timedelta(seconds=checkpoint, milliseconds=-900)
+                                + timedelta(seconds=checkpoint, milliseconds=-1000)
                             ).timestamp()
                             * 1_000
                         ),
@@ -1133,9 +1134,9 @@ def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
                         "checkpoint_at": (f"2026-08-27T10:00:0{checkpoint}+09:00"),
                         "window_started_at": (
                             datetime.fromisoformat("2026-08-27T10:00:00+09:00")
-                            + timedelta(seconds=checkpoint, milliseconds=-900)
+                            + timedelta(seconds=checkpoint, milliseconds=-1000)
                         ).isoformat(),
-                        "window_horizon_ms": 900,
+                        "window_horizon_ms": 1000,
                         "binding_policy": (
                             "past_only_0b_0d_window_ending_at_exact_checkpoint"
                         ),
@@ -1143,7 +1144,30 @@ def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
                     },
                     "horizons": [
                         {
-                            "horizon_ms": 900,
+                            "horizon_ms": 1000,
+                            "checkpoint_at_ms": int(
+                                (
+                                    datetime.fromisoformat("2026-08-27T10:00:00+09:00")
+                                    + timedelta(seconds=checkpoint)
+                                ).timestamp()
+                                * 1000
+                            ),
+                            "endpoint_depth": {
+                                "bid": 10000 + checkpoint,
+                                "ask": 10010 + checkpoint,
+                                "quantity": 100,
+                                "epoch": sequence_epoch,
+                                "at_ms": int(
+                                    (
+                                        datetime.fromisoformat(
+                                            "2026-08-27T10:00:00+09:00"
+                                        )
+                                        + timedelta(seconds=checkpoint)
+                                    ).timestamp()
+                                    * 1000
+                                )
+                                - 50,
+                            },
                             "eligible_for_feature_ablation": True,
                             "aggressive_buy_trade_backed_ratio": 0.8,
                             "refill_ratio": 0.1,
@@ -1201,7 +1225,7 @@ def test_dynamic_confirmation_uses_causal_anchor_bid_not_eventual_fill_price():
                     "context": {"sequence_epoch": 7},
                     "horizons": [
                         {
-                            "horizon_ms": 900,
+                            "horizon_ms": 1000,
                             "eligible_for_feature_ablation": True,
                             "aggressive_buy_trade_backed_ratio": 0.8,
                             "refill_ratio": 0.1,
@@ -1241,39 +1265,11 @@ def test_checkpoint_ask_depletion_never_reads_after_checkpoint(monkeypatch) -> N
     checkpoint_at = anchor_at + timedelta(seconds=1)
     captured: dict = {}
 
-    class FakeReport:
-        def __init__(self, payload: dict) -> None:
-            self.payload = payload
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        return {"source_quality_status": "eligible", "source_gap_reasons": []}
 
-        def as_dict(self) -> dict:
-            return self.payload
-
-    def fake_build(*, context, depth_rows, market_rows, horizons_ms, **_kwargs):
-        captured["context"] = context
-        captured["depth_rows"] = list(depth_rows)
-        captured["market_rows"] = list(market_rows)
-        captured["horizon_ms"] = horizons_ms[0]
-        return FakeReport(
-            {
-                "context": {
-                    "symbol": context.symbol,
-                    "venue": context.venue,
-                    "session_bucket": context.session_bucket,
-                    "sequence_epoch": context.sequence_epoch,
-                },
-                "horizons": [
-                    {
-                        "horizon_ms": horizons_ms[0],
-                        "eligible_for_feature_ablation": True,
-                        "aggressive_buy_trade_backed_ratio": 0.8,
-                        "refill_ratio": 0.1,
-                        "downward_reprice_observed": False,
-                    }
-                ],
-            }
-        )
-
-    monkeypatch.setattr(attribution_module, "build_ask_depletion_report", fake_build)
+    monkeypatch.setattr(attribution_module, "build_confirmation_window", fake_build)
     market_rows = [
         {
             "schema": "scalp_micro_reversion_market_stream_point_v3",
@@ -1328,14 +1324,12 @@ def test_checkpoint_ask_depletion_never_reads_after_checkpoint(monkeypatch) -> N
     )
 
     assert report is not None
-    assert captured["horizon_ms"] == 900
+    assert report["decision_anchor_binding"]["window_horizon_ms"] == 1000
     assert all(
         datetime.fromisoformat(row["local_receive_timestamp"]) < checkpoint_at
-        for row in captured["market_rows"] + captured["depth_rows"]
+        for row in captured["trade_rows"] + captured["depth_rows"]
     )
-    assert captured["context"].observed_through_local_receive_timestamp_ms == int(
-        checkpoint_at.timestamp() * 1_000
-    )
+    assert captured["checkpoint_at_ms"] == int(checkpoint_at.timestamp() * 1_000)
     assert report["decision_anchor_binding"]["checkpoint_at"] == (
         checkpoint_at.isoformat()
     )

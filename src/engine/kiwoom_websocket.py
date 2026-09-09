@@ -3783,6 +3783,15 @@ class KiwoomWSManager:
                                     "strength": current_vpw,
                                     "received_at_ms": int(received_ts * 1000),
                                 }
+                                normalized_tick["route_sequence"] = (
+                                    int(
+                                        self._route_realtime_sequence.get(
+                                            (normalized_raw_item, real_type)
+                                        )
+                                        or 0
+                                    )
+                                    + 1
+                                )
                                 target["last_trade_tick"] = {
                                     "ts": received_ts,
                                     "values": values,
@@ -3832,6 +3841,15 @@ class KiwoomWSManager:
                                 )
                                 current_depth_observation["transport_epoch"] = int(
                                     self._market_data_transport_epoch
+                                )
+                                current_depth_observation["route_sequence"] = (
+                                    int(
+                                        self._route_realtime_sequence.get(
+                                            (normalized_raw_item, real_type)
+                                        )
+                                        or 0
+                                    )
+                                    + 1
                                 )
                                 if self._micro_reversion_depth_capture_requested():
                                     target["last_depth_tick"] = (
@@ -3956,7 +3974,7 @@ class KiwoomWSManager:
                                         depth_route_key
                                     )
                                     if not isinstance(depth_buffer, deque):
-                                        depth_buffer = deque(maxlen=16)
+                                        depth_buffer = deque(maxlen=120)
                                         route_depth_buffers[depth_route_key] = (
                                             depth_buffer
                                         )

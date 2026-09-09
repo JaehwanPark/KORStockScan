@@ -79,6 +79,7 @@ SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
         "low_price_two_leg_tuning_report_v5",
         "low_price_two_leg_tuning_report_v6",
         "low_price_two_leg_tuning_report_v7",
+        "low_price_two_leg_tuning_report_v8",
     }
 )
 APPLIED_SCHEMA = "low_price_two_leg_policy_applied_v1"
@@ -930,7 +931,10 @@ def validate_candidate(
         if (
             payload.get("evaluation_authority_contract") != SUBSET_AUTHORITY_CONTRACT
             or payload.get("source_report_schema")
-            != "low_price_two_leg_tuning_report_v7"
+            not in {
+                "low_price_two_leg_tuning_report_v7",
+                "low_price_two_leg_tuning_report_v8",
+            }
             or not isinstance(binding, dict)
             or binding.get("source_date") != source_date.isoformat()
             or binding.get("policies") != policies

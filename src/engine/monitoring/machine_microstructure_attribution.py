@@ -59,6 +59,15 @@ from src.engine.monitoring.machine_lifecycle_turnover_policy_research import (
 from src.engine.monitoring.machine_adaptive_exit_replay import (
     build_adaptive_exit_source_census,
 )
+from src.engine.monitoring.machine_adaptive_exit_source import (
+    collect_owner_census,
+    bind_ordered_paths,
+    merge_census_history,
+    propose_study_contract,
+    HORIZON_SEC as ADAPTIVE_EXIT_HORIZON_SEC,
+    MAX_ROWS_PER_ANCHOR as ADAPTIVE_EXIT_MAX_SOURCE_ROWS,
+    MAX_TOTAL_ROWS as ADAPTIVE_EXIT_MAX_TOTAL_SOURCE_ROWS,
+)
 from src.engine.monitoring.machine_market_weakness_response import (
     build_machine_market_weakness_response,
     COUNTERFACTUAL_MAX_QUOTE_AGE_SEC,
@@ -71,6 +80,10 @@ from src.engine.risk.market_weakness_entry_guard import (
     market_weakness_blocked_entry_contract_errors,
 )
 from src.trading.low_price_two_leg.profiles import PROFILES
+from src.trading.market.confirmation_window import (
+    FEATURE_VERSION,
+    build_confirmation_window,
+)
 from src.trading.market.micro_confirmation import (
     CHECKPOINTS_SEC as DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC,
     build_dynamic_micro_confirmation_checkpoints,
@@ -932,7 +945,9 @@ def _widget_state_order_index(
     return index, source
 
 
-def _widget_advisory_event_index(*, target_date: str, report_root: Path) -> tuple[
+def _widget_advisory_event_index(
+    *, target_date: str, report_root: Path
+) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[tuple[str, str, int], dict[str, Any]],
@@ -1853,7 +1868,9 @@ def _widget_actual_execution_inventory(
         execution_venue_alignment_state = (
             "unknown"
             if not all_execution_venues
-            else "aligned" if all_execution_venues == {venue} else "cross_venue"
+            else "aligned"
+            if all_execution_venues == {venue}
+            else "cross_venue"
         )
         timestamp_order_valid = bool(
             signal_at <= first_entry_submit_at
@@ -1970,7 +1987,9 @@ def _widget_actual_execution_inventory(
                     else (
                         source_final_exit_reason
                         if realized and source_final_exit_reason
-                        else "final_exit_fill" if realized else "right_censored"
+                        else "final_exit_fill"
+                        if realized
+                        else "right_censored"
                     )
                 )
             ),
@@ -2034,7 +2053,9 @@ def _widget_actual_execution_inventory(
             "realization_scope": (
                 "partial_manual_exit_cashflow"
                 if partial_manual_realization
-                else "full_widget_episode" if realized else "right_censored"
+                else "full_widget_episode"
+                if realized
+                else "right_censored"
             ),
             "buy_leg_count": len(buy_submit_orders),
             "scale_in_buy_leg_count": sum(
@@ -3005,9 +3026,9 @@ def _widget_inventory(
             scope_id = f"expansion:{symbol}:SOR_REGULAR"
             if scope_id not in row["owner_scope_ids"]:
                 row["owner_scope_ids"].append(scope_id)
-            row["owner_scope_kinds"][
-                scope_id
-            ] = "prospective_widget_collector_expansion"
+            row["owner_scope_kinds"][scope_id] = (
+                "prospective_widget_collector_expansion"
+            )
             row["owner_scope_expected_venues"][scope_id] = ["SOR"]
 
     actual_anchors, actual_source = _widget_actual_execution_inventory(
@@ -3207,6 +3228,7 @@ def _episode_inventory(
         "low_price_two_leg_tuning_report_v5",
         "low_price_two_leg_tuning_report_v6",
         "low_price_two_leg_tuning_report_v7",
+        "low_price_two_leg_tuning_report_v8",
     )
     expansion_schemas = (
         "low_price_two_leg_expanded_candidate_research_v5",
@@ -4504,7 +4526,9 @@ def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
         else (
             f"{symbol}_NX"
             if venue == "NXT"
-            else f"{symbol}_AL" if venue == "SOR" else ""
+            else f"{symbol}_AL"
+            if venue == "SOR"
+            else ""
         )
     )
     return bool(symbol and expected_item and payload.get("item") == expected_item)
@@ -4985,6 +5009,8 @@ def _micro_context(
             anchors_by_symbol[anchor["symbol"]].append((anchor, anchor_at))
 
     def post_window_sec(anchor: Mapping[str, Any]) -> int:
+        if anchor.get("adaptive_exit_source_only") is True:
+            return ADAPTIVE_EXIT_HORIZON_SEC
         rebound_frame = anchor.get("rebound_source_frame")
         if isinstance(rebound_frame, Mapping):
             observation_end = _parse_ts(rebound_frame.get("parent_horizon_end"))
@@ -5004,6 +5030,7 @@ def _micro_context(
             else POST_WINDOW_SEC
         )
 
+    adaptive_source_rows = {"market": 0, "depth": 0}
     for payload in _iter_relevant_rows(
         stream_paths, symbols, diagnostics=read_diagnostics
     ):
@@ -5062,6 +5089,18 @@ def _micro_context(
                 <= timestamp
                 <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
+                if anchor.get("adaptive_exit_source_only") is True:
+                    window = windows[anchor["anchor_id"]]
+                    if (
+                        len(window["raw_market_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
+                        or adaptive_source_rows["market"]
+                        >= ADAPTIVE_EXIT_MAX_TOTAL_SOURCE_ROWS // 2
+                    ):
+                        window["adaptive_exit_source_overflow"] = True
+                    else:
+                        window["raw_market_rows"].append(payload)
+                        adaptive_source_rows["market"] += 1
+                    continue
                 windows[anchor["anchor_id"]]["rows"].append(
                     {
                         "timestamp": timestamp,
@@ -5122,6 +5161,18 @@ def _micro_context(
                 <= timestamp
                 <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
+                if anchor.get("adaptive_exit_source_only") is True:
+                    window = windows[anchor["anchor_id"]]
+                    if (
+                        len(window["raw_depth_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
+                        or adaptive_source_rows["depth"]
+                        >= ADAPTIVE_EXIT_MAX_TOTAL_SOURCE_ROWS // 2
+                    ):
+                        window["adaptive_exit_source_overflow"] = True
+                    else:
+                        window["raw_depth_rows"].append(payload)
+                        adaptive_source_rows["depth"] += 1
+                    continue
                 windows[anchor["anchor_id"]]["depth_rows"] += 1
                 windows[anchor["anchor_id"]]["depth_points"].append(
                     {
@@ -5398,8 +5449,7 @@ def _entry_checkpoint_ask_depletion_feature(
     source_complete: bool,
     checkpoint_sec: int,
 ) -> dict[str, Any] | None:
-    """Build the causal one-second micro window ending at a checkpoint."""
-
+    """Use the same fixed-price one-second kernel as the live route adapter."""
     if anchor.get("anchor_role") not in _ENTRY_CONFIRMATION_ANCHOR_ROLES:
         return None
     anchor_at = _parse_ts(anchor.get("anchor_at"))
@@ -5409,147 +5459,86 @@ def _entry_checkpoint_ask_depletion_feature(
             "source_gap_reasons": ["decision_anchor_timestamp_invalid"],
         }
     checkpoint_at = anchor_at + timedelta(seconds=checkpoint_sec)
-    raw_market_rows = [
-        dict(row)
-        for row in window.get("raw_market_rows") or []
-        if isinstance(row, dict)
-    ]
-    raw_depth_rows = [
-        dict(row) for row in window.get("raw_depth_rows") or [] if isinstance(row, dict)
-    ]
     window_start = checkpoint_at - timedelta(seconds=1)
-    event_candidates: list[tuple[datetime, dict[str, Any]]] = []
-    for row in raw_market_rows:
-        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
-        if (
-            timestamp is not None
-            and window_start <= timestamp < checkpoint_at
-            and row.get("schema") == "scalp_micro_reversion_market_stream_point_v3"
-            and row.get("realtime_type") == "0B"
+
+    def scoped_rows(key: str) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in window.get(key) or ()
+            if isinstance(row, dict)
+            and (
+                _parse_owner_ts(row.get("local_receive_timestamp")) is None
+                or _parse_owner_ts(row.get("local_receive_timestamp")) <= checkpoint_at
+            )
             and str(row.get("symbol") or "") == str(anchor.get("symbol") or "")
-            and str(row.get("venue") or "") in set(anchor.get("expected_venues") or ())
-            and str(row.get("session_bucket") or "")
-            in set(anchor.get("expected_session_buckets") or ())
-        ):
-            event_candidates.append((timestamp, row))
-    if not event_candidates:
-        return {
-            "source_quality_status": "source_gap",
-            "source_gap_reasons": ["causal_checkpoint_0b_window_missing"],
-        }
-    event_at, event_market = min(event_candidates, key=lambda item: item[0])
-    try:
-        sequence_epoch = int(event_market["sequence_epoch"])
-        market_sequence = int(event_market["source_sequence"])
-    except (KeyError, TypeError, ValueError):
-        return {
-            "source_quality_status": "source_gap",
-            "source_gap_reasons": ["causal_checkpoint_0b_sequence_invalid"],
-        }
-    scope = (
-        str(event_market.get("symbol") or ""),
-        str(event_market.get("venue") or ""),
-        str(event_market.get("session_bucket") or ""),
-        sequence_epoch,
-    )
+            and row.get("venue") in (anchor.get("expected_venues") or ())
+            and row.get("session_bucket")
+            in (anchor.get("expected_session_buckets") or ())
+        ]
 
-    scoped_market: list[tuple[datetime, dict[str, Any]]] = []
-    for row in raw_market_rows:
-        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
-        try:
-            row_epoch = int(row.get("sequence_epoch"))
-        except (TypeError, ValueError):
-            continue
-        if (
-            timestamp is not None
-            and event_at <= timestamp < checkpoint_at
-            and (
-                str(row.get("symbol") or ""),
-                str(row.get("venue") or ""),
-                str(row.get("session_bucket") or ""),
-                row_epoch,
-            )
-            == scope
-        ):
-            scoped_market.append((timestamp, row))
-
-    scoped_depth: list[tuple[datetime, dict[str, Any]]] = []
-    for row in raw_depth_rows:
-        timestamp = _parse_owner_ts(row.get("local_receive_timestamp"))
-        try:
-            row_epoch = int(row.get("sequence_epoch"))
-        except (TypeError, ValueError):
-            continue
-        if (
-            timestamp is not None
-            and timestamp < checkpoint_at
-            and (
-                str(row.get("symbol") or ""),
-                str(row.get("venue") or ""),
-                str(row.get("session_bucket") or ""),
-                row_epoch,
-            )
-            == scope
-        ):
-            scoped_depth.append((timestamp, row))
-    anchor_depth_candidates = [item for item in scoped_depth if item[0] < event_at]
-    anchor_depth = (
-        max(anchor_depth_candidates, key=lambda item: item[0])[1]
-        if anchor_depth_candidates
-        else None
+    depths = scoped_rows("raw_depth_rows")
+    trades = scoped_rows("raw_market_rows")
+    expected_items = {
+        _registration_item_for_exact_route(anchor.get("symbol"), venue)
+        for venue in anchor.get("expected_venues") or ()
+    } - {""}
+    exact_item = next(iter(expected_items)) if len(expected_items) == 1 else None
+    # Bind to the latest causal depth route, never to a future/other-route tick.
+    endpoint = max(
+        [
+            row
+            for row in depths
+            if _parse_owner_ts(row.get("local_receive_timestamp")) is not None
+            and row.get("item") == exact_item
+        ],
+        key=lambda r: _parse_owner_ts(r["local_receive_timestamp"]),
+        default={},
     )
-    horizon_ms = int((checkpoint_at - event_at).total_seconds() * 1_000)
-    if horizon_ms <= 0:
-        return {
-            "source_quality_status": "source_gap",
-            "source_gap_reasons": ["causal_checkpoint_window_not_positive"],
-        }
-    context = AskDepletionContext(
-        event_id=(
-            f"entry_confirmation_checkpoint:{anchor['anchor_id']}:"
-            f"{checkpoint_sec}:{market_sequence}"
-        ),
-        anchor_role="shock_event",
-        symbol=scope[0],
-        venue=scope[1],
-        session_bucket=scope[2],
-        sequence_epoch=sequence_epoch,
-        anchor_event_local_receive_timestamp_ms=int(event_at.timestamp() * 1_000),
-        event_market_source_sequence=market_sequence,
-        observed_through_local_receive_timestamp_ms=int(
-            checkpoint_at.timestamp() * 1_000
-        ),
-        depth_source_complete=source_complete,
-        market_source_complete=source_complete,
+    item, epoch = exact_item, endpoint.get("sequence_epoch")
+    feature = build_confirmation_window(
+        depth_rows=depths,
+        trade_rows=trades,
+        item=item,
+        epoch=epoch,
+        checkpoint_at_ms=int(checkpoint_at.timestamp() * 1_000),
+        source_complete=source_complete,
     )
-    try:
-        report = build_ask_depletion_report(
-            context=context,
-            anchor_depth=anchor_depth,
-            depth_rows=[row for _, row in scoped_depth],
-            market_rows=[row for _, row in scoped_market],
-            horizons_ms=(horizon_ms,),
-            top_depth_levels=(3, 5),
-            max_depth_age_ms=1_000,
-        ).as_dict()
-    except (KeyError, TypeError, ValueError) as exc:
-        return {
-            "source_quality_status": "source_gap",
-            "source_gap_reasons": [
-                f"causal_checkpoint_contract_error:{type(exc).__name__}:{exc}"
-            ],
-        }
-    report["decision_anchor_binding"] = {
-        "decision_anchor_id": anchor["anchor_id"],
-        "decision_anchor_at": anchor_at.isoformat(),
-        "checkpoint_sec": checkpoint_sec,
-        "checkpoint_at": checkpoint_at.isoformat(),
-        "window_started_at": event_at.isoformat(),
-        "window_horizon_ms": horizon_ms,
-        "binding_policy": "past_only_0b_0d_window_ending_at_exact_checkpoint",
-        "future_outcome_input_used": False,
+    return {
+        "schema": "scalp_micro_reversion_ask_depletion_v2",
+        "feature_version": FEATURE_VERSION,
+        "runtime_effect": False,
+        "trading_runtime_effect": False,
+        "trading_decision_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_quality_status": feature["source_quality_status"],
+        "source_gap_reasons": feature["source_gap_reasons"],
+        "context": {
+            "symbol": anchor.get("symbol"),
+            "venue": endpoint.get("venue"),
+            "session_bucket": endpoint.get("session_bucket"),
+            "sequence_epoch": epoch,
+            "item": item,
+            "anchor_event_local_receive_timestamp_ms": int(
+                window_start.timestamp() * 1_000
+            ),
+            "observed_through_local_receive_timestamp_ms": int(
+                checkpoint_at.timestamp() * 1_000
+            ),
+        },
+        "horizons": [feature],
+        "decision_anchor_binding": {
+            "decision_anchor_id": anchor["anchor_id"],
+            "decision_anchor_at": anchor_at.isoformat(),
+            "checkpoint_sec": checkpoint_sec,
+            "checkpoint_at": checkpoint_at.isoformat(),
+            "window_started_at": window_start.isoformat(),
+            "window_horizon_ms": 1_000,
+            "binding_policy": "past_only_0b_0d_window_ending_at_exact_checkpoint",
+            "future_outcome_input_used": False,
+        },
     }
-    return report
 
 
 def _anchor_result(
@@ -5662,6 +5651,15 @@ def _anchor_result(
         required_entry_quantity = None
 
     depth_context_count = sum(depth_context_present(row) for row in rows)
+    checkpoint_ask_depletion = {
+        str(checkpoint_sec): _entry_checkpoint_ask_depletion_feature(
+            anchor,
+            window,
+            source_complete=status == "matched",
+            checkpoint_sec=checkpoint_sec,
+        )
+        for checkpoint_sec in DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC
+    }
     metrics: dict[str, Any] = {
         "eligible_window_row_count": len(rows),
         "post_anchor_row_count": len(post),
@@ -6380,6 +6378,41 @@ def _anchor_result(
             "broker_order_forbidden": True,
         }
 
+        # Bind executable labels to the same latest causal 0D quote used by
+        # confirmation, not an independently sampled 0B quote.
+        for checkpoint_sec in DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC:
+            feature_report = checkpoint_ask_depletion[str(checkpoint_sec)] or {}
+            features = feature_report.get("horizons") or []
+            feature = features[0] if features else {}
+            endpoint = feature.get("endpoint_depth") or {}
+            if feature.get("eligible_for_feature_ablation") is not True:
+                continue
+            bbo = (
+                metrics["entry_confirmation_bbo_anchor"]
+                if checkpoint_sec == 0
+                else metrics["entry_confirmation_bbo_horizons"][str(checkpoint_sec)]
+            )
+            age_ms = feature["checkpoint_at_ms"] - endpoint["at_ms"]
+            bbo.update(
+                {
+                    "observed": True,
+                    "best_bid": endpoint["bid"],
+                    "best_ask": endpoint["ask"],
+                    "sequence_epoch": endpoint["epoch"],
+                    "spread_bps": round(
+                        (endpoint["ask"] - endpoint["bid"]) / endpoint["bid"] * 10_000,
+                        6,
+                    ),
+                    "quote_age_from_signal_ms": age_ms,
+                    "quote_age_from_horizon_ms": age_ms,
+                    "depth_backed": bool(
+                        required_entry_quantity is not None
+                        and endpoint["quantity"] >= required_entry_quantity
+                    ),
+                    "available_best_ask_quantity": endpoint["quantity"],
+                    "feature_version": FEATURE_VERSION,
+                }
+            )
         dynamic_first_hit_checkpoints: dict[str, dict[str, Any]] = {}
         owner_entry_limit_price = _finite_float(anchor.get("owner_entry_limit_price"))
         signal_sequence_epoch = (
@@ -6637,15 +6670,6 @@ def _anchor_result(
             "broker_order_forbidden": True,
         }
 
-    checkpoint_ask_depletion = {
-        str(checkpoint_sec): _entry_checkpoint_ask_depletion_feature(
-            anchor,
-            window,
-            source_complete=status == "matched",
-            checkpoint_sec=checkpoint_sec,
-        )
-        for checkpoint_sec in DYNAMIC_CONFIRMATION_CHECKPOINTS_SEC
-    }
     metrics["entry_pre_signal_ask_depletion"] = checkpoint_ask_depletion["0"]
     metrics["entry_confirmation_checkpoint_ask_depletion"] = {
         "schema": "machine_entry_confirmation_checkpoint_ask_depletion_v1",
@@ -6696,9 +6720,6 @@ def _dynamic_confirmation_replay(result: dict[str, Any]) -> dict[str, Any]:
     checkpoint_ask_depletion = (
         metrics.get("entry_confirmation_checkpoint_ask_depletion") or {}
     )
-    causal_anchor_bid = _finite_float(
-        anchor_bbo.get("best_bid") if isinstance(anchor_bbo, dict) else None
-    )
     owner_entry_limit_price = _finite_float(result.get("owner_entry_limit_price"))
     owner_target_price = _finite_float(result.get("owner_target_price"))
     round_trip_cost_pct = _finite_float(result.get("owner_round_trip_cost_pct"))
@@ -6740,7 +6761,7 @@ def _dynamic_confirmation_replay(result: dict[str, Any]) -> dict[str, Any]:
         "owner_target_price": owner_target_price,
         "owner_round_trip_cost_pct": round_trip_cost_pct,
         "owner_requested_quantity": result.get("owner_requested_quantity"),
-        "causal_anchor_bid": causal_anchor_bid,
+        "causal_anchor_bid": checkpoints[0].get("best_bid"),
     }
     return replay
 
@@ -8229,11 +8250,26 @@ def build_report(
     )
     symbols.update(str(row["symbol"]) for row in weakness_blocked_anchors)
     symbols.update(str(row["symbol"]) for row in rebound_anchors)
+    from src.trading.order.adaptive_exit.source import catalog_from_owner_inventories
+
+    # At this point widget session_contexts have not been enriched yet. Include
+    # its actual scopes from raw owner state; episode inventory is already known.
+    adaptive_census, adaptive_anchors = (
+        collect_owner_census(
+            target_date=target_date,
+            catalog=catalog_from_owner_inventories({}, episode_profiles, errors=[]),
+            runtime_root=runtime_root,
+            widget_state_path=resolved_widget_state_path,
+        )
+        if clean_baseline_allowed
+        else (None, [])
+    )
+    symbols.update(anchor["symbol"] for anchor in adaptive_anchors)
     micro_source, micro_inventory, windows = _micro_context(
         target_date,
         observation_root,
         symbols,
-        anchors,
+        anchors + adaptive_anchors,
         source_exclusion_manifest_path,
         canary_snapshot_path,
         generated,
@@ -8260,15 +8296,13 @@ def build_report(
                         )
                         == "target_date_evidence_stale"
                         else (
-                            (
-                                "micro_stream_source_contract_invalid"
-                                if micro_source.get("source_contract_ready") is not True
-                                else (
-                                    "micro_runtime_registration_receipt_missing_or_incomplete"
-                                    if registration_receipt.get("global_contract_ready")
-                                    is not True
-                                    else None
-                                )
+                            "micro_stream_source_contract_invalid"
+                            if micro_source.get("source_contract_ready") is not True
+                            else (
+                                "micro_runtime_registration_receipt_missing_or_incomplete"
+                                if registration_receipt.get("global_contract_ready")
+                                is not True
+                                else None
                             )
                         )
                     )
@@ -8778,7 +8812,32 @@ def build_report(
     }
     # Separate v2 source census, not a successor live recommendation or an
     # implicit waiver of the v1 approval contract. Parent byte hash is external.
-    report["rolling_policy_research_v2"] = build_adaptive_exit_source_census(report)
+    natural_exit_source = (
+        bind_ordered_paths(
+            adaptive_census,
+            windows,
+            source_contract_gap=source_contract_gap,
+            evaluated_at=generated,
+        )
+        if adaptive_census is not None
+        else None
+    )
+    rolling_exit_source = (
+        merge_census_history(
+            natural_exit_source,
+            report_root=report_root,
+        )
+        if natural_exit_source is not None
+        else None
+    )
+    report["rolling_policy_research_v2"] = build_adaptive_exit_source_census(
+        report,
+        owner_census=natural_exit_source,
+        study_source=rolling_exit_source,
+        study_contract=propose_study_contract(rolling_exit_source)
+        if rolling_exit_source is not None
+        else None,
+    )
     if is_krx_trading_day(target_day):
         collection_targets = build_collection_targets(
             report,
@@ -8949,15 +9008,43 @@ def render_markdown(report: dict[str, Any]) -> str:
     adaptive = report.get("rolling_policy_research_v2")
     if isinstance(adaptive, dict):
         population = adaptive.get("population_contract") or {}
+        study = adaptive.get("all_scope_study") or {}
+        natural = adaptive.get("natural_owner_census") or {}
+        source_scopes = natural.get("scopes") or {}
+        natural_lots = sum(len(c.get("lots") or []) for c in source_scopes.values())
+        natural_paths = sum(
+            len(c.get("lot_paths") or []) for c in source_scopes.values()
+        )
+        lines.extend(
+            [
+                "",
+                "- Adaptive exit natural source: existing owner-state target receipts -> same-read ordered market windows; "
+                f"filled lots `{natural_lots}`, bound paths `{natural_paths}`. No new market requests.",
+                "- Shared target topology (current source date only): "
+                + "; ".join(
+                    f"{scope_key}/{key}={group.get('status')}:{group.get('reason')}"
+                    for scope_key, census in sorted(source_scopes.items())
+                    for key, group in sorted(
+                        (census.get("shared_target_groups") or {}).items()
+                    )
+                )
+                + ". Quantity planning is not broker partial-cancel support or actual lot-fill attribution.",
+                "- Automatic grid values and two-day screening are provisional research, not approved live risk/economic bounds. "
+                "Actual SELL adapters, approved envelope and PREOPEN activation remain separate incomplete work.",
+            ]
+        )
         lines.extend(
             [
                 "## Adaptive Exit Source Census (v2, source-only)",
                 "",
-                f"- Status: `{adaptive.get('status')}`; observed unique lifecycles: "
+                f"- Legacy anchor status: `{adaptive.get('status')}`; observed unique lifecycles: "
                 f"`{population.get('observed_unique_lifecycles', 0)}`.",
                 "- Attribution anchors are not the complete owner episode population. "
                 "Legacy timeout marks do not prove ordered cancel/fill execution.",
-                "- Net EV: not evaluated; PREOPEN and runtime adapter: not connected. "
+                f"- Whole-catalog study: `{study.get('status')}`; scopes: "
+                f"`{study.get('scope_count', 0)}`; native research candidates: "
+                f"`{len(study.get('policy_promotion_candidates') or [])}`.",
+                "- Study EV is modeled counterfactual, not actual PnL; PREOPEN and live owner adapter are not connected. "
                 "Existing target orders and owner policies are unchanged.",
                 f"- Next action: `{adaptive.get('next_action')}`.",
                 "",

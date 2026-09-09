@@ -37,6 +37,14 @@ from src.engine.monitoring.widget_comparison_cost import (
     comparison_cost_contract,
     cost_aware_return_pct,
 )
+from src.engine.monitoring.widget_execution_quality import (
+    EXECUTION_OWNER,
+    load_execution_incidents,
+)
+from src.engine.monitoring.widget_signal_quality import (
+    component_arms,
+    objective_comparison,
+)
 from src.engine.monitoring.samsung_widget_contract import (
     DEFAULT_OBSERVATION_DIR as SAMSUNG_OBSERVATION_DIR,
     KST,
@@ -58,6 +66,10 @@ from src.trading.widget_auto_trade.policy import (
     WidgetAutoTradePolicyLoader,
 )
 from src.utils.market_day import is_krx_trading_day
+from src.engine.monitoring import widget_paired_policy_replay as paired_replay
+from src.engine.monitoring.widget_advisory_calibration_policy import (
+    WidgetCalibrationPolicyLoader,
+)
 
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_auto_trade_policy_calibration")
@@ -1052,6 +1064,13 @@ def _load_execution_quality(
                     continue
                 if not isinstance(row, dict) or str(row.get("symbol") or "") != symbol:
                     continue
+                row_owner = str(
+                    row.get("execution_authority")
+                    or row.get("decision_authority")
+                    or ""
+                )
+                if row_owner and row_owner != EXECUTION_OWNER:
+                    continue
                 event_type = str(row.get("event_type") or "")
                 if not event_type:
                     continue
@@ -1086,8 +1105,13 @@ def _load_execution_quality(
     )
     ambiguous_submit_failures = counts.get("order_submit_ambiguous", 0)
     execution_failures = terminal_failures + submit_failures
+    incident_ledger = load_execution_incidents(
+        symbol, target_date=target_date, session=session, event_dir=event_dir
+    )
+    apply_allowed = execution_failures == 0 and incident_ledger["runtime_apply_allowed"]
     return {
-        "status": "SAFETY_VETO" if execution_failures else "PASS",
+        "status": "PASS" if apply_allowed else "SAFETY_VETO",
+        "incident_ledger": incident_ledger,
         "source_path": str(path) if path.exists() else None,
         "accepted_order_count": accepted_order_count,
         "order_submit_failed_count": submit_failures,
@@ -1116,7 +1140,7 @@ def _load_execution_quality(
         # sample lets the same policy be selected again without repairing the
         # producer or broker contract.  Keep naturally empty sessions eligible,
         # but fail closed when an actual submit attempt was rejected.
-        "runtime_apply_allowed": execution_failures == 0,
+        "runtime_apply_allowed": apply_allowed,
         "decision_authority": "execution_quality_real_only_safety_veto",
         "execution_event_scope": session or "symbol_all_sessions",
         "session_attributed_event_count": attributed_event_count,
@@ -1233,6 +1257,13 @@ def _research_accumulation(
         "excluded_observation_dates": excluded_dates,
         "qualification_contract": CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT,
         "runtime_eligible": ready,
+        "remaining_qualified_dates_minimum": max(0, minimum - len(qualified_dates)),
+        "observed_qualification_ratio": (
+            len(qualified_dates) / len(expected_dates) if expected_dates else None
+        ),
+        "approval_eta": None,
+        "gate_role": "existing_coverage_contract_not_economic_acceptance",
+        "threshold_change_authorized": False,
     }
 
 
@@ -1464,7 +1495,9 @@ def _calibrate_session(
     provisional_decision = (
         "widget_auto_trade_policy_candidate_ready"
         if selected["ready"] and holdout_ready
-        else selected["reason"] if not selected["ready"] else holdout_reason
+        else selected["reason"]
+        if not selected["ready"]
+        else holdout_reason
     )
     carry_forward_policy = _carry_forward_parameters(previous_runtime_policy)
     carry_forward_calibration_summary = None
@@ -1553,6 +1586,38 @@ def _calibrate_session(
         if carry_forward_previous
         else provisional_decision
     )
+    component_results = {}
+    for arm_name, parameters in component_arms(
+        carry_forward_policy,
+        selected_parameters,
+        signal_keys=(
+            "new_entry_cutoff_time",
+            "reentry_cooldown_minutes",
+            "max_completed_entries_per_day",
+        ),
+        exit_keys=("target_bps", "force_exit_time"),
+    ).items():
+        component_results[arm_name] = {"parameters": parameters}
+        for window, window_dates in (
+            ("calibration", calibration_dates),
+            ("holdout", sorted(holdout_dates)),
+        ):
+            trades = simulate_dates(
+                window_dates,
+                add_triggers=tuple(parameters["add_trigger_bps_from_initial_fill"]),
+                target_bps=int(parameters["target_bps"]),
+                max_entries=int(parameters["max_completed_entries_per_day"]),
+                cutoff=str(parameters["new_entry_cutoff_time"]),
+                cooldown=int(parameters["reentry_cooldown_minutes"]),
+                force_exit_time=parameters["force_exit_time"],
+            )
+            summary = _summary(trades)
+            summary["completed_trades_per_qualified_day"] = (
+                summary["resolved_trade_count"] / len(window_dates)
+                if window_dates
+                else None
+            )
+            component_results[arm_name][window] = summary
     return {
         "decision": (
             "research_accumulation_incomplete"
@@ -1560,6 +1625,11 @@ def _calibrate_session(
             else runtime_decision
         ),
         "provisional_candidate_decision": provisional_decision,
+        "component_comparison": objective_comparison(
+            component_results,
+            baseline_policy_id=(previous_runtime_policy or {}).get("policy_id"),
+        ),
+        "objective_acceptance": "not_established_by_target_completions_or_proxy_ev_alone",
         "runtime_selected_policy": (
             carry_forward_policy if carry_forward_previous else selected_parameters
         ),
@@ -1670,6 +1740,48 @@ def _load_previous_verified_session_policies(
                 == expected_path.resolve()
             ):
                 selected.setdefault(symbol, {})[session] = policy
+            elif (
+                symbol == SAMSUNG_CODE
+                and isinstance(policy, dict)
+                and policy.get("new_entry_runtime_block_reason")
+                in {"execution_quality_safety_veto", "paired_incumbent_policy_missing"}
+                and Path(str(policy.get("policy_path") or "")).resolve()
+                == expected_path.resolve()
+            ):
+                # A temporary incident veto must not erase the last verified
+                # recipe forever. Restoration is unchanged-value only and still
+                # requires today's real incident/source gates in build_policy.
+                for older_path in sorted(
+                    policy_dir.glob(f"{POLICY_FILE_PREFIX}_*.json"), reverse=True
+                ):
+                    try:
+                        older_date = date.fromisoformat(
+                            older_path.stem.rsplit("_", 1)[-1]
+                        )
+                    except ValueError:
+                        continue
+                    if not CLEAN_BASELINE_DATE <= older_date < previous_effective_date:
+                        continue
+                    older = (
+                        WidgetAutoTradePolicyLoader(
+                            policy_dir, include_symbol_expansion=False
+                        )
+                        .resolve_all(observed_date=older_date)
+                        .get(symbol, {})
+                        .get(session)
+                    )
+                    if not isinstance(older, dict):
+                        continue
+                    if older.get("new_entry_runtime_eligible") is True:
+                        selected.setdefault(symbol, {})[session] = dict(
+                            older, incumbent_recovery_only=True
+                        )
+                        break
+                    if older.get("new_entry_runtime_block_reason") not in {
+                        "execution_quality_safety_veto",
+                        "paired_incumbent_policy_missing",
+                    }:
+                        break
     return selected
 
 
@@ -1682,7 +1794,14 @@ def build_report(
     if target_date < CLEAN_BASELINE_DATE:
         raise ValueError("target date precedes clean baseline")
     effective_date = _next_krx_trading_date(target_date)
-    previous_session_policies = previous_session_policies or {}
+    if previous_session_policies is None:
+        previous_session_policies = (
+            _load_previous_verified_session_policies(
+                effective_date=effective_date, policy_dir=DEFAULT_POLICY_DIR
+            )
+            if target_date >= paired_replay.SELECTION_START_DATE
+            else {}
+        )
     micro_feedback = load_prior_owner_diagnostic(
         target_date=target_date,
         owner="widget",
@@ -1726,6 +1845,47 @@ def build_report(
             )
             for session in spec.sessions
         }
+        if (
+            target_date >= paired_replay.SELECTION_START_DATE
+            and spec.symbol == SAMSUNG_CODE
+        ):
+            inputs, input_audit = paired_replay.load_inputs(
+                [Path(path) for path in paths],
+                symbol=spec.symbol,
+                target_date=target_date,
+            )
+            confirmation_loader = WidgetCalibrationPolicyLoader()
+            for session_spec in spec.sessions:
+                previous = previous_session_policies.get(spec.symbol, {}).get(
+                    session_spec.session
+                )
+                current_confirmation = confirmation_loader.resolve(
+                    symbol=spec.symbol,
+                    session=session_spec.session,
+                    observed_date=target_date,
+                )
+                next_confirmation = confirmation_loader.resolve(
+                    symbol=spec.symbol,
+                    session=session_spec.session,
+                    observed_date=effective_date,
+                )
+                apply_paired_target_selection(
+                    sessions[session_spec.session],
+                    inputs=inputs,
+                    source_audit=input_audit,
+                    symbol=spec.symbol,
+                    session=session_spec.session,
+                    target_date=target_date,
+                    previous=previous,
+                    values=spec.target_bps_values,
+                    confirmations=current_confirmation[
+                        "required_actionable_confirmations"
+                    ],
+                    confirmation_axis_changed=(
+                        current_confirmation["required_actionable_confirmations"]
+                        != next_confirmation["required_actionable_confirmations"]
+                    ),
+                )
         execution_quality = _load_execution_quality(
             spec.symbol, target_date=target_date
         )
@@ -1830,6 +1990,81 @@ def build_report(
     }
 
 
+def apply_paired_target_selection(
+    calibration,
+    *,
+    inputs,
+    source_audit,
+    symbol,
+    session,
+    target_date,
+    previous,
+    values,
+    confirmations,
+    confirmation_axis_changed=False,
+):
+    """Replace the winner-only Samsung selector; freeze every non-target knob."""
+    parameters = paired_replay.policy_parameters(previous)
+    study = paired_replay.build_study(
+        inputs
+        if not confirmation_axis_changed
+        and not (previous or {}).get("incumbent_recovery_only")
+        else [],
+        symbol=symbol,
+        session=session,
+        parameters=parameters,
+        baseline_confirmations=confirmations,
+        axis="target_bps",
+        values=values,
+        target_date=target_date,
+        source_audit=source_audit,
+    )
+    paired_replay.bind_incumbent(study, previous)
+    selection = paired_replay.select_candidate(
+        study, previous_value=(parameters or {}).get("target_bps")
+    )
+    calibration["paired_economics"] = {"study": study, "selection": selection}
+    calibration["confirmation_axis_changed"] = confirmation_axis_changed
+    calibration["incumbent_recovery_only"] = (previous or {}).get(
+        "incumbent_recovery_only"
+    ) is True
+    calibration["legacy_grid_decision_diagnostic_only"] = calibration["decision"]
+    calibration["selected_summary_evidence_role"] = (
+        "legacy_grid_diagnostic_not_runtime_selected_economics"
+    )
+    calibration["runtime_selected_economics"] = next(
+        (
+            item["windows"]
+            for item in selection.get("diagnostics", [])
+            if item["value"] == selection["selected_value"]
+        ),
+        None,
+    )
+    calibration["objective_acceptance"] = (
+        "paired_counterfactual_economics_not_actual_execution_or_profit"
+    )
+    if parameters is None:
+        calibration["decision"] = "paired_incumbent_policy_missing"
+        calibration["runtime_selected_policy"] = None
+        return
+    selected = {
+        key: value
+        for key, value in parameters.items()
+        if key not in {"leg_quantity_each", "source_final_exit_action"}
+    }
+    selected["target_bps"] = selection["selected_value"]
+    calibration.update(
+        decision="widget_auto_trade_policy_candidate_ready"
+        if selection["candidate_ready"]
+        else "carry_forward_previous_verified_policy",
+        runtime_selected_policy=selected,
+        carry_forward_previous_policy=not selection["candidate_ready"],
+        carry_forward_from_policy_id=(previous or {}).get("policy_id"),
+        policy_tier="paired_existing_target_axis",
+        rollback_condition="paired candidate fails next cumulative/holdout cost EV or source/owner safety fails; retain verified incumbent otherwise",
+    )
+
+
 def build_policy(report: dict[str, Any]) -> dict[str, Any]:
     target_date = str(report["target_date"])
     effective_date = str(report["effective_date"])
@@ -1849,9 +2084,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
             elif calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 block_reason = str(calibration["decision"])
             if block_reason is not None:
-                blocked_sessions.setdefault(spec.symbol, {})[
-                    session_name
-                ] = block_reason
+                blocked_sessions.setdefault(spec.symbol, {})[session_name] = (
+                    block_reason
+                )
                 continue
             if calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 continue
@@ -1910,6 +2145,13 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "research_accumulation_gate_status": research_accumulation["status"],
             }
+            if "paired_economics" in calibration:
+                sessions[session_name]["paired_selection"] = calibration[
+                    "paired_economics"
+                ]["selection"]
+                sessions[session_name]["advisory_confirmation_changed"] = (
+                    calibration.get("confirmation_axis_changed") is True
+                )
         if sessions:
             policy_symbols[spec.symbol] = {"name": spec.name, "sessions": sessions}
     policy = {

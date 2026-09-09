@@ -320,6 +320,14 @@ def test_nxt_fills_submit_independent_two_tick_targets_and_complete(tmp_path):
     assert filled["attempt_consumed"] is True
     assert filled["position_qty"] == 20
     assert gateway.limit_sell_calls == [("NXT", 292_500), ("NXT", 292_000)]
+    for leg in filled["legs"]:
+        receipt = next(iter(leg["adaptive_exit_target_observations"].values()))
+        assert receipt["scope"]["profile"] == "samsung:morning"
+        assert receipt["target"]["route"] == "NXT"
+        assert receipt["target"]["quantity"] == 10
+        assert receipt["entries"][0]["lot_id"] == leg["leg_id"]
+        assert receipt["authority"]["allowed_runtime_apply"] is False
+        assert "adaptive_exit_source_gap" not in leg
 
     gateway.snapshots["T3"] = ExecutionSnapshot(True, True, 1, 0, 1, 292_500)
     gateway.snapshots["T4"] = ExecutionSnapshot(True, True, 1, 0, 1, 292_000)
@@ -380,8 +388,9 @@ def test_nxt_entry_confirmation_delay_changes_only_submission_time(
     assert gateway.buy_calls == [("NXT", 291_500), ("NXT", 291_000)]
     assert gateway.liquidity_calls == ["NXT", "NXT"]
     assert submitted["signal_features"]["signal_decision_at"] == armed_at.isoformat()
-    assert submitted["signal_features"]["source_entry_event_id"] == (
-        armed["pending_entry_confirmation"]["source_entry_event_id"]
+    assert (
+        submitted["signal_features"]["source_entry_event_id"]
+        == (armed["pending_entry_confirmation"]["source_entry_event_id"])
     )
     assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
     assert all(call["session"] == "NXT_PREMARKET" for call in calls)

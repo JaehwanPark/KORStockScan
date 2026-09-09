@@ -31,6 +31,12 @@ from src.trading.order.tick_utils import (
     move_price_up_by_bps,
 )
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
+from src.engine.monitoring.widget_execution_quality import load_execution_incidents
+from src.engine.monitoring.widget_signal_quality import (
+    component_arms,
+    objective_comparison,
+    select_policy_component,
+)
 from src.engine.monitoring.widget_comparison_cost import (
     comparison_cost_contract,
     cost_aware_return_pct,
@@ -1171,11 +1177,22 @@ def discover_symbol_policy(
 
 
 def build_report(
-    *, sources: dict[str, tuple[list[Bar], dict[str, Any]]], end_date: date
+    *,
+    sources: dict[str, tuple[list[Bar], dict[str, Any]]],
+    end_date: date,
+    applied_baselines: dict[str, dict] | None = None,
 ) -> dict[str, Any]:
     if set(sources) != set(SYMBOLS):
         raise ResearchError("widget_symbol_source_set_mismatch")
     expected_dates = _clean_trading_dates(end_date)
+    if applied_baselines is None:
+        from src.engine.monitoring.widget_symbol_runtime_policy import (
+            WidgetSymbolRuntimePolicyLoader,
+        )
+
+        applied_baselines = WidgetSymbolRuntimePolicyLoader().resolve_all(
+            observed_date=end_date
+        )
     results: dict[str, Any] = {}
     source_meta: dict[str, Any] = {}
     for symbol, name in SYMBOLS.items():
@@ -1196,6 +1213,160 @@ def build_report(
             qualified_bars,
             expected_dates=qualified_dates,
         )
+        baseline_receipt = applied_baselines.get(symbol) or {}
+        baseline = baseline_receipt.get("signal_policy")
+        if baseline:
+            baseline = {
+                **baseline,
+                "max_completed_entries_per_day": baseline_receipt["execution_policy"][
+                    "max_completed_entries_per_day"
+                ],
+            }
+        selected_parameters = result.get("selected_policy") or {}
+        comparisons = {}
+        if selected_parameters:
+            signal_keys = tuple(
+                key
+                for key in SignalPolicy.__dataclass_fields__
+                if key not in {"target_bps", "force_flat_time"}
+            )
+            for arm_name, parameters in component_arms(
+                baseline,
+                selected_parameters,
+                signal_keys=signal_keys,
+                exit_keys=("target_bps", "force_flat_time"),
+            ).items():
+                replay_policy = SignalPolicy(
+                    **{
+                        key: value
+                        for key, value in parameters.items()
+                        if key in SignalPolicy.__dataclass_fields__
+                    }
+                )
+                comparisons[arm_name] = {"parameters": parameters}
+                for window, dates in (
+                    ("calibration", qualified_dates[:-HOLDOUT_DAYS]),
+                    (
+                        "calibration_first_half",
+                        qualified_dates[:-HOLDOUT_DAYS][
+                            : max(1, (len(qualified_dates) - HOLDOUT_DAYS) // 2)
+                        ],
+                    ),
+                    (
+                        "calibration_second_half",
+                        qualified_dates[:-HOLDOUT_DAYS][
+                            max(1, (len(qualified_dates) - HOLDOUT_DAYS) // 2) :
+                        ],
+                    ),
+                    ("holdout", qualified_dates[-HOLDOUT_DAYS:]),
+                ):
+                    replay = evaluate_policy(
+                        _group_bars(qualified_bars),
+                        dates,
+                        replay_policy,
+                        include_episodes=True,
+                    )
+                    episodes = [
+                        row
+                        for row in replay["episodes"]
+                        if row["daily_entry_ordinal"]
+                        <= parameters["max_completed_entries_per_day"]
+                    ]
+                    summary = _summarize_episodes(episodes)
+                    summary["entry_cap_comparison"] = replay["entry_cap_comparison"]
+                    summary["episodes"] = episodes
+                    summary["modeled_net_pnl_per_qualified_day"] = (
+                        sum(
+                            row["entry_price"] * row["net_return_pct"] / 100 * 10
+                            for row in episodes
+                        )
+                        / len(dates)
+                        if dates
+                        else None
+                    )
+                    summary["completed_episodes_per_qualified_day"] = (
+                        len(episodes) / len(dates) if dates else None
+                    )
+                    durations = [
+                        (
+                            datetime.fromisoformat(row["exit_at"])
+                            - datetime.fromisoformat(row["entry_at"])
+                        ).total_seconds()
+                        for row in episodes
+                    ]
+                    summary["observed_occupancy_seconds_sum"] = (
+                        sum(durations) if durations else None
+                    )
+                    summary["small_profit_completed_within_180s_count"] = sum(
+                        duration <= 180 and 0 < row["net_return_pct"] <= 0.5
+                        for row, duration in zip(episodes, durations)
+                    )
+                    summary["profitable_completed_within_180s_count"] = sum(
+                        0 <= duration <= 180 and row["net_return_pct"] > 0
+                        for row, duration in zip(episodes, durations)
+                    )
+                    comparisons[arm_name][window] = summary
+        result["component_comparison"] = objective_comparison(
+            comparisons, baseline_policy_id=baseline_receipt.get("policy_id")
+        )
+        if baseline and selected_parameters and end_date >= date(2026, 9, 9):
+            selection = select_policy_component(result["component_comparison"])
+            result["component_selection"] = selection
+            result["joint_grid_diagnostic"] = {
+                "selected_policy": selected_parameters,
+                "decision": result.get("decision"),
+            }
+            chosen = comparisons.get(selection["selected_arm"])
+            if chosen:
+                result["selected_policy"] = {
+                    key: value
+                    for key, value in chosen["parameters"].items()
+                    if key in SignalPolicy.__dataclass_fields__
+                    or key == "max_completed_entries_per_day"
+                }
+                for window in (
+                    "calibration",
+                    "calibration_first_half",
+                    "calibration_second_half",
+                    "holdout",
+                ):
+                    result[window] = chosen[window]
+                result["entry_cap_comparison"] = {
+                    window: chosen[window]["entry_cap_comparison"]
+                    for window in (
+                        "calibration",
+                        "calibration_first_half",
+                        "calibration_second_half",
+                        "holdout",
+                    )
+                }
+                full_window_episodes = [
+                    *chosen["calibration"]["episodes"],
+                    *chosen["holdout"]["episodes"],
+                ]
+                result["full_window"] = _summarize_episodes(full_window_episodes)
+                result["entry_cap_comparison"]["full_window"] = _entry_cap_comparison(
+                    full_window_episodes
+                )
+                minimum_half_count = min(
+                    chosen[window]["episode_count"]
+                    for window in ("calibration_first_half", "calibration_second_half")
+                )
+                result["robust_calibration_score"] = round(
+                    min(
+                        chosen[window]["notional_weighted_ev_pct"]
+                        for window in (
+                            "calibration_first_half",
+                            "calibration_second_half",
+                        )
+                    )
+                    * minimum_half_count
+                    / (minimum_half_count + 6),
+                    6,
+                )
+                result["decision"] = "holdout_pass_widget_signal_policy_candidate"
+            else:
+                result["decision"] = "component_economics_or_holdout_not_ready"
         results[symbol] = {"symbol": symbol, "name": name, **result}
         source_meta[symbol] = {**meta, "daily_source_coverage": coverage}
     pass_symbols = [
@@ -1221,6 +1392,12 @@ def build_report(
         "symbols": results,
         "passed_symbols": pass_symbols,
         "source_meta": source_meta,
+        "execution_quality_by_symbol": {
+            symbol: load_execution_incidents(
+                symbol, target_date=end_date, session="KRX_REGULAR"
+            )
+            for symbol in SYMBOLS
+        },
         "metric_contract": METRIC_CONTRACT,
         "owner_contract": OWNER_CONTRACT,
         "official_reference": OFFICIAL_REFERENCE,

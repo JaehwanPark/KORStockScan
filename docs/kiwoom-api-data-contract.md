@@ -57,6 +57,106 @@ paths, and retrieval time in the change/review evidence. Verify at least:
    while preserving KORStockScan broker, account, order, quantity, cooldown,
    stale/conflict, and hard-safety guards.
 
+### 2026-09-09 Adaptive Exit Owned SELL Adapter Reference
+
+- First group-runner write/TTL follow-up rechecked upstream `main` at
+  `2026-09-09T19:29:04+09:00`, SHA
+  `234560d213acd8871ae344b5481aecd2f30287fa`. Inspected `kiwoom/specs.py`,
+  `kiwoom/_data/kiwoom_api_spec.json` entries `kt10001/kt10003/kt00007/ka10075`,
+  `kiwoom/core/client.py` and their Postman production/demo envelopes;
+  `kiwoom_docs` is absent. The opt-in executor uses normal limit SELL
+  (`trde_tp=0`) and positive exact cancel quantities after durable action
+  binding and partial-release proof. It preserves the original target's
+  remaining reservation and rechecks guards/source age after registry waits.
+  No market/zero-quantity order, retry-capacity increase, inferred terminal
+  status or actual account/order call was introduced. Real enrollment,
+  independent validator/launcher and initial numeric approval remain absent.
+- Group-coordinator consumer follow-up rechecked upstream `main` at
+  `2026-09-09T19:10:42+09:00`, SHA
+  `234560d213acd8871ae344b5481aecd2f30287fa`. Inspected `kiwoom/specs.py`,
+  packaged `kt00007/ka10075/kt10003`, `kiwoom/core/client.py` and Postman
+  production/demo envelopes; `kiwoom_docs` is absent at this revision.
+  The opt-in consumer uses existing partial-cancel reconciliation unchanged.
+  Frozen owner BOOK allocation is not broker BUY-lot fill attribution, and
+  the capacity receipt grants no SELL authority. No wire/parser/status-enum,
+  retry/pacing change or actual account/order call was made.
+- Partial-cancel follow-up rechecked the same upstream SHA at
+  `2026-09-09T19:01:58+09:00` after inspecting `kiwoom/specs.py`, packaged
+  `kt10003/kt00007/ka10075` specs, `kiwoom/core/client.py` and their Postman
+  production/demo envelopes. The opt-in adapter requires the known cancel's
+  entire requested quantity in dated `cnfm_qty`, valid `cnfm_tm`, zero child
+  fill/remainder, no current child, matching original-order identity and
+  original quantity preserved in both root ledgers with exact canceled-share
+  conservation. No undocumented status enum or ACK alone proves completion.
+  Partial confirmation, unknown modification and cross-date variants remain
+  unsupported; do not turn them into an indefinite sample wait or fabricate
+  terminal status. This adds no actual API call, activation or retry capacity.
+- Actual-owner-loop follow-up rechecked `main` at
+  `2026-09-09T17:01:29+09:00`, unchanged SHA
+  `234560d213acd8871ae344b5481aecd2f30287fa`. Re-read the four API entries
+  in `kiwoom/_data/kiwoom_api_spec.json` below. This change connects existing
+  adapters to owner loops; it changes no wire fields, parser semantics,
+  retry/pacing limits or undefined cancel status. Tests use a fake wire only.
+- Execution-ledger follow-up rechecked upstream at `2026-09-09T17:21:55+09:00`
+  with the same SHA and inspected `kiwoom/_data/kiwoom_api_spec.json`
+  (`ka10076`, `kt00015`). `ka10076.ord_no` is a backward cursor, not an
+  exact-order filter; the reviewed entry does not close dated execution identity
+  or per-fill/per-order fee aggregation semantics. `kt00015` supplies transaction
+  numbers and settlement values, not a verified exact broker-order join.
+  No new parser/request or fee allocation is enabled. Adaptive terminal ledgers
+  reuse dated/current quantity receipts and retain null notional/cost/net PnL.
+  Quantity closure must not be represented as exact economic reconciliation.
+- Owner-session follow-up rechecked the same upstream SHA at
+  `2026-09-09T16:36:01+09:00`: the four API entries below and
+  `kiwoom/core/client.py`/`kiwoom/core/types.py`. Recovery reads the original
+  durable client intent and exact bound order, never symbol/time proximity.
+  No new request fields, status-code guesses, cross-date undated join or
+  live broker validation were introduced. Local absence of a cancel intent
+  under the original owner lock proves no adapter dispatch; any reserved,
+  ambiguous, acknowledged or rejected intent forbids blind retry.
+- Rechecked upstream `main` SHA `234560d213acd8871ae344b5481aecd2f30287fa`;
+  inspected at `2026-09-09T16:06:00+09:00`: `kiwoom/_data/kiwoom_api_spec.json`
+  (`kt10001`, `kt10003`, `kt00007`, `ka10075`), `kiwoom/specs.py`,
+  `kiwoom/core/client.py`, `kiwoom/core/errors.py`, and
+  `postman/kiwoom-openapi.postman_collection.json` at that SHA.
+- `kiwoom_docs` is absent from this revision; the official portal retrieval
+  failed. Undefined cancel/modify status codes are NOT inferred from examples.
+  This evidence covers the request envelope and strict named-field reads, not
+  every cancel-terminal semantic. No example request was executed.
+- SELL uses `kt10001`, `/api/dostk/ordr`, `trde_tp=0`, positive integer KRW
+  limit price and share quantity. Cancel uses `kt10003`, exact original route,
+  seven-digit `orig_ord_no`, and explicit positive `cncl_qty`; zero (cancel all
+  remaining) is forbidden on this new adapter. ACK is not original terminal.
+- Dated `kt00007.acnt_ord_cntr_prps_dtl` plus complete all-venue
+  `ka10075.oso` pagination must agree before releasing the original reservation.
+  Missing/repeated/exhausted continuation, ambiguous successor, cross-date
+  current-ledger identity, malformed/negative counts or stale cached responses
+  cannot prove terminal absence. A historical nonzero remainder is not cleared
+  by an empty current ledger alone. Undefined cases stay reconciliation gaps.
+- The response spec marks `cont-yn`/`next-key` optional; cross-checked
+  `kiwoom/core/client.py::_build_response` and `kiwoom/core/types.py::Continuation`.
+  No-more-pages may omit these headers. A literal `N` is not a new acceptance
+  gate; `Y` without a usable cursor, dangling/conflicting cursor or mismatched
+  response `api-id` remains invalid.
+- Reuse owner shared-token transport and existing read pacing; no new auth,
+  order retry, market order fallback, realtime/FID change or live enablement.
+
+### 2026-09-09 Machine Confirmation Internal Projection Review
+
+- Upstream `main` was rechecked with `git ls-remote` at approximately
+  `2026-09-09T14:33+09:00`: `234560d213acd8871ae344b5481aecd2f30287fa`.
+  Reviewed the same-SHA `kiwoom/_data/kiwoom_api_spec.json` 0B/0D entries,
+  `kiwoom/specs.py`, `kiwoom/realtime/{packets,decoders}.py`,
+  `kiwoom/core/ws_client.py`, and Postman collection. The checkout lacks
+  `kiwoom_docs`; missing WebSocket semantics were not inferred from examples.
+- Changes retain existing local per-route sequence on each normalized row
+  and export bounded 120-row buffers with the existing five observed levels.
+  This is local projection continuity, not proof of exchange packet completeness.
+  FIDs, units, URLs, REG/REMOVE, authentication, account/order requests,
+  subscription budget, retry and concurrency remain unchanged.
+- The common causal calculation and review evidence are documented in
+  [the 9/9 implementation review](audit-reports/2026-09-09-machine-micro-confirmation-entry-timing-next-actions-review.md#72-검증-및-공식-참조).
+
 ### 2026-09-03 Domestic Read-TR Shared Rate Gate
 
 - Re-verified at `2026-09-03T12:04:23+09:00` against upstream `main` commit

@@ -44,6 +44,9 @@ class ExitState:
     intent_id: str | None = None
     intent_kind: str | None = None
     exit_order: OrderKey | None = None
+    exit_order_history: tuple[OrderKey, ...] = ()
+    exit_order_filled_qty: int = 0
+    exit_attempts: int = 0
     high_water: float | None = None
     stop_price: float | None = None
     recovery_reason: str | None = None
@@ -96,11 +99,15 @@ def reduce_event(state: ExitState, event: ExitEvent) -> ExitState:
         "TRAIL_ACTIVE",
         "EXIT_SUBMITTING",
         "EXIT_WORKING",
+        "EXIT_CANCEL_PENDING",
         "FLAT",
         "RECOVERY_REQUIRED",
     }
     if (
         s.phase not in phases
+        or not isinstance(s.exit_order_history, tuple)
+        or any(not isinstance(order, OrderKey) for order in s.exit_order_history)
+        or len(set(s.exit_order_history)) != len(s.exit_order_history)
         or type(s.target_terminal) is not bool
         or (
             not isinstance(s.target, OrderKey)
@@ -137,6 +144,8 @@ def reduce_event(state: ExitState, event: ExitEvent) -> ExitState:
                 s.target_filled_qty,
                 s.exit_filled_qty,
                 s.exit_reserved_qty,
+                s.exit_order_filled_qty,
+                s.exit_attempts,
                 e.quantity,
                 e.cumulative_fill,
                 e.other_reserved_sell_qty,
@@ -261,28 +270,47 @@ def reduce_event(state: ExitState, event: ExitEvent) -> ExitState:
             )
         ):
             raise ValueError("sell_reservation_conflict")
-        new = replace(s, phase="EXIT_SUBMITTING", exit_reserved_qty=e.quantity)
+        new = replace(
+            s,
+            phase="EXIT_SUBMITTING",
+            exit_reserved_qty=e.quantity,
+            exit_order_filled_qty=0,
+            exit_attempts=s.exit_attempts + 1,
+        )
     elif e.kind == "EXIT_SUBMITTED":
         require("EXIT_SUBMITTING")
-        if e.order == s.target or not e.receipt_hash:
+        if (
+            e.order in (s.target, s.exit_order)
+            or e.order in s.exit_order_history
+            or not e.receipt_hash
+        ):
             raise ValueError("new_sell_receipt_required")
-        new = replace(s, phase="EXIT_WORKING", exit_order=e.order)
+        history = s.exit_order_history
+        if s.exit_order is not None and s.exit_order not in history:
+            history += (s.exit_order,)
+        new = replace(
+            s,
+            phase="EXIT_WORKING",
+            exit_order=e.order,
+            exit_order_history=history + (e.order,),
+        )
     elif e.kind == "EXIT_FILL":
-        require("EXIT_WORKING")
+        require("EXIT_WORKING", "EXIT_CANCEL_PENDING")
         if (
             e.order != s.exit_order
             or not e.receipt_hash
             or (
-                not s.exit_filled_qty
+                not s.exit_order_filled_qty
                 <= e.cumulative_fill
-                <= s.exit_filled_qty + s.exit_reserved_qty
+                <= s.exit_order_filled_qty + s.exit_reserved_qty
             )
         ):
             raise ValueError("exact_exit_fill_receipt_required")
-        delta = e.cumulative_fill - s.exit_filled_qty
+        delta = e.cumulative_fill - s.exit_order_filled_qty
         new = replace(
             s,
-            exit_filled_qty=e.cumulative_fill,
+            exit_filled_qty=s.exit_filled_qty + delta,
+            exit_order_filled_qty=e.cumulative_fill,
             exit_reserved_qty=s.exit_reserved_qty - delta,
         )
         if new.open_qty == 0:
@@ -292,6 +320,30 @@ def reduce_event(state: ExitState, event: ExitEvent) -> ExitState:
             new = replace(
                 new, phase="RECOVERY_REQUIRED", recovery_reason="residual_after_exit"
             )
+    elif e.kind == "EXIT_CANCEL_REQUESTED":
+        require("EXIT_WORKING")
+        if e.order != s.exit_order:
+            raise ValueError("exact_exit_order_required")
+        new = replace(s, phase="EXIT_CANCEL_PENDING")
+    elif e.kind == "EXIT_TERMINAL":
+        require("EXIT_WORKING", "EXIT_CANCEL_PENDING")
+        terminal_evidence()
+        if (
+            e.order != s.exit_order
+            or not s.exit_order_filled_qty
+            <= e.cumulative_fill
+            <= s.exit_order_filled_qty + s.exit_reserved_qty
+        ):
+            raise ValueError("exact_exit_terminal_quantity_required")
+        new = replace(
+            s,
+            exit_filled_qty=s.exit_filled_qty
+            + e.cumulative_fill
+            - s.exit_order_filled_qty,
+            exit_order_filled_qty=e.cumulative_fill,
+            exit_reserved_qty=0,
+        )
+        new = replace(new, phase="FLAT" if new.open_qty == 0 else "RESIDUAL_READY")
     elif e.kind == "RECOVERY_REQUIRED":
         new = replace(
             s, phase="RECOVERY_REQUIRED", recovery_reason="ambiguous_broker_state"

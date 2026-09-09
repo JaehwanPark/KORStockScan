@@ -381,6 +381,58 @@ def _validated_payload(
                 evidence_report_path=evidence_path_text,
                 research_gate=research_gate,
             )
+            if (
+                session_policy is not None
+                and str(symbol) == "005930"
+                and source_target_date >= date(2026, 9, 9)
+            ):
+                from src.engine.monitoring import (
+                    widget_paired_policy_replay as paired_replay,
+                )
+
+                try:
+                    calibration = evidence["symbols"][symbol]["sessions"][session]
+                    paired = calibration["paired_economics"]
+                except (KeyError, TypeError):
+                    paired = None
+                if not isinstance(paired, dict):
+                    continue
+                selected = session_payload.get("paired_selection")
+                parameters = paired_replay.policy_parameters(
+                    dict(session_policy, new_entry_runtime_eligible=True)
+                )
+                study = paired.get("study")
+                try:
+                    expected_parameters = {
+                        **study["baseline_parameters"],
+                        "target_bps": selected["selected_value"],
+                    }
+                except (KeyError, TypeError):
+                    expected_parameters = None
+                if (
+                    not paired_replay.selection_valid(
+                        study,
+                        selected,
+                        symbol=str(symbol),
+                        session=str(session),
+                        target_date=source_target_date,
+                        axis="target_bps",
+                        selected_value=session_policy[
+                            "take_profit_bps_from_equal_share_average"
+                        ],
+                    )
+                    or selected != paired.get("selection")
+                    or parameters != expected_parameters
+                    or not paired_replay.incumbent_valid(study)
+                ):
+                    session_policy = None
+                if session_policy is not None:
+                    session_policy["paired_evidence_state"] = selected.get(
+                        "evidence_state"
+                    )
+                    session_policy["paired_source_diagnostic"] = selected.get(
+                        "source_diagnostic"
+                    )
             if session_policy is not None:
                 validated.setdefault(str(symbol), {})[str(session)] = session_policy
     blocked_sessions = payload.get("blocked_sessions")

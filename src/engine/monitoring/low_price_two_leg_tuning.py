@@ -59,7 +59,7 @@ from src.utils import kiwoom_utils
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v7"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v8"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
@@ -68,6 +68,7 @@ SUPPORTED_REPORT_SCHEMAS = frozenset(
         "low_price_two_leg_tuning_report_v4",
         "low_price_two_leg_tuning_report_v5",
         "low_price_two_leg_tuning_report_v6",
+        "low_price_two_leg_tuning_report_v7",
         REPORT_SCHEMA,
     }
 )
@@ -76,6 +77,8 @@ MANUAL_EXIT_FILL_SOURCE = "broker_verified_manual_sell_receipt"
 MANUAL_EXIT_PRICE_SOURCE = "broker_manual_sell_receipt"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 CLEAN_WINDOW_NAME = "clean_baseline_cumulative"
+CURRENT_WINDOW_NAME = "current_policy_cohort"
+POST_APPLY_WINDOW_NAME = "post_apply_version"
 BOUNDED_MIN_OBSERVED_DAYS = 5
 SAMPLE_FLOOR_COMPLETED_LEGS = 8
 MIN_NOTIONAL_EV_UPLIFT_PCT = 0.005
@@ -448,6 +451,9 @@ def _completed_broker_legs(row: dict[str, Any]) -> list[dict[str, Any]]:
         if leg.get("completed")
         and leg.get("profit_price_source")
         in {"broker_target_fill_price", "broker_manual_sell_receipt"}
+        and _as_float(leg.get("net_profit_pct")) is not None
+        and _as_int(leg.get("fill_price")) > 0
+        and 0 < _as_int(leg.get("buy_filled_qty")) <= _as_int(leg.get("quantity"))
     ]
 
 
@@ -1064,10 +1070,7 @@ def _aggregate(rows: list[dict]) -> dict:
     all_legs = [leg for row in all_attempted_rows for leg in row.get("legs", [])]
     completed = [leg for leg in legs if leg.get("completed")]
     broker_priced_completed = [
-        leg
-        for leg in completed
-        if leg.get("profit_price_source")
-        in {"broker_target_fill_price", "broker_manual_sell_receipt"}
+        leg for row in attempted_rows for leg in _completed_broker_legs(row)
     ]
     manual_exit_completed = [
         leg
@@ -1191,11 +1194,44 @@ def _aggregate(rows: list[dict]) -> dict:
         / 100.0
         for leg in manual_exit_completed
     )
+    completed_notional = sum(
+        _as_int(leg.get("fill_price")) * _as_int(leg.get("buy_filled_qty"))
+        for leg in broker_priced_completed
+    )
+    realized_profit = broker_realized_profit if completed_notional else None
     ev = (
-        broker_realized_profit / attempted_notional * 100.0
-        if attempted_notional
+        broker_realized_profit / completed_notional * 100.0
+        if completed_notional
         else None
     )
+    fill_cohorts = {}
+    for name, full in (("full_fill", True), ("partial_fill", False)):
+        selected_legs = [
+            leg
+            for leg in broker_priced_completed
+            if (_as_int(leg.get("buy_filled_qty")) == _as_int(leg.get("quantity")))
+            == full
+        ]
+        notional = sum(
+            _as_int(leg["fill_price"]) * _as_int(leg["buy_filled_qty"])
+            for leg in selected_legs
+        )
+        profit = sum(
+            _as_int(leg["fill_price"])
+            * _as_int(leg["buy_filled_qty"])
+            * float(leg["net_profit_pct"])
+            / 100
+            for leg in selected_legs
+        )
+        fill_cohorts[name] = {
+            "completed_legs": len(selected_legs),
+            "completed_notional_krw": notional,
+            "broker_price_fixed_cost_ev_pct": (
+                round(profit / notional * 100, 6) if notional else None
+            ),
+            "cost_source": "effective_dated_fixed_cost_estimate_not_exact_broker_cost",
+            "allowed_runtime_apply": False,
+        }
     return {
         "eligible_days": eligible_days,
         "source_valid_observation_days": source_valid_observation_days,
@@ -1236,6 +1272,25 @@ def _aggregate(rows: list[dict]) -> dict:
             leg.get("held") or not leg.get("terminal") for leg in all_legs
         ),
         "notional_weighted_ev_pct": round(ev, 6) if ev is not None else None,
+        "fill_cohorts": fill_cohorts,
+        "pooled_realized_ev_role": "all_fill_accounting_only_not_fill_quality_or_promotion",
+        "realized_ev_status": (
+            "observed" if completed_notional else "no_broker_priced_completion"
+        ),
+        "broker_completed_notional_krw": completed_notional,
+        "attempted_notional_return_pct_diagnostic": (
+            round(broker_realized_profit / attempted_notional * 100.0, 6)
+            if attempted_notional and realized_profit is not None
+            else None
+        ),
+        "full_fill_completed_legs": sum(
+            _as_int(leg.get("buy_filled_qty")) == _as_int(leg.get("quantity"))
+            for leg in broker_priced_completed
+        ),
+        "partial_fill_completed_legs": sum(
+            0 < _as_int(leg.get("buy_filled_qty")) < _as_int(leg.get("quantity"))
+            for leg in broker_priced_completed
+        ),
         "gross_no_slippage_avg_return_pct": (
             round(statistics.fmean(gross_no_slippage_returns), 6)
             if gross_no_slippage_returns
@@ -1274,14 +1329,20 @@ def _aggregate(rows: list[dict]) -> dict:
         "completed_holding_seconds_sum": (
             round(sum(holding_durations), 3) if holding_durations else None
         ),
-        "broker_realized_net_profit_krw": round(broker_realized_profit, 3),
-        "cost_adjusted_net_profit_krw": round(broker_realized_profit, 3),
+        "broker_realized_net_profit_krw": (
+            round(realized_profit, 3) if realized_profit is not None else None
+        ),
+        "cost_adjusted_net_profit_krw": (
+            round(realized_profit, 3) if realized_profit is not None else None
+        ),
         "cost_adjusted_net_profit_krw_per_eligible_day": (
-            round(broker_realized_profit / eligible_days, 6) if eligible_days else None
+            round(broker_realized_profit / eligible_days, 6)
+            if eligible_days and realized_profit is not None
+            else None
         ),
         "cost_adjusted_net_profit_krw_per_source_valid_observation_day": (
             round(broker_realized_profit / source_valid_observation_days, 6)
-            if source_valid_observation_days
+            if source_valid_observation_days and realized_profit is not None
             else None
         ),
         "exact_broker_realized_net_profit_krw": round(exact_broker_profit, 3),
@@ -1344,9 +1405,71 @@ def _axis_outcome(
             6,
         )
         if source_valid_observation_days
+        and outcome["cost_adjusted_net_profit_krw"] is not None
         else None
     )
     return outcome
+
+
+def _policy_windows(
+    rows: list[dict],
+    *,
+    current_policy: dict | None,
+    policies_by_date: dict[str, dict | None],
+) -> tuple[dict, dict]:
+    """Separate semantic policy identity from unrelated global policy hashes.
+
+    Missing applied receipts break the contiguous epoch. Bad observation rows
+    remain visible inside their policy window; they do not become valid outcomes.
+    """
+
+    def identity(policy: dict | None) -> str | None:
+        if not policy:
+            return None
+        policy = {
+            key: (
+                int(value)
+                if isinstance(value, float)
+                and math.isfinite(value)
+                and value.is_integer()
+                else value
+            )
+            for key, value in policy.items()
+        }
+        return hashlib.sha256(
+            json.dumps(policy, sort_keys=True, allow_nan=False).encode()
+        ).hexdigest()
+
+    current_id = identity(current_policy)
+    matching = [
+        row
+        for row in rows
+        if current_id is not None
+        and identity(policies_by_date.get(row["target_date"])) == current_id
+    ]
+    epoch_dates: set[str] = set()
+    for day in sorted(policies_by_date, reverse=True):
+        if current_id is None or identity(policies_by_date[day]) != current_id:
+            break
+        epoch_dates.add(day)
+    epoch_rows = [row for row in matching if row["target_date"] in epoch_dates]
+
+    def window(selected: list[dict], name: str) -> dict:
+        return {
+            "window_policy": name,
+            "policy_cohort_id": current_id,
+            "policy": current_policy,
+            "status": "bound" if current_id else "current_applied_policy_missing",
+            "summary": _aggregate(selected),
+            "rows": selected,
+            "excluded_row_count": len(rows) - len(selected),
+            "runtime_effect": False,
+        }
+
+    cohort = window(matching, CURRENT_WINDOW_NAME)
+    epoch = window(epoch_rows, POST_APPLY_WINDOW_NAME)
+    epoch["applied_epoch_start"] = min(epoch_dates) if epoch_dates else None
+    return cohort, epoch
 
 
 def _load_history(
@@ -1620,22 +1743,63 @@ def build_report(
         for item in expected_clean_dates
         if item not in observed_date_set
     ]
-    windows: dict[str, dict[str, Any]] = {CLEAN_WINDOW_NAME: {}}
+    binding = runtime_policy_binding(target_date=parsed_date, applied_dir=applied_dir)
+    applied_history: dict[str, dict] = {}
+    applied_history_sources: dict[str, dict] = {}
+    for day in expected_clean_dates:
+        if dates and day.isoformat() < dates[0]:
+            continue
+        try:
+            prior_binding = runtime_policy_binding(
+                target_date=day, applied_dir=applied_dir
+            )
+        except ValueError:
+            prior_binding = {"status": "invalid"}
+        applied_history_sources[day.isoformat()] = {
+            key: prior_binding.get(key)
+            for key in ("status", "source_path", "artifact_hash")
+        }
+        applied_history[day.isoformat()] = (
+            prior_binding.get("policies", {})
+            if prior_binding.get("status") == "ready"
+            else {}
+        )
+    windows: dict[str, dict[str, Any]] = {
+        CLEAN_WINDOW_NAME: {},
+        CURRENT_WINDOW_NAME: {},
+        POST_APPLY_WINDOW_NAME: {},
+    }
     for profile_id in target_profiles:
         rows = [history[day][profile_id] for day in dates]
         windows[CLEAN_WINDOW_NAME][profile_id] = {
             "summary": _aggregate(rows),
             "rows": rows,
+            "decision_authority": "all_version_actual_audit_only",
         }
+        current_policy = (
+            (binding.get("policies") or {}).get(profile_id)
+            if binding.get("status") == "ready"
+            else None
+        )
+        cohort, epoch = _policy_windows(
+            rows,
+            current_policy=current_policy,
+            policies_by_date={
+                day: policies.get(profile_id)
+                for day, policies in applied_history.items()
+            },
+        )
+        windows[CURRENT_WINDOW_NAME][profile_id] = cohort
+        windows[POST_APPLY_WINDOW_NAME][profile_id] = epoch
     report = {
         "schema": REPORT_SCHEMA,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "artifact_path": str(output_dir / f"{REPORT_TYPE}_{target_date}.json"),
-        "source_runtime_policy_binding": runtime_policy_binding(
-            target_date=parsed_date, applied_dir=applied_dir
-        ),
+        "source_runtime_policy_binding": binding,
+        "applied_policy_history_sources": applied_history_sources,
+        "decision_window": POST_APPLY_WINDOW_NAME,
         "evaluation_authority_contract": SUBSET_AUTHORITY_CONTRACT,
         "economic_replay_handoff": {
             "owner": "low_price_two_leg_expanded_candidate_research",
@@ -1718,7 +1882,9 @@ def build_candidate(
     evaluations: dict[str, dict[str, Any]] = {}
     for profile_id in target_profiles:
         current = prior[profile_id]
-        clean_window = report["windows"][CLEAN_WINDOW_NAME][profile_id]
+        clean_window = report["windows"].get(
+            POST_APPLY_WINDOW_NAME, report["windows"][CLEAN_WINDOW_NAME]
+        )[profile_id]
         current_outcome = _axis_outcome(
             clean_window["rows"],
             min_drawdown=float(current["rolling_high_drawdown_pct"]),
@@ -1932,11 +2098,14 @@ def render_markdown(report: dict, candidate: dict) -> str:
         ),
         f"- Clean-baseline actual observations: {report['clean_baseline_window']['available_actual_observation_date_count']}/{report['clean_baseline_window']['expected_trading_date_count']} trading dates; missing dates are coverage only and are not imputed.",
         "",
-        "| Profile | Symbol | Session | Daily status | Clean cumulative attempts | Complete legs | Manual exits/losses | Held/unresolved | EV |",
+        "- Main table uses the contiguous current applied-policy epoch; all-version totals remain audit-only in JSON. Missing realized EV is null, never zero.",
+        "| Profile | Symbol | Session | Daily status | Post-apply attempts | Complete legs | Manual exits/losses | Held/unresolved | Realized EV |",
         "|---|---|---|---|---:|---:|---:|---:|---:|",
     ]
     for profile_id, row in report["daily"]["profiles"].items():
-        summary = report["windows"][CLEAN_WINDOW_NAME][profile_id]["summary"]
+        summary = report["windows"].get(
+            POST_APPLY_WINDOW_NAME, report["windows"][CLEAN_WINDOW_NAME]
+        )[profile_id]["summary"]
         lines.append(
             f"| {profile_id} | {row['symbol']} | {row['session']} | "
             f"{row['source_quality']} | {summary['attempted_episodes']} | "
