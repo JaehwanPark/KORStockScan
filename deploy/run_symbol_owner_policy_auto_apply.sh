@@ -8,6 +8,9 @@ OWNER_APPLY_DATE="$(TZ=Asia/Seoul /bin/date +%F)"
 if [[ "$OWNER_APPLY_DATE" > "2026-09-09" ]]; then
   AUTHORITY_PATH="$PROJECT_DIR/data/config/symbol_owner_policy_standing_authority_2026-09-10.json"
 fi
+if [[ "$OWNER_APPLY_DATE" > "2026-09-10" ]]; then
+  AUTHORITY_PATH="$PROJECT_DIR/data/config/symbol_owner_policy_standing_authority_2026-09-11.json"
+fi
 RESTORE_UNITS=()
 
 restore_order_services() {

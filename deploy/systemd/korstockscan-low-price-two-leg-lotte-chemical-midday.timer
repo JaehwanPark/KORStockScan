@@ -1,0 +1,11 @@
+[Unit]
+Description=Start lotte_chemical_midday two-leg episode machine
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 13:14:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=korstockscan-low-price-two-leg@lotte_chemical_midday.service
+
+[Install]
+WantedBy=timers.target

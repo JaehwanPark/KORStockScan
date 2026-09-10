@@ -1,0 +1,11 @@
+[Unit]
+Description=Preflight lx_semicon_morning two-leg episode machine
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:40:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=korstockscan-low-price-two-leg-preflight@lx_semicon_morning.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,3627 @@
+{
+  "start_date": "2026-06-05",
+  "end_date": "2026-09-10",
+  "trading_date_count": 68,
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "cost_contract": {
+    "round_trip_cost_pct": 0.23,
+    "scope": "low_price_two_leg_research_and_actual_outcome",
+    "version": "low_price_two_leg_round_trip_cost_v1"
+  },
+  "schema": "low_price_two_leg_user_approved_profile_evidence_v7",
+  "approval": {
+    "approver": "user_explicit_2026_09_11_widget_episode_implementation_deployment_next_startup",
+    "effective_target_date": "2026-09-11",
+    "scope": "three_profiles_passing_existing_preflight_guards",
+    "recommendation_count": 3,
+    "source_recommendation_count": 5,
+    "logic_revision_count": 1,
+    "new_profile_count": 2,
+    "existing_order_effect": "none_preserve_prior_policy_custody"
+  },
+  "source_report": {
+    "schema": "low_price_two_leg_expanded_candidate_research_v6",
+    "path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+    "canonical_sha256": "66a4f8748a7d4485db2e72fd5fa469f847733e5c51c5dfd9167f605fc0080368",
+    "byte_sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73"
+  },
+  "source_meta": {
+    "011170": {
+      "api_id": "ka10080",
+      "api_url": "https://api.kiwoom.com/api/dostk/chart",
+      "bar_count": 25610,
+      "continuation_exhausted": false,
+      "duplicate_row_count": 0,
+      "expected_trading_date_count": 68,
+      "invalid_row_count": 0,
+      "latest_close_price": 65700,
+      "latest_price_band": "50000_to_100000_krw",
+      "latest_source_date": "2026-09-10",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "out_of_session_row_count": 13943,
+      "page_count": 44,
+      "request_code": "011170_AL",
+      "shared_read_deferred_count": 0,
+      "shared_read_deferred_wait_sec": 0.0,
+      "source_content_sha256": "050fe38e41fdbd2e7faf0a63aff4377e0f1d5a47c1f646d384eff0cffbc72fd7",
+      "source_quality_status": "PASS",
+      "start_date_fully_bracketed": true,
+      "symbol": "011170",
+      "trading_date_count": 68
+    },
+    "108320": {
+      "api_id": "ka10080",
+      "api_url": "https://api.kiwoom.com/api/dostk/chart",
+      "bar_count": 24984,
+      "continuation_exhausted": false,
+      "duplicate_row_count": 0,
+      "expected_trading_date_count": 68,
+      "invalid_row_count": 0,
+      "latest_close_price": 36950,
+      "latest_price_band": "under_50000_krw",
+      "latest_source_date": "2026-09-10",
+      "market": "KRX_NXT_integrated_SOR_regular",
+      "oldest_source_date": "2026-06-05",
+      "out_of_session_row_count": 10638,
+      "page_count": 40,
+      "request_code": "108320_AL",
+      "shared_read_deferred_count": 0,
+      "shared_read_deferred_wait_sec": 0.0,
+      "source_content_sha256": "23276e1cb53ce7adb3bd25aea1b3eb8bde409587ac9364b402791cbf3702525e",
+      "source_quality_status": "PASS",
+      "start_date_fully_bracketed": true,
+      "symbol": "108320",
+      "trading_date_count": 68
+    }
+  },
+  "profiles": {},
+  "recommendations": [
+    {
+      "profile_id": "logic_lotte_chemical_afternoon",
+      "symbol": "011170",
+      "session": "afternoon",
+      "recommendation_id": "low_price_two_leg_expanded_candidate_research:7b7011b346c958821a742e8461b3cc589c4f575a216c4af83b22dc8a2f518d9d",
+      "recommendation_proposal_sha256": "7da644f336f16e3bf03845b256b7328ad46d81e77229c28ad8f9ae82e753f85d",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          -1,
+          -2
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 0.5,
+        "rolling_low_proximity_pct": 0.05,
+        "scan_end": "14:34",
+        "scan_start": "14:25",
+        "target_ticks": 4
+      },
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "runtime_effect": false,
+      "calibration": {
+        "active_unrealized_notional_weighted_pct": null,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.32692308,
+        "attempted_legs": 34,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 256,
+        "carry_in_held_legs": 0,
+        "completed_legs": 21,
+        "completed_legs_per_attempted_leg": 0.617647,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 100.38057692,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [],
+        "custody_resolution_required": false,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "filled_legs": 21,
+        "held_leg_rate_per_filled_leg": 0.0,
+        "held_legs": 0,
+        "held_notional_krw": 0,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 13,
+        "notional_weighted_ev_pct": 0.236908,
+        "observation_dates": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10",
+          "2026-08-11",
+          "2026-08-12",
+          "2026-08-13",
+          "2026-08-14",
+          "2026-08-18",
+          "2026-08-19"
+        ],
+        "realized_net_profit_krw": 5219.79,
+        "realized_net_profit_krw_per_episode": 307.05,
+        "runtime_effect": false,
+        "signal_episodes": 17,
+        "source_valid_observation_days": 52,
+        "worst_filled_max_adverse_excursion_pct": -0.938967,
+        "worst_held_active_unrealized_pct": null
+      },
+      "holdout": {
+        "active_unrealized_notional_weighted_pct": 14.03087,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.375,
+        "attempted_legs": 12,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 2431,
+        "carry_in_held_legs": 0,
+        "completed_legs": 6,
+        "completed_legs_per_attempted_leg": 0.5,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 101.47,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "custody_resolution_required": true,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "filled_legs": 7,
+        "held_leg_rate_per_filled_leg": 0.142857,
+        "held_legs": 1,
+        "held_notional_krw": 57500,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 5,
+        "notional_weighted_ev_pct": 0.238472,
+        "observation_dates": [
+          "2026-08-20",
+          "2026-08-21",
+          "2026-08-24",
+          "2026-08-25",
+          "2026-08-26",
+          "2026-08-27",
+          "2026-08-28",
+          "2026-08-31",
+          "2026-09-01",
+          "2026-09-02",
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "realized_net_profit_krw": 1623.52,
+        "realized_net_profit_krw_per_episode": 270.59,
+        "runtime_effect": false,
+        "signal_episodes": 6,
+        "source_valid_observation_days": 16,
+        "worst_filled_max_adverse_excursion_pct": -0.8695652173912993,
+        "worst_held_active_unrealized_pct": 14.03087
+      },
+      "full": {
+        "active_unrealized_notional_weighted_pct": 14.03087,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.33823529,
+        "attempted_legs": 46,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 2687,
+        "carry_in_held_legs": 0,
+        "completed_legs": 27,
+        "completed_legs_per_attempted_leg": 0.586957,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 100.63691176,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "custody_resolution_required": true,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "episodes": [
+          {
+            "date": "2026-06-08",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 72600,
+                "fill_at": "2026-06-08T14:36:00+09:00",
+                "holding_completed_bars": 14,
+                "max_adverse_excursion_pct": -0.413223,
+                "max_favorable_excursion_pct": 0.550964,
+                "net_profit_pct": 0.320964,
+                "status": "COMPLETE",
+                "target_at": "2026-06-08T14:50:00+09:00",
+                "target_price": 73000
+              },
+              {
+                "entry_price": 72500,
+                "fill_at": "2026-06-08T14:36:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.551724,
+                "net_profit_pct": 0.321724,
+                "status": "COMPLETE",
+                "target_at": "2026-06-08T14:37:00+09:00",
+                "target_price": 72900
+              }
+            ],
+            "observed_drawdown_pct": 0.953678,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-08T14:34:00+09:00",
+            "signal_close": 72700
+          },
+          {
+            "date": "2026-06-09",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 76100,
+                "fill_at": "2026-06-09T14:30:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.525624,
+                "net_profit_pct": 0.295624,
+                "status": "COMPLETE",
+                "target_at": "2026-06-09T14:33:00+09:00",
+                "target_price": 76500
+              },
+              {
+                "entry_price": 76000,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.167315,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-09T14:29:00+09:00",
+            "signal_close": 76200
+          },
+          {
+            "date": "2026-06-15",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 80100,
+                "fill_at": "2026-06-15T14:35:00+09:00",
+                "holding_completed_bars": 23,
+                "max_adverse_excursion_pct": -0.124844,
+                "max_favorable_excursion_pct": 0.499376,
+                "net_profit_pct": 0.269376,
+                "status": "COMPLETE",
+                "target_at": "2026-06-15T14:58:00+09:00",
+                "target_price": 80500
+              },
+              {
+                "entry_price": 80000,
+                "fill_at": "2026-06-15T14:35:00+09:00",
+                "holding_completed_bars": 9,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.5,
+                "net_profit_pct": 0.27,
+                "status": "COMPLETE",
+                "target_at": "2026-06-15T14:44:00+09:00",
+                "target_price": 80400
+              }
+            ],
+            "observed_drawdown_pct": 0.619579,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-15T14:31:00+09:00",
+            "signal_close": 80200
+          },
+          {
+            "date": "2026-06-17",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 81900,
+                "fill_at": "2026-06-17T14:33:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.2442,
+                "max_favorable_excursion_pct": 0.610501,
+                "net_profit_pct": 0.2584,
+                "status": "COMPLETE",
+                "target_at": "2026-06-17T14:34:00+09:00",
+                "target_price": 82300
+              },
+              {
+                "entry_price": 81800,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.726392,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-17T14:32:00+09:00",
+            "signal_close": 82000
+          },
+          {
+            "date": "2026-06-25",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 66900,
+                "fill_at": "2026-06-25T14:34:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.597907,
+                "net_profit_pct": 0.367907,
+                "status": "COMPLETE",
+                "target_at": "2026-06-25T14:36:00+09:00",
+                "target_price": 67300
+              },
+              {
+                "entry_price": 66800,
+                "fill_at": "2026-06-25T14:34:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": 0.149701,
+                "max_favorable_excursion_pct": 0.748503,
+                "net_profit_pct": 0.368802,
+                "status": "COMPLETE",
+                "target_at": "2026-06-25T14:36:00+09:00",
+                "target_price": 67200
+              }
+            ],
+            "observed_drawdown_pct": 1.179941,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-25T14:32:00+09:00",
+            "signal_close": 67000
+          },
+          {
+            "date": "2026-06-29",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 66700,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 66600,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.742942,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-29T14:30:00+09:00",
+            "signal_close": 66800
+          },
+          {
+            "date": "2026-07-01",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 63900,
+                "fill_at": "2026-07-01T14:37:00+09:00",
+                "holding_completed_bars": 42,
+                "max_adverse_excursion_pct": -0.938967,
+                "max_favorable_excursion_pct": 0.782473,
+                "net_profit_pct": 0.395978,
+                "status": "COMPLETE",
+                "target_at": "2026-07-01T15:19:00+09:00",
+                "target_price": 64300
+              },
+              {
+                "entry_price": 63800,
+                "fill_at": "2026-07-01T14:37:00+09:00",
+                "holding_completed_bars": 35,
+                "max_adverse_excursion_pct": -0.783699,
+                "max_favorable_excursion_pct": 0.626959,
+                "net_profit_pct": 0.396959,
+                "status": "COMPLETE",
+                "target_at": "2026-07-01T15:12:00+09:00",
+                "target_price": 64200
+              }
+            ],
+            "observed_drawdown_pct": 0.928793,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-01T14:32:00+09:00",
+            "signal_close": 64000
+          },
+          {
+            "date": "2026-07-03",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 62800,
+                "fill_at": "2026-07-03T14:33:00+09:00",
+                "holding_completed_bars": 32,
+                "max_adverse_excursion_pct": -0.636943,
+                "max_favorable_excursion_pct": 0.636943,
+                "net_profit_pct": 0.406943,
+                "status": "COMPLETE",
+                "target_at": "2026-07-03T15:05:00+09:00",
+                "target_price": 63200
+              },
+              {
+                "entry_price": 62700,
+                "fill_at": "2026-07-03T14:35:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.318979,
+                "max_favorable_excursion_pct": 0.637959,
+                "net_profit_pct": 0.407959,
+                "status": "COMPLETE",
+                "target_at": "2026-07-03T14:36:00+09:00",
+                "target_price": 63100
+              }
+            ],
+            "observed_drawdown_pct": 0.631912,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-03T14:31:00+09:00",
+            "signal_close": 62900
+          },
+          {
+            "date": "2026-07-06",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 63300,
+                "fill_at": "2026-07-06T14:34:00+09:00",
+                "holding_completed_bars": 20,
+                "max_adverse_excursion_pct": -0.789889,
+                "max_favorable_excursion_pct": 0.947867,
+                "net_profit_pct": 0.401912,
+                "status": "COMPLETE",
+                "target_at": "2026-07-06T14:54:00+09:00",
+                "target_price": 63700
+              },
+              {
+                "entry_price": 63200,
+                "fill_at": "2026-07-06T14:34:00+09:00",
+                "holding_completed_bars": 20,
+                "max_adverse_excursion_pct": -0.632911,
+                "max_favorable_excursion_pct": 1.107595,
+                "net_profit_pct": 0.402911,
+                "status": "COMPLETE",
+                "target_at": "2026-07-06T14:54:00+09:00",
+                "target_price": 63600
+              }
+            ],
+            "observed_drawdown_pct": 1.399689,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-06T14:31:00+09:00",
+            "signal_close": 63400
+          },
+          {
+            "date": "2026-07-08",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 59900,
+                "fill_at": "2026-07-08T14:31:00+09:00",
+                "holding_completed_bars": 4,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.834725,
+                "net_profit_pct": 0.43778,
+                "status": "COMPLETE",
+                "target_at": "2026-07-08T14:35:00+09:00",
+                "target_price": 60300
+              },
+              {
+                "entry_price": 59800,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.990099,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-08T14:30:00+09:00",
+            "signal_close": 60000
+          },
+          {
+            "date": "2026-07-13",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 60500,
+                "fill_at": "2026-07-13T14:29:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.661157,
+                "net_profit_pct": 0.431157,
+                "status": "COMPLETE",
+                "target_at": "2026-07-13T14:32:00+09:00",
+                "target_price": 60900
+              },
+              {
+                "entry_price": 60400,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.463415,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-13T14:27:00+09:00",
+            "signal_close": 60600
+          },
+          {
+            "date": "2026-07-15",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 60200,
+                "fill_at": "2026-07-15T14:30:00+09:00",
+                "holding_completed_bars": 17,
+                "max_adverse_excursion_pct": -0.166113,
+                "max_favorable_excursion_pct": 0.664452,
+                "net_profit_pct": 0.434452,
+                "status": "COMPLETE",
+                "target_at": "2026-07-15T14:47:00+09:00",
+                "target_price": 60600
+              },
+              {
+                "entry_price": 60100,
+                "fill_at": "2026-07-15T14:30:00+09:00",
+                "holding_completed_bars": 16,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.665557,
+                "net_profit_pct": 0.435557,
+                "status": "COMPLETE",
+                "target_at": "2026-07-15T14:46:00+09:00",
+                "target_price": 60500
+              }
+            ],
+            "observed_drawdown_pct": 0.658979,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-15T14:28:00+09:00",
+            "signal_close": 60300
+          },
+          {
+            "date": "2026-07-24",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 60800,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 60700,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.296596,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-24T14:28:00+09:00",
+            "signal_close": 60900
+          },
+          {
+            "date": "2026-07-30",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 53900,
+                "fill_at": "2026-07-30T14:36:00+09:00",
+                "holding_completed_bars": 5,
+                "max_adverse_excursion_pct": -0.185529,
+                "max_favorable_excursion_pct": 0.742115,
+                "net_profit_pct": 0.512115,
+                "status": "COMPLETE",
+                "target_at": "2026-07-30T14:41:00+09:00",
+                "target_price": 54300
+              },
+              {
+                "entry_price": 53800,
+                "fill_at": "2026-07-30T14:37:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.743494,
+                "net_profit_pct": 0.513494,
+                "status": "COMPLETE",
+                "target_at": "2026-07-30T14:40:00+09:00",
+                "target_price": 54200
+              }
+            ],
+            "observed_drawdown_pct": 1.098901,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-30T14:34:00+09:00",
+            "signal_close": 54000
+          },
+          {
+            "date": "2026-08-05",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 57800,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 57700,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.515464,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-05T14:33:00+09:00",
+            "signal_close": 57900
+          },
+          {
+            "date": "2026-08-10",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 57400,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 57300,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.519031,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-10T14:26:00+09:00",
+            "signal_close": 57500
+          },
+          {
+            "date": "2026-08-11",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 57700,
+                "fill_at": "2026-08-11T14:29:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": 0.17331,
+                "max_favorable_excursion_pct": 0.693241,
+                "net_profit_pct": 0.463241,
+                "status": "COMPLETE",
+                "target_at": "2026-08-11T14:32:00+09:00",
+                "target_price": 58100
+              },
+              {
+                "entry_price": 57600,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.516351,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-11T14:26:00+09:00",
+            "signal_close": 57800
+          },
+          {
+            "date": "2026-08-20",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 54500,
+                "fill_at": "2026-08-20T14:32:00+09:00",
+                "holding_completed_bars": 7,
+                "max_adverse_excursion_pct": -0.183486,
+                "max_favorable_excursion_pct": 0.917431,
+                "net_profit_pct": 0.503945,
+                "status": "COMPLETE",
+                "target_at": "2026-08-20T14:39:00+09:00",
+                "target_price": 54900
+              },
+              {
+                "entry_price": 54400,
+                "fill_at": "2026-08-20T14:34:00+09:00",
+                "holding_completed_bars": 5,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 1.102941,
+                "net_profit_pct": 0.505294,
+                "status": "COMPLETE",
+                "target_at": "2026-08-20T14:39:00+09:00",
+                "target_price": 54800
+              }
+            ],
+            "observed_drawdown_pct": 0.727273,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-20T14:29:00+09:00",
+            "signal_close": 54600
+          },
+          {
+            "date": "2026-08-24",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 54700,
+                "fill_at": "2026-08-24T14:35:00+09:00",
+                "holding_completed_bars": 21,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.731261,
+                "net_profit_pct": 0.501261,
+                "status": "COMPLETE",
+                "target_at": "2026-08-24T14:56:00+09:00",
+                "target_price": 55100
+              },
+              {
+                "entry_price": 54600,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.544465,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-24T14:34:00+09:00",
+            "signal_close": 54800
+          },
+          {
+            "date": "2026-08-26",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 56500,
+                "fill_at": "2026-08-26T14:27:00+09:00",
+                "holding_completed_bars": 6,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.707965,
+                "net_profit_pct": 0.477965,
+                "status": "COMPLETE",
+                "target_at": "2026-08-26T14:33:00+09:00",
+                "target_price": 56900
+              },
+              {
+                "entry_price": 56400,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.527241,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-26T14:26:00+09:00",
+            "signal_close": 56600
+          },
+          {
+            "date": "2026-08-28",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 58800,
+                "fill_at": "2026-08-28T14:34:00+09:00",
+                "holding_completed_bars": 26,
+                "max_adverse_excursion_pct": -0.340136,
+                "max_favorable_excursion_pct": 0.85034,
+                "net_profit_pct": 0.450272,
+                "status": "COMPLETE",
+                "target_at": "2026-08-28T15:00:00+09:00",
+                "target_price": 59200
+              },
+              {
+                "entry_price": 58700,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.506757,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-28T14:30:00+09:00",
+            "signal_close": 58900
+          },
+          {
+            "date": "2026-08-31",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "entry_price": 58700,
+                "fill_at": "2026-08-31T14:30:00+09:00",
+                "holding_completed_bars": 45,
+                "max_adverse_excursion_pct": -0.170358,
+                "max_favorable_excursion_pct": 0.681431,
+                "net_profit_pct": 0.451431,
+                "status": "COMPLETE",
+                "target_at": "2026-08-31T15:15:00+09:00",
+                "target_price": 59100
+              },
+              {
+                "entry_price": 58600,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.507614,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-31T14:28:00+09:00",
+            "signal_close": 58800
+          },
+          {
+            "date": "2026-09-02",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                -1,
+                -2
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 4
+            },
+            "legs": [
+              {
+                "active_unrealized_pct": 14.03087,
+                "entry_price": 57500,
+                "fill_at": "2026-09-02T14:38:00+09:00",
+                "holding_completed_bars": 2321,
+                "mark_price": 65700,
+                "max_adverse_excursion_pct": -0.8695652173912993,
+                "max_favorable_excursion_pct": 0.521739,
+                "status": "HELD",
+                "target_price": 57900
+              },
+              {
+                "entry_price": 57400,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.860585,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-09-02T14:33:00+09:00",
+            "signal_close": 57600
+          }
+        ],
+        "filled_legs": 28,
+        "held_leg_rate_per_filled_leg": 0.035714,
+        "held_legs": 1,
+        "held_notional_krw": 57500,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 18,
+        "notional_weighted_ev_pct": 0.237277,
+        "observation_dates": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10",
+          "2026-08-11",
+          "2026-08-12",
+          "2026-08-13",
+          "2026-08-14",
+          "2026-08-18",
+          "2026-08-19",
+          "2026-08-20",
+          "2026-08-21",
+          "2026-08-24",
+          "2026-08-25",
+          "2026-08-26",
+          "2026-08-27",
+          "2026-08-28",
+          "2026-08-31",
+          "2026-09-01",
+          "2026-09-02",
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "realized_net_profit_krw": 6843.31,
+        "realized_net_profit_krw_per_episode": 297.54,
+        "runtime_effect": false,
+        "signal_episodes": 23,
+        "source_valid_observation_days": 68,
+        "worst_filled_max_adverse_excursion_pct": -0.938967,
+        "worst_held_active_unrealized_pct": 14.03087
+      },
+      "calibration_first_half_ev_pct": 0.260635,
+      "calibration_second_half_ev_pct": 0.196561
+    },
+    {
+      "profile_id": "existing_011170_midday",
+      "symbol": "011170",
+      "session": "midday",
+      "recommendation_id": "low_price_two_leg_expanded_candidate_research:0b57ab867a9e8c770d3c1483720e25c7da5266661339a50e41fe185547abaacc",
+      "recommendation_proposal_sha256": "45bf6d6475465e2d6fb01851d65b97be7df9ca44ff09ee16a26cfae2b071f521",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 45,
+        "rolling_high_drawdown_pct": 0.75,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "13:34",
+        "scan_start": "13:15",
+        "target_ticks": 2
+      },
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "runtime_effect": false,
+      "calibration": {
+        "active_unrealized_notional_weighted_pct": null,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.67307692,
+        "attempted_legs": 70,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 442,
+        "carry_in_held_legs": 0,
+        "completed_legs": 55,
+        "completed_legs_per_attempted_leg": 0.785714,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 51.46288462,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [],
+        "custody_resolution_required": false,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "filled_legs": 55,
+        "held_leg_rate_per_filled_leg": 0.0,
+        "held_legs": 0,
+        "held_notional_krw": 0,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 15,
+        "notional_weighted_ev_pct": 0.058607,
+        "observation_dates": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10",
+          "2026-08-11",
+          "2026-08-12",
+          "2026-08-13",
+          "2026-08-14",
+          "2026-08-18",
+          "2026-08-19"
+        ],
+        "realized_net_profit_krw": 2676.07,
+        "realized_net_profit_krw_per_episode": 76.46,
+        "runtime_effect": false,
+        "signal_episodes": 35,
+        "source_valid_observation_days": 52,
+        "worst_filled_max_adverse_excursion_pct": -1.277372,
+        "worst_held_active_unrealized_pct": null
+      },
+      "holdout": {
+        "active_unrealized_notional_weighted_pct": null,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.1875,
+        "attempted_legs": 6,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 12,
+        "carry_in_held_legs": 0,
+        "completed_legs": 5,
+        "completed_legs_per_attempted_leg": 0.833333,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 20.021875,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [],
+        "custody_resolution_required": false,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "filled_legs": 5,
+        "held_leg_rate_per_filled_leg": 0.0,
+        "held_legs": 0,
+        "held_notional_krw": 0,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 1,
+        "notional_weighted_ev_pct": 0.090828,
+        "observation_dates": [
+          "2026-08-20",
+          "2026-08-21",
+          "2026-08-24",
+          "2026-08-25",
+          "2026-08-26",
+          "2026-08-27",
+          "2026-08-28",
+          "2026-08-31",
+          "2026-09-01",
+          "2026-09-02",
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "realized_net_profit_krw": 320.35,
+        "realized_net_profit_krw_per_episode": 106.78,
+        "runtime_effect": false,
+        "signal_episodes": 3,
+        "source_valid_observation_days": 16,
+        "worst_filled_max_adverse_excursion_pct": -0.173913,
+        "worst_held_active_unrealized_pct": null
+      },
+      "full": {
+        "active_unrealized_notional_weighted_pct": null,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.55882353,
+        "attempted_legs": 76,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 454,
+        "carry_in_held_legs": 0,
+        "completed_legs": 60,
+        "completed_legs_per_attempted_leg": 0.789474,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 44.065,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [],
+        "custody_resolution_required": false,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "episodes": [
+          {
+            "date": "2026-06-05",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 77300,
+                "fill_at": "2026-06-05T13:18:00+09:00",
+                "holding_completed_bars": 38,
+                "max_adverse_excursion_pct": -0.517464,
+                "max_favorable_excursion_pct": 0.258732,
+                "net_profit_pct": 0.028732,
+                "status": "COMPLETE",
+                "target_at": "2026-06-05T13:56:00+09:00",
+                "target_price": 77500
+              },
+              {
+                "entry_price": 77200,
+                "fill_at": "2026-06-05T13:19:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.129534,
+                "max_favorable_excursion_pct": 0.259067,
+                "net_profit_pct": 0.029067,
+                "status": "COMPLETE",
+                "target_at": "2026-06-05T13:20:00+09:00",
+                "target_price": 77400
+              }
+            ],
+            "observed_drawdown_pct": 0.897436,
+            "observed_near_low_pct": 0.651042,
+            "signal_at": "2026-06-05T13:17:00+09:00",
+            "signal_close": 77300
+          },
+          {
+            "date": "2026-06-08",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 73300,
+                "fill_at": "2026-06-08T13:32:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.136426,
+                "max_favorable_excursion_pct": 0.272851,
+                "net_profit_pct": 0.042851,
+                "status": "COMPLETE",
+                "target_at": "2026-06-08T13:33:00+09:00",
+                "target_price": 73500
+              },
+              {
+                "entry_price": 73200,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.811908,
+            "observed_near_low_pct": 0.410959,
+            "signal_at": "2026-06-08T13:31:00+09:00",
+            "signal_close": 73300
+          },
+          {
+            "date": "2026-06-09",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 77100,
+                "fill_at": "2026-06-09T13:25:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.389105,
+                "net_profit_pct": 0.029403,
+                "status": "COMPLETE",
+                "target_at": "2026-06-09T13:26:00+09:00",
+                "target_price": 77300
+              },
+              {
+                "entry_price": 77000,
+                "fill_at": "2026-06-09T13:27:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": -0.12987,
+                "max_favorable_excursion_pct": 0.25974,
+                "net_profit_pct": 0.02974,
+                "status": "COMPLETE",
+                "target_at": "2026-06-09T13:28:00+09:00",
+                "target_price": 77200
+              }
+            ],
+            "observed_drawdown_pct": 0.772201,
+            "observed_near_low_pct": 0.652742,
+            "signal_at": "2026-06-09T13:24:00+09:00",
+            "signal_close": 77100
+          },
+          {
+            "date": "2026-06-10",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 73400,
+                "fill_at": "2026-06-10T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.27248,
+                "max_favorable_excursion_pct": 0.681199,
+                "net_profit_pct": 0.04248,
+                "status": "COMPLETE",
+                "target_at": "2026-06-10T13:17:00+09:00",
+                "target_price": 73600
+              },
+              {
+                "entry_price": 73300,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 2.263648,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-10T13:15:00+09:00",
+            "signal_close": 73400
+          },
+          {
+            "date": "2026-06-12",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 78000,
+                "fill_at": "2026-06-12T13:16:00+09:00",
+                "holding_completed_bars": 7,
+                "max_adverse_excursion_pct": -0.384615,
+                "max_favorable_excursion_pct": 0.25641,
+                "net_profit_pct": 0.02641,
+                "status": "COMPLETE",
+                "target_at": "2026-06-12T13:23:00+09:00",
+                "target_price": 78200
+              },
+              {
+                "entry_price": 77900,
+                "fill_at": "2026-06-12T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.256739,
+                "net_profit_pct": 0.026739,
+                "status": "COMPLETE",
+                "target_at": "2026-06-12T13:17:00+09:00",
+                "target_price": 78100
+              }
+            ],
+            "observed_drawdown_pct": 0.763359,
+            "observed_near_low_pct": 0.3861,
+            "signal_at": "2026-06-12T13:15:00+09:00",
+            "signal_close": 78000
+          },
+          {
+            "date": "2026-06-15",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 80400,
+                "fill_at": "2026-06-15T13:16:00+09:00",
+                "holding_completed_bars": 9,
+                "max_adverse_excursion_pct": -0.124378,
+                "max_favorable_excursion_pct": 0.248756,
+                "net_profit_pct": 0.018756,
+                "status": "COMPLETE",
+                "target_at": "2026-06-15T13:25:00+09:00",
+                "target_price": 80600
+              },
+              {
+                "entry_price": 80300,
+                "fill_at": "2026-06-15T13:20:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.124533,
+                "max_favorable_excursion_pct": 0.249066,
+                "net_profit_pct": 0.019066,
+                "status": "COMPLETE",
+                "target_at": "2026-06-15T13:21:00+09:00",
+                "target_price": 80500
+              }
+            ],
+            "observed_drawdown_pct": 0.985222,
+            "observed_near_low_pct": 0.124533,
+            "signal_at": "2026-06-15T13:15:00+09:00",
+            "signal_close": 80400
+          },
+          {
+            "date": "2026-06-16",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 80100,
+                "fill_at": "2026-06-16T13:22:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.249688,
+                "net_profit_pct": 0.019688,
+                "status": "COMPLETE",
+                "target_at": "2026-06-16T13:23:00+09:00",
+                "target_price": 80300
+              },
+              {
+                "entry_price": 80000,
+                "fill_at": "2026-06-16T13:25:00+09:00",
+                "holding_completed_bars": 5,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.25,
+                "net_profit_pct": 0.02,
+                "status": "COMPLETE",
+                "target_at": "2026-06-16T13:30:00+09:00",
+                "target_price": 80200
+              }
+            ],
+            "observed_drawdown_pct": 0.866337,
+            "observed_near_low_pct": 0.125,
+            "signal_at": "2026-06-16T13:21:00+09:00",
+            "signal_close": 80100
+          },
+          {
+            "date": "2026-06-18",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 79800,
+                "fill_at": "2026-06-18T13:16:00+09:00",
+                "holding_completed_bars": 14,
+                "max_adverse_excursion_pct": -0.250627,
+                "max_favorable_excursion_pct": 0.250627,
+                "net_profit_pct": 0.020627,
+                "status": "COMPLETE",
+                "target_at": "2026-06-18T13:30:00+09:00",
+                "target_price": 80000
+              },
+              {
+                "entry_price": 79700,
+                "fill_at": "2026-06-18T13:16:00+09:00",
+                "holding_completed_bars": 14,
+                "max_adverse_excursion_pct": -0.125471,
+                "max_favorable_excursion_pct": 0.376412,
+                "net_profit_pct": 0.020941,
+                "status": "COMPLETE",
+                "target_at": "2026-06-18T13:30:00+09:00",
+                "target_price": 79900
+              }
+            ],
+            "observed_drawdown_pct": 0.869565,
+            "observed_near_low_pct": 0.251256,
+            "signal_at": "2026-06-18T13:15:00+09:00",
+            "signal_close": 79800
+          },
+          {
+            "date": "2026-06-19",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 75200,
+                "fill_at": "2026-06-19T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.265957,
+                "net_profit_pct": 0.035957,
+                "status": "COMPLETE",
+                "target_at": "2026-06-19T13:17:00+09:00",
+                "target_price": 75400
+              },
+              {
+                "entry_price": 75100,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.827676,
+            "observed_near_low_pct": 0.133156,
+            "signal_at": "2026-06-19T13:15:00+09:00",
+            "signal_close": 75200
+          },
+          {
+            "date": "2026-06-22",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 72300,
+                "fill_at": "2026-06-22T13:17:00+09:00",
+                "holding_completed_bars": 42,
+                "max_adverse_excursion_pct": -0.414938,
+                "max_favorable_excursion_pct": 0.276625,
+                "net_profit_pct": 0.046625,
+                "status": "COMPLETE",
+                "target_at": "2026-06-22T13:59:00+09:00",
+                "target_price": 72500
+              },
+              {
+                "entry_price": 72200,
+                "fill_at": "2026-06-22T13:20:00+09:00",
+                "holding_completed_bars": 36,
+                "max_adverse_excursion_pct": -0.277008,
+                "max_favorable_excursion_pct": 0.277008,
+                "net_profit_pct": 0.047008,
+                "status": "COMPLETE",
+                "target_at": "2026-06-22T13:56:00+09:00",
+                "target_price": 72400
+              }
+            ],
+            "observed_drawdown_pct": 0.823045,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-22T13:16:00+09:00",
+            "signal_close": 72300
+          },
+          {
+            "date": "2026-06-24",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 67700,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 67600,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.167883,
+            "observed_near_low_pct": 0.594354,
+            "signal_at": "2026-06-24T13:17:00+09:00",
+            "signal_close": 67700
+          },
+          {
+            "date": "2026-06-25",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 67700,
+                "fill_at": "2026-06-25T13:16:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.14771,
+                "max_favorable_excursion_pct": 0.295421,
+                "net_profit_pct": 0.065421,
+                "status": "COMPLETE",
+                "target_at": "2026-06-25T13:18:00+09:00",
+                "target_price": 67900
+              },
+              {
+                "entry_price": 67600,
+                "fill_at": "2026-06-25T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.295858,
+                "net_profit_pct": 0.065858,
+                "status": "COMPLETE",
+                "target_at": "2026-06-25T13:17:00+09:00",
+                "target_price": 67800
+              }
+            ],
+            "observed_drawdown_pct": 1.455604,
+            "observed_near_low_pct": 0.296296,
+            "signal_at": "2026-06-25T13:15:00+09:00",
+            "signal_close": 67700
+          },
+          {
+            "date": "2026-06-29",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 66700,
+                "fill_at": "2026-06-29T13:24:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.29985,
+                "net_profit_pct": 0.06985,
+                "status": "COMPLETE",
+                "target_at": "2026-06-29T13:26:00+09:00",
+                "target_price": 66900
+              },
+              {
+                "entry_price": 66600,
+                "fill_at": "2026-06-29T13:24:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.15015,
+                "max_favorable_excursion_pct": 0.3003,
+                "net_profit_pct": 0.0703,
+                "status": "COMPLETE",
+                "target_at": "2026-06-29T13:25:00+09:00",
+                "target_price": 66800
+              }
+            ],
+            "observed_drawdown_pct": 0.89153,
+            "observed_near_low_pct": 0.603318,
+            "signal_at": "2026-06-29T13:23:00+09:00",
+            "signal_close": 66700
+          },
+          {
+            "date": "2026-06-30",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 63900,
+                "fill_at": "2026-06-30T13:16:00+09:00",
+                "holding_completed_bars": 17,
+                "max_adverse_excursion_pct": -0.156495,
+                "max_favorable_excursion_pct": 0.312989,
+                "net_profit_pct": 0.082989,
+                "status": "COMPLETE",
+                "target_at": "2026-06-30T13:33:00+09:00",
+                "target_price": 64100
+              },
+              {
+                "entry_price": 63800,
+                "fill_at": "2026-06-30T13:16:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.31348,
+                "net_profit_pct": 0.08348,
+                "status": "COMPLETE",
+                "target_at": "2026-06-30T13:18:00+09:00",
+                "target_price": 64000
+              }
+            ],
+            "observed_drawdown_pct": 0.776398,
+            "observed_near_low_pct": 0.15674,
+            "signal_at": "2026-06-30T13:15:00+09:00",
+            "signal_close": 63900
+          },
+          {
+            "date": "2026-07-01",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 63500,
+                "fill_at": "2026-07-01T13:26:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.314961,
+                "net_profit_pct": 0.084961,
+                "status": "COMPLETE",
+                "target_at": "2026-07-01T13:28:00+09:00",
+                "target_price": 63700
+              },
+              {
+                "entry_price": 63400,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.78125,
+            "observed_near_low_pct": 0.157729,
+            "signal_at": "2026-07-01T13:25:00+09:00",
+            "signal_close": 63500
+          },
+          {
+            "date": "2026-07-02",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 64300,
+                "fill_at": "2026-07-02T13:21:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.311042,
+                "max_favorable_excursion_pct": 0.311042,
+                "net_profit_pct": 0.081042,
+                "status": "COMPLETE",
+                "target_at": "2026-07-02T13:22:00+09:00",
+                "target_price": 64500
+              },
+              {
+                "entry_price": 64200,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.771605,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-02T13:18:00+09:00",
+            "signal_close": 64300
+          },
+          {
+            "date": "2026-07-03",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 62700,
+                "fill_at": "2026-07-03T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": -0.15949,
+                "max_favorable_excursion_pct": 0.318979,
+                "net_profit_pct": 0.088979,
+                "status": "COMPLETE",
+                "target_at": "2026-07-03T13:17:00+09:00",
+                "target_price": 62900
+              },
+              {
+                "entry_price": 62600,
+                "fill_at": "2026-07-03T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.479233,
+                "net_profit_pct": 0.089489,
+                "status": "COMPLETE",
+                "target_at": "2026-07-03T13:17:00+09:00",
+                "target_price": 62800
+              }
+            ],
+            "observed_drawdown_pct": 1.104101,
+            "observed_near_low_pct": 0.642055,
+            "signal_at": "2026-07-03T13:15:00+09:00",
+            "signal_close": 62700
+          },
+          {
+            "date": "2026-07-06",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 62800,
+                "fill_at": "2026-07-06T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.318471,
+                "net_profit_pct": 0.088471,
+                "status": "COMPLETE",
+                "target_at": "2026-07-06T13:17:00+09:00",
+                "target_price": 63000
+              },
+              {
+                "entry_price": 62700,
+                "fill_at": "2026-07-06T13:18:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.15949,
+                "max_favorable_excursion_pct": 0.637959,
+                "net_profit_pct": 0.088979,
+                "status": "COMPLETE",
+                "target_at": "2026-07-06T13:19:00+09:00",
+                "target_price": 62900
+              }
+            ],
+            "observed_drawdown_pct": 1.257862,
+            "observed_near_low_pct": 0.48,
+            "signal_at": "2026-07-06T13:15:00+09:00",
+            "signal_close": 62800
+          },
+          {
+            "date": "2026-07-07",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 61900,
+                "fill_at": "2026-07-07T13:19:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.323102,
+                "max_favorable_excursion_pct": 0.323102,
+                "net_profit_pct": 0.093102,
+                "status": "COMPLETE",
+                "target_at": "2026-07-07T13:21:00+09:00",
+                "target_price": 62100
+              },
+              {
+                "entry_price": 61800,
+                "fill_at": "2026-07-07T13:19:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.161812,
+                "max_favorable_excursion_pct": 0.485437,
+                "net_profit_pct": 0.093625,
+                "status": "COMPLETE",
+                "target_at": "2026-07-07T13:21:00+09:00",
+                "target_price": 62000
+              }
+            ],
+            "observed_drawdown_pct": 0.801282,
+            "observed_near_low_pct": 0.487013,
+            "signal_at": "2026-07-07T13:18:00+09:00",
+            "signal_close": 61900
+          },
+          {
+            "date": "2026-07-08",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 60300,
+                "fill_at": "2026-07-08T13:16:00+09:00",
+                "holding_completed_bars": 51,
+                "max_adverse_excursion_pct": -1.160862,
+                "max_favorable_excursion_pct": 0.66335,
+                "net_profit_pct": 0.101675,
+                "status": "COMPLETE",
+                "target_at": "2026-07-08T14:07:00+09:00",
+                "target_price": 60500
+              },
+              {
+                "entry_price": 60200,
+                "fill_at": "2026-07-08T13:16:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.166113,
+                "max_favorable_excursion_pct": 0.332226,
+                "net_profit_pct": 0.102226,
+                "status": "COMPLETE",
+                "target_at": "2026-07-08T13:18:00+09:00",
+                "target_price": 60400
+              }
+            ],
+            "observed_drawdown_pct": 1.470588,
+            "observed_near_low_pct": 0.332779,
+            "signal_at": "2026-07-08T13:15:00+09:00",
+            "signal_close": 60300
+          },
+          {
+            "date": "2026-07-09",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 59700,
+                "fill_at": "2026-07-09T13:20:00+09:00",
+                "holding_completed_bars": 12,
+                "max_adverse_excursion_pct": -1.005025,
+                "max_favorable_excursion_pct": 0.335008,
+                "net_profit_pct": 0.105008,
+                "status": "COMPLETE",
+                "target_at": "2026-07-09T13:32:00+09:00",
+                "target_price": 59900
+              },
+              {
+                "entry_price": 59600,
+                "fill_at": "2026-07-09T13:20:00+09:00",
+                "holding_completed_bars": 12,
+                "max_adverse_excursion_pct": -0.838926,
+                "max_favorable_excursion_pct": 0.503356,
+                "net_profit_pct": 0.10557,
+                "status": "COMPLETE",
+                "target_at": "2026-07-09T13:32:00+09:00",
+                "target_price": 59800
+              }
+            ],
+            "observed_drawdown_pct": 0.830565,
+            "observed_near_low_pct": 0.167785,
+            "signal_at": "2026-07-09T13:19:00+09:00",
+            "signal_close": 59700
+          },
+          {
+            "date": "2026-07-13",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 61000,
+                "fill_at": "2026-07-13T13:16:00+09:00",
+                "holding_completed_bars": 6,
+                "max_adverse_excursion_pct": -0.327869,
+                "max_favorable_excursion_pct": 0.327869,
+                "net_profit_pct": 0.097869,
+                "status": "COMPLETE",
+                "target_at": "2026-07-13T13:22:00+09:00",
+                "target_price": 61200
+              },
+              {
+                "entry_price": 60900,
+                "fill_at": "2026-07-13T13:16:00+09:00",
+                "holding_completed_bars": 5,
+                "max_adverse_excursion_pct": -0.164204,
+                "max_favorable_excursion_pct": 0.328407,
+                "net_profit_pct": 0.098407,
+                "status": "COMPLETE",
+                "target_at": "2026-07-13T13:21:00+09:00",
+                "target_price": 61100
+              }
+            ],
+            "observed_drawdown_pct": 1.134522,
+            "observed_near_low_pct": 0.164204,
+            "signal_at": "2026-07-13T13:15:00+09:00",
+            "signal_close": 61000
+          },
+          {
+            "date": "2026-07-14",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 59400,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 59300,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.492537,
+            "observed_near_low_pct": 0.507614,
+            "signal_at": "2026-07-14T13:32:00+09:00",
+            "signal_close": 59400
+          },
+          {
+            "date": "2026-07-15",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 60400,
+                "fill_at": "2026-07-15T13:16:00+09:00",
+                "holding_completed_bars": 44,
+                "max_adverse_excursion_pct": -0.331126,
+                "max_favorable_excursion_pct": 0.496689,
+                "net_profit_pct": 0.101126,
+                "status": "COMPLETE",
+                "target_at": "2026-07-15T14:00:00+09:00",
+                "target_price": 60600
+              },
+              {
+                "entry_price": 60300,
+                "fill_at": "2026-07-15T13:16:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.165837,
+                "max_favorable_excursion_pct": 0.331675,
+                "net_profit_pct": 0.101675,
+                "status": "COMPLETE",
+                "target_at": "2026-07-15T13:18:00+09:00",
+                "target_price": 60500
+              }
+            ],
+            "observed_drawdown_pct": 1.30719,
+            "observed_near_low_pct": 0.165837,
+            "signal_at": "2026-07-15T13:15:00+09:00",
+            "signal_close": 60400
+          },
+          {
+            "date": "2026-07-16",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 59800,
+                "fill_at": "2026-07-16T13:32:00+09:00",
+                "holding_completed_bars": 22,
+                "max_adverse_excursion_pct": -0.501672,
+                "max_favorable_excursion_pct": 0.334448,
+                "net_profit_pct": 0.104448,
+                "status": "COMPLETE",
+                "target_at": "2026-07-16T13:54:00+09:00",
+                "target_price": 60000
+              },
+              {
+                "entry_price": 59700,
+                "fill_at": "2026-07-16T13:32:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.167504,
+                "max_favorable_excursion_pct": 0.335008,
+                "net_profit_pct": 0.105008,
+                "status": "COMPLETE",
+                "target_at": "2026-07-16T13:34:00+09:00",
+                "target_price": 59900
+              }
+            ],
+            "observed_drawdown_pct": 1.157025,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-16T13:31:00+09:00",
+            "signal_close": 59800
+          },
+          {
+            "date": "2026-07-20",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 57300,
+                "fill_at": "2026-07-20T13:16:00+09:00",
+                "holding_completed_bars": 10,
+                "max_adverse_excursion_pct": -0.34904,
+                "max_favorable_excursion_pct": 0.34904,
+                "net_profit_pct": 0.11904,
+                "status": "COMPLETE",
+                "target_at": "2026-07-20T13:26:00+09:00",
+                "target_price": 57500
+              },
+              {
+                "entry_price": 57200,
+                "fill_at": "2026-07-20T13:16:00+09:00",
+                "holding_completed_bars": 10,
+                "max_adverse_excursion_pct": -0.174825,
+                "max_favorable_excursion_pct": 0.524476,
+                "net_profit_pct": 0.11965,
+                "status": "COMPLETE",
+                "target_at": "2026-07-20T13:26:00+09:00",
+                "target_price": 57400
+              }
+            ],
+            "observed_drawdown_pct": 0.865052,
+            "observed_near_low_pct": 0.174825,
+            "signal_at": "2026-07-20T13:15:00+09:00",
+            "signal_close": 57300
+          },
+          {
+            "date": "2026-07-21",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 56800,
+                "fill_at": "2026-07-21T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.528169,
+                "net_profit_pct": 0.122113,
+                "status": "COMPLETE",
+                "target_at": "2026-07-21T13:17:00+09:00",
+                "target_price": 57000
+              },
+              {
+                "entry_price": 56700,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.388889,
+            "observed_near_low_pct": 0.176367,
+            "signal_at": "2026-07-21T13:15:00+09:00",
+            "signal_close": 56800
+          },
+          {
+            "date": "2026-07-23",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 61700,
+                "fill_at": "2026-07-23T13:16:00+09:00",
+                "holding_completed_bars": 13,
+                "max_adverse_excursion_pct": -0.648298,
+                "max_favorable_excursion_pct": 0.324149,
+                "net_profit_pct": 0.094149,
+                "status": "COMPLETE",
+                "target_at": "2026-07-23T13:29:00+09:00",
+                "target_price": 61900
+              },
+              {
+                "entry_price": 61600,
+                "fill_at": "2026-07-23T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": -0.162338,
+                "max_favorable_excursion_pct": 0.324675,
+                "net_profit_pct": 0.094675,
+                "status": "COMPLETE",
+                "target_at": "2026-07-23T13:17:00+09:00",
+                "target_price": 61800
+              }
+            ],
+            "observed_drawdown_pct": 0.963082,
+            "observed_near_low_pct": 0.488599,
+            "signal_at": "2026-07-23T13:15:00+09:00",
+            "signal_close": 61700
+          },
+          {
+            "date": "2026-07-24",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 61100,
+                "fill_at": "2026-07-24T13:16:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.327332,
+                "net_profit_pct": 0.097332,
+                "status": "COMPLETE",
+                "target_at": "2026-07-24T13:18:00+09:00",
+                "target_price": 61300
+              },
+              {
+                "entry_price": 61000,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.972447,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-24T13:15:00+09:00",
+            "signal_close": 61100
+          },
+          {
+            "date": "2026-07-27",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 60000,
+                "fill_at": "2026-07-27T13:31:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.5,
+                "net_profit_pct": 0.103333,
+                "status": "COMPLETE",
+                "target_at": "2026-07-27T13:34:00+09:00",
+                "target_price": 60200
+              },
+              {
+                "entry_price": 59900,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.990099,
+            "observed_near_low_pct": 0.671141,
+            "signal_at": "2026-07-27T13:28:00+09:00",
+            "signal_close": 60000
+          },
+          {
+            "date": "2026-07-28",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 57900,
+                "fill_at": "2026-07-28T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.345423,
+                "net_profit_pct": 0.115423,
+                "status": "COMPLETE",
+                "target_at": "2026-07-28T13:17:00+09:00",
+                "target_price": 58100
+              },
+              {
+                "entry_price": 57800,
+                "fill_at": "2026-07-28T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.17301,
+                "max_favorable_excursion_pct": 0.519031,
+                "net_profit_pct": 0.116021,
+                "status": "COMPLETE",
+                "target_at": "2026-07-28T13:17:00+09:00",
+                "target_price": 58000
+              }
+            ],
+            "observed_drawdown_pct": 1.025641,
+            "observed_near_low_pct": 0.520833,
+            "signal_at": "2026-07-28T13:15:00+09:00",
+            "signal_close": 57900
+          },
+          {
+            "date": "2026-07-30",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 54800,
+                "fill_at": "2026-07-30T13:16:00+09:00",
+                "holding_completed_bars": 13,
+                "max_adverse_excursion_pct": -1.277372,
+                "max_favorable_excursion_pct": 1.094891,
+                "net_profit_pct": 0.134964,
+                "status": "COMPLETE",
+                "target_at": "2026-07-30T13:29:00+09:00",
+                "target_price": 55000
+              },
+              {
+                "entry_price": 54700,
+                "fill_at": "2026-07-30T13:16:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.365631,
+                "net_profit_pct": 0.135631,
+                "status": "COMPLETE",
+                "target_at": "2026-07-30T13:17:00+09:00",
+                "target_price": 54900
+              }
+            ],
+            "observed_drawdown_pct": 1.438849,
+            "observed_near_low_pct": 0.182815,
+            "signal_at": "2026-07-30T13:15:00+09:00",
+            "signal_close": 54800
+          },
+          {
+            "date": "2026-07-31",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 54400,
+                "fill_at": "2026-07-31T13:17:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.367647,
+                "net_profit_pct": 0.137647,
+                "status": "COMPLETE",
+                "target_at": "2026-07-31T13:19:00+09:00",
+                "target_price": 54600
+              },
+              {
+                "entry_price": 54300,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.910747,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-31T13:16:00+09:00",
+            "signal_close": 54400
+          },
+          {
+            "date": "2026-08-03",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 55000,
+                "fill_at": "2026-08-03T13:35:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.363636,
+                "net_profit_pct": 0.133636,
+                "status": "COMPLETE",
+                "target_at": "2026-08-03T13:38:00+09:00",
+                "target_price": 55200
+              },
+              {
+                "entry_price": 54900,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.900901,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-03T13:34:00+09:00",
+            "signal_close": 55000
+          },
+          {
+            "date": "2026-08-13",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 57100,
+                "fill_at": "2026-08-13T13:23:00+09:00",
+                "holding_completed_bars": 13,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.350263,
+                "net_profit_pct": 0.120263,
+                "status": "COMPLETE",
+                "target_at": "2026-08-13T13:36:00+09:00",
+                "target_price": 57300
+              },
+              {
+                "entry_price": 57000,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.868056,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-13T13:22:00+09:00",
+            "signal_close": 57100
+          },
+          {
+            "date": "2026-08-27",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 57500,
+                "fill_at": "2026-08-27T13:19:00+09:00",
+                "holding_completed_bars": 8,
+                "max_adverse_excursion_pct": -0.173913,
+                "max_favorable_excursion_pct": 0.347826,
+                "net_profit_pct": 0.117826,
+                "status": "COMPLETE",
+                "target_at": "2026-08-27T13:27:00+09:00",
+                "target_price": 57700
+              },
+              {
+                "entry_price": 57400,
+                "fill_at": "2026-08-27T13:21:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.348432,
+                "net_profit_pct": 0.118432,
+                "status": "COMPLETE",
+                "target_at": "2026-08-27T13:22:00+09:00",
+                "target_price": 57600
+              }
+            ],
+            "observed_drawdown_pct": 1.372213,
+            "observed_near_low_pct": 0.524476,
+            "signal_at": "2026-08-27T13:18:00+09:00",
+            "signal_close": 57500
+          },
+          {
+            "date": "2026-09-03",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 61700,
+                "fill_at": "2026-09-03T13:30:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.162075,
+                "max_favorable_excursion_pct": 0.486224,
+                "net_profit_pct": 0.094149,
+                "status": "COMPLETE",
+                "target_at": "2026-09-03T13:31:00+09:00",
+                "target_price": 61900
+              },
+              {
+                "entry_price": 61600,
+                "fill_at": "2026-09-03T13:30:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.324675,
+                "max_favorable_excursion_pct": 0.649351,
+                "net_profit_pct": 0.094675,
+                "status": "COMPLETE",
+                "target_at": "2026-09-03T13:31:00+09:00",
+                "target_price": 61800
+              }
+            ],
+            "observed_drawdown_pct": 0.803859,
+            "observed_near_low_pct": 0.162338,
+            "signal_at": "2026-09-03T13:29:00+09:00",
+            "signal_close": 61700
+          },
+          {
+            "date": "2026-09-08",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 57300,
+                "fill_at": "2026-09-08T13:17:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.17452,
+                "max_favorable_excursion_pct": 0.52356,
+                "net_profit_pct": 0.11904,
+                "status": "COMPLETE",
+                "target_at": "2026-09-08T13:18:00+09:00",
+                "target_price": 57500
+              },
+              {
+                "entry_price": 57200,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 0.865052,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-09-08T13:16:00+09:00",
+            "signal_close": 57300
+          }
+        ],
+        "filled_legs": 60,
+        "held_leg_rate_per_filled_leg": 0.0,
+        "held_legs": 0,
+        "held_notional_krw": 0,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 16,
+        "notional_weighted_ev_pct": 0.060918,
+        "observation_dates": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10",
+          "2026-08-11",
+          "2026-08-12",
+          "2026-08-13",
+          "2026-08-14",
+          "2026-08-18",
+          "2026-08-19",
+          "2026-08-20",
+          "2026-08-21",
+          "2026-08-24",
+          "2026-08-25",
+          "2026-08-26",
+          "2026-08-27",
+          "2026-08-28",
+          "2026-08-31",
+          "2026-09-01",
+          "2026-09-02",
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "realized_net_profit_krw": 2996.42,
+        "realized_net_profit_krw_per_episode": 78.85,
+        "runtime_effect": false,
+        "signal_episodes": 38,
+        "source_valid_observation_days": 68,
+        "worst_filled_max_adverse_excursion_pct": -1.277372,
+        "worst_held_active_unrealized_pct": null
+      },
+      "calibration_first_half_ev_pct": 0.046553,
+      "calibration_second_half_ev_pct": 0.080279
+    },
+    {
+      "profile_id": "candidate_108320_morning",
+      "symbol": "108320",
+      "session": "morning",
+      "recommendation_id": "low_price_two_leg_expanded_candidate_research:79378c4760f654a1de2c3ccc44d9be88e31304a1bf2f9f4ca58829fc3b2e6e93",
+      "recommendation_proposal_sha256": "c6fc2f5bdf9d899699139eff5629ed29b598c73bf9986d05aa57925cdcb1d071",
+      "recommended_spot": {
+        "entry_offsets_ticks": [
+          0,
+          -1
+        ],
+        "entry_valid_completed_bars": 5,
+        "lookback_bars": 15,
+        "rolling_high_drawdown_pct": 1.25,
+        "rolling_low_proximity_pct": 0.75,
+        "scan_end": "09:54",
+        "scan_start": "09:45",
+        "target_ticks": 2
+      },
+      "implementation_status": "source_only_requires_review_and_user_approval",
+      "runtime_effect": false,
+      "calibration": {
+        "active_unrealized_notional_weighted_pct": null,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.21153846,
+        "attempted_legs": 22,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 41,
+        "carry_in_held_legs": 0,
+        "completed_legs": 17,
+        "completed_legs_per_attempted_leg": 0.772727,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 10.79442308,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [],
+        "custody_resolution_required": false,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "filled_legs": 17,
+        "held_leg_rate_per_filled_leg": 0.0,
+        "held_legs": 0,
+        "held_notional_krw": 0,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 5,
+        "notional_weighted_ev_pct": 0.058986,
+        "observation_dates": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10",
+          "2026-08-11",
+          "2026-08-12",
+          "2026-08-13",
+          "2026-08-14",
+          "2026-08-18",
+          "2026-08-19"
+        ],
+        "realized_net_profit_krw": 561.31,
+        "realized_net_profit_krw_per_episode": 51.03,
+        "runtime_effect": false,
+        "signal_episodes": 11,
+        "source_valid_observation_days": 52,
+        "worst_filled_max_adverse_excursion_pct": -0.626566,
+        "worst_held_active_unrealized_pct": null
+      },
+      "holdout": {
+        "active_unrealized_notional_weighted_pct": null,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.1875,
+        "attempted_legs": 6,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 24,
+        "carry_in_held_legs": 0,
+        "completed_legs": 4,
+        "completed_legs_per_attempted_leg": 0.666667,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 3.955,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [],
+        "custody_resolution_required": false,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "filled_legs": 4,
+        "held_leg_rate_per_filled_leg": 0.0,
+        "held_legs": 0,
+        "held_notional_krw": 0,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 2,
+        "notional_weighted_ev_pct": 0.028954,
+        "observation_dates": [
+          "2026-08-20",
+          "2026-08-21",
+          "2026-08-24",
+          "2026-08-25",
+          "2026-08-26",
+          "2026-08-27",
+          "2026-08-28",
+          "2026-08-31",
+          "2026-09-01",
+          "2026-09-02",
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "realized_net_profit_krw": 63.28,
+        "realized_net_profit_krw_per_episode": 21.09,
+        "runtime_effect": false,
+        "signal_episodes": 3,
+        "source_valid_observation_days": 16,
+        "worst_filled_max_adverse_excursion_pct": -0.944669,
+        "worst_held_active_unrealized_pct": null
+      },
+      "full": {
+        "active_unrealized_notional_weighted_pct": null,
+        "actual_order_submitted": false,
+        "attempted_episodes_per_source_valid_observation_day": 0.20588235,
+        "attempted_legs": 28,
+        "broker_order_forbidden": true,
+        "capital_exposure_completed_bars": 65,
+        "carry_in_held_legs": 0,
+        "completed_legs": 21,
+        "completed_legs_per_attempted_leg": 0.75,
+        "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 9.18514706,
+        "cost_pct": 0.23,
+        "custody_blocked_dates": [],
+        "custody_resolution_required": false,
+        "decision_authority": "source_only_no_runtime_or_order_authority",
+        "economic_replay_contract": "low_price_two_leg_continuous_custody_economics_v1",
+        "episodes": [
+          {
+            "date": "2026-06-05",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 52100,
+                "fill_at": "2026-06-05T09:46:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.383877,
+                "net_profit_pct": 0.153877,
+                "status": "COMPLETE",
+                "target_at": "2026-06-05T09:47:00+09:00",
+                "target_price": 52300
+              },
+              {
+                "entry_price": 52000,
+                "fill_at": "2026-06-05T09:46:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.192308,
+                "max_favorable_excursion_pct": 0.576923,
+                "net_profit_pct": 0.154615,
+                "status": "COMPLETE",
+                "target_at": "2026-06-05T09:47:00+09:00",
+                "target_price": 52200
+              }
+            ],
+            "observed_drawdown_pct": 1.512287,
+            "observed_near_low_pct": 0.192308,
+            "signal_at": "2026-06-05T09:45:00+09:00",
+            "signal_close": 52100
+          },
+          {
+            "date": "2026-06-10",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 48350,
+                "fill_at": "2026-06-10T09:51:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.103413,
+                "max_favorable_excursion_pct": 0.517063,
+                "net_profit_pct": -0.023175,
+                "status": "COMPLETE",
+                "target_at": "2026-06-10T09:53:00+09:00",
+                "target_price": 48450
+              },
+              {
+                "entry_price": 48300,
+                "fill_at": "2026-06-10T09:51:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.0,
+                "max_favorable_excursion_pct": 0.207039,
+                "net_profit_pct": -0.022961,
+                "status": "COMPLETE",
+                "target_at": "2026-06-10T09:52:00+09:00",
+                "target_price": 48400
+              }
+            ],
+            "observed_drawdown_pct": 1.62767,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-06-10T09:50:00+09:00",
+            "signal_close": 48350
+          },
+          {
+            "date": "2026-06-12",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 50700,
+                "fill_at": "2026-06-12T09:47:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.197239,
+                "max_favorable_excursion_pct": 0.394477,
+                "net_profit_pct": 0.164477,
+                "status": "COMPLETE",
+                "target_at": "2026-06-12T09:48:00+09:00",
+                "target_price": 50900
+              },
+              {
+                "entry_price": 50600,
+                "fill_at": "2026-06-12T09:49:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.197628,
+                "max_favorable_excursion_pct": 0.395257,
+                "net_profit_pct": 0.165257,
+                "status": "COMPLETE",
+                "target_at": "2026-06-12T09:50:00+09:00",
+                "target_price": 50800
+              }
+            ],
+            "observed_drawdown_pct": 1.361868,
+            "observed_near_low_pct": 0.39604,
+            "signal_at": "2026-06-12T09:45:00+09:00",
+            "signal_close": 50700
+          },
+          {
+            "date": "2026-06-15",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 50700,
+                "fill_at": "2026-06-15T09:46:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": -0.394477,
+                "max_favorable_excursion_pct": 0.394477,
+                "net_profit_pct": 0.164477,
+                "status": "COMPLETE",
+                "target_at": "2026-06-15T09:49:00+09:00",
+                "target_price": 50900
+              },
+              {
+                "entry_price": 50600,
+                "fill_at": "2026-06-15T09:47:00+09:00",
+                "holding_completed_bars": 2,
+                "max_adverse_excursion_pct": -0.197628,
+                "max_favorable_excursion_pct": 0.592885,
+                "net_profit_pct": 0.165257,
+                "status": "COMPLETE",
+                "target_at": "2026-06-15T09:49:00+09:00",
+                "target_price": 50800
+              }
+            ],
+            "observed_drawdown_pct": 1.361868,
+            "observed_near_low_pct": 0.197628,
+            "signal_at": "2026-06-15T09:45:00+09:00",
+            "signal_close": 50700
+          },
+          {
+            "date": "2026-06-23",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 42950,
+                "fill_at": "2026-06-23T09:52:00+09:00",
+                "holding_completed_bars": 11,
+                "max_adverse_excursion_pct": -0.582072,
+                "max_favorable_excursion_pct": 0.698487,
+                "net_profit_pct": 0.002829,
+                "status": "COMPLETE",
+                "target_at": "2026-06-23T10:03:00+09:00",
+                "target_price": 43050
+              },
+              {
+                "entry_price": 42900,
+                "fill_at": "2026-06-23T09:52:00+09:00",
+                "holding_completed_bars": 3,
+                "max_adverse_excursion_pct": -0.4662,
+                "max_favorable_excursion_pct": 0.2331,
+                "net_profit_pct": 0.0031,
+                "status": "COMPLETE",
+                "target_at": "2026-06-23T09:55:00+09:00",
+                "target_price": 43000
+              }
+            ],
+            "observed_drawdown_pct": 1.264368,
+            "observed_near_low_pct": 0.233372,
+            "signal_at": "2026-06-23T09:51:00+09:00",
+            "signal_close": 42950
+          },
+          {
+            "date": "2026-07-07",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 39900,
+                "fill_at": "2026-07-07T09:46:00+09:00",
+                "holding_completed_bars": 5,
+                "max_adverse_excursion_pct": -0.626566,
+                "max_favorable_excursion_pct": 0.501253,
+                "net_profit_pct": 0.020627,
+                "status": "COMPLETE",
+                "target_at": "2026-07-07T09:51:00+09:00",
+                "target_price": 40000
+              },
+              {
+                "entry_price": 39850,
+                "fill_at": "2026-07-07T09:46:00+09:00",
+                "holding_completed_bars": 5,
+                "max_adverse_excursion_pct": -0.501882,
+                "max_favorable_excursion_pct": 0.627353,
+                "net_profit_pct": 0.020941,
+                "status": "COMPLETE",
+                "target_at": "2026-07-07T09:51:00+09:00",
+                "target_price": 39950
+              }
+            ],
+            "observed_drawdown_pct": 1.845018,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-07T09:45:00+09:00",
+            "signal_close": 39900
+          },
+          {
+            "date": "2026-07-08",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 41500,
+                "fill_at": "2026-07-08T09:55:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.240964,
+                "max_favorable_excursion_pct": 0.60241,
+                "net_profit_pct": 0.010964,
+                "status": "COMPLETE",
+                "target_at": "2026-07-08T09:56:00+09:00",
+                "target_price": 41600
+              },
+              {
+                "entry_price": 41450,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.542112,
+            "observed_near_low_pct": 0.728155,
+            "signal_at": "2026-07-08T09:54:00+09:00",
+            "signal_close": 41500
+          },
+          {
+            "date": "2026-07-09",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 38750,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 38700,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.898734,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-07-09T09:54:00+09:00",
+            "signal_close": 38750
+          },
+          {
+            "date": "2026-07-14",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 37300,
+                "fill_at": "2026-07-14T09:46:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.134048,
+                "max_favorable_excursion_pct": 0.402145,
+                "net_profit_pct": 0.038097,
+                "status": "COMPLETE",
+                "target_at": "2026-07-14T09:47:00+09:00",
+                "target_price": 37400
+              },
+              {
+                "entry_price": 37250,
+                "fill_at": "2026-07-14T09:46:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.268456,
+                "max_favorable_excursion_pct": 0.536913,
+                "net_profit_pct": 0.038456,
+                "status": "COMPLETE",
+                "target_at": "2026-07-14T09:47:00+09:00",
+                "target_price": 37350
+              }
+            ],
+            "observed_drawdown_pct": 1.71278,
+            "observed_near_low_pct": 0.268817,
+            "signal_at": "2026-07-14T09:45:00+09:00",
+            "signal_close": 37300
+          },
+          {
+            "date": "2026-07-23",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 38400,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 38350,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 3.274559,
+            "observed_near_low_pct": 0.392157,
+            "signal_at": "2026-07-23T09:53:00+09:00",
+            "signal_close": 38400
+          },
+          {
+            "date": "2026-08-05",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 35500,
+                "fill_at": "2026-08-05T09:52:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.140845,
+                "max_favorable_excursion_pct": 0.422535,
+                "net_profit_pct": 0.05169,
+                "status": "COMPLETE",
+                "target_at": "2026-08-05T09:53:00+09:00",
+                "target_price": 35600
+              },
+              {
+                "entry_price": 35450,
+                "fill_at": "2026-08-05T09:52:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.282087,
+                "max_favorable_excursion_pct": 0.564175,
+                "net_profit_pct": 0.052087,
+                "status": "COMPLETE",
+                "target_at": "2026-08-05T09:53:00+09:00",
+                "target_price": 35550
+              }
+            ],
+            "observed_drawdown_pct": 1.251739,
+            "observed_near_low_pct": 0.424328,
+            "signal_at": "2026-08-05T09:51:00+09:00",
+            "signal_close": 35500
+          },
+          {
+            "date": "2026-08-25",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 36100,
+                "status": "NO_FILL"
+              },
+              {
+                "entry_price": 36050,
+                "status": "NO_FILL"
+              }
+            ],
+            "observed_drawdown_pct": 1.36612,
+            "observed_near_low_pct": 0.0,
+            "signal_at": "2026-08-25T09:52:00+09:00",
+            "signal_close": 36100
+          },
+          {
+            "date": "2026-08-26",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 37050,
+                "fill_at": "2026-08-26T09:53:00+09:00",
+                "holding_completed_bars": 9,
+                "max_adverse_excursion_pct": -0.944669,
+                "max_favorable_excursion_pct": 0.269906,
+                "net_profit_pct": 0.039906,
+                "status": "COMPLETE",
+                "target_at": "2026-08-26T10:02:00+09:00",
+                "target_price": 37150
+              },
+              {
+                "entry_price": 37000,
+                "fill_at": "2026-08-26T09:53:00+09:00",
+                "holding_completed_bars": 9,
+                "max_adverse_excursion_pct": -0.810811,
+                "max_favorable_excursion_pct": 0.405405,
+                "net_profit_pct": 0.04027,
+                "status": "COMPLETE",
+                "target_at": "2026-08-26T10:02:00+09:00",
+                "target_price": 37100
+              }
+            ],
+            "observed_drawdown_pct": 1.854305,
+            "observed_near_low_pct": 0.135135,
+            "signal_at": "2026-08-26T09:52:00+09:00",
+            "signal_close": 37050
+          },
+          {
+            "date": "2026-08-31",
+            "execution_plan": {
+              "entry_offsets_ticks": [
+                0,
+                -1
+              ],
+              "entry_valid_completed_bars": 5,
+              "target_ticks": 2
+            },
+            "legs": [
+              {
+                "entry_price": 36200,
+                "fill_at": "2026-08-31T09:47:00+09:00",
+                "holding_completed_bars": 5,
+                "max_adverse_excursion_pct": -0.138122,
+                "max_favorable_excursion_pct": 0.414365,
+                "net_profit_pct": 0.046243,
+                "status": "COMPLETE",
+                "target_at": "2026-08-31T09:52:00+09:00",
+                "target_price": 36300
+              },
+              {
+                "entry_price": 36150,
+                "fill_at": "2026-08-31T09:49:00+09:00",
+                "holding_completed_bars": 1,
+                "max_adverse_excursion_pct": 0.138313,
+                "max_favorable_excursion_pct": 0.276625,
+                "net_profit_pct": 0.046625,
+                "status": "COMPLETE",
+                "target_at": "2026-08-31T09:50:00+09:00",
+                "target_price": 36250
+              }
+            ],
+            "observed_drawdown_pct": 1.362398,
+            "observed_near_low_pct": 0.277008,
+            "signal_at": "2026-08-31T09:46:00+09:00",
+            "signal_close": 36200
+          }
+        ],
+        "filled_legs": 21,
+        "held_leg_rate_per_filled_leg": 0.0,
+        "held_legs": 0,
+        "held_notional_krw": 0,
+        "metric_contract": {
+          "decision_authority": "source_only_no_runtime_or_order_authority",
+          "forbidden_uses": [
+            "real_fill_evidence",
+            "standalone_live_promotion",
+            "held_as_realized_pnl"
+          ],
+          "metric_role": "existing_axis_paired_economic_research",
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": "calibration_6_episodes_8_legs_holdout_3_episodes_4_legs",
+          "source_quality_gate": "validated_completed_sor_bars_no_invented_custody_resolution",
+          "window_policy": "same_clean_prefix_custody_same_observation_dates"
+        },
+        "no_fill_legs": 7,
+        "notional_weighted_ev_pct": 0.053377,
+        "observation_dates": [
+          "2026-06-05",
+          "2026-06-08",
+          "2026-06-09",
+          "2026-06-10",
+          "2026-06-11",
+          "2026-06-12",
+          "2026-06-15",
+          "2026-06-16",
+          "2026-06-17",
+          "2026-06-18",
+          "2026-06-19",
+          "2026-06-22",
+          "2026-06-23",
+          "2026-06-24",
+          "2026-06-25",
+          "2026-06-26",
+          "2026-06-29",
+          "2026-06-30",
+          "2026-07-01",
+          "2026-07-02",
+          "2026-07-03",
+          "2026-07-06",
+          "2026-07-07",
+          "2026-07-08",
+          "2026-07-09",
+          "2026-07-10",
+          "2026-07-13",
+          "2026-07-14",
+          "2026-07-15",
+          "2026-07-16",
+          "2026-07-20",
+          "2026-07-21",
+          "2026-07-22",
+          "2026-07-23",
+          "2026-07-24",
+          "2026-07-27",
+          "2026-07-28",
+          "2026-07-29",
+          "2026-07-30",
+          "2026-07-31",
+          "2026-08-03",
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10",
+          "2026-08-11",
+          "2026-08-12",
+          "2026-08-13",
+          "2026-08-14",
+          "2026-08-18",
+          "2026-08-19",
+          "2026-08-20",
+          "2026-08-21",
+          "2026-08-24",
+          "2026-08-25",
+          "2026-08-26",
+          "2026-08-27",
+          "2026-08-28",
+          "2026-08-31",
+          "2026-09-01",
+          "2026-09-02",
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08",
+          "2026-09-09",
+          "2026-09-10"
+        ],
+        "realized_net_profit_krw": 624.59,
+        "realized_net_profit_krw_per_episode": 44.61,
+        "runtime_effect": false,
+        "signal_episodes": 14,
+        "source_valid_observation_days": 68,
+        "worst_filled_max_adverse_excursion_pct": -0.944669,
+        "worst_held_active_unrealized_pct": null
+      },
+      "calibration_first_half_ev_pct": 0.068001,
+      "calibration_second_half_ev_pct": 0.029404
+    }
+  ]
+}

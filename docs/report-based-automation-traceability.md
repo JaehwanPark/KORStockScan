@@ -1060,3 +1060,7 @@ Verifier의 micro diagnostic warning은 required workorder ID와 issues0·runtim
 ### 2026-09-08 위젯·에피소드 추천 적용 handoff
 
 9/7 사용자 승인 구현은 [별도 검토 원장](./audit-reports/2026-09-07-widget-episode-recommendation-implementation-review.md)에서 추적한다. 세 recommendation producer는 `machine_recommendation_identity_v1` native scope/axis ID와 proposal hash를 발급하며 ID 자체는 authority가 아니다. 기존 9/7 canonical source/hash는 보존한다. Low-price 승인 evidence v7 → 날짜별 56-profile revision → 기존 exact-date policy apply → profile preflight → 기존 owner service가 9/8 적용 경로다. 신규 TYM 오전/NHN 정오/에스디바이오센서 오후는 각 preflight/live timer가 단일 실행 owner다. 기존 3개 quarantine 및 two-leg 수량/custody 계약을 유지한다. Widget 080220은 별도 exact-date widget policy → 08:57 collector와 long-running trader의 날짜 경계 catalog가 소비한다. 자연 receipt acceptance는 당일 checklist 소유이며 source-only metadata 생성이나 policy publish만으로 체결·순이익 효과를 주장하지 않는다.
+
+### 9/11 명시 승인 low-price 후속
+
+[승인 구현·배포](audit-reports/2026-09-11-widget-episode-approved-deployment.md): source9/10 native 추천5개 중 기존 gate를 통과한3개를9/11 profile revision으로 연결한다. `profiles → dated baseline/bounds → candidate carry → policy apply → exact preflight → live wrapper`와 `PROFILE_FIRST_OPERATIONAL_DATES → 장후 report`가 같은61개/과거59개 날짜 경계를 소비한다.07:32 standing authority는9/11 successor로LX세미콘 episode scope를 포함하고, broker/custody skip은 유지한다. 기존 저가주 template에90 drop-in과 신규4개/변경2개 timer만 설치하며 widget·Samsung80 release와 지속 추가기능 pin은 유지한다. 향후 자연 기동은9/11 체크리스트 기존 owner에 남긴다.

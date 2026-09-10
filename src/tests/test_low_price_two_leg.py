@@ -775,7 +775,7 @@ def test_current_and_install_time_profile_symbols_have_machine_owner_scope():
     }
     for symbol in install_time_symbols:
         assert f'"{symbol}":' in install_script
-    owner_scope = expected_machine_symbol_owners(date(2026, 9, 10))
+    owner_scope = expected_machine_symbol_owners(date(2026, 9, 11))
     assert "011170" not in expected_machine_symbol_owners(date(2026, 9, 9))
     for symbol in {profile.symbol for profile in PROFILES.values()}:
         assert "episode" in owner_scope[symbol]

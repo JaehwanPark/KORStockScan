@@ -1,0 +1,1106 @@
+{
+  "schema": "widget_episode_explicit_approval_successor_v1",
+  "source_date": "2026-09-10",
+  "effective_target_date": "2026-09-11",
+  "parent_rows_sha256": "fa7556b4b9ff01c8e2fb3d7a6dbbb24dd2986884611c4c7fd395c67d47b79aa9",
+  "is_subset_not_additional_unique_work": true,
+  "counts": {
+    "total": 18,
+    "implemented": 3,
+    "economic_gate_deferred": 2,
+    "research_watch_deferred": 7,
+    "evidence_blocked": 2,
+    "rejected": 3,
+    "observed": 1,
+    "unaccounted": 0
+  },
+  "rows": [
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:0b57ab867a9e8c770d3c1483720e25c7da5266661339a50e41fe185547abaacc",
+      "decision_field": "implementation_status",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "low_price_two_leg_policy_apply",
+      "acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "b026dc8bf285eaf86a968a612b628ae831c7b56c7fb0029d7e34ab7b5dfc7113",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][1]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"recommendations\"][2]"
+        }
+      ],
+      "code_review": "389_tests_passed",
+      "deployment": "prepared_pending_receipt",
+      "natural_consumption": "not_yet_observed",
+      "economic_acceptance": "not_yet_observed",
+      "final_disposition": "implemented_under_explicit_user_approval",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "011170/midday/existing_011170_midday"
+        },
+        "recommendation_proposal_sha256": "45bf6d6475465e2d6fb01851d65b97be7df9ca44ff09ee16a26cfae2b071f521",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:0bdfc39c76573e968028e3e36bea0f840b8249c225566ea71ae456c3c248b563",
+      "decision_field": "implementation_status",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "low_price_two_leg_policy_apply",
+      "acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "db097945f19108474a579fb6a204ed9ff6c49bf7dc67ab5b688beb526345fc40",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][2]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"recommendations\"][4]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "034020/midday/existing_034020_midday"
+        },
+        "recommendation_proposal_sha256": "f57c3270a176035a5d089cdb3c9941dd1790778ee1fed44a19ff0fc7042fd080",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts."
+      },
+      "original_disposition": "deferred",
+      "approval_followup": "user_approval_present; existing_calibration_half_economic_gate_failed"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:2c12077e277ea743fbc2add1007b002a6d0fd3412fc31fa51a91d064914412d8",
+      "decision_field": "implementation_status",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "low_price_two_leg_policy_apply",
+      "acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "9b46923d6253ba1c257961e4e96c9fa9c74d5d891b078439478c5a294742683b",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"existing_symbol_time_extension_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"recommendations\"][1]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "111770/late_morning/existing_111770_late_morning"
+        },
+        "recommendation_proposal_sha256": "5a5976c85de08f84cb57b162d87de393315f21c1d1be2cd6f06d5deae540ccfb",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts."
+      },
+      "original_disposition": "deferred",
+      "approval_followup": "user_approval_present; existing_calibration_half_economic_gate_failed"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:3287c340cabe4b868a3283e957a49c5ae5bf8494fb936d371c8bd5f20b934400",
+      "decision_field": null,
+      "decision": null,
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "low_price_two_leg_expanded_candidate_research",
+      "acceptance": "Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "4f9890f04785d78dfdb15f6d546cabd1e886f80413444eb0ae114a4c4cee062c",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"operator_observation_candidate_inventory\"][\"candidate_475560_morning\"]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"profiles\"][\"candidate_475560_morning\"][\"observation_candidate\"]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "blocked_missing_evidence",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "operator_observation",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "candidate_475560_morning"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "low_price_two_leg_expanded_candidate_research",
+        "recommendation_acceptance": "Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+        "metric_contract": {
+          "decision_authority": "source_only_observation_no_runtime_authority",
+          "forbidden_uses": [
+            "daily_policy_reoptimization",
+            "automatic_machine_implementation_or_service_start",
+            "automatic_runtime_or_preopen_policy_promotion",
+            "minute_bar_holdout_pass_as_machine_recommendation_without_bbo_economics",
+            "account_or_order_api",
+            "real_order_submission",
+            "provider_bot_cap_threshold_or_broker_guard_change",
+            "stop_loss_or_forced_exit_creation",
+            "thin_oos_or_diagnostic_win_rate_as_live_authority"
+          ],
+          "metric_role": "fixed_episode_candidate_holdout_observation",
+          "missing_execution_evidence": [
+            "prospective_fresh_bbo_spread",
+            "passive_fill_feasibility",
+            "spread_and_fee_adjusted_target_ev"
+          ],
+          "primary_decision_metric": "notional_weighted_ev_pct",
+          "sample_floor": {
+            "completed_legs": 4,
+            "signal_episodes": 3
+          },
+          "source_quality_gate": [
+            "official_ka10080_success",
+            "requested_start_date_fully_bracketed",
+            "valid_unique_completed_sor_regular_ohlc",
+            "fixed_policy_identity_match",
+            "completed_legs_only_for_ev",
+            "active_unrealized_separated_from_completed_ev"
+          ],
+          "window_policy": "clean_baseline_expanding_calibration_latest_16_trading_days_holdout"
+        }
+      },
+      "original_disposition": "blocked_missing_evidence"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:79378c4760f654a1de2c3ccc44d9be88e31304a1bf2f9f4ca58829fc3b2e6e93",
+      "decision_field": "implementation_status",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "low_price_two_leg_policy_apply",
+      "acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "92cc3e74927b1a6bdc2bd381e8de1b47941e0d72ecfa8f1c20c80665d90c1e3d",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"new_symbol_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"recommendations\"][3]"
+        }
+      ],
+      "code_review": "389_tests_passed",
+      "deployment": "prepared_pending_receipt",
+      "natural_consumption": "not_yet_observed",
+      "economic_acceptance": "not_yet_observed",
+      "final_disposition": "implemented_under_explicit_user_approval",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "108320/morning/candidate_108320_morning"
+        },
+        "recommendation_proposal_sha256": "c6fc2f5bdf9d899699139eff5629ed29b598c73bf9986d05aa57925cdcb1d071",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "low_price_two_leg_expanded_candidate_research",
+      "native_id": "low_price_two_leg_expanded_candidate_research:7b7011b346c958821a742e8461b3cc589c4f575a216c4af83b22dc8a2f518d9d",
+      "decision_field": "implementation_status",
+      "decision": "source_only_requires_review_and_user_approval",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "low_price_two_leg_policy_apply",
+      "acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "b01eb7500e8ff4d1d0bf5897ead7b946f8b0e789c7eb4035128a0efb32324e1a",
+      "sources": [
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"existing_symbol_logic_improvement_recommendations\"][0]"
+        },
+        {
+          "label": "low_price_two_leg_expanded_candidate_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-10.json",
+          "sha256": "c42fe91eb1c59bb9896775f223fade53b5998a8bd6b094c7d7aafb3bde284f73",
+          "location": "$[\"recommendations\"][0]"
+        }
+      ],
+      "code_review": "389_tests_passed",
+      "deployment": "prepared_pending_receipt",
+      "natural_consumption": "not_yet_observed",
+      "economic_acceptance": "not_yet_observed",
+      "final_disposition": "implemented_under_explicit_user_approval",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "011170/afternoon/logic_lotte_chemical_afternoon"
+        },
+        "recommendation_proposal_sha256": "7da644f336f16e3bf03845b256b7328ad46d81e77229c28ad8f9ae82e753f85d",
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "machine_microstructure_attribution",
+      "native_id": "machine_lifecycle_turnover_policy_research_v1",
+      "decision_field": "state",
+      "decision": "EVIDENCE_ACCUMULATING",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": null,
+      "acceptance": null,
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "66d23c4971acfbe02a698ec7f478f243ad90c0098c97d02b08171d8fc4bd0fa4",
+      "sources": [
+        {
+          "label": "machine_microstructure_attribution",
+          "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-10.json",
+          "sha256": "d2c050106bdf62bd69388be7c869cce01a071903b7846458ce62e90bcb893162",
+          "location": "$[\"objective_followups\"][0]"
+        },
+        {
+          "label": "machine_microstructure_policy_approval",
+          "path": "/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-10.json",
+          "sha256": "5d70a63786edaedd80257d10dd1144a2de447042393b85b4117ff540bb170bdf",
+          "location": "$[\"objective_followups\"][0]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "observed_no_patch",
+      "native_kind": "followup",
+      "identity_valid": true,
+      "mirror_contract": {
+        "followup_id": "machine_lifecycle_turnover_policy_research_v1",
+        "source_date": "2026-09-10",
+        "state": "EVIDENCE_ACCUMULATING",
+        "metric_contract": {
+          "decision_authority": "postclose_followup_tracking_only",
+          "forbidden_uses": [
+            "promotion_candidate_substitution",
+            "operator_approval_substitution",
+            "preopen_handoff_or_runtime_family_enrollment",
+            "runtime_env_or_threshold_or_order_mutation",
+            "provider_bot_cap_or_hard_safety_change"
+          ],
+          "metric_role": "machine_lifecycle_objective_completion_followup",
+          "primary_decision_metric": "source_quality_adjusted_ev_pct",
+          "sample_floor": {
+            "comparison": "paired_same_anchor_current_policy_vs_one_micro_conditioned_axis",
+            "cost_policy": "fees_taxes_and_slippage_included",
+            "downside_guard": "paired_p10_not_worse_and_held_unresolved_not_increased",
+            "invalid_contract_row_count": 0,
+            "minimum_bbo_complete_rate_pct": 95.0,
+            "minimum_depth_window_coverage_pct": 90.0,
+            "minimum_observed_trading_days_per_owner_symbol_session": 5,
+            "minimum_policy_eligible_unique_decision_lifecycles_per_owner_symbol_session": 20,
+            "minimum_relative_primary_ev_uplift_pct": 1.0,
+            "primary_metric": "source_quality_adjusted_ev_pct",
+            "required_absolute_ev_uplift": "greater_than_zero_in_all_windows",
+            "required_net_profit": "positive_in_primary_20d_window",
+            "rolling_windows_trading_days": [
+              5,
+              10,
+              20
+            ]
+          },
+          "source_quality_gate": [
+            "exact_target_date_machine_attribution",
+            "clean_baseline_only",
+            "paired_cost_aware_rolling_evidence_before_candidate_handoff"
+          ],
+          "window_policy": "daily_until_implementation_evidence_or_candidate_handoff"
+        },
+        "current_capability": "rolling_paired_research_report_contract_blocked",
+        "next_action": "repair_excluded_source_report_contracts_and_rerun",
+        "remaining_gap_codes": [
+          "10d_candidate_ev_not_positive",
+          "10d_paired_ev_uplift_not_positive",
+          "10d_paired_lifecycle_count_below_10",
+          "10d_source_report_contract_gap",
+          "20d_candidate_ev_not_positive",
+          "20d_paired_ev_uplift_not_positive",
+          "20d_paired_lifecycle_count_below_20",
+          "20d_source_report_contract_gap",
+          "5d_candidate_ev_not_positive",
+          "5d_paired_ev_uplift_not_positive",
+          "5d_paired_lifecycle_count_below_5",
+          "5d_source_report_contract_gap",
+          "bbo_complete_rate_below_95pct",
+          "depth_window_coverage_below_90pct",
+          "invalid_contract_rows_present",
+          "observed_trading_days_below_5",
+          "paired_p10_worse_or_missing",
+          "policy_eligible_unique_lifecycles_below_20",
+          "primary_20d_net_profit_not_positive",
+          "relative_primary_ev_uplift_below_1pct"
+        ]
+      },
+      "original_disposition": "observed_no_patch"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:1876a96dff2b6afebb1f445538c9a487def36028174fe64880e497c68d19745a",
+      "decision_field": "recommendation_tier",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_research_watch_collector",
+      "acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "97d833825cceb0ff54f301d0962f3d05a99ff2f6258c6505219cb4ea0f0f7f85",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-10.json",
+          "sha256": "11220bda0f8c02ae63a359755a005ee586f66b36444c645ad447125c9f893b30",
+          "location": "$[\"recommendations\"][1]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "361610/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:1ed187a6c7bf27db9dd41bb361c3005e4bc961b64036fa65e2159e926ed22322",
+      "decision_field": "recommendation_tier",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_research_watch_collector",
+      "acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "820d007dd9b8764c0f8bbf6aef43aea74c689ccd702e956ced5b556cad85e51f",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-10.json",
+          "sha256": "11220bda0f8c02ae63a359755a005ee586f66b36444c645ad447125c9f893b30",
+          "location": "$[\"recommendations\"][4]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "484870/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:2eaf06787075f5631a2790102165df3f4813b7c8778c2d1e0bd34d9d264c9334",
+      "decision_field": "recommendation_tier",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_research_watch_collector",
+      "acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "521b74330f5c4d126afc45a60c0e23d27040742e287fc5819e965f0cdf198fc0",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-10.json",
+          "sha256": "11220bda0f8c02ae63a359755a005ee586f66b36444c645ad447125c9f893b30",
+          "location": "$[\"recommendations\"][0]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "142760/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:519bad7f319ed282a6130f6ef2c55cc353c5cbf7f1de96bea8e07b8448bef3e3",
+      "decision_field": "recommendation_tier",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_research_watch_collector",
+      "acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "0a770657a910b7d9738a4072cf92193f06a0aca3cda62ba8f9522ec46f85dfe9",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-10.json",
+          "sha256": "11220bda0f8c02ae63a359755a005ee586f66b36444c645ad447125c9f893b30",
+          "location": "$[\"recommendations\"][3]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "033640/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:7ff28758a02a80ced86c9d279c6b46cb0b02a95a5eb6186245551a68d8ee66d2",
+      "decision_field": "recommendation_tier",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_research_watch_collector",
+      "acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "e22c7301185ec05df68ccc9041f9f0d015df57111c7bf44921fc25c8201d1d5d",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-10.json",
+          "sha256": "11220bda0f8c02ae63a359755a005ee586f66b36444c645ad447125c9f893b30",
+          "location": "$[\"recommendations\"][2]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "138080/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:bf75a6fe44b5b537d1fd09e26ee5a0131e3cb4ea87cf37e6b5b05e18d06a501d",
+      "decision_field": "recommendation_tier",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_research_watch_collector",
+      "acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "a5e4ffa508d2584a63bc2e79a6889fa487d2ff50ffa28491ddae2fc2d8b1307e",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-10.json",
+          "sha256": "11220bda0f8c02ae63a359755a005ee586f66b36444c645ad447125c9f893b30",
+          "location": "$[\"recommendations\"][5]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "240810/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "widget_collector_expansion_recommendation",
+      "native_id": "widget_collector_expansion_recommendation:d3845195b73790a6428270bb61f84eaaa065879844b08240e9995643f52e2b88",
+      "decision_field": "recommendation_tier",
+      "decision": "research_watch",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_research_watch_collector",
+      "acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "aa6ba6ae54df2ba423933d57877c4291283d90ce26da6a82f17aef3418ae7138",
+      "sources": [
+        {
+          "label": "widget_collector_expansion_recommendation",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-10.json",
+          "sha256": "11220bda0f8c02ae63a359755a005ee586f66b36444c645ad447125c9f893b30",
+          "location": "$[\"recommendations\"][6]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "deferred",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "007810/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading."
+      },
+      "original_disposition": "deferred"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:1a6aebfa63c42f751b0242e3e18a558d326ca01f58eb3055c6b699316120f216",
+      "decision_field": "decision",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_symbol_runtime_policy",
+      "acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "6f173e0b42dffd4b5a09496dbf41d475e575fe9c882300fbb20026c2f4d79ffb",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-10.json",
+          "sha256": "f4c9e0166e439464dbb202494ce5bdbaad2679df6f3e74453f32111b635de5fa",
+          "location": "$[\"symbols\"][\"475150\"]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "rejected",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "475150/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "101302109d5416f43ad57ca6e1b3147995e64c550751efb36f799d262300f151",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application."
+      },
+      "original_disposition": "rejected"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:2991bcc69c56990b25c4b08aaf4fdd60e5d3173a67c6592ec632d5328db3c16d",
+      "decision_field": "decision",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_symbol_runtime_policy",
+      "acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "7098d56348a748d6d87d9fe3ec770c6ba730395e01bc7688780fca30fb55fb0b",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-10.json",
+          "sha256": "f4c9e0166e439464dbb202494ce5bdbaad2679df6f3e74453f32111b635de5fa",
+          "location": "$[\"symbols\"][\"006800\"]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "rejected",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "006800/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "d680980112b1bb216e13556f830410b98c43afbab22ae8113ae17cc79fffe0d4",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application."
+      },
+      "original_disposition": "rejected"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:814eab726593d89d0288fe3ad6a3d6fcb3d3dbc4fe5a1d6dff5ca6d17b32d0a0",
+      "decision_field": "decision",
+      "decision": "holdout_failed_no_widget_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_symbol_runtime_policy",
+      "acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "9534585e2cb5725c06a7354dd30cf3c6087392000aebe4add5ea6c358388a5fc",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-10.json",
+          "sha256": "f4c9e0166e439464dbb202494ce5bdbaad2679df6f3e74453f32111b635de5fa",
+          "location": "$[\"symbols\"][\"010140\"]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "rejected",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "010140/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "7b0dafbec6cff567aeaaf42536d0e23b8268d400f31b811c428bab194f6994b7",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application."
+      },
+      "original_disposition": "rejected"
+    },
+    {
+      "owner": "widget_symbol_signal_policy_research",
+      "native_id": "widget_symbol_signal_policy_research:f4ef9259aaa1ee8420d52ce4303595054ec87d2981b617f425739820921042b3",
+      "decision_field": "decision",
+      "decision": "component_economics_or_holdout_not_ready",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "real_order_authority": null,
+        "order_authority": null,
+        "runtime_authority": null,
+        "provider_authority": null,
+        "bot_authority": null,
+        "safety_authority": null,
+        "runtime_registry_mutation_allowed": null,
+        "provider_budget_increase_allowed": null,
+        "broker_order_forbidden": true
+      },
+      "authority_class": "eligible_runtime_effect_false",
+      "consumer": "widget_symbol_runtime_policy",
+      "acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "implementation_location": null,
+      "implementation_requested": false,
+      "row_sha256": "3104dbea90f0d10fbd41662b32c4885afeaa2a7a80cbbccb435d923808662223",
+      "sources": [
+        {
+          "label": "widget_symbol_signal_policy_research",
+          "path": "/home/ubuntu/KORStockScan/data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-10.json",
+          "sha256": "f4c9e0166e439464dbb202494ce5bdbaad2679df6f3e74453f32111b635de5fa",
+          "location": "$[\"symbols\"][\"080220\"]"
+        }
+      ],
+      "code_review": "unverified",
+      "deployment": "unverified",
+      "natural_consumption": "unverified",
+      "economic_acceptance": "not_evaluated_by_handoff",
+      "final_disposition": "blocked_missing_evidence",
+      "native_kind": "recommendation",
+      "identity_valid": true,
+      "mirror_contract": {
+        "recommendation_contract": "machine_recommendation_identity_v1",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "080220/KRX_REGULAR"
+        },
+        "recommendation_proposal_sha256": "19881449b743ec14d72d329847a2a806144833e3d076f158e3cbf93a49f856d6",
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application."
+      },
+      "original_disposition": "blocked_missing_evidence"
+    }
+  ]
+}

@@ -7,6 +7,10 @@ PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 SYSTEMD_DIR="$SCRIPT_DIR/systemd"
 TARGET_DIR="/etc/systemd/system"
 UNITS=(
+  korstockscan-low-price-two-leg-lotte-chemical-midday-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-midday.timer
+  korstockscan-low-price-two-leg-lx-semicon-morning-preflight.timer
+  korstockscan-low-price-two-leg-lx-semicon-morning.timer
   korstockscan-low-price-two-leg-lotte-chemical-morning-preflight.timer
   korstockscan-low-price-two-leg-lotte-chemical-morning.timer
   korstockscan-low-price-two-leg-lotte-chemical-afternoon-preflight.timer
@@ -129,6 +133,10 @@ UNITS=(
   korstockscan-low-price-two-leg-sd-biosensor-afternoon.timer
 )
 TIMERS=(
+  korstockscan-low-price-two-leg-lotte-chemical-midday-preflight.timer
+  korstockscan-low-price-two-leg-lotte-chemical-midday.timer
+  korstockscan-low-price-two-leg-lx-semicon-morning-preflight.timer
+  korstockscan-low-price-two-leg-lx-semicon-morning.timer
   korstockscan-low-price-two-leg-lotte-chemical-morning-preflight.timer
   korstockscan-low-price-two-leg-lotte-chemical-morning.timer
   korstockscan-low-price-two-leg-lotte-chemical-afternoon-preflight.timer
@@ -285,6 +293,7 @@ from src.engine.risk.manual_control_exclusion import (
 )
 
 owners = {
+    "108320": "lx_semicon_low_price_two_leg_owner",
     "011170": "lotte_chemical_low_price_two_leg_owner",
     "006800": "mirae_asset_low_price_two_leg_owner",
     "035720": "kakao_low_price_two_leg_owner",
@@ -308,4 +317,4 @@ PY
 /bin/systemctl enable --now "${TIMERS[@]}"
 /bin/systemctl list-timers --all --no-pager "${TIMERS[@]}"
 
-echo "installed fifty-nine lower-price profile timers; retired Daewoo units were removed"
+echo "installed sixty-one lower-price profile timers; retired Daewoo units were removed"

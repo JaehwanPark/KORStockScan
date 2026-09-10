@@ -86,6 +86,8 @@ APPLIED_POLICY_PROVENANCE_REQUIRED_DATE = date(2026, 8, 14)
 SOURCE_QUALITY_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 OUTPUT_DIR = DATA_DIR / "report" / REPORT_TYPE
 PROFILE_FIRST_OPERATIONAL_DATES = {
+    "lotte_chemical_midday": date(2026, 9, 11),
+    "lx_semicon_morning": date(2026, 9, 11),
     "lotte_chemical_morning": date(2026, 9, 10),
     "lotte_chemical_afternoon": date(2026, 9, 10),
     "tym_late_morning": date(2026, 9, 10),
