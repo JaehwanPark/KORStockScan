@@ -24,6 +24,8 @@ from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
 DIRECTORY = DATA_DIR / "runtime" / "entry_recheck_submit_budget"
 SCHEMA = "entry_recheck_submit_budget_v1"
 _LOCK = threading.RLock()
+_BOOTSTRAP_LOCK = threading.Lock()
+_BOOTSTRAP_JOB: dict[str, Any] = {}
 
 
 def _path(trade_date: str) -> Path:
@@ -110,6 +112,62 @@ def observed_count(trade_date: str) -> int | None:
             return len(_charged(payload))
     except (OSError, ValueError, TypeError):
         return None
+
+
+def observe_nonblocking(trade_date: str) -> dict[str, Any]:
+    """Read committed advisory quota without scanning history on the live thread.
+
+    Atomic replacement makes an unlocked read of an existing ledger sufficient
+    for observation only. The final locked reservation remains authoritative.
+    A missing ledger starts at most one background bootstrap for that path;
+    pending/failed initialization is unknown, never an empty budget. Only one
+    worker may run at a time, including across the trading-date boundary.
+    """
+    try:
+        path = _path(trade_date)
+        with path.open(encoding="utf-8") as handle:
+            payload = _validate(json.load(handle), trade_date)
+        return {"count": len(_charged(payload)), "status": "ready"}
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError):
+        return {"count": None, "status": "ledger_invalid"}
+
+    if not _BOOTSTRAP_LOCK.acquire(blocking=False):
+        return {"count": None, "status": "bootstrap_pending"}
+    try:
+        job_path = str(path)
+        if _BOOTSTRAP_JOB.get("path") == job_path:
+            return {"count": None, "status": _BOOTSTRAP_JOB["status"]}
+        if _BOOTSTRAP_JOB.get("status") == "bootstrap_pending":
+            return {"count": None, "status": "bootstrap_pending_other_date"}
+        _BOOTSTRAP_JOB.clear()
+        _BOOTSTRAP_JOB.update(path=job_path, status="bootstrap_pending")
+
+        def bootstrap() -> None:
+            try:
+                result = observed_count(trade_date)
+            except Exception:
+                # Surface a terminal diagnostic; do not repeatedly scan the
+                # same broken history or grant orders after a worker failure.
+                result = None
+            with _BOOTSTRAP_LOCK:
+                _BOOTSTRAP_JOB["status"] = (
+                    "bootstrap_complete" if result is not None else "bootstrap_failed"
+                )
+
+        try:
+            threading.Thread(
+                target=bootstrap,
+                name="entry-recheck-budget-bootstrap",
+                daemon=True,
+            ).start()
+        except RuntimeError:
+            _BOOTSTRAP_JOB["status"] = "bootstrap_failed"
+            return {"count": None, "status": "bootstrap_failed"}
+        return {"count": None, "status": "bootstrap_pending"}
+    finally:
+        _BOOTSTRAP_LOCK.release()
 
 
 def _bootstrap_legacy(payload: dict[str, Any], trade_date: str) -> None:
