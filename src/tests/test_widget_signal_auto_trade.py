@@ -3975,3 +3975,77 @@ def test_calibrated_widget_symbol_collector_is_exact_date_policy_gated():
     assert "Restart=on-failure" in service
     assert "OnCalendar=Mon..Fri *-*-* 08:57:00 Asia/Seoul" in timer
     assert "Persistent=true" in timer
+
+
+@pytest.mark.parametrize("day,quantity", [(11, 1), (14, 10)])
+def test_operator_one_day_widget_policy_projection_and_target_quantity(
+    tmp_path, monkeypatch, day, quantity
+):
+    from copy import deepcopy
+
+    now = _at(11).replace(month=9, day=day)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    baseline = deepcopy(engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY)
+    trader.run_once(now)
+    assert gateway.buy_calls == [("005930", quantity, "SOR")]
+    assert engine.SAMSUNG_DAILY_EQUAL_SHARE_POLICY == baseline
+    frozen = trader._state["symbols"]["005930"]["entry_execution_policy"]
+    assert frozen["leg_quantity_each"] == quantity
+    _fill(gateway, "B1", qty=quantity, price=100_000)
+    trader.run_once(now)
+    assert gateway.limit_sell_calls == [("005930", quantity, "SOR", 100_500)]
+
+
+def test_operator_one_day_widget_fallback_quantity_expires(tmp_path, monkeypatch):
+    from src.trading.order.episode_quantity import new_entry_quantity
+
+    now = _at(11).replace(month=9)
+    box = {"payload": _payload(now, entry_id="ONE-DAY")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box, qty=10)
+    trader.run_once(now)
+    assert gateway.buy_calls == [("999999", 1, "SOR")]
+    assert new_entry_quantity(datetime.fromisoformat("2026-09-10T15:00:00+00:00")) == 1
+    assert new_entry_quantity(datetime.fromisoformat("2026-09-11T15:00:00+00:00")) == 10
+    assert new_entry_quantity(datetime.fromisoformat("2026-09-10T14:59:59+00:00")) == 10
+    with pytest.raises(ValueError):
+        new_entry_quantity(datetime(2026, 9, 11))
+
+
+def test_operator_one_day_widget_scale_in_uses_one_and_keeps_total_sell_quantity(
+    tmp_path, monkeypatch
+):
+    now = _at(11).replace(month=9)
+    box = {"payload": _samsung_policy_payload(now)}
+    trader, gateway, _ = _samsung_policy_trader(tmp_path, monkeypatch, box)
+    trader.run_once(now)
+    _fill(gateway, "B1", qty=1, price=100_000)
+    trader.run_once(now)
+    box["payload"] = _samsung_policy_payload(now.replace(second=1), price=99_500)
+    trader.run_once(now.replace(second=1))
+    assert gateway.cancel_calls == [("005930", "L2", 1, "SOR")]
+    gateway.snapshots["L2"] = ExecutionSnapshot(True, True, 0, 0, 1)
+    trader.run_once(now.replace(second=2))
+    assert gateway.buy_calls == [("005930", 1, "SOR"), ("005930", 1, "SOR")]
+    _fill(gateway, "B4", qty=1, price=99_500)
+    trader.run_once(now.replace(second=3))
+    assert gateway.limit_sell_calls[-1][1] == 2
+
+
+def test_operator_one_day_widget_override_preserves_dated_entry_veto(
+    tmp_path, monkeypatch
+):
+    now = _at(11).replace(month=9)
+    box = {"payload": _payload(now, entry_id="VETO")}
+    trader, gateway, _ = _trader(tmp_path, monkeypatch, box, qty=10)
+    policy = {
+        **_dated_policy(),
+        "leg_quantity_each": 10,
+        "new_entry_runtime_eligible": False,
+        "new_entry_runtime_block_reason": "execution_quality_safety_veto",
+    }
+    trader.policy_loader = FakeDatedPolicyLoader({"999999": {"KRX_REGULAR": policy}})
+    trader.run_once(now)
+    assert gateway.buy_calls == []
+    assert policy["leg_quantity_each"] == 10
+    assert policy["new_entry_runtime_eligible"] is False

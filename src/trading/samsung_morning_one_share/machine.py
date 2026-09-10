@@ -12,8 +12,11 @@ from src.engine.risk.manual_control_exclusion import (
     independent_machine_ownership_source,
 )
 from src.trading.order.episode_quantity import (
+    new_entry_quantity,
+    new_entry_quantity_receipt,
+    validate_owned_leg_quantity,
     EPISODE_LEG_QUANTITY,
-    EPISODE_TOTAL_QUANTITY,
+    EPISODE_LEG_COUNT,
 )
 from src.trading.order.owner_custody_registry import OwnerRegistryError
 from src.trading.order.adaptive_exit.source import record_first_fill_observation
@@ -50,13 +53,17 @@ def _episode_ownership_source(code: object) -> str:
     return independent_machine_ownership_source(code, owner="episode")
 
 
-def _morning_leg(plan: dict, route: str) -> dict:
+def _morning_leg(
+    plan: dict, route: str, *, quantity: int = EPISODE_LEG_QUANTITY
+) -> dict:
     return {
         # Use the same persisted defaults as the loader. Otherwise a fresh
         # morning leg changes identity when read back for a durable write gate.
-        **_new_leg(plan["leg_id"], plan["price_role"], plan["entry_price"]),
+        **_new_leg(
+            plan["leg_id"], plan["price_role"], plan["entry_price"], quantity=quantity
+        ),
         **plan,
-        "quantity": EPISODE_LEG_QUANTITY,
+        "quantity": validate_owned_leg_quantity(quantity),
         "route": route,
         "status": "PLANNED",
         "buy_order_no": "",
@@ -277,7 +284,13 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         return self.policy.nxt if route == "NXT" else self.policy.sor
 
     def _signal_features(
-        self, *, route: str, signal_bar: object, open_price: int, plans: list[dict]
+        self,
+        *,
+        route: str,
+        signal_bar: object,
+        open_price: int,
+        plans: list[dict],
+        quantity: int = EPISODE_LEG_QUANTITY,
     ) -> dict:
         window = self._window(route)
         return {
@@ -308,7 +321,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     "price_role": str(plan["price_role"]),
                     "entry_price": int(plan["entry_price"]),
                     "route": route,
-                    "quantity": EPISODE_LEG_QUANTITY,
+                    "quantity": validate_owned_leg_quantity(quantity),
                 }
                 for plan in plans
             ],
@@ -919,6 +932,8 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             )
 
     def _consider_entry(self, now: datetime) -> dict:
+        leg_quantity = new_entry_quantity(now)
+        total_quantity = leg_quantity * EPISODE_LEG_COUNT
         if now.time() < self.policy.nxt.open_time:
             self._state.update(
                 {"last_action": "waiting_for_nxt_premarket", "blocked_reason": ""}
@@ -972,7 +987,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     "preview": {
                         "route": route,
                         "open_price": open_price,
-                        "total_quantity": EPISODE_TOTAL_QUANTITY,
+                        "total_quantity": total_quantity,
                         "legs": plans,
                         "operator_exclusion_ready": bool(source_owner),
                         "widget_relationship": "parallel_independent_strategy",
@@ -994,7 +1009,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             now=now,
             signal_bar=str(signal_bar),
             reference_price=int(open_price or 0),
-            required_quantity=EPISODE_TOTAL_QUANTITY,
+            required_quantity=total_quantity,
             expected_venues=[route],
             counterfactual_session=(
                 "NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR"
@@ -1235,7 +1250,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 due_at = now + timedelta(seconds=confirmation_delay_sec)
                 anchor_liquidity = self._entry_liquidity_decision(
                     route=route,
-                    requested_quantity=EPISODE_TOTAL_QUANTITY,
+                    requested_quantity=total_quantity,
                 )
                 anchor_snapshot = anchor_liquidity.event_fields()[
                     "entry_liquidity_snapshot"
@@ -1268,9 +1283,11 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             signal_bar=signal_bar,
             open_price=open_price,
             plans=plans,
+            quantity=leg_quantity,
         )
         signal_features.update(
             {
+                "new_entry_quantity_receipt": new_entry_quantity_receipt(now),
                 "signal_decision_at": signal_decision_at,
                 "source_entry_event_id": source_entry_event_id,
                 "entry_confirmation_delay_sec": confirmation_delay_sec,
@@ -1289,7 +1306,9 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 "signal_bar": signal_bar,
                 "signal_close": open_price,
                 "signal_features": signal_features,
-                "legs": [_morning_leg(plan, route) for plan in plans],
+                "legs": [
+                    _morning_leg(plan, route, quantity=leg_quantity) for plan in plans
+                ],
                 "blocked_reason": "",
             }
         )

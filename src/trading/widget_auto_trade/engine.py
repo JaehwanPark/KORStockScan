@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from src.trading.order import entry_adverse_guard, entry_adverse_owners
+from src.trading.order.episode_quantity import (
+    new_entry_quantity,
+    new_entry_quantity_receipt,
+)
 
 from src.trading.order.profit_stagnation_exit import KEY as PROFIT_EXIT_KEY
 from src.trading.order.target_ratchet import KEY as RATCHET_KEY
@@ -1274,6 +1278,19 @@ class WidgetSignalAutoTrader:
             return None
         dated_sessions = self._dated_execution_policies.get(spec.code)
         execution_policy = self._execution_policy(spec, session=context.name)
+        if execution_policy is not None and new_entry_quantity(
+            now, int(execution_policy["leg_quantity_each"])
+        ) != int(execution_policy["leg_quantity_each"]):
+            # Project the explicit one-day sizing override after validating the
+            # canonical policy. Keep its source bytes/hash and entry vetoes.
+            execution_policy = deepcopy(execution_policy)
+            baseline_quantity = int(execution_policy["leg_quantity_each"])
+            execution_policy["leg_quantity_each"] = new_entry_quantity(
+                now, baseline_quantity
+            )
+            execution_policy["new_entry_quantity_receipt"] = new_entry_quantity_receipt(
+                now, baseline_quantity
+            )
         runtime_block_reason = (
             str(execution_policy.get("new_entry_runtime_block_reason") or "")
             if execution_policy is not None
@@ -3626,7 +3643,7 @@ class WidgetSignalAutoTrader:
         entry_quantity = (
             int(entry_policy["leg_quantity_each"])
             if entry_policy is not None
-            else self.entry_qty
+            else new_entry_quantity(now, self.entry_qty)
         )
         counterfactual_reference_price = _positive_int(
             advisory.get("entry_price_high")

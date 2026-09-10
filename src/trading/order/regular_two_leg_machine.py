@@ -28,7 +28,11 @@ from src.engine.risk.market_weakness_entry_guard import (
     record_market_weakness_blocked_entry,
 )
 from src.trading.order.episode_quantity import (
+    validate_owned_leg_quantity,
+    new_entry_quantity,
+    new_entry_quantity_receipt,
     EPISODE_LEG_QUANTITY,
+    EPISODE_LEG_COUNT,
     EPISODE_TOTAL_QUANTITY,
     SUPPORTED_OWNED_LEG_QUANTITIES,
 )
@@ -122,11 +126,17 @@ def _default_episode_ownership_source(code: object) -> str:
     return independent_machine_ownership_source(code, owner="episode")
 
 
-def _new_leg(leg_id: str, price_role: str, entry_price: int) -> dict:
+def _new_leg(
+    leg_id: str,
+    price_role: str,
+    entry_price: int,
+    *,
+    quantity: int = EPISODE_LEG_QUANTITY,
+) -> dict:
     return {
         "leg_id": leg_id,
         "price_role": price_role,
-        "quantity": EPISODE_LEG_QUANTITY,
+        "quantity": validate_owned_leg_quantity(quantity),
         "entry_price": int(entry_price),
         "status": "PLANNED",
         "buy_order_no": "",
@@ -729,7 +739,15 @@ class SamsungRegularTwoLegMachine:
         resolved_reference = int(
             reference_price or self._state.get("signal_close") or 0
         )
-        resolved_quantity = int(required_quantity or EPISODE_TOTAL_QUANTITY)
+        resolved_quantity = int(
+            required_quantity
+            or sum(
+                int(leg["quantity"])
+                for leg in self._state.get("legs", [])
+                if leg.get("status") == "PLANNED"
+            )
+            or new_entry_quantity(now) * EPISODE_LEG_COUNT
+        )
         resolved_target = int(target_price or 0)
         if resolved_target <= 0 and resolved_reference > 0:
             resolved_target = move_price_by_ticks(
@@ -2338,6 +2356,8 @@ class SamsungRegularTwoLegMachine:
             return self.snapshot()
         source_owner = str(self.ownership_source(self.policy.symbol) or "")
         plans = self.policy.entry_legs(signal.signal_bar.close_price)
+        leg_quantity = new_entry_quantity(now)
+        total_quantity = leg_quantity * len(plans)
         if not self.live_enabled:
             self._state.update(
                 {
@@ -2345,7 +2365,7 @@ class SamsungRegularTwoLegMachine:
                     "blocked_reason": "live_authority_disabled",
                     "preview": {
                         "signal_bar": latest_iso,
-                        "total_quantity": EPISODE_TOTAL_QUANTITY,
+                        "total_quantity": total_quantity,
                         "legs": plans,
                         "operator_exclusion_ready": bool(source_owner),
                         "strategy_relationship": "parallel_independent_strategy",
@@ -2373,7 +2393,7 @@ class SamsungRegularTwoLegMachine:
             target_price=move_price_by_ticks(
                 int(signal.signal_bar.close_price), int(self.policy.target_ticks)
             ),
-            required_quantity=EPISODE_TOTAL_QUANTITY,
+            required_quantity=total_quantity,
             expected_venues=[
                 str(getattr(self.policy, "route", "SOR") or "SOR").upper()
             ],
@@ -2396,7 +2416,7 @@ class SamsungRegularTwoLegMachine:
                     ),
                     "scan_start": self.policy.scan_start.isoformat(),
                     "scan_last_bar": self.policy.scan_last_bar.isoformat(),
-                    "leg_quantities": [EPISODE_LEG_QUANTITY for _ in plans],
+                    "leg_quantities": [leg_quantity for _ in plans],
                     "runtime_policy_hash": str(self.policy.runtime_policy_hash),
                     "lookback_bars": int(self.policy.lookback_bars),
                     "rolling_high_drawdown_pct": float(
@@ -2412,7 +2432,7 @@ class SamsungRegularTwoLegMachine:
                         else "immediate_owner_guards"
                     ),
                 },
-                "legs": [{**plan, "quantity": EPISODE_LEG_QUANTITY} for plan in plans],
+                "legs": [{**plan, "quantity": leg_quantity} for plan in plans],
                 "reference_price": int(signal.signal_bar.close_price),
                 "route": str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
             },
@@ -2577,7 +2597,7 @@ class SamsungRegularTwoLegMachine:
                 due_at = now + timedelta(seconds=delay_sec)
                 anchor_liquidity = self._entry_liquidity_decision(
                     route=str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
-                    requested_quantity=EPISODE_TOTAL_QUANTITY,
+                    requested_quantity=total_quantity,
                 )
                 anchor_snapshot = anchor_liquidity.event_fields()[
                     "entry_liquidity_snapshot"
@@ -2648,17 +2668,18 @@ class SamsungRegularTwoLegMachine:
                     "target_ticks": int(self.policy.target_ticks),
                     "runtime_policy_source": str(self.policy.runtime_policy_source),
                     "runtime_policy_hash": str(self.policy.runtime_policy_hash),
+                    "new_entry_quantity_receipt": new_entry_quantity_receipt(now),
                     "entry_legs": [
                         {
                             "leg_id": str(plan["leg_id"]),
                             "price_role": str(plan["price_role"]),
                             "entry_price": int(plan["entry_price"]),
-                            "quantity": EPISODE_LEG_QUANTITY,
+                            "quantity": leg_quantity,
                         }
                         for plan in plans
                     ],
                 },
-                "legs": [_new_leg(**plan) for plan in plans],
+                "legs": [_new_leg(**plan, quantity=leg_quantity) for plan in plans],
                 "blocked_reason": "",
             }
         )

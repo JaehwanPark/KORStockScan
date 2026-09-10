@@ -1206,3 +1206,36 @@ def test_systemd_live_unit_uses_exact_two_leg_confirmation():
         not in preflight_script[polling_verify:polling_verify_end]
     )
     assert polling_verify_end < verify_commit < verify_artifact_write
+
+
+@pytest.mark.parametrize("day,quantity", [(11, 1), (14, 10)])
+def test_operator_one_day_morning_entry_and_targets_preserve_quantity(
+    tmp_path, day, quantity
+):
+    gateway = FakeGateway()
+    buys, sells = [], []
+    original_buy, original_sell = gateway.submit_limit_buy, gateway.submit_limit_sell
+
+    def buy(*, price, quantity, route="SOR"):
+        buys.append(quantity)
+        return original_buy(price=price, quantity=quantity, route=route)
+
+    def sell(*, price, quantity, route="SOR"):
+        sells.append(quantity)
+        return original_sell(price=price, quantity=quantity, route=route)
+
+    gateway.submit_limit_buy, gateway.submit_limit_sell = buy, sell
+    now = _at(11, 8, 1).replace(month=9, day=day)
+    state = _machine(tmp_path, gateway).run_once(now)
+    assert buys == [quantity, quantity]
+    assert [leg["quantity"] for leg in state["signal_features"]["entry_legs"]] == [
+        quantity,
+        quantity,
+    ]
+    for index, leg in enumerate(state["legs"], 1):
+        gateway.snapshots[f"B{index}"] = ExecutionSnapshot(
+            True, True, quantity, 0, quantity, leg["entry_price"]
+        )
+    filled = _machine(tmp_path, gateway).run_once(now + timedelta(minutes=1))
+    assert filled["position_qty"] == quantity * 2
+    assert sells == [quantity, quantity]

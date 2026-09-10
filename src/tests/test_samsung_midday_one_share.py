@@ -813,3 +813,62 @@ def test_preflight_systemd_can_observe_existing_tmux_socket():
     assert "13:12:00 Asia/Seoul" in preflight_timer
     assert "13:14:00 Asia/Seoul" in live_timer
     assert service_module.LIVE_CONFIRMATION in live_unit
+
+
+@pytest.mark.parametrize("day,quantity", [(11, 1), (14, 10)])
+def test_operator_one_day_new_legs_submit_and_reload_with_owned_quantity(
+    tmp_path, day, quantity
+):
+    from dataclasses import replace
+
+    gateway = FakeGateway()
+    gateway.bars = tuple(
+        replace(bar, timestamp=bar.timestamp.replace(month=9, day=day))
+        for bar in gateway.bars
+    )
+    buy_quantities = []
+    original_buy = gateway.submit_limit_buy
+
+    def buy(*, price, quantity):
+        buy_quantities.append(quantity)
+        return original_buy(price=price, quantity=quantity)
+
+    gateway.submit_limit_buy = buy
+    now = _scan_at(12, 1).replace(month=9, day=day)
+    machine = _machine(tmp_path, gateway)
+    state = machine.run_once(now)
+    assert buy_quantities == [quantity, quantity]
+    assert [leg["quantity"] for leg in state["signal_features"]["entry_legs"]] == [
+        quantity,
+        quantity,
+    ]
+    for index, leg in enumerate(state["legs"], 1):
+        gateway.snapshots[f"B{index}"] = ExecutionSnapshot(
+            True, True, quantity, 0, quantity, leg["entry_price"]
+        )
+    loaded = _machine(tmp_path, gateway)
+    held = loaded.run_once(now + timedelta(seconds=1))
+    assert held["position_qty"] == quantity * 2
+    assert gateway.sell_quantities == [quantity, quantity]
+    assert [leg["quantity"] for leg in held["legs"]] == [quantity, quantity]
+    # The expiry controls future entry allocation, never an outstanding lot.
+    later = _machine(tmp_path, gateway).run_once(now + timedelta(days=1))
+    assert [leg["quantity"] for leg in later["legs"]] == [quantity, quantity]
+    assert buy_quantities == [quantity, quantity]
+
+
+
+def test_operator_one_day_keeps_previous_ten_share_owned_targets(tmp_path):
+    from dataclasses import replace
+    gateway = FakeGateway()
+    gateway.bars = tuple(replace(bar, timestamp=bar.timestamp.replace(month=9, day=10)) for bar in gateway.bars)
+    now = _scan_at(12, 1).replace(month=9, day=10)
+    state = _machine(tmp_path, gateway).run_once(now)
+    for index, leg in enumerate(state["legs"], 1):
+        gateway.snapshots[f"B{index}"] = ExecutionSnapshot(True, True, 10, 0, 10, leg["entry_price"])
+    _machine(tmp_path, gateway).run_once(now + timedelta(seconds=1))
+    state = _machine(tmp_path, gateway).run_once(now + timedelta(days=1))
+    assert state["position_qty"] == 20
+    assert [leg["quantity"] for leg in state["legs"]] == [10, 10]
+    assert gateway.sell_quantities == [10, 10]
+    assert len(gateway.buy_calls) == 2
