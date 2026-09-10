@@ -1,13 +1,16 @@
 """Local-only entry input timing regressions; no provider or broker calls."""
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+from src.utils.constants import TRADING_RULES as CONFIG
 
 from src.engine import sniper_state_handlers as handlers
+from src.engine.scalping import ai_market_snapshot as snapshot_module
 from src.engine.scalping.entry_candle_context import (
     build_entry_candle_context,
     revalidate_entry_candle_snapshot,
@@ -408,3 +411,123 @@ def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
     assert snapshot["sources"]["tape"]["observed_at"] == (
         context["ai_market_snapshot_v1"]["sources"]["tape"]["observed_at"]
     )
+
+
+@pytest.mark.parametrize("mode", ["fresh", "stale", "future", "route_changed"])
+def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
+    monkeypatch, mode
+):
+    clock = {"now": NOW}
+    calls = []
+    monkeypatch.setattr(handlers.time, "time", lambda: clock["now"])
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED", "true")
+    monkeypatch.setattr(
+        snapshot_module,
+        "runtime_preflight_artifact_status",
+        lambda **k: {"ready": True, "status": "ready_fixture"},
+    )
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_PRICE_REFRESH_ENABLED=False,
+        ),
+    )
+    monkeypatch.setattr(handlers, "entry_candle_context_enabled", lambda **k: True)
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *a, **k: [{"old_rest": True}],
+    )
+    monkeypatch.setattr(
+        handlers, "fetch_entry_candles_with_meta", lambda *a, **k: ([], {})
+    )
+    monkeypatch.setattr(handlers, "_log_entry_pipeline", lambda *a, **k: None)
+    monkeypatch.setattr(
+        handlers,
+        "_entry_ai_price_input_audit_fields",
+        lambda **k: {"ai_input_source_quality_status": "complete"},
+    )
+
+    def latest(_code):
+        age = {"fresh": 0.9, "stale": 4, "future": -1, "route_changed": 0.1}[mode]
+        ws = _ws(clock["now"] - age, price=10020)
+        if mode == "route_changed":
+            ws.update(market_route="nxt_only", market_suffix="_NX")
+            ws["last_realtime_type_market_route"] = {"0B": "nxt_only", "0D": "nxt_only"}
+            ws["last_realtime_type_market_suffix"] = {"0B": "_NX", "0D": "_NX"}
+        return ws
+
+    monkeypatch.setattr(handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=latest))
+
+    def slow_context(*a, **k):
+        context = _context()
+        clock["now"] += 5
+        return context
+
+    monkeypatch.setattr(handlers, "build_entry_candle_context", slow_context)
+
+    def evaluate(_name, _code, ws, ticks, candles, price_ctx, **kwargs):
+        calls.append(True)
+        assert mode == "fresh"
+        assert ws["curr"] == 10020 and price_ctx["current_price"] == 10020
+        assert ticks == ws["recent_trade_ticks"] and "old_rest" not in str(ticks)
+        assert kwargs["candle_context"]["ai_market_snapshot_v1"]["sources"]["tape"][
+            "age_ms"
+        ] == pytest.approx(900, abs=1)
+        return {
+            "action": "SKIP",
+            "confidence": 99,
+            "reason": "fixture_skip",
+            "ai_parse_ok": True,
+            "ai_result_source": "live",
+        }
+
+    gate = {
+        "target_buy_price": 9980,
+        "latency_guarded_order_price": 9990,
+        "normal_defensive_order_price": 9990,
+        "order_price": 9990,
+        "price_resolution_reason": "defensive_order_price",
+        "latency_state": "SAFE",
+    }
+    result, touched = handlers._apply_entry_ai_price_canary(
+        stock={
+            "name": "fixture",
+            "strategy": "SCALPING",
+            "position_tag": "SCANNER",
+            "prob": 0.8,
+        },
+        code="123456",
+        strategy="SCALPING",
+        ws_data=_ws(NOW - 0.1),
+        ai_engine=SimpleNamespace(evaluate_scalping_entry_price=evaluate),
+        latency_gate=gate,
+        planned_orders=[
+            {
+                "tag": "normal",
+                "qty": 1,
+                "price": 9990,
+                "tif": "DAY",
+                "order_type": "LIMIT",
+            }
+        ],
+        curr_price=10000,
+        best_bid=10000,
+        best_ask=10010,
+    )
+    assert result == [] and touched is True
+    assert len(calls) == (1 if mode == "fresh" else 0), {
+        k: v for k, v in gate.items() if "reason" in k or "error" in k or "blocker" in k
+    }
+    assert gate["entry_ai_price_final_ws_snapshot_refresh_max_age_ms"] == 3000
+    if mode == "fresh":
+        _, final = handlers._pre_submit_refresh_real_ws_snapshot(
+            "123456", latest("123456"), "SCALPING"
+        )
+        assert final["pre_submit_ws_snapshot_refresh_applied"] is False
+        assert final["pre_submit_ws_snapshot_refresh_max_age_ms"] == 700

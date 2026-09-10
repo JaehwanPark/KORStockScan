@@ -46141,6 +46141,89 @@ def _apply_entry_ai_price_canary(
             source_meta=candle_source_meta,
             include_investor_source=True,
         )
+        # Auxiliary context preparation may outlive the market snapshot taken
+        # above. Acquire once after all slow reads under this AI input's own
+        # existing source-age contract, not the stricter final-submit contract.
+        prepared_snapshot = candle_context.get("ai_market_snapshot_v1")
+        prepared_snapshot = (
+            prepared_snapshot if isinstance(prepared_snapshot, dict) else {}
+        )
+        prepared_sources = prepared_snapshot.get("sources")
+        prepared_sources = (
+            prepared_sources if isinstance(prepared_sources, dict) else {}
+        )
+        source_limits = [
+            _safe_float(source.get("freshness_limit_ms"), 0.0)
+            for name in ("current_price", "bbo", "tape")
+            for source in [
+                (
+                    prepared_sources.get(name)
+                    if isinstance(prepared_sources.get(name), dict)
+                    else {}
+                )
+            ]
+        ]
+        if all(math.isfinite(limit) and limit > 0 for limit in source_limits):
+            ws_data, final_refresh = _pre_submit_refresh_real_ws_snapshot(
+                code, ws_data, strategy, context_max_age_ms=int(min(source_limits))
+            )
+            final_refresh_fields = {
+                key.replace(
+                    "pre_submit_ws_snapshot_refresh_",
+                    "entry_ai_price_final_ws_snapshot_refresh_",
+                    1,
+                ): value
+                for key, value in final_refresh.items()
+                if key.startswith("pre_submit_ws_snapshot_refresh_")
+            }
+            entry_price_ws_refresh_fields.update(final_refresh_fields)
+            if final_refresh.get("pre_submit_ws_snapshot_refresh_applied"):
+                recent_ticks = list(ws_data.get("recent_trade_ticks") or [])
+                current_price = curr_price = _safe_int(
+                    ws_data.get("curr"), current_price
+                )
+                refreshed_best_ask, refreshed_best_bid = _get_best_levels_from_ws(
+                    ws_data
+                )
+                if refreshed_best_bid > 0 and refreshed_best_ask >= refreshed_best_bid:
+                    best_bid, best_ask = refreshed_best_bid, refreshed_best_ask
+                invalid_price_context_fields.update(
+                    current_price=current_price, best_bid=best_bid, best_ask=best_ask
+                )
+                price_ctx = _build_entry_ai_price_context(
+                    stock,
+                    latency_gate,
+                    curr_price=current_price,
+                    best_bid=best_bid,
+                    best_ask=best_ask,
+                )
+                micro_log_fields = _build_orderbook_micro_log_fields(
+                    price_ctx.get("orderbook_micro")
+                )
+            try:
+                candle_context = revalidate_entry_candle_snapshot(
+                    candle_context, ws_data, now_ts=time.time()
+                )
+                entry_price_ws_refresh_fields[
+                    "entry_ai_price_prepared_snapshot_age_ms"
+                ] = candle_context.get("market_snapshot_revalidation", {}).get(
+                    "elapsed_ms"
+                )
+            except (KeyError, TypeError, ValueError, OverflowError) as exc:
+                # Never fall back to an order on a changed route or invalid
+                # source clock. The existing candle-source veto below owns it.
+                candle_context = copy.deepcopy(candle_context)
+                quality = candle_context.get("source_quality")
+                quality = quality if isinstance(quality, dict) else {}
+                candle_context["source_quality"] = quality
+                quality["status"] = "blocked"
+                quality["blockers"] = list(quality.get("blockers") or []) + [
+                    "prepared_market_snapshot_revalidation_failed"
+                ]
+                entry_price_ws_refresh_fields[
+                    "entry_ai_price_snapshot_revalidation_error"
+                ] = str(exc)
+            latency_gate.update(entry_price_ws_refresh_fields)
         candle_source_quality = (
             candle_context.get("source_quality")
             if isinstance(candle_context.get("source_quality"), dict)
