@@ -18,8 +18,16 @@
 
 ## 별도 사용자 승인 적용 확인
 
+- [x] `[FixedReleasePostcloseStartupRoutingReview0910] 장후·PREOPEN·예약 기동 release 경로 통일 승인 및 설치 검증` (`Due: 2026-09-10`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~20:00`, `Track: RuntimeStability`)
+  - Source: [고정 배포 재리뷰](../audit-reports/2026-09-10-fixed-release-postclose-startup-review.md). 18:10 점검에서는 main a722b27f fixed/PID1048327과 장후/예약 작업폴더가 분리돼 있었다. 이후 사용자가 적응형 청산 변경을 제외한 경로 통일을 명시 승인했다. `unified-runtime-20260910` 별도 release에서 입력 source 구조 방어·PREOPEN OFF 표시·공통 실행기를 검토하며, 설치 완료/내일 자연 기동을 분리한다.
+  - Acceptance: 검토된 live/장후 호환 release 및 rollback 확정→공통 배포 진입점·예약 경로 설치 승인→정적/모의 경로·source/policy hash 검증. 실행 중 wrapper를 교체하거나 미검토 widget/episode 변경을 합치지 않는다. 날짜별 env/activation/quota와 기존 owner/guard는 유지한다. 승인된 설치와 실제 내일 PID/경제성 수락을 분리한다.
+  - Handoff: 설치 미완료면 다음날07:55 fixed 자동 유지를 보장하지 않으며 `KRXDaily100NextDayStartupAcceptance0911`에 정확한 선택 root/commit/미해결 blocker를 전달한다. 새 봇 재기동·주문·cap 변경은 이 checkbox로 승인되지 않는다.
+  - 완료 18:31: 공통 선택 `unified-runtime-20260910`/b665e0a3, cron9행·작업폴더 restart routing 설치/readback 및10개 operation dry-run 일치. 회귀1951 PASS·pin code10/source3 일치·별도 workspace shim54 PASS(중복). 현재 main1048327/a722b27f·widget327676 유지. [설치 근거](../audit-reports/2026-09-10-fixed-release-postclose-startup-review.md), [운영 계약](../runtime-release-routing.md). 오늘 장후/내일 자연 기동·NXT 및 경제성은 별도이며, 적응형 청산은 미포함이다.
+
 - [ ] `[KRXDaily100NextDayStartupAcceptance0911] KRX 일일100 정책과 다음날 실제 기동 경로 확인` (`Due: 2026-09-11`, `Slot: PREOPEN`, `TimeWindow: 07:30~08:05`, `Track: RuntimeStability`)
-  - Source: [고정 배포·재기동 영향 점검](../audit-reports/2026-09-10-entry-intraday-activation-review.md). 현재07:55 cron은 작업폴더이며 fixed-release 자동 유지가 아니다. 수동/예약 기동의 공통 release routing 변경은 별도 승인·검증 없이는 실행하지 않는다.
+  - 경로 수리 리뷰: [9/10 routing review](../audit-reports/2026-09-10-runtime-release-routing-review.md). start env/log 보존·실제 cron 명령 판별·조회 lock 부작용을 보완했다. workspace bootstrap 수정과 선택 b665e0a3/실제 PID 세대를 구분하며, cron 재설치·선택 교체·매매 재기동 없이 내일 기존 예약/정책 소비를 확인한다.
+  - 장후 handoff: [장후 지시문 §8.8](../postclose-tuning-result-review-task-instructions.md#88-다음-거래일-preopen0755-기동-handoff)에 따라 선택 원장/root/commit·cron9행·실제 장후 worker 세대, 다음 거래일 후보/source hash·정책 blocker·미배포 수리/rollback을 기록한다. 장후 준비 확인은 다음날 PID 성공이나 재기동 승인으로 대신하지 않는다. 이 문서 현행화에서는 실제 장후/배포/기동을 실행하지 않았다.
+  - Source: [고정 배포·재기동 영향 점검](../audit-reports/2026-09-10-entry-intraday-activation-review.md)의 과거 작업폴더 경로는 9/10 18:31 승인 설치로 해소했다. [설치 근거](../audit-reports/2026-09-10-fixed-release-postclose-startup-review.md): 07:35/07:55 및 workspace restart는 공통 선택 `unified-runtime-20260910`/b665e0a3를 사용한다. 선택 원장·소스 clean·공유 state와 cron drift 검증은 설치 완료이며, 내일 실제 후보/PID 소비는 아직 미래 상태다.
   - Acceptance: source9/10의 KRX 후보 및9/11 activation 또는 정확한 blocker, 실제 PID root/commit/dirty·runtime verify, V2.14/1주/정책 cap100/두 env budget100, 오늘 pin 미상속·날짜별 quota, WS/Provider 첫 소비를 분리 확인한다. 후보0/미승인은 강제 BUY로 복구하지 않으며 NXT/다른 owner와 safety는 불변이다. 사전 artifact 정상은 실제 자연 기동·체결·순이익 완료가 아니다.
 
 - [ ] `[WidgetEpisodeApprovedNextDayExecution0910] 9/9 후속 승인 추천의 9/10 정책·기동·자연 소비 확인` (`Due: 2026-09-10`, `Slot: PREOPEN`, `TimeWindow: 08:40~09:00`, `Track: RuntimeStability`)

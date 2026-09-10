@@ -19,6 +19,11 @@ set -euo pipefail
 # threshold/provider/order env.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Canonical workspace entrypoint: missing/invalid selection must fail closed.
+# Reviewed worktrees retain their original restart script and policy code pin.
+if [ -d "$PROJECT_DIR/.git" ]; then
+    exec /bin/bash "$PROJECT_DIR/deploy/run_runtime_release.sh" restart "$@"
+fi
 VENV_PY="${KORSTOCKSCAN_VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 # Release worktrees share the original operator flag, not independent requests.
 RESTART_FLAG="$(realpath -m "$PROJECT_DIR/restart.flag")"

@@ -170,6 +170,18 @@ def render_crontab(original: str, workspace: Path) -> str:
     machine timers and intraday observers are deliberately outside this router.
     """
     router = f"bash {workspace}/deploy/run_runtime_release.sh"
+    legacy_start = (
+        f"/usr/bin/tmux new-session -d -s bot '/bin/bash -c \"cd {workspace}/src "
+        "&& source ../.venv/bin/activate && ./run_bot.sh\"'"
+    )
+    simple_start = (
+        f"/usr/bin/tmux new-session -d -s bot 'cd {workspace}/src && ./run_bot.sh'"
+    )
+    # Only leading shell assignments may precede an execution owner. A route
+    # appearing in echo/printf, a conditional, or a comment is not execution.
+    env_prefix = re.compile(
+        r"""(?:[A-Za-z_][A-Za-z0-9_]*=(?:[^\s'";&|<>]+|'[^']*'|"[^"]*")+\s+)*"""
+    )
     seen: list[str] = []
     result = []
     for line in original.splitlines():
@@ -187,31 +199,49 @@ def render_crontab(original: str, workspace: Path) -> str:
             result.append(line)
             continue
         seen.append(op)
-        if op == "start":
-            schedule = line.split(maxsplit=5)[:5]
-            if len(schedule) != 5:
-                raise ValueError("cron_start_schedule_invalid")
-            line = " ".join(schedule) + f" {router} start # RUNTIME_RELEASE_START"
-        elif not re.search(
-            re.escape(f"{router} {op}") + r"(?=\s|$)", line.partition("#")[0]
-        ):
-            if op in OWNED:
-                script, owner = OWNED[op]
-                old = (
-                    f"bash {workspace}/deploy/run_with_owned_log.sh --owner {owner} "
-                    f"--log {workspace}/logs/{owner}.log {workspace}/deploy/run_{script}.sh"
-                )
-            elif op == "paired-replay":
-                old = (
-                    f"{workspace}/deploy/run_ai_entry_setup_paired_replay_postclose.sh"
-                )
-            elif op == "eod":
-                old = f"cd {workspace} && {workspace}/.venv/bin/python src/utils/update_kospi.py"
-            else:
-                old = f"{workspace}/deploy/run_dashboard_db_archive_cron.sh 0"
-            if line.count(old) != 1:
-                raise ValueError(f"cron_command_unrecognized:{op}")
-            line = line.replace(old, f"{router} {op}", 1)
+        scheduled = re.fullmatch(r"(\s*(?:\S+\s+){5})(.+)", line)
+        if not scheduled:
+            raise ValueError("cron_schedule_invalid")
+        schedule, command = scheduled.groups()
+        prefix = env_prefix.match(command).group()
+        command = command[len(prefix) :]
+        desired = f"{router} {op}"
+        if op in OWNED:
+            script, owner = OWNED[op]
+            old = (
+                f"bash {workspace}/deploy/run_with_owned_log.sh --owner {owner} "
+                f"--log {workspace}/logs/{owner}.log {workspace}/deploy/run_{script}.sh"
+            )
+        elif op == "paired-replay":
+            old = f"{workspace}/deploy/run_ai_entry_setup_paired_replay_postclose.sh"
+        elif op == "eod":
+            old = f"cd {workspace} && {workspace}/.venv/bin/python src/utils/update_kospi.py"
+        elif op == "archive":
+            old = f"{workspace}/deploy/run_dashboard_db_archive_cron.sh 0"
+        else:
+            old = legacy_start
+        allowed = (desired, old, simple_start) if op == "start" else (desired, old)
+        matched = next(
+            (c for c in allowed if command == c or command.startswith(c + " ")), None
+        )
+        if matched is None:
+            raise ValueError(f"cron_command_unrecognized:{op}")
+        tail = command[len(matched) :]
+        arguments, marker, comment = tail.partition("#")
+        if op in OWNED or op == "paired-replay":
+            date_arg = r" $(TZ=Asia/Seoul date +\%F)"
+            if not arguments.startswith(date_arg):
+                raise ValueError(f"cron_target_date_unrecognized:{op}")
+            arguments = arguments[len(date_arg) :]
+        # Do not accept --print-plan, an extra execution, or shell conditionals
+        # as an installed scheduled worker. Preserve conventional log redirects.
+        if not re.fullmatch(r"(?:\s+(?:>>?\s+[^\s;&|<>]+|2>&1))*\s*", arguments):
+            raise ValueError(f"cron_arguments_unrecognized:{op}")
+        if op == "start" and not marker:
+            tail = tail.rstrip() + " # RUNTIME_RELEASE_START"
+        elif op == "start" and comment.strip() != "RUNTIME_RELEASE_START":
+            raise ValueError("cron_start_marker_unrecognized")
+        line = schedule + prefix + desired + tail
         result.append(line)
     expected = {"start", *TAGS.values()}
     if set(seen) != expected or len(seen) != len(expected):
@@ -220,15 +250,19 @@ def render_crontab(original: str, workspace: Path) -> str:
 
 
 def manage_cron(workspace: Path, install: bool) -> None:
+    if not install:
+        old = subprocess.check_output(["crontab", "-l"], text=True)
+        if render_crontab(old, workspace) != old:
+            raise ValueError("cron_release_routing_not_installed")
+        print(json.dumps({"cron_routing_verified": True, "targets": 9}))
+        return
     # Serialize router installs. Re-read just before writing to avoid clobbering
     # an unrelated session's edits observed during validation.
     with (workspace / "data/runtime/runtime_release_cron.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         old = subprocess.check_output(["crontab", "-l"], text=True)
         new = render_crontab(old, workspace)
-        if not install and new != old:
-            raise ValueError("cron_release_routing_not_installed")
-        if install and new != old:
+        if new != old:
             backup_dir = Path(
                 tempfile.mkdtemp(prefix="runtime-release-cron-", dir=workspace / "tmp")
             )
