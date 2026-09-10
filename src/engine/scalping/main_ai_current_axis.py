@@ -16,10 +16,11 @@ from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils.market_day import is_krx_trading_day
+from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
 ROOT = Path(__file__).resolve().parents[3]
-RUNTIME_ROOT = ROOT / "data/runtime/main_ai_current_axis"
+RUNTIME_ROOT = DATA_DIR / "runtime/main_ai_current_axis"
 FAMILY = "main_ai_ask_depletion_prompt_input_v1"
 AXIS = "prompt_contract_effect_on_ask_depletion_context"
 ENABLED_ENV = "MAIN_AI_CURRENT_AXIS_ENABLED"

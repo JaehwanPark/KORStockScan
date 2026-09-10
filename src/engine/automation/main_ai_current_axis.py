@@ -256,8 +256,8 @@ def main(argv: list[str] | None = None) -> int:
             result["post_apply_attribution"] = post_apply(
                 args.target_date,
                 root=root,
-                trace_path=policy.ROOT
-                / "data/ai_decision_trace"
+                trace_path=policy.DATA_DIR
+                / "ai_decision_trace"
                 / f"ai_decision_trace_{args.target_date}.jsonl",
             )
             if result["post_apply_attribution"]["source_quality_errors"]:
