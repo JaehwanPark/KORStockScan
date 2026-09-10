@@ -72,7 +72,7 @@ from src.engine.trade_profit import (
     calculate_net_realized_pnl,
     get_trade_cost_rate,
 )
-from src.utils.constants import TRADING_RULES
+from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
@@ -136,12 +136,18 @@ _BROKER_EXECUTION_RAW_FIELD_KEYS = (
     "2135",
     "2136",
 )
-SELL_RECEIPT_RECOVERY_DIR = Path(
-    os.getenv(
-        "KORSTOCKSCAN_SELL_RECEIPT_RECOVERY_DIR",
-        "data/runtime/sell_receipt_recovery",
-    )
-)
+
+
+def _sell_receipt_recovery_directory() -> Path:
+    explicit = os.getenv("KORSTOCKSCAN_SELL_RECEIPT_RECOVERY_DIR")
+    if explicit is not None:
+        return Path(explicit)
+    # Preserve the existing launcher-cwd journal location across release roots.
+    # Resolve only the trusted shared data mount, not journal descendants.
+    return DATA_DIR.resolve().parent / "src/data/runtime/sell_receipt_recovery"
+
+
+SELL_RECEIPT_RECOVERY_DIR = _sell_receipt_recovery_directory()
 _SELL_RECEIPT_RECOVERY_SCHEMA = "sell_receipt_recovery_v1"
 _SELL_PENDING_SUBMIT_SCHEMA = "sell_pending_submit_custody_v1"
 _SELL_PENDING_SUBMIT_CONTEXT_SCHEMA = "sell_submit_pending_context_v1"

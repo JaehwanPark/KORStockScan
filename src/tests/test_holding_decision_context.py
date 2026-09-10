@@ -272,6 +272,219 @@ def _ws(
     }
 
 
+@pytest.mark.parametrize(
+    "totals,expected",
+    [
+        ({"ask": 1000, "bid": 1400}, True),
+        ({"ask": -1, "bid": 1400}, False),
+        ({"ask": True, "bid": 1400}, False),
+        ({"ask": None, "bid": 1400}, False),
+    ],
+)
+def test_selected_route_depth_totals_reach_holding_microstructure(
+    monkeypatch, totals, expected
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    ws = _ws(now)
+    ws["recent_trade_ticks"] = []
+    rows = {}
+    for kind in ("0B", "0D"):
+        rows[kind] = {
+            "observed_epoch": now.timestamp(),
+            "item": "000660",
+            "market_suffix": "",
+            "market_route": "krx_regular",
+        }
+    rows["0B"]["current_price"] = 10300
+    rows["0D"].update(
+        {
+            "orderbook": {
+                "asks": [{"price": 10301, "volume": 100}],
+                "bids": [{"price": 10299, "volume": 200}],
+            },
+            "route_depth_totals": {
+                "combined": totals,
+                "KRX": {"ask": 0, "bid": 0},
+                "NXT": {"ask": 0, "bid": 0},
+            },
+        }
+    )
+    ws["realtime_type_snapshots_by_route"] = {"KRX|krx_regular": rows}
+    stock = _stock()
+    stock.pop("holding_flow_ofi_regime")
+    stock.pop("holding_flow_ofi_snapshot_age_ms")
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        ws,
+        stock,
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)),
+    )
+    assert (
+        "microstructure_missing_or_stale" not in context["source_quality"]["blockers"]
+    ) is expected
+    assert context["source_quality"]["hold_defer_allowed"] is expected
+
+
+@pytest.mark.parametrize("quote_age", [4.0, -2.0])
+def test_new_trade_does_not_refresh_stale_or_future_quote(monkeypatch, quote_age):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    ws = _ws(now)
+    ws["last_realtime_type_ts"] = {
+        "0B": now.timestamp(),
+        "0D": now.timestamp() - quote_age,
+    }
+    context = build_holding_decision_context(
+        None,
+        "000660",
+        ws,
+        _stock(),
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)),
+    )
+    assert "executable_bbo" in context["source_quality"]["blockers"]
+    assert context["source_quality"]["hold_defer_allowed"] is False
+
+
+def test_holding_refresh_replaces_volatile_input_without_restamping(monkeypatch):
+    from types import SimpleNamespace
+
+    now = 1789014600.0
+    base = {
+        "curr": 100,
+        "last_ws_update_ts": now - 4,
+        "orderbook": {"old": True},
+        "recent_trade_ticks": [{"old": True}],
+        "market_type": "KOSDAQ",
+        "last_realtime_type_ts": {"0B": now - 4},
+    }
+    latest = {"curr": 101, "last_ws_update_ts": now - 0.1}
+    calls = []
+
+    def read(code):
+        calls.append(code)
+        return latest
+
+    monkeypatch.setattr(
+        state_handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=read)
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now)
+    refreshed, fields = state_handlers._refresh_holding_ai_ws_snapshot("232140", base)
+    assert calls == ["232140"]
+    assert fields["holding_ai_ws_refresh_applied"] is True
+    assert refreshed["last_ws_update_ts"] == latest["last_ws_update_ts"]
+    assert refreshed["market_type"] == "KOSDAQ"
+    assert not any(
+        k in refreshed
+        for k in ["orderbook", "recent_trade_ticks", "last_realtime_type_ts"]
+    )
+    assert base["curr"] == 100 and latest == {
+        "curr": 101,
+        "last_ws_update_ts": now - 0.1,
+    }
+
+
+@pytest.mark.parametrize(
+    "timestamp", [0, float("nan"), float("inf"), 1789014700.0, 1789014590.0]
+)
+def test_holding_refresh_rejects_invalid_future_or_regressed_cache(
+    monkeypatch, timestamp
+):
+    from types import SimpleNamespace
+
+    base = {"curr": 100, "last_ws_update_ts": 1789014599.0}
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(
+            get_latest_data=lambda code: {"curr": 101, "last_ws_update_ts": timestamp}
+        ),
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1789014600.0)
+    refreshed, fields = state_handlers._refresh_holding_ai_ws_snapshot("232140", base)
+    assert refreshed == base
+    assert fields["holding_ai_ws_refresh_applied"] is False
+
+
+def test_holding_refresh_repairs_pre_fetch_age_without_relaxing_gate(monkeypatch):
+    from types import SimpleNamespace
+
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    base = _ws(now - timedelta(seconds=4))
+    latest = _ws(now)
+    monkeypatch.setattr(
+        state_handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: latest),
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now.timestamp())
+    fresh, fields = state_handlers._refresh_holding_ai_ws_snapshot("000660", base)
+    for source, allowed in [(base, False), (fresh, True)]:
+        ctx = build_holding_decision_context(
+            None,
+            "000660",
+            source,
+            _stock(),
+            "KRX",
+            "krx_regular",
+            "holding_score",
+            now_ts=now,
+            recent_candles=_candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)),
+        )
+        assert ctx["source_quality"]["hold_defer_allowed"] is allowed
+    assert fields["holding_ai_ws_refresh_applied"] is True
+
+
+@pytest.mark.parametrize(
+    "fee,slippage,known",
+    [
+        (None, None, False),
+        (0.23, None, False),
+        (float("nan"), 0, False),
+        (-0.1, 0, False),
+        (0, 0, True),
+        (0.23, 2, True),
+    ],
+)
+def test_missing_holding_costs_are_not_zero_net_profit(
+    monkeypatch, fee, slippage, known
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 23, 10, 0, 30, tzinfo=KST)
+    stock = {
+        **_stock(),
+        "estimated_fee_tax_pct": fee,
+        "estimated_slippage_bps": slippage,
+    }
+    ctx = build_holding_decision_context(
+        None,
+        "000660",
+        _ws(now),
+        stock,
+        "KRX",
+        "krx_regular",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)),
+    )
+    pnl = ctx["execution_pnl"]
+    assert (pnl["estimated_net_executable_pnl_pct"] is not None) is known
+    if known:
+        assert pnl["estimated_net_executable_pnl_pct"] == pytest.approx(
+            pnl["executable_pnl_pct"] - fee - slippage / 100.0
+        )
+
+
 def _stock() -> dict:
     return {
         "avg_price": 10_000,

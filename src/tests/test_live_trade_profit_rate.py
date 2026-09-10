@@ -21,6 +21,45 @@ from src.engine.trade_profit import (
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
+def test_sell_recovery_default_uses_shared_legacy_journal_not_release_cwd(
+    monkeypatch, tmp_path
+):
+    shared = tmp_path / "shared"
+    (shared / "data").mkdir(parents=True)
+    release = tmp_path / "release"
+    (release / "src").mkdir(parents=True)
+    (release / "data").symlink_to(shared / "data", target_is_directory=True)
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_RECEIPT_RECOVERY_DIR", raising=False)
+    monkeypatch.setattr(receipts, "DATA_DIR", release / "data")
+    monkeypatch.chdir(release / "src")
+    expected = shared / "src/data/runtime/sell_receipt_recovery"
+    assert receipts._sell_receipt_recovery_directory() == expected
+    monkeypatch.chdir(shared)
+    assert receipts._sell_receipt_recovery_directory() == expected
+    assert not expected.exists()  # Resolution never creates or copies custody.
+
+
+def test_sell_recovery_default_does_not_resolve_journal_child_symlink(
+    monkeypatch, tmp_path
+):
+    (tmp_path / "data").mkdir()
+    parent = tmp_path / "src/data/runtime"
+    parent.mkdir(parents=True)
+    linked = parent / "sell_receipt_recovery"
+    linked.symlink_to(tmp_path / "untrusted", target_is_directory=True)
+    monkeypatch.delenv("KORSTOCKSCAN_SELL_RECEIPT_RECOVERY_DIR", raising=False)
+    monkeypatch.setattr(receipts, "DATA_DIR", tmp_path / "data")
+    resolved = receipts._sell_receipt_recovery_directory()
+    assert resolved == linked and resolved.is_symlink()
+    monkeypatch.setattr(receipts, "SELL_RECEIPT_RECOVERY_DIR", resolved)
+    assert receipts.reconcile_committed_sell_receipt_recovery_files()["invalid"] == 1
+
+
+def test_sell_recovery_explicit_operator_directory_is_preserved(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SELL_RECEIPT_RECOVERY_DIR", "/operator/exact")
+    assert str(receipts._sell_receipt_recovery_directory()) == "/operator/exact"
+
+
 def test_sim_probe_persistence_uses_common_isolation_and_session_guard(tmp_path):
     import json
 

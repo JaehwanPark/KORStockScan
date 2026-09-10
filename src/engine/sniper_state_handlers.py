@@ -25324,6 +25324,54 @@ def _record_holding_score_upstream_preflight_trace(
     return result
 
 
+def _refresh_holding_ai_ws_snapshot(
+    code: str, ws_data: dict | None
+) -> tuple[dict, dict]:
+    """Acquire a new local snapshot after blocking history reads; never restamp data."""
+    base = dict(ws_data or {})
+    fields = {
+        "holding_ai_ws_refresh_applied": False,
+        "holding_ai_ws_refresh_reason": "manager_unavailable",
+    }
+    if WS_MANAGER is None or not hasattr(WS_MANAGER, "get_latest_data"):
+        return base, fields
+    try:
+        latest = WS_MANAGER.get_latest_data(code)
+    except Exception as exc:
+        fields["holding_ai_ws_refresh_reason"] = "manager_error"
+        fields["holding_ai_ws_refresh_error_type"] = type(exc).__name__
+        return base, fields
+    if not isinstance(latest, dict) or not latest:
+        fields["holding_ai_ws_refresh_reason"] = "latest_missing"
+        return base, fields
+    observed = _safe_float(latest.get("last_ws_update_ts"), 0.0)
+    now = time.time()
+    if not math.isfinite(observed) or observed <= 0 or observed > now:
+        fields["holding_ai_ws_refresh_reason"] = "latest_timestamp_invalid"
+        return base, fields
+    if observed < _safe_float(base.get("last_ws_update_ts"), 0.0):
+        fields["holding_ai_ws_refresh_reason"] = "latest_older_than_input"
+        return base, fields
+    # Carry only slow context, never old BBO/tape/receipt clocks. Exact source
+    # preflight below still rejects stale, missing and cross-route input.
+    fresh = {
+        key: base[key] for key in _PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS if key in base
+    }
+    fresh.update(latest)
+    fields.update(
+        {
+            "holding_ai_ws_refresh_applied": True,
+            "holding_ai_ws_refresh_reason": "latest_cache_acquired",
+            "holding_ai_ws_refresh_input_age_ms": (
+                now - _safe_float(base.get("last_ws_update_ts"), now)
+            )
+            * 1000.0,
+            "holding_ai_ws_refresh_age_ms": (now - observed) * 1000.0,
+        }
+    )
+    return fresh, fields
+
+
 def _build_holding_ai_decision_context(
     *,
     stock: dict | None,
@@ -85944,7 +85992,12 @@ def handle_holding_state(
                                 now_ts=now_ts,
                             )
                         )
+                    holding_ai_ws_data = ws_data
                     holding_ai_orderbook_refresh_fields = {}
+                    if not sim_ai_budget_skip:
+                        holding_ai_ws_data, holding_ai_orderbook_refresh_fields = (
+                            _refresh_holding_ai_ws_snapshot(code, ws_data)
+                        )
                     if not sim_ai_budget_skip:
                         record_market_inputs(
                             code,
@@ -85964,18 +86017,23 @@ def handle_holding_state(
                         )
                     if (
                         not sim_ai_budget_skip
-                        and not _pre_submit_input_snapshot_has_usable_quote(ws_data)
+                        and not _pre_submit_input_snapshot_has_usable_quote(
+                            holding_ai_ws_data
+                        )
                     ):
-                        ws_data, holding_ai_orderbook_refresh_fields = (
+                        holding_ai_ws_data, rest_refresh_fields = (
                             _holding_ai_refresh_rest_orderbook_snapshot(
                                 code,
-                                ws_data,
+                                holding_ai_ws_data,
                                 strategy,
                             )
                         )
-                    holding_ai_orderbook_present = bool(ws_data.get("orderbook"))
+                        holding_ai_orderbook_refresh_fields.update(rest_refresh_fields)
+                    holding_ai_orderbook_present = bool(
+                        holding_ai_ws_data.get("orderbook")
+                    )
                     holding_ai_orderbook_usable = (
-                        _pre_submit_input_snapshot_has_usable_quote(ws_data)
+                        _pre_submit_input_snapshot_has_usable_quote(holding_ai_ws_data)
                     )
                     holding_ai_recent_tick_count = len(recent_ticks or [])
                     holding_score_preflight = {
@@ -85992,7 +86050,7 @@ def handle_holding_state(
                         holding_context_now_ts = time.time()
                         holding_score_preflight = (
                             _holding_score_preflight_source_quality(
-                                ws_data,
+                                holding_ai_ws_data,
                                 recent_ticks,
                                 recent_candles,
                                 now_ts=holding_context_now_ts,
@@ -86012,14 +86070,25 @@ def handle_holding_state(
                             used_after_record = _record_scalp_sim_ai_budget_call(now_ts)
                         else:
                             used_after_record = None
+                        holding_ai_curr_price = _safe_int(
+                            holding_ai_ws_data.get("curr"), 0
+                        )
+                        holding_ai_profit_rate = (
+                            calculate_net_profit_rate(buy_p, holding_ai_curr_price)
+                            if holding_ai_curr_price > 0 and buy_p > 0
+                            else profit_rate
+                        )
+                        holding_ai_peak_profit = max(
+                            peak_profit, holding_ai_profit_rate
+                        )
                         holding_score_position_ctx = {
                             "record_id": stock.get("id"),
                             "buy_price": buy_p,
-                            "curr_price": curr_p,
-                            "profit_rate": profit_rate,
-                            "peak_profit": peak_profit,
+                            "curr_price": holding_ai_curr_price,
+                            "profit_rate": holding_ai_profit_rate,
+                            "peak_profit": holding_ai_peak_profit,
                             "drawdown_from_peak_pct": max(
-                                0.0, peak_profit - profit_rate
+                                0.0, holding_ai_peak_profit - holding_ai_profit_rate
                             ),
                             "held_sec": held_sec,
                             "buy_qty": stock.get("buy_qty"),
@@ -86052,7 +86121,7 @@ def handle_holding_state(
                         holding_context_source = _build_holding_ai_decision_context(
                             stock=stock,
                             code=code,
-                            ws_data=ws_data,
+                            ws_data=holding_ai_ws_data,
                             decision_kind="holding_score",
                             now_ts=holding_context_now_ts,
                             recent_candles=recent_candles,
@@ -86136,7 +86205,7 @@ def handle_holding_state(
                             ai_decision = ai_engine.evaluate_scalping_holding_score(
                                 stock["name"],
                                 code,
-                                ws_data,
+                                holding_ai_ws_data,
                                 recent_ticks,
                                 recent_candles,
                                 holding_score_position_ctx,
@@ -86685,7 +86754,7 @@ def handle_holding_state(
                                 _record_holding_score_upstream_preflight_trace(
                                     stock=stock,
                                     code=code,
-                                    ws_data=ws_data,
+                                    ws_data=holding_ai_ws_data,
                                     preflight=holding_score_preflight,
                                 )
                             )

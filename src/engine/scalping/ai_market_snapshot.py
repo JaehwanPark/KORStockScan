@@ -724,6 +724,15 @@ def _route_partitioned_ws_view(
     view["best_ask"] = 0
     view["ask_tot"] = 0
     view["bid_tot"] = 0
+    for key in (
+        "ask_price",
+        "bid_price",
+        "ask_qty",
+        "bid_qty",
+        "best_ask_qty",
+        "best_bid_qty",
+    ):
+        view[key] = 0
     route_ticks = ws.get("recent_trade_ticks_by_route")
     selected_ticks = (
         route_ticks.get(route_key) if isinstance(route_ticks, dict) else None
@@ -774,6 +783,19 @@ def _route_partitioned_ws_view(
             view["best_ask"] = asks[0].get("price")
         view["ask_tot"] = quote_row.get("ask_total") or quote_row.get("ask_tot") or 0
         view["bid_tot"] = quote_row.get("bid_total") or quote_row.get("bid_tot") or 0
+        if "route_depth_totals" in quote_row:
+            # The normalized producer owns these totals for this exact 0D
+            # item. Native-route component FIDs may be zero; do not substitute
+            # KRX/NXT components or the other subscription's flat snapshot.
+            totals = _mapping(_mapping(quote_row, "route_depth_totals"), "combined")
+            values = (totals.get("ask"), totals.get("bid"))
+            if all(
+                isinstance(v, int) and not isinstance(v, bool) and v >= 0
+                for v in values
+            ):
+                view["ask_tot"], view["bid_tot"] = values
+            else:
+                view["ask_tot"] = view["bid_tot"] = 0
     observed_epochs = [
         _epoch(row.get("observed_epoch"))
         for row in rows.values()

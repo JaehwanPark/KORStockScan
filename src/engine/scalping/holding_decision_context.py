@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 import time
@@ -205,6 +206,14 @@ def _age_ms_from_epoch(value: Any, now_epoch: float) -> float | None:
 def _quote_age_ms(
     ws_data: dict[str, Any], now_epoch: float
 ) -> tuple[float | None, str]:
+    realtime_times = ws_data.get("last_realtime_type_ts")
+    if isinstance(realtime_times, dict) and "0D" in realtime_times:
+        observed = _safe_float(realtime_times["0D"], None)
+        if observed is None or observed <= 0:
+            return None, "invalid_0d_timestamp"
+        if observed > 10_000_000_000:
+            observed /= 1000.0
+        return (now_epoch - observed) * 1000.0, "absolute_timestamp:0D"
     for key in ("last_ws_update_ts", "received_at", "received_ts", "timestamp", "ts"):
         if key in ws_data:
             age = _age_ms_from_epoch(ws_data.get(key), now_epoch)
@@ -891,7 +900,7 @@ def build_holding_decision_context(
         best_bid > 0
         and best_ask >= best_bid
         and quote_age_ms is not None
-        and quote_age_ms <= 3000.0
+        and 0.0 <= quote_age_ms <= 3000.0
         and not bool(ws.get("quote_stale") or ws.get("stale_quote"))
     )
     spread_bps = (
@@ -994,6 +1003,14 @@ def build_holding_decision_context(
     )
     estimated_fee_tax_pct = _safe_float(position.get("estimated_fee_tax_pct"), None)
     estimated_slippage_bps = _safe_float(position.get("estimated_slippage_bps"), None)
+    if estimated_fee_tax_pct is not None and (
+        not math.isfinite(estimated_fee_tax_pct) or estimated_fee_tax_pct < 0
+    ):
+        estimated_fee_tax_pct = None
+    if estimated_slippage_bps is not None and (
+        not math.isfinite(estimated_slippage_bps) or estimated_slippage_bps < 0
+    ):
+        estimated_slippage_bps = None
     estimated_net_executable_pnl_pct = (
         round(
             executable_pnl_pct
@@ -1002,6 +1019,8 @@ def build_holding_decision_context(
             4,
         )
         if executable_pnl_pct is not None
+        and estimated_fee_tax_pct is not None
+        and estimated_slippage_bps is not None
         else None
     )
     active_exit_token = bool(
