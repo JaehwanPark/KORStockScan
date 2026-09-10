@@ -228,6 +228,8 @@ jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_
 
 단순 elapsed time만으로 hang을 선언하지 않는다. 다음을 함께 확인한다.
 
+`threshold_postclose_status`의 `running`은 `succeeded`와 다르지만 그 자체가 terminal FAIL도 아니다. 감지기의 pending 예외는 당일 유효 status·시작시각, 같은 날짜의 미종결 최신 START, 실제 wrapper(immutable snapshot 포함)의 exact-date argv가 함께 확인되고 기본 finalization deadline23:20 이전인 경우에만 warning 대기로 분류한다. PID/진행 근거를 계속 관찰하며 성공으로 표시하지 않는다. 실제 failed/invalid status, 최신 FAIL/DONE과의 충돌, 잘못된 날짜·PID 부재 또는 deadline 도달은 이 예외로 숨기지 않는다. 이 계약의 코드 수리와 선택 배포/현재 detector 소비는 §6.5에 따라 별도로 기록한다.
+
 WS 무수신은 [장중 §4.2.1](intraday-monitoring-task-instructions.md#421-동시호가nxt-휴장-구간의-수신-기대)을 먼저 적용한다. 정상 평일08:50~09:00(확인된 NXT-only09:00:30까지)은 event/원 snapshot 시각·route 기준 `expected_market_quiet`이며 연속매매 무수신만으로 장애/recovery workorder를 만들지 않는다. 장후 현재 시각으로 과거 quiet를 stale로 바꾸지 않고, 개장 후 실제 결손·LOGIN/REG/연결/저장 실패·원천 제외·주문 freshness guard는 유지한다.
 
 - latest stage marker와 최근 log mtime

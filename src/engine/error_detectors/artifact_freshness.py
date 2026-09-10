@@ -261,6 +261,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_end": (22, 10),
         "json_status_field": "status",
         "json_ok_values": ["succeeded"],
+        "running_status_deadline": (23, 20),
         "suppress_missing_while_cron_in_progress": {
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",
@@ -705,6 +706,16 @@ class ArtifactFreshnessDetector(BaseDetector):
                 artifact, artifact_path, details
             )
             if status_warning:
+                if self._is_bounded_postclose_running(
+                    artifact, artifact_path, today, now_dt
+                ):
+                    warnings.append(
+                        f"{aid}: exact-date postclose still running before deadline"
+                    )
+                    details[f"{aid}_status"] = "warning"
+                    details[f"{aid}_upstream_status"] = "running_before_deadline"
+                    details[f"{aid}_running_deadline"] = "23:20"
+                    continue
                 if critical:
                     issues.append(status_warning)
                     details[f"{aid}_status"] = "fail"
@@ -805,6 +816,58 @@ class ArtifactFreshnessDetector(BaseDetector):
         return ""
 
     @staticmethod
+    def _is_bounded_postclose_running(
+        artifact: dict[str, Any], artifact_path: Path, today: str, now: datetime
+    ) -> bool:
+        # Only the postclose owner can be pending here, never a failed status,
+        # a prior-day recovery, a generic live process, or an unbounded wait.
+        if (
+            artifact.get("id") != "threshold_postclose_status"
+            or artifact.get("running_status_deadline") != (23, 20)
+            or today != now.date().isoformat()
+            or (now.hour, now.minute) >= (23, 20)
+        ):
+            return False
+        try:
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or type(payload.get("schema_version")) is not int
+                or payload.get("schema_version") != 1
+                or payload.get("report_type") != "threshold_cycle_postclose_status"
+                or payload.get("runtime_effect") is not False
+                or payload.get("status") != "running"
+                or payload.get("target_date") != today
+                or payload.get("reason") != "started"
+                or type(payload.get("exit_code")) is not int
+                or payload["exit_code"] != 0
+            ):
+                return False
+            started = datetime.fromisoformat(payload["started_at"])
+            if (
+                started.date().isoformat() != today
+                or started.timestamp() > now.timestamp()
+            ):
+                return False
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+        config = artifact.get("suppress_missing_while_cron_in_progress")
+        if not isinstance(config, dict) or not config.get("log"):
+            return False
+        # A live PID alone must not hide a newer FAIL/DONE or another date.
+        markers = CronCompletionDetector._read_once_markers(
+            PROJECT_ROOT / config["log"], today
+        )
+        if not (
+            ("[START]" in markers.upper() or "[BEGIN]" in markers.upper())
+            and CronCompletionDetector._last_terminal_marker(markers) == "none"
+        ):
+            return False
+        return ArtifactFreshnessDetector._has_matching_live_process(
+            config, target_date=today
+        )
+
+    @staticmethod
     def _is_upstream_cron_in_progress(config: Any, today: str) -> bool:
         if not isinstance(config, dict):
             return False
@@ -827,7 +890,9 @@ class ArtifactFreshnessDetector(BaseDetector):
         )
 
     @staticmethod
-    def _has_matching_live_process(config: dict[str, Any]) -> bool:
+    def _has_matching_live_process(
+        config: dict[str, Any], *, target_date: str | None = None
+    ) -> bool:
         patterns_raw = config.get("process_patterns")
         if not isinstance(patterns_raw, list):
             return False
@@ -852,17 +917,23 @@ class ArtifactFreshnessDetector(BaseDetector):
             if pid == current_pid:
                 continue
             try:
-                cmdline = (
-                    (entry / "cmdline")
-                    .read_bytes()
-                    .replace(b"\x00", b" ")
-                    .decode(
-                        "utf-8",
-                        errors="replace",
-                    )
-                )
+                raw_cmdline = (entry / "cmdline").read_bytes()
             except OSError:
                 continue
+            if target_date is not None:
+                argv = raw_cmdline.decode("utf-8", errors="replace").split("\x00")
+                for index, arg in enumerate(argv[:-1]):
+                    name = Path(arg).name
+                    is_wrapper = name == "run_threshold_cycle_postclose.sh" or (
+                        name.startswith(".run_threshold_cycle_postclose.snapshot.")
+                        and name.endswith(".sh")
+                    )
+                    if is_wrapper and argv[index + 1] == target_date:
+                        return True
+                continue
+            cmdline = raw_cmdline.replace(b"\x00", b" ").decode(
+                "utf-8", errors="replace"
+            )
             if cmdline and any(pattern in cmdline for pattern in patterns):
                 return True
         return False
