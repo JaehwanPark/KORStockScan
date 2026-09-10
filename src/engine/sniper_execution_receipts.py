@@ -3016,14 +3016,8 @@ def _emit_standard_sell_partial_lifecycle_outbox_leg(
         and candidate_stock.get("entry_opportunity_recheck_attempt_id")
     ):
         terminal_fields = dict(leg["event_fields"])
-        recheck_terminal_payload = _log_holding_pipeline(
-            leg.get("name") or "-",
-            str(leg["code"]),
-            int(leg["target_id"]),
-            "entry_opportunity_recheck_sell_completed",
-            candidate_stock=dict(candidate_stock),
-            observed_at=observed_at,
-            observe_candidate_lifecycle=False,
+        companion_stage = "entry_opportunity_recheck_sell_completed"
+        companion_fields = dict(
             profit_rate=terminal_fields.get("profit_rate"),
             entry_opportunity_recheck_cost_adjusted_profit_pct=terminal_fields.get(
                 "entry_opportunity_recheck_cost_adjusted_profit_pct",
@@ -3067,11 +3061,45 @@ def _emit_standard_sell_partial_lifecycle_outbox_leg(
                 "broker_guard_bypass|hard_safety_bypass"
             ),
         )
-        # Keep the durable outbox leg pending if its exact-attempt companion
-        # failed. Replays are idempotent by attempt ID and terminal economics.
+        # Freeze the companion contract before emitting. Raw append success
+        # alone must not ACK a different attempt, terminal value or authority.
+        expected_companion = {
+            str(key): str(value)
+            for key, value in {
+                **companion_fields,
+                **entry_opportunity_recheck_attribution_fields(
+                    candidate_stock,
+                    stage=companion_stage,
+                    event_fields=companion_fields,
+                ),
+            }.items()
+        }
+        recheck_terminal_payload = _log_holding_pipeline(
+            leg.get("name") or "-",
+            str(leg["code"]),
+            int(leg["target_id"]),
+            companion_stage,
+            candidate_stock=dict(candidate_stock),
+            observed_at=observed_at,
+            observe_candidate_lifecycle=False,
+            **companion_fields,
+        )
+        # Keep the durable leg pending on any companion contract failure.
+        # Replay remains attribution-only; it cannot submit another sell.
         emitted = bool(
             isinstance(recheck_terminal_payload, dict)
             and recheck_terminal_payload.get("structured_append_succeeded") is True
+            and recheck_terminal_payload.get("structured_append_status")
+            in {"raw_appended", "raw_appended_companion_failed"}
+            and recheck_terminal_payload.get("pipeline") == "HOLDING_PIPELINE"
+            and recheck_terminal_payload.get("stage") == companion_stage
+            and str(recheck_terminal_payload.get("record_id")) == str(leg["target_id"])
+            and recheck_terminal_payload.get("stock_code") == str(leg["code"])
+            and isinstance(recheck_terminal_payload.get("fields"), dict)
+            and all(
+                recheck_terminal_payload["fields"].get(key) == value
+                for key, value in expected_companion.items()
+            )
         )
     return emitted
 

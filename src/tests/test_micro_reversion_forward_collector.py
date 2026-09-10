@@ -193,6 +193,80 @@ def test_timestamp_rejection_tail_is_bounded_and_keeps_route_epoch(tmp_path) -> 
         collector.close()
 
 
+@pytest.mark.parametrize("realtime_type", ["0B", "0D"])
+@pytest.mark.parametrize(
+    "packet_case",
+    [
+        "trusted",
+        "missing",
+        "untrusted",
+        "future",
+        "infinite",
+        "nan",
+        "malformed",
+        "boolean",
+        "fractional",
+        "numeric_string",
+    ],
+)
+def test_rejection_separates_packet_ingress_from_normalization(
+    tmp_path, realtime_type, packet_case
+):
+    collector = _collector(tmp_path, depth_capture_enabled=True)
+    received = int(
+        datetime.fromisoformat("2026-08-08T09:00:20+09:00").timestamp() * 1000
+    )
+    snapshot = (
+        _snapshot(received_at_ms=received)
+        if realtime_type == "0B"
+        else _depth_snapshot(received_at_ms=received)
+    )
+    if packet_case != "missing":
+        snapshot["micro_observer_packet_received_at_ms"] = (
+            received + 1 if packet_case == "future" else received - 12000
+        )
+        if packet_case in {
+            "infinite",
+            "nan",
+            "malformed",
+            "boolean",
+            "fractional",
+            "numeric_string",
+        }:
+            snapshot["micro_observer_packet_received_at_ms"] = {
+                "infinite": float("inf"),
+                "nan": float("nan"),
+                "malformed": "bad-clock",
+                "boolean": True,
+                "fractional": received - 12000.5,
+                "numeric_string": str(received - 12000),
+            }[packet_case]
+        snapshot["micro_observer_packet_receive_time_source"] = (
+            "unknown" if packet_case == "untrusted" else "websocket_packet_ingress"
+        )
+    try:
+        observe = getattr(collector, "observe_kiwoom_" + realtime_type.lower())
+        assert observe("000001", snapshot, realtime_type=realtime_type) == (
+            ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
+        )
+        row = collector.runtime_snapshot().timestamp_rejection_samples[-1]
+        assert row["exchange_to_receive_lag_ms"] == 20000
+        assert row["maximum_exchange_to_receive_lag_ms"] == 10000
+        assert row["packet_to_normalization_ms"] == (
+            12000 if packet_case == "trusted" else None
+        )
+        assert row["exchange_to_packet_receive_lag_ms"] == (
+            8000 if packet_case == "trusted" else None
+        )
+        assert row["packet_receive_provenance_status"] == (
+            "trusted_packet_ingress"
+            if packet_case == "trusted"
+            else "missing_or_invalid"
+        )
+    finally:
+        collector.close()
+
+
 def test_missing_receive_time_is_not_reported_as_epoch_zero_latency(tmp_path):
     collector = _collector(tmp_path)
     snapshot = _snapshot()

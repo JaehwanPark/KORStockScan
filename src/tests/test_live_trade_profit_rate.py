@@ -21,6 +21,30 @@ from src.engine.trade_profit import (
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
+def test_sim_probe_persistence_uses_common_isolation_and_session_guard(tmp_path):
+    import json
+
+    for path in (
+        state_handlers.SCALP_SIM_STATE_PATH,
+        state_handlers.SWING_INTRADAY_PROBE_STATE_PATH,
+    ):
+        assert path.is_relative_to(tmp_path)
+    assert (
+        state_handlers.SCALP_SIM_STATE_PATH
+        == state_handlers.DEFAULT_SCALP_SIM_STATE_PATH
+    )
+    assert not state_handlers._scalp_simulator_state_row_is_current_session(
+        {"holding_started_at": 1.0}
+    )
+    state_handlers.persist_scalp_simulator_state([])
+    state_handlers.persist_swing_intraday_probe_state([], allow_empty_overwrite=True)
+    for path in (
+        state_handlers.SCALP_SIM_STATE_PATH,
+        state_handlers.SWING_INTRADAY_PROBE_STATE_PATH,
+    ):
+        assert json.loads(path.read_text())["active_positions"] == []
+
+
 @pytest.fixture(autouse=True)
 def _isolate_symbol_owner_runtime_files(monkeypatch, tmp_path):
     """Keep unit tests independent of the host's exact-date live policy."""

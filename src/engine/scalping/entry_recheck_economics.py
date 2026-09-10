@@ -230,8 +230,13 @@ def terminal_economics(
             PREFIX + "cost_adjusted_profit_pct": net / buy_amount * 100,
             PREFIX + "realized_net_pnl_krw": net,
             PREFIX + "buy_notional_krw": buy_amount,
-            PREFIX + "sell_notional_krw": sell_amount,
-            PREFIX + "cost_rate": cost_rate,
+            # These are validated receipt inputs, not newly derived values.
+            # Preserve their exact representation: the durable sell outbox
+            # acknowledges every field after str(value) serialization. An
+            # int-to-float rewrite (15130 -> 15130.0) otherwise prevents a
+            # valid completed sell from ever acknowledging its journal.
+            PREFIX + "sell_notional_krw": fields[PREFIX + "sell_notional_krw"],
+            PREFIX + "cost_rate": fields[PREFIX + "cost_rate"],
             PREFIX + "position_qty": buy_qty,
             PREFIX + "buy_order_count": len(orders),
         }

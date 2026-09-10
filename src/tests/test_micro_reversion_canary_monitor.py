@@ -692,13 +692,14 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
             # Explicit post-measurement compatibility, not a new benchmark.
             # See 2026-09-08-intraday-due-work-execution.md. Only the offline
             # report-preservation function changed; keep the frozen receipt
-            # and every callback/guard source hash untouched. Future edits
-            # must fail this byte pin and receive their own review.
+            # and every callback/guard source hash untouched. The reviewed
+            # d34bfffe CLI stdout isolation is also included below; it changes
+            # no storage function. Future edits must fail these exact pins.
             assert expected == (
                 "cc72b533aed4081283ed1cb4d48e50239b13215e3c828bc98139d3bcb7325f9f"
             )
             expected = (
-                "acbddd3e2e96bef5404142287b7cd15d20d11154de9693bb4f7a918723135816"
+                "438923f08fe3e5d1aa7750d3506cf5341417b7f8986ac195d5e3733584e97dde"
             )
             tree = ast.parse(path.read_bytes())
             tree.body = [
@@ -711,20 +712,60 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
             ]
             unchanged_source = ast.dump(tree, include_attributes=False).encode()
             assert hashlib.sha256(unchanged_source).hexdigest() == (
-                "9170ec9965725ede3f59c00d30877772cb738c1e50013ad3d55cdf35a8ac06d1"
+                "627c2468c88e88b7a8fed30d08b0a4cccfa2704185e994b130acaf5935216a8d"
+            )
+        if field == "forward_collector_sha256":
+            # 2026-09-10 additive rejection-clock diagnostics; original
+            # measured guard remains frozen. Current 25k valid callbacks and
+            # rejected 0B/0D measurements include the final invalid-clock fix.
+            # See the separate 10:50 code review and source-bound receipt.
+            assert expected == (
+                "3ed07ede82cc21930f79206398b50e15d8f5242b0464b9b4d88364347f9dfd70"
+            )
+            expected = (
+                "7f63c64aa7f2d3feb6da814d4dcbfda3dae25be8f22a8b96c92b7df58a8f7df4"
             )
         if field == "kiwoom_websocket_sha256":
-            # The frozen measurement predates the reviewed 2026-09-08 ingress
-            # backlog repair (7077831a).  Preserve the original receipt while
-            # pinning that exact replacement generation; any further websocket
-            # edit must fail this guard and receive a new compatibility review.
+            # Preserve the frozen measurement. The 2026-09-10 compatibility
+            # review covers the already-reviewed deferred REG/auction changes
+            # and additive packet-clock telemetry. Future edits still fail
+            # this exact byte pin; no runtime guard is loosened here.
             assert expected == (
                 "e33771db11090766c613436c98b1e0e9fbed7663fcebf3663fd633612ad0c052"
             )
             expected = (
-                "480159f2949566954823a66e09134a288378f58865851884e24fa26fec719065"
+                "f2165af17dae160535ddd5ac6ef5a5406eaf1bc8bacf423c3f475ceb514ba15c"
             )
         assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+
+
+def test_packet_diagnostic_measurement_keeps_existing_latency_limits() -> None:
+    evidence = json.loads(
+        (
+            Path(__file__).resolve().parents[2] / "docs/audit-reports/"
+            "2026-09-10-micro-packet-review-latency-validation.json.txt"
+        ).read_text()
+    )
+    assert evidence["runtime_guard_changed"] is False
+    assert evidence["summary"]["queue_drop_count"] == 0
+    assert evidence["summary"]["worker_error_count"] == 0
+    assert evidence["summary"]["observer_on_internal_p95_ms_max"] < 1.0
+    assert evidence["summary"]["observer_on_internal_p99_ms_max"] < 2.0
+    import hashlib
+
+    root = Path(__file__).resolve().parents[2]
+    for source, expected_hash in evidence["source_hashes"].items():
+        assert hashlib.sha256((root / source).read_bytes()).hexdigest() == expected_hash
+    for kind, prefix in (
+        ("0B", "producer_callback_latency"),
+        ("0D", "producer_0d_callback_latency"),
+    ):
+        rejected = evidence["rejected_validation"][kind]
+        assert rejected["timestamp_rejection_sample_total"] == 5000
+        assert rejected["tail_size"] == 64
+        assert rejected["latency"][prefix + "_p95_ms"] < 1.0
+        assert rejected["latency"][prefix + "_p99_ms"] < 2.0
+        assert rejected["packet_to_normalization_ms"] == 12000
 
 
 def test_canary_monitor_has_no_trading_authority_imports() -> None:
