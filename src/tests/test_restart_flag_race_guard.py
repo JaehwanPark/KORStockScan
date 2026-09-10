@@ -1,4 +1,8 @@
 import inspect
+import ast
+import subprocess
+
+import pytest
 from pathlib import Path
 
 import src.bot_main as bot_main
@@ -55,3 +59,79 @@ def test_restart_script_reloads_stale_supervisor_only_after_child_drain():
     assert "confirmed session removal" in source
     assert "exec ./run_bot.sh" in source
     assert 'exit "$VERIFY_RC"' in source
+
+
+def test_release_restart_flag_preserves_shared_symlink_when_claimed(tmp_path):
+    source = Path("restart.sh").read_text()
+    assert 'RESTART_FLAG="$(realpath -m "$PROJECT_DIR/restart.flag")"' in source
+    assert (
+        'RESTART_FLAG_PATH = (PROJECT_ROOT / "restart.flag").resolve()'
+        in Path("src/utils/constants.py").read_text()
+    )
+    state = tmp_path / "state"
+    release = tmp_path / "release"
+    state.mkdir()
+    release.mkdir()
+    shared = state / "restart.flag"
+    linked = release / "restart.flag"
+    linked.symlink_to(shared)
+    shell_target = subprocess.check_output(
+        ["realpath", "-m", str(linked)], text=True
+    ).strip()
+    assert Path(shell_target) == linked.resolve() == shared
+    Path(shell_target).write_text("test request")
+    linked.resolve().unlink()
+    assert linked.is_symlink() and not shared.exists()
+
+
+def test_release_source_root_change_requires_drained_supervisor_reload():
+    source = Path("restart.sh").read_text()
+    gate = source.split("RELOAD_SUPERVISOR=false", 1)[1].split(
+        'echo "Requesting graceful bot restart', 1
+    )[0]
+    assert '[ "$LOADED_SOURCE_ROOT" != "$PROJECT_DIR" ]' in gate
+    assert "RELOAD_SUPERVISOR=true" in gate
+
+
+def test_launcher_clears_intraday_pins_before_loading_dated_authority():
+    source = Path("src/run_bot.sh").read_text()
+    reset = source.split("reset_runtime_policy_env_before_handoff() {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    path_key = "KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_PATH"
+    sha_key = "KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_SHA256"
+    command = (
+        f"export {path_key}=yesterday {sha_key}=old_hash\n"
+        + reset
+        + f'\ntest -z "${{{path_key}+set}}" && test -z "${{{sha_key}+set}}"'
+    )
+    subprocess.run(["bash", "-c", command], check=True)
+
+
+def test_release_mount_resolution_preserves_artifact_no_follow_guard(tmp_path):
+    from src.utils.jsonl_io import read_json_object_strict
+
+    release = tmp_path / "release"
+    state = tmp_path / "shared-data"
+    release.mkdir()
+    state.mkdir()
+    (release / "data").symlink_to(state)
+    (state / "sample.json").write_text('{"valid":true}')
+    tree = ast.parse(Path("src/utils/constants.py").read_text())
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "DATA_DIR"
+            for target in node.targets
+        )
+    )
+    canonical_data = eval(
+        compile(ast.Expression(assignment.value), "constants", "eval"),
+        {"PROJECT_ROOT": release},
+    )
+    assert canonical_data == state
+    assert read_json_object_strict(canonical_data / "sample.json") == {"valid": True}
+    with pytest.raises(ValueError, match="parent_invalid"):
+        read_json_object_strict(release / "data" / "sample.json")

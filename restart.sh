@@ -20,7 +20,8 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PY="${KORSTOCKSCAN_VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
-RESTART_FLAG="$PROJECT_DIR/restart.flag"
+# Release worktrees share the original operator flag, not independent requests.
+RESTART_FLAG="$(realpath -m "$PROJECT_DIR/restart.flag")"
 RESTART_REQUEST_TMP="${RESTART_FLAG}.$$"
 RESTART_SOURCE="${KORSTOCKSCAN_RESTART_REQUEST_SOURCE:-operator_restart_sh}"
 # Anchor the default pattern to the real bot command.  Broad patterns such as
@@ -147,11 +148,13 @@ fi
 
 CURRENT_LAUNCHER_SHA256="$(current_launcher_sha256)"
 LOADED_LAUNCHER_SHA256="$(pid_env_value "${OLD_PIDS[0]}" KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256 || true)"
+LOADED_SOURCE_ROOT="$(pid_env_value "${OLD_PIDS[0]}" KORSTOCKSCAN_RUNTIME_SOURCE_ROOT || true)"
 RELOAD_SUPERVISOR=false
-if [ -n "$LOADED_LAUNCHER_SHA256" ] \
+if { [ -n "$LOADED_SOURCE_ROOT" ] && [ "$LOADED_SOURCE_ROOT" != "$PROJECT_DIR" ]; } \
+    || { [ -n "$LOADED_LAUNCHER_SHA256" ] \
     && [ "$LOADED_LAUNCHER_SHA256" != unknown ] \
     && [ "$CURRENT_LAUNCHER_SHA256" != unknown ] \
-    && [ "$LOADED_LAUNCHER_SHA256" != "$CURRENT_LAUNCHER_SHA256" ]; then
+    && [ "$LOADED_LAUNCHER_SHA256" != "$CURRENT_LAUNCHER_SHA256" ]; }; then
     RELOAD_SUPERVISOR=true
     echo "Launcher generation drift detected; supervisor reload required."
     echo "Loaded run_bot.sh sha256: $LOADED_LAUNCHER_SHA256"

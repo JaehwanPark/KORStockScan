@@ -1225,7 +1225,11 @@ def _validate_candidate_artifact(
     candidate_path: Path,
     runtime_env: dict[str, str] | None = None,
     cohort: tuple[str, str] = DEFAULT_COHORT,
+    source_bundle_root: Path | None = None,
+    runtime_target_date: str | None = None,
 ) -> list[str]:
+    # Intraday approval verifies the ORIGINAL scheduled candidate unchanged,
+    # but binds its archived bundle and the actual operator runtime date.
     errors: list[str] = []
     source_date = str(candidate.get("source_date") or "")
     try:
@@ -1313,16 +1317,27 @@ def _validate_candidate_artifact(
     provenance = provenance if isinstance(provenance, dict) else {}
     batch_path = Path(str(provenance.get("batch_report_path") or ""))
     detailed_path = Path(str(provenance.get("detailed_report_path") or ""))
-    if batch_path != batch_report_path(source_date):
+    expected_batch_path = batch_report_path(source_date)
+    expected_detailed_path = detailed_report_path(
+        source_date, selected_prompt_version, cohort=cohort
+    )
+    expected_candidate_path = live_candidate_path(source_date, cohort=cohort)
+    if source_bundle_root is not None:
+        expected_batch_path = source_bundle_root / "batch" / expected_batch_path.name
+        expected_detailed_path = (
+            source_bundle_root / "detailed" / expected_detailed_path.name
+        )
+        expected_candidate_path = (
+            source_bundle_root / "candidates" / expected_candidate_path.name
+        )
+    if batch_path != expected_batch_path:
         errors.append("candidate_batch_path_invalid")
     batch = _read_json(batch_path) if batch_path.is_file() else {}
     if not batch_path.is_file() or _canonical_sha256(
         _batch_evidence(batch)
     ) != provenance.get("batch_evidence_sha256"):
         errors.append("candidate_batch_evidence_mismatch")
-    if detailed_path != detailed_report_path(
-        source_date, selected_prompt_version, cohort=cohort
-    ):
+    if detailed_path != expected_detailed_path:
         errors.append("candidate_detailed_path_invalid")
     detailed_sha256 = _safe_file_sha256(detailed_path)
     if not detailed_sha256 or detailed_sha256 != provenance.get(
@@ -1343,7 +1358,7 @@ def _validate_candidate_artifact(
             detailed_report=detailed,
         )
     errors.extend(source_errors)
-    if candidate_path != live_candidate_path(source_date, cohort=cohort):
+    if candidate_path != expected_candidate_path:
         errors.append("candidate_path_invalid")
     errors.extend(
         _runtime_candidate_contract_errors(
@@ -1352,7 +1367,9 @@ def _validate_candidate_artifact(
     )
     errors.extend(
         _runtime_probe_contract_errors(
-            target_date=target_date, env=runtime_env, cohort=cohort
+            target_date=runtime_target_date or target_date,
+            env=runtime_env,
+            cohort=cohort,
         )
     )
     return list(dict.fromkeys(errors))
@@ -1656,6 +1673,13 @@ def resolve_live_prompt_policy(
         result["status"] = "fallback_probe_first_runtime_contract_invalid"
         result["runtime_contract_errors"] = runtime_contract_errors
         return result
+    if cohort == DEFAULT_COHORT and (
+        os.getenv("KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_PATH")
+        or os.getenv("KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_SHA256")
+    ):
+        from src.engine.scalping.entry_setup_intraday_activation import resolve_intraday
+
+        return resolve_intraday(result, now=current)
     activation = _load_activation_cached(target_date, cohort=cohort)
     artifact_sha = str(activation.get("artifact_sha256") or "")
     if artifact_sha != _canonical_sha256(
