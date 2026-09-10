@@ -4189,6 +4189,13 @@ def _select_auto_apply_candidates(
                 if family in previous_selected_families
                 else "not_selected"
             )
+        elif decision["runtime_disable_family"]:
+            # Selecting an OFF envelope does not enable a runtime family.
+            selection_change_class = (
+                "newly_disabled"
+                if family in previous_selected_families
+                else "explicit_off_policy"
+            )
         elif succession:
             selection_change_class = (
                 "policy_carried_forward"

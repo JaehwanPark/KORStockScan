@@ -280,6 +280,30 @@ def test_fast_handoff_recomputes_ages_preserves_parent_and_is_single_use(monkeyp
     assert second is None
 
 
+@pytest.mark.parametrize("broken", ["sources", "investor", "program"])
+@pytest.mark.parametrize("value", [["invalid"], [], None, "invalid"])
+def test_malformed_source_mapping_rejects_handoff_without_leaking_exception(
+    broken, value
+):
+    context = _context()
+    if broken == "sources":
+        context["ai_market_snapshot_v1"]["sources"] = value
+    else:
+        context["ai_market_snapshot_v1"]["sources"][broken] = value
+    stock = _record_handoff(context)
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + 0.5, current_ws_data=_ws(NOW - 0.1)
+    )
+    assert handoff is None
+    assert fields["pre_submit_entry_ai_exact_context_handoff_reason"] == (
+        "stored_snapshot_revalidation_failed"
+    )
+    assert fields["pre_submit_entry_ai_exact_context_handoff_revalidation_error"] == (
+        "entry_context_source_mapping_invalid"
+    )
+    assert "_entry_price_exact_context_handoff" not in stock
+
+
 @pytest.mark.parametrize("elapsed", [3.0, 5.0])
 def test_provider_response_does_not_renew_source_freshness(monkeypatch, elapsed):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
@@ -414,7 +438,8 @@ def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
 
 
 @pytest.mark.parametrize(
-    "mode", ["fresh", "fresh_input", "stale", "future", "route_changed"]
+    "mode",
+    ["fresh", "fresh_input", "stale", "future", "route_changed", "invalid_sources"],
 )
 def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
     monkeypatch, mode
@@ -462,6 +487,7 @@ def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
             "stale": 4,
             "future": -1,
             "route_changed": 0.1,
+            "invalid_sources": 0.1,
         }[mode]
         ws = _ws(clock["now"] - age, price=10020)
         if mode == "route_changed":
@@ -474,6 +500,8 @@ def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
 
     def slow_context(*a, **k):
         context = _context()
+        if mode == "invalid_sources":
+            context["ai_market_snapshot_v1"]["sources"]["program"] = ["invalid"]
         clock["now"] += 0.5 if mode == "fresh_input" else 5
         return context
 

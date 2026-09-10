@@ -1629,9 +1629,18 @@ def test_entry_ai_gate_backtest_rejects_retired_score_sweep_runtime_mode(
     assert candidates[0]["calibration_state"] == "freeze"
 
 
+@pytest.mark.parametrize("previous_enabled", [False, True])
 def test_drought_entry_recheck_candidate_is_deterministic_non_owner_and_can_turn_off(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, previous_enabled
 ):
+    monkeypatch.setattr(
+        mod,
+        "_load_previous_runtime_env_selected_families",
+        lambda day: (
+            {"entry_opportunity_recheck_runtime"} if previous_enabled else set(),
+            {},
+        ),
+    )
     monkeypatch.setattr(
         mod,
         "ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR",
@@ -1847,12 +1856,40 @@ def test_drought_entry_recheck_candidate_is_deterministic_non_owner_and_can_turn
     assert decisions[0]["selected"] is True
     assert decisions[0]["same_stage_owner_claim"] is False
     assert decisions[0]["runtime_disable_family"] is True
+    assert decisions[0]["selection_change_class"] == (
+        "newly_disabled" if previous_enabled else "explicit_off_policy"
+    )
     assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "false"
     assert (
         env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED"]
         == "false"
     )
     assert mod._entry_live_tuning_owner_family(selected) == ""
+
+    blocked = {**candidates[0], "source_quality_gate": "source_quality_blocked"}
+    blocked_selected, blocked_decisions, blocked_env = mod._select_auto_apply_candidates(
+        [blocked], ai_review={}, require_ai=True, target_date="2026-09-07"
+    )
+    assert blocked_selected == []
+    assert blocked_env == {}
+    assert blocked_decisions[0]["selection_change_class"] == (
+        "previous_family_not_selected" if previous_enabled else "not_selected"
+    )
+
+
+def test_recheck_on_policy_remains_newly_enabled(monkeypatch):
+    monkeypatch.setattr(
+        mod, "_load_previous_runtime_env_selected_families", lambda day: (set(), {})
+    )
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [_valid_entry_recheck_candidate()],
+        ai_review={},
+        require_ai=True,
+        target_date="2026-09-07",
+    )
+    assert len(selected) == 1
+    assert decisions[0]["selection_change_class"] == "newly_enabled"
+    assert env["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "true"
 
 
 def test_drought_entry_recheck_contract_requires_exact_three_date_window():
@@ -1918,6 +1955,7 @@ def test_write_runtime_env_excludes_explicitly_disabled_family_from_selected_lis
         mod.runtime_env_manifest_path("2026-09-07").read_text(encoding="utf-8")
     )
     assert runtime_manifest["selected_families"] == []
+    assert runtime_manifest["selection_change_summary"]["newly_enabled"] == []
     assert (
         runtime_manifest["env_overrides"][
             "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"

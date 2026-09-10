@@ -1391,6 +1391,14 @@ def revalidate_entry_candle_snapshot(
     previous = context.get("ai_market_snapshot_v1")
     if not isinstance(previous, dict) or not previous:
         return context  # Missing canonical input still fails the normal preflight.
+    sources = previous.get("sources")
+    if not isinstance(sources, dict) or any(
+        name in sources and not isinstance(sources[name], dict)
+        for name in ("investor", "program")
+    ):
+        # Use the callers' explicit source-rejection path, not an uncaught
+        # AttributeError or an empty-source substitution on malformed storage.
+        raise ValueError("entry_context_source_mapping_invalid")
     captured = datetime.fromisoformat(previous["captured_at"])
     if (
         captured.tzinfo is None
@@ -1415,7 +1423,6 @@ def revalidate_entry_candle_snapshot(
         # Keep the bar's original observed time, including across minute rollover.
         result["latest_bar_age_sec"] = float(age) + elapsed
     ws = copy.deepcopy(ws_data)
-    sources = previous.get("sources") or {}
     for name in ("investor", "program"):
         source = sources.get(name) or {}
         if name == "program" and (
