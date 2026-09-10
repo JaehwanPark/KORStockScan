@@ -2,12 +2,92 @@ from __future__ import annotations
 
 import tempfile
 import json
+from datetime import datetime
 from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 from src.engine.error_detectors.cron_completion import CronCompletionDetector
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [("running", "in_progress"), ("done", "pass")]
+    + [
+        (case, "fail")
+        for case in (
+            "failed",
+            "wrong_date",
+            "invalid_json",
+            "no_live_pid",
+            "terminal_fail",
+            "deadline",
+            "past_source",
+            "other_owner",
+        )
+    ],
+)
+def test_postclose_completion_shares_exact_bounded_running_gate(
+    monkeypatch, tmp_path, case, expected
+):
+    import src.engine.error_detectors.cron_completion as cc
+    from src.engine.error_detectors.artifact_freshness import ArtifactFreshnessDetector
+
+    now = datetime(2026, 9, 10, 21, 50)
+    if case == "deadline":
+        now = datetime(2026, 9, 10, 23, 20)
+    elif case == "past_source":
+        now = datetime(2026, 9, 11, 0, 5)
+    job = dict(
+        next(j for j in cc.CRON_JOB_REGISTRY if j["id"] == "threshold_cycle_postclose")
+    )
+    job.update(log="postclose.log", status_artifact="status.json")
+    if case == "other_owner":
+        job["id"] = "other_owner"
+    payload = {
+        "schema_version": 1,
+        "report_type": "threshold_cycle_postclose_status",
+        "target_date": "2026-09-10",
+        "status": "running",
+        "reason": "started",
+        "exit_code": 0,
+        "runtime_effect": False,
+        "started_at": "2026-09-10T20:10:04+09:00",
+    }
+    if case == "failed":
+        payload.update(status="failed", exit_code=1)
+    elif case == "done":
+        payload.update(status="succeeded", reason="completed")
+    elif case == "wrong_date":
+        payload["target_date"] = "2026-09-09"
+    (tmp_path / "status.json").write_text(
+        "{" if case == "invalid_json" else json.dumps(payload)
+    )
+    markers = "[START] postclose target_date=2026-09-10\n"
+    if case == "terminal_fail":
+        markers += "[FAIL] postclose target_date=2026-09-10\n"
+    (tmp_path / "postclose.log").write_text(markers)
+    monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(cc, "CRON_JOB_REGISTRY", [job])
+    monkeypatch.setattr(
+        cc,
+        "load_installed_crontab",
+        lambda: "10 20 * * 1-5 THRESHOLD_CYCLE_POSTCLOSE=true bash deploy/run_threshold_cycle_postclose.sh",
+    )
+    monkeypatch.setattr(cc, "_today_kst", lambda: now.date().isoformat())
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (now.hour, now.minute))
+    monkeypatch.setattr(cc, "_now_kst_ts", lambda: now.timestamp())
+    monkeypatch.setattr(
+        ArtifactFreshnessDetector,
+        "_has_matching_live_process",
+        staticmethod(lambda *a, **k: case != "no_live_pid"),
+    )
+    detector = cc.CronCompletionDetector(dry_run=True)
+    detector.postclose_source_date = "2026-09-10"
+    result = detector.check()
+    assert result.details[f"{job['id']}_status"] == expected
+    assert result.severity == ("warning" if expected == "in_progress" else expected)
 
 
 @pytest.fixture(autouse=True)
