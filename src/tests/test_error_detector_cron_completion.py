@@ -78,6 +78,7 @@ def test_postclose_completion_shares_exact_bounded_running_gate(
     monkeypatch.setattr(cc, "_today_kst", lambda: now.date().isoformat())
     monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (now.hour, now.minute))
     monkeypatch.setattr(cc, "_now_kst_ts", lambda: now.timestamp())
+
     def matching_process(config, *, target_date):
         assert config["process_patterns"] == ["run_threshold_cycle_postclose.sh"]
         assert target_date == "2026-09-10"
