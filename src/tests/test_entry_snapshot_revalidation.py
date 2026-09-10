@@ -178,6 +178,7 @@ def test_retry_acquires_after_slow_context_build_and_uses_same_tape(
             NOW - 5, ZoneInfo("Asia/Seoul")
         ).isoformat()
         stock.update(_record_handoff(context, response_at=NOW - 0.1))
+        stock["_entry_price_exact_context_handoff"]["ws_data"] = _ws(NOW - 5.1)
 
     def refresh(*args, **kwargs):
         calls.append(clock["now"])
@@ -227,7 +228,7 @@ def test_retry_acquires_after_slow_context_build_and_uses_same_tape(
     if expired_handoff:
         assert result[
             "pre_submit_entry_ai_exact_context_handoff_revalidation_error"
-        ] == ("prepared_snapshot_expired")
+        ] == ("source_preflight_rejected")
 
 
 def _record_handoff(context, *, response_at=NOW + 0.2):
@@ -276,8 +277,8 @@ def test_fast_handoff_recomputes_ages_preserves_parent_and_is_single_use(monkeyp
     assert second is None
 
 
-@pytest.mark.parametrize("elapsed", [2.0, 5.0])
-def test_provider_response_does_not_renew_prepared_snapshot_ttl(monkeypatch, elapsed):
+@pytest.mark.parametrize("elapsed", [3.0, 5.0])
+def test_provider_response_does_not_renew_source_freshness(monkeypatch, elapsed):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
     stock = _record_handoff(_context(), response_at=NOW + elapsed - 0.1)
     handoff, fields = handlers._consume_entry_price_exact_context_handoff(
@@ -285,10 +286,22 @@ def test_provider_response_does_not_renew_prepared_snapshot_ttl(monkeypatch, ela
     )
     assert handoff is None
     assert fields["pre_submit_entry_ai_exact_context_handoff_revalidation_error"] == (
-        "prepared_snapshot_expired"
+        "source_preflight_rejected"
     )
     assert "pre_submit_entry_ai_exact_context_handoff_parent_trace_id" not in fields
     assert "_entry_price_exact_context_handoff" not in stock
+
+
+def test_handoff_ttl_does_not_add_a_stricter_source_freshness_limit(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    stock = _record_handoff(_context(), response_at=NOW + 2.0)
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + 2.1, current_ws_data=_ws(NOW - 0.1)
+    )
+    assert handoff is not None, fields
+    assert handoff["candle_context"]["ai_market_snapshot_v1"]["sources"]["tape"][
+        "age_ms"
+    ] == pytest.approx(2200, abs=1)
 
 
 def test_handoff_rechecks_source_age_even_with_longer_existing_ttl(monkeypatch):
@@ -328,4 +341,70 @@ def test_handoff_rejects_wrong_canonical_parent_identity(field, value):
     assert handoff is None
     assert fields["pre_submit_entry_ai_exact_context_handoff_revalidation_error"] == (
         "prepared_snapshot_identity_mismatch"
+    )
+
+
+@pytest.mark.parametrize(
+    "suffix,route", [("_NX", "nxt_only"), ("_AL", "krx_nxt_integrated")]
+)
+def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
+    monkeypatch, suffix, route
+):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    now = datetime(2026, 9, 10, 17, 0, 25, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    ws = _ws(now - 0.1)
+    ws.update(market_suffix=suffix, market_route=route)
+    for kind in ("0B", "0D"):
+        ws["last_realtime_type_item"][kind] = "123456" + suffix
+        ws["last_realtime_type_market_suffix"][kind] = suffix
+        ws["last_realtime_type_market_route"][kind] = route
+    context = build_entry_candle_context(
+        None,
+        "123456",
+        ws,
+        "NXT",
+        "nxt_aftermarket",
+        now_ts=now,
+        recent_candles=[
+            {
+                "source_timestamp": "20260910165900",
+                "시가": 10000,
+                "고가": 10010,
+                "저가": 9990,
+                "현재가": 10000,
+                "거래량": 100,
+            }
+        ],
+        broker_route="NXT",
+    )
+    stock = {}
+    handlers._record_entry_price_exact_context_handoff(
+        stock,
+        code="123456",
+        captured_at=now + 2.0,
+        ws_data=ws,
+        recent_ticks=ws["recent_trade_ticks"],
+        recent_candles=context["bars"],
+        candle_context=context,
+        preflight=context["ai_market_snapshot_v1"]["ai_input_preflight_v1"],
+        result={
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "ai_input_snapshot_id": context["ai_market_snapshot_v1"]["snapshot_id"],
+            "ai_decision_trace_id": "nxt-price-parent",
+        },
+    )
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock,
+        code="123456",
+        now_ts=now + 2.1,
+        current_ws_data=ws,
+    )
+    assert handoff is not None, (context["source_quality"], fields)
+    snapshot = handoff["candle_context"]["ai_market_snapshot_v1"]
+    assert snapshot["effective_venue"] == "NXT"
+    assert snapshot["market_data_route"] == route
+    assert snapshot["sources"]["tape"]["age_ms"] == pytest.approx(2200, abs=1)
+    assert snapshot["sources"]["tape"]["observed_at"] == (
+        context["ai_market_snapshot_v1"]["sources"]["tape"]["observed_at"]
     )

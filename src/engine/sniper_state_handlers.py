@@ -42894,9 +42894,9 @@ def _consume_entry_price_exact_context_handoff(
             "stored_context_contract_rejected"
         )
         return None, fields
-    # The handoff was recorded after the price-provider response. Its receipt
-    # TTL must not renew the original market snapshot's lifetime. Revalidate
-    # original source clocks, not just unchanged prices or frozen quality flags.
+    # The handoff TTL bounds reuse after the price-provider response, not source
+    # freshness. Revalidate original source clocks under the existing preflight
+    # limits; neither renew stale inputs nor impose a second, stricter age cap.
     try:
         snapshot = context.get("ai_market_snapshot_v1")
         if not isinstance(snapshot, dict) or not snapshot:
@@ -42914,8 +42914,6 @@ def _consume_entry_price_exact_context_handoff(
         fields["pre_submit_entry_ai_exact_context_handoff_prepared_age_ms"] = round(
             prepared_age * 1000.0, 3
         )
-        if prepared_age >= expires_at - captured_at:
-            raise ValueError("prepared_snapshot_expired")
         revalidated = revalidate_entry_candle_snapshot(
             context, stored_ws_data, now_ts=now_ts
         )
