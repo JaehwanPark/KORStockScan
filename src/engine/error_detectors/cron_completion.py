@@ -159,6 +159,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "status_artifact": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{date}.status.json",
         "window_start": (20, 10),
         "window_end": (21, 40),
+        "running_status_deadline": (23, 20),
         "mode": "once",
         "critical": True,
         "trading_day_only": True,
@@ -399,6 +400,10 @@ class CronCompletionDetector(BaseDetector):
                 elif has_error and past_window_end:
                     issues.append(f"{jid}: finished with error after window end")
                     details[f"{jid}_status"] = "fail"
+                elif self._bounded_postclose_running(job, today_str):
+                    warnings.append(f"{jid}: exact-date owner running before 23:20")
+                    details[f"{jid}_status"] = "in_progress"
+                    details[f"{jid}_running_deadline"] = "23:20"
                 elif past_window_end:
                     issues.append(f"{jid}: no completion marker after window end")
                     details[f"{jid}_status"] = "fail"
@@ -429,6 +434,32 @@ class CronCompletionDetector(BaseDetector):
             summary=summary,
             details=details,
             recommended_action=self._recommend_action(severity, issues),
+        )
+
+    @staticmethod
+    def _bounded_postclose_running(job: dict[str, Any], today: str) -> bool:
+        if (
+            job.get("id") != "threshold_cycle_postclose"
+            or job.get("running_status_deadline") != (23, 20)
+            or not job.get("status_artifact")
+        ):
+            return False
+        # Import at call time: artifact freshness already uses this class's
+        # marker parser. Both consumers must apply the same strict pending gate.
+        from .artifact_freshness import ArtifactFreshnessDetector
+
+        artifact = {
+            "id": "threshold_postclose_status",
+            "running_status_deadline": job["running_status_deadline"],
+            "suppress_missing_while_cron_in_progress": {
+                "log": str(PROJECT_ROOT / job["log"]),
+            },
+        }
+        return ArtifactFreshnessDetector._is_bounded_postclose_running(
+            artifact,
+            PROJECT_ROOT / job["status_artifact"].format(date=today),
+            today,
+            datetime.fromtimestamp(_now_kst_ts()),
         )
 
     @staticmethod
