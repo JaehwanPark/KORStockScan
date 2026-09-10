@@ -4053,6 +4053,7 @@ def _resolve_snapshot(
         "snapshot_as_of": generated_at.isoformat() if generated_at else None,
         "current_freshness_usable": False,
         "evaluation_scope": "historical_snapshot" if historical else "current_snapshot",
+        "evaluated_at": as_of.isoformat(),
     }
     if selected_path is None or not selected_path.exists():
         return selected_path, {}, provenance
@@ -5201,7 +5202,28 @@ def build_report(
     history_report_dir: Path | None = None,
 ) -> dict[str, Any]:
     target_date = target_date or date.today().isoformat()
-    generated_at = generated_at or datetime.now(KST).isoformat()
+    requested_as_of = generated_at
+    report_started_at = generated_at or datetime.now(KST).isoformat()
+    # Freeze the live dashboard against the report's as-of time before a slow
+    # event scan. Reading it afterwards can reject a legitimate newer snapshot
+    # as future-dated and silently erase the entire current diagnostic cohort.
+    (
+        resolved_snapshot_path,
+        snapshot_payload,
+        snapshot_provenance,
+    ) = _resolve_snapshot(
+        subscription_snapshot_path,
+        target_date=target_date,
+        as_of=(
+            _snapshot_generated_at({"generated_at": requested_as_of})
+            if requested_as_of
+            else None
+        ),
+        historical=finalize,
+    )
+    # The default clock is sampled after the snapshot read. Explicit historical
+    # as-of inputs remain strict and never advance to accommodate future data.
+    generated_at = requested_as_of or snapshot_provenance["evaluated_at"]
     stale_ms = float(stale_sec) * 1000.0
     paths = _source_paths(target_date)
     if pipeline_path is not None:
@@ -5407,16 +5429,6 @@ def build_report(
             },
         )
 
-    (
-        resolved_snapshot_path,
-        snapshot_payload,
-        snapshot_provenance,
-    ) = _resolve_snapshot(
-        subscription_snapshot_path,
-        target_date=target_date,
-        as_of=_snapshot_generated_at({"generated_at": generated_at}),
-        historical=finalize,
-    )
     snapshot_rows = _snapshot_rows(
         snapshot_payload,
         stale_ms=stale_ms,
@@ -5489,6 +5501,8 @@ def build_report(
             "incremental_state_persisted": incremental_state_persisted,
             "source_offsets": source_offsets,
         },
+        "report_started_at": report_started_at,
+        "subscription_snapshot_capture_phase": "before_event_scan",
         "subscription_snapshot_path": (
             str(resolved_snapshot_path) if resolved_snapshot_path else None
         ),

@@ -27,6 +27,7 @@ from src.engine.monitoring.pruned_candidate_bbo_collector import (
     OBSERVATION_SCHEMA_VERSION as PRUNE_BBO_OBSERVATION_SCHEMA_VERSION,
 )
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.ws_receive_expectation import receive_expectation
 from src.engine.monitoring.market_opportunity_review import (
     decision_disposition,
     diagnostic_followups,
@@ -2130,6 +2131,17 @@ def _matching_stage_rows(
     return matched
 
 
+def _nxt_scheduled_capture_pause(*, venue: str, captured_at: datetime | None) -> bool:
+    # Ranking snapshots remain raw evidence during the NXT opening pause, but
+    # cannot anchor continuous-session recall or executable opportunities.
+    return (
+        venue == "NXT"
+        and receive_expectation({"registered_market_routes": [venue]}, captured_at)[
+            "scheduled_quiet"
+        ]
+    )
+
+
 def _build_episodes(
     snapshots: Iterable[dict[str, Any]], *, panel: str, top_n: int
 ) -> list[dict[str, Any]]:
@@ -2148,6 +2160,8 @@ def _build_episodes(
         captured_at = _parse_ts(snapshot.get("captured_at"))
         venue = str(snapshot.get("venue") or "")
         if captured_at is None or venue not in VENUE_REQUEST_CODES:
+            continue
+        if _nxt_scheduled_capture_pause(venue=venue, captured_at=captured_at):
             continue
         session = str(snapshot.get("session") or "") or _session_for_capture(
             venue=venue,
@@ -3288,16 +3302,28 @@ def build_report(
         and latest_observer_runtime_receipt.get("broker_order_forbidden") is True
         and latest_observer_runtime_receipt.get("market_data_request_effect") is True
     )
-    valid_snapshots = [
+    source_ok_snapshots = [
         row for row in snapshots if row.get("source_quality_status") == "ok"
     ]
+    paused_snapshots = [
+        row
+        for row in source_ok_snapshots
+        if _nxt_scheduled_capture_pause(
+            venue=str(row.get("venue") or ""),
+            captured_at=_parse_ts(row.get("captured_at")),
+        )
+    ]
+    paused_ids = {id(row) for row in paused_snapshots}
+    valid_snapshots = [row for row in source_ok_snapshots if id(row) not in paused_ids]
     external_bbo_contract_row_count = 0
     external_bbo_request_attempted_count = 0
     external_bbo_reserved_contract_row_count = 0
     external_bbo_invalid_reservation_attempt_count = 0
     external_bbo_max_reserved_ordinal = 0
     external_bbo_reservation_ordinals: list[int] = []
-    for snapshot in valid_snapshots:
+    # Preserve actual REST reservation accounting, including paused captures.
+    # Only their market observations are excluded from economic joins.
+    for snapshot in source_ok_snapshots:
         if snapshot.get("panel") != "liquid_common":
             continue
         for snapshot_row in snapshot.get("rows") or []:
@@ -3331,6 +3357,8 @@ def build_report(
                         executable_bbo_gap_counts[
                             "external_census_daily_budget_reservation_invalid"
                         ] += 1
+            if id(snapshot) in paused_ids:
+                continue
             observation, gap_reason = _external_snapshot_bbo_observation(
                 snapshot,
                 snapshot_row,
@@ -3342,6 +3370,25 @@ def build_report(
             executable_bbo_index.setdefault(observation["stock_code"], {}).setdefault(
                 observation["venue"], {}
             ).setdefault(observation["session"], []).append(observation)
+    # Capture and BBO observation time can straddle a pause. Fence every
+    # validated source before economic joins and freshness watermarks, while
+    # preserving all actual REST reservation accounting above.
+    for venue_index in executable_bbo_index.values():
+        for venue, session_index in venue_index.items():
+            for session, observations in session_index.items():
+                retained = [
+                    observation
+                    for observation in observations
+                    if not _nxt_scheduled_capture_pause(
+                        venue=venue, captured_at=observation["observed_at"]
+                    )
+                ]
+                excluded_count = len(observations) - len(retained)
+                if excluded_count:
+                    executable_bbo_gap_counts[
+                        "nxt_scheduled_pause_bbo_excluded"
+                    ] += excluded_count
+                session_index[session] = retained
     _deduplicate_executable_bbo_index(executable_bbo_index)
     selected_external_bbo_budget_path = external_bbo_budget_path or (
         EXTERNAL_BBO_BUDGET_DIR / f"external_bbo_request_budget_{target_date}.json"
@@ -3442,6 +3489,8 @@ def build_report(
             for row in snapshots:
                 captured_at = _parse_ts(row.get("captured_at"))
                 if captured_at is None:
+                    continue
+                if _nxt_scheduled_capture_pause(venue=venue, captured_at=captured_at):
                     continue
                 expected_session = _session_for_capture(
                     venue=venue, captured_at=captured_at
@@ -3893,7 +3942,17 @@ def build_report(
                 {error for error in contract_errors if error}
             ),
             "valid_snapshot_count": len(valid_snapshots),
-            "unavailable_snapshot_count": len(snapshots) - len(valid_snapshots),
+            "unavailable_snapshot_count": len(snapshots) - len(source_ok_snapshots),
+            "scheduled_pause_snapshot_count": len(paused_snapshots),
+            "scheduled_pause_capture_ids": [
+                row.get("capture_id") for row in paused_snapshots
+            ],
+            "scheduled_pause_exclusion": {
+                "reason": "nxt_scheduled_opening_pause",
+                "raw_snapshots_preserved": True,
+                "recall_and_economic_inputs_allowed": False,
+                "request_reservation_accounting": "preserved_including_paused_captures",
+            },
             "missing_session_snapshot_count": missing_session_snapshot_count,
             "missing_session_capture_ids": missing_session_capture_ids,
             "missing_source_hash_snapshot_count": (missing_source_hash_snapshot_count),
@@ -4162,6 +4221,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- scanner_recall_state: `{report.get('scanner_recall_state')}`",
         f"- decision_authority: `{METRIC_CONTRACT['decision_authority']}`",
         "- runtime_effect: `false`",
+        "- NXT scheduled-pause captures excluded from recall/economics: "
+        f"{(report.get('source_quality') or {}).get('scheduled_pause_snapshot_count', 0)} "
+        "(raw evidence and actual request-budget accounting preserved)",
         "- actual_order_submitted: `false`",
         (
             "- warning: forward_exact requires intraday captures; retrospective "

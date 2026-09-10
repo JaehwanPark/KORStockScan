@@ -2676,3 +2676,256 @@ def test_recall_separates_discovery_sla_from_validity_consumption():
         summary["recall_metric_contract"]["candidate_recall_scope"]
         == "scanner_candidate_pool_not_final_buy_candidate"
     )
+
+
+def test_nxt_pause_does_not_anchor_recall_or_extend_capture_cadence(tmp_path):
+    def snapshot(clock, venue="NXT", quality="ok"):
+        at = datetime.fromisoformat(f"2026-09-10T{clock}+09:00")
+        return {
+            "schema_version": census.SCHEMA_VERSION,
+            "target_date": "2026-09-10",
+            "capture_id": f"{venue}-{clock}-{quality}",
+            "captured_at": at.isoformat(),
+            "venue": venue,
+            "session": census._session_for_capture(venue=venue, captured_at=at),
+            "panel": "all",
+            "source_quality_status": quality,
+            "rows": [{"rank": 1, "stock_code": "005930", "current_price": 10000}],
+        }
+
+    rows = [
+        snapshot(clock)
+        for clock in [
+            "08:49:59",
+            "08:50:00",
+            "08:55:00",
+            "09:00:29",
+            "09:00:30",
+            "09:05:00",
+        ]
+    ]
+    rows += [snapshot("09:00:00", "KRX"), snapshot("09:00:15", quality="error")]
+    malformed = snapshot("08:55:01")
+    malformed["source"] = {"normalized_source_payload_sha256": "invalid"}
+    rows.append(malformed)
+    path = tmp_path / "snapshots.jsonl"
+    _write_jsonl(path, rows)
+    original = path.read_bytes()
+    report = census.build_report(
+        "2026-09-10",
+        snapshot_path=path,
+        pipeline_path=tmp_path / "pipeline.jsonl",
+        ai_trace_path=tmp_path / "ai.jsonl",
+        symbol_master_path=tmp_path / "master.json",
+        trigger_receipt_path=tmp_path / "trigger.json",
+        external_bbo_budget_path=tmp_path / "budget.json",
+    )
+    q = report["source_quality"]
+    assert path.read_bytes() == original
+    assert q["scheduled_pause_snapshot_count"] == 3
+    assert q["valid_snapshot_count"] == 4
+    assert q["unavailable_snapshot_count"] == 1
+    assert q["invalid_contract_snapshot_count"] == 1
+    assert q["snapshot_count"] == 8
+    cadence = q["observed_capture_cadence_by_venue_panel"]["NXT|all"]["sessions"]
+    assert cadence["NXT_PREMARKET"]["capture_time_count"] == 1
+    assert cadence["NXT_REGULAR_OVERLAP"]["capture_time_count"] == 2
+    episodes = census._build_episodes(rows[:-1], panel="all", top_n=20)
+    nxt = [r for r in episodes if r["venue"] == "NXT"]
+    assert len(nxt) == 2
+    assert nxt[0]["last_census_at"].isoformat() == "2026-09-10T08:49:59+09:00"
+    assert nxt[1]["first_census_at"].isoformat() == "2026-09-10T09:00:30+09:00"
+    assert nxt[1]["snapshot_count"] == 2
+    assert any(r["venue"] == "KRX" for r in episodes)
+    assert report["scanner_source_census"]["runtime_effect"] is False
+    assert report["scanner_source_census"]["allowed_runtime_apply"] is False
+    assert (
+        "scheduled-pause captures excluded from recall/economics: 3"
+        in census.render_markdown(report)
+    )
+
+
+def test_nxt_pause_keeps_request_budget_accounting_without_executable_bbo(tmp_path):
+    row = {
+        "schema_version": census.SCHEMA_VERSION,
+        "target_date": "2026-09-10",
+        "capture_id": "paused-request",
+        "captured_at": "2026-09-10T09:00:21+09:00",
+        "venue": "NXT",
+        "session": "NXT_REGULAR_OVERLAP",
+        "panel": "liquid_common",
+        "source_quality_status": "ok",
+        "rows": [
+            {
+                "rank": 1,
+                "stock_code": "005930",
+                "current_price": 10000,
+                "executable_bbo_observation": {
+                    "schema_version": census.EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION,
+                    "request_attempted": True,
+                    "status": "captured",
+                    "daily_budget_reservation": {
+                        "status": "reserved",
+                        "reserved": True,
+                        "attempt_ordinal": 1,
+                        "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+                    },
+                },
+            }
+        ],
+    }
+    path = tmp_path / "snapshots.jsonl"
+    _write_jsonl(path, [row])
+    report = census.build_report(
+        "2026-09-10",
+        snapshot_path=path,
+        pipeline_path=tmp_path / "pipeline.jsonl",
+        ai_trace_path=tmp_path / "ai.jsonl",
+        symbol_master_path=tmp_path / "master.json",
+        trigger_receipt_path=tmp_path / "trigger.json",
+        external_bbo_budget_path=tmp_path / "budget.json",
+    )
+    q = report["source_quality"]
+    assert q["valid_snapshot_count"] == 0
+    assert q["scheduled_pause_capture_ids"] == ["paused-request"]
+    bbo = q["ex_post_bbo_source"]
+    assert bbo["external_census_request_attempted_count"] == 1
+    assert bbo["external_census_reserved_contract_row_count"] == 1
+    assert bbo["external_census_reservation_conservation_delta"] == 0
+    assert q["report_freshness"]["latest_exact_bbo_at"] is None
+    assert q["report_freshness"]["latest_valid_snapshot_at"] is None
+
+
+def test_report_excludes_pause_bbo_even_when_ranking_was_captured_before_pause(
+    tmp_path,
+):
+    before = datetime.fromisoformat("2026-09-10T08:49:59+09:00")
+    during = datetime.fromisoformat("2026-09-10T08:50:00+09:00")
+    bbo = {
+        "schema_version": census.EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION,
+        "status": "captured",
+        "request_attempted": True,
+        "request_code": "005930_NX",
+        "response_request_code": "005930_NX",
+        "stock_code": "005930",
+        "expected_observed_venue": "NXT",
+        "request_started_epoch": before.timestamp(),
+        "observed_epoch": during.timestamp(),
+        "request_completed_epoch": during.timestamp() + 0.1,
+        "quote_age_ms": 100,
+        "best_bid": 999,
+        "best_ask": 1000,
+        "best_bid_qty": 10,
+        "best_ask_qty": 10,
+        "price_source": "ka10004_external_market_census_exact_request_code",
+        "source_quality_pass": True,
+        "daily_budget_reservation": {
+            "status": "reserved",
+            "reserved": True,
+            "attempt_ordinal": 1,
+            "daily_request_cap": census.EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE,
+        },
+        "decision_authority": "external_market_census_bbo_observation_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "market_data_request_effect": True,
+    }
+    row = {
+        "schema_version": census.SCHEMA_VERSION,
+        "target_date": "2026-09-10",
+        "capture_id": "crossing-pause",
+        "captured_at": before.isoformat(),
+        "venue": "NXT",
+        "session": "NXT_PREMARKET",
+        "panel": "liquid_common",
+        "source_quality_status": "ok",
+        "rows": [
+            {
+                "rank": 1,
+                "stock_code": "005930",
+                "current_price": 1000,
+                "executable_bbo_observation": bbo,
+            }
+        ],
+    }
+    path = tmp_path / "snapshots.jsonl"
+    _write_jsonl(path, [row])
+    raw = path.read_bytes()
+    report = census.build_report(
+        "2026-09-10",
+        snapshot_path=path,
+        pipeline_path=tmp_path / "pipeline.jsonl",
+        ai_trace_path=tmp_path / "ai.jsonl",
+        symbol_master_path=tmp_path / "master.json",
+        trigger_receipt_path=tmp_path / "trigger.json",
+        external_bbo_budget_path=tmp_path / "budget.json",
+    )
+    q = report["source_quality"]
+    assert q["valid_snapshot_count"] == 1
+    assert q["scheduled_pause_snapshot_count"] == 0
+    assert q["report_freshness"]["latest_exact_bbo_at"] is None
+    assert q["report_freshness"]["latest_valid_snapshot_at"] == before.isoformat()
+    assert q["ex_post_bbo_source"]["external_census_request_attempted_count"] == 1
+    assert (
+        q["ex_post_bbo_source"]["external_census_reservation_conservation_delta"] == 0
+    )
+    assert (
+        q["ex_post_bbo_source"]["gap_reason_counts"]["nxt_scheduled_pause_bbo_excluded"]
+        == 1
+    )
+    assert path.read_bytes() == raw
+
+
+def test_report_pause_fence_covers_prune_and_promoted_ws_sources(tmp_path):
+    events = []
+    for clock in ["08:49:59", "08:50:00", "09:00:29", "09:00:30"]:
+        at = datetime.fromisoformat(f"2026-09-10T{clock}+09:00")
+        session = census._session_for_capture(venue="NXT", captured_at=at)
+        prune = _prune_bbo_event(at, bid=999, ask=1000)
+        prune["fields"].update(
+            effective_venue="NXT",
+            venue="NXT",
+            market_session_bucket=session,
+            scanner_prune_observer_request_code="005930_NX",
+            scanner_prune_observer_response_request_code="005930_NX",
+            scanner_prune_observer_expected_observed_venue="NXT",
+        )
+        promoted = _promoted_ws_bundle_event(at)
+        promoted["fields"].update(effective_venue="NXT", market_session_bucket=session)
+        samples = json.loads(promoted["fields"]["rising_missed_entry_turn_bbo_samples"])
+        samples[0].update(
+            effective_venue="NXT",
+            market_session_bucket=session,
+            observed_venue="NXT",
+            market_route="nxt_only",
+            observed_item="005930_NX",
+        )
+        promoted["fields"]["rising_missed_entry_turn_bbo_samples"] = json.dumps(samples)
+        events.extend([prune, promoted])
+    events.append(
+        _prune_bbo_event(
+            datetime.fromisoformat("2026-09-10T09:00:00+09:00"), bid=999, ask=1000
+        )
+    )
+    path = tmp_path / "events.jsonl"
+    _write_jsonl(path, events)
+    raw = path.read_bytes()
+    result = census.build_report(
+        "2026-09-10",
+        snapshot_path=tmp_path / "missing.jsonl",
+        pipeline_path=path,
+        ai_trace_path=tmp_path / "ai.jsonl",
+        symbol_master_path=tmp_path / "master.json",
+        trigger_receipt_path=tmp_path / "trigger.json",
+        external_bbo_budget_path=tmp_path / "budget.json",
+    )
+    source = result["source_quality"]["ex_post_bbo_source"]
+    assert source["gap_reason_counts"]["nxt_scheduled_pause_bbo_excluded"] == 4
+    assert source["valid_observation_count"] == 5
+    assert (
+        result["source_quality"]["report_freshness"]["latest_exact_bbo_at"]
+        == "2026-09-10T09:00:30+09:00"
+    )
+    assert path.read_bytes() == raw

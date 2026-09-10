@@ -2786,6 +2786,7 @@ def test_build_report_uses_same_day_live_dashboard_snapshot_fallback(
         "evaluation_scope": "current_snapshot",
         "snapshot_as_of": "2026-07-30T12:20:00+09:00",
         "snapshot_age_sec": 0.0,
+        "evaluated_at": "2026-07-30T12:20:00+09:00",
     }
     assert report["snapshot_summary"]["row_count"] == 3
     assert report["snapshot_summary"]["trade_tick_quiet_count"] == 1
@@ -2996,3 +2997,110 @@ def test_write_report_monitor_only_skips_workorder_files(tmp_path, monkeypatch):
     assert workorder_md is None
     assert not (tmp_path / "workorder-report").exists()
     assert not (tmp_path / "workorder-docs").exists()
+
+
+def test_report_freezes_dashboard_before_slow_event_scan(tmp_path, monkeypatch):
+    pipeline = tmp_path / "pipeline.jsonl"
+    threshold = tmp_path / "threshold.jsonl"
+    dashboard = tmp_path / "latest.json"
+    _write_jsonl(pipeline, [])
+    _write_jsonl(threshold, [])
+    initial = {
+        "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+        "generated_at": "2026-09-10T09:05:02+09:00",
+        "stocks": {
+            "005930": {
+                "last_realtime_type_ages_ms": {"0B": 100.0, "0D": 100.0},
+                "last_0b_age_ms": 100.0,
+                "last_ws_market_route": "krx_regular",
+                "last_ws_market_suffix": "",
+            }
+        },
+    }
+    dashboard.write_text(json.dumps(initial))
+    original_load = mod._load_incremental_state
+
+    def concurrent_dashboard_update(*args, **kwargs):
+        newer = {**initial, "generated_at": "2026-09-10T09:05:22+09:00", "stocks": {}}
+        dashboard.write_text(json.dumps(newer))
+        return original_load(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_load_incremental_state", concurrent_dashboard_update)
+    report = mod.build_report(
+        "2026-09-10",
+        pipeline_path=pipeline,
+        threshold_path=threshold,
+        subscription_snapshot_path=dashboard,
+        generated_at="2026-09-10T09:05:03+09:00",
+        symbol_master_path=tmp_path / "missing-master.json",
+    )
+    assert report["subscription_snapshot_capture_phase"] == "before_event_scan"
+    assert report["snapshot_summary"]["row_count"] == 1
+    provenance = report["subscription_snapshot_provenance"]
+    assert provenance["current_freshness_usable"] is True
+    assert provenance["generated_at"] == initial["generated_at"]
+    assert provenance["snapshot_age_sec"] == 1.0
+    # An actually future-dated input is still rejected on a later invocation.
+    later = mod.build_report(
+        "2026-09-10",
+        pipeline_path=pipeline,
+        threshold_path=threshold,
+        subscription_snapshot_path=dashboard,
+        generated_at="2026-09-10T09:05:03+09:00",
+        symbol_master_path=tmp_path / "missing-master.json",
+    )
+    assert later["snapshot_summary"]["row_count"] == 0
+    assert (
+        later["subscription_snapshot_provenance"]["selection_reason"]
+        == "snapshot_future_dated"
+    )
+
+
+def test_live_snapshot_clock_crossing_during_acquisition(tmp_path, monkeypatch):
+    from datetime import datetime as RealDatetime
+
+    started = RealDatetime.fromisoformat("2026-09-10T09:05:03.999000+09:00")
+    acquired = RealDatetime.fromisoformat("2026-09-10T09:05:04.001000+09:00")
+
+    class Clock(RealDatetime):
+        calls = 0
+
+        @classmethod
+        def now(cls, tz=None):
+            cls.calls += 1
+            return (started if cls.calls == 1 else acquired).astimezone(tz)
+
+    pipeline, threshold, dashboard = (
+        tmp_path / n for n in ["p.jsonl", "t.jsonl", "latest.json"]
+    )
+    _write_jsonl(pipeline, [])
+    _write_jsonl(threshold, [])
+    dashboard.write_text(
+        json.dumps(
+            {
+                "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+                "generated_at": "2026-09-10T09:05:04+09:00",
+                "stocks": {
+                    "005930": {
+                        "last_0b_age_ms": 0,
+                        "last_realtime_type_ages_ms": {"0B": 0, "0D": 0},
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(mod, "datetime", Clock)
+    result = mod.build_report(
+        "2026-09-10",
+        pipeline_path=pipeline,
+        threshold_path=threshold,
+        subscription_snapshot_path=dashboard,
+        symbol_master_path=tmp_path / "missing.json",
+    )
+    assert result["snapshot_summary"]["row_count"] == 1
+    assert (
+        result["subscription_snapshot_provenance"]["current_freshness_usable"] is True
+    )
+    assert result["subscription_snapshot_provenance"]["snapshot_age_sec"] == 0.001
+    assert result["report_started_at"] == started.isoformat()
+    assert result["generated_at"] == acquired.isoformat()
