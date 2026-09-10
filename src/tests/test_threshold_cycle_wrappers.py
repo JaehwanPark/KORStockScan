@@ -11,6 +11,45 @@ from pathlib import Path
 import pytest
 
 
+def test_postclose_symbol_master_resolves_mount_but_rejects_child_symlink(tmp_path):
+    from src.utils.jsonl_io import read_json_object_strict_receipt
+
+    release = tmp_path / "release"
+    state = tmp_path / "state"
+    release.mkdir()
+    master_dir = state / "data/report/micro_reversion_economic_reference"
+    master_dir.mkdir(parents=True)
+    (release / "data").symlink_to(state / "data")
+    master = master_dir / "micro_reversion_symbol_master_2026-09-10.json"
+    master.write_text('{"fixture": true}')
+    script = (
+        Path(__file__).resolve().parents[2] / "deploy/run_threshold_cycle_postclose.sh"
+    ).read_text()
+    assignments = "\n".join(
+        line.strip()
+        for line in script.splitlines()
+        if line.strip().startswith(
+            ("intraday_ws_data_root=", "intraday_ws_symbol_master=")
+        )
+    )
+    result = subprocess.run(
+        ["bash", "-c", assignments + '\n echo "$intraday_ws_symbol_master"'],
+        env={**os.environ, "PROJECT_DIR": str(release), "TARGET_DATE": "2026-09-10"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    path = Path(result.stdout.strip())
+    assert path == master
+    assert read_json_object_strict_receipt(path).payload == {"fixture": True}
+    external = tmp_path / "external.json"
+    external.write_text('{"untrusted": true}')
+    master.unlink()
+    master.symlink_to(external)
+    with pytest.raises((ValueError, OSError)):
+        read_json_object_strict_receipt(path)
+
+
 @pytest.mark.parametrize(
     "failure,expected_code",
     [("none", 0), ("capture", 7), ("report", 8), ("capture_log", 9), ("report_log", 9)],
@@ -2776,6 +2815,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         in script
     )
     assert '--symbol-master-path "$intraday_ws_symbol_master"' in script
+    assert 'intraday_ws_data_root="$(cd "$PROJECT_DIR/data" && pwd -P)"' in script
+    assert 'intraday_ws_symbol_master="$intraday_ws_data_root/report/' in script
     ws_finalize_command = script.split(
         'wait_for_postclose_resources "intraday_ws_freshness_finalize"', 1
     )[1].split("wait_for_report_artifact", 1)[0]

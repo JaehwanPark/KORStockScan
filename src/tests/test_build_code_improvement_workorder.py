@@ -1,5 +1,37 @@
 import json
 import pytest
+from src.engine.automation import codex_workorder_runner
+from src.engine import build_code_improvement_workorder as mod
+from src.engine import lifecycle_decision_matrix as ldm_mod
+
+
+def test_recheck_natural_acceptance_repetition_does_not_invent_implementation():
+    from src.engine import build_code_improvement_workorder as mod
+
+    for status, expected in (
+        ("natural_acceptance_pending", []),
+        ("source_gap", ["recheck"]),
+    ):
+        item = mod.ClassifiedOrder(
+            order={
+                "order_id": "recheck",
+                "source_report_type": "entry_recheck_drought_controller",
+                "implementation_status": status,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
+            decision="defer_evidence",
+            reason="exact source review",
+            mapped_family="entry_opportunity_recheck_runtime",
+            route="maintenance_review",
+            confidence="exact_source_diagnostic",
+            automation_reentry="existing owner",
+        )
+        result, ids = mod._escalate_repeated_unresolved_orders(
+            [item], repeat_counts={"recheck": {"count": 3}}
+        )
+        assert ids == expected
+        assert result[0].decision == ("implement_now" if expected else "defer_evidence")
 
 
 def test_scanner_source_repair_emits_its_actual_downstream_contract():
@@ -25,11 +57,6 @@ def test_scanner_source_repair_emits_its_actual_downstream_contract():
     ]
     assert rows[0]["runtime_effect"] is False
     assert rows[0]["allowed_runtime_apply"] is False
-
-
-from src.engine.automation import codex_workorder_runner
-from src.engine import build_code_improvement_workorder as mod
-from src.engine import lifecycle_decision_matrix as ldm_mod
 
 
 def test_panic_report_only_provenance_is_explicit_at_native_row_boundary():

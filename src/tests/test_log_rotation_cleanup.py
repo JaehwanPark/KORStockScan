@@ -13,6 +13,81 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.parametrize("defect", [None, "selection_commit", "child_lock"])
+def test_selected_release_cleanup_uses_declared_state_mounts(tmp_path, defect):
+    import sys
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    repo = Path(__file__).resolve().parents[2]
+    state = tmp_path / "state"
+    release = tmp_path / "release"
+    release.mkdir()
+    subprocess.run(["git", "init", "-q", str(release)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(release),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        ],
+        check=True,
+    )
+    commit = subprocess.check_output(
+        ["git", "-C", str(release), "rev-parse", "HEAD"], text=True
+    ).strip()
+    for name in ("data", "logs", "tmp"):
+        (state / name).mkdir(parents=True)
+        (release / name).symlink_to(state / name)
+    (state / "data/runtime").mkdir()
+    (state / "data/runtime/runtime_release_selection.json").write_text(
+        json.dumps(
+            {
+                "schema": "runtime_release_selection_v1",
+                "workspace": str(state),
+                "release_root": str(release),
+                "git_commit": "wrong" if defect == "selection_commit" else commit,
+            }
+        )
+    )
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    sample = state / "logs/system_metric_samples.jsonl"
+    sample.write_text(json.dumps({"ts": now.isoformat()}) + "\n")
+    external = tmp_path / "external"
+    external.write_text("must remain intact")
+    if defect == "child_lock":
+        (state / "tmp/micro_reversion_storage_maintenance.lock").symlink_to(external)
+    result = subprocess.run(
+        ["bash", str(repo / "deploy/run_logs_rotation_cleanup_cron.sh"), "30"],
+        env={
+            **os.environ,
+            "PROJECT_DIR": str(release),
+            "KORSTOCKSCAN_CODE_ROOT": str(repo),
+            "PYTHON_BIN": sys.executable,
+            "TARGET_DATE": now.date().isoformat(),
+        },
+        text=True,
+        capture_output=True,
+        timeout=40,
+    )
+    assert (result.returncode == 0) is (defect is None), result.stdout + result.stderr
+    assert external.read_text() == "must remain intact"
+    assert sample.exists()
+    if defect is None:
+        assert "micro_reversion_storage_status=pass" in result.stdout
+        assert "system_metric_retained=1" in result.stdout
+    elif defect == "child_lock":
+        assert "micro_reversion_storage_status=unsafe_lock" in result.stdout
+
+
 def _generation_gzip(source: Path) -> Path:
     base_name, numeric_slot = source.name.rsplit(".", 1)
     assert numeric_slot.isdigit()

@@ -4,6 +4,35 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 KORSTOCKSCAN_CODE_ROOT="${KORSTOCKSCAN_CODE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# A selected immutable release shares state with its workspace. Resolve this
+# declared mount boundary only, leaving lock/artifact child no-follow intact.
+if [[ -L "$PROJECT_DIR/data" && -L "$PROJECT_DIR/logs" && -L "$PROJECT_DIR/tmp" ]]; then
+  PROJECT_DIR="$("${PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}" - "$PROJECT_DIR" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+release = Path(sys.argv[1]).absolute()
+workspace = (release / "data").resolve(strict=True).parent
+selection = json.loads((workspace / "data/runtime/runtime_release_selection.json").read_text())
+commit = subprocess.check_output(
+    ["git", "-C", str(release), "rev-parse", "HEAD"], text=True
+).strip()
+if (selection.get("schema") != "runtime_release_selection_v1"
+        or selection.get("release_root") != str(release)
+        or selection.get("workspace") != str(workspace)
+        or selection.get("git_commit") != commit):
+    raise ValueError("release_selection_mismatch")
+for name in ("data", "logs", "tmp"):
+    target = workspace / name
+    if (not target.is_dir() or target.is_symlink()
+            or (release / name).resolve(strict=True) != target):
+        raise ValueError("release_state_mount_mismatch:" + name)
+print(workspace)
+PY
+  )" || { echo "[LOG_CLEANUP_ERROR] invalid selected release state mounts"; exit 2; }
+fi
 LOG_DIR="$PROJECT_DIR/logs"
 RETENTION_DAYS="${1:-${LOG_ROTATION_ARCHIVE_RETENTION_DAYS:-30}}"
 STORAGE_ONLY_RECOVERY=false
