@@ -135,3 +135,11 @@ def test_release_mount_resolution_preserves_artifact_no_follow_guard(tmp_path):
     assert read_json_object_strict(canonical_data / "sample.json") == {"valid": True}
     with pytest.raises(ValueError, match="parent_invalid"):
         read_json_object_strict(release / "data" / "sample.json")
+
+
+def test_context_promotion_uses_canonical_data_identity():
+    from src.engine.scalping import multi_timeframe_context as context
+    from src.utils.constants import DATA_DIR
+
+    assert context.PROMOTION_DIR == DATA_DIR / "runtime"
+    assert context.RUNTIME_ENV_DIR == DATA_DIR / "threshold_cycle/runtime_env"

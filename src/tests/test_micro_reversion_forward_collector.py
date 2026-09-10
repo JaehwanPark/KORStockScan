@@ -296,10 +296,63 @@ def test_factory_resolves_default_output_from_repository_not_process_cwd(
 
     assert collector is not None
     assert collector.config.output_root == (
-        Path(__file__).parents[2] / "data/observations/scalp_micro_reversion_forward"
+        (Path(__file__).parents[2] / "data").resolve()
+        / "observations/scalp_micro_reversion_forward"
     )
     assert collector.config.observation_queue_size == 50_000
     assert collector.config.depth_queue_size == 50_000
+
+
+def test_release_shared_mount_captures_trade_and_depth_without_weakening_guard(
+    tmp_path,
+):
+    import inspect
+
+    release = tmp_path / "release"
+    data = tmp_path / "state"
+    release.mkdir()
+    data.mkdir()
+    (release / "data").symlink_to(data)
+    tree = ast.parse(inspect.getsource(collector_module))
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "DEFAULT_OUTPUT_ROOT"
+            for target in node.targets
+        )
+    )
+    root = eval(
+        compile(ast.Expression(assignment.value), "collector", "eval"),
+        {"REPOSITORY_ROOT": release},
+    )
+    assert root == data / "observations/scalp_micro_reversion_forward"
+    collector = _collector(root, path_capture_enabled=True, depth_capture_enabled=True)
+    try:
+        assert (
+            collector.observe_kiwoom_0b("000001", _snapshot(), realtime_type="0B")
+            is ProducerCanaryResult.ENQUEUED
+        )
+        assert (
+            collector.observe_kiwoom_0d("000001", _depth_snapshot(), realtime_type="0D")
+            is ProducerCanaryResult.ENQUEUED
+        )
+    finally:
+        collector.close()
+    snapshot = collector.runtime_snapshot()
+    assert snapshot.worker_error_count == snapshot.depth_worker_error_count == 0
+    assert snapshot.worker_processed_count == snapshot.depth_worker_processed_count == 1
+    assert list(root.rglob("market_stream.jsonl"))
+    assert list(root.rglob("market_depth_stream.jsonl"))
+    from src.engine.scalping.micro_reversion.path_journal import (
+        _assert_no_symlink_ancestors,
+    )
+
+    child_link = root / "unsafe-child"
+    child_link.symlink_to(data)
+    with pytest.raises(OSError, match="ancestor symlink"):
+        _assert_no_symlink_ancestors(child_link / "rows.jsonl")
 
 
 def test_integrated_al_item_is_captured_as_sor_without_exchange_guess(

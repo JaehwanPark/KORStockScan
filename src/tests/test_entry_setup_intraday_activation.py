@@ -212,6 +212,106 @@ def test_approval_cannot_reset_existing_daily_cap(ready, monkeypatch, tmp_path):
     assert policy.exploration_probe_cap_path(TARGET_DATE).read_bytes() == before
 
 
+def _enable_hundred_budget(monkeypatch):
+    for suffix, value in {
+        "ALLOWED_SCOPES": "KRX|KRX_REGULAR",
+        "MAX_DAILY_RECHECK": "100",
+        "MAX_DAILY_BUY_RECOVERY": "100",
+        "INTRADAY_ESCALATION_ENABLED": "false",
+    }.items():
+        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + suffix, value)
+
+
+def test_hundred_budget_carries_prior_orders_and_reaches_final_guards(
+    ready, monkeypatch, tmp_path
+):
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping.entry_opportunity_recheck import config_from_env
+
+    _enable_hundred_budget(monkeypatch)
+    original = ready.read_bytes()
+    for index in range(3):
+        policy.record_exploration_probe_submission(
+            trade_date=TARGET_DATE,
+            broker_order_no=f"prior-{index}",
+            stock_code="005930",
+        )
+    ledger = policy.exploration_probe_cap_path(TARGET_DATE).read_bytes()
+    approval = _approve(ready, maximum_daily_exploration_probes=100)
+    _pin(monkeypatch, tmp_path, approval)
+    resolved = _resolve()
+    assert resolved["enabled"] and resolved["maximum_daily_exploration_probes"] == 100
+    assert approval["source_maximum_daily_exploration_probes"] == 3
+    assert ready.read_bytes() == original
+    assert policy.exploration_probe_cap_path(TARGET_DATE).read_bytes() == ledger
+    assert config_from_env().max_daily_recheck == 100
+    assert config_from_env().max_daily_buy_recovery == 100
+    stock = {
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_setup_live_policy_max_daily_exploration_probes": 100,
+        "entry_opportunity_recheck_armed": True,
+        "entry_opportunity_recheck_attempt_id": "test-attempt",
+        "entry_opportunity_recheck_scope": "KRX|KRX_REGULAR",
+    }
+    assert handlers._entry_setup_exploration_submit_cap_guard(
+        stock, qty=1, now_ts=NOW.timestamp()
+    )["allowed"]
+    assert not handlers._entry_setup_exploration_submit_cap_guard(
+        stock, qty=2, now_ts=NOW.timestamp()
+    )["allowed"]
+    from src.engine.scalping.entry_opportunity_recheck import (
+        EntryOpportunityRecheckState,
+    )
+
+    monkeypatch.setattr(
+        handlers, "_ENTRY_OPPORTUNITY_RECHECK_STATE", EntryOpportunityRecheckState()
+    )
+    captured = {}
+
+    def reserve(**kwargs):
+        captured.update(kwargs)
+        return {"allowed": True}
+
+    monkeypatch.setattr(handlers.entry_recheck_submit_budget, "reserve", reserve)
+    assert handlers._reserve_entry_recheck_submit_budget(stock, "005930", qty=1)[
+        "allowed"
+    ]
+    assert captured["limit"] == 100
+    for index in range(3, 100):
+        policy.record_exploration_probe_submission(
+            trade_date=TARGET_DATE,
+            broker_order_no=f"prior-{index}",
+            stock_code="005930",
+        )
+    assert not handlers._entry_setup_exploration_submit_cap_guard(
+        stock, qty=1, now_ts=NOW.timestamp()
+    )["allowed"]
+
+
+@pytest.mark.parametrize("limit", [True, 0, 4, 101, "100"])
+def test_unsupported_budget_cannot_be_approved(ready, limit):
+    with pytest.raises(ValueError, match="budget_unsupported"):
+        _approve(ready, maximum_daily_exploration_probes=limit)
+
+
+def test_hundred_budget_cannot_bypass_lower_recheck_or_expand_scope(
+    ready, monkeypatch, tmp_path
+):
+    with pytest.raises(ValueError, match="budget_env_mismatch"):
+        _approve(ready, maximum_daily_exploration_probes=100)
+    _enable_hundred_budget(monkeypatch)
+    _pin(monkeypatch, tmp_path, _approve(ready, maximum_daily_exploration_probes=100))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "3"
+    )
+    assert not _resolve()["enabled"]
+    _enable_hundred_budget(monkeypatch)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "NXT|NXT_AFTERMARKET"
+    )
+    assert not _resolve()["enabled"]
+
+
 def test_approval_publication_never_overwrites_an_existing_receipt(tmp_path):
     path = tmp_path / "approval.json"
     intraday.write_new_approval(path, {"original": True})
@@ -219,6 +319,40 @@ def test_approval_publication_never_overwrites_an_existing_receipt(tmp_path):
     with pytest.raises(FileExistsError):
         intraday.write_new_approval(path, {"replacement": True})
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("target_date", ["2026-09-11", "2026-09-14"])
+def test_future_daily_krx_candidate_preopen_and_runtime_keep_hundred_budget(
+    ready, monkeypatch, target_date
+):
+    _enable_hundred_budget(monkeypatch)
+    generated = datetime.fromisoformat(target_date).replace(hour=7, tzinfo=policy.KST)
+    policy.publish_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=policy._read_json(policy.batch_report_path(SOURCE_DATE)),
+        generated_at=generated,
+        write=True,
+    )
+    candidate = policy._read_json(ready)
+    assert candidate["effective_date"] == target_date
+    assert candidate["risk_contract"]["maximum_daily_exploration_probes"] == 100
+    assert (
+        candidate["risk_contract"]["daily_exploration_limit_authority"]
+        == policy.KRX_EXPLORATION_LIMIT_AUTHORITY
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", target_date)
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", target_date)
+    activation = policy.write_preopen_activation(target_date=target_date)
+    assert activation["allowed_runtime_apply"], activation.get("errors")
+    assert (
+        _resolve(now=generated.replace(hour=9))["maximum_daily_exploration_probes"]
+        == 100
+    )
+    assert policy._new_exploration_limit(("NXT", "NXT_AFTERMARKET"), target_date) == 3
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "3"
+    )
+    assert not _resolve(now=generated.replace(hour=9))["enabled"]
 
 
 @pytest.mark.parametrize(

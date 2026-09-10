@@ -22,6 +22,10 @@ SCHEMA = "entry_setup_operator_intraday_approval_v1"
 PATH_ENV = "KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_PATH"
 SHA_ENV = "KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_SHA256"
 CONFIRM = "APPLY_KRX_ONE_SHARE_INTRADAY"
+SUPPORTED_DAILY_LIMITS = (
+    policy.EXPLORATION_MAX_DAILY_PROBES,
+    policy.KRX_EXPLORATION_MAX_DAILY_PROBES,
+)
 CODE_PATHS = (
     "src/engine/scalping/entry_setup_intraday_activation.py",
     "src/engine/scalping/entry_setup_live_policy.py",
@@ -31,7 +35,19 @@ CODE_PATHS = (
     "src/utils/constants.py",
     "restart.sh",
     "src/run_bot.sh",
+    "src/engine/scalping/micro_reversion/forward_collector.py",
+    "src/engine/scalping/multi_timeframe_context.py",
 )
+
+
+def _budget_errors(limit: int, env: dict[str, str] | None = None) -> list[str]:
+    if type(limit) is not int or limit not in SUPPORTED_DAILY_LIMITS:
+        return ["intraday_exploration_budget_unsupported"]
+    if limit == policy.EXPLORATION_MAX_DAILY_PROBES:
+        return []
+    if policy.expanded_exploration_budget_errors(env):
+        return ["intraday_exploration_budget_env_mismatch"]
+    return []
 
 
 @lru_cache(maxsize=32)
@@ -107,6 +123,7 @@ def build_approval(
     expires_at: datetime,
     now: datetime,
     runtime_env: dict[str, str] | None = None,
+    maximum_daily_exploration_probes: int = policy.EXPLORATION_MAX_DAILY_PROBES,
 ) -> dict[str, Any]:
     """Validate the exact original source; the caller supplies operator authority."""
     if now.tzinfo is None:
@@ -124,6 +141,7 @@ def build_approval(
     errors = _candidate_errors(
         candidate, candidate_path, now=now, runtime_env=runtime_env
     )
+    errors.extend(_budget_errors(maximum_daily_exploration_probes, runtime_env))
     if errors:
         raise ValueError(";".join(errors))
     provenance = candidate["source_provenance"]
@@ -149,7 +167,10 @@ def build_approval(
         "original_effective_date": candidate["effective_date"],
         "source_hashes": {str(path): _digest(path) for path in sources},
         "code_hashes": {path: _digest(PROJECT_ROOT / path) for path in CODE_PATHS},
-        "maximum_daily_exploration_probes": policy.EXPLORATION_MAX_DAILY_PROBES,
+        "maximum_daily_exploration_probes": maximum_daily_exploration_probes,
+        "source_maximum_daily_exploration_probes": candidate["risk_contract"][
+            "maximum_daily_exploration_probes"
+        ],
         "daily_quota_reset_forbidden": True,
         "residual_multi_leg_forbidden": True,
         "scale_in_forbidden": True,
@@ -193,8 +214,8 @@ def resolve_intraday(result: dict[str, Any], *, now: datetime) -> dict[str, Any]
             or (approval.get("effective_venue"), approval.get("session_bucket"))
             != policy.DEFAULT_COHORT
             or approval.get("canary_mode") != policy.EXPLORATION_CANARY_MODE
-            or approval.get("maximum_daily_exploration_probes")
-            != policy.EXPLORATION_MAX_DAILY_PROBES
+            or approval.get("source_maximum_daily_exploration_probes")
+            not in SUPPORTED_DAILY_LIMITS
             or approval.get("daily_quota_reset_forbidden") is not True
             or approval.get("residual_multi_leg_forbidden") is not True
             or approval.get("scale_in_forbidden") is not True
@@ -207,6 +228,7 @@ def resolve_intraday(result: dict[str, Any], *, now: datetime) -> dict[str, Any]
         ):
             errors.append("intraday_authority_contract_invalid")
         errors.extend(_window_errors(approval, now))
+        errors.extend(_budget_errors(approval.get("maximum_daily_exploration_probes")))
         if errors:
             raise ValueError(";".join(errors))
         if set(approval["code_hashes"]) != set(CODE_PATHS):
@@ -230,6 +252,10 @@ def resolve_intraday(result: dict[str, Any], *, now: datetime) -> dict[str, Any]
         if (
             candidate.get("artifact_sha256") != approval["candidate_artifact_sha256"]
             or candidate.get("effective_date") != approval["original_effective_date"]
+            or (candidate.get("risk_contract") or {}).get(
+                "maximum_daily_exploration_probes"
+            )
+            != approval["source_maximum_daily_exploration_probes"]
         ):
             raise ValueError("intraday_original_candidate_changed")
         # Runtime rechecks the original contract; the full report/source gate was
@@ -264,7 +290,9 @@ def resolve_intraday(result: dict[str, Any], *, now: datetime) -> dict[str, Any]
             activation_artifact_sha256=actual_hash,
             activation_mode=approval["approval_mode"],
             canary_mode=policy.EXPLORATION_CANARY_MODE,
-            maximum_daily_exploration_probes=policy.EXPLORATION_MAX_DAILY_PROBES,
+            maximum_daily_exploration_probes=approval[
+                "maximum_daily_exploration_probes"
+            ],
             source_date=candidate["source_date"],
             intraday_expires_at=approval["expires_at"],
         )
@@ -295,6 +323,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dated-operator-env-file", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--confirm")
+    parser.add_argument(
+        "--maximum-daily-exploration-probes",
+        type=int,
+        choices=SUPPORTED_DAILY_LIMITS,
+        default=policy.EXPLORATION_MAX_DAILY_PROBES,
+    )
     args = parser.parse_args(argv)
     if args.output and args.confirm != CONFIRM:
         parser.error("--output requires explicit --confirm " + CONFIRM)
@@ -313,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             expires_at=_stamp(args.expires_at),
             now=datetime.now(policy.KST),
             runtime_env=env,
+            maximum_daily_exploration_probes=args.maximum_daily_exploration_probes,
         )
         if args.output:
             write_new_approval(args.output, approval)
