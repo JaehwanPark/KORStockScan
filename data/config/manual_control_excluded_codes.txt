@@ -17,3 +17,4 @@
 137310 # machine_owner_scope sd_biosensor_low_price_two_leg_owner
 028670 # machine_owner_scope fan_ocean_low_price_two_leg_owner
 011170 # machine_owner_scope lotte_chemical_low_price_two_leg_owner
+108320 # machine_owner_scope lx_semicon_low_price_two_leg_owner

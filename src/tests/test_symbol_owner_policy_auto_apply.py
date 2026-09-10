@@ -188,7 +188,7 @@ def test_expected_scope_covers_all_current_widget_and_episode_symbols():
     assert all("manual_operator" in owners for owners in scope.values())
     assert set(scope) < set(LEGACY_MACHINE_OWNER_SCOPE_LABELS)
     assert set(LEGACY_MACHINE_OWNER_SCOPE_LABELS) == set(
-        expected_machine_symbol_owners(date(2026, 9, 10))
+        expected_machine_symbol_owners(date(2026, 9, 11))
     )
 
 

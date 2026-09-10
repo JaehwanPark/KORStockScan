@@ -50,6 +50,7 @@ LEGACY_MACHINE_OWNER_SCOPE_LABELS = {
     "079160": "cj_cgv_low_price_two_leg_owner",
     "080220": "jeju_semiconductor_low_price_two_leg_owner",
     "105630": "hanse_low_price_two_leg_owner",
+    "108320": "lx_semicon_low_price_two_leg_owner",
     "111770": "youngone_low_price_two_leg_owner",
     "137310": "sd_biosensor_low_price_two_leg_owner",
     "181710": "nhn_low_price_two_leg_owner",

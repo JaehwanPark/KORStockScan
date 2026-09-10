@@ -140,6 +140,43 @@ def test_standing_authority_date_and_exact_scope():
         )
 
 
+@pytest.mark.parametrize("marker_kind", ["current", "legacy", "missing", "invalid"])
+def test_standing_authority_validates_installed_scope_markers(
+    tmp_path, monkeypatch, marker_kind
+):
+    """Check actual marker parsing, which a symbols-only comparison misses."""
+    from src.engine.risk import manual_control_exclusion as exclusion
+    from src.trading.order.symbol_owner_policy_auto_apply import (
+        _validate_runtime_scope,
+        SymbolOwnerPolicyAutoApplyError,
+    )
+
+    path = ROOT / "data/config/symbol_owner_policy_standing_authority_2026-09-11.json"
+    authority = load_standing_authority(
+        path, observed_at=datetime(2026, 9, 11, 7, 32, tzinfo=ZoneInfo("Asia/Seoul"))
+    )
+    marker = "108320 # machine_owner_scope lx_semicon_low_price_two_leg_owner\n"
+    text = (ROOT / "data/config/manual_control_excluded_codes.txt").read_text()
+    assert text.count(marker) == 1
+    if marker_kind == "legacy":
+        text = text.replace(marker, marker.replace("machine_owner_scope", "manual_operator"))
+    elif marker_kind == "missing":
+        text = text.replace(marker, "")
+    elif marker_kind == "invalid":
+        text = text.replace(marker, "108320 # manual_operator unrelated_operator_veto\n")
+    fixture = tmp_path / "markers.txt"
+    fixture.write_text(text)
+    monkeypatch.setenv(exclusion.EXCLUDED_CODES_FILE_ENV, str(fixture))
+    if marker_kind in {"missing", "invalid"}:
+        with pytest.raises(SymbolOwnerPolicyAutoApplyError, match="scope_mismatch:108320"):
+            _validate_runtime_scope(authority, target_date=DAY)
+    else:
+        assert _validate_runtime_scope(authority, target_date=DAY) == expected_machine_symbol_owners(DAY)
+    # A reviewed marker never erases a separate explicit operator veto.
+    fixture.write_text(text + "108320 # manual_operator operator_pause\n")
+    assert exclusion.manual_control_operator_exclusion_source("108320") == "manual_operator"
+
+
 @pytest.mark.parametrize(
     "rid,hour,minute",
     [
