@@ -2993,7 +2993,7 @@ def test_entry_opportunity_recheck_refresh_uses_post_ai_quote_and_ticks(monkeypa
     monkeypatch.setattr(
         state_handlers,
         "_pre_submit_refresh_real_ws_snapshot",
-        lambda *args: (
+        lambda *args, **kwargs: (
             refreshed_ws,
             {
                 "pre_submit_ws_snapshot_refresh_applied": True,
@@ -3029,7 +3029,7 @@ def test_entry_opportunity_recheck_refresh_does_not_pair_new_quote_with_old_tick
     monkeypatch.setattr(
         state_handlers,
         "_pre_submit_refresh_real_ws_snapshot",
-        lambda *args: (
+        lambda *args, **kwargs: (
             {"curr": 10_020, "last_ws_update_ts": time.time()},
             {
                 "pre_submit_ws_snapshot_refresh_applied": True,

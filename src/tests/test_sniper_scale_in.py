@@ -5450,6 +5450,13 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
             }
 
     monkeypatch.setattr(state_handlers.time, "time", lambda: clock["now"])
+    # This test owns authority handoff, not live candle/auxiliary acquisition.
+    monkeypatch.setattr(
+        state_handlers, "fetch_entry_candles_with_meta", lambda *a, **k: ([], {})
+    )
+    monkeypatch.setattr(
+        state_handlers, "build_entry_candle_context", lambda *a, **k: {}
+    )
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "get_tick_history_ka10003",

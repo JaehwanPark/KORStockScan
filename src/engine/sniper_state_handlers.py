@@ -111,6 +111,7 @@ from src.engine.scalping.entry_candle_context import (
     entry_candle_context_enabled,
     entry_candle_context_log_fields,
     fetch_entry_candles_with_meta,
+    revalidate_entry_candle_snapshot,
     resolve_entry_candle_request_code,
     resolve_entry_candle_session,
     resolve_entry_candle_venue,
@@ -30663,9 +30664,18 @@ def _get_best_levels_from_ws(ws_data):
 
 
 def _pre_submit_refresh_real_ws_snapshot(
-    code: str, ws_data: dict | None, strategy: str
+    code: str,
+    ws_data: dict | None,
+    strategy: str,
+    *,
+    context_max_age_ms: int | None = None,
 ) -> tuple[dict, dict]:
-    """Refresh the real SCALPING pre-submit snapshot from the live WS manager."""
+    """Acquire a local snapshot; submit callers retain the submit-age limit.
+
+    An upstream observation owner may supply its existing input-age contract.
+    This never certifies submission: the final submit owner rechecks its own
+    unchanged quote, tape, route and broker guards.
+    """
     base = dict(ws_data or {})
     fields = {
         "pre_submit_ws_snapshot_refresh_enabled": False,
@@ -30700,10 +30710,25 @@ def _pre_submit_refresh_real_ws_snapshot(
             700,
         ),
     )
+    if context_max_age_ms is not None:
+        if type(context_max_age_ms) is not int or context_max_age_ms < 0:
+            fields["pre_submit_ws_snapshot_refresh_reason"] = (
+                "invalid_context_age_limit"
+            )
+            return base, fields
+        max_age_ms = context_max_age_ms
+    fields["pre_submit_ws_snapshot_refresh_max_age_ms"] = max_age_ms
+    fields["pre_submit_ws_snapshot_refresh_age_owner"] = (
+        "upstream_context" if context_max_age_ms is not None else "final_submit"
+    )
     base_best_ask, base_best_bid = _get_best_levels_from_ws(base)
     base_price = _safe_int(base.get("curr"), 0)
     base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
-    base_age_ms = None if base_ts <= 0 else max(0.0, (time.time() - base_ts) * 1000.0)
+    base_now = time.time()
+    if not math.isfinite(base_ts) or base_ts > base_now:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "input_timestamp_invalid"
+        return base, fields
+    base_age_ms = None if base_ts <= 0 else (base_now - base_ts) * 1000.0
     if base_price > 0 and base_best_bid > 0 and base_best_ask > base_best_bid:
         if base_age_ms is None:
             fields["pre_submit_ws_snapshot_refresh_reason"] = (
@@ -30730,7 +30755,10 @@ def _pre_submit_refresh_real_ws_snapshot(
     latest_price = _safe_int(latest.get("curr"), 0)
     latest_ts = _safe_float(latest.get("last_ws_update_ts"), 0.0)
     now_ts = time.time()
-    age_ms = None if latest_ts <= 0 else max(0.0, (now_ts - latest_ts) * 1000.0)
+    if not math.isfinite(latest_ts) or latest_ts > now_ts:
+        fields["pre_submit_ws_snapshot_refresh_reason"] = "latest_timestamp_invalid"
+        return base, fields
+    age_ms = None if latest_ts <= 0 else (now_ts - latest_ts) * 1000.0
     fields.update(
         {
             "pre_submit_ws_snapshot_refresh_age_ms": (
@@ -40981,6 +41009,9 @@ def _retry_entry_ai_submit_authority_before_block(
                 now_ts=now_ts,
                 allow_integrated_sor_execution_view=True,
             )
+            fields["pre_submit_entry_ai_authority_retry_history_ready_elapsed_ms"] = (
+                round((time.monotonic() - retry_started_at) * 1000.0, 3)
+            )
             try:
                 _update_ai_quote_freshness_fields(retry_ws_data)
             except Exception as exc:
@@ -40994,6 +41025,7 @@ def _retry_entry_ai_submit_authority_before_block(
                     f"retry_freshness_error:{type(exc).__name__}",
                 )
             retry_context_now_ts = time.time()
+            context_build_started = time.monotonic()
             candle_context = build_entry_candle_context(
                 KIWOOM_TOKEN,
                 code,
@@ -41007,6 +41039,42 @@ def _retry_entry_ai_submit_authority_before_block(
                 source_meta=candle_source_meta,
                 include_investor_source=True,
             )
+            fields["pre_submit_entry_ai_authority_retry_context_build_elapsed_ms"] = (
+                round((time.monotonic() - context_build_started) * 1000.0, 3)
+            )
+            # All history/auxiliary reads have finished. Acquire quote AND tape
+            # once more from the local cache, then rebuild only the canonical
+            # snapshot. No additional REST/provider call or timestamp stamping.
+            retry_ws_data, final_refresh = _pre_submit_refresh_real_ws_snapshot(
+                code, retry_ws_data, "SCALPING"
+            )
+            fields.update(
+                {
+                    "pre_submit_entry_ai_authority_retry_final_refresh_applied": bool(
+                        final_refresh.get("pre_submit_ws_snapshot_refresh_applied")
+                    ),
+                    "pre_submit_entry_ai_authority_retry_final_refresh_reason": final_refresh.get(
+                        "pre_submit_ws_snapshot_refresh_reason"
+                    ),
+                    "pre_submit_entry_ai_authority_retry_final_refresh_age_ms": final_refresh.get(
+                        "pre_submit_ws_snapshot_refresh_age_ms"
+                    ),
+                }
+            )
+            if final_refresh.get("pre_submit_ws_snapshot_refresh_applied"):
+                # Never resurrect pre-refresh REST/WS tape when the new snapshot
+                # did not carry an exact tape observation.
+                recent_ticks = list(retry_ws_data.get("recent_trade_ticks") or [])
+            revalidation_started = time.monotonic()
+            candle_context = revalidate_entry_candle_snapshot(
+                candle_context, retry_ws_data, now_ts=time.time()
+            )
+            fields["pre_submit_entry_ai_authority_retry_prepared_snapshot_age_ms"] = (
+                candle_context.get("market_snapshot_revalidation", {}).get("elapsed_ms")
+            )
+            fields[
+                "pre_submit_entry_ai_authority_retry_snapshot_revalidation_elapsed_ms"
+            ] = round((time.monotonic() - revalidation_started) * 1000.0, 3)
         retry_ws_data.setdefault("current_ai_score", _safe_float(current_ai_score, 0.0))
         retry_ws_data.setdefault(
             "ai_score_baseline_source", "pre_submit_entry_ai_authority_retry"
@@ -56317,14 +56385,16 @@ def _refresh_entry_opportunity_recheck_inputs(
     The Entry AI response may take several seconds.  Reusing the pre-call quote
     and tape here makes a healthy live feed look stale and defeats the bounded
     recheck before its existing submit guards can evaluate it.  This helper
-    deliberately reuses the pre-submit freshness owner; an unavailable/stale
-    refresh remains fail-closed, and refreshed quotes never inherit old ticks.
+    uses the recheck owner's existing observation-age limit, not the stricter
+    final-submit limit. Unavailable/stale refresh remains fail-closed, and
+    refreshed quotes never inherit old ticks. Final submission is revalidated.
     """
 
     refreshed_ws, refresh_fields = _pre_submit_refresh_real_ws_snapshot(
         code,
         ws_data,
         strategy,
+        context_max_age_ms=entry_recheck_config_from_env().max_ws_age_ms,
     )
     refresh_applied = bool(refresh_fields.get("pre_submit_ws_snapshot_refresh_applied"))
     refreshed_ticks = refreshed_ws.get("recent_trade_ticks")
@@ -56342,6 +56412,9 @@ def _refresh_entry_opportunity_recheck_inputs(
 
     fields = {
         "entry_opportunity_recheck_quote_refresh_applied": refresh_applied,
+        "entry_opportunity_recheck_quote_refresh_max_age_ms": refresh_fields.get(
+            "pre_submit_ws_snapshot_refresh_max_age_ms"
+        ),
         "entry_opportunity_recheck_quote_refresh_reason": refresh_fields.get(
             "pre_submit_ws_snapshot_refresh_reason", "unknown"
         ),

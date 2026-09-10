@@ -7,6 +7,7 @@ BUY authority, choose an order price/quantity, or bypass broker/safety guards.
 
 from __future__ import annotations
 
+import copy
 import math
 import os
 import time
@@ -1376,6 +1377,83 @@ def build_entry_candle_context(
         now_ts=now_kst.timestamp(),
     )
     return context
+
+
+def revalidate_entry_candle_snapshot(
+    context: dict[str, Any], ws_data: dict[str, Any], *, now_ts: float
+) -> dict[str, Any]:
+    """Rebind market inputs after preparation without fetching or restamping bars.
+
+    Completed/forming bars remain the exact prepared observation. Optional slow
+    sources keep their original receipt clocks. The ordinary snapshot builder
+    still owns all source-age, skew and venue checks.
+    """
+    previous = context.get("ai_market_snapshot_v1")
+    if not isinstance(previous, dict) or not previous:
+        return context  # Missing canonical input still fails the normal preflight.
+    captured = datetime.fromisoformat(previous["captured_at"])
+    if (
+        captured.tzinfo is None
+        or not math.isfinite(now_ts)
+        or now_ts < captured.timestamp()
+    ):
+        raise ValueError("entry_context_revalidation_clock_invalid")
+    result = copy.deepcopy(context)
+    source_route = str(context.get("ws_route") or "")
+    if source_route == "unknown":
+        source_route = ""
+    if preferred_ws_route(ws_data, now_ts=now_ts) != (
+        str(context.get("ws_suffix") or ""),
+        source_route,
+    ):
+        raise ValueError("entry_context_revalidation_route_changed")
+    elapsed = now_ts - captured.timestamp()
+    age = result.get("latest_bar_age_sec")
+    if age is not None:
+        if not math.isfinite(float(age)) or float(age) < 0:
+            raise ValueError("entry_context_candle_age_invalid")
+        # Keep the bar's original observed time, including across minute rollover.
+        result["latest_bar_age_sec"] = float(age) + elapsed
+    ws = copy.deepcopy(ws_data)
+    sources = previous.get("sources") or {}
+    for name in ("investor", "program"):
+        source = sources.get(name) or {}
+        if name == "program" and (
+            "0w" in (ws.get("received_types") or [])
+            or (ws.get("last_realtime_type_ts") or {}).get("0w")
+            or ws.get("last_prog_update_ts")
+        ):
+            continue
+        if (
+            f"{name}_context" not in ws
+            and isinstance(source.get("value"), dict)
+            and source.get("observed_at")
+            and source.get("market_route") == source_route
+        ):
+            ws[f"{name}_context"] = copy.deepcopy(source["value"])
+            source_time = datetime.fromisoformat(source["observed_at"])
+            if source_time.tzinfo is None:
+                raise ValueError("entry_context_source_clock_missing_timezone")
+            ws[f"{name}_observed_ts"] = source_time.timestamp()
+            ws[f"{name}_source"] = source.get("source")
+            ws[f"{name}_freshness_limit_ms"] = source.get("freshness_limit_ms")
+    result["ai_market_snapshot_v1"] = build_ai_market_snapshot(
+        stock_code=previous["stock_code"],
+        decision_stage=previous["decision_stage"],
+        ws_data=ws,
+        effective_venue=previous["effective_venue"],
+        session_bucket=previous["session_bucket"],
+        broker_route=previous["broker_route"],
+        candle_context=result,
+        now_ts=now_ts,
+    )
+    result["market_snapshot_revalidation"] = {
+        "prepared_snapshot_id": previous.get("snapshot_id"),
+        "prepared_at": previous["captured_at"],
+        "elapsed_ms": round(elapsed * 1000.0, 3),
+        "source_clocks_preserved": True,
+    }
+    return result
 
 
 def _best_levels(ws_data: dict[str, Any]) -> tuple[int, int, float, float]:
