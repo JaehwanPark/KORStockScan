@@ -117,7 +117,9 @@ def test_entry_context_ws_data_preserves_explicit_market_metadata_only():
     assert state_handlers._entry_context_ws_data({"curr": 70000}, {}) == {"curr": 70000}
 
 
-def test_entry_price_exact_context_handoff_is_single_use_and_bounded(monkeypatch):
+def test_entry_price_exact_context_handoff_rejects_missing_canonical_snapshot(
+    monkeypatch,
+):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
     stock = {}
     recorded = state_handlers._record_entry_price_exact_context_handoff(
@@ -149,8 +151,11 @@ def test_entry_price_exact_context_handoff_is_single_use_and_bounded(monkeypatch
     )
 
     assert recorded["entry_price_exact_context_handoff_recorded"] is True
-    assert handoff["snapshot_id"] == "snapshot-entry-price"
-    assert fields["pre_submit_entry_ai_exact_context_handoff_used"] is True
+    assert handoff is None
+    assert fields["pre_submit_entry_ai_exact_context_handoff_used"] is False
+    assert fields["pre_submit_entry_ai_exact_context_handoff_revalidation_error"] == (
+        "canonical_snapshot_missing"
+    )
     assert second is None
     assert (
         second_fields["pre_submit_entry_ai_exact_context_handoff_reason"]

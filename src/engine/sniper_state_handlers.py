@@ -42791,7 +42791,12 @@ def _consume_entry_price_exact_context_handoff(
             ),
         }
     )
-    if captured_at <= 0 or expires_at <= float(now_ts):
+    if (
+        not all(math.isfinite(value) for value in (captured_at, expires_at, now_ts))
+        or captured_at <= 0
+        or captured_at > now_ts
+        or expires_at <= float(now_ts)
+    ):
         _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
         fields["pre_submit_entry_ai_exact_context_handoff_reason"] = "expired"
         return None, fields
@@ -42889,6 +42894,51 @@ def _consume_entry_price_exact_context_handoff(
             "stored_context_contract_rejected"
         )
         return None, fields
+    # The handoff was recorded after the price-provider response. Its receipt
+    # TTL must not renew the original market snapshot's lifetime. Revalidate
+    # original source clocks, not just unchanged prices or frozen quality flags.
+    try:
+        snapshot = context.get("ai_market_snapshot_v1")
+        if not isinstance(snapshot, dict) or not snapshot:
+            raise ValueError("canonical_snapshot_missing")
+        if (
+            snapshot.get("stock_code") != str(code or "").strip()[:6]
+            or not snapshot.get("snapshot_id")
+            or snapshot.get("snapshot_id") != handoff.get("snapshot_id")
+        ):
+            raise ValueError("prepared_snapshot_identity_mismatch")
+        prepared_at = datetime.fromisoformat(snapshot["captured_at"])
+        if prepared_at.tzinfo is None or prepared_at.timestamp() > captured_at:
+            raise ValueError("prepared_clock_invalid")
+        prepared_age = now_ts - prepared_at.timestamp()
+        fields["pre_submit_entry_ai_exact_context_handoff_prepared_age_ms"] = round(
+            prepared_age * 1000.0, 3
+        )
+        if prepared_age >= expires_at - captured_at:
+            raise ValueError("prepared_snapshot_expired")
+        revalidated = revalidate_entry_candle_snapshot(
+            context, stored_ws_data, now_ts=now_ts
+        )
+        preflight = ai_input_preflight(revalidated)
+        if preflight.get("allowed") is not True:
+            fields["pre_submit_entry_ai_exact_context_handoff_source_blockers"] = (
+                ",".join(map(str, preflight.get("blockers") or []))
+            )
+            raise ValueError("source_preflight_rejected")
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
+        fields["pre_submit_entry_ai_exact_context_handoff_reason"] = (
+            "stored_snapshot_revalidation_failed"
+        )
+        fields["pre_submit_entry_ai_exact_context_handoff_revalidation_error"] = str(
+            exc
+        )
+        return None, fields
+    # Preserve the original snapshot/trace as the parent. The consumer receives
+    # a new canonical snapshot with current ages, never a relabelled old ID.
+    handoff = copy.deepcopy(handoff)
+    handoff["candle_context"] = revalidated
+    fields["pre_submit_entry_ai_exact_context_handoff_revalidated"] = True
     _mutate_stock_state(stock, pop_fields=["_entry_price_exact_context_handoff"])
     fields.update(
         {

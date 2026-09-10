@@ -26,6 +26,7 @@ def _ws(at, *, price=10000):
         "market_suffix": "",
         "received_types": ["0B", "0D"],
         "last_realtime_type_ts": {"0B": at, "0D": at},
+        "last_realtime_type_item": {"0B": "123456", "0D": "123456"},
         "last_realtime_type_market_route": {"0B": "krx_regular", "0D": "krx_regular"},
         "last_realtime_type_market_suffix": {"0B": "", "0D": ""},
         "recent_trade_ticks": [{"price": price, "received_ts": at}],
@@ -160,15 +161,23 @@ def test_revalidation_never_matures_an_invalid_prepared_candle_age(age):
         revalidate_entry_candle_snapshot(context, _ws(NOW + 4.9), now_ts=NOW + 5)
 
 
-def test_retry_acquires_after_slow_context_build_and_uses_same_tape(monkeypatch):
+@pytest.mark.parametrize("expired_handoff", [False, True])
+def test_retry_acquires_after_slow_context_build_and_uses_same_tape(
+    monkeypatch, expired_handoff
+):
     clock = {"now": NOW}
     calls = []
     monkeypatch.setattr(handlers.time, "time", lambda: clock["now"])
-    monkeypatch.setattr(
-        handlers,
-        "_consume_entry_price_exact_context_handoff",
-        lambda *a, **k: (None, {}),
-    )
+    stock = {"id": 1, "name": "fixture", "strategy": "SCALPING"}
+    if expired_handoff:
+        monkeypatch.setenv(
+            "KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2"
+        )
+        context = _context()
+        context["ai_market_snapshot_v1"]["captured_at"] = datetime.fromtimestamp(
+            NOW - 5, ZoneInfo("Asia/Seoul")
+        ).isoformat()
+        stock.update(_record_handoff(context, response_at=NOW - 0.1))
 
     def refresh(*args, **kwargs):
         calls.append(clock["now"])
@@ -198,6 +207,7 @@ def test_retry_acquires_after_slow_context_build_and_uses_same_tape(monkeypatch)
         assert ticks == ws["recent_trade_ticks"]
         source = kwargs["candle_context"]["ai_market_snapshot_v1"]["sources"]
         assert source["tape"]["age_ms"] == pytest.approx(100, abs=1)
+        assert kwargs["metadata_extra"]["ai_input_parent_snapshot_id"] is None
         return {
             "ai_result_source": "input_preflight_blocked",
             "action": "DROP",
@@ -205,7 +215,7 @@ def test_retry_acquires_after_slow_context_build_and_uses_same_tape(monkeypatch)
         }
 
     result = handlers._retry_entry_ai_submit_authority_before_block(
-        stock={"id": 1, "name": "fixture", "strategy": "SCALPING"},
+        stock=stock,
         code="123456",
         ws_data=_ws(NOW - 5),
         ai_engine=SimpleNamespace(analyze_target=analyze),
@@ -214,3 +224,108 @@ def test_retry_acquires_after_slow_context_build_and_uses_same_tape(monkeypatch)
     )
     assert result["pre_submit_entry_ai_authority_retry_final_refresh_applied"] is True
     assert result["pre_submit_entry_ai_authority_retry_success"] is False
+    if expired_handoff:
+        assert result[
+            "pre_submit_entry_ai_exact_context_handoff_revalidation_error"
+        ] == ("prepared_snapshot_expired")
+
+
+def _record_handoff(context, *, response_at=NOW + 0.2):
+    stock = {}
+    handlers._record_entry_price_exact_context_handoff(
+        stock,
+        code="123456",
+        captured_at=response_at,
+        ws_data=_ws(NOW - 0.1),
+        recent_ticks=_ws(NOW - 0.1)["recent_trade_ticks"],
+        recent_candles=context["bars"],
+        candle_context=context,
+        preflight={"allowed": True},
+        result={
+            "ai_result_source": "live",
+            "ai_parse_ok": True,
+            "ai_input_snapshot_id": context["ai_market_snapshot_v1"]["snapshot_id"],
+            "ai_decision_trace_id": "price-parent",
+        },
+    )
+    return stock
+
+
+def test_fast_handoff_recomputes_ages_preserves_parent_and_is_single_use(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    context = _context()
+    stock = _record_handoff(context)
+    original = deepcopy(stock["_entry_price_exact_context_handoff"])
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + 0.5, current_ws_data=_ws(NOW - 0.1)
+    )
+    assert handoff is not None, fields
+    snapshot = handoff["candle_context"]["ai_market_snapshot_v1"]
+    assert snapshot["snapshot_id"] != original["snapshot_id"]
+    assert handoff["snapshot_id"] == original["snapshot_id"]
+    assert snapshot["sources"]["tape"]["age_ms"] == pytest.approx(600, abs=1)
+    assert snapshot["sources"]["tape"]["observed_at"] == (
+        context["ai_market_snapshot_v1"]["sources"]["tape"]["observed_at"]
+    )
+    assert fields["pre_submit_entry_ai_exact_context_handoff_revalidated"] is True
+    assert handoff["recent_ticks"] == original["recent_ticks"]
+    assert handoff["candle_context"]["bars"] == original["candle_context"]["bars"]
+    second, _ = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + 0.6, current_ws_data=_ws(NOW)
+    )
+    assert second is None
+
+
+@pytest.mark.parametrize("elapsed", [2.0, 5.0])
+def test_provider_response_does_not_renew_prepared_snapshot_ttl(monkeypatch, elapsed):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
+    stock = _record_handoff(_context(), response_at=NOW + elapsed - 0.1)
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + elapsed, current_ws_data=_ws(NOW)
+    )
+    assert handoff is None
+    assert fields["pre_submit_entry_ai_exact_context_handoff_revalidation_error"] == (
+        "prepared_snapshot_expired"
+    )
+    assert "pre_submit_entry_ai_exact_context_handoff_parent_trace_id" not in fields
+    assert "_entry_price_exact_context_handoff" not in stock
+
+
+def test_handoff_rechecks_source_age_even_with_longer_existing_ttl(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "15")
+    stock = _record_handoff(_context(), response_at=NOW + 4.9)
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + 5, current_ws_data=_ws(NOW)
+    )
+    assert handoff is None
+    assert (
+        "tape_stale"
+        in fields["pre_submit_entry_ai_exact_context_handoff_source_blockers"]
+    )
+
+
+@pytest.mark.parametrize("clock", [NOW + 1, float("nan"), float("inf")])
+def test_handoff_rejects_future_or_nonfinite_response_clock(clock):
+    stock = _record_handoff(_context(), response_at=clock)
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + 0.5, current_ws_data=_ws(NOW)
+    )
+    assert handoff is None
+    assert fields["pre_submit_entry_ai_exact_context_handoff_used"] is False
+
+
+@pytest.mark.parametrize(
+    "field,value", [("stock_code", "654321"), ("snapshot_id", "other")]
+)
+def test_handoff_rejects_wrong_canonical_parent_identity(field, value):
+    stock = _record_handoff(_context())
+    stock["_entry_price_exact_context_handoff"]["candle_context"][
+        "ai_market_snapshot_v1"
+    ][field] = value
+    handoff, fields = handlers._consume_entry_price_exact_context_handoff(
+        stock, code="123456", now_ts=NOW + 0.5, current_ws_data=_ws(NOW)
+    )
+    assert handoff is None
+    assert fields["pre_submit_entry_ai_exact_context_handoff_revalidation_error"] == (
+        "prepared_snapshot_identity_mismatch"
+    )
