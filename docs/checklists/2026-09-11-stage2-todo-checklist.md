@@ -19,6 +19,7 @@
 ## 전일 승인 배포의 다음 거래일 확인
 
 - [ ] `[MachineProfitStagnationStartupAcceptance0911] 배포된 최소 보조청산의 다음 거래일 service·정책·신규 entry 소비 확인` (`Due: 2026-09-11`, `Slot: INTRADAY`, `TimeWindow: 07:55~14:35`, `Track: RuntimeStability`)
+  - 9/11 07:32 사용자 “오늘만 신규1주” 승인 반영: [1일 수량 배포](../audit-reports/2026-09-11-one-day-machine-quantity.md), 위젯/삼성427ab86e·저가주5abbf613 및95 drop-in9개/로드된129개 경로 대사. 오늘 새 leg1주(episode2개 총2주), 기존10주 보유/접수 주문 보존. 기존3개 policy pin·예약은 유지하며 현재PID0/미래 기동 미확인이다. 본 owner의 자연 신규 entry 확인에서 `new_entry_quantity_receipt`와 실제 주문 원장 수량을 함께 확인한다. 원칙상의 기본10/총20 승인 정책과 오늘 사용자 override를 구분한다.
   - 9/11 승인 후속: [추천 구현·배포](../audit-reports/2026-09-11-widget-episode-approved-deployment.md), [18행 successor](../audit-reports/2026-09-11-widget-episode-approved-ledger.json). 롯데 오후 개선/정오 신규·LX세미콘 오전 신규3개를 기존 gate 통과 후 반영. low-price 별도90 drop-in/신규 timer4개·변경2개와07:32 exact owner scope를 대사한다. 나머지15행의 보류/차단/거절/관찰은 유지하며 미래 실제 PID·신규 entry·경제성은 OPEN.
   - 실제 배포00:20 KST: low-price4f073800/90 drop-in2개, 공통 consumer340c1d00, widget PID2651657/f9d53a9a 유지. 기존 롯데 오후 timer reload의00:20 조기 preflight는 종료·예약 복구했고 exact9/11 applied 정책은 원시각으로 보존했다. 정상 다음 preflight/실제 PID·경제성 완료가 아니며09:40/09:44·13:10/13:14·14:20/14:24 예정으로 대사한다.
   - Latest deployment 2026-09-10 23:53 KST: [전체 scope 추가기능 배포](../audit-reports/2026-09-10-approved-additions-deployment.md), `data/runtime/machine_additions_deployment.json`; machine `f9d53a9a`, widget PID2651657/23:53:08, 9개80-drop-in과 세 policy pin 확인. 진입 직전 악화 보류·WS 목표 상향을 기존 위젯/에피소드 전체의9/11 신규 신호/진입부터 지속 적용. 기존 보유 제외·timing conflict·수량/안전 guard 유지. 다음날 자연 소비/경제성은 OPEN. 아래19:19 receipt는 이전 배포 이력이다.
@@ -154,3 +155,10 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+
+## 사용자 승인 1일 수량 override 후속
+
+- [ ] `[MachineOneDayQuantityExpiryAcceptance0914] 9/11 신규1주 override 만료·다음 거래일 신규10주 복귀 확인` (`Due: 2026-09-14`, `Slot: INTRADAY`, `TimeWindow: 07:55~15:30`, `Track: RuntimeStability`)
+  - Source: [1일 수량 구현/배포 receipt](../audit-reports/2026-09-11-one-day-machine-quantity.md), `data/runtime/machine_one_day_quantity_deployment.json`, 실제 machine PID/code·신규 signal feature/entry execution policy.
+  - Acceptance: 9/12 00:00 KST 이후 신규 배정10/episode2개 총20의 자동 복귀와 실제 소비 code를 읽기 전용 대사한다. 자연 신규 신호가 있으면 원장 수량을 확인하며, 신호0을 실패로 만들거나 주문을 강제하지 않는다. 9/11에 이미 생성·접수·보유한1주 lot은 원래 수량으로 관리되고 신규10주와 섞어 재작성되지 않아야 한다. 배포·재시작·새 승인 재발행은 기본 요구가 아니다.

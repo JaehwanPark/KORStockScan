@@ -25,3 +25,16 @@
 `deploy/machine-one-day-quantity/`의9개 drop-in을 검토했다. 위젯/삼성은 기존 f9d53a9a, 저가주는 기존4f073800 각각에 이번 변경만 적용한 별도 릴리스로 연결한다. 공통 main selector·cron·collector·timer 시각은 변경하지 않는다. 설치 시각/PID/commit/공유 경로 receipt는 아래에 추가한다.
 
 기존 `MachineProfitStagnationStartupAcceptance0911`의 예정 기동/신규 entry 확인에서 실제 수량 receipt를 함께 확인한다. 설치와 미래 PID 소비를 구분한다. 다음 거래일 신규10주 복귀 관찰은 체크리스트의 별도 날짜 만료 확인에 남긴다. rollback은 기존 원장과 진행 중 SELL/취소를 보존해야 하며, 단순히 과거 수량값으로 보유를 재작성하지 않는다.
+
+
+## 07:32 실제 설치 receipt
+
+- 설치 완료: `2026-09-11T07:32:35+09:00`. 작업 branch/main 코드88cb14cf.
+- 위젯·삼성: `/home/ubuntu/KORStockScan-runtime-releases/machine-one-share-20260911`, commit `427ab86ee32b9e6258eaf4b1e606fb037f78b078` (기존f9d53a9a + 이번 변경).
+- 저가주: `/home/ubuntu/KORStockScan-runtime-releases/episode-one-share-20260911`, commit `5abbf613fd369cb736b8f27626f939b099e56a13` (기존4f073800 + 이번 변경).
+- 9개 service/template에 `95-one-day-quantity-20260911.conf` 설치. 로드된129개 서비스/instance의 WorkingDirectory·ExecStart·PYTHONPATH·보조청산/진입악화/목표상향3개 실제 정책SHA256을 대사했다. 모든 매매/사전검증 PID0; 재시작/조기 기동 없음.
+- 각 고정 root에서 신규 수량 관련10개 테스트 각각PASS, 이후 source4개 hash를 검토 commit과 대사했다. src/deploy/restart.sh clean, data/logs/tmp/.venv/docs/restart.flag 공유경로 확인. 날짜별 helper 직접조회:9/10=10,9/11=1,9/12=10,9/14=10.
+- 공통 selector SHA256과 crontab 원문 불변. 삼성07:57·위젯07:58 등 timer 원 예약 유지. 기존 collector 실행도 유지한다.
+- canonical 설치 원장: `data/runtime/machine_one_day_quantity_deployment.json`. 기존3개 machine manifest에는 과거 PID/root receipt를 보존하고 unit별 successor와 원장 링크를 추가했다. 원장/공유원본/cron/timer rollback 근거: `tmp/one-day-quantity-20260911/`.
+- `code_review_closed=true`, `machine_release_installed=true`, `actual_pid_consumed=false`. 새 PID와 실제 신규 진입량은 해당 예약 후 기존 startup owner에서 확인한다. 실제 주문 또는 수익 개선을 검증했다고 주장하지 않는다.
+- 전일 SK텔레콤 morning HELD leg10주를 읽기 전용 확인했다. 기존 원장/주문은 변경하지 않았고, 이 수량 축소는 기존보유 축소매도가 아니다.
