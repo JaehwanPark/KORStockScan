@@ -273,6 +273,36 @@ Postclose chain은 direct predecessor artifact 계약을 갖는다. 후행 단�
 
 | `data/report/ai_entry_setup_paired_replay_batch/ai_entry_setup_paired_replay_batch_YYYY-MM-DD.json` and venue/session-suffixed Entry control/paired/detailed artifacts | `src.engine.scalping.entry_setup_paired_replay_batch` via `deploy/run_ai_entry_setup_paired_replay_postclose.sh` at 21:05 KST after predecessor DONE | postclose cohort-specific Entry challenger review; registered V2.14/V2.15 KRX bounded-live candidate producer | full-day mature exact cohort -> optimizer-selected supported challenger -> outcome-blind setup-state/symbol-stratified checkpoint -> same-contract/venue/session cumulative attribution -> registered bounded KRX candidate handoff | `EntrySetupRiskOOSFullDay0806`, `MainAIPromptContinuousOptimizer0904` | Current late-finalization order: terminal detailed batch -> #82 calibration v5 -> optimizer with --preserve-entry-batch-selection and --require-action-outcome-calibration -> --refresh-optimizer-binding-only -> holding manifest -> exact-hash consumer. Binding refresh checks unchanged detailed hashes and never repeats provider calls or republishes live candidates. Missing/invalid calibration fails the follower. If provider retries exhaust with a partial detailed batch, refresh #82 learning only and preserve the nonzero batch failure; do not rebind incomplete optimizer generations. The consumer revalidates the #82 hash bound by the optimizer, so a subsequently replaced calibration cannot be reported as consumed. The late offline runner waits up to twelve hours for the main postclose controller and 60-minute horizon, treating interim `failed/error/blocked/missing` states as recoverable until target-date `succeeded`; a bounded predecessor timeout ends the wrapper. It verifies the exact-date `main_ai_prompt_optimizer` hash and source-only authority, then executes KRX regular and NXT aftermarket separately with each cohort's supported V2.14/V2.15/V2.16 challenger; a missing/invalid optimizer safely falls back to the existing V2.14 research candidate. V2.14 and V2.15 can publish only their registered exact KRX bridge; V2.15 is exploration-only with residual and scale-in forbidden. V2.16 cannot publish PREOPEN authority until its 300-second later-snapshot confirmation actuator is separately implemented and reviewed. Before maturity or provider completion the batch overwrites the same-date candidate alias with a fail-closed refresh-pending marker, so a stale candidate cannot survive an interrupted refresh. It uses the existing OpenAI route, rejects KRX `provider=none`, and selects at most 30 new calls per cohort without outcome fields. Decision-time `READY/WAIT_CONFIRMATION/OTHER` weights are `60/30/10` with symbol diversity so INVALID-heavy rows cannot exhaust the checkpoint; when all eligible rows fit inside the remaining cap, `complete_eligible_census` is equivalent only with `deferred=0`, `selected=eligible`, `distinct<=cap`, and outcome-blind proof. A policy-version or bounded-census contract change invalidates stale selection reuse. Provider timeout retry runs at most three wrapper attempts, reuses every validated result, retries only failed IDs, and records the full checkpoint state distribution separately from the retry subset. Cumulative learning starts at one row, but full performance promotion retains exposure 10/3, positive cost-adjusted EV, non-worse opportunity value, complete cost provenance, and bounded risk. Probe-arm 10/3 opens only the separately guarded one-share exploration authority described in the live-policy row and does not lower performance floors; after candidate exposure reaches 10/3, non-positive primary or cost-adjusted EV, failed bounded risk, or any catastrophic loss stops the next PREOPEN exploration candidate. NXT failures remain explicit, their next action remains NXT-control collection, and NXT never inherits KRX authority. The artifacts remain `runtime_effect=false`, `allowed_runtime_apply=false`, `actual_order_submitted=false`, and `broker_order_forbidden=true`. |
 
+Entry setup v10 implementation delta (2026-09-10; supersedes the KRX-only
+code-path descriptions above, not existing PID receipts): the producer now emits
+separate KRX/KRX_REGULAR and NXT/NXT_AFTERMARKET candidates with
+`bounded_live_cohort_contract=exact_cohort_candidates_v1`. PREOPEN invokes
+`entry_setup_live_policy --all-cohorts`; each scope requires its own source,
+activation, recheck allowlist and operator veto. NXT shares the existing durable
+three-probe daily cap and cannot inherit KRX evidence. Integrated premarket SOR
+and NXT regular remain outside this registration. The terminal follower verifies
+both candidate references, dates, exact paths and self-hashes before DONE. A
+research-only exhausted prompt is a terminal source disposition, not a reason to
+repeat Provider replay; `artifact_status` separates its blocked file state from
+the diagnostic reason. Full-cost economics uses verified fee/tax/master-bound
+executable CF paths, preserving missing data and real-fill separation. New
+UNCONFIRMED/micro-recovery evidence is policy v10 and cannot reuse v9 approvals.
+Second review: the bounded candidate's economic basis is
+`exact_cumulative_full_cost_net_ev_v1`. Verified positive full-cost cumulative
+EV and same-parent net improvement, source integrity, exposure floor and bounded
+tail risk own this gate; legacy gross/proxy EV and sub-pattern opportunity counts
+remain diagnostics, not additional conjunctive economic vetoes. The optimizer
+keeps a verified net-positive challenger on new exact parents rather than
+screening it out by the old proxy calibration. Its registered prompt hashes must
+match the current reviewed English contracts. This is offline selection, not
+runtime authority. `probe_arm_full_cost_diagnostic` evaluates hypothetical WAIT
+arms separately and cannot substitute for exposure or broker-terminal evidence.
+PREOPEN and runtime reject an activation candidate missing the new economic-basis
+contract. The discovery refresh lease survives async dispatch/commit only inside
+its finite window; date reset and replacement/revocation follow the latest result.
+The actual 9/10 PID and unclosed economic/scope dependencies are documented in
+[the implementation review](audit-reports/2026-09-10-entry-micro-recovery-automation-review.md).
+
 Entry setup terminal-follower addendum: the fixed 21:05
 `deploy/run_ai_entry_setup_paired_replay_postclose.sh` trigger remains the primary
 producer. When its bounded predecessor wait finishes before a later postclose

@@ -198,6 +198,58 @@ if any(
     print("retry_required:main_ai_consumer_entry_followup_nonterminal")
     raise SystemExit(0)
 
+if batch.get("bounded_live_cohort_contract") == "exact_cohort_candidates_v1":
+    refs = batch.get("bounded_live_candidates_by_cohort")
+    if not isinstance(refs, dict) or set(refs) != {"KRX/KRX_REGULAR", "NXT/NXT_AFTERMARKET"}:
+        print("retry_required:exact_cohort_candidate_census_invalid")
+        raise SystemExit(0)
+    if refs["KRX/KRX_REGULAR"] != batch.get("krx_bounded_live_candidate"):
+        print("retry_required:krx_candidate_alias_mismatch")
+        raise SystemExit(0)
+    nxt_ref = refs["NXT/NXT_AFTERMARKET"]
+    try:
+        nxt_path = Path(nxt_ref["path"])
+        if not nxt_path.is_absolute():
+            nxt_path = project_dir / nxt_path
+        expected_nxt = project_dir / "data/threshold_cycle/bounded_live_candidates" / (
+            f"entry_setup_v2_14_bounded_live_candidate_{target_date}_nxt_nxt_aftermarket.json"
+        )
+        nxt = json.loads(nxt_path.read_text(encoding="utf-8"))
+        nxt_hash = hashlib.sha256(json.dumps(
+            {key: value for key, value in nxt.items() if key != "artifact_sha256"},
+            ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str,
+        ).encode("utf-8")).hexdigest()
+        valid_nxt = (
+            nxt_path.resolve() == expected_nxt.resolve()
+            and nxt.get("artifact_sha256") == nxt_ref.get("artifact_sha256") == nxt_hash
+            and nxt.get("source_date") == target_date
+            and (nxt.get("effective_venue"), nxt.get("session_bucket")) == ("NXT", "NXT_AFTERMARKET")
+            and nxt.get("status") == nxt_ref.get("artifact_status", nxt_ref.get("status"))
+            and nxt.get("effective_date") == nxt_ref.get("effective_date")
+            and nxt.get("effective_date_policy") == "first_available_krx_preopen_v1"
+            and nxt.get("preopen_candidate_cutoff_kst") == "07:35:00"
+            and nxt.get("runtime_effect") is False
+            and nxt.get("actual_order_submitted") is False
+            and nxt.get("broker_order_forbidden") is True
+            and (
+                (
+                    nxt.get("status") == "blocked"
+                    and nxt.get("allowed_runtime_apply") is False
+                    and nxt_ref.get("allowed_runtime_apply") is False
+                )
+                or (
+                    nxt.get("status") in {"bounded_exploration_apply_ready", "live_auto_apply_ready"}
+                    and isinstance(nxt.get("candidate_contract_sha256"), str)
+                    and len(nxt["candidate_contract_sha256"]) == 64
+                )
+            )
+        )
+    except (KeyError, TypeError, ValueError, OSError):
+        valid_nxt = False
+    if not valid_nxt:
+        print("retry_required:nxt_candidate_contract_invalid")
+        raise SystemExit(0)
+
 candidate_ref = batch.get("krx_bounded_live_candidate")
 if candidate_ref is None:
     print("terminal_ready:validated_batch_and_main_ai_consumer_no_krx_candidate")
@@ -249,7 +301,7 @@ if declared_artifact_sha256 != computed_artifact_sha256:
 if candidate.get("source_date") != target_date:
     print("retry_required:candidate_source_date_mismatch")
     raise SystemExit(0)
-if candidate.get("status") != candidate_ref.get("status"):
+if candidate.get("status") != candidate_ref.get("artifact_status", candidate_ref.get("status")):
     print("retry_required:candidate_status_mismatch")
     raise SystemExit(0)
 if candidate.get("effective_date") != candidate_ref.get("effective_date"):
@@ -265,6 +317,24 @@ if candidate.get("artifact_sha256") != candidate_ref.get("artifact_sha256"):
     print("retry_required:candidate_hash_mismatch")
     raise SystemExit(0)
 candidate_contract_sha256 = candidate.get("candidate_contract_sha256")
+# A version-exhausted or unregistered research challenger is a terminal source
+# disposition, not a provider retry or authority to invent a live candidate.
+if (
+    candidate.get("status") == candidate_ref.get("artifact_status") == "blocked"
+    and candidate.get("blocking_reasons") in (
+        ["candidate_registry_exhausted_source_only"],
+        ["unregistered_dynamic_prompt_for_live"],
+    )
+    and candidate.get("canary_mode") is None
+    and candidate_contract_sha256 is None
+    and candidate_ref.get("allowed_runtime_apply") is False
+    and all(candidate.get(key) is False for key in (
+        "runtime_effect", "allowed_runtime_apply", "actual_order_submitted"
+    ))
+    and candidate.get("broker_order_forbidden") is True
+):
+    print("terminal_ready:validated_source_only_prompt_disposition")
+    raise SystemExit(0)
 krx_cohorts = [
     row for row in batch.get("cohorts", [])
     if isinstance(row, dict)

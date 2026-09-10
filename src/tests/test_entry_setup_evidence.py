@@ -56,6 +56,107 @@ def _risk(verdict, codes, *, support=None, contradict=None, confidence=70):
     }
 
 
+def _micro_features(**overrides):
+    return {
+        "net_aggressive_delta_10t": 1009,
+        "price_change_10t_pct": 0.05,
+        "buy_pressure_10t": 99.32,
+        "curr_vs_micro_vwap_bp": -95.97,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 10,
+        "tick_context_stale": False,
+        "quote_stale": False,
+        "large_sell_print_detected": False,
+        **overrides,
+    }
+
+
+def _micro_evidence(features, **facts):
+    return build_entry_setup_evidence(
+        exact_payload={"features": features, "current": {"price": 15790}},
+        exact_analysis={
+            **_exact_analysis(
+                structural_edge_floor=False, trusted_supportive_trigger=False, **facts
+            ),
+            "completed_structure": {"phase": "range_or_no_setup"},
+            "executable_liquidity": {
+                "state": "supportive",
+                "execution_cost_state": "low",
+            },
+        },
+        recovery_analysis=_recovery_analysis(),
+    )
+
+
+def test_micro_recovery_is_independent_of_completed_bar_and_old_vwap():
+    evidence = _micro_evidence(_micro_features())
+    composed = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=_risk(
+            "CAUTION",
+            ["CONFIRMATION_MISSING"],
+            contradict=["micro_continuation_unconfirmed"],
+        ),
+    )
+    assert evidence["structure_phase"] == "range_or_no_setup"
+    assert evidence["setup_family"] == "MICRO_RECOVERY"
+    assert composed["entry_ai_contract_errors"] == []
+    assert composed["action"] == "WAIT"
+    assert composed["entry_probe_intent"] is True
+    assert composed["actual_order_submitted"] is False
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"price_change_10t_pct": 0.0},
+        {"price_change_10t_pct": -0.1},
+        {"price_change_10t_pct": None},
+        {"price_change_10t_pct": float("nan")},
+        {"net_aggressive_delta_10t": -1},
+        {"tick_aggressor_pressure_usable": False},
+        {"tick_context_stale": True},
+        {"quote_stale": None},
+        {"large_sell_print_detected": True},
+    ],
+)
+def test_pressure_alone_missing_stale_or_adverse_never_creates_micro_probe(override):
+    evidence = _micro_evidence(_micro_features(**override))
+    assert evidence["setup_state"] == "UNCONFIRMED"
+    assert evidence["invalidation_facts"] == []
+    result = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=_risk(
+            "CAUTION", ["CONFIRMATION_MISSING"], contradict=["no_supported_setup"]
+        ),
+    )
+    assert result["entry_ai_contract_errors"] == []
+    assert result["action"] == "WAIT"
+    assert result["edge_state"] == "NO_EDGE"
+    assert result["entry_probe_intent"] is False
+
+
+def test_actual_invalidation_still_overrides_micro_response():
+    evidence = _micro_evidence(_micro_features(), adverse_distribution_no_edge=True)
+    assert evidence["setup_state"] == "INVALID"
+    assert "adverse_distribution_no_edge" in evidence["invalidation_facts"]
+
+
+@pytest.mark.parametrize("value", [0, -0.1, None, float("nan")])
+def test_micro_summary_flags_cannot_override_missing_or_adverse_numeric_evidence(value):
+    from src.engine.scalping import entry_setup_evidence as setup
+
+    evidence = _micro_evidence(_micro_features())
+    evidence["micro_recovery_observation"]["price_change_10t_pct"] = value
+    evidence["evidence_sha256"] = setup._canonical_sha256(
+        {key: item for key, item in evidence.items() if key != "evidence_sha256"}
+    )
+    assert (
+        "entry_setup_micro_recovery_contract_invalid"
+        in setup.validate_entry_setup_evidence(evidence)
+    )
+
+
 def test_risk_schema_has_unique_required_fields_and_no_action_authority():
     schema = entry_risk_adjudication_openai_schema()
 
@@ -186,7 +287,7 @@ def test_setup_evidence_is_symbol_agnostic_and_ready_for_clean_continuation():
     )
 
     assert evidence["schema"] == ENTRY_SETUP_EVIDENCE_SCHEMA
-    assert evidence["version"] == "entry_setup_evidence_policy_v9"
+    assert evidence["version"] == "entry_setup_evidence_policy_v10"
     assert evidence["setup_family"] == "CLEAN_CONTINUATION"
     assert evidence["setup_state"] == "READY"
     assert evidence["structure_phase"] == "continuation"
@@ -767,7 +868,7 @@ def test_composer_uses_only_corroborated_veto_as_offline_block():
         ),
     )
     assert passed["action"] == "BUY"
-    assert passed["composer_version"] == "entry_decision_composer_policy_v8"
+    assert passed["composer_version"] == "entry_decision_composer_policy_v11"
     assert passed["score_authority"] == (
         "legacy_response_shape_only_not_a_decision_gate"
     )
@@ -1058,13 +1159,16 @@ def test_v2_15_soft_distribution_keeps_only_bounded_recovery_probe():
     evidence.update(
         {
             "setup_family": "NO_VALID_SETUP",
-            "setup_state": "INVALID",
+            "setup_state": "UNCONFIRMED",
             "structure_phase": "distribution",
-            "execution_readiness_state": "INVALID",
+            "execution_readiness_state": "UNCONFIRMED",
             "positive_facts": ["liquidity_supportive", "volume_confirmed"],
-            "contradicting_facts": ["supportive_micro_tape_vs_program_net_sell"],
-            "invalidation_facts": ["no_supported_setup"],
-            "corroborated_risk_codes": ["STRUCTURE_INVALIDATED"],
+            "contradicting_facts": [
+                "supportive_micro_tape_vs_program_net_sell",
+                "no_supported_setup",
+            ],
+            "invalidation_facts": [],
+            "corroborated_risk_codes": ["CONFIRMATION_MISSING"],
             "recheck_reasons": [],
             "source_quality": {
                 "status": "fresh_consistent",
@@ -1077,8 +1181,8 @@ def test_v2_15_soft_distribution_keeps_only_bounded_recovery_probe():
         {key: value for key, value in evidence.items() if key != "evidence_sha256"}
     )
     risk = _risk(
-        "VETO",
-        ["STRUCTURE_INVALIDATED"],
+        "CAUTION",
+        ["CONFIRMATION_MISSING"],
         support=["liquidity_supportive"],
         contradict=["no_supported_setup"],
     )
@@ -1093,7 +1197,8 @@ def test_v2_15_soft_distribution_keeps_only_bounded_recovery_probe():
         bounded_recovery_policy=True,
     )
 
-    assert legacy["action"] == "DROP"
+    assert legacy["action"] == "WAIT"
+    assert legacy["entry_probe_intent"] is False
     assert candidate["action"] == "WAIT"
     assert candidate["entry_probe_intent"] is True
     assert candidate["entry_recheck_intent"] is True

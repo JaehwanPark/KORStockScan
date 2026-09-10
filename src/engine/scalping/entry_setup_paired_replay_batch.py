@@ -205,11 +205,12 @@ def _publish_prompt_blocker(
     candidate_prompt_version: str,
     write: bool,
     blocking_reason: str,
+    cohort: tuple[str, str] = live_policy.DEFAULT_COHORT,
 ) -> dict[str, Any]:
     """Replace any same-date candidate alias with a fail-closed marker."""
 
     generated_at = datetime.now(quality.KST)
-    path = live_policy.live_candidate_path(source_date)
+    path = live_policy.live_candidate_path(source_date, cohort=cohort)
     body = {
         "schema": live_policy.LIVE_CANDIDATE_SCHEMA,
         "source_date": source_date,
@@ -230,8 +231,8 @@ def _publish_prompt_blocker(
         "registered_live_prompt_versions": list(
             live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
         ),
-        "effective_venue": "KRX",
-        "session_bucket": "KRX_REGULAR",
+        "effective_venue": cohort[0],
+        "session_bucket": cohort[1],
         "activation_mode": "first_available_krx_trading_date_preopen_only",
         "next_action": (
             "finish the full-day isolated replay and republish a verified candidate"
@@ -259,6 +260,7 @@ def _publish_prompt_blocker(
     return {
         "path": str(path),
         "status": f"blocked_{blocking_reason}",
+        "artifact_status": body["status"],
         "candidate_prompt_version": candidate_prompt_version,
         "registered_live_prompt_versions": list(
             live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
@@ -506,6 +508,7 @@ def run_batch(
     candidate_plan, candidate_plan_source = _optimizer_candidate_plan(target_date)
     report: dict[str, Any] = {
         "schema": BATCH_SCHEMA,
+        "bounded_live_cohort_contract": "exact_cohort_candidates_v1",
         "target_date": target_date,
         "generated_at": started_at.isoformat(),
         "outcome_as_of": as_of.astimezone(quality.KST).isoformat(),
@@ -525,6 +528,21 @@ def run_batch(
     if write:
         _atomic_write_json(path, report)
     krx_candidate = candidate_plan[("KRX", "KRX_REGULAR")]
+    # Every registered exact cohort gets an early invalidation marker, including
+    # provider/predecessor failure paths. Never reuse yesterday's NXT readiness.
+    report["bounded_live_candidates_by_cohort"] = {}
+    for selected_cohort in live_policy.SUPPORTED_LIVE_COHORTS:
+        if selected_cohort == live_policy.DEFAULT_COHORT:
+            continue
+        report["bounded_live_candidates_by_cohort"]["/".join(selected_cohort)] = (
+            _publish_prompt_blocker(
+                source_date=target_date,
+                candidate_prompt_version=candidate_plan[selected_cohort],
+                write=write,
+                blocking_reason="full_day_candidate_refresh_pending",
+                cohort=selected_cohort,
+            )
+        )
     if krx_candidate not in live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
         # Invalidate a same-date candidate alias before any maturity,
         # predecessor, credential, provider, or report-write early return.
@@ -646,6 +664,38 @@ def run_batch(
                 write=write,
                 candidate_prompt_version=krx_candidate,
             )
+        report["bounded_live_candidates_by_cohort"]["KRX/KRX_REGULAR"] = report[
+            "krx_bounded_live_candidate"
+        ]
+        for selected_cohort in live_policy.SUPPORTED_LIVE_COHORTS:
+            if selected_cohort == live_policy.DEFAULT_COHORT:
+                continue
+            version = candidate_plan[selected_cohort]
+            research_only = "/".join(selected_cohort) in candidate_plan_source.get(
+                "research_only_cohorts", []
+            )
+            if (
+                research_only
+                or version not in live_policy.SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
+            ):
+                candidate_result = _publish_prompt_blocker(
+                    source_date=target_date,
+                    candidate_prompt_version=version,
+                    write=write,
+                    cohort=selected_cohort,
+                    blocking_reason="unregistered_or_research_only_prompt_for_live",
+                )
+            else:
+                candidate_result = publish_live_candidate(
+                    source_date=target_date,
+                    batch_report=report,
+                    write=write,
+                    candidate_prompt_version=version,
+                    cohort=selected_cohort,
+                )
+            report["bounded_live_candidates_by_cohort"][
+                "/".join(selected_cohort)
+            ] = candidate_result
     except Exception as exc:
         report["status"] = "failed_offline_batch"
         report["error_type"] = type(exc).__name__

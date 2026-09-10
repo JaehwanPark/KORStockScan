@@ -33,6 +33,25 @@ def _observe(path, stock, stage, fields, offset):
     )
 
 
+def test_nxt_v2_15_adapter_is_recorded_and_not_relabelled_as_krx(tmp_path):
+    path = tmp_path / "events.jsonl"
+    stock = {"id": 17, "code": "005930"}
+    fields = {
+        **_candidate_fields(),
+        "decision_quality_live_adapter": "entry_setup_v2_15_nxt_bounded_probe_v1",
+        "entry_setup_live_policy_status": "active_bounded_nxt_canary",
+        "entry_setup_live_policy_effective_venue": "NXT",
+        "entry_setup_live_policy_session_bucket": "nxt_aftermarket",
+    }
+    assert _observe(path, stock, "ai_confirmed", fields, 0)
+    event = json.loads(path.read_text().splitlines()[0])
+    assert event["live_adapter"] == fields["decision_quality_live_adapter"]
+    assert event["effective_venue"] == "NXT"
+    stock.pop(lifecycle.CONTEXT_KEY)
+    fields["entry_setup_live_policy_effective_venue"] = "KRX"
+    assert lifecycle.bind_candidate_context(stock, fields, output_path=path) is None
+
+
 def test_materializer_preserves_exact_candidate_full_lifecycle(tmp_path):
     path = tmp_path / "events.jsonl"
     stock = {"id": 17, "code": "005930", "name": "삼성전자"}

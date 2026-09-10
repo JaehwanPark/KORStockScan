@@ -1,4 +1,4 @@
-"""Bridge a verified entry setup-risk replay into a next-day KRX canary.
+"""Bridge a verified exact-cohort setup-risk replay into a next-day canary.
 
 The postclose producer emits a bounded-live candidate.  PREOPEN validates the
 candidate and its immutable source reports, then writes a date-scoped
@@ -47,6 +47,26 @@ BATCH_REPORT_DIR = DATA_DIR / "report" / "ai_entry_setup_paired_replay_batch"
 CANARY_ENV_KEY = "KORSTOCKSCAN_ENTRY_SETUP_V2_14_KRX_CANARY_ENABLED"
 CANARY_VENUE = "KRX"
 CANARY_SESSION = "KRX_REGULAR"
+DEFAULT_COHORT = (CANARY_VENUE, CANARY_SESSION)
+SUPPORTED_LIVE_COHORTS = (DEFAULT_COHORT, ("NXT", "NXT_AFTERMARKET"))
+
+
+def _cohort_suffix(cohort: tuple[str, str]) -> str:
+    if cohort not in SUPPORTED_LIVE_COHORTS:
+        raise ValueError("entry_setup_cohort_not_registered")
+    return (
+        "" if cohort == DEFAULT_COHORT else f"_{cohort[0].lower()}_{cohort[1].lower()}"
+    )
+
+
+def _cohort_env_key(cohort: tuple[str, str]) -> str:
+    return (
+        CANARY_ENV_KEY
+        if cohort == DEFAULT_COHORT
+        else "KORSTOCKSCAN_ENTRY_SETUP_NXT_CANARY_ENABLED"
+    )
+
+
 CANARY_POSITION_TAGS = ("SCANNER",)
 CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
 PERFORMANCE_CANARY_MODE = "performance_bounded"
@@ -76,6 +96,7 @@ PERFORMANCE_PROMOTION_ERROR_CODES = frozenset(
         "cumulative_exposure_counts_below_floor",
         "cumulative_probe_risk_budget_not_passed",
         "bounded_recovery_prompt_requires_one_share_exploration_mode",
+        "cumulative_full_cost_economics_not_passed",
     }
 )
 CUMULATIVE_PROMOTION_CHECK_KEYS = (
@@ -88,6 +109,15 @@ CUMULATIVE_PROMOTION_CHECK_KEYS = (
     "opportunity_capture_expanded",
     "missed_upside_tradeoff_not_worse",
     "drawdown_recovery_capture_not_decreased",
+)
+NET_ECONOMIC_GATE_BASIS = "exact_cumulative_full_cost_net_ev_v1"
+# Legacy gross/proxy EV and opportunity counts remain diagnostics. Requiring
+# every sub-pattern count to improve can reject a positive full-cost portfolio.
+# Source integrity, exposure floors and bounded tail risk are still mandatory.
+LIVE_REQUIRED_CUMULATIVE_CHECK_KEYS = (
+    "cohort_isolated",
+    "candidate_exposure_sample_floor_pass",
+    "candidate_probe_bounded_risk_budget_pass",
 )
 
 
@@ -159,13 +189,15 @@ def _env_value(name: str, env: dict[str, str] | None = None) -> str | None:
     return env.get(name)
 
 
-def _enabled_by_operator(env: dict[str, str] | None = None) -> bool:
-    raw = _env_value(CANARY_ENV_KEY, env)
+def _enabled_by_operator(
+    env: dict[str, str] | None = None, *, cohort: tuple[str, str] = DEFAULT_COHORT
+) -> bool:
+    raw = _env_value(_cohort_env_key(cohort), env)
     if raw is None and env is not None:
         # The kill switch may be supplied by the cron/supervisor environment,
         # while all positive runtime-contract keys must come from the explicit
         # launcher env-file merge.
-        raw = os.getenv(CANARY_ENV_KEY)
+        raw = os.getenv(_cohort_env_key(cohort))
     if raw is None or not raw.strip():
         return True
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -179,7 +211,10 @@ def _env_bool(name: str, default: bool, env: dict[str, str] | None = None) -> bo
 
 
 def _runtime_probe_contract_errors(
-    *, target_date: str, env: dict[str, str] | None = None
+    *,
+    target_date: str,
+    env: dict[str, str] | None = None,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> list[str]:
     """Verify that setup-risk canaries can only reach the one-share owner."""
 
@@ -194,6 +229,22 @@ def _runtime_probe_contract_errors(
     for key in required_true:
         if not _env_bool(key, False, env):
             errors.append(f"runtime_contract_disabled:{key}")
+    # ON alone is not a reachable handoff: the existing recheck owner also
+    # requires an exact allowed scope. Match its comma-separated, case-sensitive
+    # contract rather than promoting an inactive or NXT-only configuration.
+    allowed_scopes = {
+        value.strip()
+        for value in str(
+            _env_value("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", env)
+            or ""
+        ).split(",")
+    }
+    if f"{cohort[0]}|{cohort[1]}" not in allowed_scopes:
+        errors.append(
+            "runtime_contract_krx_recheck_scope_missing"
+            if cohort == DEFAULT_COHORT
+            else "runtime_contract_exact_recheck_scope_missing"
+        )
     if not _env_bool("KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED", False, env):
         errors.append("runtime_contract_threshold_auto_apply_disabled")
     runtime_apply_date = str(
@@ -308,10 +359,12 @@ def load_preopen_runtime_env(
                 for key in sorted(
                     {
                         CANARY_ENV_KEY,
+                        "KORSTOCKSCAN_ENTRY_SETUP_NXT_CANARY_ENABLED",
                         "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED",
                         "KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE",
                         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
                         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED",
+                        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES",
                         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
                         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
                         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
@@ -371,15 +424,22 @@ def _candidate_effective_date(*, source_date: str, generated_at: datetime | str)
     return _next_krx_trading_date(current.date().isoformat())
 
 
-def live_candidate_path(source_date: str) -> Path:
+def live_candidate_path(
+    source_date: str, *, cohort: tuple[str, str] = DEFAULT_COHORT
+) -> Path:
     return (
         LIVE_CANDIDATE_DIR
-        / f"entry_setup_v2_14_bounded_live_candidate_{source_date}.json"
+        / f"entry_setup_v2_14_bounded_live_candidate_{source_date}{_cohort_suffix(cohort)}.json"
     )
 
 
-def activation_path(target_date: str) -> Path:
-    return ACTIVATION_DIR / f"entry_setup_v2_14_live_policy_{target_date}.json"
+def activation_path(
+    target_date: str, *, cohort: tuple[str, str] = DEFAULT_COHORT
+) -> Path:
+    return (
+        ACTIVATION_DIR
+        / f"entry_setup_v2_14_live_policy_{target_date}{_cohort_suffix(cohort)}.json"
+    )
 
 
 def exploration_probe_cap_path(trade_date: str) -> Path:
@@ -485,11 +545,12 @@ def detailed_report_path(
     candidate_prompt_version: str = (
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     ),
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> Path:
     return DETAILED_REPORT_DIR / (
         "ai_prompt_detailed_paired_replay_"
         f"{source_date}_{candidate_prompt_version}"
-        "_venue_krx_session_krx_regular.json"
+        f"_venue_{cohort[0].lower()}_session_{cohort[1].lower()}.json"
     )
 
 
@@ -537,15 +598,20 @@ def _candidate_source_errors(
     candidate_prompt_version: str = (
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     ),
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> list[str]:
     errors: list[str] = []
+    if cohort not in SUPPORTED_LIVE_COHORTS:
+        errors.append("candidate_cohort_not_registered")
     if candidate_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
         errors.append("candidate_prompt_version_not_registered_for_live")
     if batch_report.get("schema") != BATCH_SCHEMA:
         errors.append("batch_schema_invalid")
     if batch_report.get("target_date") != source_date:
         errors.append("batch_target_date_mismatch")
-    if batch_report.get("candidate_prompt_version") != candidate_prompt_version:
+    if (batch_report.get("candidate_prompt_versions_by_cohort") or {}).get(
+        "/".join(cohort), batch_report.get("candidate_prompt_version")
+    ) != candidate_prompt_version:
         errors.append("batch_candidate_prompt_version_mismatch")
     if batch_report.get("status") not in {
         "completed_offline_only",
@@ -563,8 +629,8 @@ def _candidate_source_errors(
         row
         for row in batch_report.get("cohorts") or []
         if isinstance(row, dict)
-        and _normalize_venue(row.get("effective_venue")) == CANARY_VENUE
-        and _normalize_session(row.get("session_bucket")) == CANARY_SESSION
+        and _normalize_venue(row.get("effective_venue")) == cohort[0]
+        and _normalize_session(row.get("session_bucket")) == cohort[1]
     ]
     if len(krx_rows) != 1 or krx_rows[0].get("status") != "completed_offline_only":
         errors.append("krx_cohort_not_completed")
@@ -587,8 +653,8 @@ def _candidate_source_errors(
             ),
         ):
             errors.append("krx_execution_selection_checkpoint_invalid")
-        if krx_rows[0].get("promotion_quality_gate_pass") is not True:
-            errors.append("krx_batch_promotion_gate_not_passed")
+        if type(krx_rows[0].get("promotion_quality_gate_pass")) is not bool:
+            errors.append("batch_legacy_quality_diagnostic_invalid")
 
     cohort_filter = detailed_report.get("cohort_filter")
     cohort_filter = cohort_filter if isinstance(cohort_filter, dict) else {}
@@ -601,8 +667,8 @@ def _candidate_source_errors(
     if cumulative.get("candidate_prompt_version") != candidate_prompt_version:
         errors.append("detailed_cumulative_prompt_version_mismatch")
     if (
-        _normalize_venue(cohort_filter.get("effective_venue")) != CANARY_VENUE
-        or _normalize_session(cohort_filter.get("session_bucket")) != CANARY_SESSION
+        _normalize_venue(cohort_filter.get("effective_venue")) != cohort[0]
+        or _normalize_session(cohort_filter.get("session_bucket")) != cohort[1]
     ):
         errors.append("detailed_cohort_not_krx_regular")
     request_versions = {
@@ -666,8 +732,8 @@ def _candidate_source_errors(
         errors.append("detailed_execution_selection_checkpoint_invalid")
     if detailed_report.get("promotion_report_integrity_pass") is not True:
         errors.append("detailed_promotion_integrity_not_passed")
-    if detailed_report.get("promotion_quality_gate_pass") is not True:
-        errors.append("detailed_promotion_quality_not_passed")
+    if type(detailed_report.get("promotion_quality_gate_pass")) is not bool:
+        errors.append("detailed_legacy_quality_diagnostic_invalid")
     if detailed_report.get("provider_failed_count") != 0:
         errors.append("detailed_provider_failure")
     if detailed_report.get("candidate_provider_none_count") != 0:
@@ -694,21 +760,21 @@ def _candidate_source_errors(
         or cumulative.get("allowed_runtime_apply") is not False
     ):
         errors.append("cumulative_authority_contract_invalid")
-    if cumulative.get("promotion_quality_gate_pass") is not True:
-        errors.append("cumulative_promotion_gate_not_passed")
+    if type(cumulative.get("promotion_quality_gate_pass")) is not bool:
+        errors.append("cumulative_legacy_quality_diagnostic_invalid")
     cumulative_checks = cumulative.get("promotion_quality_checks")
     cumulative_checks = cumulative_checks if isinstance(cumulative_checks, dict) else {}
     if any(
         cumulative_checks.get(key) is not True
-        for key in CUMULATIVE_PROMOTION_CHECK_KEYS
+        for key in LIVE_REQUIRED_CUMULATIVE_CHECK_KEYS
     ):
         errors.append("cumulative_promotion_checks_incomplete")
     cumulative_scope = cumulative.get("cohort_scope")
     cumulative_scope = cumulative_scope if isinstance(cumulative_scope, dict) else {}
     if (
         cumulative_scope.get("isolated") is not True
-        or _normalize_venue(cumulative_scope.get("effective_venue")) != CANARY_VENUE
-        or _normalize_session(cumulative_scope.get("session_bucket")) != CANARY_SESSION
+        or _normalize_venue(cumulative_scope.get("effective_venue")) != cohort[0]
+        or _normalize_session(cumulative_scope.get("session_bucket")) != cohort[1]
     ):
         errors.append("cumulative_cohort_not_krx_regular")
     if cumulative.get("candidate_contract_sha256") != detailed_report.get(
@@ -737,9 +803,47 @@ def _candidate_source_errors(
     )
     if cumulative_risk_budget.get("pass") is not True:
         errors.append("cumulative_probe_risk_budget_not_passed")
+    if not _full_cost_economics_pass(cumulative.get("full_cost_economics")):
+        errors.append("cumulative_full_cost_economics_not_passed")
     if not str(detailed_report.get("candidate_contract_sha256") or ""):
         errors.append("candidate_contract_sha256_missing")
     return list(dict.fromkeys(errors))
+
+
+def _full_cost_economics_pass(value: Any) -> bool:
+    import math
+
+    metric = value if isinstance(value, dict) else {}
+    try:
+        numbers = [
+            metric[key]
+            for key in ("candidate_net_ev_pct", "paired_net_decision_delta_pct")
+        ]
+        return bool(
+            metric.get("schema") == "entry_paired_full_cost_economics_v1"
+            and metric.get("pass") is True
+            and metric.get("sample_floor_pass") is True
+            and metric.get("runtime_effect") is False
+            and metric.get("allowed_runtime_apply") is False
+            and metric.get("actual_order_submitted") is False
+            and metric.get("broker_order_forbidden") is True
+            and type(metric.get("verified_pair_count")) is int
+            and type(metric.get("candidate_exposure_count")) is int
+            and metric["candidate_exposure_count"] >= 10
+            and type(metric.get("candidate_unique_symbol_count")) is int
+            and metric["candidate_unique_symbol_count"] >= 3
+            and metric["candidate_unique_symbol_count"]
+            <= metric["candidate_exposure_count"]
+            <= metric["verified_pair_count"]
+            and all(
+                type(number) in (int, float) and math.isfinite(number) and number > 0
+                for number in numbers
+            )
+            and metric.get("actual_fill_proven") is False
+            and metric.get("additional_cost_subtracted_here") is False
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _exploration_source_errors(
@@ -826,11 +930,9 @@ def _exploration_continuation_gate(
     )
     blocking_reasons: list[str] = []
     if floor_reached:
-        if primary_ev is None or primary_ev <= 0.0:
-            blocking_reasons.append("exploration_continuation_primary_ev_not_positive")
-        if cost_adjusted_ev is None or cost_adjusted_ev <= 0.0:
+        if not _full_cost_economics_pass(cumulative.get("full_cost_economics")):
             blocking_reasons.append(
-                "exploration_continuation_cost_adjusted_ev_not_positive"
+                "exploration_continuation_full_cost_economics_not_passed"
             )
         if risk_budget.get("pass") is not True:
             blocking_reasons.append(
@@ -848,6 +950,8 @@ def _exploration_continuation_gate(
         "floor_reached": floor_reached,
         "candidate_primary_decision_ev_pct": primary_ev,
         "candidate_exposure_probe_cost_adjusted_ev_pct": cost_adjusted_ev,
+        "economic_gate_basis": NET_ECONOMIC_GATE_BASIS,
+        "legacy_proxy_metrics_role": "diagnostic_only",
         "bounded_probe_risk_budget_pass": risk_budget.get("pass") is True,
         "catastrophic_loss_count": catastrophic_count,
         "pass": not blocking_reasons,
@@ -875,6 +979,7 @@ def build_live_candidate(
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     ),
     generated_at: datetime | None = None,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> dict[str, Any]:
     current = generated_at or datetime.now(KST)
     current = (
@@ -883,6 +988,7 @@ def build_live_candidate(
         else current.astimezone(KST)
     )
     errors = _candidate_source_errors(
+        cohort=cohort,
         source_date=source_date,
         batch_report=batch_report,
         detailed_report=detailed_report,
@@ -938,8 +1044,8 @@ def build_live_candidate(
         "rollback_prompt_version": (
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         ),
-        "effective_venue": CANARY_VENUE,
-        "session_bucket": CANARY_SESSION,
+        "effective_venue": cohort[0],
+        "session_bucket": cohort[1],
         "candidate_contract_sha256": detailed_report.get("candidate_contract_sha256"),
         "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
         "entry_decision_composer_version": _expected_composer_version(
@@ -947,6 +1053,13 @@ def build_live_candidate(
         ),
         "entry_structure_phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
         "promotion_metrics": {
+            "economic_gate_basis": NET_ECONOMIC_GATE_BASIS,
+            "legacy_quality_diagnostics": {
+                "detailed_pass": detailed_report.get("promotion_quality_gate_pass"),
+                "cumulative_pass": cumulative.get("promotion_quality_gate_pass"),
+                "checks": cumulative.get("promotion_quality_checks"),
+                "decision_authority": "diagnostic_only_except_source_floor_tail_risk",
+            },
             "promotion_quality_gate_basis": detailed_report.get(
                 "promotion_quality_gate_basis"
             ),
@@ -991,6 +1104,10 @@ def build_live_candidate(
                 "candidate_probe_arm_risk_budget"
             ),
             "exploration_continuation_gate": exploration_continuation,
+            "full_cost_economics": cumulative.get("full_cost_economics"),
+            "probe_arm_full_cost_diagnostic": cumulative.get(
+                "probe_arm_full_cost_diagnostic"
+            ),
         },
         "source_provenance": {
             "batch_report_path": str(batch_report_path(source_date)),
@@ -1000,7 +1117,7 @@ def build_live_candidate(
         },
         "activation_mode": "first_available_krx_trading_date_preopen_only",
         "operator_approval_required": False,
-        "operator_disable_env": CANARY_ENV_KEY,
+        "operator_disable_env": _cohort_env_key(cohort),
         "risk_contract": {
             "eligible_position_tags": list(CANARY_POSITION_TAGS),
             "one_share_probe_first_required": True,
@@ -1018,10 +1135,10 @@ def build_live_candidate(
             "same_stage_prompt_owner_count": 1,
             "nxt_promotion_separate": True,
         },
-        "metric_role": "bounded_krx_entry_prompt_live_candidate",
-        "decision_authority": "preopen_date_scoped_krx_prompt_selection_only",
+        "metric_role": "bounded_exact_cohort_entry_prompt_live_candidate",
+        "decision_authority": "preopen_date_scoped_exact_cohort_prompt_selection_only",
         "window_policy": (
-            "clean_baseline_cumulative_same_contract_krx_regular_plus_current_full_day"
+            "clean_baseline_cumulative_same_contract_exact_cohort_plus_current_full_day"
         ),
         "sample_floor": (
             "candidate_exposure_10_rows_3_symbols"
@@ -1049,7 +1166,7 @@ def build_live_candidate(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "forbidden_uses": [
-            "nxt_or_premarket_prompt_selection",
+            "unregistered_or_cross_cohort_prompt_selection",
             "provider_model_price_quantity_or_cap_change",
             "direct_full_entry_from_ai",
             "broker_or_safety_guard_bypass",
@@ -1070,9 +1187,13 @@ def publish_live_candidate(
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     ),
     generated_at: datetime | None = None,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> dict[str, Any]:
-    detailed_path = detailed_report_path(source_date, candidate_prompt_version)
+    detailed_path = detailed_report_path(
+        source_date, candidate_prompt_version, cohort=cohort
+    )
     candidate = build_live_candidate(
+        cohort=cohort,
         source_date=source_date,
         batch_report=batch_report,
         detailed_report=_read_json(detailed_path),
@@ -1080,7 +1201,7 @@ def publish_live_candidate(
         candidate_prompt_version=candidate_prompt_version,
         generated_at=generated_at,
     )
-    path = live_candidate_path(source_date)
+    path = live_candidate_path(source_date, cohort=cohort)
     if write:
         _atomic_write_json(path, candidate)
     return {
@@ -1103,6 +1224,7 @@ def _validate_candidate_artifact(
     target_date: str,
     candidate_path: Path,
     runtime_env: dict[str, str] | None = None,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> list[str]:
     errors: list[str] = []
     source_date = str(candidate.get("source_date") or "")
@@ -1126,6 +1248,12 @@ def _validate_candidate_artifact(
         errors.append("candidate_effective_date_policy_invalid")
     if candidate.get("schema") != LIVE_CANDIDATE_SCHEMA:
         errors.append("candidate_schema_invalid")
+    metrics = candidate.get("promotion_metrics")
+    if (
+        not isinstance(metrics, dict)
+        or metrics.get("economic_gate_basis") != NET_ECONOMIC_GATE_BASIS
+    ):
+        errors.append("candidate_economic_gate_basis_stale")
     canary_mode = str(candidate.get("canary_mode") or "")
     expected_status = (
         "live_auto_apply_ready"
@@ -1154,8 +1282,8 @@ def _validate_candidate_artifact(
     ):
         errors.append("candidate_authority_contract_invalid")
     if (
-        _normalize_venue(candidate.get("effective_venue")) != CANARY_VENUE
-        or _normalize_session(candidate.get("session_bucket")) != CANARY_SESSION
+        _normalize_venue(candidate.get("effective_venue")) != cohort[0]
+        or _normalize_session(candidate.get("session_bucket")) != cohort[1]
     ):
         errors.append("candidate_cohort_invalid")
     selected_prompt_version = str(candidate.get("selected_prompt_version") or "")
@@ -1192,7 +1320,9 @@ def _validate_candidate_artifact(
         _batch_evidence(batch)
     ) != provenance.get("batch_evidence_sha256"):
         errors.append("candidate_batch_evidence_mismatch")
-    if detailed_path != detailed_report_path(source_date, selected_prompt_version):
+    if detailed_path != detailed_report_path(
+        source_date, selected_prompt_version, cohort=cohort
+    ):
         errors.append("candidate_detailed_path_invalid")
     detailed_sha256 = _safe_file_sha256(detailed_path)
     if not detailed_sha256 or detailed_sha256 != provenance.get(
@@ -1201,6 +1331,7 @@ def _validate_candidate_artifact(
         errors.append("candidate_detailed_report_hash_mismatch")
     detailed = _read_json(detailed_path) if detailed_sha256 else {}
     source_errors = _candidate_source_errors(
+        cohort=cohort,
         source_date=source_date,
         batch_report=batch,
         detailed_report=detailed,
@@ -1212,27 +1343,42 @@ def _validate_candidate_artifact(
             detailed_report=detailed,
         )
     errors.extend(source_errors)
-    if candidate_path != live_candidate_path(source_date):
+    if candidate_path != live_candidate_path(source_date, cohort=cohort):
         errors.append("candidate_path_invalid")
     errors.extend(
-        _runtime_candidate_contract_errors(candidate, target_date=target_date)
+        _runtime_candidate_contract_errors(
+            candidate, target_date=target_date, cohort=cohort
+        )
     )
     errors.extend(
-        _runtime_probe_contract_errors(target_date=target_date, env=runtime_env)
+        _runtime_probe_contract_errors(
+            target_date=target_date, env=runtime_env, cohort=cohort
+        )
     )
     return list(dict.fromkeys(errors))
 
 
 def _runtime_candidate_contract_errors(
-    candidate: dict[str, Any], *, target_date: str
+    candidate: dict[str, Any],
+    *,
+    target_date: str,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> list[str]:
     errors: list[str] = []
+    if cohort not in SUPPORTED_LIVE_COHORTS:
+        errors.append("runtime_candidate_cohort_not_registered")
     selected_prompt_version = str(candidate.get("selected_prompt_version") or "")
     expected_artifact_sha = _canonical_sha256(
         {key: value for key, value in candidate.items() if key != "artifact_sha256"}
     )
     if candidate.get("artifact_sha256") != expected_artifact_sha:
         errors.append("runtime_candidate_artifact_sha256_invalid")
+    metrics = candidate.get("promotion_metrics")
+    if (
+        not isinstance(metrics, dict)
+        or metrics.get("economic_gate_basis") != NET_ECONOMIC_GATE_BASIS
+    ):
+        errors.append("runtime_candidate_economic_gate_basis_stale")
     canary_mode = str(candidate.get("canary_mode") or "")
     expected_status = (
         "live_auto_apply_ready"
@@ -1268,8 +1414,8 @@ def _runtime_candidate_contract_errors(
     ):
         errors.append("runtime_candidate_authority_contract_invalid")
     if (
-        _normalize_venue(candidate.get("effective_venue")) != CANARY_VENUE
-        or _normalize_session(candidate.get("session_bucket")) != CANARY_SESSION
+        _normalize_venue(candidate.get("effective_venue")) != cohort[0]
+        or _normalize_session(candidate.get("session_bucket")) != cohort[1]
     ):
         errors.append("runtime_candidate_cohort_invalid")
     risk_contract = candidate.get("risk_contract")
@@ -1323,18 +1469,23 @@ def build_preopen_activation(
     runtime_env: dict[str, str] | None = None,
     runtime_env_provenance: dict[str, Any] | None = None,
     runtime_env_load_errors: list[str] | None = None,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> dict[str, Any]:
     candidates: list[tuple[str, Path, dict[str, Any]]] = []
     for path in LIVE_CANDIDATE_DIR.glob(
         "entry_setup_v2_14_bounded_live_candidate_*.json"
     ):
         payload = _read_json(path)
-        if payload.get("effective_date") == target_date:
+        if (
+            payload.get("effective_date") == target_date
+            and (payload.get("effective_venue"), payload.get("session_bucket"))
+            == cohort
+        ):
             candidates.append((str(payload.get("source_date") or ""), path, payload))
     candidates.sort(key=lambda item: item[0], reverse=True)
     selected = candidates[0] if candidates else None
     errors: list[str] = list(runtime_env_load_errors or [])
-    if not _enabled_by_operator(runtime_env):
+    if not _enabled_by_operator(runtime_env, cohort=cohort):
         errors.append("operator_disabled")
     if selected is None:
         errors.append("no_effective_date_candidate")
@@ -1344,6 +1495,7 @@ def build_preopen_activation(
         errors.extend(
             _validate_candidate_artifact(
                 candidate,
+                cohort=cohort,
                 target_date=target_date,
                 candidate_path=selected[1],
                 runtime_env=runtime_env,
@@ -1375,8 +1527,8 @@ def build_preopen_activation(
         "rollback_prompt_version": (
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         ),
-        "effective_venue": CANARY_VENUE,
-        "session_bucket": CANARY_SESSION,
+        "effective_venue": cohort[0],
+        "session_bucket": cohort[1],
         "source_date": candidate.get("source_date"),
         "candidate_path": str(candidate_path) if candidate_path else None,
         "candidate_file_sha256": candidate_file_sha256,
@@ -1423,19 +1575,23 @@ def write_preopen_activation(
     runtime_env: dict[str, str] | None = None,
     runtime_env_provenance: dict[str, Any] | None = None,
     runtime_env_load_errors: list[str] | None = None,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> dict[str, Any]:
     activation = build_preopen_activation(
+        cohort=cohort,
         target_date=target_date,
         runtime_env=runtime_env,
         runtime_env_provenance=runtime_env_provenance,
         runtime_env_load_errors=runtime_env_load_errors,
     )
-    _atomic_write_json(activation_path(target_date), activation)
+    _atomic_write_json(activation_path(target_date, cohort=cohort), activation)
     return activation
 
 
-def _load_activation_cached(target_date: str) -> dict[str, Any]:
-    path = activation_path(target_date)
+def _load_activation_cached(
+    target_date: str, *, cohort: tuple[str, str] = DEFAULT_COHORT
+) -> dict[str, Any]:
+    path = activation_path(target_date, cohort=cohort)
     try:
         stat = path.stat()
     except OSError:
@@ -1461,6 +1617,7 @@ def resolve_live_prompt_policy(
     current = (now or datetime.now(KST)).astimezone(KST)
     target_date = current.date().isoformat()
     fallback = str(configured_prompt_version or "").strip()
+    cohort = (_normalize_venue(effective_venue), _normalize_session(session_bucket))
     result = {
         "enabled": False,
         "status": "fallback_configured_prompt",
@@ -1472,31 +1629,34 @@ def resolve_live_prompt_policy(
         "effective_venue": _normalize_venue(effective_venue),
         "session_bucket": _normalize_session(session_bucket),
         "position_tag": str(position_tag or "").strip().upper(),
-        "activation_path": str(activation_path(target_date)),
+        "activation_path": (
+            str(activation_path(target_date, cohort=cohort))
+            if cohort in SUPPORTED_LIVE_COHORTS
+            else None
+        ),
         "runtime_effect": False,
         "canary_mode": None,
     }
     if fallback != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
         result["status"] = "fallback_same_stage_owner_conflict"
         return result
-    if not _enabled_by_operator():
+    if not _enabled_by_operator(cohort=cohort):
         result["status"] = "fallback_operator_disabled"
         return result
-    if (
-        result["effective_venue"] != CANARY_VENUE
-        or result["session_bucket"] != CANARY_SESSION
-    ):
+    if cohort not in SUPPORTED_LIVE_COHORTS:
         result["status"] = "fallback_non_krx_regular_cohort"
         return result
     if result["position_tag"] not in CANARY_POSITION_TAGS:
         result["status"] = "fallback_position_owner_out_of_scope"
         return result
-    runtime_contract_errors = _runtime_probe_contract_errors(target_date=target_date)
+    runtime_contract_errors = _runtime_probe_contract_errors(
+        target_date=target_date, cohort=cohort
+    )
     if runtime_contract_errors:
         result["status"] = "fallback_probe_first_runtime_contract_invalid"
         result["runtime_contract_errors"] = runtime_contract_errors
         return result
-    activation = _load_activation_cached(target_date)
+    activation = _load_activation_cached(target_date, cohort=cohort)
     artifact_sha = str(activation.get("artifact_sha256") or "")
     if artifact_sha != _canonical_sha256(
         {key: value for key, value in activation.items() if key != "artifact_sha256"}
@@ -1542,8 +1702,8 @@ def resolve_live_prompt_policy(
         != _expected_composer_version(activation.get("selected_prompt_version"))
         or activation.get("entry_structure_phase_policy_version")
         != STRUCTURE_PHASE_POLICY_VERSION
-        or _normalize_venue(activation.get("effective_venue")) != CANARY_VENUE
-        or _normalize_session(activation.get("session_bucket")) != CANARY_SESSION
+        or _normalize_venue(activation.get("effective_venue")) != cohort[0]
+        or _normalize_session(activation.get("session_bucket")) != cohort[1]
         or activation_contract.get("preopen_only") is not True
         or activation_contract.get("eligible_position_tags")
         != list(CANARY_POSITION_TAGS)
@@ -1563,6 +1723,7 @@ def resolve_live_prompt_policy(
     candidate_errors = _runtime_candidate_contract_errors(
         candidate,
         target_date=target_date,
+        cohort=cohort,
     )
     if candidate.get("artifact_sha256") != activation.get("candidate_artifact_sha256"):
         candidate_errors.append("runtime_candidate_activation_sha_mismatch")
@@ -1595,7 +1756,11 @@ def resolve_live_prompt_policy(
     result.update(
         {
             "enabled": True,
-            "status": "active_bounded_krx_canary",
+            "status": (
+                "active_bounded_krx_canary"
+                if cohort == DEFAULT_COHORT
+                else "active_bounded_nxt_canary"
+            ),
             "selected_prompt_version": (activation.get("selected_prompt_version")),
             "source_date": activation.get("source_date"),
             "candidate_contract_sha256": activation.get("candidate_contract_sha256"),
@@ -1627,6 +1792,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--all-cohorts", action="store_true")
     parser.add_argument("--runtime-env-file")
     parser.add_argument("--operator-env-file")
     parser.add_argument("--dated-operator-env-file")
@@ -1651,22 +1817,31 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         )
-    activation = (
-        write_preopen_activation(
-            target_date=args.target_date,
-            runtime_env=runtime_env,
-            runtime_env_provenance=runtime_env_provenance,
-            runtime_env_load_errors=runtime_env_load_errors,
+    activations = []
+    for cohort in (SUPPORTED_LIVE_COHORTS if args.all_cohorts else (DEFAULT_COHORT,)):
+        activation = (
+            write_preopen_activation(
+                cohort=cohort,
+                target_date=args.target_date,
+                runtime_env=runtime_env,
+                runtime_env_provenance=runtime_env_provenance,
+                runtime_env_load_errors=runtime_env_load_errors,
+            )
+            if args.write
+            else build_preopen_activation(
+                cohort=cohort,
+                target_date=args.target_date,
+                runtime_env=runtime_env,
+                runtime_env_provenance=runtime_env_provenance,
+                runtime_env_load_errors=runtime_env_load_errors,
+            )
         )
-        if args.write
-        else build_preopen_activation(
-            target_date=args.target_date,
-            runtime_env=runtime_env,
-            runtime_env_provenance=runtime_env_provenance,
-            runtime_env_load_errors=runtime_env_load_errors,
+        activations.append(activation)
+    print(
+        json.dumps(
+            activations if args.all_cohorts else activations[0], ensure_ascii=False
         )
     )
-    print(json.dumps(activation, ensure_ascii=False))
     return 0
 
 

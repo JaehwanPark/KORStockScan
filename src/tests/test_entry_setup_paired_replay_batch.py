@@ -571,7 +571,8 @@ def test_batch_executes_and_publishes_registered_v2_15_bounded_candidate(
         ("NXT", batch.DEFAULT_CANDIDATE_PROMPT_VERSION),
     ]
     assert report["candidate_prompt_version"] == optimizer_candidate
-    assert len(published) == 1
+    assert len(published) == 2
+    assert published[1]["cohort"] == ("NXT", "NXT_AFTERMARKET")
     assert published[0]["candidate_prompt_version"] == optimizer_candidate
     assert published[0]["source_date"] == "2026-09-04"
     assert published[0]["write"] is True

@@ -226,6 +226,7 @@ if [ "$preopen_apply_result_rc" -ne 0 ]; then
   mark_preopen_failed "$preopen_apply_result_rc"
 fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
+  --all-cohorts \
   --target-date "$TARGET_DATE" \
   --runtime-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env" \
   --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env" \

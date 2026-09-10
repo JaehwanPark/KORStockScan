@@ -42979,6 +42979,214 @@ def test_entry_setup_exploration_micro_relief_is_bounded_and_source_qualified():
     assert large_sell["entry_setup_exploration_micro_relief_allowed"] is False
 
 
+def test_setup_discovery_recheck_is_exact_finite_and_never_releases_safety_cooldown(
+    monkeypatch,
+):
+    from src.engine.scalping import entry_setup_live_policy as policy
+
+    now_ts = datetime(2026, 9, 10, 9, 15).timestamp()
+    monkeypatch.setattr(
+        state_handlers, "resolve_entry_candle_venue", lambda *_, **__: "KRX"
+    )
+    monkeypatch.setattr(
+        state_handlers, "resolve_entry_candle_session", lambda **__: "KRX_REGULAR"
+    )
+    monkeypatch.setattr(state_handlers, "_get_ws_snapshot_age_sec", lambda _: 0.1)
+    monkeypatch.setattr(
+        policy,
+        "resolve_live_prompt_policy",
+        lambda **_: {
+            "enabled": True,
+            "target_date": "2026-09-10",
+            "activation_artifact_sha256": "a" * 64,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+        },
+    )
+    stock = {
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "ai_wait_cooldown_anchor_at": now_ts - 5,
+        "ai_wait_cooldown_anchor_until": now_ts + 175,
+        "ai_wait_cooldown_anchor_action": "WAIT",
+        "ai_wait_cooldown_anchor_price": 10000,
+        "entry_setup_discovery_observation": {
+            "entry_setup_live_policy_target_date": "2026-09-10",
+            "entry_setup_live_policy_activation_sha256": "a" * 64,
+            "entry_setup_live_policy_effective_venue": "KRX",
+            "entry_setup_live_policy_session_bucket": "KRX_REGULAR",
+            "entry_setup_evidence_sha256": "b" * 64,
+        },
+    }
+    probe = {
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 10,
+        "tick_context_stale": False,
+        "quote_stale": False,
+        "large_sell_print": False,
+        "net_aggressive_delta_10t": 20,
+        "price_change_10t_pct": 0.05,
+    }
+    decide = state_handlers._entry_setup_discovery_recheck_decision
+    assert not decide(
+        stock, {"curr": 10010}, probe, now_ts=now_ts, cooldown_until=now_ts + 176
+    )["ai_wait_rebound_recheck_allowed"]
+    assert not decide(
+        stock, {"curr": 10000}, probe, now_ts=now_ts, cooldown_until=now_ts + 175
+    )["ai_wait_rebound_recheck_allowed"]
+    assert decide(
+        stock, {"curr": 10010}, probe, now_ts=now_ts, cooldown_until=now_ts + 175
+    )["ai_wait_rebound_recheck_allowed"]
+    assert not decide(
+        stock, {"curr": 10010}, probe, now_ts=now_ts, cooldown_until=now_ts + 175
+    )["ai_wait_rebound_recheck_allowed"]
+    stock["entry_setup_discovery_observation"]["entry_setup_evidence_sha256"] = "c" * 64
+    assert decide(
+        stock, {"curr": 10010}, probe, now_ts=now_ts, cooldown_until=now_ts + 175
+    )["ai_wait_rebound_recheck_allowed"]
+    stock["entry_setup_discovery_observation"]["entry_setup_evidence_sha256"] = "d" * 64
+    assert not decide(
+        stock, {"curr": 10010}, probe, now_ts=now_ts, cooldown_until=now_ts + 175
+    )["ai_wait_rebound_recheck_allowed"]
+
+
+def test_setup_discovery_budget_resets_date_in_both_precheck_and_consumer():
+    now_ts = datetime.fromisoformat("2026-09-10T09:15:00+09:00").timestamp()
+    stock = {
+        "entry_setup_discovery_observation": {
+            "entry_setup_live_policy_target_date": "2026-09-10",
+            "entry_setup_evidence_sha256": "b" * 64,
+        },
+        "entry_setup_discovery_recheck_usage": {
+            "date": "2026-09-09",
+            "count": 2,
+            "parent": "b" * 64,
+        },
+    }
+    available = state_handlers._entry_setup_discovery_budget_available
+    assert available(stock, now_ts=now_ts)
+    stock["entry_setup_discovery_recheck_usage"]["date"] = "2026-09-10"
+    assert not available(stock, now_ts=now_ts)
+    stock["entry_setup_discovery_recheck_usage"] = {}
+    assert available(stock, now_ts=now_ts)
+    stock["entry_setup_discovery_observation"][
+        "entry_setup_live_policy_target_date"
+    ] = "2026-09-09"
+    assert not available(stock, now_ts=now_ts)
+
+
+def test_setup_discovery_refresh_survives_async_dispatch_but_expires():
+    now_ts = datetime.fromisoformat("2026-09-10T09:15:00+09:00").timestamp()
+    stock = {
+        "ai_wait_rebound_recheck_pending": True,
+        "ai_wait_rebound_recheck_last_at": now_ts,
+        "entry_setup_discovery_observation": {
+            "entry_setup_live_policy_target_date": "2026-09-10",
+        },
+    }
+    pending = state_handlers._entry_setup_discovery_refresh_pending
+    assert pending(stock, now_ts=now_ts)  # dispatch
+    assert pending(stock, now_ts=now_ts + 1)  # main-thread commit
+    assert pending(stock, now_ts=now_ts + 30)
+    assert not pending(stock, now_ts=now_ts + 31)
+    assert "ai_wait_rebound_recheck_pending" not in stock
+    stock["ai_wait_rebound_recheck_pending"] = True
+    stock["entry_setup_discovery_observation"] = {}
+    assert pending(stock, now_ts=now_ts)  # legacy behavior is still consume-once
+    assert not pending(stock, now_ts=now_ts)
+
+
+@pytest.mark.parametrize(
+    "action, trusted", [("WAIT", True), ("DROP", True), ("WAIT", False)]
+)
+def test_new_recheck_result_replaces_or_revokes_setup_discovery_lease(action, trusted):
+    decision = {
+        "action": action,
+        "entry_ai_contract_valid": True,
+        "entry_setup_state": "UNCONFIRMED",
+        "entry_recheck_intent": True,
+        "entry_probe_intent": False,
+        "entry_setup_live_policy_runtime_effect": True,
+        "entry_setup_evidence_sha256": "b" * 64,
+        "ai_decision_trace_id": "fresh-recheck",
+        "ai_result_source": "live" if trusted else "timeout",
+    }
+    fields = state_handlers._entry_ai_recheck_probe_state_fields(
+        decision,
+        action=action,
+        score=69,
+        completed_at=1.0,
+    )
+    lease = fields["entry_setup_discovery_observation"]
+    assert bool(lease) is (action == "WAIT" and trusted)
+
+
+def test_micro_recovery_revalidation_requires_current_price_and_flow_not_old_vwap():
+    probe = {
+        "buy_pressure": 99.32,
+        "tick_accel": 1.0,
+        "micro_vwap_bp": -95.97,
+        "micro_vwap_available": True,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 10,
+        "tick_context_stale": False,
+        "quote_stale": False,
+        "large_sell_print": False,
+        "net_aggressive_delta_10t": 1009,
+        "price_change_10t_pct": 0.05,
+    }
+    for family, expected in [("MICRO_RECOVERY", True), ("", False)]:
+        result = state_handlers._entry_setup_exploration_micro_relief(
+            probe,
+            source_quality_ok=True,
+            setup_family=family,
+        )
+        assert result["entry_setup_exploration_micro_relief_allowed"] is expected
+    for key, value in [
+        ("price_change_10t_pct", 0),
+        ("net_aggressive_delta_10t", None),
+        ("quote_stale", True),
+    ]:
+        result = state_handlers._entry_setup_exploration_micro_relief(
+            {**probe, key: value},
+            source_quality_ok=True,
+            setup_family="MICRO_RECOVERY",
+        )
+        assert result["entry_setup_exploration_micro_relief_allowed"] is False
+
+
+def test_micro_recovery_actual_feature_producer_reaches_revalidation():
+    features = {
+        "buy_pressure_10t": 99.32,
+        "tick_acceleration_ratio": 1.0,
+        "curr_vs_micro_vwap_bp": -95.97,
+        "micro_vwap_available": True,
+        "tick_aggressor_pressure_usable": True,
+        "tick_aggressor_trusted_count": 10,
+        "tick_context_stale": False,
+        "quote_stale": False,
+        "large_sell_print_detected": False,
+        "net_aggressive_delta_10t": 1009,
+        "price_change_10t_pct": 0.05,
+    }
+    engine = SimpleNamespace(_extract_scalping_features=lambda *_: features)
+    probe = state_handlers._extract_buy_recovery_probe_features(engine, {}, [], [])
+    result = state_handlers._entry_setup_exploration_micro_relief(
+        probe,
+        source_quality_ok=True,
+        setup_family="MICRO_RECOVERY",
+    )
+    assert result["entry_setup_exploration_micro_relief_allowed"] is True
+    features.pop("net_aggressive_delta_10t")
+    probe = state_handlers._extract_buy_recovery_probe_features(engine, {}, [], [])
+    assert probe["net_aggressive_delta_10t"] is None
+    assert not state_handlers._entry_setup_exploration_micro_relief(
+        probe,
+        source_quality_ok=True,
+        setup_family="MICRO_RECOVERY",
+    )["entry_setup_exploration_micro_relief_allowed"]
+
+
 def test_superseded_unsubmitted_exploration_arm_is_cleared():
     stock = {
         "entry_opportunity_recheck_armed": True,

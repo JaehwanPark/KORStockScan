@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
@@ -27,6 +29,9 @@ def _configure_paths(monkeypatch, tmp_path):
 
 
 def _enable_probe_contract(monkeypatch):
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "KRX|KRX_REGULAR"
+    )
     for key in (
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
@@ -46,6 +51,68 @@ def _enable_probe_contract(monkeypatch):
     monkeypatch.setenv(
         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    )
+
+
+def test_nxt_exact_candidate_preopen_and_runtime_are_isolated(monkeypatch, tmp_path):
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    cohort = ("NXT", "NXT_AFTERMARKET")
+    detailed = _valid_detailed_report()
+    detailed["cohort_filter"] = dict(zip(("effective_venue", "session_bucket"), cohort))
+    detailed["cumulative_learning"]["cohort_scope"].update(detailed["cohort_filter"])
+    batch = _valid_batch_report()
+    batch["cohorts"][0].update(detailed["cohort_filter"])
+    batch["cohorts"] = batch["cohorts"][:1]
+    detailed_path = policy.detailed_report_path(SOURCE_DATE, cohort=cohort)
+    policy._atomic_write_json(detailed_path, detailed)
+    policy._atomic_write_json(policy.batch_report_path(SOURCE_DATE), batch)
+    candidate = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        detailed_report=detailed,
+        detailed_path=detailed_path,
+        generated_at=POSTCLOSE_GENERATED_AT,
+        cohort=cohort,
+    )
+    assert candidate["allowed_runtime_apply"] is True, candidate["blocking_reasons"]
+    policy._atomic_write_json(
+        policy.live_candidate_path(SOURCE_DATE, cohort=cohort), candidate
+    )
+    blocked = policy.build_preopen_activation(target_date=TARGET_DATE, cohort=cohort)
+    assert "runtime_contract_exact_recheck_scope_missing" in blocked["blocking_reasons"]
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "NXT|NXT_AFTERMARKET"
+    )
+    activation = policy.write_preopen_activation(target_date=TARGET_DATE, cohort=cohort)
+    assert activation["status"] == "active_bounded_canary"
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue=cohort[0],
+        session_bucket=cohort[1],
+        position_tag="SCANNER",
+        now=datetime(2026, 8, 7, 16, 5, tzinfo=policy.KST),
+    )
+    assert resolved["status"] == "active_bounded_nxt_canary"
+    assert not policy.build_preopen_activation(target_date=TARGET_DATE)[
+        "allowed_runtime_apply"
+    ]
+    # KRX sources cannot be relabelled as NXT, and an NXT switch never affects KRX.
+    wrong = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=_valid_batch_report(),
+        detailed_report=_valid_detailed_report(),
+        detailed_path=detailed_path,
+        generated_at=POSTCLOSE_GENERATED_AT,
+        cohort=cohort,
+    )
+    assert wrong["allowed_runtime_apply"] is False
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SETUP_NXT_CANARY_ENABLED", "false")
+    assert (
+        "operator_disabled"
+        in policy.build_preopen_activation(target_date=TARGET_DATE, cohort=cohort)[
+            "blocking_reasons"
+        ]
     )
 
 
@@ -120,6 +187,22 @@ def _valid_detailed_report():
             "candidate_exposure_unique_symbol_count": 4,
             "candidate_primary_decision_ev_pct": 0.28,
             "candidate_exposure_probe_cost_adjusted_ev_pct": 0.21,
+            "full_cost_economics": {
+                "schema": "entry_paired_full_cost_economics_v1",
+                "pass": True,
+                "sample_floor_pass": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "verified_pair_count": 12,
+                "candidate_exposure_count": 12,
+                "candidate_unique_symbol_count": 4,
+                "candidate_net_ev_pct": 0.05,
+                "paired_net_decision_delta_pct": 0.01,
+                "actual_fill_proven": False,
+                "additional_cost_subtracted_here": False,
+            },
             "candidate_probe_arm_decision_count": 12,
             "candidate_probe_arm_unique_symbol_count": 4,
             "exploration_evidence_floor": {"pass": True},
@@ -186,6 +269,7 @@ def _valid_runtime_env():
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         ),
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES": "KRX|KRX_REGULAR",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "true",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "false",
@@ -212,6 +296,43 @@ def _write_ready_chain(monkeypatch, tmp_path):
     )
     activation = policy.write_preopen_activation(target_date=TARGET_DATE)
     return published, activation
+
+
+def test_setup_canary_requires_reachable_exact_krx_recheck_scope(monkeypatch):
+    key = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES"
+    monkeypatch.setenv(key, "KRX|KRX_REGULAR")
+    for scopes in (None, "", "NXT|NXT_REGULAR", "krx|krx_regular", "KRX"):
+        env = _valid_runtime_env()
+        if scopes is None:
+            env.pop(key)
+        else:
+            env[key] = scopes
+        assert "runtime_contract_krx_recheck_scope_missing" in (
+            policy._runtime_probe_contract_errors(target_date=TARGET_DATE, env=env)
+        )
+    env = _valid_runtime_env()
+    env[key] = " NXT|NXT_REGULAR, KRX|KRX_REGULAR "
+    assert policy._runtime_probe_contract_errors(target_date=TARGET_DATE, env=env) == []
+
+
+def test_active_setup_falls_back_if_runtime_loses_krx_recheck_scope(
+    monkeypatch, tmp_path
+):
+    _, activation = _write_ready_chain(monkeypatch, tmp_path)
+    assert activation["status"] == "active_bounded_canary"
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "")
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
+        now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
+    )
+    assert resolved["enabled"] is False
+    assert resolved["status"] == "fallback_probe_first_runtime_contract_invalid"
+    assert resolved["runtime_contract_errors"] == [
+        "runtime_contract_krx_recheck_scope_missing"
+    ]
 
 
 def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp_path):
@@ -471,6 +592,29 @@ def test_candidate_without_position_owner_scope_fails_closed(monkeypatch, tmp_pa
     )
 
 
+def test_old_economic_basis_cannot_be_rehashed_into_new_runtime_authority(
+    monkeypatch, tmp_path
+):
+    _write_ready_chain(monkeypatch, tmp_path)
+    path = policy.live_candidate_path(SOURCE_DATE)
+    candidate = policy._read_json(path)
+    candidate["promotion_metrics"].pop("economic_gate_basis")
+    candidate["artifact_sha256"] = policy._canonical_sha256(
+        {key: value for key, value in candidate.items() if key != "artifact_sha256"}
+    )
+    policy._atomic_write_json(path, candidate)
+    activation = policy.build_preopen_activation(target_date=TARGET_DATE)
+    assert activation["status"] == "inactive_fallback_v2_13"
+    assert "candidate_economic_gate_basis_stale" in activation["blocking_reasons"]
+    assert (
+        "runtime_candidate_economic_gate_basis_stale"
+        in policy._runtime_candidate_contract_errors(
+            candidate,
+            target_date=TARGET_DATE,
+        )
+    )
+
+
 def test_runtime_rejects_preexisting_activation_without_current_phase_contract(
     monkeypatch, tmp_path
 ):
@@ -532,6 +676,7 @@ def test_failed_promotion_writes_inactive_preopen_fallback(monkeypatch, tmp_path
     _configure_paths(monkeypatch, tmp_path)
     detailed = _valid_detailed_report()
     detailed["promotion_quality_gate_pass"] = False
+    detailed["cumulative_learning"]["full_cost_economics"]["pass"] = False
     detailed["candidate_probe_arm_sample_floor"] = {"pass": False}
     detailed["cumulative_learning"]["exploration_evidence_floor"] = {"pass": False}
     policy._atomic_write_json(policy.detailed_report_path(SOURCE_DATE), detailed)
@@ -668,6 +813,13 @@ def test_mature_negative_exploration_stops_at_next_preopen(monkeypatch, tmp_path
     cumulative["candidate_exposure_unique_symbol_count"] = 4
     cumulative["candidate_primary_decision_ev_pct"] = -0.01
     cumulative["candidate_exposure_probe_cost_adjusted_ev_pct"] = -0.2
+    cumulative["full_cost_economics"].update(
+        {
+            "candidate_net_ev_pct": -0.01,
+            "paired_net_decision_delta_pct": -0.01,
+            "pass": False,
+        }
+    )
     cumulative["candidate_probe_risk_budget"] = {
         "pass": True,
         "catastrophic_loss_count": 0,
@@ -688,17 +840,57 @@ def test_mature_negative_exploration_stops_at_next_preopen(monkeypatch, tmp_path
     assert candidate["status"] == "blocked"
     assert candidate["allowed_runtime_apply"] is False
     assert (
-        "exploration_continuation_primary_ev_not_positive"
-        in candidate["blocking_reasons"]
-    )
-    assert (
-        "exploration_continuation_cost_adjusted_ev_not_positive"
+        "exploration_continuation_full_cost_economics_not_passed"
         in candidate["blocking_reasons"]
     )
     assert (
         candidate["promotion_metrics"]["exploration_continuation_gate"]["action"]
         == "stop_and_fallback_at_next_preopen"
     )
+
+
+@pytest.mark.parametrize("failed_guard", [None, "cost", "tail", "source"])
+def test_net_positive_candidate_does_not_require_every_gross_pattern_to_improve(
+    monkeypatch, tmp_path, failed_guard
+):
+    _configure_paths(monkeypatch, tmp_path)
+    detailed = _valid_detailed_report()
+    batch = _valid_batch_report()
+    batch["cohorts"][0]["promotion_quality_gate_pass"] = False
+    detailed["promotion_quality_gate_pass"] = False
+    cumulative = detailed["cumulative_learning"]
+    cumulative["promotion_quality_gate_pass"] = False
+    for key in policy.CUMULATIVE_PROMOTION_CHECK_KEYS:
+        cumulative["promotion_quality_checks"][key] = (
+            key in policy.LIVE_REQUIRED_CUMULATIVE_CHECK_KEYS
+        )
+    # Different gross horizon/proxy losses are not full-cost terminal-path EV.
+    cumulative["candidate_primary_decision_ev_pct"] = -0.01
+    cumulative["candidate_exposure_probe_cost_adjusted_ev_pct"] = -0.01
+    if failed_guard == "cost":
+        cumulative["full_cost_economics"]["candidate_net_ev_pct"] = None
+    elif failed_guard == "tail":
+        cumulative["candidate_probe_risk_budget"]["pass"] = False
+    elif failed_guard == "source":
+        detailed["promotion_report_integrity_pass"] = False
+    path = tmp_path / "net-detailed.json"
+    policy._atomic_write_json(path, detailed)
+    candidate = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        detailed_report=detailed,
+        detailed_path=path,
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+    assert candidate["status"] == (
+        "blocked" if failed_guard else "live_auto_apply_ready"
+    )
+    assert (
+        candidate["promotion_metrics"]["economic_gate_basis"]
+        == policy.NET_ECONOMIC_GATE_BASIS
+    )
+    assert candidate["runtime_effect"] is False
+    assert candidate["actual_order_submitted"] is False
 
 
 def test_malformed_candidate_source_paths_fail_closed_without_exception(

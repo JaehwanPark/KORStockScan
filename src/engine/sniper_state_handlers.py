@@ -6727,6 +6727,7 @@ def _entry_ai_recheck_probe_state_fields(
         model_action=normalized_action,
     )
     fields = {
+        **_entry_setup_discovery_observation_fields(decision, trusted=trusted_result),
         "last_watching_ai_attempt_action": normalized_action or "NOT_EVALUATED",
         "last_watching_ai_attempt_model_action": normalized_action or "NOT_EVALUATED",
         "last_watching_ai_attempt_score": float(_safe_float(score, 0.0)),
@@ -56227,6 +56228,8 @@ def _extract_buy_recovery_probe_features(
             features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0
         ),
         "micro_vwap_available": bool(features.get("micro_vwap_available")),
+        "net_aggressive_delta_10t": features.get("net_aggressive_delta_10t"),
+        "price_change_10t_pct": features.get("price_change_10t_pct"),
         "large_sell_print": bool(features.get("large_sell_print_detected", False)),
         "tick_sample_count": features.get("tick_sample_count", "-"),
         "tick_window_sample_count": features.get("tick_window_sample_count", "-"),
@@ -56905,10 +56908,41 @@ def _score65_74_recovery_probe_micro_guard(probe: dict | None) -> dict:
     }
 
 
+def _entry_setup_discovery_observation_fields(
+    ai_decision: dict, *, trusted: bool
+) -> dict:
+    eligible = bool(
+        trusted
+        and ai_decision.get("action") == "WAIT"
+        and ai_decision.get("entry_ai_contract_valid") is True
+        and ai_decision.get("entry_setup_state") == "UNCONFIRMED"
+        and ai_decision.get("entry_recheck_intent") is True
+        and ai_decision.get("entry_probe_intent") is False
+        and ai_decision.get("entry_setup_live_policy_runtime_effect") is True
+    )
+    return {
+        "entry_setup_discovery_observation": (
+            {
+                key: ai_decision.get(key)
+                for key in (
+                    "entry_setup_live_policy_activation_sha256",
+                    "entry_setup_live_policy_target_date",
+                    "entry_setup_live_policy_effective_venue",
+                    "entry_setup_live_policy_session_bucket",
+                    "entry_setup_evidence_sha256",
+                )
+            }
+            if eligible
+            else {}
+        )
+    }
+
+
 def _entry_setup_exploration_micro_relief(
     probe: dict | None,
     *,
     source_quality_ok: bool,
+    setup_family: str = "",
 ) -> dict[str, Any]:
     """Allow a fresh, supportive 1-share observation without full strong micro.
 
@@ -56929,6 +56963,21 @@ def _entry_setup_exploration_micro_relief(
         "micro_vwap": micro_vwap_available and micro_vwap_bp >= 0.0,
     }
     support_count = sum(checks.values())
+    micro_recovery_allowed = False
+    if setup_family == "MICRO_RECOVERY":
+        from src.engine.scalping.entry_setup_evidence import micro_recovery_observation
+
+        observation = micro_recovery_observation(
+            {
+                **probe,
+                "large_sell_print_detected": probe.get("large_sell_print"),
+            }
+        )
+        micro_recovery_allowed = bool(
+            source_quality_ok
+            and observation["tape_support"]
+            and observation["price_response"]
+        )
     allowed = bool(
         source_quality_ok
         and not large_sell_print
@@ -56936,8 +56985,13 @@ def _entry_setup_exploration_micro_relief(
         and micro_vwap_bp >= -5.0
         and support_count >= 2
     )
+    # The approved micro path revalidates flow plus price response, not distance
+    # to an old VWAP. Unknown sources and the existing one-share cap still veto.
+    if setup_family == "MICRO_RECOVERY":
+        allowed = micro_recovery_allowed
     return {
         "entry_setup_exploration_micro_relief_allowed": allowed,
+        "entry_setup_exploration_micro_recovery_allowed": micro_recovery_allowed,
         "entry_setup_exploration_micro_relief_support_count": support_count,
         "entry_setup_exploration_micro_relief_checks": checks,
         "entry_setup_exploration_micro_relief_source_quality_ok": bool(
@@ -57864,7 +57918,21 @@ def _scalp_ai_wait_rebound_recheck_decision(
     *,
     now_ts: float,
     cooldown_until: float,
+    current_probe: dict | None = None,
 ) -> dict:
+    stock = stock if isinstance(stock, dict) else {}
+    observation = stock.get("entry_setup_discovery_observation") or {}
+    if observation:
+        discovery = _entry_setup_discovery_recheck_decision(
+            stock,
+            ws_data or {},
+            current_probe,
+            now_ts=now_ts,
+            cooldown_until=cooldown_until,
+        )
+        # This is the selected setup family's observation lease, not an
+        # activation of the retired standalone WAIT-score bridge.
+        return discovery
     fields = {
         "ai_wait_rebound_recheck_enabled": _env_bool(
             "KORSTOCKSCAN_SCALP_AI_WAIT_REBOUND_RECHECK_ENABLED",
@@ -58086,6 +58154,148 @@ def _scalp_ai_wait_rebound_recheck_decision(
 
     fields["ai_wait_rebound_recheck_allowed"] = True
     fields["ai_wait_rebound_recheck_reason"] = "price_rebound_after_wait"
+    return fields
+
+
+def _entry_setup_discovery_budget_available(stock: dict, *, now_ts: float) -> bool:
+    """Share the same date/parent budget at the cheap precheck and consumer."""
+    from src.engine.scalping.entry_setup_live_policy import KST
+
+    observation = stock.get("entry_setup_discovery_observation")
+    used = stock.get("entry_setup_discovery_recheck_usage", {})
+    if not isinstance(observation, dict) or not isinstance(used, dict):
+        return False
+    day = datetime.fromtimestamp(now_ts, tz=KST).date().isoformat()
+    parent = str(observation.get("entry_setup_evidence_sha256") or "")
+    if (
+        observation.get("entry_setup_live_policy_target_date") != day
+        or re.fullmatch(r"[0-9a-f]{64}", parent) is None
+    ):
+        return False
+    if used.get("date") != day:
+        return True
+    count = used.get("count")
+    return bool(type(count) is int and 0 <= count < 2 and used.get("parent") != parent)
+
+
+def _entry_setup_discovery_refresh_pending(stock: dict, *, now_ts: float) -> bool:
+    """Keep this finite refresh lease across async dispatch and commit passes."""
+    from src.engine.scalping.entry_setup_live_policy import KST
+
+    pending = bool(stock.get("ai_wait_rebound_recheck_pending"))
+    observation = stock.get("entry_setup_discovery_observation")
+    if not observation:
+        # Preserve the retired standalone bridge's existing consumption behavior.
+        return bool(stock.pop("ai_wait_rebound_recheck_pending", False))
+    age = now_ts - _safe_float(stock.get("ai_wait_rebound_recheck_last_at"), 0)
+    if not (
+        isinstance(observation, dict)
+        and observation.get("entry_setup_live_policy_target_date")
+        == datetime.fromtimestamp(now_ts, tz=KST).date().isoformat()
+        and 0 <= age <= 30
+    ):
+        stock.pop("ai_wait_rebound_recheck_pending", None)
+        return False
+    return pending
+
+
+def _entry_setup_discovery_recheck_decision(
+    stock: dict,
+    ws_data: dict,
+    current_probe: dict | None,
+    *,
+    now_ts: float,
+    cooldown_until: float,
+) -> dict:
+    from src.engine.scalping.entry_setup_evidence import micro_recovery_observation
+    from src.engine.scalping.entry_setup_live_policy import (
+        KST,
+        resolve_live_prompt_policy,
+    )
+
+    fields = {
+        "ai_wait_rebound_recheck_enabled": True,
+        "ai_wait_rebound_recheck_allowed": False,
+        "ai_wait_rebound_recheck_reason": "setup_discovery_observation_only",
+    }
+    observation = stock.get("entry_setup_discovery_observation") or {}
+    if not _entry_setup_discovery_budget_available(stock, now_ts=now_ts):
+        fields["ai_wait_rebound_recheck_reason"] = (
+            "setup_discovery_finite_budget_or_date_blocked"
+        )
+        return fields
+    anchor = _safe_float(stock.get("ai_wait_cooldown_anchor_at"), 0)
+    # Only this exact AI-WAIT cooldown may be released. Never release a later
+    # broker, loss, order, or symbol safety cooldown occupying the same map.
+    if (
+        str(stock.get("strategy") or "").upper() not in {"SCALP", "SCALPING"}
+        or stock.get("ai_wait_cooldown_anchor_action") != "WAIT"
+        or _safe_float(stock.get("ai_wait_cooldown_anchor_until"), 0) != cooldown_until
+        or not 1.0 <= now_ts - anchor <= 30.0
+        or cooldown_until <= now_ts
+        or len(str(observation.get("entry_setup_evidence_sha256") or "")) != 64
+        or _has_open_pending_entry_orders(stock)
+        or _already_holding_entry_position(stock)
+    ):
+        return fields
+    current = datetime.fromtimestamp(now_ts, tz=KST)
+    day = str(observation.get("entry_setup_live_policy_target_date") or "")
+    used = stock.get("entry_setup_discovery_recheck_usage") or {}
+    count = _safe_int(used.get("count"), 0) if used.get("date") == day else 0
+    venue = resolve_entry_candle_venue(
+        ws_data, session=resolve_entry_candle_session(now_ts=now_ts)
+    )
+    session = resolve_entry_candle_session(now_ts=now_ts)
+    policy = resolve_live_prompt_policy(
+        configured_prompt_version=os.getenv(
+            "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION", ""
+        ),
+        effective_venue=venue,
+        session_bucket=session,
+        position_tag=stock.get("position_tag"),
+        now=current,
+    )
+    if (
+        policy.get("enabled") is not True
+        or policy.get("target_date") != day
+        or policy.get("activation_artifact_sha256")
+        != observation.get("entry_setup_live_policy_activation_sha256")
+        or policy.get("effective_venue")
+        != observation.get("entry_setup_live_policy_effective_venue")
+        or policy.get("session_bucket")
+        != observation.get("entry_setup_live_policy_session_bucket")
+    ):
+        return fields
+    probe = current_probe or {}
+    micro = micro_recovery_observation(
+        {**probe, "large_sell_print_detected": probe.get("large_sell_print")}
+    )
+    quote_age = _get_ws_snapshot_age_sec(ws_data)
+    price = _safe_float(ws_data.get("curr"), 0)
+    anchor_price = _safe_float(stock.get("ai_wait_cooldown_anchor_price"), 0)
+    if not (
+        micro["tape_support"]
+        and micro["price_response"]
+        and quote_age is not None
+        and 0 <= quote_age <= 1.5
+        and price > anchor_price > 0
+    ):
+        return fields
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "entry_setup_discovery_recheck_usage": {
+                "date": day,
+                "count": count + 1,
+                "parent": observation.get("entry_setup_evidence_sha256"),
+            }
+        },
+    )
+    fields.update(
+        ai_wait_rebound_recheck_allowed=True,
+        ai_wait_rebound_recheck_reason="setup_discovery_fresh_state_change",
+        entry_setup_discovery_recheck_count=count + 1,
+    )
     return fields
 
 
@@ -62922,8 +63132,8 @@ def _handle_watching_strategy_branch(
                             "hard_safety_bypass,provider_route_change,threshold_mutation"
                         ),
                     )
-                ai_wait_rebound_recheck_pending = bool(
-                    stock.pop("ai_wait_rebound_recheck_pending", False)
+                ai_wait_rebound_recheck_pending = (
+                    _entry_setup_discovery_refresh_pending(stock, now_ts=now_ts)
                 )
                 if ai_wait_rebound_recheck_pending:
                     ai_call_trigger_reason = "ai_wait_rebound_recheck"
@@ -62954,7 +63164,13 @@ def _handle_watching_strategy_branch(
                         )
                         if scanner_async_enabled:
                             if async_resolution.get("status") != "completed":
+                                if async_resolution.get("status") not in {
+                                    "dispatched",
+                                    "pending",
+                                }:
+                                    stock.pop("ai_wait_rebound_recheck_pending", None)
                                 return False
+                            stock.pop("ai_wait_rebound_recheck_pending", None)
                             prepared_context = dict(
                                 async_resolution.get("prepared_context") or {}
                             )
@@ -63040,6 +63256,7 @@ def _handle_watching_strategy_branch(
                                     source_meta=candle_source_meta,
                                     include_investor_source=True,
                                 )
+                                stock.pop("ai_wait_rebound_recheck_pending", None)
                                 ai_decision = ai_engine.analyze_target(
                                     stock["name"],
                                     entry_ai_ws_data,
@@ -63225,6 +63442,9 @@ def _handle_watching_strategy_branch(
                                 )
                             trusted_state_fields = (
                                 {
+                                    **_entry_setup_discovery_observation_fields(
+                                        ai_decision, trusted=trusted_result
+                                    ),
                                     "last_watching_ai_action": str(
                                         action or "WAIT"
                                     ).upper(),
@@ -64911,6 +65131,9 @@ def _handle_watching_strategy_branch(
                         _entry_setup_exploration_micro_relief(
                             recheck_feature_probe,
                             source_quality_ok=recheck_micro_source_quality_ok,
+                            setup_family=str(
+                                (ai_decision or {}).get("entry_setup_family") or ""
+                            ),
                         )
                     )
                     recheck_micro_confirmed = bool(
@@ -75007,6 +75230,7 @@ def _record_scanner_entry_ai_attempt(
         stock,
         set_fields={
             **attempt_fields,
+            **_entry_setup_discovery_observation_fields(ai_decision, trusted=trusted),
             "last_watching_ai_action": normalized_action,
             "last_watching_ai_score": float(score),
             "last_watching_ai_score_raw": float(score),
@@ -82778,6 +83002,16 @@ def handle_watching_state(
             ws_data,
             now_ts=now_ts,
             cooldown_until=_safe_float(cooldowns.get(code), 0.0),
+            current_probe=(
+                _extract_buy_recovery_probe_features(
+                    ai_engine, ws_data, ws_data.get("recent_trade_ticks") or [], []
+                )
+                if _entry_setup_discovery_budget_available(stock, now_ts=now_ts)
+                and 1.0
+                <= now_ts - _safe_float(stock.get("ai_wait_cooldown_anchor_at"), 0)
+                <= 30.0
+                else None
+            ),
         )
         if ai_wait_rebound_recheck.get("ai_wait_rebound_recheck_allowed"):
             cooldowns.pop(code, None)
@@ -82788,7 +83022,11 @@ def handle_watching_state(
                 code,
                 "ai_wait_rebound_recheck_cooldown_bypass",
                 metric_role="bounded_tunable",
-                decision_authority="ai_wait_rebound_recheck_runtime",
+                decision_authority=(
+                    "entry_setup_discovery_observation_recheck"
+                    if stock.get("entry_setup_discovery_observation")
+                    else "ai_wait_rebound_recheck_runtime"
+                ),
                 window_policy="same_day_intraday_runtime_state",
                 sample_floor="not_applicable_runtime_guard",
                 primary_decision_metric="ai_wait_rebound_recheck_reason",

@@ -2112,6 +2112,9 @@ class GPTSniperEngine:
             == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
         )
         version_token = "v2_15" if bounded_recovery_policy else "v2_14"
+        venue_token = (
+            "nxt" if policy.get("status") == "active_bounded_nxt_canary" else "krx"
+        )
         contract_errors = validate_entry_risk_adjudication(
             risk,
             setup_evidence=setup,
@@ -2119,7 +2122,8 @@ class GPTSniperEngine:
         setup_contract_errors = validate_entry_setup_evidence(setup)
         if (
             policy.get("enabled") is not True
-            or policy.get("status") != "active_bounded_krx_canary"
+            or policy.get("status")
+            not in {"active_bounded_krx_canary", "active_bounded_nxt_canary"}
             or policy.get("selected_prompt_version") != selected_prompt_version
         ):
             contract_errors.append(f"entry_setup_{version_token}_live_policy_invalid")
@@ -2240,6 +2244,7 @@ class GPTSniperEngine:
                 "READY": "EDGE",
                 "WAIT_CONFIRMATION": "EDGE",
                 "INVALID": "NO_EDGE",
+                "UNCONFIRMED": "NO_EDGE",
                 "INSUFFICIENT": "INSUFFICIENT_DATA",
             }.get(setup_state, "INSUFFICIENT_DATA")
             return {
@@ -2272,7 +2277,7 @@ class GPTSniperEngine:
                 "decision_quality_contract_repair_applied": False,
                 "decision_quality_contract_repair_codes": [],
                 "decision_quality_live_adapter": (
-                    f"entry_setup_{version_token}_krx_bounded_probe_v1"
+                    f"entry_setup_{version_token}_{venue_token}_bounded_probe_v1"
                 ),
                 "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
                 "decision_quality_score_semantics": (
@@ -2379,7 +2384,7 @@ class GPTSniperEngine:
             "decision_quality_contract_repair_applied": False,
             "decision_quality_contract_repair_codes": [],
             "decision_quality_live_adapter": (
-                f"entry_setup_{version_token}_krx_bounded_probe_v1"
+                f"entry_setup_{version_token}_{venue_token}_bounded_probe_v1"
             ),
             "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
             "decision_quality_score_semantics": (
@@ -2404,10 +2409,10 @@ class GPTSniperEngine:
             ),
             "entry_probe_intent_prompt_version": (selected_prompt_version),
             "entry_probe_intent_eligibility_path": (
-                f"{version_token}_krx_bounded:{setup_family.lower()}:{verdict.lower()}"
+                f"{version_token}_{venue_token}_bounded:{setup_family.lower()}:{verdict.lower()}"
             ),
             "entry_probe_intent_authority": (
-                "bounded_krx_canary_existing_submit_guard_required"
+                f"bounded_{venue_token}_canary_existing_submit_guard_required"
             ),
             "entry_probe_intent_submit_guard_required": True,
             "entry_probe_intent_actual_order_submitted": False,

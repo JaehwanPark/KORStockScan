@@ -1849,7 +1849,7 @@ def decision_quality_v2_13_recovery_confirmation_system_prompt(stage: str) -> st
 _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES = """
 V2.14 setup-risk adjudicator contract:
 1. This risk-only classifier has no direct runtime or order authority. In paired
-   replay it is offline; in the bounded KRX canary, a separate deterministic
+   replay it is offline; in an exact-cohort bounded canary, a separate deterministic
    adapter may map an eligible result only to the existing one-share probe path.
    It never submits an order and never chooses price, quantity, provider, model,
    threshold, broker behavior, or bot state.
@@ -1878,7 +1878,7 @@ V2.14 setup-risk adjudicator contract:
    deterministic entry rejection.
 6. Return INSUFFICIENT when setup_state=INSUFFICIENT or exact source quality is
    unusable. Include SOURCE_QUALITY_GAP. Never return INSUFFICIENT for READY,
-   WAIT_CONFIRMATION, or INVALID when the ledger source is usable. Missing data
+   WAIT_CONFIRMATION, UNCONFIRMED, or INVALID when the ledger source is usable. Missing data
    is not adverse evidence.
 7. supporting_fact_ids must copy exact IDs from positive_facts.
    contradicting_fact_ids must copy exact IDs from contradicting_facts or
@@ -1892,6 +1892,12 @@ V2.14 setup-risk adjudicator contract:
    setup_state=WAIT_CONFIRMATION return CAUTION or VETO and cite at least one
    exact ID from contradicting_facts or invalidation_facts. For
    setup_state=READY return PASS, CAUTION, or VETO.
+   For UNCONFIRMED use CAUTION with CONFIRMATION_MISSING and cite
+   no_supported_setup. An undiscovered setup is not structural invalidation.
+   MICRO_RECOVERY uses trusted intrabar buy flow plus actual price response;
+   completed-bar trend is background, not an additional mandatory trigger.
+   It remains WAIT_CONFIRMATION behind fresh revalidation, cost evaluation,
+   and existing one-share guards. Do not infer profitability from buy pressure.
 9. WAIT_CONFIRMATION never grants direct submit authority. Ordinary trigger or
    fragile-liquidity confirmation gaps may remain eligible for an offline
    one-share probe observation behind every downstream guard. A current

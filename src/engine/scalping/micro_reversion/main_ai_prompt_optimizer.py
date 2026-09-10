@@ -46,13 +46,13 @@ ENTRY_CANDIDATE_ORDER = (
 )
 ENTRY_CANDIDATE_PROMPT_SHA256 = {
     ENTRY_CANDIDATE_ORDER[0]: (
-        "4d7d540cdf771d4a1cd168b5a3311dd4e208266aec98c0a5279035fa72389015"
+        "eeb6c079eb6cdc41f53cf073a92451778370c282fbfa9f2c10ded7c68e6b0e10"
     ),
     ENTRY_CANDIDATE_ORDER[1]: (
-        "0129e6950da4c563b8727a990ad435c72c3d6b617d3c71808377fa166d4d819b"
+        "203b6bfba260393a5901079967a026d65d06c89fd8bcf56f78950db252e3d8d7"
     ),
     ENTRY_CANDIDATE_ORDER[2]: (
-        "74bbdc46ede54e2b5b5c3075ef387863a262b9d3f0ca9be3339027f95b8e303a"
+        "f062daa8d000aadc79085b67d5f88cf1d2340655b1a7a3eda6e61f5e24597113"
     ),
 }
 ENTRY_REGISTERED_BOUNDED_LIVE_PROMPT_VERSIONS = ENTRY_CANDIDATE_ORDER[:2]
@@ -509,6 +509,9 @@ def _enriched_trace_ids_by_stage(bridge: Mapping[str, Any]) -> dict[str, set[str
 
 
 def _detailed_reports(target_date: str) -> list[dict[str, Any]]:
+    from src.engine.scalping.entry_setup_evidence import ENTRY_SETUP_EVIDENCE_VERSION
+    from src.engine.scalping.entry_setup_live_policy import _full_cost_economics_pass
+
     latest: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     requested_date = date.fromisoformat(target_date)
     for path in sorted(DETAILED_DIR.glob("*.json")):
@@ -588,6 +591,20 @@ def _detailed_reports(target_date: str) -> list[dict[str, Any]]:
             != declared_candidate_contract_sha256
         ):
             continue
+        net_economic_review_pass = bool(
+            stage == "entry"
+            and payload.get("runtime_effect") is False
+            and payload.get("allowed_runtime_apply") is False
+            and payload.get("actual_order_submitted") is False
+            and payload.get("broker_order_forbidden") is True
+            and payload.get("entry_setup_evidence_version")
+            == ENTRY_SETUP_EVIDENCE_VERSION
+            and _full_cost_economics_pass(cumulative.get("full_cost_economics"))
+            and isinstance(cumulative.get("candidate_probe_risk_budget"), Mapping)
+            and cumulative["candidate_probe_risk_budget"].get("pass") is True
+            and isinstance(cumulative.get("promotion_evidence_floor"), Mapping)
+            and cumulative["promotion_evidence_floor"].get("pass") is True
+        )
         report = {
             "path": str(path),
             "source_date": source_date.isoformat(),
@@ -621,7 +638,15 @@ def _detailed_reports(target_date: str) -> list[dict[str, Any]]:
                 "candidate_exposure_probe_cost_adjusted_ev_pct"
             ),
             "promotion_evidence_floor": cumulative.get("promotion_evidence_floor"),
-            "promotion_quality_gate_pass": cumulative.get("promotion_quality_gate_pass")
+            "promotion_quality_gate_pass": (
+                net_economic_review_pass
+                if stage == "entry" and "full_cost_economics" in cumulative
+                else cumulative.get("promotion_quality_gate_pass") is True
+            ),
+            "net_economic_review_pass": net_economic_review_pass,
+            "legacy_quality_diagnostic_pass": cumulative.get(
+                "promotion_quality_gate_pass"
+            )
             is True,
             "error_taxonomy_counts": cumulative.get("candidate_error_taxonomy_counts")
             or {},
@@ -827,6 +852,18 @@ def _select_entry_challenger(
             by_version[str(row["candidate_prompt_version"])].append(row)
     for version in ENTRY_CANDIDATE_ORDER:
         evaluations = by_version.get(version) or []
+        if any(row.get("net_economic_review_pass") is True for row in evaluations):
+            # Keep learning on new exact parents. A gross/proxy calibration
+            # screen must not discard a full-cost-positive challenger. This is
+            # offline scheduling only; PREOPEN independently verifies authority.
+            return {
+                "prompt_version": version,
+                "action": "continue_current_challenger_new_mature_parents_only",
+                "reason": "verified_full_cost_net_positive_continue_exact_validation",
+                "calibration_screened_out_versions": list(screened_out),
+                "calibration_research_rotated_versions": list(research_rotated),
+                **SOURCE_ONLY_AUTHORITY,
+            }
         matches = [
             row
             for row in (calibration or {}).get("candidate_summaries") or []

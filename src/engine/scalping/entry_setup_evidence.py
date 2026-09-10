@@ -15,8 +15,8 @@ from typing import Any
 ENTRY_SETUP_EVIDENCE_SCHEMA = "entry_setup_evidence_v1"
 ENTRY_RISK_ADJUDICATION_SCHEMA = "entry_setup_risk_adjudication_v1"
 ENTRY_DECISION_COMPOSER_SCHEMA = "entry_decision_composer_v1"
-ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v9"
-ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v8"
+ENTRY_SETUP_EVIDENCE_VERSION = "entry_setup_evidence_policy_v10"
+ENTRY_DECISION_COMPOSER_VERSION = "entry_decision_composer_policy_v11"
 ENTRY_DECISION_COMPOSER_V2_15_VERSION = "entry_decision_composer_policy_v9"
 ENTRY_DECISION_COMPOSER_V2_16_VERSION = "entry_decision_composer_policy_v10"
 ENTRY_BOUNDED_RECOVERY_POLICY_VERSION = "entry_bounded_recovery_policy_v1"
@@ -36,15 +36,18 @@ RECHECK_REASONS = {
     "TRIGGER_CONFIRMATION_RECHECK",
     "LARGE_SELL_EXHAUSTION_RECHECK",
     "TAIL_LIQUIDITY_RECHECK",
+    "MICRO_PRICE_RESPONSE_RECHECK",
+    "SETUP_DISCOVERY_RECHECK",
 }
 
 SETUP_FAMILIES = {
     "CLEAN_CONTINUATION",
     "PULLBACK_RECOVERY",
     "RECOVERY_CONFIRMATION",
+    "MICRO_RECOVERY",
     "NO_VALID_SETUP",
 }
-SETUP_STATES = {"READY", "WAIT_CONFIRMATION", "INVALID", "INSUFFICIENT"}
+SETUP_STATES = {"READY", "WAIT_CONFIRMATION", "UNCONFIRMED", "INVALID", "INSUFFICIENT"}
 STRUCTURE_PHASES = {
     "distribution",
     "failed_breakout",
@@ -191,6 +194,32 @@ def _number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def micro_recovery_observation(features: Any) -> dict[str, Any]:
+    """Observe tape plus price response; never infer fills or net profitability.
+
+    Completed-bar trend and distance below VWAP are not a second trigger. The
+    existing freshness flags remain authoritative; unknown flags fail closed.
+    """
+    values = _as_dict(features)
+    delta = _number(values.get("net_aggressive_delta_10t"))
+    response = _number(values.get("price_change_10t_pct"))
+    source_ok = bool(
+        values.get("tick_aggressor_pressure_usable") is True
+        and values.get("tick_context_stale") is False
+        and values.get("quote_stale") is False
+        and values.get("large_sell_print_detected") is False
+        and (_number(values.get("tick_aggressor_trusted_count")) or 0) >= 10
+    )
+    tape_support = bool(source_ok and delta is not None and delta > 0)
+    return {
+        "source_usable": source_ok,
+        "tape_support": tape_support,
+        "price_response": bool(source_ok and response is not None and response > 0),
+        "net_aggressive_delta_10t": delta,
+        "price_change_10t_pct": response,
+    }
 
 
 def _source_quality_status(value: Any) -> str:
@@ -459,6 +488,7 @@ def build_entry_setup_evidence(
     corroborated_risk_codes: list[str] = []
     recheck_reasons: list[str] = []
     context_observations = _build_context_observations(payload)
+    micro = micro_recovery_observation(payload.get("features"))
 
     spread_bp = _number(liquidity.get("spread_bp"))
     fillability_score = _number(liquidity.get("fillability_score"))
@@ -666,11 +696,30 @@ def build_entry_setup_evidence(
     elif phase_family in {"CLEAN_CONTINUATION", "PULLBACK_RECOVERY"}:
         setup_family = phase_family
         setup_state = "WAIT_CONFIRMATION"
+    elif (
+        structure_phase == "range_or_no_setup"
+        and micro["tape_support"]
+        and micro["price_response"]
+        and liquidity_state == "supportive"
+        and not tail_liquidity_fragility
+    ):
+        setup_family = "MICRO_RECOVERY"
+        setup_state = "WAIT_CONFIRMATION"
+        positive_facts.extend(
+            ["micro_trusted_buy_flow", "micro_positive_price_response"]
+        )
+        contradicting_facts.append("micro_continuation_unconfirmed")
+        corroborated_risk_codes.append("CONFIRMATION_MISSING")
+        recheck_reasons.append("MICRO_PRICE_RESPONSE_RECHECK")
     else:
         setup_family = "NO_VALID_SETUP"
-        setup_state = "INVALID"
-        invalidation_facts.append("no_supported_setup")
-        corroborated_risk_codes.append("STRUCTURE_INVALIDATED")
+        setup_state = "UNCONFIRMED"
+        contradicting_facts.append("no_supported_setup")
+        corroborated_risk_codes.append("CONFIRMATION_MISSING")
+        # Observation only: no inferred EDGE and no automatic probe. A changed
+        # fresh snapshot must establish a setup before the submit owner runs.
+        if micro["tape_support"] and liquidity_state == "supportive":
+            recheck_reasons.append("SETUP_DISCOVERY_RECHECK")
 
     if setup_state == "WAIT_CONFIRMATION" and tail_liquidity_fragility:
         recheck_reasons.append("TAIL_LIQUIDITY_RECHECK")
@@ -721,6 +770,7 @@ def build_entry_setup_evidence(
             },
         },
         "context_observations": context_observations,
+        "micro_recovery_observation": micro,
         "source_quality": {
             "status": source_status or "unknown",
             "source_mode": source_mode or "unknown",
@@ -816,6 +866,7 @@ def entry_risk_adjudication_openai_schema(
             if response_field == "contradicting_fact_ids" and setup_state in {
                 "INVALID",
                 "WAIT_CONFIRMATION",
+                "UNCONFIRMED",
             }:
                 field_schema["minItems"] = 1
         else:
@@ -855,19 +906,41 @@ def validate_entry_setup_evidence(evidence: Any) -> list[str]:
         errors.append("entry_setup_structure_phase_sha256_invalid")
     if (
         setup.get("setup_family") == "NO_VALID_SETUP"
-        and setup.get("setup_state") not in {"INVALID", "INSUFFICIENT"}
+        and setup.get("setup_state") not in {"INVALID", "INSUFFICIENT", "UNCONFIRMED"}
     ) or (
         setup.get("setup_family") in SETUP_FAMILIES - {"NO_VALID_SETUP"}
-        and setup.get("setup_state") in {"INVALID", "INSUFFICIENT"}
+        and setup.get("setup_state") in {"INVALID", "INSUFFICIENT", "UNCONFIRMED"}
     ):
         errors.append("entry_setup_family_state_inconsistent")
     expected_phase_family = STRUCTURE_PHASE_FAMILIES.get(
         setup.get("structure_phase"), "NO_VALID_SETUP"
     )
-    if setup.get("setup_family") != "NO_VALID_SETUP" and (
+    if setup.get("setup_family") not in {"NO_VALID_SETUP", "MICRO_RECOVERY"} and (
         setup.get("setup_family") != expected_phase_family
     ):
         errors.append("entry_setup_structure_phase_family_inconsistent")
+    if setup.get("setup_family") == "MICRO_RECOVERY":
+        micro = _as_dict(setup.get("micro_recovery_observation"))
+        if (
+            setup.get("setup_state") != "WAIT_CONFIRMATION"
+            or setup.get("structure_phase") != "range_or_no_setup"
+            or not all(
+                micro.get(key) is True
+                for key in ("source_usable", "tape_support", "price_response")
+            )
+            or not all(
+                (value := _number(micro.get(key))) is not None and value > 0
+                for key in ("net_aggressive_delta_10t", "price_change_10t_pct")
+            )
+            or setup.get("invalidation_facts")
+            or not {
+                "micro_trusted_buy_flow",
+                "micro_positive_price_response",
+                "liquidity_supportive",
+            }.issubset(setup.get("positive_facts") or [])
+            or setup.get("recheck_reasons") != ["MICRO_PRICE_RESPONSE_RECHECK"]
+        ):
+            errors.append("entry_setup_micro_recovery_contract_invalid")
     for field in (
         "positive_facts",
         "contradicting_facts",
@@ -892,8 +965,17 @@ def validate_entry_setup_evidence(evidence: Any) -> list[str]:
         errors.append("entry_setup_recheck_reason_unknown")
     if setup.get("setup_state") == "WAIT_CONFIRMATION" and not recheck_reasons:
         errors.append("entry_setup_wait_recheck_reason_missing")
-    if setup.get("setup_state") != "WAIT_CONFIRMATION" and recheck_reasons:
+    if (
+        setup.get("setup_state") not in {"WAIT_CONFIRMATION", "UNCONFIRMED"}
+        and recheck_reasons
+    ):
         errors.append("entry_setup_recheck_reason_state_inconsistent")
+    if setup.get("setup_state") == "UNCONFIRMED" and (
+        setup.get("invalidation_facts")
+        or "no_supported_setup" not in (setup.get("contradicting_facts") or [])
+        or not recheck_reasons.issubset({"SETUP_DISCOVERY_RECHECK"})
+    ):
+        errors.append("entry_setup_unconfirmed_contract_invalid")
     tail_assessment = _as_dict(setup.get("tail_risk_assessment"))
     for field, expected in TAIL_RISK_OBSERVATION_CONTRACT.items():
         if tail_assessment.get(field) != expected:
@@ -1071,6 +1153,8 @@ def validate_entry_risk_adjudication(
             errors.append("entry_risk_invalid_setup_invalidation_fact_required")
     if setup.get("setup_state") == "WAIT_CONFIRMATION" and verdict == "PASS":
         errors.append("entry_risk_wait_confirmation_pass")
+    if setup.get("setup_state") == "UNCONFIRMED" and verdict == "PASS":
+        errors.append("entry_risk_unconfirmed_pass")
     return list(dict.fromkeys(errors))
 
 
@@ -1159,8 +1243,15 @@ def compose_entry_decision(
     recovery_seed_policy = bounded_recovery_policy or sequential_recovery_policy
     if recovery_seed_policy and source_fresh and not contract_errors:
         if (
-            state == "INVALID"
-            and invalidation_facts == {"no_supported_setup"}
+            state == "WAIT_CONFIRMATION"
+            and family == "MICRO_RECOVERY"
+            and not invalidation_facts
+        ):
+            bounded_recovery_path = "intrabar_micro_price_flow_recovery"
+        elif (
+            state == "UNCONFIRMED"
+            and not invalidation_facts
+            and "no_supported_setup" in contradicting_facts
             and str(setup.get("structure_phase") or "") == "distribution"
             and "liquidity_supportive" in positive_facts
             and "supportive_micro_tape_vs_program_net_sell" in contradicting_facts
@@ -1176,10 +1267,15 @@ def compose_entry_decision(
             bounded_recovery_path = "recovery_liquidity_tape_confirmation"
     recheck_intent = bool(
         not contract_errors
-        and (state == "WAIT_CONFIRMATION" or bounded_recovery_path is not None)
+        and (
+            state == "WAIT_CONFIRMATION"
+            or bool(recheck_reasons)
+            or bounded_recovery_path is not None
+        )
     )
     bounded_wait_probe_intent = bool(
         recheck_intent
+        and state != "UNCONFIRMED"
         and not sequential_recovery_policy
         and "LARGE_SELL_EXHAUSTION_RECHECK" not in recheck_reasons
         and (
@@ -1199,7 +1295,7 @@ def compose_entry_decision(
         edge_state = "INSUFFICIENT_DATA"
         probe_intent = False
         reason = "entry_setup_or_ai_insufficient"
-    elif state == "INVALID":
+    elif state in {"INVALID", "UNCONFIRMED"}:
         if bounded_recovery_path is not None:
             action = "WAIT"
             edge_state = "EDGE"
@@ -1210,10 +1306,14 @@ def compose_entry_decision(
                 else "entry_setup_bounded_recovery_recheck_probe"
             )
         else:
-            action = "DROP"
+            action = "WAIT" if state == "UNCONFIRMED" else "DROP"
             edge_state = "NO_EDGE"
             probe_intent = False
-            reason = "entry_setup_invalid"
+            reason = (
+                "entry_setup_discovery_required"
+                if state == "UNCONFIRMED"
+                else "entry_setup_invalid"
+            )
     elif state == "WAIT_CONFIRMATION":
         action = "WAIT"
         edge_state = "EDGE"
@@ -1266,6 +1366,7 @@ def compose_entry_decision(
         "CLEAN_CONTINUATION": "continuation",
         "PULLBACK_RECOVERY": "pullback_recovery",
         "RECOVERY_CONFIRMATION": "reversal",
+        "MICRO_RECOVERY": "reversal",
     }.get(family, "no_setup")
     result = {
         "schema": ENTRY_DECISION_COMPOSER_SCHEMA,

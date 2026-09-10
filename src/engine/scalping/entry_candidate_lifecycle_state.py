@@ -53,7 +53,11 @@ OBSERVATION_CONTRACT = {
 
 _WRITE_LOCK = threading.RLock()
 _ACTIVE_POLICY_STATUSES = {"active_bounded_krx_canary", "active_bounded_nxt_canary"}
-_ACTIVE_ADAPTERS = {"entry_setup_v2_14_krx_bounded_probe_v1"}
+_ACTIVE_ADAPTERS = {
+    f"entry_setup_{version}_{venue}_bounded_probe_v1"
+    for version in ("v2_14", "v2_15")
+    for venue in ("krx", "nxt")
+}
 _VALID_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
 
 _COMPONENT_COMPLETE_STATUSES = {
@@ -335,6 +339,14 @@ def _candidate_context_from_fields(
         or not session
     ):
         return None
+    expected_venue = "NXT" if "_nxt_" in adapter else "KRX"
+    expected_session = "nxt_aftermarket" if expected_venue == "NXT" else "krx_regular"
+    if (
+        venue != expected_venue
+        or session != expected_session
+        or status != f"active_bounded_{expected_venue.lower()}_canary"
+    ):
+        return None
     context = {
         "schema": CONTEXT_SCHEMA,
         "decision_trace_id": trace_id,
@@ -485,6 +497,17 @@ def _recover_candidate_context(
     latest = candidates[-1]
     if _text(latest.get("stage")) == "sell_completed":
         return None
+    adapters = {
+        _text(
+            row.get("live_adapter")
+            or (row.get("data") if isinstance(row.get("data"), dict) else {}).get(
+                "decision_quality_live_adapter"
+            )
+        )
+        for row in candidates
+    } - {""}
+    if len(adapters) != 1 or not adapters.issubset(_ACTIVE_ADAPTERS):
+        return None
     context = {
         "schema": CONTEXT_SCHEMA,
         "decision_trace_id": latest.get("decision_trace_id"),
@@ -494,7 +517,7 @@ def _recover_candidate_context(
         "session_bucket": latest.get("session_bucket"),
         "policy_status": latest.get("policy_status"),
         "policy_mode": latest.get("policy_mode"),
-        "live_adapter": "entry_setup_v2_14_krx_bounded_probe_v1",
+        "live_adapter": next(iter(adapters)),
         "stock_code": _text(code)[:6],
         "record_id": latest.get("record_id") or stock.get("id"),
         "bound_at": latest.get("observed_at"),
@@ -603,6 +626,7 @@ def _event_row(
         "session_bucket": context.get("session_bucket"),
         "policy_status": context.get("policy_status"),
         "policy_mode": context.get("policy_mode"),
+        "live_adapter": context.get("live_adapter"),
         "trade_date": context.get("trade_date"),
         "lifecycle_basis": context.get("lifecycle_basis"),
         "stock_code": context.get("stock_code") or _text(stock.get("code"))[:6],

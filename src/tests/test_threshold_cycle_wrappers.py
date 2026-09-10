@@ -1516,6 +1516,51 @@ def test_postclose_done_controller_entry_setup_terminal_validator(tmp_path: Path
         "terminal_ready:validated_batch_candidate_and_main_ai_consumer"
     )
 
+    batch["bounded_live_cohort_contract"] = "exact_cohort_candidates_v1"
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+    assert (
+        validate().stdout.strip()
+        == "retry_required:exact_cohort_candidate_census_invalid"
+    )
+    nxt_path = candidate_path.with_name(
+        f"entry_setup_v2_14_bounded_live_candidate_{target_date}_nxt_nxt_aftermarket.json"
+    )
+    nxt = {
+        **candidate,
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_AFTERMARKET",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    nxt["artifact_sha256"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in nxt.items() if key != "artifact_sha256"},
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+    nxt_path.write_text(json.dumps(nxt), encoding="utf-8")
+    batch["bounded_live_candidates_by_cohort"] = {
+        "KRX/KRX_REGULAR": batch["krx_bounded_live_candidate"],
+        "NXT/NXT_AFTERMARKET": {
+            "path": str(nxt_path),
+            "status": nxt["status"],
+            "effective_date": nxt["effective_date"],
+            "artifact_sha256": nxt["artifact_sha256"],
+        },
+    }
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+    assert validate().stdout.strip().startswith("terminal_ready:")
+    nxt["session_bucket"] = "KRX_REGULAR"
+    nxt_path.write_text(json.dumps(nxt), encoding="utf-8")
+    assert validate().stdout.strip() == "retry_required:nxt_candidate_contract_invalid"
+    batch.pop("bounded_live_cohort_contract")
+    batch.pop("bounded_live_candidates_by_cohort")
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+
     consumer["runtime_effect"] = True
     consumer_path.write_text(json.dumps(consumer), encoding="utf-8")
     result = validate()

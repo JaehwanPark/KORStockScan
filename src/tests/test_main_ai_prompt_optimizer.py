@@ -822,6 +822,89 @@ def test_optimizer_continues_candidate_until_isolated_promotion_floor_closes(
     )
 
 
+def test_optimizer_preserves_full_cost_positive_challenger_without_gross_veto(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import entry_setup_live_policy as policy
+
+    monkeypatch.setattr(optimizer, "DETAILED_DIR", tmp_path)
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    payload = {
+        "schema": "ai_prompt_detailed_paired_replay_v1",
+        "target_date": "2026-09-10",
+        "promotion_cohort_scope": {
+            "isolated": True,
+            "stages": ["entry"],
+            "effective_venues": ["KRX"],
+            "session_buckets": ["KRX_REGULAR"],
+            "candidate_contract_isolated": True,
+            "cross_cohort_promotion_forbidden": True,
+            "candidate_contract_sha256": "d" * 64,
+        },
+        "candidate_contract_sha256": "d" * 64,
+        "entry_setup_evidence_version": policy.ENTRY_SETUP_EVIDENCE_VERSION,
+        **optimizer.SOURCE_ONLY_AUTHORITY,
+        "cumulative_learning": {
+            "candidate_prompt_version": version,
+            "candidate_contract_sha256": "d" * 64,
+            "as_of_date": "2026-09-10",
+            "clean_tuning_baseline_date": "2026-06-05",
+            "promotion_evidence_floor": {"pass": True},
+            "promotion_quality_gate_pass": False,
+            "candidate_probe_risk_budget": {"pass": True},
+            "full_cost_economics": {
+                "schema": "entry_paired_full_cost_economics_v1",
+                "pass": True,
+                "sample_floor_pass": True,
+                "verified_pair_count": 10,
+                "candidate_exposure_count": 10,
+                "candidate_unique_symbol_count": 3,
+                "candidate_net_ev_pct": 0.03,
+                "paired_net_decision_delta_pct": 0.01,
+                "actual_fill_proven": False,
+                "additional_cost_subtracted_here": False,
+                **optimizer.SOURCE_ONLY_AUTHORITY,
+            },
+        },
+        "provider_failed_count": 0,
+        "candidate_provider_none_count": 0,
+        "promotion_report_integrity_pass": True,
+        "requests": _entry_candidate_requests(version),
+    }
+    path = tmp_path / "net-detailed.json"
+    _write(path, payload)
+    evaluations = optimizer._detailed_reports("2026-09-10")
+    assert len(evaluations) == 1
+    assert evaluations[0]["net_economic_review_pass"] is True
+    choice = optimizer._select_entry_challenger(
+        version,
+        evaluations,
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+    )
+    assert (
+        choice["reason"] == "verified_full_cost_net_positive_continue_exact_validation"
+    )
+    assert choice["runtime_effect"] is False
+    assert choice["allowed_runtime_apply"] is False
+    assert (
+        optimizer._select_entry_challenger(
+            version,
+            evaluations,
+            effective_venue="NXT",
+            session_bucket="NXT_AFTERMARKET",
+        )["reason"]
+        == "first_untested_supported_challenger"
+    )
+    payload["cumulative_learning"]["full_cost_economics"]["candidate_net_ev_pct"] = None
+    payload["cumulative_learning"]["promotion_quality_gate_pass"] = True
+    _write(path, payload)
+    assert (
+        optimizer._detailed_reports("2026-09-10")[0]["promotion_quality_gate_pass"]
+        is False
+    )
+
+
 def test_optimizer_does_not_share_promotion_state_across_cohorts(monkeypatch, tmp_path):
     target_date = "2026-09-04"
     prepared_path = tmp_path / "prepared.json"

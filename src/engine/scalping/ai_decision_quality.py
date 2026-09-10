@@ -23556,6 +23556,134 @@ def _entry_lifecycle_replay_attribution(
     }
 
 
+def _paired_net_economic_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate only already-verified executable fee/tax/master-bound CF paths.
+
+    Unknown costs are excluded, never zero-filled. Zero exposure is a decision
+    value, not an imputed outcome. This does not prove actual fills or PnL.
+    """
+    eligible = []
+    seen = set()
+    for row in rows:
+        net = row.get("entry_cost_aware_opportunity")
+        if not isinstance(net, dict):
+            continue
+        value = _number(net.get("cost_adjusted_end_return_pct"))
+        identity = str(row.get("decision_trace_id") or "")
+        if (
+            not identity
+            or identity in seen
+            or value is None
+            or net.get("status") != "verified_counterfactual_after_cost"
+            or net.get("decision_trace_id") != identity
+            or not all(
+                re.fullmatch(r"[0-9a-f]{64}", str(net.get(key) or ""))
+                for key in (
+                    "label_content_sha256",
+                    "action_neutral_path_sha256",
+                    "cost_profile_artifact_sha256",
+                    "symbol_master_artifact_sha256",
+                )
+            )
+            or type(row.get("candidate_exposure_selected")) is not bool
+            or type(row.get("control_exposure_selected")) is not bool
+        ):
+            continue
+        seen.add(identity)
+        eligible.append((row, value))
+    exposures = [
+        (row, value) for row, value in eligible if row["candidate_exposure_selected"]
+    ]
+    symbols = {row.get("stock_code") for row, _ in exposures if row.get("stock_code")}
+    candidate_ev = fmean(value for _, value in exposures) if exposures else None
+    delta = (
+        fmean(
+            (value if row["candidate_exposure_selected"] else 0.0)
+            - (value if row["control_exposure_selected"] else 0.0)
+            for row, value in eligible
+        )
+        if eligible
+        else None
+    )
+    floor = (
+        len(exposures) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
+        and len(symbols) >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
+    )
+    return {
+        "schema": "entry_paired_full_cost_economics_v1",
+        "verified_pair_count": len(eligible),
+        "excluded_pair_count": len(rows) - len(eligible),
+        "candidate_exposure_count": len(exposures),
+        "candidate_unique_symbol_count": len(symbols),
+        "candidate_net_ev_pct": candidate_ev,
+        "paired_net_decision_delta_pct": delta,
+        "sample_floor_pass": floor,
+        "pass": bool(
+            floor
+            and candidate_ev is not None
+            and candidate_ev > 0
+            and delta is not None
+            and delta > 0
+        ),
+        "metric_role": "full_cost_counterfactual_economic_gate",
+        "decision_authority": "existing_bounded_preopen_candidate_only",
+        "window_policy": "same_contract_exact_cohort_clean_baseline_cumulative",
+        "sample_floor": "candidate_exposure_10_rows_3_symbols",
+        "primary_decision_metric": "candidate_net_ev_pct_and_paired_net_decision_delta_pct",
+        "source_quality_gate": "verified_executable_action_neutral_cost_master_path_only",
+        "actual_fill_proven": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "additional_cost_subtracted_here": False,
+        "forbidden_uses": [
+            "realized_profit_claim",
+            "direct_order_or_quantity_change",
+            "missing_cost_imputation",
+        ],
+    }
+
+
+def _paired_probe_arm_net_diagnostic(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate WAIT arms separately; never reinterpret an arm as a live fill.
+
+    These are hypothetical immediate-entry path values before downstream guards.
+    They may prioritize research, but cannot close the exposure promotion floor.
+    """
+    projected = [
+        {
+            **row,
+            "candidate_exposure_selected": row.get("candidate_probe_armed"),
+            "control_exposure_selected": row.get("control_probe_armed"),
+        }
+        for row in rows
+    ]
+    result = _paired_net_economic_summary(projected)
+    result.update(
+        schema="entry_paired_probe_arm_net_diagnostic_v1",
+        candidate_probe_arm_count=result.pop("candidate_exposure_count"),
+        candidate_probe_arm_unique_symbol_count=result.pop(
+            "candidate_unique_symbol_count"
+        ),
+        candidate_probe_arm_net_ev_pct=result.pop("candidate_net_ev_pct"),
+        paired_probe_arm_net_delta_pct=result.pop("paired_net_decision_delta_pct"),
+        diagnostic_positive=result.pop("pass"),
+        metric_role="sim_probe_ev",
+        decision_authority="diagnostic_only_no_promotion_gate",
+        sample_floor="candidate_probe_arm_10_rows_3_symbols_diagnostic_only",
+        primary_decision_metric="candidate_probe_arm_net_ev_pct",
+        actual_exposure_proven=False,
+        performance_promotion_authority=False,
+        forbidden_uses=[
+            "exposure_floor_substitution",
+            "live_promotion",
+            "realized_profit_claim",
+        ],
+    )
+    return result
+
+
 def _anticipatory_cumulative_learning_summary(
     *,
     target_date: str,
@@ -23822,6 +23950,10 @@ def _anticipatory_cumulative_learning_summary(
         "candidate_primary_decision_ev_pct": cumulative_candidate_primary_ev,
         "candidate_primary_decision_ev_delta_pct": cumulative_primary_delta,
         "candidate_exposure_probe_cost_adjusted_ev_pct": cumulative_exposure_ev,
+        "full_cost_economics": _paired_net_economic_summary(cumulative_rows),
+        "probe_arm_full_cost_diagnostic": _paired_probe_arm_net_diagnostic(
+            cumulative_rows
+        ),
         "opportunity_capture_tradeoff": opportunity_capture,
         "candidate_execution_cost_adjusted_ev_pct": (
             fmean(candidate_primary_values) if candidate_primary_values else None

@@ -11258,6 +11258,77 @@ def test_holding_paired_replay_uses_noncollapsed_prompt_and_pointer_ledger():
     )
 
 
+def test_full_cost_economics_uses_verified_small_returns_and_avoided_losses():
+    rows = [
+        {
+            "decision_trace_id": f"net-{index}",
+            "stock_code": f"{index % 3:06}",
+            "candidate_exposure_selected": True,
+            "control_exposure_selected": False,
+            "entry_cost_aware_opportunity": {
+                "status": "verified_counterfactual_after_cost",
+                "decision_trace_id": f"net-{index}",
+                "cost_adjusted_end_return_pct": 0.03,
+                "label_content_sha256": "a" * 64,
+                "action_neutral_path_sha256": "b" * 64,
+                "cost_profile_artifact_sha256": "c" * 64,
+                "symbol_master_artifact_sha256": "d" * 64,
+            },
+        }
+        for index in range(10)
+    ]
+    metric = quality._paired_net_economic_summary(rows)
+    assert metric["pass"] is True
+    assert metric["candidate_net_ev_pct"] == pytest.approx(0.03)
+    assert metric["actual_fill_proven"] is False
+    # One new tail loss outweighs many tiny wins; higher participation is not
+    # sufficient for approval. Missing fees cannot be replaced by the proxy.
+    rows[0]["entry_cost_aware_opportunity"]["cost_adjusted_end_return_pct"] = -0.5
+    assert quality._paired_net_economic_summary(rows)["pass"] is False
+    rows[0]["entry_cost_aware_opportunity"]["status"] = "execution_proxy_only"
+    metric = quality._paired_net_economic_summary(rows)
+    assert metric["candidate_exposure_count"] == 9
+    assert metric["pass"] is False
+
+
+def test_wait_arm_net_diagnostic_does_not_forge_exposure_promotion():
+    rows = [
+        {
+            "decision_trace_id": f"arm-{index}",
+            "stock_code": f"{index % 3:06}",
+            "candidate_exposure_selected": False,
+            "control_exposure_selected": False,
+            "candidate_probe_armed": True,
+            "control_probe_armed": False,
+            "entry_cost_aware_opportunity": {
+                "status": "verified_counterfactual_after_cost",
+                "decision_trace_id": f"arm-{index}",
+                "cost_adjusted_end_return_pct": 0.03,
+                "label_content_sha256": "a" * 64,
+                "action_neutral_path_sha256": "b" * 64,
+                "cost_profile_artifact_sha256": "c" * 64,
+                "symbol_master_artifact_sha256": "d" * 64,
+            },
+        }
+        for index in range(10)
+    ]
+    metric = quality._paired_probe_arm_net_diagnostic(rows)
+    assert metric["diagnostic_positive"] is True
+    assert metric["candidate_probe_arm_count"] == 10
+    assert metric["candidate_probe_arm_net_ev_pct"] == pytest.approx(0.03)
+    assert metric["performance_promotion_authority"] is False
+    assert "candidate_exposure_count" not in metric
+    assert "pass" not in metric
+    exposure = quality._paired_net_economic_summary(rows)
+    assert exposure["candidate_exposure_count"] == 0
+    assert exposure["candidate_net_ev_pct"] is None
+    assert exposure["pass"] is False
+    rows[0]["entry_cost_aware_opportunity"]["cost_profile_artifact_sha256"] = "unknown"
+    assert (
+        quality._paired_probe_arm_net_diagnostic(rows)["candidate_probe_arm_count"] == 9
+    )
+
+
 def _small_profit_report(*, cost=0.2, first_hit="target_first", action="DROP"):
     return quality.build_paired_replay_report(
         target_date="2026-09-08",
