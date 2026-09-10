@@ -113,6 +113,8 @@ def runner_market(transport, filled=0, remaining=None, ttl_child=False):
                 ord_qty="4",
                 cntr_qty="0",
                 ord_remnq="0",
+                cnfm_qty="4",
+                cnfm_tm="12:59:59",
             )
         )
 

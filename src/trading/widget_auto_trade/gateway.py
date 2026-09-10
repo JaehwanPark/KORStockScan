@@ -304,7 +304,8 @@ class KiwoomSharedTokenOrderGateway:
         return response, body if isinstance(body, dict) else {}
 
     def adaptive_exit_adapter(
-        self, *, registry, context, code, policy_hash, write_guard=None
+        self, *, registry, context, code, policy_hash, write_guard=None,
+        authority_policy_id="machine_adaptive_exit_v1",
     ):
         """No live enablement: caller must provide the frozen owner write guard."""
         from src.trading.order.adaptive_exit.broker import RegisteredSellAdapter
@@ -331,6 +332,7 @@ class KiwoomSharedTokenOrderGateway:
             maximum_quantity=None,
             require_write_authority=require_production,
             write_guard=write_guard,
+            authority_policy_id=authority_policy_id,
             new_route=resolve_widget_broker_route,
         )
 

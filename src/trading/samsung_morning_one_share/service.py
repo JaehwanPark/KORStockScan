@@ -156,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         policy=policy,
         live_enabled=live_enabled,
     )
+    machine.profit_exit_lock_held = lambda: not lock_handle.closed
     if args.once:
         print(json.dumps(machine.run_once(), ensure_ascii=False, indent=2))
         return 0
@@ -176,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
                 policy=reentry_policy,
                 live_enabled=True,
             )
+            reentry.profit_exit_lock_held = lambda: not lock_handle.closed
             result["reentry_episode"] = reentry.run_until_terminal(
                 interval_sec=args.interval_sec
             )

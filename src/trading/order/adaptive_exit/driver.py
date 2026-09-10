@@ -195,12 +195,21 @@ def advance_exit(
     ):
         return replace(driver, alert_reason="owner_position_binding_mismatch")
     if (
-        type(clock.now_ms) is not int
+        not isinstance(clock, Clock)
+        or type(clock.now_ms) is not int
         or clock.now_ms < position.first_fill_at_ms
-        or type(clock.verified_halt_ms) is not int
-        or clock.verified_halt_ms < 0
+        or (
+            clock.verified_halt_ms is not None
+            and (
+                type(clock.verified_halt_ms) is not int
+                or not 0
+                <= clock.verified_halt_ms
+                <= clock.now_ms - position.first_fill_at_ms
+            )
+        )
     ):
         return replace(driver, alert_reason="invalid_clock")
+    receipt_only = clock.verified_halt_ms is None
 
     def save(new):
         nonlocal current
@@ -292,6 +301,8 @@ def advance_exit(
             event("CANCEL_CONFIRMED", proof=proof)
             save(replace(current, unprotected_since_ms=clock.now_ms))
             return current
+        if receipt_only:
+            return alert("clock_source_gap_receipt_reconciliation_only")
         if (
             port.guard(
                 current.orders,
@@ -348,6 +359,8 @@ def advance_exit(
             )
         if current.orders.phase == "FLAT":
             return current
+        if receipt_only:
+            return alert("clock_source_gap_receipt_reconciliation_only")
         if phase in ("CANCEL_PENDING", "EXIT_CANCEL_PENDING"):
             resume = getattr(port, "resume_unreserved_cancel", None)
             if callable(resume):
@@ -373,6 +386,8 @@ def advance_exit(
             )
         return current
 
+    if receipt_only:
+        return alert("clock_source_gap_receipt_reconciliation_only")
     if not isinstance(snapshot, Snapshot):
         return alert("fresh_executable_snapshot_required")
     clock = replace(clock, now_ms=observed_now())

@@ -49,7 +49,11 @@ _TERMINAL_PROOF_FIELDS = (
 def _terminal_proof(row, receipt_sha256):
     return {
         "schema": "order_owner_terminal_reconciliation_v1",
-        "source_contract": "machine_adaptive_exit_dated_current_v1",
+        "source_contract": (
+            "machine_adaptive_exit_buy_dated_current_v1"
+            if row.get("side") == "BUY"
+            else "machine_adaptive_exit_dated_current_v1"
+        ),
         **{key: row[key] for key in _TERMINAL_PROOF_FIELDS},
         "receipt_sha256": receipt_sha256,
     }
@@ -247,6 +251,17 @@ class OrderOwnerRegistry:
                 cancel.update(
                     state="ORDER_TERMINAL",
                     cancel_reconciliation=proof,
+                    event_hash=event["event_hash"],
+                )
+            if event.get("event") in {
+                "SELL_TERMINAL_CANCEL_RECONCILED",
+                "BUY_TERMINAL_CANCEL_RECONCILED",
+            }:
+                proof = event["terminal_cancel_reconciliation"]
+                cancel = state[proof["cancel_intent_id"]]
+                cancel.update(
+                    state="ORDER_TERMINAL",
+                    terminal_cancel_reconciliation=proof,
                     event_hash=event["event_hash"],
                 )
             # Read-only compatibility for the prior adapter's terminal event.
@@ -1348,9 +1363,192 @@ class OrderOwnerRegistry:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()
 
-    def record_terminal_reconciliation(
+    def record_terminal_cancel_reconciliation(self, **kwargs) -> None:
+        """SELL-only public contract; BUY cancellation has a separate entrypoint."""
+        self._record_terminal_cancel_reconciliation(side="SELL", **kwargs)
+
+    def record_buy_terminal_cancel_reconciliation(self, **kwargs) -> None:
+        """Existing BUY root/child closure, not new entry or SELL authority."""
+        self._record_terminal_cancel_reconciliation(side="BUY", **kwargs)
+
+    def _record_terminal_cancel_reconciliation(
         self,
         *,
+        side: str,
+        context: OwnerOrderContext,
+        order_date: str,
+        target_order_no: str,
+        cancel_order_no: str,
+        target_event_hash: str,
+        cancel_event_hash: str,
+        filled_qty: int,
+        confirmed_qty: int,
+        receipt_sha256: str,
+        terminal_receipt_sha256: str,
+    ) -> None:
+        """Atomically terminalize the exact root and confirmed cancel child.
+
+        A target terminal alone does not prove the child cancel terminal. The
+        adapter supplies both complete dated/current evidence and a positive
+        cnfm_qty, including a smaller confirmation after a late root fill.
+        SELL residual remains Q - F; BUY inventory is F. Neither side counts
+        canceled shares as fills. The side-specific public entrypoint fixes the
+        proof source, so BUY evidence cannot satisfy a SELL terminal consumer.
+        """
+        context.validate()
+        clean_date = _registry_order_date(order_date)
+        if (
+            side not in {"BUY", "SELL"}
+            or context.owner_type not in {"widget_auto_trade", "episode"}
+            or type(filled_qty) is not int
+            or filled_qty < 0
+            or type(confirmed_qty) is not int
+            or confirmed_qty <= 0
+            or target_order_no == cancel_order_no
+            or any(
+                not isinstance(v, str)
+                or len(v) != 64
+                or any(c not in "0123456789abcdef" for c in v)
+                for v in (
+                    target_event_hash,
+                    cancel_event_hash,
+                    receipt_sha256,
+                    terminal_receipt_sha256,
+                )
+            )
+        ):
+            raise OwnerRegistryError("owner_registry_terminal_cancel_invalid")
+        lock = self._locked()
+        try:
+            events = self._read_locked()
+            state = self._state(events)
+            target = self._assert_owner_from_state(
+                state,
+                context=context,
+                order_date=clean_date,
+                broker_order_no=target_order_no,
+            )
+            cancel = self._assert_owner_from_state(
+                state,
+                context=context,
+                order_date=clean_date,
+                broker_order_no=cancel_order_no,
+            )
+            previous = cancel.get("terminal_cancel_reconciliation")
+            if (
+                target.get("side") != side
+                or target.get("action") != "NEW"
+                or target.get("state") not in {"ORDER_BOUND", "ORDER_TERMINAL"}
+                or cancel.get("side") != side
+                or cancel.get("action") != "CANCEL"
+                or cancel.get("original_order_no") != target_order_no
+                or type(cancel.get("quantity")) is not int
+                or not 0 < confirmed_qty <= cancel["quantity"]
+                or cancel.get("authority_policy_id") not in {
+                    "machine_adaptive_exit_v1", "machine_profit_stagnation_v1"
+                }
+                or any(cancel.get(k) != target.get(k) for k in ("symbol", "route"))
+                or target.get("filled_qty", 0) > filled_qty
+                or target.get("event_hash") != target_event_hash
+                or cancel.get("event_hash") != cancel_event_hash
+            ):
+                raise OwnerRegistryConflict(
+                    "owner_registry_terminal_cancel_identity_or_generation_conflict"
+                )
+            if any(
+                r.get("account_key") == target["account_key"]
+                and r.get("order_date") == clean_date
+                and r.get("original_order_no") == target_order_no
+                and r.get("intent_id") != cancel["intent_id"]
+                and r.get("state")
+                in {"INTENT_RESERVED", "INTENT_AMBIGUOUS", "ORDER_BOUND"}
+                for r in state.values()
+            ):
+                raise OwnerRegistryConflict(
+                    "owner_registry_terminal_cancel_other_pending"
+                )
+            total_canceled = target.get("canceled_qty", 0) + (
+                confirmed_qty if previous is None else 0
+            )
+            if target["quantity"] != filled_qty + total_canceled:
+                raise OwnerRegistryConflict(
+                    "owner_registry_terminal_cancel_quantity_conflict"
+                )
+            if previous is not None:
+                if (
+                    not isinstance(previous, dict)
+                    or previous.get("confirmed_qty") != confirmed_qty
+                    or previous.get("filled_qty") != filled_qty
+                    or previous != target.get("terminal_cancel_reconciliation")
+                    or cancel.get("state") != "ORDER_TERMINAL"
+                    or target.get("state") != "ORDER_TERMINAL"
+                ):
+                    raise OwnerRegistryConflict(
+                        "owner_registry_terminal_cancel_saved_proof_conflict"
+                    )
+                return
+            if cancel.get("state") != "ORDER_BOUND":
+                raise OwnerRegistryConflict(
+                    "owner_registry_terminal_cancel_unproved_child_state"
+                )
+            old_terminal = target.get("terminal_reconciliation")
+            if old_terminal is not None and (
+                old_terminal.get("filled_qty") != filled_qty
+                or old_terminal.get("quantity") != target["quantity"]
+            ):
+                raise OwnerRegistryConflict(
+                    "owner_registry_terminal_cancel_prior_terminal_conflict"
+                )
+            proof = {
+                "schema": "order_owner_terminal_cancel_reconciliation_v1",
+                "source_contract": (
+                    "machine_adaptive_exit_buy_terminal_cancel_dated_current_v1"
+                    if side == "BUY"
+                    else "machine_adaptive_exit_terminal_cancel_dated_current_v1"
+                ),
+                "target_intent_id": target["intent_id"],
+                "cancel_intent_id": cancel["intent_id"],
+                "target_order_no": target_order_no,
+                "cancel_order_no": cancel_order_no,
+                "order_date": clean_date,
+                "requested_qty": cancel["quantity"],
+                "confirmed_qty": confirmed_qty,
+                "filled_qty": filled_qty,
+                "remaining_qty": 0,
+                "target_event_hash": target_event_hash,
+                "cancel_event_hash": cancel_event_hash,
+                "receipt_sha256": receipt_sha256,
+            }
+            self._append_locked(
+                events,
+                {
+                    "intent_id": target["intent_id"],
+                    "account_key": target["account_key"],
+                    "event": side + "_TERMINAL_CANCEL_RECONCILED",
+                    "state": "ORDER_TERMINAL",
+                    "filled_qty": filled_qty,
+                    "canceled_qty": total_canceled,
+                    "terminal_cancel_reconciliation": proof,
+                    "terminal_reconciliation": old_terminal
+                    or _terminal_proof(
+                        target | {"filled_qty": filled_qty}, terminal_receipt_sha256
+                    ),
+                },
+            )
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+    def record_terminal_reconciliation(self, **kwargs) -> None:
+        self._record_terminal_reconciliation(side="SELL", **kwargs)
+
+    def record_buy_terminal_reconciliation(self, **kwargs) -> None:
+        self._record_terminal_reconciliation(side="BUY", **kwargs)
+
+    def _record_terminal_reconciliation(
+        self,
+        *,
+        side: str,
         context: OwnerOrderContext,
         symbol: str,
         order_quantity: int,
@@ -1359,7 +1557,7 @@ class OrderOwnerRegistry:
         cumulative_filled_qty: int,
         receipt_sha256: str,
     ) -> None:
-        """Attach dated/current SELL evidence without replacing terminal origin.
+        """Attach side-specific dated/current evidence without replacing origin.
 
         The adaptive adapter is the producer; a WS terminal alone is not this
         proof. Validate against the current journal under its lock, including
@@ -1369,7 +1567,8 @@ class OrderOwnerRegistry:
         context.validate()
         clean_date = _registry_order_date(order_date)
         if (
-            context.owner_type not in {"widget_auto_trade", "episode"}
+            side not in {"BUY", "SELL"}
+            or context.owner_type not in {"widget_auto_trade", "episode"}
             or type(order_quantity) is not int
             or type(cumulative_filled_qty) is not int
             or not 0 <= cumulative_filled_qty <= order_quantity
@@ -1391,7 +1590,7 @@ class OrderOwnerRegistry:
             if (
                 current.get("state") != "ORDER_TERMINAL"
                 or current.get("symbol") != _registry_symbol(symbol)
-                or current.get("side") != "SELL"
+                or current.get("side") != side
                 or current.get("action") != "NEW"
                 or type(current.get("quantity")) is not int
                 or type(current.get("filled_qty")) is not int
@@ -1426,6 +1625,34 @@ class OrderOwnerRegistry:
                     "event": "TERMINAL_RECONCILIATION_RECORDED",
                     "terminal_reconciliation": proof,
                 },
+            )
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+    def position_intents(
+        self, *, context: OwnerOrderContext, symbol: object
+    ) -> list[dict[str, Any]]:
+        """Read the complete account/position census, including unbound intents.
+
+        Do not filter by date, route, state or owner: a conflicting owner or an
+        old unresolved reservation must remain visible to terminal consumers.
+        This is registry evidence, not a broker query or execution authority.
+        """
+        context.validate()
+        clean_symbol = _registry_symbol(symbol)
+        account_key = broker_account_key(require_explicit=True)
+        lock = self._locked()
+        try:
+            return sorted(
+                (
+                    row
+                    for row in self._state(self._read_locked()).values()
+                    if row.get("account_key") == account_key
+                    and row.get("position_id") == context.position_id
+                    and row.get("symbol") == clean_symbol
+                ),
+                key=lambda row: row["intent_id"],
             )
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)

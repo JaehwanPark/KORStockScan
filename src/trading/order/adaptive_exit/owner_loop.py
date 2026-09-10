@@ -6,12 +6,17 @@ those services or enroll a position in an exit policy.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable
 
-from .models import Clock, Snapshot
+from .models import Clock, ClockSourceGap, Snapshot
 from .runtime import OwnerSession, RegisteredOwnerExitPort
 from .terminal import terminal_receipt
 from .arbitration import SCHEMA as FINAL_EXIT_SCHEMA
+from .group_owner_loop import GroupLoopServices
+from .episode_pending_buy import EpisodePendingBuyServices
+from .enrollment import InitialPolicyAdmission, PolicyAdmissionCatalog
+from .market_source import MarketSourceGap
 from src.trading.config.machine_adaptive_exit_policy import canonical_sha256
 
 SESSION_KEY = "adaptive_exit_session"
@@ -27,6 +32,26 @@ class OwnerLoopServices:
     # Independent validation of the original owner's frozen source-EXIT
     # policy, not another user approval or authority from a raw signal/hash.
     authorize_final_exit: Callable[[dict], bool] | None = None
+    # Shares THIS original owner's lock. No default group enrollment/services.
+    group: GroupLoopServices | None = None
+    pending_buy: EpisodePendingBuyServices | None = None
+    admission: InitialPolicyAdmission | PolicyAdmissionCatalog | None = None
+
+
+def binding_authorized(services, session, enrollment_receipt=None, *, now=None):
+    if not isinstance(services, OwnerLoopServices):
+        return False
+    if services.authorize_binding(session.binding) is not True:
+        return False
+    if services.admission is None:
+        # Removing the service cannot downgrade a policy-enrolled lot to the
+        # older explicit-binding path.
+        return enrollment_receipt is None
+    return isinstance(
+        services.admission, (InitialPolicyAdmission, PolicyAdmissionCatalog)
+    ) and services.admission.authorize(
+        session.binding, enrollment_receipt, now=now or datetime.now(timezone.utc)
+    )
 
 
 def manager_required(records) -> bool:
@@ -50,6 +75,7 @@ def step_session(
     persist_terminal=None,
     final_exit_requested=False,
     final_exit_request=None,
+    enrollment_receipt=None,
 ):
     if not isinstance(services, OwnerLoopServices):
         return "owner_loop_services_missing"
@@ -74,17 +100,35 @@ def step_session(
         return "adaptive_final_exit_receipt_binding_invalid"
 
     def authorized(binding):
-        return services.authorize_binding(binding) is True and (
-            not final_exit_requested
-            or services.authorize_final_exit(final_exit_request) is True
+        return (
+            binding == session.binding
+            and binding_authorized(
+                services,
+                session,
+                enrollment_receipt,
+                now=datetime.fromtimestamp(clock.now_ms / 1000, timezone.utc),
+            )
+            and (
+                not final_exit_requested
+                or services.authorize_final_exit(final_exit_request) is True
+            )
         )
 
     # Check before even constructing a gateway adapter or loading market data.
     if not authorized(session.binding):
         return "frozen_policy_authority_missing"
-    verified_clock = services.clock_loader(session, clock.now_ms)
+    clock_gap = ""
+    try:
+        verified_clock = services.clock_loader(session, clock.now_ms)
+    except ClockSourceGap as exc:
+        # The wall timestamp remains usable for exact broker receipt age. Do
+        # not fabricate active time; the driver and write guard forbid effects.
+        verified_clock = Clock(clock.now_ms, None)
+        clock_gap = "clock_source_gap:" + str(exc)
     if not isinstance(verified_clock, Clock) or verified_clock.now_ms != clock.now_ms:
         return "owner_loop_verified_clock_missing"
+    if verified_clock.verified_halt_ms is None and not clock_gap:
+        clock_gap = "clock_source_gap:verified_halt_duration_missing"
     port = RegisteredOwnerExitPort(
         session=session,
         adapter_factory=adapter_factory,
@@ -93,11 +137,18 @@ def step_session(
         owner_guard=services.owner_guard,
         authorize_binding=authorized,
     )
-    snapshot = (
-        services.snapshot_loader(port.session, verified_clock)
-        if port.session.manager_required
-        else None
-    )
+    source_gap = ""
+    try:
+        snapshot = (
+            services.snapshot_loader(port.session, verified_clock)
+            if port.session.manager_required and not clock_gap
+            else None
+        )
+    except MarketSourceGap as exc:
+        # Missing market input blocks a new price decision, not receipt-only
+        # reconciliation of already owned target/exit orders or terminal fills.
+        # The port's existing guards still own any reserved cancel recovery.
+        snapshot, source_gap = None, str(exc)
     updated = port.step(
         snapshot=snapshot,
         clock=verified_clock,
@@ -114,4 +165,9 @@ def step_session(
         if services.lock_held() is not True:
             raise PermissionError("original_owner_lock_required")
         persist_terminal(receipt)
-    return updated.driver.alert_reason or "owner_loop_step_completed"
+    reason = updated.driver.alert_reason or "owner_loop_step_completed"
+    if source_gap and updated.manager_required:
+        reason += "|" + source_gap
+    if clock_gap and updated.manager_required:
+        reason += "|" + clock_gap
+    return reason

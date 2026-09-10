@@ -168,10 +168,22 @@ def cancelled(runtime, *, trailing=False):
     port = build(session)
     tick(port, bid=10065 if trailing else 10010)
     assert port.session.driver.orders.phase == "CANCEL_PENDING"
-    wire.detailed, wire.current = [detail(ord_remnq="0")], []
+    wire.detailed, wire.current = [detail(ord_remnq="0"), cancel_detail()], []
     tick(port, quote=False)
     assert port.session.driver.orders.phase == "RESIDUAL_READY"
     return port
+
+
+def cancel_detail(*, order="0000003", parent="0000002", requested=10, confirmed=None):
+    return detail(
+        ord_no=order,
+        ori_ord=parent,
+        ord_qty=str(requested),
+        cntr_qty="0",
+        ord_remnq="0",
+        cnfm_qty=str(requested if confirmed is None else confirmed),
+        cnfm_tm="12:59:59",
+    )
 
 
 def working_exit(wire, *, fill=0, remaining=10):
@@ -231,7 +243,10 @@ def test_partial_fill_while_cancel_pending_rebinds_without_clock_reset(runtime):
         != port.session.position.position_epoch
     )
     assert port.session.position.first_fill_at_ms == anchor
-    wire.detailed, wire.current = [detail(cntr_qty="3", ord_remnq="0")], []
+    wire.detailed, wire.current = [
+        detail(cntr_qty="3", ord_remnq="0"),
+        cancel_detail(confirmed=7),
+    ], []
     tick(port, quote=False)
     wire.write_body["ord_no"] = "0000004"
     tick(port)
@@ -424,7 +439,7 @@ def test_real_read_latency_not_misclassified_as_future_proof(runtime, latency_ms
             port._adapter.post = original
             tick(port)  # No broker reservation: resume the persisted cancel once.
             assert len(wire.writes) == 1
-        wire.detailed, wire.current = [detail(ord_remnq="0")], []
+        wire.detailed, wire.current = [detail(ord_remnq="0"), cancel_detail()], []
         tick(port, quote=False)
         assert port.session.driver.orders.phase == "RESIDUAL_READY"
 
@@ -460,6 +475,7 @@ def test_latest_replacement_partial_fill_ttl_and_second_attempt_uses_last_order(
     assert port.session.driver.orders.phase == "EXIT_CANCEL_PENDING"
     assert wire.writes[-1]["payload"]["orig_ord_no"] == "0000004"
     working_exit(wire, fill=3, remaining=0)
+    wire.detailed.append(cancel_detail(order="0000005", parent="0000004", requested=7))
     port = build(OwnerSession.from_payload(saved[-1]))
     tick(port, quote=False)
     wire.write_body["ord_no"] = "0000006"

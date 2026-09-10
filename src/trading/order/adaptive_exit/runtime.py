@@ -312,6 +312,7 @@ class RegisteredOwnerExitPort:
         self._write_quote = None
         self._quote_required = False
         self._source_gap = ""
+        self._receipt_only = True  # No write until a step supplies a valid clock.
         self._adapter = adapter_factory(self._transport_guard)
         scope = OwnerScope(*session.policy.scope_key.split("|"))
         if (
@@ -373,7 +374,8 @@ class RegisteredOwnerExitPort:
             self._quote_required = True
         quote = self._write_quote
         return (
-            state == self.session.driver.orders
+            not self._receipt_only
+            and state == self.session.driver.orders
             and self._authorized()
             and type(quantity) is int
             and 0 < quantity <= state.open_qty
@@ -450,7 +452,36 @@ class RegisteredOwnerExitPort:
             or order not in (state.target, state.exit_order)
         ):
             raise ValueError("owner_port_reconcile_identity_mismatch")
-        return self._proof(self._adapter.reconcile_owned_sell(order))
+        snapshot = self._adapter.reconcile_owned_sell(order)
+        if snapshot.source_ok and snapshot.terminal:
+            from .terminal import confirmed_cancel_proof
+
+            context = replace(
+                self.session.context, client_intent_id=self._cancel_client_id(order)
+            )
+            child = self._adapter.registry.intent_for_client(context=context)
+            if child is not None:
+                try:
+                    confirmed_cancel_proof(
+                        session=self.session, adapter=self._adapter, order=order
+                    )
+                except ValueError:
+                    if child.get("state") not in {
+                        "ORDER_BOUND",
+                        "ORDER_TERMINAL",
+                    } or not child.get("broker_order_no"):
+                        self._source_gap = "cancel_child_intent_unresolved"
+                        return None
+                    snapshot = self._adapter.reconcile_terminal_cancel(
+                        order,
+                        OrderKey(child["order_date"], child["broker_order_no"]),
+                        max_snapshot_age_ms=self.session.policy.max_quote_age_ms,
+                    )
+                    if snapshot.source_ok:
+                        confirmed_cancel_proof(
+                            session=self.session, adapter=self._adapter, order=order
+                        )
+        return self._proof(snapshot)
 
     def recover_submission(self, *, state):
         if (
@@ -476,13 +507,9 @@ class RegisteredOwnerExitPort:
         )
 
     def _cancel_client_id(self, order):
-        return canonical_sha256(
-            {
-                "binding": self.session.binding_hash,
-                "order": asdict(order),
-                "action": "cancel",
-            }
-        )
+        from .terminal import owner_cancel_client_id
+
+        return owner_cancel_client_id(self.session.binding_hash, order)
 
     def resume_unreserved_cancel(self, order, *, state):
         """Only a missing durable broker reservation proves no dispatch here.
@@ -541,18 +568,25 @@ class RegisteredOwnerExitPort:
         if self._lock() is not True:
             raise PermissionError("original_owner_lock_required")
         self._write_quote, self._quote_required, self._source_gap = snapshot, False, ""
+        self._receipt_only = True
         if type(final_exit_requested) is not bool:
             raise ValueError("final_exit_authority_invalid")
         if (
             not isinstance(clock, Clock)
             or type(clock.now_ms) is not int
             or clock.now_ms < self.session.position.first_fill_at_ms
-            or type(clock.verified_halt_ms) is not int
-            or not 0
-            <= clock.verified_halt_ms
-            <= clock.now_ms - self.session.position.first_fill_at_ms
+            or (
+                clock.verified_halt_ms is not None
+                and (
+                    type(clock.verified_halt_ms) is not int
+                    or not 0
+                    <= clock.verified_halt_ms
+                    <= clock.now_ms - self.session.position.first_fill_at_ms
+                )
+            )
         ):
             raise ValueError("valid_owner_clock_required")
+        self._receipt_only = clock.verified_halt_ms is None
         if not self._authorized():
             self.persist(
                 replace(

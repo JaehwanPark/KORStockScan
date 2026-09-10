@@ -242,7 +242,8 @@ class KiwoomOneShareGateway:
         )
 
     def adaptive_exit_adapter(
-        self, *, registry, context, policy_hash, write_guard=None
+        self, *, registry, context, policy_hash, write_guard=None,
+        authority_policy_id="machine_adaptive_exit_v1",
     ):
         """Build a disabled-by-default adapter; does not attach an exit loop."""
         from src.trading.order.adaptive_exit.broker import RegisteredSellAdapter
@@ -259,6 +260,7 @@ class KiwoomOneShareGateway:
             maximum_quantity=EPISODE_LEG_QUANTITY,
             require_write_authority=self._require_write_authority,
             write_guard=write_guard,
+            authority_policy_id=authority_policy_id,
         )
 
     def _require_write_authority(self) -> None:

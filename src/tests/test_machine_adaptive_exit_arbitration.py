@@ -9,7 +9,7 @@ import pytest
 
 from src.tests import test_machine_adaptive_exit_owner_loop as fixtures
 from src.tests.test_machine_adaptive_exit_broker import detail
-from src.tests.test_machine_adaptive_exit_runtime import working_exit
+from src.tests.test_machine_adaptive_exit_runtime import working_exit, cancel_detail
 from src.tests.test_machine_adaptive_exit_decision import inputs, trail_inputs
 from src.tests.test_widget_signal_auto_trade import FakeContract
 from src.trading.widget_auto_trade.engine import WidgetSpec
@@ -97,7 +97,7 @@ def test_qualified_exit_is_sticky_cancels_once_and_finishes_via_same_owner(widge
     assert len(loop.wire.writes) == 1
     loop.box["payload"] = None
     loop.machine._state = loop.machine._load_state()
-    loop.wire.detailed = [detail(cntr_qty="0", ord_remnq="0")]
+    loop.wire.detailed = [detail(cntr_qty="0", ord_remnq="0"), cancel_detail()]
     loop.wire.current = []
     loop.tick()
     loop.wire.write_body["ord_no"] = "0000004"
@@ -404,7 +404,7 @@ def test_final_exit_in_trail_active_submits_one_original_owner_sell(widget_loop)
         ),
     )
     loop.tick()
-    loop.wire.detailed = [detail(cntr_qty="0", ord_remnq="0")]
+    loop.wire.detailed = [detail(cntr_qty="0", ord_remnq="0"), cancel_detail()]
     loop.wire.current = []
     loop.tick()
     loop.tick()

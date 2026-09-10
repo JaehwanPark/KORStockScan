@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from src.trading.order.profit_stagnation_exit import KEY as PROFIT_EXIT_KEY
+from src.trading.order.profit_stagnation_owners import OBSERVATION_KEY as PROFIT_OBSERVATION_KEY, active_widget, widget_symbol as run_profit_exit_symbol
+
 import json
 import os
 import time
@@ -45,7 +48,30 @@ from src.trading.order.adaptive_exit.source import (
     record_first_fill_observation,
     record_target_observation,
 )
-from src.trading.order.adaptive_exit.owner_loop import OwnerLoopServices, step_session
+from src.trading.order.adaptive_exit.owner_loop import (
+    OwnerLoopServices,
+    step_session,
+    binding_authorized,
+)
+from src.trading.order.adaptive_exit.enrollment import (
+    ENROLLMENT_KEY,
+    EnrollmentReloadRequired,
+    validate_registered_admission,
+)
+from src.trading.order.adaptive_exit.group_owner_loop import (
+    SESSION_KEY as GROUP_SESSION_KEY,
+    GroupOwnerPort,
+    GroupOwnerSession,
+)
+from src.trading.order.adaptive_exit.group_whole_exit import (
+    SCHEMA as WHOLE_EXIT_SCHEMA,
+    make_whole_exit_request,
+    validate_whole_exit_request,
+)
+from src.trading.order.adaptive_exit.group_pending_buy import (
+    capture_pending_buys,
+    validate_pending_buys,
+)
 from src.trading.order.adaptive_exit.runtime import OwnerSession
 from src.trading.order.adaptive_exit.models import Clock
 from src.trading.order.adaptive_exit.arbitration import (
@@ -420,6 +446,20 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     try:
         directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
+        # An adaptive execution journal must not claim durability if the
+        # directory containing its atomic rename could not be synchronized.
+        if any(
+            isinstance(value, dict)
+            and (
+                "adaptive_exit_sessions" in value
+                or GROUP_SESSION_KEY in value
+                or PROFIT_EXIT_KEY in value
+                or value.get("adaptive_exit_history")
+            )
+            for group in [payload, *(payload.get("history") or [])]
+            for value in (group.get("symbols") or {}).values()
+        ):
+            raise
         return
     try:
         os.fsync(directory_fd)
@@ -577,7 +617,8 @@ class WidgetSignalAutoTrader:
         if not isinstance(state, dict):
             raise ValueError("widget_owner_state_invalid")
         adaptive_claimed = any(
-            isinstance(value, dict) and "adaptive_exit_sessions" in value
+            isinstance(value, dict)
+            and ("adaptive_exit_sessions" in value or GROUP_SESSION_KEY in value or PROFIT_EXIT_KEY in value)
             for value in (state.get("symbols") or {}).values()
         )
         adaptive_evidence = adaptive_claimed or any(
@@ -722,6 +763,8 @@ class WidgetSignalAutoTrader:
         }
 
     def _save(self) -> None:
+        if getattr(self, "_adaptive_enrollment_reload_required", False):
+            raise EnrollmentReloadRequired("adaptive_enrollment_reload_required")
         monitored_symbols = [spec.code for spec in self.specs]
         policy_sessions = self._policy_execution_sessions()
         runtime_sessions = policy_sessions if self.enabled else {}
@@ -806,7 +849,8 @@ class WidgetSignalAutoTrader:
         frozen_symbols = {
             code: value
             for code, value in prior_symbols.items()
-            if isinstance(value, dict) and "adaptive_exit_sessions" in value
+            if isinstance(value, dict)
+            and ("adaptive_exit_sessions" in value or GROUP_SESSION_KEY in value or PROFIT_EXIT_KEY in value)
         }
         history = self._state.get("history")
         history = history if isinstance(history, list) else []
@@ -3142,19 +3186,31 @@ class WidgetSignalAutoTrader:
         self, spec: WidgetSpec, payload: dict[str, Any], now: datetime
     ) -> None:
         symbol_state = self._state["symbols"][spec.code]
+        if (active_widget(symbol_state) or PROFIT_OBSERVATION_KEY in symbol_state) and getattr(self, "profit_exit_lock_held", lambda: False)() is not True:
+            return
+        if getattr(self, "_adaptive_enrollment_reload_required", False):
+            raise EnrollmentReloadRequired("adaptive_enrollment_reload_required")
+        if not active_widget(symbol_state) and self._try_adaptive_enrollment(spec.code, symbol_state, now):
+            return
+        if GROUP_SESSION_KEY in symbol_state:
+            self._run_adaptive_group(
+                spec.code, symbol_state, now, source_spec=spec, source_payload=payload
+            )
+            return
         if "adaptive_exit_sessions" in symbol_state:
             self._run_adaptive_symbol(
                 spec.code, symbol_state, now, source_spec=spec, source_payload=payload
             )
             return
-        self._reconcile(spec, symbol_state, now)
+        if not active_widget(symbol_state):
+            self._reconcile(spec, symbol_state, now)
         self._cancel_market_weakness_pending_buys(
             spec=spec,
             symbol_state=symbol_state,
             now=now,
         )
         self._recover_definitive_rejected_entry_episode(spec, symbol_state, now)
-        if self._close_completed_take_profit_episode(spec, symbol_state, now):
+        if not active_widget(symbol_state) and self._close_completed_take_profit_episode(spec, symbol_state, now):
             return
 
         self._maybe_request_policy_force_exit(spec, symbol_state, now)
@@ -3177,6 +3233,9 @@ class WidgetSignalAutoTrader:
             not in {"observe_only_no_forced_sell", "sell_own_filled_quantity"}
         )
         if source_exit_action_invalid:
+            if active_widget(symbol_state):
+                run_profit_exit_symbol(self, symbol_state, now)
+                return
             if exit_signal_id != symbol_state.get("last_blocked_source_exit_signal_id"):
                 symbol_state["last_blocked_source_exit_signal_id"] = exit_signal_id
                 self._save()
@@ -3244,6 +3303,10 @@ class WidgetSignalAutoTrader:
                 current_day_open_qty=self._open_qty(symbol_state),
             )
 
+        if run_profit_exit_symbol(self, symbol_state, now):
+            return
+        if self._close_completed_take_profit_episode(spec, symbol_state, now):
+            return
         self._maybe_submit_exit(spec, symbol_state, payload, now)
         # A source-qualified final exit dominates any entry payload carried in
         # the same snapshot.  Re-entry is possible only after the producer has
@@ -4156,7 +4219,15 @@ class WidgetSignalAutoTrader:
         if (
             not isinstance(services, OwnerLoopServices)
             or services.lock_held() is not True
-            or any(services.authorize_binding(s.binding) is not True for s in sessions)
+            or any(
+                not binding_authorized(
+                    services,
+                    s,
+                    symbol_state.get(ENROLLMENT_KEY, {}).get(s.position.lot_id),
+                    now=now,
+                )
+                for s in sessions
+            )
         ):
             return False
         if source_spec is None:
@@ -4211,7 +4282,15 @@ class WidgetSignalAutoTrader:
             return False
         if services.lock_held() is not True:
             raise PermissionError("original_owner_lock_required")
-        if any(services.authorize_binding(s.binding) is not True for s in sessions):
+        if any(
+            not binding_authorized(
+                services,
+                s,
+                symbol_state.get(ENROLLMENT_KEY, {}).get(s.position.lot_id),
+                now=now,
+            )
+            for s in sessions
+        ):
             raise PermissionError("frozen_policy_authority_missing")
         prior = deepcopy(self._state)
         superseded_confirmation = deepcopy(
@@ -4235,6 +4314,170 @@ class WidgetSignalAutoTrader:
             raise
         return True
 
+    def _try_adaptive_enrollment(self, code, state, now) -> bool:
+        """Persist new independent lot bindings under the original owner lock."""
+        if getattr(self, "_adaptive_enrollment_reload_required", False):
+            raise EnrollmentReloadRequired("adaptive_enrollment_reload_required")
+        services = self.adaptive_exit_services
+        if ENROLLMENT_KEY in state and "adaptive_exit_sessions" not in state:
+            raise ValueError("adaptive_enrollment_session_missing")
+        if (
+            not isinstance(services, OwnerLoopServices)
+            or services.admission is None
+            or not self.enabled
+            or services.lock_held() is not True
+            or self._state.get("active_date") != now.date().isoformat()
+            or "adaptive_exit_sessions" in state
+            or ENROLLMENT_KEY in state
+            or GROUP_SESSION_KEY in state
+            or state.get("owner_registry_reconciliation_required")
+            or state.get("pending_entry_confirmation")
+            or state.get("exit_requested")
+            or state.get("scale_in_requested")
+            or state.get("entry_episode_open") is not True
+        ):
+            return False
+        proposals = {}
+        buy_keys, target_keys = set(), set()
+        try:
+            orders = state.get("orders") or []
+            targets = [
+                o
+                for o in orders
+                if o.get("side") == "SELL"
+                and o.get("order_role") == ORDER_ROLE_TAKE_PROFIT
+                and o.get("broker_accepted") is True
+                and o.get("status") in {"SUBMITTED", "ACCEPTED"}
+            ]
+            if not targets:
+                return False
+            if any(
+                o not in targets
+                and not (
+                    o.get("status") == "FILLED"
+                    or o.get("status") == "FAILED"
+                    and o.get("broker_accepted") is False
+                )
+                for o in orders
+            ):
+                raise ValueError("new_enrollment_competing_order")
+            entry_id = state["entry_signal_id"]
+            parts = entry_id.split(":", 4)
+            if len(parts) != 5:
+                raise ValueError("new_enrollment_signal_identity_invalid")
+            for target in targets:
+                source = target.get("adaptive_exit_target_observations", {}).get(
+                    f"{target.get('order_date')}:{target.get('order_no')}"
+                )
+                if not isinstance(source, dict):
+                    raise ValueError("new_target_observation_missing")
+                context = self._owner_context_from_order(target)
+                session, receipt = services.admission.prepare(
+                    source_receipt=source,
+                    context=context,
+                    target_intent_id=target["owner_registry_intent_id"],
+                    now=now,
+                )
+                entry, p = source["entries"][0], session.position
+                buy_key = (entry["order_date"], entry["order_no"])
+                target_key = (target["order_date"], target["order_no"])
+                if buy_key in buy_keys or target_key in target_keys:
+                    raise ValueError("new_enrollment_duplicate_original_order")
+                buy_keys.add(buy_key)
+                target_keys.add(target_key)
+                matches = [
+                    o
+                    for o in orders
+                    if o.get("side") == "BUY"
+                    and o.get("order_date") == entry["order_date"]
+                    and o.get("order_no") == entry["order_no"]
+                ]
+                if len(matches) != 1:
+                    raise ValueError("new_enrollment_original_buy_missing_or_duplicate")
+                buy = matches[0]
+                if (
+                    session.policy.scope_key
+                    != f"widget|actual:{code}:{parts[3]}|{code}|{source['target']['route']}|{parts[3]}"
+                    or entry.get("episode_id") != entry_id
+                    or target.get("parent_entry_signal_id") != entry_id
+                    or target.get("filled_qty") != 0
+                    or type(target.get("filled_qty")) is not int
+                    or target.get("requested_qty") != p.open_qty
+                    or target.get("limit_price") != p.original_target
+                    or buy.get("filled_qty") != p.open_qty
+                    or buy.get("requested_qty") != p.open_qty
+                    or buy.get("fill_price") != p.entry_price
+                    or buy.get("status") != "FILLED"
+                    or buy.get("broker_accepted") is not True
+                    or not (
+                        buy.get("signal_id") == entry_id
+                        or buy.get("parent_entry_signal_id") == entry_id
+                    )
+                    or buy.get("adaptive_exit_first_fill_observation")
+                    != entry.get("first_fill_observation")
+                    or p.lot_id in proposals
+                ):
+                    raise ValueError("enrollment_original_widget_source_mismatch")
+                validate_registered_admission(session, source, self.owner_registry)
+                if (
+                    not binding_authorized(services, session, receipt, now=now)
+                    or services.owner_guard(
+                        session.binding,
+                        state=session.driver.orders,
+                        quantity=p.open_qty,
+                        worst_bid=None,
+                        now_ms=int(now.timestamp() * 1000),
+                    )
+                    is not True
+                ):
+                    raise PermissionError("new_enrollment_owner_authority_missing")
+                proposals[p.lot_id] = (session, receipt)
+            if buy_keys != {
+                (o.get("order_date"), o.get("order_no"))
+                for o in orders
+                if o.get("side") == "BUY" and o.get("filled_qty", 0) > 0
+            }:
+                raise ValueError("new_enrollment_unaccounted_original_buy")
+            if sum(
+                s.position.open_qty for s, _ in proposals.values()
+            ) != self._open_qty(state):
+                raise ValueError("new_enrollment_whole_episode_quantity_mismatch")
+            if (
+                services.lock_held() is not True
+                or self.adaptive_exit_services is not services
+            ):
+                raise PermissionError("original_owner_lock_required")
+            if any(
+                not binding_authorized(services, s, r, now=now)
+                for s, r in proposals.values()
+            ):
+                raise PermissionError("new_enrollment_owner_authority_missing")
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            OwnerRegistryError,
+        ) as exc:
+            if services.lock_held() is not True:
+                raise PermissionError("original_owner_lock_required") from exc
+            state["adaptive_exit_enrollment_status"] = str(exc)
+            return False
+        state["adaptive_exit_sessions"] = {
+            k: s.to_payload() for k, (s, _) in proposals.items()
+        }
+        state[ENROLLMENT_KEY] = {k: r for k, (_, r) in proposals.items()}
+        state["adaptive_exit_enrollment_status"] = "enrolled_original_owner_no_order"
+        try:
+            self._save()
+        except BaseException as exc:
+            self._adaptive_enrollment_reload_required = True
+            raise EnrollmentReloadRequired(
+                "adaptive_enrollment_save_uncertain_reload_required"
+            ) from exc
+        return True
+
     def _run_adaptive_symbol(
         self, code, symbol_state, now, *, source_spec=None, source_payload=None
     ) -> None:
@@ -4249,10 +4492,22 @@ class WidgetSignalAutoTrader:
             return
         try:
             records = symbol_state["adaptive_exit_sessions"]
+            if ENROLLMENT_KEY in symbol_state and not isinstance(
+                symbol_state[ENROLLMENT_KEY], dict
+            ):
+                raise ValueError("adaptive_enrollment_receipt_map_invalid")
             if symbol_state.get("owner_registry_reconciliation_required"):
                 raise ValueError("adaptive_exit_owner_reconciliation_required")
             if not isinstance(records, dict) or not records:
                 raise ValueError("adaptive_exit_session_map_invalid")
+            if ENROLLMENT_KEY in symbol_state and (
+                set(symbol_state[ENROLLMENT_KEY]) != set(records)
+                or any(
+                    not isinstance(v, dict)
+                    for v in symbol_state[ENROLLMENT_KEY].values()
+                )
+            ):
+                raise ValueError("adaptive_enrollment_receipt_coverage_invalid")
             sessions = [OwnerSession.from_payload(value) for value in records.values()]
             orders = symbol_state.get("orders") or []
             targets = []
@@ -4272,7 +4527,10 @@ class WidgetSignalAutoTrader:
                 context = self._owner_context_from_order(target)
                 if (
                     key != p.lot_id
-                    or p.lot_id != session.target_intent_id
+                    or (
+                        ENROLLMENT_KEY not in symbol_state
+                        and p.lot_id != session.target_intent_id
+                    )
                     or p.owner_id != "widget"
                     or session.policy.scope_key.split("|")[2] != code
                     or p.episode_id != context.position_id
@@ -4288,6 +4546,13 @@ class WidgetSignalAutoTrader:
                 ):
                     raise ValueError("adaptive_exit_original_lot_binding_mismatch")
                 targets.append(target)
+                if isinstance(services, OwnerLoopServices) and not binding_authorized(
+                    services,
+                    session,
+                    symbol_state.get(ENROLLMENT_KEY, {}).get(key),
+                    now=now,
+                ):
+                    raise ValueError("frozen_policy_authority_missing")
             target_keys = {
                 (s.driver.orders.target.trading_date, s.driver.orders.target.order_no)
                 for s in sessions
@@ -4356,6 +4621,7 @@ class WidgetSignalAutoTrader:
                         write_guard=guard,
                     ),
                     persist_record=persist,
+                    enrollment_receipt=symbol_state.get(ENROLLMENT_KEY, {}).get(key),
                     clock=Clock(int(now.timestamp() * 1000), 0),
                     final_exit_requested=final_exit,
                     final_exit_request=symbol_state.get(FINAL_EXIT_KEY),
@@ -4374,6 +4640,477 @@ class WidgetSignalAutoTrader:
             symbol_state["adaptive_exit_loop_status"] = str(exc)
         if not isinstance(services, OwnerLoopServices) or services.lock_held() is True:
             self._save()
+
+    def _validate_adaptive_group_owner(
+        self, code, state, session, *, now_ms, proposed_whole=None
+    ):
+        """Bind the pooled target and ALL admitted BUY lots to ordinary custody."""
+        group, context = session.group, session.context
+        whole = [
+            r
+            for r in session.payload["records"].values()
+            if r.get("schema") == WHOLE_EXIT_SCHEMA
+        ]
+        if len(whole) > 1:
+            raise ValueError("adaptive_group_multiple_whole_exit_claims")
+        request = whole[0]["request"] if whole else proposed_whole
+        pending = []
+        if request is not None:
+            validate_whole_exit_request(
+                request,
+                session,
+                execution_policy=state.get("entry_execution_policy"),
+                entry_signal_id=state.get("entry_signal_id"),
+                now_ms=now_ms,
+            )
+            pending = request.get("pending_buys", [])
+            validate_pending_buys(
+                pending,
+                session,
+                registry=self.owner_registry,
+                orders=state.get("orders"),
+            )
+            if "pending_confirmation_sha256" in request and (
+                request["pending_confirmation_sha256"]
+                != canonical_sha256(
+                    {"pending": state.get("pending_entry_confirmation")}
+                )
+                or request["scale_in_requested"]
+                != bool(state.get("scale_in_requested"))
+            ):
+                raise ValueError("adaptive_group_pending_entry_intent_changed")
+        if (
+            "adaptive_exit_sessions" in state
+            or state.get(TERMINAL_KEY)
+            or state.get("owner_registry_reconciliation_required")
+            or (
+                state.get("pending_entry_confirmation")
+                and not (request and "pending_confirmation_sha256" in request)
+            )
+            or state.get("exit_requested")
+            or (state.get("scale_in_requested") and not (request and pending))
+            or state.get(FINAL_EXIT_KEY)
+            or state.get("adaptive_exit_group_recovery_reason")
+            or _positive_int(state.get("prior_day_unmanaged_qty"))
+            or _positive_int(state.get("prior_day_unresolved_order_count"))
+        ):
+            raise ValueError("adaptive_group_competing_owner_requires_recovery")
+        if (
+            not self.enabled
+            or group.scope.owner != "widget"
+            or group.scope.symbol != code
+            or context.owner_type != "widget_auto_trade"
+            or group.episode_id != context.position_id
+            or state.get("entry_episode_open") is not True
+            or not isinstance(state.get("entry_signal_id"), str)
+            or not state["entry_signal_id"]
+        ):
+            raise ValueError("adaptive_group_original_episode_mismatch")
+        orders = state.get("orders")
+        if not isinstance(orders, list) or not all(isinstance(o, dict) for o in orders):
+            raise ValueError("adaptive_group_ordinary_orders_invalid")
+        expected = {group.target: ("SELL", group.quantity, group.target_price)}
+        expected.update(
+            {order: ("BUY", qty, price) for _, order, qty, _, price in group.lots}
+        )
+        target = None
+        for key, (side, qty, price) in expected.items():
+            matches = [
+                o
+                for o in orders
+                if o.get("order_date") == key.trading_date
+                and o.get("order_no") == key.order_no
+            ]
+            if len(matches) != 1:
+                raise ValueError("adaptive_group_original_order_missing_or_duplicate")
+            order = matches[0]
+            registered = self.owner_registry.assert_owner(
+                context=context,
+                order_date=key.trading_date,
+                broker_order_no=key.order_no,
+            )
+            if (
+                order.get("side") != side
+                or order.get("broker_accepted") is not True
+                or order.get("requested_qty") != qty
+                or type(order.get("requested_qty")) is not int
+                or order.get("owner_id") != context.owner_id
+                or order.get("owner_position_id") != context.position_id
+                or order.get("route") != group.scope.route
+                or order.get("owner_registry_intent_id") != registered.get("intent_id")
+                or order.get("owner_client_intent_id")
+                != registered.get("client_intent_id")
+            ):
+                raise ValueError("adaptive_group_original_order_binding_mismatch")
+            if side == "BUY":
+                if (
+                    order.get("filled_qty") != qty
+                    or type(order.get("filled_qty")) is not int
+                    or order.get("status") != "FILLED"
+                    or order.get("fill_price") != price
+                ):
+                    raise ValueError("adaptive_group_full_buy_receipt_required")
+            else:
+                target = order
+                if (
+                    self._owner_context_from_order(order) != context
+                    or order.get("order_role") != ORDER_ROLE_TAKE_PROFIT
+                    or order.get("limit_price") != price
+                    or order.get("parent_entry_signal_id") != state["entry_signal_id"]
+                    or type(order.get("filled_qty")) is not int
+                    or not 0 <= order["filled_qty"] <= qty
+                ):
+                    raise ValueError("adaptive_group_original_target_mismatch")
+        if any(
+            (o.get("order_date"), o.get("order_no"))
+            not in (
+                {(key.trading_date, key.order_no) for key in expected}
+                | {
+                    (r["identity"]["order_date"], r["identity"]["broker_order_no"])
+                    for r in pending
+                }
+            )
+            and (
+                o.get("status") not in {"FILLED", "CANCELED", "TERMINAL_UNFILLED"}
+                or o.get("owner_position_id") == context.position_id
+            )
+            for o in orders
+        ):
+            raise ValueError("adaptive_group_unaccounted_ordinary_order")
+        if (
+            self._open_qty(state)
+            != group.quantity
+            + sum(r["initial_ordinary_filled_qty"] for r in pending)
+            - target["filled_qty"]
+        ):
+            raise ValueError("adaptive_group_whole_episode_quantity_mismatch")
+        return True
+
+    def _run_adaptive_group(
+        self, code, state, now, *, source_spec=None, source_payload=None
+    ):
+        """Resume pooled custody before the ordinary source-EXIT/BUY paths."""
+        services = self.adaptive_exit_services
+        if isinstance(services, OwnerLoopServices) and services.lock_held() is not True:
+            return
+        try:
+            if not isinstance(services, OwnerLoopServices) or services.group is None:
+                raise ValueError("group_owner_services_missing")
+            # Original-policy full EXIT has a separate sticky journal and writer.
+            # Missing independent whole services still fail closed as before.
+            policy = state.get("entry_execution_policy")
+            whole_supported = services.group.whole_exit is not None
+            whole_request = None
+            session = GroupOwnerSession.from_payload(state[GROUP_SESSION_KEY])
+            whole_active = any(
+                r.get("schema") == WHOLE_EXIT_SCHEMA
+                for r in session.payload["records"].values()
+            )
+            if (
+                isinstance(policy, dict)
+                and policy.get("force_flat_at_session_end") is True
+            ):
+                try:
+                    cutoff = datetime_time.fromisoformat(
+                        str(policy.get("force_exit_time") or "")
+                    )
+                except ValueError:
+                    raise ValueError("adaptive_group_force_flat_time_invalid") from None
+                if now.time().replace(tzinfo=None) >= cutoff:
+                    if whole_supported and not whole_active:
+                        whole_request = make_whole_exit_request(
+                            session,
+                            execution_policy=policy,
+                            entry_signal_id=state.get("entry_signal_id"),
+                            reason="force_flat",
+                            signal_id="force_flat:" + state["entry_signal_id"],
+                            source_hash=canonical_sha256(policy),
+                            observed_at_ms=int(now.timestamp() * 1000),
+                            accepted_at_ms=int(now.timestamp() * 1000),
+                            route=session.group.scope.route,
+                            source_session=session.group.scope.session,
+                        )
+                    elif not whole_supported:
+                        state["adaptive_exit_group_recovery_reason"] = (
+                            "force_flat_requires_group_arbitration"
+                        )
+            if (
+                not whole_active
+                and whole_request is None
+                and source_spec is not None
+                and self._exit_signal(source_spec, source_payload, now)
+            ):
+                action = (
+                    policy.get("source_final_exit_action")
+                    if isinstance(policy, dict)
+                    else None
+                )
+                if action == "sell_own_filled_quantity":
+                    if whole_supported:
+                        source_at = self._snapshot_time(source_payload)
+                        if source_at is None or source_spec.code != code:
+                            raise ValueError("whole_exit_source_time_or_symbol_missing")
+                        whole_request = make_whole_exit_request(
+                            session,
+                            execution_policy=policy,
+                            entry_signal_id=state.get("entry_signal_id"),
+                            reason="source_final_exit",
+                            signal_id=self._exit_signal(
+                                source_spec, source_payload, now
+                            ),
+                            source_hash=canonical_sha256(source_payload),
+                            observed_at_ms=int(source_at.timestamp() * 1000),
+                            accepted_at_ms=int(now.timestamp() * 1000),
+                            route=self._route(source_payload),
+                            source_session=source_spec.contract.session_context(
+                                now
+                            ).name,
+                        )
+                    else:
+                        state["adaptive_exit_group_recovery_reason"] = (
+                            "original_source_exit_requires_group_arbitration"
+                        )
+                else:
+                    state["adaptive_source_exit_status"] = (
+                        "observe_only_no_forced_sell"
+                        if action == "observe_only_no_forced_sell"
+                        else "source_final_exit_policy_missing_or_invalid"
+                    )
+
+            def persist(expected, payload):
+                if services.lock_held() is not True:
+                    raise PermissionError("original_owner_lock_required")
+                current = GroupOwnerSession.from_payload(state[GROUP_SESSION_KEY])
+                if current.payload["canonical_sha256"] != expected:
+                    raise ValueError("group_owner_session_generation_changed")
+                prior = deepcopy(self._state)
+                state[GROUP_SESSION_KEY] = deepcopy(payload)
+                try:
+                    self._save()
+                    saved = self._read_adaptive_group_file()
+                    if (
+                        saved.get("symbols", {}).get(code, {}).get(GROUP_SESSION_KEY)
+                        != payload
+                    ):
+                        raise OSError("group_owner_durable_file_readback_missing")
+                except BaseException:
+                    self._state = prior
+                    raise
+
+            if whole_request is not None:
+                pending = capture_pending_buys(
+                    session,
+                    state.get("orders"),
+                    self.owner_registry,
+                    state.get("entry_signal_id"),
+                )
+                if (
+                    pending
+                    or state.get("pending_entry_confirmation")
+                    or state.get("scale_in_requested")
+                ):
+                    whole_request = make_whole_exit_request(
+                        session,
+                        execution_policy=policy,
+                        **{
+                            k: whole_request[k]
+                            for k in (
+                                "entry_signal_id",
+                                "reason",
+                                "signal_id",
+                                "source_hash",
+                                "observed_at_ms",
+                                "accepted_at_ms",
+                                "route",
+                                "source_session",
+                            )
+                        },
+                        pending_buys=pending,
+                        pending_confirmation=state.get("pending_entry_confirmation"),
+                        scale_in_requested=bool(state.get("scale_in_requested")),
+                    )
+
+            port = GroupOwnerPort(
+                services=services.group,
+                lock_held=services.lock_held,
+                load_session=lambda: state[GROUP_SESSION_KEY],
+                persist_session=persist,
+                owner_binding_guard=lambda s: self._validate_adaptive_group_owner(
+                    code,
+                    state,
+                    s,
+                    now_ms=int(now.timestamp() * 1000),
+                    proposed_whole=whole_request,
+                ),
+                adapter_factory=lambda s, guard: self.gateway.adaptive_exit_adapter(
+                    registry=self.owner_registry,
+                    context=s.context,
+                    code=code,
+                    policy_hash=s.allocation.policy_hash,
+                    write_guard=guard,
+                ),
+            )
+            if whole_request is not None:
+                port.claim_whole_exit(whole_request)
+            result = port.step(int(now.timestamp() * 1000))
+            state["adaptive_exit_loop_status"] = result["status"]
+            state["adaptive_exit_realized_pnl_status"] = (
+                "unreconciled_exact_fill_cost_required"
+            )
+            if result.get("group_terminal") is True:
+                self._finish_adaptive_group(code, state, now, port, result["receipt"])
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            PermissionError,
+            OwnerRegistryError,
+        ) as exc:
+            state["adaptive_exit_loop_status"] = str(exc)
+        if not isinstance(services, OwnerLoopServices) or services.lock_held() is True:
+            self._save()
+
+    def _read_adaptive_group_file(self):
+        try:
+            saved = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            # Do not catch this as an ordinary loop diagnostic and overwrite
+            # unreadable on-disk evidence with the pre-save in-memory version.
+            raise OSError("group_owner_durable_file_invalid") from exc
+        if not isinstance(saved, dict):
+            raise OSError("group_owner_durable_file_invalid")
+        return saved
+
+    def _finish_adaptive_group(self, code, state, now, port, receipt):
+        """Full exact group quantities, not BOOK lot profits, close one episode."""
+        port.validate_terminal(receipt)
+        session = GroupOwnerSession.from_payload(state[GROUP_SESSION_KEY])
+        context, signal = session.context, state["entry_signal_id"]
+        orders = deepcopy(state["orders"])
+        for row in receipt.get("buy_orders", []):
+            if "reconciliation_sha256" not in row:
+                continue
+            matches = [
+                o
+                for o in orders
+                if o.get("order_date") == row["order_date"]
+                and o.get("order_no") == row["broker_order_no"]
+            ]
+            if (
+                len(matches) != 1
+                or matches[0].get("owner_registry_intent_id") != row["intent_id"]
+            ):
+                raise ValueError("adaptive_group_terminal_pending_buy_binding_invalid")
+            order = matches[0]
+            old_filled = order["filled_qty"]
+            order.update(
+                filled_qty=row["filled_qty"],
+                remaining_qty=0,
+                status=(
+                    "FILLED"
+                    if row["filled_qty"] == row["quantity"]
+                    else "TERMINAL_UNFILLED"
+                ),
+                reconciliation_sha256=row["reconciliation_sha256"],
+                adaptive_exit_terminal_id=receipt["terminal_id"],
+            )
+            if old_filled != row["filled_qty"]:
+                order.update(
+                    fill_price=None,
+                    fill_amount_krw=None,
+                    commission_krw=None,
+                    tax_krw=None,
+                )
+        for index, row in enumerate(receipt["orders"]):
+            matches = [
+                o
+                for o in orders
+                if o.get("order_no") == row["order_no"]
+                and o.get("order_date") == row["trading_date"]
+            ]
+            if index == 0:
+                if (
+                    len(matches) != 1
+                    or matches[0].get("owner_registry_intent_id") != row["intent_id"]
+                ):
+                    raise ValueError("adaptive_group_terminal_target_binding_invalid")
+                order = matches[0]
+            else:
+                if matches:
+                    raise ValueError("adaptive_group_terminal_duplicate_replacement")
+                order = dict(
+                    side="SELL",
+                    order_role="ADAPTIVE_EXIT_SELL",
+                    order_no=row["order_no"],
+                    order_date=row["trading_date"],
+                    parent_entry_signal_id=signal,
+                    signal_id=receipt["terminal_id"],
+                    owner_id=context.owner_id,
+                    owner_position_id=context.position_id,
+                    owner_registry_intent_id=row["intent_id"],
+                    owner_client_intent_id=row["client_intent_id"],
+                    requested_qty=row["requested_qty"],
+                    route=row["route"],
+                    broker_route=row["route"],
+                    broker_accepted=True,
+                    fill_price=None,
+                )
+                orders.append(order)
+            order.update(
+                filled_qty=row["filled_qty"],
+                remaining_qty=0,
+                status=(
+                    "FILLED"
+                    if row["filled_qty"] == row["requested_qty"]
+                    else "TERMINAL_UNFILLED"
+                ),
+                adaptive_exit_terminal_id=receipt["terminal_id"],
+                reconciliation_sha256=row["reconciliation_sha256"],
+                realized_pnl_status=receipt["realized_pnl_status"],
+            )
+        if self._filled_qty({"orders": orders}, "BUY") != self._filled_qty(
+            {"orders": orders}, "SELL"
+        ):
+            raise ValueError("adaptive_group_terminal_ordinary_ledger_not_flat")
+        # Recheck policy/lock/registry after projection, before archival.
+        port.validate_terminal(receipt)
+        prior = deepcopy(self._state)
+        state.setdefault("adaptive_exit_history", []).append(
+            {
+                "group_session": session.to_payload(),
+                "group_terminal": deepcopy(receipt),
+                "entry_signal_id": signal,
+                "superseded_pending_entry_confirmation": deepcopy(
+                    state.get("pending_entry_confirmation")
+                ),
+                "superseded_scale_in_requested": bool(state.get("scale_in_requested")),
+                "completed_observed_at": datetime.fromtimestamp(
+                    receipt["observed_at_ms"] / 1000, KST
+                ).isoformat(),
+            }
+        )
+        state.update(
+            orders=orders,
+            entry_episode_open=False,
+            exit_requested=False,
+            scale_in_requested=False,
+            pending_entry_confirmation=None,
+            last_episode_completed_at=datetime.fromtimestamp(
+                receipt["observed_at_ms"] / 1000, KST
+            ).isoformat(),
+            last_completed_entry_signal_id=signal,
+            completed_entry_count=_positive_int(state.get("completed_entry_count")) + 1,
+            adaptive_exit_loop_status="execution_terminal_handoff_completed",
+        )
+        del state[GROUP_SESSION_KEY]
+        try:
+            self._save()
+            saved = self._read_adaptive_group_file()
+            if saved.get("symbols", {}).get(code) != state:
+                raise OSError("group_owner_terminal_file_readback_missing")
+        except BaseException:
+            self._state = prior
+            raise
 
     def _persist_adaptive_terminal(self, symbol_state, key, receipt):
         session = OwnerSession.from_payload(symbol_state["adaptive_exit_sessions"][key])
@@ -4428,7 +5165,12 @@ class WidgetSignalAutoTrader:
             session = OwnerSession.from_payload(raw)
             receipt = receipts.get(key)
             validate_terminal(receipt, session)
-            if services.authorize_binding(session.binding) is not True:
+            if not binding_authorized(
+                services,
+                session,
+                symbol_state.get(ENROLLMENT_KEY, {}).get(key),
+                now=now,
+            ):
                 raise ValueError("frozen_policy_authority_missing")
             if (
                 self.owner_registry.owner_position_qty(
@@ -4493,6 +5235,7 @@ class WidgetSignalAutoTrader:
         symbol_state.setdefault("adaptive_exit_history", []).append(
             {
                 "sessions": deepcopy(sessions),
+                "enrollments": deepcopy(symbol_state.get(ENROLLMENT_KEY)),
                 "terminals": deepcopy(receipts),
                 "entry_signal_id": signal_id,
                 "completed_observed_at": now.isoformat(),
@@ -4516,6 +5259,7 @@ class WidgetSignalAutoTrader:
             adaptive_exit_loop_status="execution_terminal_handoff_completed",
         )
         del symbol_state["adaptive_exit_sessions"]
+        symbol_state.pop(ENROLLMENT_KEY, None)
         del symbol_state[TERMINAL_KEY]
         symbol_state.pop(FINAL_EXIT_KEY, None)
         symbol_state.pop("adaptive_exit_superseded_entry_confirmation", None)
@@ -4543,6 +5287,12 @@ class WidgetSignalAutoTrader:
 
     def run_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
         now = (observed_at or _now_kst()).astimezone(KST)
+        if getattr(self, "_profit_exit_reload_required", False):
+            raise OSError("profit_exit_owner_reload_required")
+        if any(active_widget(s) or PROFIT_OBSERVATION_KEY in s for s in (self._state.get("symbols") or {}).values()) and getattr(self, "profit_exit_lock_held", lambda: False)() is not True:
+            return deepcopy(self._state)
+        if getattr(self, "_adaptive_enrollment_reload_required", False):
+            raise EnrollmentReloadRequired("adaptive_enrollment_reload_required")
         services = self.adaptive_exit_services
         if isinstance(services, OwnerLoopServices) and services.lock_held() is not True:
             result = deepcopy(self._state)
@@ -4553,9 +5303,36 @@ class WidgetSignalAutoTrader:
         # Also resume removed catalog symbols and the producer-no-snapshot
         # branch; a new entry catalog must not orphan a frozen SELL manager.
         for code, state in (self._state.get("symbols") or {}).items():
-            if isinstance(state, dict) and "adaptive_exit_sessions" in state:
+            if isinstance(state, dict) and active_widget(state):
                 claimed.add(code)
-                self._run_adaptive_symbol(code, state, now)
+                spec = next((s for s in self.specs if s.code == code), None)
+                payload = self.snapshot_loader(spec.snapshot_path) if spec else None
+                if payload:
+                    self.process_payload(spec, payload, now)
+                else:
+                    run_profit_exit_symbol(self, state, now)
+                continue
+            if isinstance(state, dict) and self._try_adaptive_enrollment(
+                code, state, now
+            ):
+                claimed.add(code)
+                continue
+            if isinstance(state, dict) and (
+                "adaptive_exit_sessions" in state or GROUP_SESSION_KEY in state
+            ):
+                claimed.add(code)
+                if GROUP_SESSION_KEY in state:
+                    spec = next((s for s in self.specs if s.code == code), None)
+                    payload = self.snapshot_loader(spec.snapshot_path) if spec else None
+                    self._run_adaptive_group(
+                        code,
+                        state,
+                        now,
+                        source_spec=spec if payload else None,
+                        source_payload=payload,
+                    )
+                else:
+                    self._run_adaptive_symbol(code, state, now)
                 if (
                     isinstance(services, OwnerLoopServices)
                     and services.lock_held() is not True
@@ -4577,6 +5354,8 @@ class WidgetSignalAutoTrader:
                 # cancellation must not depend on a producer snapshot being
                 # present.  This branch never creates a new entry signal.
                 symbol_state = self._state["symbols"][spec.code]
+                if run_profit_exit_symbol(self, symbol_state, now):
+                    continue
                 self._reconcile(spec, symbol_state, now)
                 self._cancel_market_weakness_pending_buys(
                     spec=spec,

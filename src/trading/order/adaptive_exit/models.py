@@ -137,7 +137,13 @@ class Snapshot:
 @dataclass(frozen=True)
 class Clock:
     now_ms: int
-    verified_halt_ms: int
+    # None is unknown active-market time, never an assumed zero halt. It can
+    # support exact receipt reconciliation using wall time, but no new action.
+    verified_halt_ms: int | None
+
+
+class ClockSourceGap(ValueError):
+    """Clock provider cannot certify session/halt history for this position."""
 
 
 @dataclass(frozen=True)

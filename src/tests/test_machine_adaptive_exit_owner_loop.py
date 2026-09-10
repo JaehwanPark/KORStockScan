@@ -16,12 +16,15 @@ from src.tests.test_machine_adaptive_exit_broker import (
     current,
 )
 from src.tests.test_machine_adaptive_exit_decision import inputs
-from src.tests.test_machine_adaptive_exit_runtime import working_exit
+from src.tests.test_machine_adaptive_exit_runtime import working_exit, cancel_detail
 from src.trading.config.machine_adaptive_exit_policy import canonical_sha256
 from src.trading.order.adaptive_exit.broker import RegisteredSellAdapter
 from src.trading.order.adaptive_exit.driver import DriverState, ExecutionBounds
 from src.trading.order.adaptive_exit.models import Clock, DecisionState
-from src.trading.order.adaptive_exit.owner_loop import SESSION_KEY, OwnerLoopServices
+from src.trading.order.adaptive_exit.owner_loop import (
+    SESSION_KEY,
+    OwnerLoopServices,
+)
 from src.trading.order.adaptive_exit.reducer import ExitState
 from src.trading.order.adaptive_exit.runtime import OwnerSession
 from src.trading.order.owner_custody_registry import (
@@ -377,7 +380,7 @@ def test_pending_buy_is_explicit_recovery_not_adaptive_cancel_or_new_buy(loop):
 
 def test_terminal_replacement_updates_quantity_not_profit_or_new_entry(loop):
     loop.tick()
-    loop.wire.detailed, loop.wire.current = [detail(ord_remnq="0")], []
+    loop.wire.detailed, loop.wire.current = [detail(ord_remnq="0"), cancel_detail()], []
     loop.tick()
     assert loop.record()["driver"]["orders"]["phase"] == "RESIDUAL_READY"
     loop.wire.write_body["ord_no"] = "0000004"

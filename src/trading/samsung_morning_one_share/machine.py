@@ -15,7 +15,16 @@ from src.trading.order.episode_quantity import (
 )
 from src.trading.order.owner_custody_registry import OwnerRegistryError
 from src.trading.order.adaptive_exit.source import record_first_fill_observation
-from src.trading.order.regular_two_leg_machine import KST, SamsungRegularTwoLegMachine
+from src.trading.order.adaptive_exit.episode_sor_fallback import (
+    prepare as prepare_adaptive_sor_fallback,
+    step_planned as step_adaptive_sor_fallback,
+    before_buy as require_adaptive_sor_buy,
+)
+from src.trading.order.regular_two_leg_machine import (
+    KST,
+    SamsungRegularTwoLegMachine,
+    _new_leg,
+)
 from src.trading.config.machine_entry_timing_policy import (
     DYNAMIC_MODE,
     ENTRY_CONFIRMATION_MAX_LATE_SEC,
@@ -41,6 +50,9 @@ def _episode_ownership_source(code: object) -> str:
 
 def _morning_leg(plan: dict, route: str) -> dict:
     return {
+        # Use the same persisted defaults as the loader. Otherwise a fresh
+        # morning leg changes identity when read back for a durable write gate.
+        **_new_leg(plan["leg_id"], plan["price_role"], plan["entry_price"]),
         **plan,
         "quantity": EPISODE_LEG_QUANTITY,
         "route": route,
@@ -138,6 +150,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
         return snapshot
 
     def _submit_target(self, now: datetime, leg: dict) -> None:
+        self._require_adaptive_legacy_target_authority(leg, now)
         if (
             int(leg.get("position_qty", 0) or 0) <= 0
             or int(leg.get("fill_price", 0) or 0) <= 0
@@ -175,6 +188,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 f"target_submit_owner_registry_or_gateway_error:{leg['leg_id']}:{type(exc).__name__}",
             )
             return
+        self._require_adaptive_legacy_target_authority(leg, now)
         try:
             result = self.gateway.submit_limit_sell(
                 route=str(leg["route"]), price=target_price, quantity=target_quantity
@@ -319,6 +333,20 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             }
         )
         self._record(now, "nxt_leg_released_for_sor_fallback", leg_id=leg["leg_id"])
+
+    def _adaptive_zero_buy_handoff(self, now, leg):
+        prepare_adaptive_sor_fallback(self, now, leg)
+
+    def _adaptive_planned_buy_handoff(self, now):
+        return step_adaptive_sor_fallback(self, now)
+
+    def _adaptive_leg_session(self, leg):
+        return "NXT_PREMARKET" if leg.get("route") == "NXT" else "KRX_REGULAR"
+
+    def _validate_adaptive_leg(self, leg, session):
+        super()._validate_adaptive_leg(leg, session)
+        if session.policy.scope_key.split("|")[3] != leg.get("route"):
+            raise ValueError("adaptive_morning_leg_route_mismatch")
 
     def _submit_buy_cancel(self, leg: dict, now: datetime):
         original_intent_id = str(leg.get("buy_owner_registry_intent_id") or "")
@@ -494,6 +522,21 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             self._cancel_buy(now, leg, 0)
         else:
             self._record(now, "buy_open_wait", leg_id=leg["leg_id"], route=leg["route"])
+
+    def _adaptive_pending_buy_cancel_reason(self, now, leg, snapshot):
+        if snapshot.filled_qty > 0:
+            return {
+                "reason": "partial_fill_remainder",
+                "filled_qty": snapshot.filled_qty,
+            }
+        deadline = self._window(str(leg["route"])).deadline
+        if now.time() < deadline:
+            return None
+        return {
+            "reason": "entry_validity_expired",
+            "route": leg["route"],
+            "original_deadline": deadline.isoformat(),
+        }
 
     def _price_sor_leg(self, now: datetime, leg: dict) -> bool:
         opening = self.gateway.opening_price(route="SOR", trade_date=now.date())
@@ -731,6 +774,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 ):
                     return
                 approved_routes.add(route)
+            require_adaptive_sor_buy(self, now, leg)
             leg["status"] = "BUY_SUBMITTING"
             self._record(
                 now,
@@ -760,6 +804,7 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     f"buy_submit_owner_registry_or_gateway_error:{leg['leg_id']}:{type(exc).__name__}",
                 )
                 return
+            require_adaptive_sor_buy(self, now, leg, reserved=True)
             try:
                 result = self.gateway.submit_limit_buy(
                     route=route,

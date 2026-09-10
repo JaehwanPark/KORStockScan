@@ -12,6 +12,7 @@ from src.engine.risk.manual_control_exclusion import (
     independent_machine_ownership_source,
 )
 from src.trading.order.episode_quantity import SUPPORTED_OWNED_LEG_QUANTITIES
+from src.trading.order.profit_stagnation_exit import KEY as PROFIT_EXIT_KEY, order_history, policy_digest
 from src.trading.order.regular_two_leg_machine import (
     KST,
     SamsungRegularTwoLegMachine,
@@ -41,6 +42,26 @@ def _episode_ownership_source(code: object) -> str:
     return independent_machine_ownership_source(code, owner="episode")
 
 
+def _profit_terminal_complete(leg: dict) -> bool:
+    """Quantity/receipt completion; observation time is NOT a fill-time proxy."""
+    try:
+        state = leg[PROFIT_EXIT_KEY]
+        records = order_history(state)
+        return bool(state["phase"] == "FLAT"
+            and state["policy_content_sha256"] == policy_digest(state["policy"])
+            and len(state["terminal_receipt_sha256"]) == 64
+            and all(c in "0123456789abcdef" for c in state["terminal_receipt_sha256"])
+            and type(state["terminal_observed_at_ms"]) is int and state["terminal_observed_at_ms"] > 0
+            and state["root"] == {"trading_date": leg["target_order_date"], "order_no": leg["target_order_no"]}
+            and records[0]["filled"] == leg["target_filled_qty"]
+            and sum(r["filled"] for r in records[1:]) == leg.get("profit_stagnation_filled_qty", 0)
+            and all(type(r["filled"]) is int and 0 <= r["filled"] <= r["quantity"] for r in records)
+            and sum(r["filled"] for r in records) == leg["buy_filled_qty"] > 0
+            and leg["position_qty"] == 0)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _first_episode_payload_complete(payload: object, target_date: date) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -53,9 +74,10 @@ def _first_episode_payload_complete(payload: object, target_date: date) -> bool:
             and all(
                 isinstance(leg, dict)
                 and leg.get("status") == "COMPLETE"
-                and int(leg.get("target_filled_qty", 0) or 0) > 0
-                and int(leg.get("target_filled_qty", 0) or 0)
-                == int(leg.get("buy_filled_qty", leg.get("target_filled_qty", 0)) or 0)
+                and (_profit_terminal_complete(leg) if PROFIT_EXIT_KEY in leg else (
+                    int(leg.get("target_filled_qty", 0) or 0) > 0
+                    and int(leg.get("target_filled_qty", 0) or 0)
+                    == int(leg.get("buy_filled_qty", leg.get("target_filled_qty", 0)) or 0)))
                 for leg in legs
             )
         )
@@ -307,6 +329,10 @@ class SamsungMorningSORReentryMachine(SamsungRegularTwoLegMachine):
                 continue
             leg_id = str(leg.get("leg_id") or "")
             if leg_id not in expected_ids:
+                continue
+            if PROFIT_EXIT_KEY in leg and _profit_terminal_complete(leg):
+                completion_by_leg[leg_id] = datetime.fromtimestamp(
+                    leg[PROFIT_EXIT_KEY]["terminal_observed_at_ms"] / 1000, KST)
                 continue
             try:
                 completed_at = datetime.fromisoformat(

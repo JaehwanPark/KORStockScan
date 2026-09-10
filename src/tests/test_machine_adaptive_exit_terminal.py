@@ -8,7 +8,7 @@ import pytest
 
 from src.tests import test_machine_adaptive_exit_owner_loop as owner_fixtures
 from src.tests.test_machine_adaptive_exit_broker import detail, current, DATE
-from src.tests.test_machine_adaptive_exit_runtime import working_exit
+from src.tests.test_machine_adaptive_exit_runtime import working_exit, cancel_detail
 from src.trading.order.adaptive_exit.runtime import OwnerSession
 from src.trading.order.adaptive_exit.terminal import TERMINAL_KEY, validate_terminal
 from src.trading.widget_auto_trade import engine as widget
@@ -27,7 +27,10 @@ def close(loop, target_fill=0):
         loop.tick()
     loop.wire.write_body["cncl_qty"] = str(10 - target_fill)
     loop.tick()
-    loop.wire.detailed = [detail(cntr_qty=str(target_fill), ord_remnq="0")]
+    loop.wire.detailed = [
+        detail(cntr_qty=str(target_fill), ord_remnq="0"),
+        cancel_detail(requested=10 - target_fill),
+    ]
     loop.wire.current = []
     loop.tick()
     loop.wire.write_body["ord_no"] = "0000004"
@@ -207,6 +210,41 @@ def test_target_only_completion_has_no_replacement_or_profit_claim(loop):
     r = receipt(loop)
     assert len(r["orders"]) == 1 and r["orders"][0]["filled_qty"] == 10
     assert r["realized_net_profit_krw"] is None and not loop.wire.writes
+
+
+@pytest.mark.parametrize("missing", ["child", "confirmation", "zero_confirmation"])
+def test_target_terminal_without_cancel_confirmation_keeps_owner(loop, missing):
+    loop.tick()
+    assert len(loop.wire.writes) == 1
+    child = cancel_detail()
+    if missing == "confirmation":
+        child.pop("cnfm_qty")
+    elif missing == "zero_confirmation":
+        child["cnfm_qty"] = "0"
+    loop.wire.detailed = [detail(ord_remnq="0")]
+    if missing != "child":
+        loop.wire.detailed.append(child)
+    loop.wire.current = []
+    for _ in range(2):
+        loop.tick()
+    assert loop.record()["driver"]["orders"]["phase"] == "CANCEL_PENDING"
+    assert len(loop.wire.writes) == 1
+    state = (
+        loop.machine._state
+        if loop.owner == "episode"
+        else loop.machine._state["symbols"]["005930"]
+    )
+    assert not state.get("adaptive_exit_history")
+    assert not state.get("completed_entry_count")
+    assert OwnerSession.from_payload(loop.record()).driver.orders.open_qty == 10
+    # Exact positive proof later resumes the same owner without another cancel.
+    if missing == "child":
+        loop.wire.detailed.append(cancel_detail())
+    else:
+        loop.wire.detailed[-1] = cancel_detail()
+    loop.tick()
+    assert loop.record()["driver"]["orders"]["phase"] == "RESIDUAL_READY"
+    assert len(loop.wire.writes) == 1
 
 
 @pytest.mark.parametrize("receipt_first", [True, False])

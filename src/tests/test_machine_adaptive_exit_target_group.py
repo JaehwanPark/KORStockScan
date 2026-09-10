@@ -215,7 +215,8 @@ def test_natural_census_deduplicates_shared_target_and_passes_diagnostic_to_stud
     groups = row["shared_target_groups"]
     assert len(groups) == 1
     assert len(row["lots"]) == 2
-    assert row["complete"] and not anchors
+    assert row["complete"] and len(anchors) == 2
+    assert not row["lot_paths"]  # Missing market windows remain missing.
     assert groups[DAY + ":2222222"]["status"] == "source_bound_runtime_unavailable"
     assert row["expected_episode_lots"] == {f"samsung:midday:{DAY}": ["leg1", "leg2"]}
     result = run_study(target_date=DAY, catalog=(SCOPE,), source=census, contract=None)
@@ -253,19 +254,21 @@ def test_natural_census_deduplicates_shared_target_and_passes_diagnostic_to_stud
 
 def test_group_missing_second_current_owned_lot_is_not_source_bound(tmp_path):
     _, legs = source()
-    census, _ = collect(tmp_path, legs[:1])
+    census, anchors = collect(tmp_path, legs[:1])
     record = census["scopes"][SCOPE.key]["shared_target_groups"][DAY + ":2222222"]
     assert record["status"] == "source_invalid"
     assert record["reason"] == "shared_target_current_owner_lot_mismatch"
+    assert not anchors
 
 
 def test_changed_current_fill_price_does_not_reuse_frozen_group(tmp_path):
     _, legs = source()
     legs[1]["fill_price"] = 10010
-    census, _ = collect(tmp_path, legs)
+    census, anchors = collect(tmp_path, legs)
     record = census["scopes"][SCOPE.key]["shared_target_groups"][DAY + ":2222222"]
     assert record["status"] == "source_invalid"
     assert not record["current_target_epoch_verified"]
+    assert not anchors
 
 
 def test_pure_reconciliation_is_restart_deterministic_and_does_not_mutate_input():

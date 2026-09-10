@@ -5,12 +5,92 @@ commission allocation. Keep economics null until a separately verified exact
 settlement source arrives. This ledger never submits orders or approves policy.
 """
 
-from dataclasses import asdict
+from copy import deepcopy
+from dataclasses import asdict, replace
 
 from src.trading.config.machine_adaptive_exit_policy import canonical_sha256
 
 SCHEMA = "machine_adaptive_exit_execution_terminal_v1"
 TERMINAL_KEY = "adaptive_exit_execution_terminal"
+
+
+def owner_cancel_client_id(binding_hash, order):
+    return canonical_sha256(
+        {"binding": binding_hash, "order": asdict(order), "action": "cancel"}
+    )
+
+
+def confirmed_cancel_proof(*, session, adapter, order):
+    """Require a cancel's own terminal proof; a root fill never closes an ACK."""
+    child = adapter.registry.intent_for_client(
+        context=replace(
+            session.context,
+            client_intent_id=owner_cancel_client_id(session.binding_hash, order),
+        )
+    )
+    if child is None:
+        return None
+    root = adapter._owned(order)
+    proof = child.get("terminal_cancel_reconciliation")
+    if (
+        root.get("state") != "ORDER_TERMINAL"
+        or child.get("state") != "ORDER_TERMINAL"
+        or child.get("action") != "CANCEL"
+        or child.get("side") != "SELL"
+        or child.get("original_order_no") != order.order_no
+        or child.get("authority_policy_hash") != session.policy.policy_hash
+        or child.get("authority_policy_id") != "machine_adaptive_exit_v1"
+        or any(
+            child.get(k) != root.get(k)
+            for k in (
+                "symbol",
+                "route",
+                "order_date",
+                "owner_type",
+                "owner_id",
+                "position_id",
+                "account_key",
+            )
+        )
+        or not isinstance(proof, dict)
+        or any(
+            type(row.get(k)) is not int
+            for row, k in (
+                (root, "quantity"),
+                (root, "filled_qty"),
+                (root, "canceled_qty"),
+                (child, "quantity"),
+                (proof, "requested_qty"),
+                (proof, "filled_qty"),
+                (proof, "remaining_qty"),
+            )
+        )
+        or root.get("terminal_cancel_reconciliation") != proof
+        or any(
+            proof.get(k) != v
+            for k, v in {
+                "schema": "order_owner_terminal_cancel_reconciliation_v1",
+                "source_contract": "machine_adaptive_exit_terminal_cancel_dated_current_v1",
+                "target_intent_id": root["intent_id"],
+                "cancel_intent_id": child["intent_id"],
+                "target_order_no": order.order_no,
+                "cancel_order_no": child.get("broker_order_no"),
+                "order_date": order.trading_date,
+                "requested_qty": child["quantity"],
+                "filled_qty": root["filled_qty"],
+                "remaining_qty": 0,
+            }.items()
+        )
+        or type(proof.get("confirmed_qty")) is not int
+        or not 0 < proof["confirmed_qty"] <= child["quantity"]
+        or root.get("canceled_qty") != proof["confirmed_qty"]
+        or root["quantity"] != root["filled_qty"] + proof["confirmed_qty"]
+        or not isinstance(proof.get("receipt_sha256"), str)
+        or len(proof["receipt_sha256"]) != 64
+        or any(c not in "0123456789abcdef" for c in proof["receipt_sha256"])
+    ):
+        raise ValueError("adaptive_terminal_cancel_child_proof_required")
+    return deepcopy(proof)
 
 
 def terminal_receipt(*, session, adapter, observed_at_ms):
@@ -29,7 +109,7 @@ def terminal_receipt(*, session, adapter, observed_at_ms):
         or observed_at_ms < session.position.first_fill_at_ms
     ):
         raise ValueError("adaptive_terminal_observation_time_invalid")
-    rows = []
+    rows, cancels = [], []
     predecessor = s.target
     for index, key in enumerate((s.target, *s.exit_order_history)):
         row = adapter._owned(key)
@@ -81,6 +161,22 @@ def terminal_receipt(*, session, adapter, observed_at_ms):
             or row.get("authority_policy_hash") != session.policy.policy_hash
         ):
             raise ValueError("adaptive_terminal_replacement_chain_mismatch")
+        child_proof = confirmed_cancel_proof(
+            session=session, adapter=adapter, order=key
+        )
+        child_id = child_proof["cancel_intent_id"] if child_proof else None
+        census = adapter.registry.position_intents(
+            context=session.context, symbol=adapter.symbol
+        )
+        if any(
+            r.get("order_date") == key.trading_date
+            and r.get("original_order_no") == key.order_no
+            and r["intent_id"] != child_id
+            for r in census
+        ):
+            raise ValueError("adaptive_terminal_unresolved_cancel_or_successor")
+        if child_proof is not None:
+            cancels.append(child_proof)
         rows.append(
             {
                 **asdict(key),
@@ -118,6 +214,7 @@ def terminal_receipt(*, session, adapter, observed_at_ms):
         "buy_filled_qty": s.buy_filled_qty,
         "sell_filled_qty": sum(row["filled_qty"] for row in rows),
         "orders": rows,
+        "cancel_proofs": cancels,
         "realized_pnl_status": "unreconciled_exact_fill_cost_required",
         "realized_net_profit_krw": None,
         "economic_acceptance": False,

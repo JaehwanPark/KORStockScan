@@ -132,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         dynamic_spec_catalog=CALIBRATED_WIDGET_SPECS,
         entry_action_notifier=WidgetAutoTradeEntryTelegramNotifier(),
     )
+    trader.profit_exit_lock_held = lambda: not lock_handle.closed
     publish_startup_receipt(trader, interval_sec=args.interval_sec, once=args.once)
     if args.once:
         trader.run_once()

@@ -314,7 +314,7 @@ class GroupCoordinator:
                 )
             )
             or r["target_filled_qty"] < raw["initial_filled_qty"]
-            or r["target_reserved_qty"] <= 0
+            or r["target_reserved_qty"] < 0
             or r["runner_released_qty"] != raw["requested_qty"]
             or r["target_filled_qty"]
             + r["target_reserved_qty"]
@@ -357,12 +357,15 @@ class GroupCoordinator:
             raise ValueError("group_durable_save_receipt_missing")
         return saved
 
-    def _fresh(self, snapshot, start):
+    def _fresh(self, snapshot, start, *, allow_terminal=False):
         now = self.adapter.now_ms()
         if (
             snapshot.source_ok is not True
             or snapshot.order != self.group.target
-            or snapshot.terminal is not False
+            or (
+                snapshot.terminal is not False
+                and not (allow_terminal and snapshot.terminal is True)
+            )
             or not 0 <= now - start <= self.max_age
             or not start <= snapshot.observed_at_ms <= now
             or datetime.fromtimestamp(now / 1000, KST).date().isoformat()
@@ -468,7 +471,7 @@ class GroupCoordinator:
         snapshot = self.adapter.reconcile_partial_cancel(
             self.group.target, order, max_snapshot_age_ms=self.max_age
         )
-        self._fresh(snapshot, start)
+        self._fresh(snapshot, start, allow_terminal=True)
         target, cancel = self._target(), self._row(order)
         proof = cancel.get("cancel_reconciliation")
         if (
@@ -487,7 +490,8 @@ class GroupCoordinator:
                 }.items()
             )
             or target.get("partial_cancel_reconciliation") != proof
-            or target.get("state") != "ORDER_BOUND"
+            or target.get("state")
+            != ("ORDER_TERMINAL" if snapshot.terminal else "ORDER_BOUND")
             or cancel.get("state") != "ORDER_TERMINAL"
             or target.get("canceled_qty") != state["requested_qty"]
             or target.get("filled_qty") != snapshot.filled_qty

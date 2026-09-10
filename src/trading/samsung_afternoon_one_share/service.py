@@ -122,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         policy=policy,
         live_enabled=live_enabled,
     )
+    machine.profit_exit_lock_held = lambda: not lock_handle.closed
     if args.once:
         print(json.dumps(machine.run_once(), ensure_ascii=False, indent=2))
         return 0

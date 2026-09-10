@@ -28,6 +28,7 @@ from .reducer import OrderKey
 
 KST = ZoneInfo("Asia/Seoul")
 FAMILY = "machine_adaptive_exit_v1"
+PROFIT_STAGNATION_FAMILY = "machine_profit_stagnation_v1"
 OFFICIAL_REFERENCE_SHA = "234560d213acd8871ae344b5481aecd2f30287fa"
 
 
@@ -117,9 +118,12 @@ class RegisteredSellAdapter:
         write_guard: Callable[[SellWrite], bool] | None = None,
         now_ms: Callable[[], int] | None = None,
         new_route: Callable[[str], str] | None = None,
+        authority_policy_id: str = FAMILY,
     ):
         context.validate()
         if (
+            authority_policy_id not in {FAMILY, PROFIT_STAGNATION_FAMILY}
+            or
             context.owner_type not in {"widget_auto_trade", "episode"}
             or not re.fullmatch(r"[0-9]{6}", symbol)
             or not routes
@@ -134,6 +138,7 @@ class RegisteredSellAdapter:
         self.post, self.registry, self.context = post, registry, context
         self.symbol, self.routes, self.policy_hash = symbol, routes, policy_hash
         self.maximum_quantity = maximum_quantity
+        self.authority_policy_id = authority_policy_id
         self.require_write_authority, self.write_guard = (
             require_write_authority,
             write_guard,
@@ -143,6 +148,11 @@ class RegisteredSellAdapter:
         self.account_key = broker_account_key(require_explicit=True)
 
     def _owned(self, order):
+        return self._owned_for_side(order, "SELL")
+
+    def _owned_for_side(self, order, side):
+        if side not in {"BUY", "SELL"}:
+            raise SellContractError("invalid_owned_order_side")
         if not isinstance(order, OrderKey):
             raise SellContractError("exact_dated_order_required")
         _number(order.order_no)
@@ -156,7 +166,7 @@ class RegisteredSellAdapter:
         quantity = _count(row.get("quantity"))
         if (
             row.get("symbol") != self.symbol
-            or row.get("side") != "SELL"
+            or row.get("side") != side
             or row.get("action") != "NEW"
             or row.get("route") not in self.routes
             or quantity <= 0
@@ -211,9 +221,33 @@ class RegisteredSellAdapter:
         """Read-only; no stale transport cache and no absence-only terminal proof."""
         return self._snapshot(order)[0]
 
-    def _snapshot(self, order: OrderKey, *, cancel_order: OrderKey | None = None):
+    def _snapshot(
+        self,
+        order: OrderKey,
+        *,
+        cancel_order: OrderKey | None = None,
+        terminal_cancel=False,
+        allow_released_terminal=False,
+        _side="SELL",
+        _full_buy_price=False,
+        _cancelled_buy_price=False,
+    ):
         try:
-            owned = self._owned(order)
+            if _cancelled_buy_price and (
+                _side != "BUY"
+                or cancel_order is None
+                or not terminal_cancel
+                or _full_buy_price
+            ):
+                raise SellContractError("cancelled_buy_price_scope_invalid")
+            if _full_buy_price and (_side != "BUY" or cancel_order is not None):
+                raise SellContractError("full_buy_price_scope_invalid")
+            owned = self._owned_for_side(order, _side)
+            if _side == "BUY" and (
+                allow_released_terminal
+                or (cancel_order is not None and not terminal_cancel)
+            ):
+                raise SellContractError("buy_partial_release_not_supported")
             cancel = None
             if cancel_order is not None:
                 if (
@@ -229,11 +263,11 @@ class RegisteredSellAdapter:
                 )
                 if (
                     cancel.get("action") != "CANCEL"
-                    or cancel.get("side") != "SELL"
+                    or cancel.get("side") != _side
                     or cancel.get("original_order_no") != order.order_no
                     or cancel.get("symbol") != self.symbol
                     or cancel.get("route") != owned["route"]
-                    or cancel.get("authority_policy_id") != FAMILY
+                    or cancel.get("authority_policy_id") != self.authority_policy_id
                     or cancel.get("authority_policy_hash") != self.policy_hash
                     or cancel.get("state") not in {"ORDER_BOUND", "ORDER_TERMINAL"}
                     or type(cancel.get("quantity")) is not int
@@ -253,7 +287,7 @@ class RegisteredSellAdapter:
                     "ord_dt": today.replace("-", ""),
                     "qry_tp": "1",
                     "stk_bond_tp": "1",
-                    "sell_tp": "1",
+                    "sell_tp": "2" if _side == "BUY" else "1",
                     "stk_cd": self.symbol,
                     "fr_ord_no": "",
                     "dmst_stex_tp": "%",
@@ -264,13 +298,14 @@ class RegisteredSellAdapter:
                 "ka10075",
                 {
                     "all_stk_tp": "1",
-                    "trde_tp": "1",
+                    "trde_tp": "2" if _side == "BUY" else "1",
                     "stk_cd": self.symbol,
                     "stex_tp": "0",
                 },
                 "oso",
             )
             root, open_root, cancel_confirmations = set(), set(), set()
+            full_buy_prices = set()
             descendants = {order.order_no}
             links = [(r.get("ord_no"), r.get("ori_ord")) for r in detailed]
             links += [(r.get("ord_no"), r.get("orig_ord_no")) for r in current]
@@ -339,6 +374,11 @@ class RegisteredSellAdapter:
                         if original not in ("", "0000000") or qty != owned["quantity"]:
                             raise SellContractError("broker_original_identity_conflict")
                         (open_root if is_current else root).add((filled, remaining))
+                        if (_full_buy_price or _cancelled_buy_price) and not is_current:
+                            price = _count(row.get("cntr_uv")) if filled else 0
+                            if price <= 0 and (_full_buy_price or filled):
+                                raise SellContractError("full_buy_fill_price_missing")
+                            full_buy_prices.add(price)
                     elif original in descendants:
                         successor = self.registry.order_owner(
                             order_date=today, broker_order_no=number
@@ -356,6 +396,7 @@ class RegisteredSellAdapter:
                                     "owner_id",
                                     "position_id",
                                     "symbol",
+                                    "side",
                                 )
                             )
                             or (is_current and remaining > 0)
@@ -385,7 +426,11 @@ class RegisteredSellAdapter:
                             )
                             if (
                                 qty != cancel["quantity"]
-                                or confirmed != qty
+                                or (
+                                    not 0 < confirmed <= qty
+                                    if terminal_cancel
+                                    else confirmed != qty
+                                )
                                 or filled != 0
                                 or remaining != 0
                                 or confirmed_at > start
@@ -393,7 +438,7 @@ class RegisteredSellAdapter:
                                 raise SellContractError(
                                     "partial_cancel_confirmation_incomplete"
                                 )
-                            cancel_confirmations.add((qty, confirmed_at))
+                            cancel_confirmations.add((confirmed, confirmed_at))
             if len(root) != 1 or len(open_root) > 1:
                 raise SellContractError("missing_or_conflicting_dated_order")
             filled, remaining = next(iter(root))
@@ -405,14 +450,49 @@ class RegisteredSellAdapter:
                 raise SellContractError("dated_current_quantity_race")
             if remaining and not open_root:
                 raise SellContractError("absence_without_dated_terminal")
+            if _full_buy_price and (
+                filled != owned["quantity"]
+                or remaining != 0
+                or owned.get("canceled_qty", 0)
+                or len(full_buy_prices) != 1
+                or descendants != {order.order_no}
+            ):
+                raise SellContractError("priced_full_buy_not_proved")
+            if _cancelled_buy_price and len(full_buy_prices) != 1:
+                raise SellContractError("cancelled_buy_fill_price_conflict")
             if cancel is not None:
+                confirmed_qty = (
+                    next(iter(cancel_confirmations))[0]
+                    if len(cancel_confirmations) == 1
+                    else 0
+                )
                 prior = owned.get("canceled_qty", 0)
-                if cancel.get("cancel_reconciliation") is None:
-                    prior += cancel["quantity"]
+                proof_key = (
+                    "terminal_cancel_reconciliation"
+                    if terminal_cancel
+                    else "cancel_reconciliation"
+                )
+                if cancel.get(proof_key) is None:
+                    prior += confirmed_qty
+                released_terminal = (
+                    allow_released_terminal
+                    and not terminal_cancel
+                    and remaining == 0
+                    and isinstance(cancel.get("cancel_reconciliation"), dict)
+                )
                 if (
                     len(cancel_confirmations) != 1
-                    or remaining <= 0
-                    or owned.get("state") != "ORDER_BOUND"
+                    or (
+                        remaining != 0
+                        if terminal_cancel
+                        else remaining <= 0 and not released_terminal
+                    )
+                    or owned.get("state")
+                    not in (
+                        {"ORDER_BOUND", "ORDER_TERMINAL"}
+                        if terminal_cancel or released_terminal
+                        else {"ORDER_BOUND"}
+                    )
                     or owned["quantity"] != filled + remaining + prior
                 ):
                     raise SellContractError("partial_cancel_root_conservation_unproved")
@@ -437,6 +517,7 @@ class RegisteredSellAdapter:
                         "account_scope": _hash(self.account_key),
                         "start": start,
                         "end": end,
+                        **({"side": "BUY"} if _side == "BUY" else {}),
                     }
                 ),
             )
@@ -444,7 +525,7 @@ class RegisteredSellAdapter:
                 {
                     "target_event_hash": owned["event_hash"],
                     "cancel_event_hash": cancel["event_hash"],
-                    "confirmed_qty": cancel["quantity"],
+                    "confirmed_qty": confirmed_qty,
                     "receipt_sha256": _hash(
                         {
                             "root_receipt": snapshot.receipt_hash,
@@ -453,9 +534,21 @@ class RegisteredSellAdapter:
                         }
                     ),
                     "started_at_ms": start,
+                    **(
+                        {"fill_price": next(iter(full_buy_prices)) or None}
+                        if _cancelled_buy_price
+                        else {}
+                    ),
                 }
                 if cancel is not None
-                else None
+                else (
+                    {
+                        "fill_price": next(iter(full_buy_prices)),
+                        "started_at_ms": start,
+                    }
+                    if _full_buy_price
+                    else None
+                )
             )
         except Exception as exc:
             # Never leak response text, token or account numbers into an alert.
@@ -477,7 +570,9 @@ class RegisteredSellAdapter:
         """
         if type(max_snapshot_age_ms) is not int or max_snapshot_age_ms <= 0:
             raise ValueError("partial_cancel_freshness_bound_required")
-        snapshot, proof = self._snapshot(order, cancel_order=cancel_order)
+        snapshot, proof = self._snapshot(
+            order, cancel_order=cancel_order, allow_released_terminal=True
+        )
         if snapshot.source_ok:
             try:
                 now = self.now_ms()
@@ -491,15 +586,18 @@ class RegisteredSellAdapter:
                     raise SellContractError(
                         "partial_cancel_snapshot_stale_or_account_changed"
                     )
-                self.registry.record_partial_cancel_reconciliation(
-                    context=self.context,
-                    order_date=order.trading_date,
-                    target_order_no=order.order_no,
-                    cancel_order_no=cancel_order.order_no,
-                    filled_qty=snapshot.filled_qty,
-                    remaining_qty=snapshot.remaining_qty,
-                    **{k: v for k, v in proof.items() if k != "started_at_ms"},
-                )
+                if snapshot.terminal:
+                    self._bind_released_target_terminal(order, cancel_order, snapshot)
+                else:
+                    self.registry.record_partial_cancel_reconciliation(
+                        context=self.context,
+                        order_date=order.trading_date,
+                        target_order_no=order.order_no,
+                        cancel_order_no=cancel_order.order_no,
+                        filled_qty=snapshot.filled_qty,
+                        remaining_qty=snapshot.remaining_qty,
+                        **{k: v for k, v in proof.items() if k != "started_at_ms"},
+                    )
             except SellContractError as exc:
                 return SellSnapshot(order, error=str(exc))
             except Exception:
@@ -507,6 +605,54 @@ class RegisteredSellAdapter:
                     order, error="partial_cancel_registry_reconciliation_failed"
                 )
         return snapshot
+
+    def _bind_released_target_terminal(self, order, cancel_order, snapshot):
+        """A previously proved partial release survives the kept target filling.
+
+        This cannot create the FIRST partial-cancel proof from a terminal root.
+        Re-read immutable journal proof and current dated/cancel confirmation;
+        released capacity stays C, not Q, and no additional cancel is sent.
+        """
+        target = self._owned(order)
+        child = self.registry.assert_owner(
+            context=self.context,
+            order_date=cancel_order.trading_date,
+            broker_order_no=cancel_order.order_no,
+        )
+        saved = child.get("cancel_reconciliation")
+        if (
+            not isinstance(saved, dict)
+            or target.get("partial_cancel_reconciliation") != saved
+            or child.get("state") != "ORDER_TERMINAL"
+            or any(
+                saved.get(k) != v
+                for k, v in {
+                    "schema": "order_owner_partial_cancel_reconciliation_v1",
+                    "source_contract": "machine_adaptive_exit_full_cancel_request_dated_current_v1",
+                    "target_intent_id": target["intent_id"],
+                    "cancel_intent_id": child["intent_id"],
+                    "target_order_no": order.order_no,
+                    "cancel_order_no": cancel_order.order_no,
+                    "order_date": order.trading_date,
+                    "confirmed_qty": child["quantity"],
+                }.items()
+            )
+            or any(
+                type(saved.get(k)) is not int or saved[k] < 0
+                for k in ("filled_qty", "remaining_qty", "confirmed_qty")
+            )
+            or saved["remaining_qty"] <= 0
+            or saved["confirmed_qty"] <= 0
+            or target.get("canceled_qty") != saved["confirmed_qty"]
+            or sum(saved[k] for k in ("filled_qty", "remaining_qty", "confirmed_qty"))
+            != target["quantity"]
+            or snapshot.filled_qty < saved["filled_qty"]
+            or snapshot.filled_qty + saved["confirmed_qty"] != target["quantity"]
+            or not isinstance(saved.get("receipt_sha256"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", saved["receipt_sha256"])
+        ):
+            raise SellContractError("previous_exact_partial_release_required")
+        self._bind_fill(target, snapshot)
 
     def reconcile_owned_sell(self, order: OrderKey) -> SellSnapshot:
         """Persist exact cumulative fills in the same owner registry, not PnL."""
@@ -516,6 +662,51 @@ class RegisteredSellAdapter:
                 self._bind_fill(self._owned(order), snapshot)
             except Exception:
                 return SellSnapshot(order, error="owner_registry_reconciliation_failed")
+        return snapshot
+
+    def reconcile_terminal_cancel(
+        self, order: OrderKey, cancel_order: OrderKey, *, max_snapshot_age_ms: int
+    ) -> SellSnapshot:
+        """Prove the root terminal AND its exact positive cancel confirmation.
+
+        cnfm_qty may be smaller than the requested cancel after a late fill,
+        but Q = F + previously confirmed C + this C must close with R = 0.
+        Zero confirmation/rejection semantics are not guessed from an ACK.
+        This is a bounded dated/current read and atomic journal update only.
+        """
+        if type(max_snapshot_age_ms) is not int or max_snapshot_age_ms <= 0:
+            raise ValueError("terminal_cancel_freshness_bound_required")
+        snapshot, proof = self._snapshot(
+            order, cancel_order=cancel_order, terminal_cancel=True
+        )
+        if snapshot.source_ok:
+            try:
+                now = self.now_ms()
+                if (
+                    proof is None
+                    or not 0 <= now - proof["started_at_ms"] <= max_snapshot_age_ms
+                    or datetime.fromtimestamp(now / 1000, KST).date().isoformat()
+                    != order.trading_date
+                    or self.account_key != broker_account_key(require_explicit=True)
+                ):
+                    raise SellContractError(
+                        "terminal_cancel_snapshot_stale_or_account_changed"
+                    )
+                self.registry.record_terminal_cancel_reconciliation(
+                    context=self.context,
+                    order_date=order.trading_date,
+                    target_order_no=order.order_no,
+                    cancel_order_no=cancel_order.order_no,
+                    filled_qty=snapshot.filled_qty,
+                    terminal_receipt_sha256=snapshot.receipt_hash,
+                    **{k: v for k, v in proof.items() if k != "started_at_ms"},
+                )
+            except SellContractError as exc:
+                return SellSnapshot(order, error=str(exc))
+            except Exception:
+                return SellSnapshot(
+                    order, error="terminal_cancel_registry_reconciliation_failed"
+                )
         return snapshot
 
     def recover_replacement(
@@ -541,7 +732,7 @@ class RegisteredSellAdapter:
             or row.get("symbol") != self.symbol
             or row.get("side") != "SELL"
             or row.get("action") != "NEW"
-            or row.get("authority_policy_id") != FAMILY
+            or row.get("authority_policy_id") != self.authority_policy_id
             or row.get("authority_policy_hash") != self.policy_hash
         ):
             raise SellContractError("replacement_recovery_binding_mismatch")
@@ -551,10 +742,116 @@ class RegisteredSellAdapter:
         return self.reconcile_owned_sell(order)
 
     def _replacement_client_id(self, order):
-        return (
-            FAMILY
+        base = (
+            self.authority_policy_id
             + ":replacement:"
             + _hash([self.account_key, order.trading_date, order.order_no])
+        )
+        if self.authority_policy_id != PROFIT_STAGNATION_FAMILY:
+            return base
+        # Only explicit broker rejections release a bounded retry ordinal.
+        # A reservation, ambiguity or bound ACK always keeps the SAME id.
+        # This is scoped to the new supplement; legacy adaptive semantics stay
+        # one successor per predecessor, unchanged.
+        for ordinal in range(1, 4):
+            candidate = f"{base}:{ordinal}"
+            row = self.registry.intent_for_client(
+                context=replace(self.context, client_intent_id=candidate)
+            )
+            if row is None or row.get("state") != "INTENT_REJECTED":
+                return candidate
+        return candidate  # Exhausted: reserve rejects reuse; never a fourth write.
+
+    def whole_group_client_id(self, target):
+        # Exactly ONE pooled successor for the original dated target, regardless
+        # of allocation/policy/action IDs. Later retries use its own predecessor.
+        return (
+            self.authority_policy_id
+            + ":whole-group:"
+            + _hash([self.account_key, target.trading_date, target.order_no])
+        )
+
+    def submit_closed_group_residual(
+        self,
+        target,
+        *,
+        quantity,
+        limit_price,
+        action_id,
+        census_sha256,
+        pending_buy_ids=(),
+    ):
+        """First pooled successor after ALL registered roots/children terminate.
+
+        The original target may have already spent its partial-runner successor.
+        This separate single slot requires the entire exact terminal census and
+        total owned residual, not Q-F of one runner. All normal write guards and
+        registry capacity checks run before AND after reservation. No queries,
+        market order, implicit retry or caller-selected alternative client ID.
+        """
+        from .group_settlement import closed_census
+
+        _, request = self._request("NEW", target, quantity, action_id, limit_price)
+        request = replace(
+            request,
+            context=replace(
+                self.context, client_intent_id=self.whole_group_client_id(target)
+            ),
+        )
+
+        def check_census():
+            rows = self.registry.position_intents(
+                context=self.context, symbol=self.symbol
+            )
+            other = []
+            for row in rows:
+                if row["client_intent_id"] == request.context.client_intent_id:
+                    if row.get("state") != "INTENT_RESERVED" or any(
+                        row.get(k) != v
+                        for k, v in {
+                            "side": "SELL",
+                            "action": "NEW",
+                            "quantity": quantity,
+                            "route": request.route,
+                            "order_date": target.trading_date,
+                            "authority_policy_id": self.authority_policy_id,
+                            "authority_policy_hash": self.policy_hash,
+                        }.items()
+                    ):
+                        raise ValueError("whole_group_successor_already_spent")
+                else:
+                    other.append(row)
+            # Event hashes bind the exact journal generation through reservation.
+            if _hash(sorted(other, key=lambda r: r["intent_id"])) != census_sha256:
+                raise ValueError("whole_group_terminal_census_changed")
+            result = closed_census(other, pending_buy_ids=pending_buy_ids)
+            if (
+                result["residual_qty"] != quantity
+                or not any(
+                    r["order_no"] == target.order_no
+                    and r["trading_date"] == target.trading_date
+                    for r in result["orders"]
+                )
+                or self.registry.owner_position_qty(
+                    self.context.position_id, symbol=self.symbol
+                )
+                != quantity
+            ):
+                raise ValueError("whole_group_exact_residual_required")
+
+        self._guard(request)
+        check_census()
+        return self._write(
+            request,
+            "kt10001",
+            {
+                "dmst_stex_tp": request.route,
+                "stk_cd": self.symbol,
+                "ord_qty": str(quantity),
+                "ord_uv": str(limit_price),
+                "trde_tp": "0",
+            },
+            source_guard=check_census,
         )
 
     def _guard(self, request):
@@ -708,7 +1005,7 @@ class RegisteredSellAdapter:
         snapshot = self.reconcile_partial_cancel(
             predecessor, cancel_order, max_snapshot_age_ms=max_snapshot_age_ms
         )
-        if not snapshot.source_ok or snapshot.terminal:
+        if not snapshot.source_ok:
             raise ValueError("exact_partial_cancel_residual_required")
         target = self._owned(predecessor)
         cancel = self.registry.assert_owner(
@@ -720,7 +1017,8 @@ class RegisteredSellAdapter:
         if (
             not isinstance(proof, dict)
             or cancel.get("state") != "ORDER_TERMINAL"
-            or target.get("state") != "ORDER_BOUND"
+            or target.get("state")
+            != ("ORDER_TERMINAL" if snapshot.terminal else "ORDER_BOUND")
             or target.get("partial_cancel_reconciliation") != proof
             or proof.get("confirmed_qty") != quantity
             or target.get("canceled_qty") != quantity
@@ -752,7 +1050,13 @@ class RegisteredSellAdapter:
             source_guard=require_fresh_release,
         )
 
-    def _write(self, request, api_id, payload, *, source_guard=None):
+    def _write(self, request, api_id, payload, *, source_guard=None, _side="SELL"):
+        # The private shared transport can cancel an existing BUY, never buy.
+        # Public SELL callers retain their original side and methods.
+        if _side not in {"SELL", "BUY"} or (
+            _side == "BUY" and (request.action != "CANCEL" or api_id != "kt10003")
+        ):
+            raise ValueError("owned_transport_new_buy_forbidden")
         # Recheck price/account/veto after all possibly slow reads, before reserve.
         self._guard(request)
         if source_guard is not None:
@@ -760,7 +1064,7 @@ class RegisteredSellAdapter:
         intent = self.registry.reserve(
             context=request.context,
             symbol=self.symbol,
-            side="SELL",
+            side=_side,
             quantity=request.quantity,
             route=request.route,
             order_date=request.predecessor.trading_date,
@@ -768,15 +1072,23 @@ class RegisteredSellAdapter:
             original_order_no=(
                 request.predecessor.order_no if request.action == "CANCEL" else ""
             ),
-            authority_policy_id=FAMILY,
+            authority_policy_id=self.authority_policy_id,
             authority_policy_hash=self.policy_hash,
         )
         # An atomic registry/fsync wait can outlive price/date/owner approval.
         # If this fails, retain the durable reservation for explicit recovery;
         # never post and never blindly retry it after restart.
-        self._guard(request)
-        if source_guard is not None:
-            source_guard()
+        try:
+            self._guard(request)
+            if source_guard is not None:
+                source_guard()
+        except (PermissionError, ValueError):
+            if self.authority_policy_id != PROFIT_STAGNATION_FAMILY:
+                raise
+            # In this stack frame transport has provably not been called.
+            # A process crash leaves RESERVED instead; it is never retried.
+            self.registry.transition(intent, state="INTENT_REJECTED", reason="local_guard_before_transport")
+            return SellAck(intent, None, False, False, "", "local_guard_before_transport")
         order, accepted, ambiguous, reason, receipt = (
             None,
             False,

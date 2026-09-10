@@ -1039,7 +1039,9 @@ def test_live_service_fails_closed_without_exact_date_applied_policy(monkeypatch
     assert result == 5
 
 
-def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch):
+def test_live_service_runs_reentry_only_after_first_episode_complete(
+    monkeypatch, tmp_path
+):
     calls = []
 
     class FakeFirstMachine:
@@ -1098,7 +1100,8 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
             "ready_operator_override",
         ),
     )
-    monkeypatch.setattr(service_module, "_acquire_lock", lambda path: object())
+    lock_handle = (tmp_path / "service.lock").open("a+")
+    monkeypatch.setattr(service_module, "_acquire_lock", lambda path: lock_handle)
     monkeypatch.setattr(
         service_module, "KiwoomOneShareGateway", lambda **kwargs: object()
     )
@@ -1109,9 +1112,12 @@ def test_live_service_runs_reentry_only_after_first_episode_complete(monkeypatch
         service_module, "SamsungMorningSORReentryMachine", FakeReentryMachine
     )
 
-    result = service_module.main(
-        ["--live", "--confirm", service_module.LIVE_CONFIRMATION]
-    )
+    try:
+        result = service_module.main(
+            ["--live", "--confirm", service_module.LIVE_CONFIRMATION],
+        )
+    finally:
+        lock_handle.close()
 
     assert result == 0
     assert calls == [
