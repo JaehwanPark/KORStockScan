@@ -89,6 +89,8 @@ source-date 9/8의 [장후 운영 리뷰](audit-reports/2026-09-08-postclose-mon
 
 ### 1.3 적응형 청산의 별도 후속 경계
 
+9/11 00:20의 [추천 승인 후속](audit-reports/2026-09-11-widget-episode-approved-deployment.md)은 저가주3개 profile을 별도 `low_price_recommendations_deployment.json`/90 drop-in2개/4f073800으로 연결했다. 위젯·삼성은f9d53a9a/80, 공통 consumer는340c1d00이며 기존 machine manifest의 unit별 override를 함께 읽는다.6개 timer의 미래 예정과 조기 preflight 복구는 해당 receipt로 대사하며, 이후 자연 기동/PID/경제성은9/11 기존 owner의 OPEN이다. 아래273807e3·939d90f6 기록을 최신 root로 사용하지 않는다.
+
 최신 별도 승인 배포는 [9/10 23:53 배포](audit-reports/2026-09-10-approved-additions-deployment.md)와 [9/11 전수 점검](audit-reports/2026-09-11-full-recommendation-deployment-audit.md)을 따른다. machine `f9d53a9a`/80-drop-in은 보조청산과 전체 기존 scope의 진입 악화 보류·WS 목표 상향을9/11 신규 진입에 연결한다. `machine_additions_deployment.json`의 추가 pin도 대사한다. 아래19:19/273807e3/PID1138215는 이전 배포 receipt이며 현재 source/PID 보증이 아니다. 공통 선택은 별도로 수리 `939d90f6`이다.
 
 현재 운영 인계는 [9/10 최소 보조청산 배포 receipt](audit-reports/2026-09-10-machine-profit-stagnation-deployment.md)와 `data/runtime/machine_profit_stagnation_deployment.json`이다. 19:19 당시 machine 릴리스273807e3,9개 service/preflight drop-in, widget 새 PID1138215와 정책 pin을 검증했다. **main/장후 공통 선택은 변경하지 않았다.** 이 숫자는 당시 기록이며 매 실행에서 실제 경로·HEAD·pin·process를 다시 확인한다.

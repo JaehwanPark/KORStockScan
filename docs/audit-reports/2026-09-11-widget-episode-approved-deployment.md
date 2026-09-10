@@ -33,3 +33,10 @@ LX세미콘은9/11부터 standing authority에 episode 소유권을 추가한다
 ## 실행 receipt
 
 아래에 실제 선택 commit, 설치/검증 시각, 정책 pin 및 예약 확인 결과를 추가한다. 배포 성공과9/11 PREOPEN·PID·실제 신규 신호/주문·비용 차감 결과는 별도다. 기존9/11 MachineProfitStagnationStartupAcceptance0911 및 KRXDaily100NextDayStartupAcceptance0911이 자연 확인을 소유한다.
+
+- 실제 설치00:20:10 KST: 저가주 root `episode-recommendations-20260911`/`4f07380080358c319f2dc47cd4abb6e9f9b903ae`; template service/preflight2개의90 drop-in byte 일치, 과거70/80 유지. 위젯2651657/active/NRestarts0과 삼성 root는f9d53a9a 그대로다. `data/runtime/low_price_recommendations_deployment.json` 및 기존 machine manifest의 `unit_release_overrides`를 대사한다.
+- 공통 선택은 `postclose-episode-consumers-20260911`/`340c1d0052d41d3625b34df67343202490254222`: 이전939d90f6에4개 source만 추가, source clean·cron9·PREOPEN/start print-plan PASS. V2.14 승인10개 byte hash 불일치0; 미래 main PID 소비는 미확인이다.
+- 설치 중 기존 활성 롯데 오후 timer의 OnCalendar reload가00:20:09에 경과 이벤트를 dispatch했다. preflight가00:20:20에 exact9/11 정책 hash `590642d99e263254fc10663b01f62966d6461f78a63a4574998115296a738ebb`를 발행한 뒤 main_bot_inactive로 대기했다. live machine PID0이며 주문 경로에 진입하지 않았다.00:20:54 해당 timer/대기 job/preflight를 종료한 뒤 timer만 다시 시작했고14:20/14:24 예정으로 복구했다. 당시 journal·조기 정책을 보존했으며 실패 표시 reset은 자연 성공 receipt가 아니다.
+- 재발 방지: installer는 calendar 교체/daemon-reload 전에 활성 timer를 정지하고 설치 뒤 예약을 다시 연다. 기존 broad installer 전체는 이번 배포에서 실행하지 않았고 지정6개 timer만 반영했다. 이 보완의 shell syntax·직접 routing regression PASS. 신규4개09:40/09:44·13:10/13:14와 변경2개14:20/14:24가 모두9/11 미래 예정임을 재확인했다.
+- 원source9/10 strict verifier를 새 공통 코드에서 읽기 전용 실행해 warning terminal을 확인했으며 canonical 산출물은 교체하지 않았다. 승인 후 재-intake의 같은67행 digest·source13·분류/보존식은 불변이다. 새 native 추천/decision 변화0, 이번 승인 actionable open0이고 보류/차단/거절/관찰15는 원 ledger에 유지한다.
+- 9/11 정책 build/validate61개와 세 profile의 원source/cost 재검증은 양쪽 frozen root에서 PASS다. 신규/기존 보유 분리와 정산·순익의 실제 자연 acceptance는 예정 owner에 남는다. 외부 Project/Calendar sync와 실주문/Provider 호출은 실행하지 않았다.

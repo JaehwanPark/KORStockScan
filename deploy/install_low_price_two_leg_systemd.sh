@@ -275,6 +275,13 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 /bin/systemd-analyze verify "${UNITS[@]/#/$SYSTEMD_DIR/}"
+# Stop active clocks before replacing calendars: daemon-reload can dispatch
+# an elapsed event relative to the previous active timer, even without Persistent.
+for timer in "${TIMERS[@]}"; do
+  if /bin/systemctl is-active --quiet "$timer"; then
+    /bin/systemctl stop "$timer"
+  fi
+done
 /usr/bin/test -x "$SCRIPT_DIR/run_low_price_two_leg_preflight.sh"
 /usr/bin/test -x "$SCRIPT_DIR/run_low_price_two_leg_live.sh"
 /bin/systemctl disable --now "${RETIRED_DAEWOO_UNITS[@]}" 2>/dev/null || true

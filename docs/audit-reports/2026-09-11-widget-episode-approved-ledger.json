@@ -55,7 +55,13 @@
         }
       ],
       "code_review": "389_tests_passed",
-      "deployment": "prepared_pending_receipt",
+      "deployment": {
+        "status": "deployed",
+        "release_commit": "4f07380080358c319f2dc47cd4abb6e9f9b903ae",
+        "common_consumer_commit": "340c1d0052d41d3625b34df67343202490254222",
+        "installed_at_kst": "2026-09-11T00:20:10+09:00",
+        "future_pid_verified": false
+      },
       "natural_consumption": "not_yet_observed",
       "economic_acceptance": "not_yet_observed",
       "final_disposition": "implemented_under_explicit_user_approval",
@@ -327,7 +333,13 @@
         }
       ],
       "code_review": "389_tests_passed",
-      "deployment": "prepared_pending_receipt",
+      "deployment": {
+        "status": "deployed",
+        "release_commit": "4f07380080358c319f2dc47cd4abb6e9f9b903ae",
+        "common_consumer_commit": "340c1d0052d41d3625b34df67343202490254222",
+        "installed_at_kst": "2026-09-11T00:20:10+09:00",
+        "future_pid_verified": false
+      },
       "natural_consumption": "not_yet_observed",
       "economic_acceptance": "not_yet_observed",
       "final_disposition": "implemented_under_explicit_user_approval",
@@ -386,7 +398,13 @@
         }
       ],
       "code_review": "389_tests_passed",
-      "deployment": "prepared_pending_receipt",
+      "deployment": {
+        "status": "deployed",
+        "release_commit": "4f07380080358c319f2dc47cd4abb6e9f9b903ae",
+        "common_consumer_commit": "340c1d0052d41d3625b34df67343202490254222",
+        "installed_at_kst": "2026-09-11T00:20:10+09:00",
+        "future_pid_verified": false
+      },
       "natural_consumption": "not_yet_observed",
       "economic_acceptance": "not_yet_observed",
       "final_disposition": "implemented_under_explicit_user_approval",
@@ -1102,5 +1120,12 @@
       },
       "original_disposition": "blocked_missing_evidence"
     }
-  ]
+  ],
+  "second_pass": {
+    "same_native_source_generation": true,
+    "new_or_decision_changed_native_rows": 0,
+    "unaccounted": 0,
+    "in_scope_actionable_open": 0,
+    "blocked_and_nonimplementation_count": 15
+  }
 }
