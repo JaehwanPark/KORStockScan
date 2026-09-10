@@ -325,6 +325,26 @@ RECOMMENDATION_20260908_PROFILE_MAP = {
 def _research_evidence_contract(
     profile: MachineProfile, *, target_date: date | None = None
 ) -> dict:
+    revision_profile_id = {
+        "lotte_chemical_afternoon": "logic_lotte_chemical_afternoon",
+        "lotte_chemical_midday": "existing_011170_midday",
+        "lx_semicon_morning": "candidate_108320_morning",
+    }.get(profile.profile_id)
+    if revision_profile_id and (
+        target_date is None or target_date >= date(2026, 9, 11)
+    ):
+        return {
+            "path": DATA_DIR.parent
+            / "docs/audit-reports/2026-09-10-low-price-recommendation-apply-evidence.json",
+            "report_profile_id": revision_profile_id,
+            "sha256": "4c46d6b7f4a72d38510230aac8c11cb900797412aa9506412e3ff428a09aff5b",
+            "schema": "low_price_two_leg_user_approved_profile_evidence_v7",
+            "start_date": "2026-06-05",
+            "end_date": "2026-09-10",
+            "trading_date_count": 68,
+            "window": "2026-06-05_through_2026-09-10_68_trading_days",
+            "source_report_sha256": "66a4f8748a7d4485db2e72fd5fa469f847733e5c51c5dfd9167f605fc0080368",
+        }
     current_profile_id = (
         {
             "sk_telecom_morning": "logic_sk_telecom_morning",
@@ -627,7 +647,12 @@ def _approved_source_report(payload: dict, contract: dict) -> tuple[dict | None,
         source_path = PROJECT_ROOT / source_path
     try:
         source_path = source_path.resolve(strict=True)
-        source_path.relative_to(PROJECT_ROOT.resolve())
+        # Reviewed releases share canonical data, not arbitrary workspace
+        # files. Resolve the trusted mount before enforcing containment.
+        try:
+            source_path.relative_to(PROJECT_ROOT.resolve())
+        except ValueError:
+            source_path.relative_to((DATA_DIR / "report").resolve(strict=True))
         source_payload = json.loads(source_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return None, "research_source_report_unreadable"

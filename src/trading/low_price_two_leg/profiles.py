@@ -92,6 +92,7 @@ PROFILE_REVISION_20260907_EFFECTIVE_DATE = date(2026, 9, 7)
 PROFILE_REVISION_20260908_EFFECTIVE_DATE = date(2026, 9, 8)
 PROFILE_REVISION_20260909_EFFECTIVE_DATE = date(2026, 9, 9)
 PROFILE_REVISION_20260910_EFFECTIVE_DATE = date(2026, 9, 10)
+PROFILE_REVISION_20260911_EFFECTIVE_DATE = date(2026, 9, 11)
 # Compatibility alias for consumers that own the first recommendation transition.
 PROFILE_REVISION_EFFECTIVE_DATE = PROFILE_REVISION_20260819_EFFECTIVE_DATE
 ALLOWED_SYMBOLS = frozenset(
@@ -100,6 +101,7 @@ ALLOWED_SYMBOLS = frozenset(
         "002900",
         "010140",
         "011170",
+        "108320",
         "015760",
         "017670",
         "028050",
@@ -118,6 +120,7 @@ ALLOWED_SYMBOLS = frozenset(
 )
 SUPPORTED_REGULAR_SCAN_WINDOWS = frozenset(
     {
+        (time(9, 45), time(9, 54)),
         (time(9, 20), time(9, 59)),
         (time(14, 20), time(14, 39)),
         (time(10, 0), time(10, 29)),
@@ -2313,6 +2316,53 @@ for (
     )
 
 
+# Explicit 9/11 approval; preserve earlier dates and existing custody.
+PROFILES_20260911_PRIOR = dict(PROFILES)
+PROFILES = dict(PROFILES_20260911_PRIOR)
+PROFILES["lotte_chemical_afternoon"] = _profile(
+    "lotte_chemical_afternoon",
+    "011170",
+    "롯데케미칼",
+    "afternoon",
+    window=(time(14, 25), time(14, 34)),
+    lookback_bars=15,
+    drawdown_pct=0.5,
+    near_low_pct=0.05,
+    entry_offsets_ticks=(-1, -2),
+    entry_valid_completed_bars=5,
+    target_ticks=4,
+    runtime_policy_source="user_directed_profile_revision_20260911",
+)
+PROFILES["lotte_chemical_midday"] = _profile(
+    "lotte_chemical_midday",
+    "011170",
+    "롯데케미칼",
+    "midday",
+    window=(time(13, 15), time(13, 34)),
+    lookback_bars=45,
+    drawdown_pct=0.75,
+    near_low_pct=0.75,
+    entry_offsets_ticks=(0, -1),
+    entry_valid_completed_bars=5,
+    target_ticks=2,
+    runtime_policy_source="user_directed_profile_revision_20260911",
+)
+PROFILES["lx_semicon_morning"] = _profile(
+    "lx_semicon_morning",
+    "108320",
+    "LX세미콘",
+    "morning",
+    window=(time(9, 45), time(9, 54)),
+    lookback_bars=15,
+    drawdown_pct=1.25,
+    near_low_pct=0.75,
+    entry_offsets_ticks=(0, -1),
+    entry_valid_completed_bars=5,
+    target_ticks=2,
+    runtime_policy_source="user_directed_profile_revision_20260911",
+)
+
+
 def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
     if target_date < PROFILE_REVISION_20260819_EFFECTIVE_DATE:
         return PRE_RECOMMENDATION_PROFILES
@@ -2336,6 +2386,8 @@ def profiles_for_target_date(target_date: date) -> dict[str, MachineProfile]:
         return PROFILES_20260909_PRIOR
     if target_date < PROFILE_REVISION_20260910_EFFECTIVE_DATE:
         return PROFILES_20260910_PRIOR
+    if target_date < PROFILE_REVISION_20260911_EFFECTIVE_DATE:
+        return PROFILES_20260911_PRIOR
     return PROFILES
 
 
