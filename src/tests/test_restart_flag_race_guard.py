@@ -143,3 +143,34 @@ def test_context_promotion_uses_canonical_data_identity():
 
     assert context.PROMOTION_DIR == DATA_DIR / "runtime"
     assert context.RUNTIME_ENV_DIR == DATA_DIR / "threshold_cycle/runtime_env"
+
+
+@pytest.mark.parametrize(
+    "allowed,reason,plan_id,expected_rc",
+    [
+        (True, "prepared_same_date_pid_handoff", "exact-plan", 0),
+        (False, "handoff_plan_expired", "exact-plan", 3),
+        (True, "prepared_same_date_pid_handoff", "other-plan", 3),
+        (True, "morning_owner_not_active", "exact-plan", 3),
+    ],
+)
+def test_restart_staged_env_requires_exact_prepared_guard(
+    monkeypatch, allowed, reason, plan_id, expected_rc
+):
+    import sys
+    from src.trading.samsung_morning_one_share import authority_handoff as handoff
+
+    script = Path("restart.sh").read_text().split("<<'PY_PREPARED_HANDOFF'", 1)[1]
+    script = script.split("\n", 1)[1].split("\nPY_PREPARED_HANDOFF", 1)[0]
+    monkeypatch.setattr(sys, "argv", ["-", "1234", "exact-plan"])
+    calls = []
+
+    def check(**kwargs):
+        calls.append(kwargs)
+        return {"allowed": allowed, "reason": reason, "plan_id": plan_id}
+
+    monkeypatch.setattr(handoff, "restart_guard_decision", check)
+    with pytest.raises(SystemExit) as caught:
+        exec(compile(script, "restart_prepared_handoff", "exec"), {})
+    assert caught.value.code == expected_rc
+    assert calls == [{"main_bot_pid": 1234}]

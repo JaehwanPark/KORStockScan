@@ -134,17 +134,41 @@ echo "Validating Samsung morning owner continuity before restart ..."
 HANDOFF_OLD_PID="${OLD_PIDS[0]}"
 set +e
 HANDOFF_PREPARE_RC=0
-PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
-    -m src.trading.samsung_morning_one_share.authority_handoff \
-    --action prepare \
-    --old-main-bot-pid "${OLD_PIDS[0]}" \
-    --confirm "$SAMSUNG_HANDOFF_CONFIRM" \
-    --write || HANDOFF_PREPARE_RC=$?
+if [ -n "${KORSTOCKSCAN_RESTART_PREPARED_HANDOFF_ID:-}" ]; then
+    # A staged env change may follow a strict old-PID prepare. Reuse only that
+    # exact, fresh plan; the runtime guard and post-start commit revalidate it.
+    HANDOFF_OLD_PID=""
+    PYTHONPATH="$PROJECT_DIR" "$VENV_PY" - "${OLD_PIDS[0]}" \
+        "$KORSTOCKSCAN_RESTART_PREPARED_HANDOFF_ID" <<'PY_PREPARED_HANDOFF' || HANDOFF_PREPARE_RC=$?
+import json
+import sys
+from src.trading.samsung_morning_one_share.authority_handoff import restart_guard_decision
+decision = restart_guard_decision(main_bot_pid=int(sys.argv[1]))
+valid = (
+    decision.get("allowed") is True
+    and decision.get("reason") == "prepared_same_date_pid_handoff"
+    and decision.get("plan_id") == sys.argv[2]
+)
+print(json.dumps(decision))
+raise SystemExit(0 if valid else 3)
+PY_PREPARED_HANDOFF
+    if [ "$HANDOFF_PREPARE_RC" -eq 0 ]; then
+        HANDOFF_OLD_PID="${OLD_PIDS[0]}"
+    fi
+else
+    PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
+        -m src.trading.samsung_morning_one_share.authority_handoff \
+        --action prepare \
+        --old-main-bot-pid "${OLD_PIDS[0]}" \
+        --confirm "$SAMSUNG_HANDOFF_CONFIRM" \
+        --write || HANDOFF_PREPARE_RC=$?
+fi
 set -e
 if [ "$HANDOFF_PREPARE_RC" -ne 0 ]; then
     echo "Samsung morning authority/custody continuity is not safe; restart blocked (rc=$HANDOFF_PREPARE_RC)." >&2
     exit "$HANDOFF_PREPARE_RC"
 fi
+unset KORSTOCKSCAN_RESTART_PREPARED_HANDOFF_ID
 
 CURRENT_LAUNCHER_SHA256="$(current_launcher_sha256)"
 LOADED_LAUNCHER_SHA256="$(pid_env_value "${OLD_PIDS[0]}" KORSTOCKSCAN_RUNTIME_LAUNCHER_RUN_BOT_SHA256 || true)"
