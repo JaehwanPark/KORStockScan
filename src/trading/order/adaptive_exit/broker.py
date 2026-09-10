@@ -23,12 +23,13 @@ from src.trading.order.owner_custody_registry import (
     OwnerOrderContext,
     broker_account_key,
 )
-from src.trading.order.tick_utils import get_tick_size
+from src.trading.order.tick_utils import get_tick_size, move_price_by_ticks
 from .reducer import OrderKey
 
 KST = ZoneInfo("Asia/Seoul")
 FAMILY = "machine_adaptive_exit_v1"
 PROFIT_STAGNATION_FAMILY = "machine_profit_stagnation_v1"
+TARGET_RATCHET_FAMILY = "machine_ws_target_ratchet_v1"
 OFFICIAL_REFERENCE_SHA = "234560d213acd8871ae344b5481aecd2f30287fa"
 
 
@@ -69,6 +70,7 @@ class SellSnapshot:
     observed_at_ms: int = 0
     receipt_hash: str = ""
     error: str = ""
+    limit_price: int | None = None
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,7 @@ class RegisteredSellAdapter:
     ):
         context.validate()
         if (
-            authority_policy_id not in {FAMILY, PROFIT_STAGNATION_FAMILY}
+            authority_policy_id not in {FAMILY, PROFIT_STAGNATION_FAMILY, TARGET_RATCHET_FAMILY}
             or
             context.owner_type not in {"widget_auto_trade", "episode"}
             or not re.fullmatch(r"[0-9]{6}", symbol)
@@ -305,6 +307,7 @@ class RegisteredSellAdapter:
                 "oso",
             )
             root, open_root, cancel_confirmations = set(), set(), set()
+            target_prices = set()
             full_buy_prices = set()
             descendants = {order.order_no}
             links = [(r.get("ord_no"), r.get("ori_ord")) for r in detailed]
@@ -371,7 +374,17 @@ class RegisteredSellAdapter:
                             ):
                                 raise SellContractError("dated_broker_route_unresolved")
                     if number == order.order_no:
-                        if original not in ("", "0000000") or qty != owned["quantity"]:
+                        if self.authority_policy_id == TARGET_RATCHET_FAMILY:
+                            target_price = _count(row.get("ord_pric" if is_current else "ord_uv"))
+                            if target_price <= 0:
+                                raise SellContractError("ratchet_target_limit_price_missing")
+                            target_prices.add(target_price)
+                        allowed_parent = (
+                            (owned["original_order_no"],)
+                            if owned.get("amendment_receipt_sha256")
+                            else ("", "0000000")
+                        )
+                        if original not in allowed_parent or qty != owned["quantity"]:
                             raise SellContractError("broker_original_identity_conflict")
                         (open_root if is_current else root).add((filled, remaining))
                         if (_full_buy_price or _cancelled_buy_price) and not is_current:
@@ -441,6 +454,8 @@ class RegisteredSellAdapter:
                             cancel_confirmations.add((confirmed, confirmed_at))
             if len(root) != 1 or len(open_root) > 1:
                 raise SellContractError("missing_or_conflicting_dated_order")
+            if self.authority_policy_id == TARGET_RATCHET_FAMILY and len(target_prices) != 1:
+                raise SellContractError("ratchet_target_price_conflict")
             filled, remaining = next(iter(root))
             if filled < owned.get("filled_qty", 0):
                 raise SellContractError("broker_fill_regression")
@@ -520,6 +535,7 @@ class RegisteredSellAdapter:
                         **({"side": "BUY"} if _side == "BUY" else {}),
                     }
                 ),
+                limit_price=next(iter(target_prices)) if target_prices else None,
             )
             return snapshot, (
                 {
@@ -876,7 +892,7 @@ class RegisteredSellAdapter:
             or not action_id.strip()
         ):
             raise ValueError("positive_exact_quantity_and_durable_action_required")
-        if action == "NEW" and (
+        if action in {"NEW", "AMEND"} and (
             type(price) is not int or price <= 0 or price % get_tick_size(price)
         ):
             raise ValueError("valid_integer_limit_price_required")
@@ -884,11 +900,11 @@ class RegisteredSellAdapter:
         # action id after a crash. Further bounded attempts must use the last
         # terminal replacement, never re-spend the original lot's reservation.
         client_id = (
-            action_id if action == "CANCEL" else self._replacement_client_id(order)
+            action_id if action in {"CANCEL", "AMEND"} else self._replacement_client_id(order)
         )
         context = replace(self.context, client_intent_id=client_id)
         context.validate()
-        route = owned["route"] if action == "CANCEL" else self.new_route(owned["route"])
+        route = owned["route"] if action in {"CANCEL", "AMEND"} else self.new_route(owned["route"])
         if route not in self.routes:
             raise ValueError("replacement_route_not_supported")
         return owned, SellWrite(
@@ -952,6 +968,33 @@ class RegisteredSellAdapter:
                 "cncl_qty": str(quantity),
             },
         )
+
+    def amend_owned_sell(self, order, *, quantity, limit_price, action_id):
+        """Direct price amendment; never cancel/re-submit as a fallback."""
+        if self.authority_policy_id != TARGET_RATCHET_FAMILY:
+            raise PermissionError("target_ratchet_authority_required")
+        owned, request = self._request("AMEND", order, quantity, action_id, limit_price)
+        self._guard(request)
+        snapshot = self.snapshot(order)
+        if (not snapshot.source_ok or snapshot.terminal or snapshot.filled_qty != 0
+            or snapshot.remaining_qty != quantity or owned["quantity"] != quantity
+            or owned.get("filled_qty", 0) != 0
+            or snapshot.limit_price is None
+            or limit_price != move_price_by_ticks(snapshot.limit_price, 1)):
+            raise ValueError("amend_fully_unfilled_owned_target_required")
+        self._bind_fill(owned, snapshot)
+
+        def source_guard():
+            latest = self._owned(order)
+            if (latest.get("filled_qty", 0) != 0 or latest.get("state") != "ORDER_BOUND"
+                or not 0 <= self.now_ms() - snapshot.observed_at_ms <= 2000):
+                raise ValueError("amend_prewrite_fill_or_freshness_changed")
+
+        return self._write(request, "kt10002", {
+            "dmst_stex_tp": request.route, "orig_ord_no": order.order_no,
+            "stk_cd": self.symbol, "mdfy_qty": str(quantity),
+            "mdfy_uv": str(limit_price), "mdfy_cond_uv": "",
+        }, source_guard=source_guard)
 
     def submit_owned_sell(
         self, predecessor: OrderKey, *, quantity: int, limit_price: int, action_id: str
@@ -1070,7 +1113,7 @@ class RegisteredSellAdapter:
             order_date=request.predecessor.trading_date,
             action=request.action,
             original_order_no=(
-                request.predecessor.order_no if request.action == "CANCEL" else ""
+                request.predecessor.order_no if request.action in {"CANCEL", "AMEND"} else ""
             ),
             authority_policy_id=self.authority_policy_id,
             authority_policy_hash=self.policy_hash,
@@ -1083,7 +1126,7 @@ class RegisteredSellAdapter:
             if source_guard is not None:
                 source_guard()
         except (PermissionError, ValueError):
-            if self.authority_policy_id != PROFIT_STAGNATION_FAMILY:
+            if self.authority_policy_id not in {PROFIT_STAGNATION_FAMILY, TARGET_RATCHET_FAMILY}:
                 raise
             # In this stack frame transport has provably not been called.
             # A process crash leaves RESERVED instead; it is never retried.
@@ -1104,11 +1147,12 @@ class RegisteredSellAdapter:
             code = _count(body.get("return_code"))
             if response.status_code == 200 and code == 0:
                 number = _number(body.get("ord_no"))
-                if request.action == "CANCEL":
+                if request.action in {"CANCEL", "AMEND"}:
                     if (
                         body.get("base_orig_ord_no") != request.predecessor.order_no
-                        or _count(body.get("cncl_qty")) != request.quantity
+                        or _count(body.get("cncl_qty" if request.action == "CANCEL" else "mdfy_qty")) != request.quantity
                         or number == request.predecessor.order_no
+                        or (request.action == "AMEND" and body.get("dmst_stex_tp") != request.route)
                     ):
                         raise ValueError("cancel_ack_identity_mismatch")
                 elif body.get("dmst_stex_tp") != request.route:

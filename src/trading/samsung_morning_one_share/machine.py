@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.trading.order import entry_adverse_guard, entry_adverse_owners
+
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -774,6 +776,8 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 ):
                     return
                 approved_routes.add(route)
+            if not entry_adverse_owners.episode_prepare(self, leg, now):
+                continue
             require_adaptive_sor_buy(self, now, leg)
             leg["status"] = "BUY_SUBMITTING"
             self._record(
@@ -806,11 +810,29 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 return
             require_adaptive_sor_buy(self, now, leg, reserved=True)
             try:
-                result = self.gateway.submit_limit_buy(
-                    route=route,
-                    price=int(leg["entry_price"]),
-                    quantity=int(leg["quantity"]),
+                with entry_adverse_guard.transport_check(
+                    entry_adverse_owners.episode_callback(self, leg)
+                ):
+                    result = self.gateway.submit_limit_buy(
+                        route=route,
+                        price=int(leg["entry_price"]),
+                        quantity=int(leg["quantity"]),
+                    )
+            except entry_adverse_guard.EntryNotSent as exc:
+                if not self._bind_episode_submit(
+                    intent_id=intent_id, result=exc.result
+                ):
+                    self._block(now, "entry_adverse_unsent_registry_release_failed")
+                    return
+                leg["status"] = "NO_FILL"
+                self._record(
+                    now,
+                    "entry_adverse_not_sent",
+                    leg_id=leg["leg_id"],
+                    entry_adverse_flow=dict(leg.get(entry_adverse_guard.KEY) or {}),
                 )
+                self._save()
+                continue
             except Exception as exc:
                 self._bind_episode_submit(
                     intent_id=intent_id,

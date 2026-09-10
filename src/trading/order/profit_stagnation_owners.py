@@ -37,7 +37,8 @@ OBSERVATION_KEY = "profit_stagnation_observation"
 
 
 def active_widget(state):
-    return KEY in state
+    from src.trading.order.target_ratchet import KEY as RATCHET_KEY
+    return KEY in state or RATCHET_KEY in state
 
 
 def policy_for(now, owner, entered_at, diagnostic=None):
@@ -141,6 +142,9 @@ def _drive(owner, state, *, adapter, symbol, now, authorized, write_guard, persi
 
 def episode_leg(machine, leg, now):
     """True means normal target reconciliation must not also touch this leg."""
+    from src.trading.order.target_ratchet import episode
+    if episode(machine, leg, now):
+        return True
     if getattr(machine, "_profit_exit_reload_required", False):
         raise OSError("profit_exit_owner_reload_required")
     prior = leg.get(KEY)
@@ -246,13 +250,16 @@ def episode_leg(machine, leg, now):
     return True
 
 
-def widget_symbol(trader, state, now):
+def widget_symbol(trader, state, now, *, allow_new_target_ratchet=False):
     """Keep original orders immutable; project exact successor fills separately.
 
     The caller evaluates its original final EXIT before invoking this hook.
     Revocation/EXIT restores protection and releases the original owner once
     no supplementary SELL or unconfirmed cancellation remains.
     """
+    from src.trading.order.target_ratchet import widget
+    if widget(trader, state, now, allow_new=allow_new_target_ratchet):
+        return True
     if getattr(trader, "_profit_exit_reload_required", False):
         raise OSError("profit_exit_owner_reload_required")
     orders = state.get("orders", [])

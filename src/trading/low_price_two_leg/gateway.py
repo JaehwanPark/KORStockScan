@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from src.trading.order.entry_adverse_guard import before_transport
+
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.low_price_two_leg.profiles import ALLOWED_SYMBOLS, MinuteBar
@@ -152,6 +154,8 @@ def _same_order_no(left: object, right: object) -> bool:
 class KiwoomLowPriceTwoLegGateway:
     """Symbol-bound SOR adapter with shared-token reads and explicit writes."""
 
+    entry_adverse_transport_supported = True
+
     def __init__(
         self,
         *,
@@ -206,6 +210,7 @@ class KiwoomLowPriceTwoLegGateway:
         active_token = self._token()
 
         def post_once() -> tuple[requests.Response, dict[str, Any]]:
+            before_transport(api_id)
             response = self.session.post(
                 f"{self.base_url}{endpoint}",
                 headers={

@@ -243,6 +243,15 @@ class OrderOwnerRegistry:
                 continue
             current = state.setdefault(intent_id, {})
             current.update(event)
+            if event.get("event") == "SELL_AMEND_RECONCILED":
+                parent = state[event["amendment_parent_intent_id"]]
+                parent.update(
+                    state="ORDER_TERMINAL",
+                    filled_qty=event["amendment_parent_filled_qty"],
+                    canceled_qty=event["quantity"],
+                    amended_to=event["broker_order_no"],
+                    event_hash=event["event_hash"],
+                )
             if event.get("event") == "SELL_PARTIAL_CANCEL_RECONCILED":
                 proof = event["partial_cancel_reconciliation"]
                 cancel = state[proof["cancel_intent_id"]]
@@ -404,7 +413,7 @@ class OrderOwnerRegistry:
         clean_policy_hash = str(authority_policy_hash or "").strip().lower()
         if not clean_symbol or clean_side not in {"BUY", "SELL"}:
             raise OwnerRegistryError("owner_registry_order_identity_invalid")
-        if clean_action not in {"NEW", "CANCEL"} or int(quantity) < 0:
+        if clean_action not in {"NEW", "CANCEL", "AMEND"} or int(quantity) < 0:
             raise OwnerRegistryError("owner_registry_order_request_invalid")
         if clean_route not in {"KRX", "NXT", "SOR"}:
             raise OwnerRegistryError("owner_registry_route_invalid")
@@ -427,7 +436,7 @@ class OrderOwnerRegistry:
             ]
             if same_client:
                 raise OwnerRegistryConflict("owner_registry_client_intent_reused")
-            if clean_action == "CANCEL":
+            if clean_action in {"CANCEL", "AMEND"}:
                 original = self._assert_owner_from_state(
                     state,
                     context=context,
@@ -439,6 +448,30 @@ class OrderOwnerRegistry:
                         "owner_registry_cancel_original_not_open"
                     )
                 remaining = self._remaining_commitment(original)
+                if clean_action == "AMEND" and (
+                    clean_policy_id != "machine_ws_target_ratchet_v1"
+                    or clean_side != "SELL"
+                    or context.owner_type not in {"episode", "widget_auto_trade"}
+                    or original.get("side") != "SELL"
+                    or original.get("action") != "NEW"
+                    or original.get("symbol") != clean_symbol
+                    or original.get("route") != clean_route
+                    or original.get("filled_qty", 0) != 0
+                    or original.get("canceled_qty", 0) != 0
+                    or type(quantity) is not int
+                    or quantity != remaining
+                ):
+                    raise OwnerRegistryConflict("owner_registry_amend_requires_unfilled_owned_sell")
+                if clean_action == "AMEND":
+                    ancestor, visited = original, set()
+                    while ancestor.get("amendment_parent_intent_id"):
+                        ancestor_id = ancestor["amendment_parent_intent_id"]
+                        if ancestor_id in visited or ancestor_id not in state:
+                            raise OwnerRegistryConflict("owner_registry_amend_lineage_invalid")
+                        visited.add(ancestor_id)
+                        ancestor = state[ancestor_id]
+                        if ancestor.get("filled_qty", 0) != 0:
+                            raise OwnerRegistryConflict("owner_registry_amend_ancestor_partially_filled")
                 if remaining <= 0:
                     raise OwnerRegistryConflict(
                         "owner_registry_cancel_original_no_remaining_quantity"
@@ -452,7 +485,7 @@ class OrderOwnerRegistry:
                     for row in state.values()
                     if row.get("account_key") == broker_account_key()
                     and row.get("order_date") == clean_date
-                    and row.get("action") == "CANCEL"
+                    and row.get("action") in {"CANCEL", "AMEND"}
                     and row.get("original_order_no")
                     == str(original_order_no or "").strip()
                     and row.get("state")
@@ -526,6 +559,67 @@ class OrderOwnerRegistry:
                 },
             )
             return intent_id
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+
+    def reconcile_sell_amendment(
+        self, *, context, intent_id, parent_filled_qty, child_quantity,
+        child_filled_qty, child_remaining_qty, receipt_sha256,
+    ):
+        """Atomically replace commitment only after exact dated/current proof.
+
+        An AMEND reservation/ACK alone never releases the parent's quantity.
+        A reconciled child is a normal SELL for existing custody consumers;
+        its original-order linkage and immutable amendment proof remain.
+        """
+        context.validate()
+        counts = (parent_filled_qty, child_quantity, child_filled_qty, child_remaining_qty)
+        if (any(type(n) is not int or n < 0 for n in counts)
+            or child_quantity <= 0
+            or child_filled_qty + child_remaining_qty != child_quantity
+            or not isinstance(receipt_sha256, str)
+            or len(receipt_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in receipt_sha256)):
+            raise OwnerRegistryConflict("owner_registry_amend_proof_invalid")
+        lock = self._locked()
+        try:
+            events = self._read_locked()
+            state = self._state(events)
+            child = state.get(intent_id, {})
+            parent = self._assert_owner_from_state(
+                state, context=context, order_date=child.get("order_date"),
+                broker_order_no=child.get("original_order_no"),
+            )
+            if (child.get("account_key") != broker_account_key(require_explicit=True)
+                or any(child.get(k) != getattr(context, k) for k in ("owner_type", "owner_id", "position_id"))
+                or child.get("authority_policy_id") != "machine_ws_target_ratchet_v1"
+                or child.get("side") != "SELL"
+                or child.get("symbol") != parent.get("symbol")
+                or child.get("route") != parent.get("route")
+                or parent.get("quantity") != parent_filled_qty + child_quantity
+                or parent.get("filled_qty", 0) > parent_filled_qty):
+                raise OwnerRegistryConflict("owner_registry_amend_binding_invalid")
+            if child.get("amendment_receipt_sha256"):
+                if (child.get("quantity") != child_quantity
+                    or child.get("amendment_parent_filled_qty") != parent_filled_qty):
+                    raise OwnerRegistryConflict("owner_registry_amend_replay_conflict")
+                return dict(child)
+            if (child.get("action") != "AMEND" or child.get("state") != "ORDER_BOUND"
+                or parent.get("state") != "ORDER_BOUND"
+                or parent.get("canceled_qty", 0) != 0):
+                raise OwnerRegistryConflict("owner_registry_amend_not_pending")
+            retained = {k: v for k, v in child.items() if k not in {
+                "schema", "event_id", "observed_at_kst", "previous_hash", "event_hash",
+            }}
+            return dict(self._append_locked(events, {
+                **retained, "event": "SELL_AMEND_RECONCILED", "action": "NEW",
+                "state": "ORDER_TERMINAL" if child_remaining_qty == 0 else "ORDER_BOUND",
+                "quantity": child_quantity, "filled_qty": child_filled_qty,
+                "amendment_parent_intent_id": parent["intent_id"],
+                "amendment_parent_filled_qty": parent_filled_qty,
+                "amendment_receipt_sha256": receipt_sha256,
+            }))
         finally:
             fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
             lock.close()

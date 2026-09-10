@@ -9138,6 +9138,10 @@ def build_report(
             "market_data_subscription_effect": False,
             "trading_runtime_effect": False,
         }
+    from src.engine.monitoring.entry_adverse_flow_summary import build_summary
+    report["entry_adverse_flow"] = build_summary(
+        target_date=target_date, report_root=report_root
+    )
     return report
 
 
@@ -9169,6 +9173,16 @@ def render_markdown(report: dict[str, Any]) -> str:
         ),
         "",
     ]
+    adverse = report.get("entry_adverse_flow")
+    if isinstance(adverse, dict):
+        lines.extend([
+            "## Entry Adverse Flow Receipts",
+            "",
+            f"- Status: `{adverse.get('status')}`; counts: `{adverse.get('counts', {})}`.",
+            f"- Source SHA256: `{adverse.get('source_sha256')}`.",
+            "- Transport start is not broker acceptance or full fill. Economics remain null until exact lifecycle/cost reconciliation; no automatic live approval.",
+            "",
+        ])
     objective = report.get("fast_lifecycle_objective_alignment")
     if isinstance(objective, dict):
         lifecycle = objective.get("lifecycle_coverage") or {}

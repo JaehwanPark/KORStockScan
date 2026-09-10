@@ -1,0 +1,8 @@
+{
+  "contract": "machine_entry_adverse_flow_v1",
+  "enabled": true,
+  "valid_from": "2026-09-11T00:00:00+09:00",
+  "valid_until": null,
+  "scopes": "all_existing_widget_episode",
+  "approval_reference": "docs/audit-reports/2026-09-10-approved-additions-deployment.md#authority"
+}

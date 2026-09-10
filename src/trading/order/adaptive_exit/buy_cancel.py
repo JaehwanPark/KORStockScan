@@ -6,7 +6,7 @@ cancel authority. BUY fills are quantities only; no price/time/cost is invented.
 Shared private dated/current parsing retains SELL's existing public contract.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import datetime
 
 from src.trading.order.owner_custody_registry import (
@@ -138,7 +138,9 @@ class RegisteredBuyCancelAdapter:
         t = self._transport
         start = t.now_ms()
         raw, _ = t._snapshot(order, _side="BUY")
-        result = BuySnapshot(**raw.__dict__)
+        result = BuySnapshot(
+            **{field.name: getattr(raw, field.name) for field in fields(BuySnapshot)}
+        )
         if result.source_ok:
             try:
                 self._fresh(order, start, result.observed_at_ms)
@@ -205,7 +207,12 @@ class RegisteredBuyCancelAdapter:
             return PricedFullBuySnapshot(order, error="full_buy_owner_guard_missing")
         raw, proof = t._snapshot(order, _side="BUY", _full_buy_price=True)
         if not raw.source_ok:
-            return PricedFullBuySnapshot(**raw.__dict__)
+            return PricedFullBuySnapshot(
+                **{
+                    field.name: getattr(raw, field.name)
+                    for field in fields(BuySnapshot)
+                }
+            )
         try:
             self._fresh(order, proof["started_at_ms"], raw.observed_at_ms)
             if guard() is not True:
@@ -213,7 +220,13 @@ class RegisteredBuyCancelAdapter:
             self._bind_fill(t._owned_for_side(order, "BUY"), raw)
             if guard() is not True:
                 raise SellContractError("full_buy_owner_guard_lost")
-            return PricedFullBuySnapshot(**raw.__dict__, fill_price=proof["fill_price"])
+            return PricedFullBuySnapshot(
+                **{
+                    field.name: getattr(raw, field.name)
+                    for field in fields(BuySnapshot)
+                },
+                fill_price=proof["fill_price"],
+            )
         except SellContractError as exc:
             return PricedFullBuySnapshot(order, error=str(exc))
         except Exception:
@@ -239,7 +252,9 @@ class RegisteredBuyCancelAdapter:
             _side="BUY",
             _cancelled_buy_price=priced,
         )
-        result = result_type(**raw.__dict__)
+        result = result_type(
+            **{field.name: getattr(raw, field.name) for field in fields(BuySnapshot)}
+        )
         if result.source_ok:
             try:
                 if proof is None:
@@ -263,7 +278,13 @@ class RegisteredBuyCancelAdapter:
                 if priced:
                     if guard() is not True:
                         raise SellContractError("cancelled_buy_owner_guard_lost")
-                    result = result_type(**raw.__dict__, fill_price=proof["fill_price"])
+                    result = result_type(
+                        **{
+                            field.name: getattr(raw, field.name)
+                            for field in fields(BuySnapshot)
+                        },
+                        fill_price=proof["fill_price"],
+                    )
             except SellContractError as exc:
                 return result_type(order, error=str(exc))
             except Exception:

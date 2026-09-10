@@ -446,8 +446,8 @@ def test_episode_run_until_terminal_retains_unprotected_manager(loop, monkeypatc
         pass
 
     monkeypatch.setattr(
-        "src.trading.order.regular_two_leg_machine.time_module.sleep",
-        lambda *a: (_ for _ in ()).throw(Waiting()),
+        "src.trading.order.regular_two_leg_machine.wait_for_pressure",
+        lambda *a, **k: (_ for _ in ()).throw(Waiting()),
     )
     with pytest.raises(Waiting):
         loop.machine.run_until_terminal()

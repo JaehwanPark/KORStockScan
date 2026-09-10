@@ -13,6 +13,8 @@ from typing import Any, Callable
 
 import requests
 
+from src.trading.order.entry_adverse_guard import before_transport
+
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.order.entry_liquidity_guard import (
@@ -213,6 +215,8 @@ def _extract_rows(payload: object) -> list[dict[str, Any]]:
 class KiwoomSharedTokenOrderGateway:
     """Minimal real-order gateway with no token issuance or cash precheck."""
 
+    entry_adverse_transport_supported = True
+
     def __init__(
         self,
         *,
@@ -267,6 +271,7 @@ class KiwoomSharedTokenOrderGateway:
                 raise RuntimeError(
                     f"widget_shared_read_rate_deferred:{admission.reason}"
                 )
+        before_transport(api_id)
         response = self.session.post(
             request_url,
             headers={

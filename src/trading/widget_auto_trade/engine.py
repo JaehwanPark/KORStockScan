@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from src.trading.order import entry_adverse_guard, entry_adverse_owners
+
 from src.trading.order.profit_stagnation_exit import KEY as PROFIT_EXIT_KEY
+from src.trading.order.target_ratchet import KEY as RATCHET_KEY
+from src.trading.order.target_ratchet import wait_for_pressure
 from src.trading.order.profit_stagnation_owners import OBSERVATION_KEY as PROFIT_OBSERVATION_KEY, active_widget, widget_symbol as run_profit_exit_symbol
 
 import json
@@ -454,6 +458,7 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
                 "adaptive_exit_sessions" in value
                 or GROUP_SESSION_KEY in value
                 or PROFIT_EXIT_KEY in value
+                or RATCHET_KEY in value
                 or value.get("adaptive_exit_history")
             )
             for group in [payload, *(payload.get("history") or [])]
@@ -618,7 +623,7 @@ class WidgetSignalAutoTrader:
             raise ValueError("widget_owner_state_invalid")
         adaptive_claimed = any(
             isinstance(value, dict)
-            and ("adaptive_exit_sessions" in value or GROUP_SESSION_KEY in value or PROFIT_EXIT_KEY in value)
+            and ("adaptive_exit_sessions" in value or GROUP_SESSION_KEY in value or PROFIT_EXIT_KEY in value or RATCHET_KEY in value)
             for value in (state.get("symbols") or {}).values()
         )
         adaptive_evidence = adaptive_claimed or any(
@@ -850,7 +855,7 @@ class WidgetSignalAutoTrader:
             code: value
             for code, value in prior_symbols.items()
             if isinstance(value, dict)
-            and ("adaptive_exit_sessions" in value or GROUP_SESSION_KEY in value or PROFIT_EXIT_KEY in value)
+            and ("adaptive_exit_sessions" in value or GROUP_SESSION_KEY in value or PROFIT_EXIT_KEY in value or RATCHET_KEY in value)
         }
         history = self._state.get("history")
         history = history if isinstance(history, list) else []
@@ -1802,9 +1807,14 @@ class WidgetSignalAutoTrader:
         self._save()
         try:
             if side == "BUY":
-                result = self.gateway.submit_buy(
-                    code=spec.code, qty=qty, route=broker_route
+                callback = (
+                    entry_adverse_owners.widget_callback(self, spec, symbol_state)
+                    if order_role == ORDER_ROLE_ENTRY_BUY else None
                 )
+                with entry_adverse_guard.transport_check(callback):
+                    result = self.gateway.submit_buy(
+                        code=spec.code, qty=qty, route=broker_route
+                    )
             elif order_role == ORDER_ROLE_TAKE_PROFIT and limit_price is not None:
                 result = self.gateway.submit_limit_sell(
                     code=spec.code,
@@ -1816,6 +1826,20 @@ class WidgetSignalAutoTrader:
                 result = self.gateway.submit_sell(
                     code=spec.code, qty=qty, route=broker_route
                 )
+        except entry_adverse_guard.EntryNotSent as exc:
+            released = self._transition_owner_submit(order, exc.result)
+            order.update(
+                status="NOT_SENT" if released else "AMBIGUOUS",
+                return_code=exc.result.return_code, return_msg=str(exc),
+                broker_accepted=False, actual_order_submitted=False,
+            )
+            if released:
+                symbol_state["entry_episode_open"] = False
+                symbol_state.pop("entry_signal_id", None)
+            self._save()
+            self._event("entry_adverse_not_sent", spec, now, signal_id=signal_id,
+                        entry_adverse_flow=dict(symbol_state.get(entry_adverse_guard.KEY) or {}))
+            return order
         except Exception as exc:
             self._transition_owner_submit(order, None, error=type(exc).__name__)
             order.update(
@@ -3186,6 +3210,7 @@ class WidgetSignalAutoTrader:
         self, spec: WidgetSpec, payload: dict[str, Any], now: datetime
     ) -> None:
         symbol_state = self._state["symbols"][spec.code]
+        entry_adverse_owners.expire_pending(self, symbol_state, now)
         if (active_widget(symbol_state) or PROFIT_OBSERVATION_KEY in symbol_state) and getattr(self, "profit_exit_lock_held", lambda: False)() is not True:
             return
         if getattr(self, "_adaptive_enrollment_reload_required", False):
@@ -3303,7 +3328,7 @@ class WidgetSignalAutoTrader:
                 current_day_open_qty=self._open_qty(symbol_state),
             )
 
-        if run_profit_exit_symbol(self, symbol_state, now):
+        if run_profit_exit_symbol(self, symbol_state, now, allow_new_target_ratchet=True):
             return
         if self._close_completed_take_profit_episode(spec, symbol_state, now):
             return
@@ -3350,6 +3375,11 @@ class WidgetSignalAutoTrader:
 
         entry_signal = self._entry_signal(spec, payload, now)
         if entry_signal is None:
+            adverse = symbol_state.get(entry_adverse_guard.KEY)
+            if isinstance(adverse, dict) and not entry_adverse_guard.terminal(adverse):
+                entry_adverse_guard._skip(adverse, "SKIP_SIGNAL_INVALIDATED")
+                entry_adverse_owners.record(symbol_state)
+                self._save()
             pending_confirmation = symbol_state.get("pending_entry_confirmation")
             if isinstance(pending_confirmation, dict):
                 symbol_state["pending_entry_confirmation"] = None
@@ -3923,6 +3953,12 @@ class WidgetSignalAutoTrader:
                     anchor_liquidity_snapshot=anchor_snapshot,
                 )
                 return
+        if not entry_adverse_owners.widget_prepare(
+            self, spec, symbol_state, identity=confirmation_identity,
+            signal_id=signal_id, source_state=source_state, route=route,
+            session=timing_session, observed=now, entry_policy=entry_policy,
+        ):
+            return
         liquidity_decision = self._entry_liquidity_decision(
             spec=spec,
             route=route,
@@ -4125,6 +4161,16 @@ class WidgetSignalAutoTrader:
             now=now,
             order_role=ORDER_ROLE_ENTRY_BUY,
         )
+        adverse = symbol_state.get(entry_adverse_guard.KEY)
+        if isinstance(adverse, dict):
+            if adverse.get("action") == "CONTINUE" and entry_order.get("broker_accepted") is False:
+                entry_adverse_guard._skip(adverse, "SKIP_ORIGINAL_OWNER_REJECTED")
+            adverse["order_receipt"] = {
+                key: entry_order.get(key) for key in
+                ("order_no", "status", "broker_accepted", "return_code", "owner_registry_intent_id")
+            }
+            entry_adverse_owners.record(symbol_state)
+            self._save()
         if (
             entry_order.get("status") == "FAILED"
             and entry_order.get("broker_accepted") is False
@@ -5385,4 +5431,7 @@ class WidgetSignalAutoTrader:
             self.run_once()
             remaining = interval - (time.monotonic() - started)
             if remaining > 0:
-                time.sleep(remaining)
+                wait_for_pressure(
+                    self, remaining, owner_type="widget_auto_trade",
+                    now_fn=lambda: datetime.now(tz=KST),
+                )

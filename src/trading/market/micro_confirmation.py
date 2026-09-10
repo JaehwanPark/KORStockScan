@@ -796,7 +796,7 @@ def load_live_dynamic_confirmation_source(
         payload = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError) as exc:
         return None, f"dynamic_ws_snapshot_unreadable:{type(exc).__name__}"
-    contract = payload.get("machine_confirmation_input_contract")
+    contract = payload.get("machine_confirmation_input_contract") if isinstance(payload, dict) else None
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != "kiwoom_ws_dashboard_snapshot_v1"

@@ -1,0 +1,14 @@
+{
+  "family": "machine_ws_target_ratchet_v1",
+  "enabled": true,
+  "valid_from": "2026-09-11T00:00:00+09:00",
+  "valid_until": "9999-12-31T00:00:00+09:00",
+  "owners": [
+    "widget_auto_trade",
+    "episode"
+  ],
+  "round_trip_cost_pct": 0.23,
+  "slippage_bps": 5,
+  "cost_source_sha256": "5aea42fa0de70d765d160e678e82d3e82c66aa8f63a1510ca3f69ef5946f3612",
+  "decision_contract": "machine_target_pressure_v1"
+}
