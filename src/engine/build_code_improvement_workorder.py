@@ -1753,6 +1753,15 @@ def _escalate_repeated_unresolved_orders(
             and item.order.get("runtime_effect") is False
             and item.order.get("allowed_runtime_apply") is False
         )
+        existing_recheck_natural_acceptance = (
+            item.decision == "defer_evidence"
+            and item.order.get("source_report_type")
+            == "entry_recheck_drought_controller"
+            and status == "natural_acceptance_pending"
+            and item.route == "maintenance_review"
+            and item.order.get("runtime_effect") is False
+            and item.order.get("allowed_runtime_apply") is False
+        )
         if (
             order_id
             and repeat_count >= repeat_floor
@@ -1766,6 +1775,7 @@ def _escalate_repeated_unresolved_orders(
             and not pattern_lab_existing_family_evidence_only
             and not manual_review_only
             and not existing_one_share_evidence
+            and not existing_recheck_natural_acceptance
             and item.order.get("source_report_type") != "market_opportunity_census"
         ):
             escalated_order = dict(item.order)

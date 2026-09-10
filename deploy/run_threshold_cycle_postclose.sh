@@ -2216,7 +2216,10 @@ if [ "$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD" = "true" ] || [ "$RUN_STAGE_HOOK_RUNTIME
   fi
 fi
 if [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "true" ] || [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "1" ]; then
-  intraday_ws_symbol_master="$PROJECT_DIR/data/report/micro_reversion_economic_reference/micro_reversion_symbol_master_${TARGET_DATE}.json"
+  # Resolve only the shared top-level data mount; the strict reader must still
+  # reject symlinks below it and validate the original master bytes/date.
+  intraday_ws_data_root="$(cd "$PROJECT_DIR/data" && pwd -P)"
+  intraday_ws_symbol_master="$intraday_ws_data_root/report/micro_reversion_economic_reference/micro_reversion_symbol_master_${TARGET_DATE}.json"
   intraday_ws_state="$PROJECT_DIR/data/runtime/intraday_ws_freshness_monitor/intraday_ws_freshness_monitor_${TARGET_DATE}.json"
   wait_for_postclose_resources "intraday_ws_freshness_finalize"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.intraday_ws_freshness_monitor \
