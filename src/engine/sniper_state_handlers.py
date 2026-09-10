@@ -30669,6 +30669,7 @@ def _pre_submit_refresh_real_ws_snapshot(
     strategy: str,
     *,
     context_max_age_ms: int | None = None,
+    refresh_even_if_input_fresh: bool = False,
 ) -> tuple[dict, dict]:
     """Acquire a local snapshot; submit callers retain the submit-age limit.
 
@@ -30735,7 +30736,7 @@ def _pre_submit_refresh_real_ws_snapshot(
                 "input_snapshot_timestamp_missing"
             )
             return base, fields
-        if base_age_ms <= max_age_ms:
+        if base_age_ms <= max_age_ms and not refresh_even_if_input_fresh:
             fields["pre_submit_ws_snapshot_refresh_reason"] = "input_snapshot_fresh"
             return base, fields
     manager = WS_MANAGER
@@ -46165,7 +46166,11 @@ def _apply_entry_ai_price_canary(
         ]
         if all(math.isfinite(limit) and limit > 0 for limit in source_limits):
             ws_data, final_refresh = _pre_submit_refresh_real_ws_snapshot(
-                code, ws_data, strategy, context_max_age_ms=int(min(source_limits))
+                code,
+                ws_data,
+                strategy,
+                context_max_age_ms=int(min(source_limits)),
+                refresh_even_if_input_fresh=True,
             )
             final_refresh_fields = {
                 key.replace(

@@ -413,7 +413,9 @@ def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
     )
 
 
-@pytest.mark.parametrize("mode", ["fresh", "stale", "future", "route_changed"])
+@pytest.mark.parametrize(
+    "mode", ["fresh", "fresh_input", "stale", "future", "route_changed"]
+)
 def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
     monkeypatch, mode
 ):
@@ -454,7 +456,13 @@ def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
     )
 
     def latest(_code):
-        age = {"fresh": 0.9, "stale": 4, "future": -1, "route_changed": 0.1}[mode]
+        age = {
+            "fresh": 0.9,
+            "fresh_input": 0.1,
+            "stale": 4,
+            "future": -1,
+            "route_changed": 0.1,
+        }[mode]
         ws = _ws(clock["now"] - age, price=10020)
         if mode == "route_changed":
             ws.update(market_route="nxt_only", market_suffix="_NX")
@@ -466,19 +474,19 @@ def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
 
     def slow_context(*a, **k):
         context = _context()
-        clock["now"] += 5
+        clock["now"] += 0.5 if mode == "fresh_input" else 5
         return context
 
     monkeypatch.setattr(handlers, "build_entry_candle_context", slow_context)
 
     def evaluate(_name, _code, ws, ticks, candles, price_ctx, **kwargs):
         calls.append(True)
-        assert mode == "fresh"
+        assert mode in {"fresh", "fresh_input"}
         assert ws["curr"] == 10020 and price_ctx["current_price"] == 10020
         assert ticks == ws["recent_trade_ticks"] and "old_rest" not in str(ticks)
         assert kwargs["candle_context"]["ai_market_snapshot_v1"]["sources"]["tape"][
             "age_ms"
-        ] == pytest.approx(900, abs=1)
+        ] == pytest.approx(100 if mode == "fresh_input" else 900, abs=1)
         return {
             "action": "SKIP",
             "confidence": 99,
@@ -521,7 +529,7 @@ def test_entry_price_refreshes_after_auxiliary_reads_without_submit_relaxation(
         best_ask=10010,
     )
     assert result == [] and touched is True
-    assert len(calls) == (1 if mode == "fresh" else 0), {
+    assert len(calls) == (1 if mode in {"fresh", "fresh_input"} else 0), {
         k: v for k, v in gate.items() if "reason" in k or "error" in k or "blocker" in k
     }
     assert gate["entry_ai_price_final_ws_snapshot_refresh_max_age_ms"] == 3000
