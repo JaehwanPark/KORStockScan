@@ -3,6 +3,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 import hashlib
 import json
+import runpy
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -22,6 +23,51 @@ from src.engine.scalping.micro_reversion.current_axis_source import (
 from src.tests import test_micro_reversion_ai_quality_bridge as source_fixture
 from src.tests import test_micro_reversion_ai_quality_cycle as cycle_fixture
 from src.utils.jsonl_io import write_json_object_generation_safe as write_json
+
+
+def test_current_axis_uses_trusted_data_mount_and_rejects_child_symlink(
+    monkeypatch, tmp_path
+):
+    from src.utils import constants
+
+    shared = tmp_path / "workspace_data"
+    shared.mkdir()
+    release = tmp_path / "release"
+    release.mkdir()
+    (release / "data").symlink_to(shared, target_is_directory=True)
+    monkeypatch.setattr(constants, "DATA_DIR", (release / "data").resolve())
+    loaded = runpy.run_path(policy.__file__)
+    assert loaded["RUNTIME_ROOT"] == shared / "runtime/main_ai_current_axis"
+    monkeypatch.setattr(policy, "RUNTIME_ROOT", loaded["RUNTIME_ROOT"])
+    monkeypatch.setattr(policy, "DATA_DIR", loaded["DATA_DIR"])
+
+    def delivery(target_date, *, root, trace_path):
+        assert root == loaded["RUNTIME_ROOT"]
+        assert (
+            trace_path
+            == shared / "ai_decision_trace/ai_decision_trace_2026-09-10.jsonl"
+        )
+        return runtime.attribution([], target_date=target_date, activation=None)
+
+    monkeypatch.setattr(automation, "post_apply", delivery)
+    assert (
+        automation.main(
+            ["--phase", "postclose", "--target-date", "2026-09-10", "--write"]
+        )
+        == 0
+    )
+    status = policy.read(loaded["RUNTIME_ROOT"] / "postclose_status_2026-09-10.json")
+    assert status["status"] == "registration_missing_disabled"
+    assert status["runtime_effect"] is False
+    assert status["provider_call_performed"] is False
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (loaded["RUNTIME_ROOT"] / "untrusted").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(OSError):
+        write_json(
+            loaded["RUNTIME_ROOT"] / "untrusted/status.json", {"status": "forbidden"}
+        )
+    assert not (outside / "status.json").exists()
 
 
 def prompt_contract(prompt, *, role):
