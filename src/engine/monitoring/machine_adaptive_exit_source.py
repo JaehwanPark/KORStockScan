@@ -19,6 +19,10 @@ from zoneinfo import ZoneInfo
 from src.trading.config.machine_adaptive_exit_policy import AUTHORITY, canonical_sha256
 from src.trading.order.adaptive_exit.source import OwnerScope, validate_source_day
 from src.trading.order.adaptive_exit.models import finite, positive_int
+from src.trading.order.adaptive_exit.market_source import (
+    SUPPORT_CONTRACT,
+    snapshot_payload_from_window,
+)
 from src.trading.order.adaptive_exit.target_group import group_from_observation
 from src.trading.order.tick_utils import get_tick_size
 from .widget_comparison_cost import comparison_cost_contract
@@ -228,12 +232,22 @@ def _add_lot(census, *, scope, eid, lid, entry, receipts, state_hash, target_dat
             or entry["price"] <= 0
         ):
             raise ValueError("entry_identity_or_fill_invalid")
-        if len(receipt["entries"]) != 1 or target["quantity"] != entry["quantity"]:
-            row.update(
-                disposition="unsupported_policy_epoch",
-                reason="aggregated_target_partial_cancel_adapter_required",
-            )
-            return
+        group_seed = {}
+        horizon_end = first + HORIZON_SEC * 1000
+        if len(receipt["entries"]) > 1:
+            # Exact shared-order geometry is for coupled research only. The
+            # independent replay continues to exclude these target keys.
+            group = group_from_observation(receipt, scope=scope)
+            fill_times = sorted({lot[3] for lot in group.lots})
+            horizon_end = fill_times[0] + HORIZON_SEC * 1000
+            if ack >= horizon_end:
+                raise ValueError("shared_target_common_horizon_closed_before_ack")
+            group_seed = {
+                "shared_target_group_hash": group.to_payload()["canonical_sha256"],
+                "shared_target_observed_fill_times_ms": fill_times,
+            }
+        elif target["quantity"] != entry["quantity"]:
+            raise ValueError("independent_target_quantity_mismatch")
         if frozen["quantity"] != frozen["requested_quantity"]:
             row.update(
                 disposition="unsupported_policy_epoch",
@@ -269,7 +283,8 @@ def _add_lot(census, *, scope, eid, lid, entry, receipts, state_hash, target_dat
                 "entry_order_key": entry["order_date"] + ":" + entry["order_no"],
                 "target_order_key": target["order_date"] + ":" + target["order_no"],
                 "target_ack_at_ms": ack,
-                "horizon_end_ms": first + HORIZON_SEC * 1000,
+                "horizon_end_ms": horizon_end,
+                **group_seed,
                 "cost_contract": cost,
                 "owner_receipt_hash": receipt["canonical_sha256"],
                 "clock_basis": "local_first_fill_and_ack_observations_not_exchange_time",
@@ -338,6 +353,13 @@ def _finalize_shared_targets(census):
                 status="source_invalid",
                 reason="shared_target_current_owner_lot_mismatch",
             )
+            for row in matching:
+                if (
+                    row.get("path_seed", {}).get("shared_target_group_hash")
+                    == group["canonical_sha256"]
+                ):
+                    row.pop("path_seed")
+                    row.update(disposition="source_invalid", reason=record["reason"])
         else:
             record["status"] = "source_bound_runtime_unavailable"
 
@@ -704,10 +726,25 @@ def bind_ordered_paths(source, windows, *, source_contract_gap=None, evaluated_a
                 depth_times = [_ms(d["local_receive_timestamp"]) for d in depths]
                 trade_times = [_ms(t["local_receive_timestamp"]) for t in trades]
                 start, end = p["first_fill_at_ms"], seed["horizon_end_ms"]
+                # Shared lots can have different observed fill times. Use one
+                # group lattice and common horizon without inventing a fill
+                # clock or moving the boundary after seeing the outcome.
+                fills = seed.get("shared_target_observed_fill_times_ms")
+                checkpoints = (
+                    sorted(
+                        set(range(fills[0], end + 1, CADENCE_MS))
+                        | set(fills)
+                        | {seed["target_ack_at_ms"], end}
+                    )
+                    if fills
+                    else range(start, end + 1, CADENCE_MS)
+                )
                 points = []
                 di = ti = 0
                 source_epoch = None
-                for at in range(start, end + 1, CADENCE_MS):
+                for checkpoint_sequence, at in enumerate(checkpoints, 1):
+                    if at < start:
+                        continue
                     while (
                         di < len(depths)
                         and _ms(depths[di]["local_receive_timestamp"]) <= at
@@ -743,40 +780,17 @@ def bind_ordered_paths(source, windows, *, source_contract_gap=None, evaluated_a
                             "ordered_past_window_source_gap:"
                             + ",".join(feature.get("source_gap_reasons", []))
                         )
-                    levels = [
-                        (
-                            (level["price"], level["quantity"])
-                            if isinstance(level, dict)
-                            else (level[1], level[2])
-                        )
-                        for level in d["bid_levels"]
-                    ]
-                    left_bid = feature["anchor_depth"]["bid"]
-                    supportive = (
-                        d["best_bid"] >= left_bid
-                        and feature["aggressive_buy_trade_backed_ratio"] > 0
-                        and feature["refill_ratio"] <= 1
-                    )
                     points.append(
                         {
                             "clock": {"now_ms": at, "verified_halt_ms": 0},
-                            "snapshot": {
-                                "observed_at_ms": at,
-                                "quote_at_ms": _ms(d["local_receive_timestamp"]),
-                                "source_epoch": str(epoch),
-                                "sequence": len(points) + 1,
-                                "quote_sequence": d["series_sequence"],
-                                "source_hash": canonical_sha256(
-                                    {"depth": d, "feature": feature}
-                                ),
-                                "scope_key": p["scope_key"],
-                                "position_epoch": p["position_epoch"],
-                                "best_ask": d["best_ask"],
-                                "bid_levels": levels,
-                                "supportive": supportive,
-                                "improvement_bps": (d["best_bid"] / left_bid - 1)
-                                * 10000,
-                            },
+                            "snapshot": snapshot_payload_from_window(
+                                depth=d,
+                                feature=feature,
+                                scope_key=p["scope_key"],
+                                position_epoch=p["position_epoch"],
+                                observed_at_ms=at,
+                                sequence=checkpoint_sequence,
+                            ),
                         }
                     )
                 path = _signed(
@@ -786,7 +800,7 @@ def bind_ordered_paths(source, windows, *, source_contract_gap=None, evaluated_a
                         "authority": dict(AUTHORITY),
                         "observations": points,
                         "sequence_provenance": "as_of_checkpoint_ordinal_raw_sequences_in_source_hash",
-                        "support_contract": "past_one_second_bid_nondecay_trade_backing_refill_v1",
+                        "support_contract": SUPPORT_CONTRACT,
                     }
                 )
                 census["lot_paths"].append(path)
@@ -890,6 +904,15 @@ def merge_census_history(current, *, report_root, maximum_days=20):
                 census["errors"].append("historical_duplicate_episode_identity")
                 census["complete"] = False
                 break
+            old_groups = old.get("shared_target_groups", {})
+            if not isinstance(old_groups, dict) or set(old_groups).intersection(
+                census["shared_target_groups"]
+            ):
+                census.setdefault("history_errors", []).append(
+                    "historical_shared_target_topology_invalid"
+                )
+                break
+            census["shared_target_groups"].update(deepcopy(old_groups))
             census["expected_episode_lots"].update(
                 deepcopy(old["expected_episode_lots"])
             )
@@ -915,6 +938,8 @@ def propose_study_contract(source):
     train/holdout diagnostic, not live approval. Exact activation floors and
     execution readiness still belong to the separately approved envelope.
     """
+    from copy import deepcopy
+
     configs = {}
     for key, census in source["scopes"].items():
         days = census["source_trading_dates"]
@@ -979,6 +1004,12 @@ def propose_study_contract(source):
                     }
                 )
         configs[key] = {
+            # Outcome-independent BOOK comparison, not live lot-fill attribution
+            # or an approved group allocation. Reuse this source census's order.
+            "shared_target_book_allocation": {
+                "rule": "nonrunner_first_then_runner_in_declared_lot_order_v1",
+                "episode_lot_order": deepcopy(census["expected_episode_lots"]),
+            },
             "parameter_grid": grid,
             "maximum_candidates": 5,
             "execution_models": [base, stress],

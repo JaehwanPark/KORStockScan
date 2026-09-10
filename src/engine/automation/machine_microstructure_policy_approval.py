@@ -576,7 +576,37 @@ def _nonempty_mapping(value: Any) -> bool:
     return isinstance(value, Mapping) and bool(value)
 
 
-def evidence_readiness_errors(candidate: Mapping[str, Any]) -> list[str]:
+def _claims_initial_adaptive_exit(candidate: Mapping[str, Any]) -> bool:
+    design = candidate.get("runtime_design")
+    evidence = candidate.get("evidence")
+    return (
+        str(candidate.get("candidate_id") or "").startswith("adaptive-exit:")
+        or (
+            isinstance(design, Mapping)
+            and design.get("runtime_family") == "machine_adaptive_exit_v1"
+        )
+        or (
+            isinstance(evidence, Mapping)
+            and evidence.get("validator")
+            == "machine_adaptive_exit_initial_validator_v1"
+        )
+    )
+
+
+def evidence_readiness_errors(
+    candidate: Mapping[str, Any],
+    *,
+    runtime_registry: Mapping[str, Mapping[str, Any]] | None = None,
+) -> list[str]:
+    if _claims_initial_adaptive_exit(candidate):
+        from src.engine.automation.machine_adaptive_exit_approval import (
+            candidate_errors,
+        )
+
+        return candidate_errors(
+            candidate,
+            _trusted_registry_entry("machine_adaptive_exit_v1", runtime_registry),
+        )
     errors: list[str] = []
     if candidate.get("schema") != CANDIDATE_SCHEMA:
         errors.append("candidate_schema_invalid")
@@ -768,6 +798,19 @@ def runtime_design_errors(
         != (post_apply_attribution or {}).get("owner")
     ):
         errors.append("runtime_family_trusted_registry_mismatch")
+    if _claims_initial_adaptive_exit(candidate):
+        # Revalidate frozen evidence at decision and PREOPEN as well as intake.
+        # Candidate-supplied family/schema changes cannot select a weaker gate.
+        from src.engine.automation.machine_adaptive_exit_approval import (
+            candidate_errors,
+        )
+
+        errors.extend(
+            candidate_errors(
+                candidate,
+                _trusted_registry_entry("machine_adaptive_exit_v1", runtime_registry),
+            )
+        )
     return errors
 
 
@@ -2487,7 +2530,7 @@ def sync_queue(
         raw_candidate_id = str(candidate.get("candidate_id") or "").strip()
         if raw_candidate_id:
             raw_candidate_ids.add(raw_candidate_id)
-        errors = evidence_readiness_errors(candidate)
+        errors = evidence_readiness_errors(candidate, runtime_registry=runtime_registry)
         if str(candidate.get("source_date") or "") != as_of_date.isoformat():
             errors.append("candidate_source_date_not_as_of_date")
         if errors:
@@ -2736,6 +2779,15 @@ def record_operator_decision(
         )
         if design_errors:
             raise ValueError("runtime_design_not_ready:" + ",".join(design_errors))
+        if _claims_initial_adaptive_exit(entry.get("candidate") or {}):
+            initial = _trusted_registry_entry(
+                "machine_adaptive_exit_v1", runtime_registry
+            )
+            if (
+                operator_authorization_id.strip()
+                != initial["initial_approval"]["envelope"]["approval_id"]
+            ):
+                raise ValueError("initial_exit_operator_authorization_id_mismatch")
     decision_time = requested_at
     invalidated_at = _aware_datetime(entry.get("operator_decision_invalidated_at_kst"))
     if invalidated_at is not None and decision_time <= invalidated_at:
@@ -2866,6 +2918,22 @@ def schedule_preopen_handoffs(
             if entry.get("state") == STATE_AUTO_CHAIN_ELIGIBLE
             else "first_explicit_operator_approval"
         )
+        if family == "machine_adaptive_exit_v1":
+            initial = (_trusted_registry_entry(family, runtime_registry) or {}).get(
+                "initial_approval", {}
+            )
+            if (
+                authorization_mode != "first_explicit_operator_approval"
+                or initial.get("envelope", {}).get("target_date")
+                != target_date.isoformat()
+                or entry.get("operator_authorization_id")
+                != initial.get("envelope", {}).get("approval_id")
+            ):
+                entry["state"] = STATE_DESIGN_REQUIRED
+                entry["state_reason"] = (
+                    "initial_exit_target_or_authorization_mode_mismatch"
+                )
+                continue
         if authorization_mode == "enrolled_same_bounded_family_auto_chain":
             if (
                 not isinstance(enrollment, Mapping)
@@ -3531,9 +3599,34 @@ def _queue_lock(queue_path: Path) -> Iterator[ArtifactGenerationLease]:
         yield generation
 
 
+def _initial_exit_registry(args: argparse.Namespace):
+    path = getattr(args, "adaptive_exit_initial_context", None)
+    digest = getattr(args, "adaptive_exit_initial_context_sha256", None)
+    if path is None and not digest:
+        return None
+    if path is None or not digest:
+        raise ValueError("initial_exit_context_and_external_hash_required")
+    from src.engine.automation.machine_adaptive_exit_approval import (
+        load_initial_context,
+    )
+
+    entry = load_initial_context(path, expected_byte_sha256=digest)
+    registry = dict(TRUSTED_RUNTIME_FAMILY_REGISTRY)
+    if (
+        "machine_adaptive_exit_v1" in registry
+        and registry["machine_adaptive_exit_v1"] != entry
+    ):
+        raise ValueError("initial_exit_registry_conflict")
+    registry["machine_adaptive_exit_v1"] = entry
+    return registry
+
+
 def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
     target_date = date.fromisoformat(args.target_date)
     generated = _now_kst()
+    runtime_registry = _initial_exit_registry(args)
+    if runtime_registry is not None and args.phase == "preopen" and not args.write:
+        raise ValueError("initial_exit_handoff_requires_write")
     if args.phase == "postclose" and target_date > generated.date():
         raise ValueError("postclose_target_date_in_future")
     source_path: Path | None = None
@@ -3555,6 +3648,27 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
         ) = _load_source_context_snapshot(
             target_date=target_date, source_report=args.source_report
         )
+        if runtime_registry is not None:
+            if source_status != "loaded":
+                raise ValueError("initial_exit_parent_intake_contract_required")
+            from src.engine.automation.machine_adaptive_exit_approval import (
+                build_candidates,
+            )
+
+            initial_candidates = build_candidates(
+                source_path=source_path,
+                trusted_entry=runtime_registry["machine_adaptive_exit_v1"],
+            )
+            for candidate in initial_candidates:
+                same_id = [
+                    row
+                    for row in source_candidates
+                    if row.get("candidate_id") == candidate["candidate_id"]
+                ]
+                if same_id and (len(same_id) != 1 or same_id[0] != candidate):
+                    raise ValueError("initial_exit_native_projection_conflict")
+                if not same_id:
+                    source_candidates.append(candidate)
     with _queue_lock(args.queue_path) as queue_generation:
         if (
             not args.queue_path.exists()
@@ -3572,6 +3686,7 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
             approval_artifacts=_approval_artifacts(args.approval_dir),
             apply_receipt_dir=args.apply_receipt_dir,
             now=generated,
+            runtime_registry=runtime_registry,
         )
         accepted_candidate_queue_keys = (queue.get("last_sync") or {}).get(
             "accepted_candidate_queue_keys"
@@ -3594,12 +3709,15 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
         ):
             raise ValueError("source_artifact_changed_before_commit")
         handoff_paths: list[Path] = []
+        if _initial_exit_registry(args) != runtime_registry:
+            raise ValueError("initial_exit_context_changed_before_handoff")
         if args.phase == "preopen":
             queue, handoff_paths = schedule_preopen_handoffs(
                 queue,
                 target_date=target_date,
                 handoff_dir=args.handoff_dir,
                 now=generated,
+                runtime_registry=runtime_registry,
             )
         reminder_status = "not_requested"
         if args.notify:
@@ -3628,6 +3746,8 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
             now=generated,
         )
         if args.write:
+            if _initial_exit_registry(args) != runtime_registry:
+                raise ValueError("initial_exit_context_changed_before_commit")
             if (
                 args.phase == "postclose"
                 and source_path is not None
@@ -3652,6 +3772,7 @@ def _run_phase(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _record_decision(args: argparse.Namespace) -> dict[str, Any]:
+    runtime_registry = _initial_exit_registry(args)
     with _queue_lock(args.queue_path) as queue_generation:
         queue = load_queue(args.queue_path, generation=queue_generation)
         queue, artifact_path = record_operator_decision(
@@ -3663,6 +3784,7 @@ def _record_decision(args: argparse.Namespace) -> dict[str, Any]:
             operator_instruction=args.operator_instruction,
             approval_dir=args.approval_dir,
             apply_receipt_dir=args.apply_receipt_dir,
+            runtime_registry=runtime_registry,
         )
         _atomic_write_json(
             args.queue_path,
@@ -3698,6 +3820,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--candidate-sha256", default="")
     parser.add_argument("--operator-authorization-id", default="")
     parser.add_argument("--operator-instruction", default="")
+    parser.add_argument("--adaptive-exit-initial-context", type=Path)
+    parser.add_argument("--adaptive-exit-initial-context-sha256")
     args = parser.parse_args(argv)
     if not args.target_date:
         args.target_date = (

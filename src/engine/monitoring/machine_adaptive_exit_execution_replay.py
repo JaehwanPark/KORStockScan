@@ -113,11 +113,9 @@ def _advance(state, decision, clock, snapshot, position):
     return state
 
 
-def replay_execution(
-    path: ExitPath, policy: ExitPolicy, model: ExecutionModel, *, baseline: bool = False
-) -> dict:
+def _empty_result(path, policy, model, *, baseline):
     p = path.position
-    result = {
+    return {
         "schema": "machine_adaptive_exit_execution_replay_v1",
         "owner_id": p.owner_id,
         "scope_key": p.scope_key,
@@ -147,6 +145,11 @@ def replay_execution(
         "common_horizon_close_lead_ms": model.horizon_close_lead_ms,
         "horizon_close_is_evaluation_only_not_live_baseline": True,
     }
+
+
+def _path_error(path, policy, model):
+    """Common path validation for independent and shared-target replay."""
+    p = path.position
     if (
         not all(
             isinstance(v, str) and v
@@ -164,7 +167,7 @@ def replay_execution(
         or model.horizon_close_lead_ms is not None
         and (model.horizon_close_lead_ms >= path.horizon_end_ms - p.first_fill_at_ms)
     ):
-        return result
+        return "source_contract_missing"
     initial = DecisionState(
         policy.policy_hash, p.position_epoch, p.first_fill_at_ms, p.open_qty
     )
@@ -188,9 +191,7 @@ def replay_execution(
                     and quote_data != prior_quote_data
                 )
             ):
-                return result | {
-                    "resolution_reason": "quote_sequence_conflict_or_regression"
-                }
+                return "quote_sequence_conflict_or_regression"
             prior_quote_sequence, prior_quote_data = snapshot.quote_sequence, quote_data
         d = evaluate_exit(policy, p, snapshot, clock, source_state)
         if (
@@ -200,7 +201,7 @@ def replay_execution(
             or clock.verified_halt_ms < last_halt
             or clock.now_ms > path.horizon_end_ms
         ):
-            return result | {"resolution_reason": "ordered_path_invalid:" + d.reason}
+            return "ordered_path_invalid:" + d.reason
         source_state = _advance(source_state, d, clock, snapshot, p)
         last_now, last_halt = clock.now_ms, clock.verified_halt_ms
     if (
@@ -208,9 +209,22 @@ def replay_execution(
         > policy.max_observation_gap_ms
         or last_now != path.horizon_end_ms
     ):
-        return result | {"resolution_reason": "common_horizon_not_complete"}
+        return "common_horizon_not_complete"
+    return None
 
-    state = initial
+
+def replay_execution(
+    path: ExitPath, policy: ExitPolicy, model: ExecutionModel, *, baseline: bool = False
+) -> dict:
+    p = path.position
+    result = _empty_result(path, policy, model, baseline=baseline)
+    error = _path_error(path, policy, model)
+    if error:
+        return result | {"resolution_reason": error}
+
+    state = DecisionState(
+        policy.policy_hash, p.position_epoch, p.first_fill_at_ms, p.open_qty
+    )
     phase, cancel_due, submit_due, expiry, limit = "target", None, None, None, None
     left, proceeds, attempts, queue_hits = p.open_qty, 0.0, 0, 0
     extra_cost_notional = 0.0

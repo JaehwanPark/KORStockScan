@@ -1,0 +1,18 @@
+{
+  "family": "machine_profit_stagnation_v1",
+  "enabled": true,
+  "valid_from": "2026-09-11T00:00:00+09:00",
+  "valid_until": "9999-12-31T00:00:00+09:00",
+  "owners": [
+    "widget_auto_trade",
+    "episode"
+  ],
+  "round_trip_cost_pct": 0.23,
+  "slippage_bps": 5,
+  "cost_source_sha256": "5aea42fa0de70d765d160e678e82d3e82c66aa8f63a1510ca3f69ef5946f3612",
+  "min_sec": 180,
+  "max_profit_move": 0.15,
+  "max_peak_improve": 0.1,
+  "sell_ttl_sec": 10,
+  "max_observation_gap_sec": 12
+}

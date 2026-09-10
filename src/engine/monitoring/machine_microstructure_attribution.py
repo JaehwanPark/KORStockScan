@@ -9261,7 +9261,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 )
                 + ". Quantity planning is not broker partial-cancel support or actual lot-fill attribution.",
                 "- Automatic grid values and two-day screening are provisional research, not approved live risk/economic bounds. "
-                "Actual SELL adapters, approved envelope and PREOPEN activation remain separate incomplete work.",
+                "Adapter code and this research do not establish an approved envelope, service wiring or actual activation.",
             ]
         )
         lines.extend(
@@ -9275,12 +9275,22 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"- Whole-catalog study: `{study.get('status')}`; scopes: "
                 f"`{study.get('scope_count', 0)}`; native research candidates: "
                 f"`{len(study.get('policy_promotion_candidates') or [])}`.",
-                "- Study EV is modeled counterfactual, not actual PnL; PREOPEN and live owner adapter are not connected. "
+                "- Study EV is modeled counterfactual, not actual PnL; approved PREOPEN/PID consumption is a separate receipt. "
                 "Existing target orders and owner policies are unchanged.",
                 f"- Next action: `{adaptive.get('next_action')}`.",
                 "",
             ]
         )
+        for scope in study.get("scopes") or []:
+            for coupled in scope.get("shared_target_research") or []:
+                candidate = coupled.get("native_research_candidate") or {}
+                lines.append(
+                    f"- Shared-target coupled study `{scope.get('scope_key')}` / "
+                    f"`{coupled.get('policy_hash')}`: `{coupled.get('status')}`; "
+                    f"native research ID `{candidate.get('recommendation_id')}`. "
+                    "One shared depth budget and frozen BOOK allocation; "
+                    "not broker lot PnL or independent-target PREOPEN authority."
+                )
     entry_confirmation = report.get("micro_entry_confirmation")
     if isinstance(entry_confirmation, dict):
         entry_summary = entry_confirmation.get("summary") or {}

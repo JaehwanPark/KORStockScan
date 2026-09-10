@@ -16,7 +16,7 @@ from src.trading.config.machine_profit_stagnation_policy import (
 )
 
 
-def test_installed_policy_scope_dates_cost_and_pins(monkeypatch):
+def test_packaged_policy_scope_dates_cost_and_pins(monkeypatch):
     root = Path(__file__).resolve().parents[2]
     folder = root / "deploy/machine-profit-stagnation"
     path = folder / "policy.json"
@@ -73,10 +73,17 @@ def test_installed_policy_scope_dates_cost_and_pins(monkeypatch):
     )
     dropins = list(folder.glob("*.service.conf"))
     assert len(dropins) == 9
+    # A review/CI checkout is not the installation directory. These versioned
+    # drop-ins must continue to pin the approved production path, while the
+    # policy bytes are tested locally without reading live host configuration.
+    installed_root = Path(
+        "/home/ubuntu/KORStockScan-runtime-releases/machine-profit-stagnation-20260911"
+    )
+    installed_policy = installed_root / "deploy/machine-profit-stagnation/policy.json"
     for dropin in dropins:
         text = dropin.read_text()
-        assert f"WorkingDirectory={root}" in text
-        assert f"{PATH_ENV}={path}" in text
+        assert f"WorkingDirectory={installed_root}" in text
+        assert f"{PATH_ENV}={installed_policy}" in text
         assert f"{HASH_ENV}={digest}" in text
         assert text.count("ExecStart=") == 2
 

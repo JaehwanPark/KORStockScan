@@ -34,6 +34,8 @@ dist/
 # PostgreSQL을 쓰지만, 이전 로컬 DB 잔재나 백업본 방지
 *.db
 *.json
+!deploy/machine-profit-stagnation/policy.json
+!deploy/machine-profit-stagnation/operator-cost.json
 # Local execution locks and custody-recovery backups are not delivery assets.
 /data/pipeline_event_summaries/*.lock
 /data/report/strategy_owner_first_use_replay/*.lock

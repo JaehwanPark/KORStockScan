@@ -30,6 +30,7 @@ from .machine_adaptive_exit_execution_replay import (
     replay_paired,
 )
 from .machine_adaptive_exit_evidence import build_evidence, build_candidate
+from .machine_adaptive_exit_group_replay import GEOMETRY, RULE, replay_group_paired
 
 
 def _valid_hash(payload):
@@ -88,6 +89,101 @@ def eligible_execution_paths(paths, policy, expected_lots):
     return [p for p in paths if p.position.episode_id not in exclusions], exclusions
 
 
+def shared_target_research(paths, policy, models, census, cfg, contract, payload):
+    """Coupled economics stay outside the independent-target approval surface.
+
+    This existing study owns the native research candidate. A future group
+    approval consumer must bind its geometry/allocation, not reuse single-lot
+    execution bounds or remove the independent replay's exclusion.
+    """
+    by_episode = {}
+    for path in paths:
+        by_episode.setdefault(path.position.episode_id, []).append(path)
+    known_shared = {
+        record["group"]["episode_id"]
+        for record in (census.get("shared_target_groups") or {}).values()
+        if isinstance(record, dict)
+        and isinstance(record.get("group"), dict)
+        and isinstance(record["group"].get("episode_id"), str)
+        and record["group"]["episode_id"] in census["expected_episode_lots"]
+    }
+    for eid in known_shared:
+        by_episode.setdefault(eid, [])
+    expected = {
+        eid: tuple(census["expected_episode_lots"][eid])
+        for eid, rows in by_episode.items()
+        if eid in known_shared or len({p.target_order_key for p in rows}) < len(rows)
+    }
+    if not expected:
+        return None
+    result = {
+        "geometry": GEOMETRY,
+        "policy_hash": policy.policy_hash,
+        "authority": dict(AUTHORITY),
+        "runtime_geometry_approved": False,
+        "intended_consumer": "group_geometry_approval_not_independent_target_publisher",
+        "expected_episode_lots": expected,
+        "unsupported_episodes": {},
+        "execution_results": [],
+        "evidence": [],
+        "native_research_candidate": None,
+    }
+    allocation = cfg.get("shared_target_book_allocation")
+    if (
+        not isinstance(allocation, dict)
+        or set(allocation) != {"rule", "episode_lot_order"}
+        or allocation["rule"] != RULE
+        or not isinstance(allocation["episode_lot_order"], dict)
+    ):
+        result["status"] = "blocked_missing_frozen_book_allocation"
+        return result | {"canonical_sha256": canonical_sha256(result)}
+    for eid, lots in expected.items():
+        rows = by_episode[eid]
+        try:
+            order = allocation["episode_lot_order"].get(eid)
+            if (
+                not isinstance(order, (tuple, list))
+                or any(not isinstance(x, str) or not x for x in order)
+                or len(order) != len(lots)
+                or set(order) != set(lots)
+                or {p.position.lot_id for p in rows} != set(lots)
+                or len({p.target_order_key for p in rows}) != 1
+            ):
+                raise ValueError("complete_single_group_and_frozen_lot_order_required")
+            result["execution_results"].extend(
+                replay_group_paired(rows, [policy], models, lot_order=tuple(order))
+            )
+        except (ValueError, TypeError, KeyError) as exc:
+            result["unsupported_episodes"][eid] = str(exc)
+    for model in models:
+        evidence = build_evidence(
+            result["execution_results"],
+            contract,
+            source_trading_dates=tuple(census["source_trading_dates"]),
+            model_id=model.model_id,
+            expected_episode_lots=expected,
+        )
+        evidence["execution_geometry"] = GEOMETRY
+        evidence["group_execution_hashes"] = sorted(
+            {
+                pair["baseline"]["group_execution_hash"]
+                for pair in result["execution_results"]
+                if pair["model_id"] == model.model_id
+            }
+        )
+        evidence["unsupported_episodes"] = result["unsupported_episodes"]
+        evidence["canonical_sha256"] = canonical_sha256(evidence)
+        result["evidence"].append(evidence)
+    result["native_research_candidate"] = build_candidate(
+        base_evidence=result["evidence"][0],
+        stress_evidence=result["evidence"][1],
+        contract=contract,
+        policy_payload=payload,
+    )
+    result["status"] = "coupled_research_evaluated_not_runtime_approved"
+    return result | {"canonical_sha256": canonical_sha256(result)}
+
+
 def run_study(
     *,
     target_date: str,
@@ -142,6 +238,7 @@ def run_study(
             "owner_census_valid": False,
             "execution_scope": True,
             "sample_attainability": [],
+            "shared_target_research": [],
         }
         result["scopes"].append(row)
         try:
@@ -240,6 +337,11 @@ def run_study(
                 if frozen.holdout_end != target_date:
                     raise ValueError("study_target_date_mismatch")
                 typed_policy = parse_exit_policy(policy)
+                coupled = shared_target_research(
+                    paths, typed_policy, (base, stress), census, cfg, frozen, policy
+                )
+                if coupled is not None:
+                    row["shared_target_research"].append(coupled)
                 supported_paths, geometry_exclusions = eligible_execution_paths(
                     paths, typed_policy, lots
                 )
@@ -305,6 +407,7 @@ def run_study(
         except (ValueError, TypeError, KeyError, OverflowError, AttributeError) as exc:
             row["status"] = "source_or_contract_invalid"
             row["errors"] = [str(exc)]
+            row["shared_target_research"] = []
             # Never publish a partial successful grid after another arm failed.
             result["evidence"] = [
                 e for e in result["evidence"] if e["scope_key"] != scope.key

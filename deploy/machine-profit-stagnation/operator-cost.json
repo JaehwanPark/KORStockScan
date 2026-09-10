@@ -1,0 +1,20 @@
+{
+  "schema": "machine_profit_stagnation_operator_cost_v1",
+  "approved_by": "user",
+  "approval_date": "2026-09-10",
+  "effective_from": "2026-09-11",
+  "source": "User-confirmed fees effective 2026-08-18 and explicit persistent machine supplement deployment approval",
+  "buy_fee_pct": 0.015,
+  "sell_fee_pct": 0.015,
+  "sell_tax_pct": 0.2,
+  "round_trip_cost_pct": 0.23,
+  "slippage_bps": 5,
+  "provider_cost_krw": 0,
+  "method": "entry_notional_fixed_round_trip_cost_plus_sell_proceeds_slippage",
+  "actual_broker_cost": false,
+  "scope": [
+    "widget_auto_trade",
+    "episode"
+  ],
+  "main_runtime_authority": false
+}

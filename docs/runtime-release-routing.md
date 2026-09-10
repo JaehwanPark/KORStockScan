@@ -1,6 +1,6 @@
 # Main runtime release routing
 
-Owner: deployment infrastructure. Installed routing is separate from exact-date trading approval. Widget/episode services and the ongoing adaptive-exit implementation are outside this change.
+Owner: deployment infrastructure. Installed main routing is separate from exact-date trading approval. Widget/episode services use the separately authorized machine pin described below, not the main selector.
 
 ## Single selection
 
@@ -33,3 +33,13 @@ Restoring a cron backup is appropriate only after checking for subsequent unrela
 ## Acceptance boundaries
 
 Source review and dry-run routes do not prove economic improvement or validate unfinished adaptive exit. Actual day-specific candidate/env/activation, operator overrides, runtime verification, KRX/NXT authority, quota and broker guards remain owned by the existing PREOPEN/launcher/policy contracts. Current source selection, actual PID consumption and natural trade/economic evidence must be reported separately.
+
+## Separately authorized machine supplement (2026-09-10)
+
+The user subsequently authorized deployment of the minimal profit-stagnation supplement, persistent for NEW entries from September 11. `data/runtime/machine_profit_stagnation_deployment.json` owns its exact release/commit/policy pin and nine machine service/preflight drop-ins. This does not select that release for main or scheduled postclose jobs. See the [deployment and rollback receipt](audit-reports/2026-09-10-machine-profit-stagnation-deployment.md).
+
+The frozen machine release is `machine-profit-stagnation-20260911` / `273807e3`; `70-machine-profit-stagnation-release.conf` routes widget, low-price and Samsung service/preflight commands there. They share canonical data/state, not duplicate custody. Existing timers, profile quantities, target rules and safety checks remain. A workspace pull or a main selector change does not update these machine commands; a future authorized machine update must review these pins explicitly. Do not edit an active release.
+
+Widget PID1138215 was started September 10 at19:19:33 with verified policy pins. Its continuous loop reads the dated policy, so activation on September11 does not depend on a timer restarting an already-active service. Verify the actual startup receipt date and subsequent live-policy consumption separately. Episode services retain their scheduled next-day startup/preflight and are not force-started by publication. The policy has no daily renewal requirement but never enrolls pre-September11 entries.
+
+For rollback, revoke new candidates while retaining the current recovery consumer for pending supplementary orders. Do not remove its state or revert to old code until exact terminal/original-target restoration is reconciled. The main selector, existing broker holdings and old owner targets are not rollback targets for this supplement.

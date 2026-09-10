@@ -18,6 +18,11 @@
 
 ## 별도 사용자 승인 적용 확인
 
+- [ ] `[MachineProfitStagnationStartupAcceptance0911] 배포된 최소 보조청산의 다음 거래일 service·정책·신규 entry 소비 확인` (`Due: 2026-09-11`, `Slot: INTRADAY`, `TimeWindow: 07:55~14:35`, `Track: RuntimeStability`)
+  - Source: [9/10 별도 승인 배포](../audit-reports/2026-09-10-machine-profit-stagnation-deployment.md), `data/runtime/machine_profit_stagnation_deployment.json`. 사용자 승인으로9/11 신규 진입부터 동일 설정을 이후 거래일에도 유지. machine 릴리스273807e3/9개 service·preflight drop-in 설치, widget PID1138215 기동·정책 pin hash 검증 완료. main/장후 selector/PID/cron은 불변이다.
+  - Acceptance: widget 기존 새 PID의 연속 가동 또는 이후 정당한 새 PID·정책 PATH/SHA256, 삼성07:57/13:14/13:59 및 저가주 profile별 자연 timer/preflight 경로,9/11 실제 신규 entry에서 policy selected/직접 blocker, 이전 보유 미편입·정확한 수량/target 보존을 확인한다. 연속 가동 widget의9/10 startup receipt를9/11 신규 기동 receipt라고 표시하지 않는다. 오늘 빈 entry timestamp의 missing-evidence 표시와 유효 신규 entry 결손을 구분한다.
+  - Handoff: 자연 주문 전환·실제 비용/순이익·자본점유는 기존 MachineLifecycleTurnoverObjectiveFollowup0910의 후속 장후 owner에 연결한다. 미관측 표본은 not_yet_observed이며 강제 주문/기동/원장 편입 또는 정책 확대 권한이 아니다. rollback은 열린 보조 주문의 terminal/원 목표 복원 대사 뒤 시행한다.
+
 - [x] `[FixedReleasePostcloseStartupRoutingReview0910] 장후·PREOPEN·예약 기동 release 경로 통일 승인 및 설치 검증` (`Due: 2026-09-10`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~20:00`, `Track: RuntimeStability`)
   - Source: [고정 배포 재리뷰](../audit-reports/2026-09-10-fixed-release-postclose-startup-review.md). 18:10 점검에서는 main a722b27f fixed/PID1048327과 장후/예약 작업폴더가 분리돼 있었다. 이후 사용자가 적응형 청산 변경을 제외한 경로 통일을 명시 승인했다. `unified-runtime-20260910` 별도 release에서 입력 source 구조 방어·PREOPEN OFF 표시·공통 실행기를 검토하며, 설치 완료/내일 자연 기동을 분리한다.
   - Acceptance: 검토된 live/장후 호환 release 및 rollback 확정→공통 배포 진입점·예약 경로 설치 승인→정적/모의 경로·source/policy hash 검증. 실행 중 wrapper를 교체하거나 미검토 widget/episode 변경을 합치지 않는다. 날짜별 env/activation/quota와 기존 owner/guard는 유지한다. 승인된 설치와 실제 내일 PID/경제성 수락을 분리한다.
@@ -178,6 +183,7 @@
   - 다음 액션: `implement_now`, `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design`, `already_implemented`, `defer_design`, `reject` 중 하나로 닫는다.
 
 - [ ] `[MachineLifecycleTurnoverObjectiveFollowup0910] 위젯·episode 빠른 회전 목적의 미완료 후속 구현 확인` (`Due: 2026-09-10`, `Slot: POSTCLOSE`, `TimeWindow: 21:30~21:40`, `Track: ScalpingLogic`)
+  - **19:20 운영 인계:** [배포 receipt](../audit-reports/2026-09-10-machine-profit-stagnation-deployment.md). 별도 사용자 승인으로 최소 보조청산273807e3를 배포하고9/11 신규 진입부터 지속 설정을 설치했다. 1058 PASS/2 비대상 SKIP, widget 새 PID1138215·pin 검증,9개 service/preflight drop-in 설치 완료. 아래의 미배포는 당시 이력이다. 오늘 기존 entry는 편입하지 않으므로9/10 장후 보조청산 결과0은 예정 전 상태이며 자연/경제성 미완료를 유지한다. 내일 기동·신규 entry 소비는 MachineProfitStagnationStartupAcceptance0911에 분리했다. 메인/장후 공통 배포 선택은 바꾸지 않았다.
   - Source: [machine_microstructure_policy_approval_postclose_2026-09-09.json](/home/ubuntu/KORStockScan/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-09.json), [machine_microstructure_attribution.py](/home/ubuntu/KORStockScan/src/engine/monitoring/machine_microstructure_attribution.py)
   - 판정 기준: 승인 후보 수와 무관하게 `followup_required=true`인 미완료 목적 항목 `machine_lifecycle_turnover_policy_research_v1`(status=`EVIDENCE_ACCUMULATING`, next_action=`repair_excluded_source_report_contracts_and_rerun`)의 상태와 상태별 `next_action`을 확인하고 구현 또는 표본수집 경로로 닫는다.
   - 상태별 다음 액션: `IMPLEMENTATION_REQUIRED`는 source-only rolling paired policy 연구를 구현하고, `EVIDENCE_ACCUMULATING`은 exact-date floor 충족까지 수집·재검증한다. `CANDIDATE_QUEUE_HANDOFF|COMPLETE`는 closed 상태이므로 report에서 제외되고 다음 refresh에서 builder-owned 항목이 제거된다.
