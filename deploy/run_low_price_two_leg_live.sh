@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="/home/ubuntu/KORStockScan"
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 PROFILE="${1:-}"
 INTERVAL_SEC="2"

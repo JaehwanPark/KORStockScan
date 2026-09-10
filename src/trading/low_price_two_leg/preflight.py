@@ -627,7 +627,12 @@ def _approved_source_report(payload: dict, contract: dict) -> tuple[dict | None,
         source_path = PROJECT_ROOT / source_path
     try:
         source_path = source_path.resolve(strict=True)
-        source_path.relative_to(PROJECT_ROOT.resolve())
+        # Reviewed releases share canonical data, not arbitrary workspace
+        # files. Resolve the trusted mount before enforcing containment.
+        try:
+            source_path.relative_to(PROJECT_ROOT.resolve())
+        except ValueError:
+            source_path.relative_to((DATA_DIR / "report").resolve(strict=True))
         source_payload = json.loads(source_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         return None, "research_source_report_unreadable"
