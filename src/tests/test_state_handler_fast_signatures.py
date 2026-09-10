@@ -3,6 +3,8 @@ from datetime import datetime
 import inspect
 from types import SimpleNamespace
 
+import pytest
+
 from src.engine import sniper_state_handlers as handlers
 from src.engine.sniper_state_handlers import (
     SCALPING_ENTRY_BLOCKER_ROLE_REGISTRY,
@@ -6160,7 +6162,53 @@ def test_canonical_wait_probe_handoff_precedes_legacy_first_ai_wait(monkeypatch)
     assert not handlers._canonical_wait_probe_handoff_active(decision)
 
 
-def test_canonical_wait_probe_micro_pending_has_no_submit_authority(monkeypatch):
+@pytest.mark.parametrize(
+    "reason,active,expected",
+    [
+        ("strong_micro_confirmation_missing", True, "waiting_for_recovery_micro"),
+        ("strong_micro_confirmation_missing", False, "recovery_micro_pending_expired"),
+        (
+            "recheck_submit_budget_bootstrap_pending",
+            True,
+            "waiting_for_submit_budget_bootstrap",
+        ),
+        (
+            "recheck_submit_budget_bootstrap_pending",
+            False,
+            "submit_budget_bootstrap_pending_expired",
+        ),
+    ],
+)
+def test_recheck_pending_expiry_preserves_actual_blocking_owner(
+    reason, active, expected
+):
+    assert (
+        handlers._entry_opportunity_recheck_pending_status(reason, active=active)
+        == expected
+    )
+
+
+def test_recheck_pending_expiry_consumers_use_actual_owner_status():
+    source = inspect.getsource(handlers._handle_watching_strategy_branch)
+    early_expiry = source.split('if not pending_window.get("pending_active"):')[
+        1
+    ].split("pending_recheck_after =", 1)[0]
+    assert "_entry_opportunity_recheck_pending_status(" in early_expiry
+    assert 'stock.get("entry_opportunity_recheck_pending_reason")' in "".join(
+        early_expiry.split()
+    )
+    assert '"recovery_micro_pending_expired"' not in early_expiry
+    assert early_expiry.count("pending_expired_status") == 3
+    assert '"submit_budget_bootstrap_pending_expired"' in source
+
+
+@pytest.mark.parametrize(
+    "pending_reason",
+    ["strong_micro_confirmation_missing", "recheck_submit_budget_bootstrap_pending"],
+)
+def test_canonical_wait_probe_micro_pending_has_no_submit_authority(
+    monkeypatch, pending_reason
+):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT", "true"
@@ -6195,7 +6243,7 @@ def test_canonical_wait_probe_micro_pending_has_no_submit_authority(monkeypatch)
         (),
         {
             "allowed": False,
-            "reason": "strong_micro_confirmation_missing",
+            "reason": pending_reason,
         },
     )()
 

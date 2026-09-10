@@ -731,6 +731,7 @@ def evaluate_blocked_ai_score_recheck(
     microstructure_fields: Mapping[str, Any] | None = None,
     buy_recovery_cap_observed_count: int | None = None,
     buy_recovery_cap_source_quality_ok: bool = True,
+    buy_recovery_cap_source_status: str = "",
     state: EntryOpportunityRecheckState | None = None,
     config: EntryOpportunityRecheckConfig | None = None,
     today: str | None = None,
@@ -743,6 +744,11 @@ def evaluate_blocked_ai_score_recheck(
         int(state.daily_buy_recovery_count)
         if buy_recovery_cap_observed_count is None
         else max(0, _safe_int(buy_recovery_cap_observed_count, 0))
+    )
+    budget_bootstrap_pending = bool(
+        not buy_recovery_cap_source_quality_ok
+        and buy_recovery_cap_source_status
+        in {"bootstrap_pending", "bootstrap_pending_other_date"}
     )
 
     score = _safe_float(ai_score, -1.0)
@@ -794,11 +800,17 @@ def evaluate_blocked_ai_score_recheck(
         ),
         "entry_opportunity_recheck_buy_recovery_cap_observed_count": (
             effective_buy_recovery_cap_count
+            if buy_recovery_cap_source_quality_ok
+            else None
         ),
         "entry_opportunity_recheck_buy_recovery_cap_basis": (
-            "in_memory_recovery_count"
-            if buy_recovery_cap_observed_count is None
-            else "caller_verified_reservations_and_submissions"
+            "unavailable_ledger"
+            if not buy_recovery_cap_source_quality_ok
+            else (
+                "in_memory_recovery_count"
+                if buy_recovery_cap_observed_count is None
+                else "caller_verified_reservations_and_submissions"
+            )
         ),
         "entry_opportunity_recheck_symbol_count": int(state.symbol_count(code)),
         "entry_opportunity_recheck_ai_contract_status": contract_status or "unreported",
@@ -831,7 +843,7 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
-    if not buy_recovery_cap_source_quality_ok:
+    if not buy_recovery_cap_source_quality_ok and not budget_bootstrap_pending:
         return _decision(
             allowed=False,
             reason="recheck_submit_budget_ledger_invalid",
@@ -974,6 +986,15 @@ def evaluate_blocked_ai_score_recheck(
             reason="quote_freshness_not_confirmed",
             stage="entry_opportunity_recheck_blocked",
             action="block",
+            config=config,
+            fields=base,
+        )
+    if budget_bootstrap_pending:
+        return _decision(
+            allowed=False,
+            reason="recheck_submit_budget_bootstrap_pending",
+            stage="entry_opportunity_recheck_blocked",
+            action="wait_for_submit_budget_bootstrap",
             config=config,
             fields=base,
         )

@@ -3,6 +3,7 @@
 import multiprocessing
 import gzip
 import json
+import threading
 
 import pytest
 
@@ -90,6 +91,210 @@ def test_budget_source_quality_failure_blocks_evaluation():
         _decision(buy_recovery_cap_source_quality_ok=False).reason
         == "recheck_submit_budget_ledger_invalid"
     )
+
+
+@pytest.mark.parametrize(
+    "overrides,reason",
+    [
+        ({}, "recheck_submit_budget_bootstrap_pending"),
+        ({"ws_age_ms": 1501}, "quote_freshness_not_confirmed"),
+        ({"latency_state": "DANGER"}, "latency_state_danger"),
+        ({"source_reason": "account_guard"}, "hard_safety_source_block"),
+        ({"ai_action": "DROP"}, "ai_action_not_supported_wait"),
+        ({"effective_venue": "NXT"}, "scope_not_selected_by_drought_policy"),
+        ({"ai_probe_intent": False}, "canonical_wait_probe_contract_not_confirmed"),
+    ],
+)
+def test_bootstrap_wait_preserves_fresh_canonical_observation_not_order_authority(
+    overrides, reason
+):
+    result = _decision(
+        buy_recovery_cap_source_quality_ok=False,
+        buy_recovery_cap_source_status="bootstrap_pending",
+        **overrides,
+    )
+    assert result.reason == reason
+    assert result.allowed is False
+    assert result.fields["broker_order_forbidden"] is True
+    assert result.fields["entry_opportunity_recheck_buy_recovery_cap_basis"] == (
+        "unavailable_ledger"
+    )
+    assert (
+        result.fields["entry_opportunity_recheck_buy_recovery_cap_observed_count"]
+        is None
+    )
+
+
+def test_live_observation_does_not_wait_for_legacy_scan_or_start_duplicate_worker(
+    monkeypatch,
+):
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    calls = []
+
+    def bootstrap(day):
+        calls.append(day)
+        entered.set()
+        assert release.wait(3)
+        finished.set()
+        return None
+
+    monkeypatch.setattr(budget, "observed_count", bootstrap)
+    try:
+        first = budget.observe_nonblocking("2026-09-10")
+        assert first == {"count": None, "status": "bootstrap_pending"}
+        assert entered.wait(1)
+        for _ in range(5):
+            assert budget.observe_nonblocking("2026-09-10") == first
+        assert budget.observe_nonblocking("2026-09-11") == {
+            "count": None,
+            "status": "bootstrap_pending_other_date",
+        }
+        assert calls == ["2026-09-10"]
+    finally:
+        release.set()
+        assert finished.wait(1)
+        # Synchronize worker teardown before monkeypatch restores module paths.
+        for thread in threading.enumerate():
+            if thread.name == "entry-recheck-budget-bootstrap":
+                thread.join(1)
+    assert budget.observe_nonblocking("2026-09-10") == {
+        "count": None,
+        "status": "bootstrap_failed",
+    }
+    assert calls == ["2026-09-10"]
+
+
+def test_background_bootstrap_publishes_legacy_orders_before_reporting_ready(
+    monkeypatch,
+):
+    day = "2026-09-10"
+    source = budget.DATA_DIR / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "stock_code": "005930",
+                "fields": {
+                    "entry_opportunity_recheck_submit_observed": True,
+                    "entry_opportunity_recheck_broker_order_no": "B123",
+                    "entry_opportunity_recheck_scope": "KRX|KRX_REGULAR",
+                },
+            }
+        )
+        + "\n"
+    )
+    completed = threading.Event()
+    original = budget.observed_count
+
+    def bootstrap(trade_date):
+        try:
+            return original(trade_date)
+        finally:
+            completed.set()
+
+    monkeypatch.setattr(budget, "observed_count", bootstrap)
+    assert budget.observe_nonblocking(day)["count"] is None
+    assert completed.wait(3)
+    for thread in threading.enumerate():
+        if thread.name == "entry-recheck-budget-bootstrap":
+            thread.join(1)
+    assert budget.observe_nonblocking(day) == {"count": 1, "status": "ready"}
+    assert budget._load(budget._path(day), day)["attempts"]["legacy:B123"] == {
+        "status": "accepted",
+        "code": "005930",
+        "scope": "KRX|KRX_REGULAR",
+        "broker_order_no": "B123",
+    }
+
+
+def test_nonblocking_observation_reads_atomic_ledger_without_waiting_on_writer():
+    assert reserve(1)["allowed"]
+    locked = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        with budget._locked(budget._path("2026-09-07")):
+            locked.set()
+            assert release.wait(3)
+
+    worker = threading.Thread(target=hold_lock)
+    worker.start()
+    try:
+        assert locked.wait(1)
+        assert budget.observe_nonblocking("2026-09-07") == {
+            "count": 1,
+            "status": "ready",
+        }
+    finally:
+        release.set()
+        worker.join(1)
+    # Advisory reads never replace the final reservation's global quota.
+    assert reserve(2)["allowed"] and reserve(3)["allowed"]
+    assert not reserve(4)["allowed"]
+
+
+def test_nonblocking_observation_never_bootstraps_over_corrupt_or_invalid_ledger(
+    monkeypatch,
+):
+    assert reserve(1)["allowed"]
+    path = budget._path("2026-09-07")
+    path.write_text('{"bad": true}')
+    monkeypatch.setattr(
+        budget, "observed_count", lambda _: pytest.fail("no bootstrap on corruption")
+    )
+    for day in ("2026-09-07", "not-a-date"):
+        assert budget.observe_nonblocking(day) == {
+            "count": None,
+            "status": "ledger_invalid",
+        }
+    assert path.read_text() == '{"bad": true}'
+
+
+def test_recheck_preparation_queries_budget_before_refresh_and_measures_phases(
+    monkeypatch,
+):
+    from src.engine import sniper_state_handlers as handlers
+
+    calls = []
+    snapshot = {"curr": 100, "recent_trade_ticks": [{"price": 100}]}
+    ticks = snapshot["recent_trade_ticks"]
+    probe = {"quote_stale": False}
+    clock = iter((1.0, 1.010, 1.012, 1.015))
+    monkeypatch.setattr(handlers.time, "perf_counter", lambda: next(clock))
+
+    def observe(day):
+        calls.append("budget")
+        assert day == "2026-09-10"
+        return {"count": None, "status": "bootstrap_pending"}
+
+    def refresh(*_):
+        calls.append("refresh")
+        return snapshot, ticks, {"entry_opportunity_recheck_quote_refresh_age_ms": 5}
+
+    def features(engine, ws, tape, candles):
+        calls.append("features")
+        assert ws is snapshot and tape is ticks
+        return probe
+
+    monkeypatch.setattr(budget, "observe_nonblocking", observe)
+    monkeypatch.setattr(handlers, "_refresh_entry_opportunity_recheck_inputs", refresh)
+    monkeypatch.setattr(handlers, "_extract_buy_recovery_probe_features", features)
+    ws, tape, result, count, fields = (
+        handlers._prepare_entry_opportunity_recheck_inputs(
+            "005930", "SCALPING", {}, [], [], None, trade_date="2026-09-10"
+        )
+    )
+    assert calls == ["budget", "refresh", "features"]
+    assert ws is snapshot and tape is ticks and result is probe
+    assert count is None
+    assert fields["entry_opportunity_recheck_budget_status"] == "bootstrap_pending"
+    assert fields["entry_opportunity_recheck_budget_elapsed_ms"] == 10
+    assert fields["entry_opportunity_recheck_refresh_elapsed_ms"] == 2
+    assert fields["entry_opportunity_recheck_feature_elapsed_ms"] == 3
+    assert fields["entry_opportunity_recheck_input_prepare_elapsed_ms"] == 15
+    assert fields["entry_opportunity_recheck_quote_refresh_age_ms"] == 5
 
 
 @pytest.mark.parametrize(

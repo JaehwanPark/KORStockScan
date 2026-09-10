@@ -56318,6 +56318,44 @@ def _refresh_entry_opportunity_recheck_inputs(
     return refreshed_ws, effective_ticks, fields
 
 
+def _prepare_entry_opportunity_recheck_inputs(
+    code, strategy, ws_data, recent_ticks, recent_candles, ai_engine, *, trade_date
+):
+    """Prepare quota before acquiring the decision quote, with phase telemetry.
+
+    Legacy quota reconstruction is asynchronous and fail-closed. No historical
+    pipeline scan or lock wait belongs between quote capture and revalidation.
+    Freshness is still checked at the actual decision time by the caller.
+    """
+    started = time.perf_counter()
+    budget = entry_recheck_submit_budget.observe_nonblocking(trade_date)
+    budget_done = time.perf_counter()
+    refreshed_ws, refreshed_ticks, fields = _refresh_entry_opportunity_recheck_inputs(
+        code, strategy, ws_data, recent_ticks
+    )
+    refresh_done = time.perf_counter()
+    probe = _extract_buy_recovery_probe_features(
+        ai_engine, refreshed_ws, refreshed_ticks, recent_candles
+    )
+    feature_done = time.perf_counter()
+    fields.update(
+        entry_opportunity_recheck_budget_status=budget["status"],
+        entry_opportunity_recheck_budget_elapsed_ms=round(
+            (budget_done - started) * 1000, 3
+        ),
+        entry_opportunity_recheck_refresh_elapsed_ms=round(
+            (refresh_done - budget_done) * 1000, 3
+        ),
+        entry_opportunity_recheck_feature_elapsed_ms=round(
+            (feature_done - refresh_done) * 1000, 3
+        ),
+        entry_opportunity_recheck_input_prepare_elapsed_ms=round(
+            (feature_done - started) * 1000, 3
+        ),
+    )
+    return refreshed_ws, refreshed_ticks, probe, budget["count"], fields
+
+
 def _consume_entry_opportunity_recheck_ws_handoff(
     stock: dict | None,
     ws_data: dict | None,
@@ -56760,13 +56798,27 @@ def _canonical_wait_probe_recheck_pending(
     return bool(
         not bool(getattr(recheck_decision, "allowed", False))
         and str(getattr(recheck_decision, "reason", "") or "")
-        == "strong_micro_confirmation_missing"
+        in {
+            "strong_micro_confirmation_missing",
+            "recheck_submit_budget_bootstrap_pending",
+        }
         and _canonical_wait_probe_handoff_active(
             ai_decision,
             ai_action=ai_action,
             now_ts=now_ts,
         )
     )
+
+
+def _entry_opportunity_recheck_pending_status(reason: str, *, active: bool) -> str:
+    """Attribute a finite observation wait to its actual blocking owner."""
+    if reason == "recheck_submit_budget_bootstrap_pending":
+        return (
+            "waiting_for_submit_budget_bootstrap"
+            if active
+            else "submit_budget_bootstrap_pending_expired"
+        )
+    return "waiting_for_recovery_micro" if active else "recovery_micro_pending_expired"
 
 
 def _entry_opportunity_recheck_pending_window(
@@ -63024,6 +63076,17 @@ def _handle_watching_strategy_branch(
                         now_ts=now_ts,
                     )
                     if not pending_window.get("pending_active"):
+                        pending_expired_status = (
+                            _entry_opportunity_recheck_pending_status(
+                                str(
+                                    stock.get(
+                                        "entry_opportunity_recheck_pending_reason"
+                                    )
+                                    or ""
+                                ),
+                                active=False,
+                            )
+                        )
                         cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
                         with ENTRY_LOCK:
                             cooldowns[code] = now_ts + cooldown_time
@@ -63032,7 +63095,7 @@ def _handle_watching_strategy_branch(
                             set_fields={
                                 "entry_opportunity_recheck_pending": False,
                                 "entry_opportunity_recheck_pending_status": (
-                                    "recovery_micro_pending_expired"
+                                    pending_expired_status
                                 ),
                             },
                             pop_fields=[
@@ -63061,7 +63124,7 @@ def _handle_watching_strategy_branch(
                             broker_order_forbidden=True,
                             entry_opportunity_recheck_pending=False,
                             entry_opportunity_recheck_pending_status=(
-                                "recovery_micro_pending_expired"
+                                pending_expired_status
                             ),
                             entry_opportunity_recheck_pending_age_sec=round(
                                 float(pending_window.get("pending_age_sec", 0.0)), 3
@@ -65049,19 +65112,19 @@ def _handle_watching_strategy_branch(
                     (
                         recheck_ws_data,
                         recheck_recent_ticks,
+                        recheck_feature_probe,
+                        recheck_budget_count,
                         recheck_refresh_fields,
-                    ) = _refresh_entry_opportunity_recheck_inputs(
+                    ) = _prepare_entry_opportunity_recheck_inputs(
                         code,
                         strategy,
                         ws_data,
                         recent_ticks,
-                    )
-                    recheck_feature_probe = _extract_buy_recovery_probe_features(
-                        ai_engine,
-                        recheck_ws_data,
-                        recheck_recent_ticks,
                         recent_candles,
+                        ai_engine,
+                        trade_date=now_dt.date().isoformat(),
                     )
+                    recheck_guard_started = time.perf_counter()
                     recheck_micro_guard = _score65_74_recovery_probe_micro_guard(
                         recheck_feature_probe
                     )
@@ -65099,9 +65162,6 @@ def _handle_watching_strategy_branch(
                     bounded_exploration_persisted_probe_count = 0
                     bounded_exploration_observed_probe_count = 0
                     bounded_exploration_cap_ledger_ok = True
-                    recheck_budget_count = entry_recheck_submit_budget.observed_count(
-                        now_dt.date().isoformat()
-                    )
                     _ENTRY_OPPORTUNITY_RECHECK_STATE.reset_if_new_day(
                         now_dt.date().isoformat()
                     )
@@ -65160,6 +65220,9 @@ def _handle_watching_strategy_branch(
                         if ws_age_sec is not None
                         else -1
                     )
+                    recheck_refresh_fields[
+                        "entry_opportunity_recheck_micro_and_cap_elapsed_ms"
+                    ] = round((time.perf_counter() - recheck_guard_started) * 1000, 3)
                     entry_opportunity_recheck = evaluate_blocked_ai_score_recheck(
                         code=code,
                         effective_venue=resolve_entry_candle_venue(
@@ -65241,6 +65304,9 @@ def _handle_watching_strategy_branch(
                         ),
                         buy_recovery_cap_source_quality_ok=recheck_budget_count
                         is not None,
+                        buy_recovery_cap_source_status=recheck_refresh_fields[
+                            "entry_opportunity_recheck_budget_status"
+                        ],
                         state=_ENTRY_OPPORTUNITY_RECHECK_STATE,
                         today=now_dt.date().isoformat(),
                     )
@@ -65463,6 +65529,9 @@ def _handle_watching_strategy_branch(
                                 pending_window.get("pending_active", False)
                             )
                             pending_fields = dict(entry_opportunity_recheck.fields)
+                            pending_status = _entry_opportunity_recheck_pending_status(
+                                entry_opportunity_recheck.reason, active=pending_active
+                            )
                             pending_fields.update(
                                 {
                                     "entry_opportunity_recheck_pending": pending_active,
@@ -65481,11 +65550,7 @@ def _handle_watching_strategy_branch(
                                     "entry_opportunity_recheck_pending_ttl_sec": pending_window.get(
                                         "pending_ttl_sec"
                                     ),
-                                    "entry_opportunity_recheck_pending_status": (
-                                        "waiting_for_recovery_micro"
-                                        if pending_active
-                                        else "recovery_micro_pending_expired"
-                                    ),
+                                    "entry_opportunity_recheck_pending_status": pending_status,
                                     "entry_opportunity_recheck_pending_submit_authority": False,
                                     "entry_opportunity_recheck_pending_parent_snapshot_id": (
                                         (ai_decision or {}).get(
@@ -65526,7 +65591,7 @@ def _handle_watching_strategy_branch(
                                         ),
                                         "entry_opportunity_recheck_pending_probe_intent": True,
                                         "entry_opportunity_recheck_pending_status": (
-                                            "waiting_for_recovery_micro"
+                                            pending_status
                                         ),
                                         "entry_opportunity_recheck_pending_parent_snapshot_id": (
                                             pending_fields.get(
@@ -65575,7 +65640,10 @@ def _handle_watching_strategy_branch(
                                 and recheck_log_fields.get(
                                     "entry_opportunity_recheck_pending_status"
                                 )
-                                == "recovery_micro_pending_expired"
+                                in {
+                                    "recovery_micro_pending_expired",
+                                    "submit_budget_bootstrap_pending_expired",
+                                }
                             )
                             or recheck_log_min <= recheck_log_score <= recheck_log_max
                             or recheck_log_reason
