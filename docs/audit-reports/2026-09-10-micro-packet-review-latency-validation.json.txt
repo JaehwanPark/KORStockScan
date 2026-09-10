@@ -1,0 +1,185 @@
+{
+  "schema": "scalp_micro_reversion_callback_baseline_v1",
+  "baseline_id": "main_server_synthetic_0b_20260910T111748+0900",
+  "generated_at": "2026-09-10T11:17:48+09:00",
+  "host": {
+    "hostname": "ip-172-31-34-105",
+    "machine": "aarch64",
+    "python": "3.13.12",
+    "platform": "Linux-7.0.0-1012-aws-aarch64-with-glibc2.39"
+  },
+  "workload": {
+    "input": "same_valid_stable_price_kiwoom_0b_snapshot",
+    "observer_off_then_on": true,
+    "path_capture_enabled_on": true,
+    "discovery_enabled_on": false,
+    "iterations_per_repeat": 5000,
+    "warmup_per_repeat": 500,
+    "repeat_count": 5
+  },
+  "observer_off_runs": [
+    {
+      "p50_ms": 0.000119,
+      "p95_ms": 0.000125,
+      "p99_ms": 0.000136,
+      "max_ms": 0.011074,
+      "mean_ms": 0.0001234678
+    },
+    {
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000127,
+      "p99_ms": 0.00014,
+      "max_ms": 0.00038,
+      "mean_ms": 0.00012207019999999999
+    },
+    {
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000127,
+      "p99_ms": 0.000142,
+      "max_ms": 0.017229,
+      "mean_ms": 0.0001259986
+    },
+    {
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000127,
+      "p99_ms": 0.000142,
+      "max_ms": 0.000258,
+      "mean_ms": 0.0001216612
+    },
+    {
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000127,
+      "p99_ms": 0.000142,
+      "max_ms": 0.000302,
+      "mean_ms": 0.0001216472
+    }
+  ],
+  "observer_on_runs": [
+    {
+      "p50_ms": 0.022159,
+      "p95_ms": 0.026526,
+      "p99_ms": 0.034711,
+      "max_ms": 18.480706,
+      "mean_ms": 0.048316458799999996,
+      "collector_internal_p95_ms": 0.024993,
+      "collector_internal_p99_ms": 0.033018,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022316,
+      "p95_ms": 0.023845,
+      "p99_ms": 0.035066,
+      "max_ms": 15.75698,
+      "mean_ms": 0.0469155572,
+      "collector_internal_p95_ms": 0.022287,
+      "collector_internal_p99_ms": 0.033523,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022479,
+      "p95_ms": 0.024073,
+      "p99_ms": 0.034497,
+      "max_ms": 14.838821,
+      "mean_ms": 0.0508897512,
+      "collector_internal_p95_ms": 0.022568,
+      "collector_internal_p99_ms": 0.032303,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022677,
+      "p95_ms": 0.026457,
+      "p99_ms": 0.05048,
+      "max_ms": 19.54303,
+      "mean_ms": 0.0702993262,
+      "collector_internal_p95_ms": 0.02402,
+      "collector_internal_p99_ms": 0.047222,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    },
+    {
+      "p50_ms": 0.022563,
+      "p95_ms": 0.027431,
+      "p99_ms": 0.03667,
+      "max_ms": 13.061035,
+      "mean_ms": 0.0493246552,
+      "collector_internal_p95_ms": 0.025681,
+      "collector_internal_p99_ms": 0.03543,
+      "queue_drop_count": 0.0,
+      "worker_error_count": 0.0
+    }
+  ],
+  "summary": {
+    "observer_off_p95_ms_max": 0.000127,
+    "observer_off_p99_ms_max": 0.000142,
+    "observer_on_external_p95_ms_max": 0.027431,
+    "observer_on_external_p99_ms_max": 0.05048,
+    "observer_on_internal_p95_ms_max": 0.025681,
+    "observer_on_internal_p99_ms_max": 0.047222,
+    "queue_drop_count": 0,
+    "worker_error_count": 0
+  },
+  "frozen_limits": {
+    "derivation": "max(absolute_floor, five_times_max_observed_internal_percentile)",
+    "minimum_callback_samples": 1000,
+    "producer_callback_latency_p95_max_ms": 1.0,
+    "producer_callback_latency_p99_max_ms": 2.0,
+    "snapshot_stale_after_sec": 30.0
+  },
+  "metric_role": "source_quality_gate_and_observer_canary_safety_veto",
+  "decision_authority": "observer_canary_stop_only_no_trading_authority",
+  "window_policy": "current_process_cumulative_with_periodic_snapshot",
+  "sample_floor": "latency_guard_after_frozen_minimum_callback_samples",
+  "primary_decision_metric": "stop_required",
+  "source_quality_gate": "fresh_collector_snapshot_and_valid_frozen_guard_config;_bounded_ingress_queue_loss_is_source_quality_exclusion_and_provider_replay_hold;_successful_write_below_preventive_low_disk_watermark_is_operational_warning_only;_worker_writer_actual_capture_loss_storage_self_disable_or_authority_failure_is_immediate_stop",
+  "forbidden_uses": [
+    "broker_order_submission",
+    "broker_order_cancel",
+    "buy_wait_drop_or_entry_exit_decision",
+    "simulated_or_real_position_creation",
+    "threshold_provider_bot_quantity_or_cap_mutation",
+    "p2_policy_selection_or_economic_edge_claim"
+  ],
+  "runtime_guard_changed": false,
+  "validation_scope": "Synthetic valid 0B and rejected 0B/0D collector callbacks; not full WS adapter latency, live source recovery, or economics",
+  "source_hashes": {
+    "src/engine/kiwoom_websocket.py": "f2165af17dae160535ddd5ac6ef5a5406eaf1bc8bacf423c3f475ceb514ba15c",
+    "src/engine/scalping/micro_reversion/forward_collector.py": "7f63c64aa7f2d3feb6da814d4dcbfda3dae25be8f22a8b96c92b7df58a8f7df4"
+  },
+  "rejected_validation": {
+    "0B": {
+      "timestamp_rejection_sample_total": 5000,
+      "tail_size": 64,
+      "latency": {
+        "producer_callback_latency_p95_ms": 0.009705,
+        "producer_callback_latency_p99_ms": 0.015751,
+        "producer_0d_callback_latency_p95_ms": 0.0,
+        "producer_0d_callback_latency_p99_ms": 0.0,
+        "enqueue_latency_p95_ms": 0.0,
+        "enqueue_latency_p99_ms": 0.0,
+        "exchange_to_receive_latency_p95_ms": 0.0,
+        "event_reference_write_latency_p95_ms": 0.0,
+        "event_reference_write_latency_p99_ms": 0.0
+      },
+      "packet_to_normalization_ms": 12000
+    },
+    "0D": {
+      "timestamp_rejection_sample_total": 5000,
+      "tail_size": 64,
+      "latency": {
+        "producer_callback_latency_p95_ms": 0.0,
+        "producer_callback_latency_p99_ms": 0.0,
+        "producer_0d_callback_latency_p95_ms": 0.009073,
+        "producer_0d_callback_latency_p99_ms": 0.014486,
+        "enqueue_latency_p95_ms": 0.0,
+        "enqueue_latency_p99_ms": 0.0,
+        "exchange_to_receive_latency_p95_ms": 0.0,
+        "event_reference_write_latency_p95_ms": 0.0,
+        "event_reference_write_latency_p99_ms": 0.0
+      },
+      "packet_to_normalization_ms": 12000
+    }
+  }
+}

@@ -90,6 +90,67 @@ def test_raw_tick_snapshot_does_not_traverse_accumulated_history():
     assert snapshot["last_trade_tick"]["values"]["20"] == "100000"
 
 
+@pytest.mark.parametrize("realtime_type", ["0B", "0D"])
+@pytest.mark.parametrize("trusted", [True, False])
+def test_micro_observer_receives_packet_clock_without_replacing_tick_clock(
+    monkeypatch, realtime_type, trusted
+):
+    now = _epoch_at_090010()
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: now)
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes = {"005930"}
+    observed = []
+    monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
+    monkeypatch.setattr(
+        manager,
+        "_observe_micro_reversion_forward",
+        lambda code, data, **kw: observed.append(data),
+    )
+    monkeypatch.setattr(
+        kiwoom_websocket, "observe_raw_market_data", lambda *a, **k: None
+    )
+    ingress = datetime.fromtimestamp(now - 2, tz=kiwoom_websocket.KST)
+    monkeypatch.setattr(
+        manager, "_micro_reversion_depth_capture_requested", lambda: True
+    )
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": realtime_type,
+                            "item": "005930",
+                            "values": {
+                                "10": "10110",
+                                "15": "+80",
+                                "20": "090010",
+                                "21": "090010",
+                                "27": "10110",
+                                "28": "10100",
+                                "41": "10110",
+                                "51": "10100",
+                                "61": "100",
+                                "71": "100",
+                            },
+                        }
+                    ],
+                }
+            ),
+            received_at=ingress if trusted else None,
+        )
+    )
+    assert len(observed) == 1
+    snapshot = observed[0]
+    assert snapshot["micro_observer_packet_received_at_ms"] == (
+        int((now - 2) * 1000) if trusted else None
+    )
+    tick = snapshot["last_trade_tick" if realtime_type == "0B" else "last_depth_tick"]
+    assert tick["received_at_ms"] == int(now * 1000)
+    assert "micro_observer_packet_received_at_ms" not in manager.realtime_data["005930"]
+
+
 def test_raw_observation_is_lossless_while_dispatch_keeps_full_latest_history(
     monkeypatch,
 ):

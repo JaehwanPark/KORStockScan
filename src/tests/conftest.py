@@ -32,6 +32,19 @@ def isolate_module_logs(tmp_path, monkeypatch):
     # handler tests intentionally exercise real logging paths, so keep JSONL and
     # threshold compact events inside the pytest temp dir.
     monkeypatch.setattr(pipeline_event_logger, "DATA_DIR", tmp_path / "data")
+    # State-handler tests can persist sim/probe positions even when their
+    # broker calls are mocked. Keep those local files out of the running
+    # monitor's source population, preserving the default-path session gate.
+    sim_state_path = tmp_path / "runtime" / "scalp_live_simulator_state.json"
+    monkeypatch.setattr(
+        sniper_state_handlers, "DEFAULT_SCALP_SIM_STATE_PATH", sim_state_path
+    )
+    monkeypatch.setattr(sniper_state_handlers, "SCALP_SIM_STATE_PATH", sim_state_path)
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "SWING_INTRADAY_PROBE_STATE_PATH",
+        tmp_path / "runtime" / "swing_intraday_probe_state.json",
+    )
     production_custody_roots = (
         _REPOSITORY_ROOT / "data/runtime/sell_receipt_recovery",
         _REPOSITORY_ROOT / "data/runtime/s15_fast_custody",

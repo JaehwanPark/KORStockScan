@@ -4258,6 +4258,20 @@ class KiwoomWSManager:
                             tick_event_snapshot = self._snapshot_target(
                                 target, include_history=False
                             )
+                            # Source-only latency attribution. Keep the existing
+                            # normalization clock and freshness guards intact;
+                            # a late callback is not proof of upstream latency.
+                            tick_event_snapshot[
+                                "micro_observer_packet_receive_time_source"
+                            ] = packet_receive_time_source
+                            tick_event_snapshot[
+                                "micro_observer_packet_received_at_ms"
+                            ] = (
+                                int(packet_received_at.timestamp() * 1000)
+                                if packet_receive_time_source
+                                == _ORDER_EXECUTION_RECEIVE_TIME_SOURCE
+                                else None
+                            )
                             # Every raw event is observed in order. Only the
                             # already-coalesced EventBus latest-state view defers
                             # its full history copy to the dispatch worker.

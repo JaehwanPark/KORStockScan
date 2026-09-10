@@ -133,14 +133,42 @@ def test_runtime_rest_response_recovers_prior_receipt_without_new_order():
     assert LEDGER_KEY in stock
 
 
+@pytest.mark.parametrize("sell_amount", [110000, 110000.0, "110000"])
+@pytest.mark.parametrize("cost_rate", [0.0023, "0.002300"])
+@pytest.mark.parametrize(
+    "companion_corruption",
+    [
+        None,
+        "attempt",
+        "net",
+        "cost",
+        "authority",
+        "pipeline",
+        "stage",
+        "record",
+        "symbol",
+        "append_status",
+        "missing_fields",
+    ],
+)
 def test_terminal_outbox_preserves_full_position_economics_after_custody_reset(
     monkeypatch,
+    sell_amount,
+    cost_rate,
+    companion_corruption,
 ):
     from datetime import datetime, timedelta, timezone
     from src.engine import sniper_execution_receipts as receipts
 
     stock, receipt = stock_and_receipt()
-    stock.update(id=7, code="005930", name="EXACT")
+    stock.update(
+        id=7,
+        code="005930",
+        name="EXACT",
+        scanner_promotion_id="promotion-7",
+        effective_venue="KRX",
+        market_session_bucket="krx_regular",
+    )
     record_buy_receipt(
         stock,
         {
@@ -158,7 +186,14 @@ def test_terminal_outbox_preserves_full_position_economics_after_custody_reset(
         target_id=7,
         now=datetime(2026, 9, 7, 10, tzinfo=timezone(timedelta(hours=9))),
         stage="sell_completed",
-        event_fields=sale(10, 110000),
+        event_fields={
+            **sale(10, sell_amount),
+            PREFIX + "cost_rate": cost_rate,
+            "main_lifecycle_exit_qty": 10,
+            "main_lifecycle_exit_price": 11000.0,
+            "main_lifecycle_broker_reconciled": True,
+            "main_lifecycle_reconciled_final_exit": True,
+        },
     )
     stock.clear()
     emitted = []
@@ -166,7 +201,7 @@ def test_terminal_outbox_preserves_full_position_economics_after_custody_reset(
     def emit(pipeline, name, code, stage, *, record_id=None, fields=None):
         normalized = {str(k): str(v) for k, v in fields.items()}
         emitted.append((stage, normalized))
-        return {
+        payload = {
             "pipeline": pipeline,
             "stage": stage,
             "stock_name": name,
@@ -177,16 +212,41 @@ def test_terminal_outbox_preserves_full_position_economics_after_custody_reset(
             "structured_append_status": "raw_appended",
         }
 
+        if stage == "entry_opportunity_recheck_sell_completed":
+            field_changes = {
+                "attempt": (PREFIX + "attempt_id", "wrong-attempt"),
+                "net": (PREFIX + "realized_net_pnl_krw", "999999"),
+                "cost": (PREFIX + "cost_rate", "0"),
+                "authority": ("broker_order_forbidden", "True"),
+            }
+            if companion_corruption in field_changes:
+                key, value = field_changes[companion_corruption]
+                payload["fields"][key] = value
+            for case, key, value in (
+                ("pipeline", "pipeline", "ENTRY_PIPELINE"),
+                ("stage", "stage", "sell_completed"),
+                ("record", "record_id", 8),
+                ("symbol", "stock_code", "999999"),
+                ("append_status", "structured_append_status", "jsonl_disabled"),
+                ("missing_fields", "fields", {}),
+            ):
+                if companion_corruption == case:
+                    payload[key] = value
+        return payload
+
     monkeypatch.setattr(receipts, "emit_pipeline_event", emit)
-    monkeypatch.setattr(
-        receipts, "_sell_lifecycle_outbox_event_contract_valid", lambda **kwargs: True
+    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg) is (
+        companion_corruption is None
     )
-    assert receipts._emit_standard_sell_partial_lifecycle_outbox_leg(leg)
     assert len(emitted) == 2
+    if companion_corruption:
+        return
     for _, fields in emitted:
         assert fields[PREFIX + "economics_complete"] == "True"
         assert fields[PREFIX + "economics_cohort"] == "probe_residual_full_fill"
         assert float(fields[PREFIX + "realized_net_pnl_krw"]) == 9747
+        assert fields[PREFIX + "sell_notional_krw"] == str(sell_amount)
+        assert fields[PREFIX + "cost_rate"] == str(cost_rate)
 
 
 @pytest.mark.parametrize(

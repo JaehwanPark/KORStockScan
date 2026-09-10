@@ -903,6 +903,7 @@ class ForwardObservationCollector:
                     trade.get("exchange_time_raw"),
                     received_at_ms,
                     timestamp_result,
+                    packet_snapshot=snapshot,
                 )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             exchange_timestamp, future_adjusted, stale = timestamp_result
@@ -917,6 +918,7 @@ class ForwardObservationCollector:
                     trade.get("exchange_time_raw"),
                     received_at_ms,
                     timestamp_result,
+                    packet_snapshot=snapshot,
                 )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             if future_adjusted:
@@ -1052,6 +1054,7 @@ class ForwardObservationCollector:
                     depth.get("orderbook_time_raw"),
                     received_at_ms,
                     timestamp_result,
+                    packet_snapshot=snapshot,
                 )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             exchange_timestamp, _future_adjusted, stale = timestamp_result
@@ -1065,6 +1068,7 @@ class ForwardObservationCollector:
                     depth.get("orderbook_time_raw"),
                     received_at_ms,
                     timestamp_result,
+                    packet_snapshot=snapshot,
                 )
                 return ProducerCanaryResult.INVALID_EXCHANGE_TIMESTAMP
             try:
@@ -1155,6 +1159,8 @@ class ForwardObservationCollector:
         raw_time: Any,
         received_at_ms: int | None,
         parsed: tuple[datetime, bool, bool] | None,
+        *,
+        packet_snapshot: dict[str, Any] | None = None,
     ) -> None:
         if self._current_axis_buffer is not None:
             self._current_axis_buffer.invalidate_scope(normalize_symbol(symbol), venue)
@@ -1164,6 +1170,21 @@ class ForwardObservationCollector:
         received_at_ms = (
             received_at_ms if received_at_ms and received_at_ms > 0 else None
         )
+        packet_snapshot = packet_snapshot or {}
+        packet_source = packet_snapshot.get("micro_observer_packet_receive_time_source")
+        # The local adapter emits integer epoch milliseconds. Do not coerce
+        # optional diagnostics: booleans, fractional/nonfinite values and
+        # strings must not invent a trusted clock or mask the stale rejection.
+        packet_ms = packet_snapshot.get("micro_observer_packet_received_at_ms")
+        packet_valid = bool(
+            packet_source == "websocket_packet_ingress"
+            and type(packet_ms) is int
+            and packet_ms > 0
+            and received_at_ms is not None
+            and packet_ms <= received_at_ms <= checked_at_ms
+        )
+        if not packet_valid:
+            packet_ms = None
         raw_text = str(raw_time or "")
         exchange_at_ms = int(parsed[0].timestamp() * 1_000) if parsed else None
         with self._state_lock:
@@ -1187,6 +1208,19 @@ class ForwardObservationCollector:
                 else None
             ),
             "received_at_ms": received_at_ms,
+            "received_at_ms_basis": "adapter_normalization_clock",
+            "packet_received_at_ms": packet_ms,
+            "packet_receive_provenance_status": (
+                "trusted_packet_ingress" if packet_valid else "missing_or_invalid"
+            ),
+            "exchange_to_packet_receive_lag_ms": (
+                packet_ms - exchange_at_ms
+                if packet_ms is not None and exchange_at_ms is not None
+                else None
+            ),
+            "packet_to_normalization_ms": (
+                received_at_ms - packet_ms if packet_ms is not None else None
+            ),
             "checked_at_ms": checked_at_ms,
             "exchange_at_ms": exchange_at_ms,
             "exchange_to_receive_lag_ms": (

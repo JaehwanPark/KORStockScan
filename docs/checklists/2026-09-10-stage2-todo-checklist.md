@@ -19,6 +19,8 @@
 ## 별도 사용자 승인 적용 확인
 
 - [ ] `[WidgetEpisodeApprovedNextDayExecution0910] 9/9 후속 승인 추천의 9/10 정책·기동·자연 소비 확인` (`Due: 2026-09-10`, `Slot: PREOPEN`, `TimeWindow: 08:40~09:00`, `Track: RuntimeStability`)
+  - 10:50 종료: NHN/SD바이오센서/SK이터닉스/SK텔레콤 예약4기계가 당일 policy로 자연 기동·READY/무신호. 삼성E&A 오전후반 NO_TRADE 정상 종료. broker 삼성45/SK텔레콤10·SELL3 exact owner1개씩 유지; 삼성E&A 과거 registry gap·이후 신호/경제성은 OPEN. [종료 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
+  - 10:35 후속: broker 삼성45/SK텔레콤10·SELL3 exact owner1개씩 유지, 삼성E&A broker0/registry10 과거 수동 귀속 gap 유지. 삼성E&A 오전후반10:16 NO_TRADE 정상 종료; NHN preflight10:30 PASS/10:34 PID516640 READY, SD바이오센서10:35 preflight PASS. 10:39/10:44 이후 자연 확인과 전체 경제성 OPEN. [10:50 모니터링 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
   - 09:30 종료: 삼성 기존25+오전20=broker45주/target0015751·0018662 각10주; SK텔레콤0021585·0021588 각10주 BUY 미체결. 미체결4개 exact owner match1개씩. 롯데오전 liquidity/영원무역 velocity NO_TRADE terminal, 미래 profile·경제성·삼성E&A 과거 귀속 OPEN. [최종 근거](../audit-reports/2026-09-10-intraday-monitoring-0930.md).
   - 09:21 관찰:09:05 preflight3개 통과→09:09 TYM/제주반도체/SK텔레콤 가동, CJ CGV는 승인 quarantine 유지.09:15 preflight5개 통과→09:19 두산/카카오/롯데오전/삼성중공업/영원무역 가동. 삼성 오전 원주문0010216/0010227 각10주 체결→target0015751/0018662, 미청산·exact costs/terminal acceptance는 OPEN. 미래 profile과 기존 삼성E&A manual successor 귀속 불일치를 합치지 않는다. [09:30 근거](../audit-reports/2026-09-10-intraday-monitoring-0930.md).
   - 08:20 모니터링: 삼성E&A broker 잔고0과9/9 수동 successor0056859(원주문0053225)10주 체결을 확인했다. registry 잔여10주는 귀속 미반영으로 별도 유지하며 state/비용/실제 fill시각을 합성하지 않았다. 재기동 전후 삼성전자25주·미체결0, 삼성 오전327358/widget327676 유지. 기존 custody 후속과 미래 profile acceptance OPEN. [08:30 모니터링 근거](../audit-reports/2026-09-10-intraday-monitoring-0830.md).
@@ -56,6 +58,9 @@
 ## 장전 체크리스트 (07:45~09:00)
 
 - [ ] `[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0910] micro observer 저장공간·연속수집 source gap 복구 확인` (`Due: 2026-09-10`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: RuntimeStability`)
+  - 10:50 수정 재리뷰: 선택적 packet clock의 inf 예외로 stale 거절 기록이 빠지는 결함 보완. 정수 epoch만 신뢰하고 invalid/역전은 null, 기존 제외/10초 guard 유지. 최종 source-bound valid0B/rejected0B·0D 측정 모두 p95 1ms/p99 2ms 내. 새 PID/자연 원천 acceptance는 OPEN. [재리뷰](../audit-reports/2026-09-10-intraday-monitoring-1050-code-review.md).
+  - 10:50 종료: valid0B688505/0D708319·worker 동일/queue full·writer error0, 누적 timestamp 제외174492/tail64·free33.59GB. R2 코드 검증 완료이나 PID375167 미반영, 전수 exclusion/Provider hold/through-close는 OPEN. [종료 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
+  - 10:35 후속: 기존 adapter 시각만으로 packet 이전/내부 지연을 분리하지 못하는 계측 gap을 수정(R2). 신뢰 packet 시각은 observer snapshot·bounded64 rejection tail에만 전달하고10초 guard/Provider hold 유지. code 검증과 PID375167 미반영을 분리하며, 과거 전수 exclusion/through-close OPEN. [10:50 모니터링 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
   - 09:30 종료: timestamp 제외12936/진단tail64·전수복원 불가 유지. trade backlog7442→281 감소, queue full/writer error0·free36.0GB·collector 지속. 새 clean window/through-close/Provider source acceptance를 완료로 바꾸지 않았다. [최종 근거](../audit-reports/2026-09-10-intraday-monitoring-0930.md).
   - 09:21 관찰: 유효 수집 지속/queue·drop·writer error0이나09:15까지 timestamp pre-enqueue 제외0B6638/0D4843(합11481), bounded tail64로 exact 전수 제외 증거 미완료다.09:17~21 count 안정은 과거 ingress 복원이 아니며 Provider hold와 through-close/다음 clean source acceptance는 OPEN. 상세원문은09:30 모니터링 기록. [09:30 근거](../audit-reports/2026-09-10-intraday-monitoring-0930.md).
   - 08:45 사용자 재리뷰·수정보완: delayed REG의 전송 대기 중 date/epoch/manifest/target 변경, 늦은 callback, 같은 날 manifest successor 재예약, 종목별 부분 성공, wire 직전 budget 재검사를 보완했다. CLI 오류 logger의 stdout 재오염도 제거. 최종239+71=310 tests/compile/shell/diff PASS, 이번 수리 범위 finding0. [반례·수정·배포 receipt](../audit-reports/2026-09-10-intraday-monitoring-0830.md). 기존 사용자의 필요 시 main 재기동 승인은 별도 권한이며, through-close/과거 exclusion/경제성 OPEN을 유지한다.
@@ -87,6 +92,9 @@
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0910] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-09-10`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+  - 10:50 수정 재리뷰: companion append 성공만으로 잘못된 attempt/손익을 ACK할 수 있는 결함을 보완했다. 원본 금액·비용 표현 및 모든 companion 계약을 대사하고 불일치는 기존 outbox pending으로 유지. 보존한 실제 leg in-memory 검증 PASS, 운영 ACK/재기동 없음. 최종578 PASS·퇴역18 SKIP, 검토 범위 finding0; PID375167의 자연 소비는 OPEN. [재리뷰](../audit-reports/2026-09-10-intraday-monitoring-1050-code-review.md).
+  - 10:50 종료: 09시 이후 실제1주 bundle3/매도완료3, raw sell_completed345는 ACK 재시도 중복. v2.14 OpenAI DROP21/WAIT13/BUY0와 실제 bounded 체결을 분리. R1~R3 변경 검증502 PASS·퇴역18 SKIP, 현재 main PID 미반영. 공유 Entry/위젯/주문 변경의 전체 load source review 전 재기동 보류; 기존 재기동 승인은 유지. [종료 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
+  - 10:35 후속: readonly exact-date PID375167 verify PASS. main 실제1주3거래 매도 완료(로컬 비용모델 합244원, broker exact 비용 headline null). 흥구석유42193 SELL0029892의 int15130→float15130.0 attribution 변환이 durable ACK를 막는 R1 수리 완료; 원장/해시 불변 offline 실원본 leg ACK 검증 PASS, 현재 PID 자연 ACK는 미반영 OPEN. 별도 source 변경 중 재기동은 전체 load source review 선행. [10:50 모니터링 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
   - 09:39 코드 재검토: WS 획득 시각 경쟁/NXT BBO 관측시각 휴지 우회 2개를 재현·수정, 관련192 tests 및 재검토 finding0.09:35 WS는 기존 before-event-scan 수리 자연 소비 확인이나 이번 acquisition provenance는 미반영. 다음 WS 예상09:50의 evaluated_at/report_started_at 및 census12:00의 pause BBO 제외·예산 보존을 기존 owner에서 확인한다. source-only 새 report process 자동 소비이며 bot 재기동 불필요, 미래 생성·경제성은 OPEN. [수리 및 검증](../audit-reports/2026-09-10-intraday-monitoring-code-review.md).
   - 09:30 종료: PID375167 verify PASS, Entry DROP7/WAIT4/BUY0, main0018557 full fill1주 보유. holding Provider3/입력차단13 분리. source-only 수리2개 review/138·107 tests 통과, census 자연 반영/WS09:35 예정 소비를 구분했다. 효과·latency/source freshness·terminal/cost 미완료로 OPEN 유지. [최종 근거](../audit-reports/2026-09-10-intraday-monitoring-0930.md).
   - 2차 entry 재리뷰 후속: [도달성·순이익 기준 보완](../audit-reports/2026-09-10-entry-micro-recovery-automation-review.md). discovery 전일 budget/최신 lease/async commit 결함을 보완했다. 새 v10 + `exact_cumulative_full_cost_net_ev_v1` 후보와 activation을 검증한 뒤 허용된 배포 순서에서 PID 소비·finite 재평가→submit→terminal/비용을 확인한다.09:43 PID375167 유지, 이번 운영 변경 없음. micro WAIT arm만으로 일반 수량 확대하는 자동 승격 계약은 미완료이며 별도 실제 후단 귀속을 요구한다. 코드만 재기동하여 V2.13 fallback을 만들지 않는다.
@@ -105,6 +113,9 @@
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
 
 - [ ] `[SimProbeIntradayCoverage0910] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-09-10`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+  - 10:50 수정 재리뷰: 공통 pytest 격리 경로에서 scalp/swing 두 persist 파일 생성과 default-path session 차단을 회귀 검증했다. 운영 state 복원·과거 terminal 소실 해결로 보지 않으며 기존 자연 보존식 대사 OPEN. [재리뷰](../audit-reports/2026-09-10-intraday-monitoring-1050-code-review.md).
+  - 10:50 종료:10:42 당일 sim state 재영속은 확인했으나 unique진입3=완료1+active1+미대사024060 1로 보존식 미완료. 확인47행의 실주문 금지 provenance 유지. 테스트 경로 격리는 검증 완료, 과거/현재 sim 종료 결손을0 또는완료로 보간하지 않고 OPEN 유지. [종료 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
+  - 10:35 도래 점검:9/9 source sim21진입/21종료·CF38행 경제성 제외, 이번 창 sim24행 actual_order_submitted=False/broker_order_forbidden=True 확인. 운영 scalp sim 상태 파일은 합성 과거 시각으로 바뀌어 현재 active/closed는 blocked_missing_evidence. 공통 pytest의 sim/probe 운영 저장 경로를 tmp로 격리(R3); 기존 파일을0건 정상으로 승인하거나 합성 복원하지 않으며 정상 runtime 영속 대사까지 OPEN. [10:50 모니터링 근거](../audit-reports/2026-09-10-intraday-monitoring-1050.md).
   - Source: [threshold_cycle_ev_2026-09-09.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-09.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
