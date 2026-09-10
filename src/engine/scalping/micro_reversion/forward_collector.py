@@ -57,9 +57,10 @@ from .path_journal import (
 
 KST = ZoneInfo("Asia/Seoul")
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+# Canonicalize only the trusted deployment mount, not artifact descendants.
 DEFAULT_OUTPUT_ROOT = (
-    REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"
-)
+    REPOSITORY_ROOT / "data"
+).resolve() / "observations/scalp_micro_reversion_forward"
 FORWARD_COLLECTOR_SCHEMA = "scalp_micro_reversion_forward_collector_v9"
 FORWARD_COLLECTOR_AUTHORITY = "canary_observation_only_no_trading_authority"
 PRODUCER_CALLBACK_LATENCY_SCOPE = "kiwoom_0b_trade_callback_only"

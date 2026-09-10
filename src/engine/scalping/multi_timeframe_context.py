@@ -19,14 +19,15 @@ from zoneinfo import ZoneInfo
 from src.engine.scalping.market_context_observation import (
     derive_scalping_market_features,
 )
+from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
 SCHEMA = "scalping_multi_timeframe_context_v1"
 SOURCE_BAR_LIMIT = 430
 MODEL_MULTI_TIMEFRAME_BAR_LIMIT = 20
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PROMOTION_DIR = REPO_ROOT / "data" / "runtime"
-RUNTIME_ENV_DIR = REPO_ROOT / "data" / "threshold_cycle" / "runtime_env"
+PROMOTION_DIR = DATA_DIR / "runtime"
+RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 PROMOTION_SCHEMA = "ai_multi_timeframe_context_promotion_v1"
 PROMOTION_AUTHORITY_ID = "operator_full_market_context_promotion_2026-07-27"
 OPERATOR_DIRECTED_PROMOTION_MODE = "operator_directed_full_promotion"

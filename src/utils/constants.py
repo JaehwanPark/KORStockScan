@@ -5,10 +5,14 @@ from pathlib import Path
 
 # Pathlib을 사용하면 os.path.join 보다 훨씬 우아하게 경로를 관리할 수 있습니다.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-LOGS_DIR = PROJECT_ROOT / "logs"
+# Resolve only the trusted deployment mount, before no-follow child traversal.
+# Artifact-level symlink rejection remains in jsonl_io and its consumers.
+DATA_DIR = (PROJECT_ROOT / "data").resolve()
+LOGS_DIR = (PROJECT_ROOT / "logs").resolve()
 LEGACY_LOGS_DIR = PROJECT_ROOT / "src" / "logs"
-RESTART_FLAG_PATH = PROJECT_ROOT / "restart.flag"
+# A reviewed release may share the canonical operator flag through a symlink.
+# Resolve once so claiming/unlinking the request never removes that symlink.
+RESTART_FLAG_PATH = (PROJECT_ROOT / "restart.flag").resolve()
 CONFIG_PATH = DATA_DIR / "config_prod.json"
 DEV_PATH = DATA_DIR / "config_dev.json"
 UTILS_DIR = PROJECT_ROOT / "src" / "utils"

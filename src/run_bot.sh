@@ -340,6 +340,10 @@ export_runtime_source_provenance() {
 }
 
 reset_runtime_policy_env_before_handoff() {
+    # Intraday authority must be re-sourced explicitly for this startup/date.
+    # Never inherit yesterday's pinned exception from the long-lived shell.
+    unset KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_PATH
+    unset KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_SHA256
     # The supervisor is long-lived across graceful child restarts. Clear
     # startup-retired authority before loading the reviewed PREOPEN/operator
     # handoff; the verifier must reject any sourced layer that restores it.

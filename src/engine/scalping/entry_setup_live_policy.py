@@ -75,6 +75,56 @@ EXPECTED_CANDIDATE_SELECTION_POLICY = (
     "deterministic_outcome_blind_setup_state_symbol_round_robin_v3"
 )
 EXPLORATION_MAX_DAILY_PROBES = 3
+KRX_EXPLORATION_MAX_DAILY_PROBES = 100
+KRX_EXPLORATION_LIMIT_EFFECTIVE_DATE = "2026-09-11"
+KRX_EXPLORATION_LIMIT_AUTHORITY = "operator_daily_krx_one_share_limit_100_2026_09_10"
+
+
+def _new_exploration_limit(cohort: tuple[str, str], effective_date: str) -> int:
+    return (
+        KRX_EXPLORATION_MAX_DAILY_PROBES
+        if cohort == DEFAULT_COHORT
+        and effective_date >= KRX_EXPLORATION_LIMIT_EFFECTIVE_DATE
+        else EXPLORATION_MAX_DAILY_PROBES
+    )
+
+
+def _source_exploration_limit_valid(
+    candidate: dict[str, Any], cohort: tuple[str, str]
+) -> bool:
+    risk = candidate.get("risk_contract") or {}
+    limit = risk.get("maximum_daily_exploration_probes")
+    if type(limit) is not int:
+        return False
+    if limit == EXPLORATION_MAX_DAILY_PROBES:
+        return True  # Immutable historical three-probe contracts are not rewritten.
+    return bool(
+        limit == KRX_EXPLORATION_MAX_DAILY_PROBES
+        and _new_exploration_limit(cohort, str(candidate.get("effective_date") or ""))
+        == limit
+        and risk.get("daily_exploration_limit_authority")
+        == KRX_EXPLORATION_LIMIT_AUTHORITY
+    )
+
+
+def expanded_exploration_budget_errors(env: dict[str, str] | None = None) -> list[str]:
+    expected = {
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES": "KRX|KRX_REGULAR",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "100",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY": "100",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED": "false",
+    }
+    current = os.environ if env is None else env
+    return (
+        ["expanded_exploration_budget_env_mismatch"]
+        if any(
+            str(current.get(key, "")).strip() != value
+            for key, value in expected.items()
+        )
+        else []
+    )
+
+
 EXPLORATION_CONTINUATION_MIN_EXPOSURES = 10
 EXPLORATION_CONTINUATION_MIN_SYMBOLS = 3
 SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS = (
@@ -1022,13 +1072,14 @@ def build_live_candidate(
         cumulative_opportunity if isinstance(cumulative_opportunity, dict) else {}
     )
     exploration_continuation = _exploration_continuation_gate(detailed_report)
+    effective_date = _candidate_effective_date(
+        source_date=source_date, generated_at=current
+    )
+    exploration_limit = _new_exploration_limit(cohort, effective_date)
     candidate = {
         "schema": LIVE_CANDIDATE_SCHEMA,
         "source_date": source_date,
-        "effective_date": _candidate_effective_date(
-            source_date=source_date,
-            generated_at=current,
-        ),
+        "effective_date": effective_date,
         "effective_date_policy": EFFECTIVE_DATE_POLICY,
         "preopen_candidate_cutoff_kst": PREOPEN_CANDIDATE_CUTOFF_KST.isoformat(),
         "generated_at": current.isoformat(),
@@ -1128,7 +1179,15 @@ def build_live_candidate(
             "residual_multi_leg_forbidden": exploration_ready,
             "scale_in_forbidden": exploration_ready,
             "maximum_daily_exploration_probes": (
-                EXPLORATION_MAX_DAILY_PROBES if exploration_ready else None
+                exploration_limit if exploration_ready else None
+            ),
+            "daily_exploration_limit_authority": (
+                KRX_EXPLORATION_LIMIT_AUTHORITY
+                if (
+                    exploration_ready
+                    and exploration_limit == KRX_EXPLORATION_MAX_DAILY_PROBES
+                )
+                else None
             ),
             "account_order_quantity_cooldown_guards_required": True,
             "hard_protect_emergency_exit_guards_required": True,
@@ -1225,7 +1284,11 @@ def _validate_candidate_artifact(
     candidate_path: Path,
     runtime_env: dict[str, str] | None = None,
     cohort: tuple[str, str] = DEFAULT_COHORT,
+    source_bundle_root: Path | None = None,
+    runtime_target_date: str | None = None,
 ) -> list[str]:
+    # Intraday approval verifies the ORIGINAL scheduled candidate unchanged,
+    # but binds its archived bundle and the actual operator runtime date.
     errors: list[str] = []
     source_date = str(candidate.get("source_date") or "")
     try:
@@ -1313,16 +1376,27 @@ def _validate_candidate_artifact(
     provenance = provenance if isinstance(provenance, dict) else {}
     batch_path = Path(str(provenance.get("batch_report_path") or ""))
     detailed_path = Path(str(provenance.get("detailed_report_path") or ""))
-    if batch_path != batch_report_path(source_date):
+    expected_batch_path = batch_report_path(source_date)
+    expected_detailed_path = detailed_report_path(
+        source_date, selected_prompt_version, cohort=cohort
+    )
+    expected_candidate_path = live_candidate_path(source_date, cohort=cohort)
+    if source_bundle_root is not None:
+        expected_batch_path = source_bundle_root / "batch" / expected_batch_path.name
+        expected_detailed_path = (
+            source_bundle_root / "detailed" / expected_detailed_path.name
+        )
+        expected_candidate_path = (
+            source_bundle_root / "candidates" / expected_candidate_path.name
+        )
+    if batch_path != expected_batch_path:
         errors.append("candidate_batch_path_invalid")
     batch = _read_json(batch_path) if batch_path.is_file() else {}
     if not batch_path.is_file() or _canonical_sha256(
         _batch_evidence(batch)
     ) != provenance.get("batch_evidence_sha256"):
         errors.append("candidate_batch_evidence_mismatch")
-    if detailed_path != detailed_report_path(
-        source_date, selected_prompt_version, cohort=cohort
-    ):
+    if detailed_path != expected_detailed_path:
         errors.append("candidate_detailed_path_invalid")
     detailed_sha256 = _safe_file_sha256(detailed_path)
     if not detailed_sha256 or detailed_sha256 != provenance.get(
@@ -1343,7 +1417,7 @@ def _validate_candidate_artifact(
             detailed_report=detailed,
         )
     errors.extend(source_errors)
-    if candidate_path != live_candidate_path(source_date, cohort=cohort):
+    if candidate_path != expected_candidate_path:
         errors.append("candidate_path_invalid")
     errors.extend(
         _runtime_candidate_contract_errors(
@@ -1352,9 +1426,15 @@ def _validate_candidate_artifact(
     )
     errors.extend(
         _runtime_probe_contract_errors(
-            target_date=target_date, env=runtime_env, cohort=cohort
+            target_date=runtime_target_date or target_date,
+            env=runtime_env,
+            cohort=cohort,
         )
     )
+    if (candidate.get("risk_contract") or {}).get(
+        "maximum_daily_exploration_probes"
+    ) == KRX_EXPLORATION_MAX_DAILY_PROBES:
+        errors.extend(expanded_exploration_budget_errors(runtime_env))
     return list(dict.fromkeys(errors))
 
 
@@ -1456,8 +1536,7 @@ def _runtime_candidate_contract_errors(
             risk_contract.get("residual_multi_leg_existing_owner_required") is not False
             or risk_contract.get("residual_multi_leg_forbidden") is not True
             or risk_contract.get("scale_in_forbidden") is not True
-            or risk_contract.get("maximum_daily_exploration_probes")
-            != EXPLORATION_MAX_DAILY_PROBES
+            or not _source_exploration_limit_valid(candidate, cohort)
         ):
             errors.append("runtime_candidate_exploration_risk_contract_invalid")
     return errors
@@ -1656,6 +1735,13 @@ def resolve_live_prompt_policy(
         result["status"] = "fallback_probe_first_runtime_contract_invalid"
         result["runtime_contract_errors"] = runtime_contract_errors
         return result
+    if cohort == DEFAULT_COHORT and (
+        os.getenv("KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_PATH")
+        or os.getenv("KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_SHA256")
+    ):
+        from src.engine.scalping.entry_setup_intraday_activation import resolve_intraday
+
+        return resolve_intraday(result, now=current)
     activation = _load_activation_cached(target_date, cohort=cohort)
     artifact_sha = str(activation.get("artifact_sha256") or "")
     if artifact_sha != _canonical_sha256(
@@ -1682,7 +1768,7 @@ def resolve_live_prompt_policy(
             and activation_contract.get("residual_multi_leg_forbidden") is True
             and activation_contract.get("scale_in_forbidden") is True
             and activation_contract.get("maximum_daily_exploration_probes")
-            == EXPLORATION_MAX_DAILY_PROBES
+            in (EXPLORATION_MAX_DAILY_PROBES, KRX_EXPLORATION_MAX_DAILY_PROBES)
         )
     )
     if (
@@ -1737,6 +1823,14 @@ def resolve_live_prompt_policy(
         candidate_errors.append("runtime_candidate_prompt_version_mismatch")
     if candidate.get("canary_mode") != canary_mode:
         candidate_errors.append("runtime_candidate_canary_mode_mismatch")
+    if canary_mode == EXPLORATION_CANARY_MODE:
+        limit = (candidate.get("risk_contract") or {}).get(
+            "maximum_daily_exploration_probes"
+        )
+        if limit != activation_contract.get("maximum_daily_exploration_probes"):
+            candidate_errors.append("runtime_candidate_exploration_limit_mismatch")
+        if limit == KRX_EXPLORATION_MAX_DAILY_PROBES:
+            candidate_errors.extend(expanded_exploration_budget_errors())
     if candidate.get("entry_setup_evidence_version") != activation.get(
         "entry_setup_evidence_version"
     ):
@@ -1776,7 +1870,7 @@ def resolve_live_prompt_policy(
             "activation_artifact_sha256": artifact_sha,
             "canary_mode": canary_mode,
             "maximum_daily_exploration_probes": (
-                EXPLORATION_MAX_DAILY_PROBES
+                activation_contract.get("maximum_daily_exploration_probes")
                 if canary_mode == EXPLORATION_CANARY_MODE
                 else None
             ),
