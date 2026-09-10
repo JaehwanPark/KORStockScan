@@ -986,3 +986,66 @@ def test_deployment_orders_auto_apply_before_all_order_services():
     assert "runuser --user ubuntu" in wrapper
     assert "systemctl stop" in wrapper
     assert "systemctl start" in wrapper
+
+
+def _recovery_file(path, authority, **changes):
+    from src.trading.config.symbol_owner_standing_authority import content_sha256
+    payload = {
+        "schema": "symbol_owner_recovery_authority_v1",
+        "approved_by": "user",
+        "operator_instruction": "Recover this date once after reviewed repair.",
+        "active_date": TARGET_DATE.isoformat(),
+        "standing_authorization_sha256": authority["artifact_content_sha256"],
+        "valid_from": "2026-09-07T08:10:00+09:00",
+        "valid_until": "2026-09-07T08:50:00+09:00",
+        **changes,
+    }
+    payload["artifact_content_sha256"] = content_sha256(payload)
+    path.write_text(json.dumps(payload))
+    return payload
+
+
+@pytest.mark.parametrize("changes", [
+    {"active_date": "2026-09-08"},
+    {"standing_authorization_sha256": "0" * 64},
+    {"approved_by": "cron"},
+    {"valid_until": "2026-09-07T08:15:00+09:00"},
+    {"valid_from": "2026-09-07T08:30:00+09:00"},
+    {"valid_until": "2026-09-07T12:00:00+09:00"},
+    {"valid_from": "2026-09-07T08:10:00"},
+])
+def test_recovery_rejects_wrong_binding_or_window(tmp_path, changes):
+    from src.trading.config.symbol_owner_standing_authority import recovery_apply_window
+    authority = _write_authority(tmp_path / "authority.json")
+    path = tmp_path / "recovery.json"
+    _recovery_file(path, authority, **changes)
+    with pytest.raises(SymbolOwnerStandingAuthorityError, match="recovery"):
+        recovery_apply_window(path, authority=authority, observed_at=NOW.replace(hour=8, minute=20))
+
+
+def test_recovery_reaches_real_apply_and_keeps_quiescence(tmp_path, monkeypatch, auto_scope):
+    authority_path = tmp_path / "authority.json"
+    authority = _write_authority(authority_path)
+    recovery = tmp_path / "recovery.json"
+    payload = _recovery_file(recovery, authority)
+    registry = OrderOwnerRegistry(tmp_path / "registry.jsonl")
+    monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry.path))
+    monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(tmp_path / "policy.json"))
+    monkeypatch.setattr("src.trading.order.symbol_owner_policy_apply.pwd.getpwuid", lambda _uid: type("User", (), {"pw_name": "ubuntu"})())
+    def apply_local(path, **kwargs):
+        return apply_symbol_owner_policy(path, **kwargs,
+            receipt_dir=tmp_path / "receipts", owner_env_file=tmp_path / "owner.env",
+            apply_lock_path=tmp_path / "apply.lock", output_policy_path=tmp_path / "policy.json")
+    kwargs = dict(observed_at=NOW.replace(hour=8, minute=20), authority_path=authority_path,
+        token_loader=lambda: "test-token", process_scanner=lambda: [],
+        snapshot_fetcher=lambda *_: _snapshot(), registry=registry,
+        request_path=tmp_path / "request.json", result_path=tmp_path / "result.json",
+        apply_func=apply_local)
+    with pytest.raises(SymbolOwnerPolicyAutoApplyError, match="outside_standing_window"):
+        run_auto_apply(**kwargs)
+    with pytest.raises(SymbolOwnerPolicyAutoApplyError, match="not_quiescent"):
+        run_auto_apply(**{**kwargs, "process_scanner": lambda: [{"pid": 123}]}, recovery_authority_path=recovery)
+    result = run_auto_apply(**kwargs, recovery_authority_path=recovery)
+    assert result["status"] == "applied"
+    assert result["apply_receipt"]["recovery_authorization"] == payload
+    assert run_auto_apply(**kwargs, recovery_authority_path=recovery)["status"] == "already_applied"

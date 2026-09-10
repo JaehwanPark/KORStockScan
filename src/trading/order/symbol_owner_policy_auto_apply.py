@@ -37,6 +37,7 @@ from src.trading.config.symbol_owner_standing_authority import (
     STANDING_APPLY_BINDING_SCHEMA,
     load_standing_authority,
     standing_apply_window,
+    recovery_apply_window,
 )
 from src.trading.low_price_two_leg.profiles import profiles_for_target_date
 from src.trading.order.owner_custody_registry import (
@@ -427,6 +428,7 @@ def run_auto_apply(
     *,
     observed_at: datetime | None = None,
     authority_path: Path = DEFAULT_STANDING_AUTHORITY_PATH,
+    recovery_authority_path: Path | None = None,
     token_loader: Callable[[], str | None] | None = None,
     process_scanner: Callable[
         [], list[dict[str, Any]]
@@ -463,6 +465,10 @@ def run_auto_apply(
 
     authority = load_standing_authority(Path(authority_path), observed_at=now)
     start, end = standing_apply_window(authority)
+    if recovery_authority_path is not None:
+        (start, end), _ = recovery_apply_window(
+            recovery_authority_path, authority=authority, observed_at=now
+        )
     local_time = now.time().replace(tzinfo=None)
     if not start <= local_time <= end:
         raise SymbolOwnerPolicyAutoApplyError(
@@ -721,6 +727,7 @@ def run_auto_apply(
         token_loader=lambda: token,
         registry=target_registry,
         standing_authority_path=Path(authority_path).resolve(),
+        **({"recovery_authority_path": recovery_authority_path} if recovery_authority_path is not None else {}),
     )
     if (
         not isinstance(apply_result, dict)
@@ -818,6 +825,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_STANDING_AUTHORITY_PATH,
     )
     parser.add_argument("--result-path", type=Path, default=None)
+    parser.add_argument("--recovery-authority", type=Path, default=None)
     args = parser.parse_args(argv)
     now = datetime.now(tz=KST)
     output_path = Path(args.result_path or _result_path(now.date())).resolve()
@@ -825,6 +833,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run_auto_apply(
             observed_at=now,
             authority_path=args.standing_authority,
+            recovery_authority_path=args.recovery_authority,
             result_path=output_path,
         )
     except Exception as exc:

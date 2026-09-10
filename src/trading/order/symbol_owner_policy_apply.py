@@ -35,6 +35,7 @@ from src.trading.config.symbol_owner_policy import (
 from src.trading.config.symbol_owner_standing_authority import (
     load_standing_authority,
     standing_apply_window,
+    recovery_apply_window,
     validate_apply_binding,
 )
 from src.trading.order.owner_custody_registry import (
@@ -741,6 +742,7 @@ def apply_symbol_owner_policy(
     apply_lock_path: Path = DEFAULT_APPLY_LOCK,
     output_policy_path: Path | None = None,
     standing_authority_path: Path | None = None,
+    recovery_authority_path: Path | None = None,
 ) -> dict[str, Any]:
     """Validate or atomically publish one exact-date coexistence policy."""
 
@@ -782,6 +784,13 @@ def apply_symbol_owner_policy(
                     f"symbol_owner_apply_standing_scope_mismatch:{symbol}"
                 )
         apply_window = standing_apply_window(standing_authority)
+    recovery_authority = None
+    if recovery_authority_path is not None:
+        if standing_authority is None:
+            raise SymbolOwnerPolicyApplyError("symbol_owner_recovery_standing_authority_required")
+        apply_window, recovery_authority = recovery_apply_window(
+            recovery_authority_path, authority=standing_authority, observed_at=observed_at
+        )
     expected_confirmation = f"APPLY SAME SYMBOL OWNER POLICY {active_date.isoformat()}"
     if apply and confirmation != expected_confirmation:
         raise SymbolOwnerPolicyApplyError("symbol_owner_apply_confirmation_mismatch")
@@ -906,6 +915,8 @@ def apply_symbol_owner_policy(
             else ""
         ),
     }
+    if recovery_authority is not None:
+        dry_result["recovery_authorization"] = recovery_authority
     if not apply:
         return dry_result
 
@@ -996,6 +1007,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--confirm", default="")
     parser.add_argument("--standing-authority", type=Path, default=None)
+    parser.add_argument("--recovery-authority", type=Path, default=None)
     args = parser.parse_args(argv)
     try:
         result = apply_symbol_owner_policy(
@@ -1003,6 +1015,7 @@ def main(argv: list[str] | None = None) -> int:
             apply=args.apply,
             confirmation=args.confirm,
             standing_authority_path=args.standing_authority,
+            recovery_authority_path=args.recovery_authority,
         )
     except Exception as exc:
         print(

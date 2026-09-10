@@ -283,3 +283,38 @@ def validate_apply_binding(
         raise SymbolOwnerStandingAuthorityError(
             "symbol_owner_standing_authority_hash_invalid"
         )
+
+
+def recovery_apply_window(
+    path: Path, *, authority: Mapping[str, Any], observed_at: datetime
+) -> tuple[tuple[time, time], dict[str, Any]]:
+    """Validate an explicit same-day operator recovery, never cron authority."""
+    now = observed_at.astimezone(KST)
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("not_object")
+        if (
+            payload.get("schema") != "symbol_owner_recovery_authority_v1"
+            or payload.get("approved_by") != "user"
+            or payload.get("active_date") != now.date().isoformat()
+            or payload.get("standing_authorization_sha256")
+            != authority.get("artifact_content_sha256")
+            or payload.get("artifact_content_sha256") != content_sha256(payload)
+            or not str(payload.get("operator_instruction") or "").strip()
+        ):
+            raise ValueError("binding_invalid")
+        start = _aware_kst(payload.get("valid_from"), error="recovery_start_invalid")
+        end = _aware_kst(payload.get("valid_until"), error="recovery_end_invalid")
+        if (
+            start.date() != now.date()
+            or end.date() != now.date()
+            or not 0 < (end - start).total_seconds() <= 5400
+            or not start <= now <= end
+        ):
+            raise ValueError("window_invalid")
+    except (OSError, ValueError, TypeError) as exc:
+        raise SymbolOwnerStandingAuthorityError(
+            "symbol_owner_recovery_authority_invalid"
+        ) from exc
+    return (start.time().replace(tzinfo=None), end.time().replace(tzinfo=None)), payload
