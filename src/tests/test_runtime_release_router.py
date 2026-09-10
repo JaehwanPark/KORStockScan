@@ -252,3 +252,77 @@ def test_cron_install_backups_and_readback(release, monkeypatch):
     backups = list((workspace / "tmp").glob("runtime-release-cron-*"))
     assert len(backups) == 1
     assert (backups[0] / "before.crontab").read_text() == before
+
+
+def test_start_route_preserves_operator_env_and_log(tmp_path):
+    original = router.render_crontab(original_cron(tmp_path), tmp_path)
+    with_override = original.replace(
+        f"55 7 * * 1-5 bash {tmp_path}/deploy/run_runtime_release.sh start #",
+        f"55 7 * * 1-5 MAIN_OPERATOR_VETO=true bash {tmp_path}/deploy/run_runtime_release.sh start >> /start.log 2>&1 #",
+    )
+    assert router.render_crontab(with_override, tmp_path) == with_override
+
+
+@pytest.mark.parametrize("prefix", ["echo ", "false && ", "printf '%s' "])
+def test_quoted_or_nonexecuted_route_is_not_installed(tmp_path, prefix):
+    original = router.render_crontab(original_cron(tmp_path), tmp_path)
+    invalid = original.replace(
+        f"KEEP_POLICY_ENV=true bash {tmp_path}/deploy/run_runtime_release.sh postclose ",
+        f"KEEP_POLICY_ENV=true {prefix}bash {tmp_path}/deploy/run_runtime_release.sh postclose ",
+    )
+    with pytest.raises(ValueError, match="command_unrecognized"):
+        router.render_crontab(invalid, tmp_path)
+
+
+def test_check_cron_does_not_create_lock(release, monkeypatch):
+    workspace, _, _, _ = release
+    current = router.render_crontab(original_cron(workspace), workspace)
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **k: current)
+    router.manage_cron(workspace, False)
+    assert not (workspace / "data/runtime/runtime_release_cron.lock").exists()
+
+
+@pytest.mark.parametrize("op", ["postclose", "start"])
+def test_scheduled_dry_run_is_not_a_worker(tmp_path, op):
+    current = router.render_crontab(original_cron(tmp_path), tmp_path)
+    bad = current.replace(
+        f"run_runtime_release.sh {op} ", f"run_runtime_release.sh {op} --print-plan "
+    )
+    with pytest.raises(ValueError, match="unrecognized"):
+        router.render_crontab(bad, tmp_path)
+
+
+def test_legacy_start_preserves_environment_and_redirect(tmp_path):
+    current = original_cron(tmp_path)
+    old = f"/usr/bin/tmux new-session -d -s bot 'cd {tmp_path}/src && ./run_bot.sh'"
+    actual = (
+        f"MAIN_OPERATOR_VETO=true /usr/bin/tmux new-session -d -s bot '/bin/bash -c \"cd {tmp_path}/src "
+        "&& source ../.venv/bin/activate && ./run_bot.sh\"' >> /start.log 2>&1"
+    )
+    current = current.replace(old, actual)
+    result = router.render_crontab(current, tmp_path)
+    assert (
+        f"MAIN_OPERATOR_VETO=true bash {tmp_path}/deploy/run_runtime_release.sh start >> /start.log 2>&1 # RUNTIME_RELEASE_START"
+        in result
+    )
+    assert router.render_crontab(result, tmp_path) == result
+
+
+def test_quoted_leading_assignment_is_preserved(tmp_path):
+    current = router.render_crontab(original_cron(tmp_path), tmp_path)
+    current = current.replace(
+        "KEEP_POLICY_ENV=true", "KEEP_POLICY_ENV='keep value' OTHER=1"
+    )
+    assert router.render_crontab(current, tmp_path) == current
+
+
+def test_cron_check_does_not_acquire_installer_lock(release, monkeypatch):
+    workspace, _, _, _ = release
+    current = router.render_crontab(original_cron(workspace), workspace)
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **k: current)
+    monkeypatch.setattr(
+        router.fcntl,
+        "flock",
+        lambda *a: pytest.fail("read-only check must not wait for installer"),
+    )
+    router.manage_cron(workspace, False)
