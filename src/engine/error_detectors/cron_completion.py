@@ -453,6 +453,7 @@ class CronCompletionDetector(BaseDetector):
             "running_status_deadline": job["running_status_deadline"],
             "suppress_missing_while_cron_in_progress": {
                 "log": str(PROJECT_ROOT / job["log"]),
+                "process_patterns": ["run_threshold_cycle_postclose.sh"],
             },
         }
         return ArtifactFreshnessDetector._is_bounded_postclose_running(
