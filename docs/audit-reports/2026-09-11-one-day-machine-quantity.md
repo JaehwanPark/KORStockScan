@@ -37,4 +37,5 @@
 - 공통 selector SHA256과 crontab 원문 불변. 삼성07:57·위젯07:58 등 timer 원 예약 유지. 기존 collector 실행도 유지한다.
 - canonical 설치 원장: `data/runtime/machine_one_day_quantity_deployment.json`. 기존3개 machine manifest에는 과거 PID/root receipt를 보존하고 unit별 successor와 원장 링크를 추가했다. 원장/공유원본/cron/timer rollback 근거: `tmp/one-day-quantity-20260911/`.
 - `code_review_closed=true`, `machine_release_installed=true`, `actual_pid_consumed=false`. 새 PID와 실제 신규 진입량은 해당 예약 후 기존 startup owner에서 확인한다. 실제 주문 또는 수익 개선을 검증했다고 주장하지 않는다.
-- 전일 SK텔레콤 morning HELD leg10주를 읽기 전용 확인했다. 기존 원장/주문은 변경하지 않았고, 이 수량 축소는 기존보유 축소매도가 아니다.
+- **07:35 사용자 지적 후 정정:** SK텔레콤10주는 전일 정상 목표 매도가 끝났으며 실제 잔존 보유가 아니다. 앞선 답변은 stale episode `HELD10`만 읽고 실제 보유로 잘못 단정했다. `data/runtime/order_owner_registry.jsonl`의 exact SELL0022607은9/10 14:35:09.392728 `FILL_RECORDED`10주/907,000원(주당90,700원),14:35:09.619771 `ORDER_TERMINAL`이다. 해당 timestamp는 원장 관찰시각이며 거래소 체결시각으로 주장하지 않는다. [전일15:10 리뷰](2026-09-10-intraday-monitoring-1510.md#새-결함-sk텔레콤-목표-체결-후-에피소드-held-잔존)에도15:00 broker 재조회 filled10/remainder0, broker/registry0과 episode state10의 불일치가 이미 기록돼 있었다.
+- episode 파일의 마지막 상태는9/10 14:35:08.633546 `target_terminal_absence_position_held`로, 약0.76초 뒤 공통 원장의 fill 반영을 놓친 상태 갱신 결손이다. 이번 정정은 설명/검증 기록만 수정했고 custody state·공통 원장·주문·서비스를 변경하지 않았다. 오늘 신규1주 배포와 별도로 남은 기존 terminal projection 결손이며, 실제10주 보유나 수동매도로 재분류하지 않는다.
