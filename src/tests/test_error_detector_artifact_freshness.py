@@ -4,6 +4,8 @@ import pytest
 
 import os
 import time
+import json
+from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -13,6 +15,155 @@ from src.engine.error_detectors.artifact_freshness import (
 )
 
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
+
+
+@pytest.mark.parametrize(
+    "case,expected",
+    [("running", "warning"), ("after_old_window", "warning")]
+    + [
+        (case, "fail")
+        for case in (
+            "failed",
+            "wrong_date",
+            "missing_date",
+            "invalid_json",
+            "missing_status",
+            "nonzero_exit",
+            "boolean_exit",
+            "missing_start",
+            "future_start",
+            "old_start",
+            "invalid_start",
+            "wrong_schema",
+            "boolean_schema",
+            "runtime_authority",
+            "terminal_fail",
+            "terminal_done",
+            "no_start_marker",
+            "no_live_pid",
+            "deadline",
+            "past_source",
+        )
+    ],
+)
+def test_postclose_running_status_requires_bounded_exact_live_owner(
+    tmp_path, case, expected
+):
+    module = "src.engine.error_detectors.artifact_freshness"
+    now = datetime(2026, 9, 10, 21, 40, 2)
+    if case == "after_old_window":
+        now = datetime(2026, 9, 10, 22, 30)
+    elif case == "deadline":
+        now = datetime(2026, 9, 10, 23, 20)
+    elif case == "past_source":
+        now = datetime(2026, 9, 11, 0, 5)
+    payload = {
+        "schema_version": 1,
+        "report_type": "threshold_cycle_postclose_status",
+        "target_date": "2026-09-10",
+        "status": "running",
+        "reason": "started",
+        "exit_code": 0,
+        "runtime_effect": False,
+        "started_at": "2026-09-10T20:10:04+09:00",
+    }
+    changes = {
+        "failed": {"status": "failed"},
+        "wrong_date": {"target_date": "2026-09-09"},
+        "missing_date": {"target_date": None},
+        "missing_status": {"status": None},
+        "nonzero_exit": {"exit_code": 1},
+        "boolean_exit": {"exit_code": False},
+        "missing_start": {"started_at": None},
+        "future_start": {"started_at": "2026-09-10T23:00:00+09:00"},
+        "old_start": {"started_at": "2026-09-09T20:10:04+09:00"},
+        "invalid_start": {"started_at": "invalid"},
+        "wrong_schema": {"schema_version": 99},
+        "boolean_schema": {"schema_version": True},
+        "runtime_authority": {"runtime_effect": True},
+    }
+    payload.update(changes.get(case, {}))
+    status_path = tmp_path / "status.json"
+    status_path.write_text("{" if case == "invalid_json" else json.dumps(payload))
+    log_path = tmp_path / "postclose.log"
+    marker = "[START] threshold-cycle postclose target_date=2026-09-10\n"
+    if case == "no_start_marker":
+        marker = "[START] threshold-cycle postclose target_date=2026-09-09\n"
+    elif case.startswith("terminal_"):
+        terminal = "FAIL" if case == "terminal_fail" else "DONE"
+        marker += f"[{terminal}] threshold-cycle postclose target_date=2026-09-10\n"
+    log_path.write_text(marker)
+    artifact = dict(
+        next(a for a in ARTIFACT_REGISTRY if a["id"] == "threshold_postclose_status")
+    )
+    artifact["path_template"] = str(status_path)
+    artifact["suppress_missing_while_cron_in_progress"] = {"log": str(log_path)}
+    with (
+        patch(_TRADING_MOCK, return_value=True),
+        patch(f"{module}.ARTIFACT_REGISTRY", [artifact]),
+        patch(f"{module}.datetime", wraps=datetime) as clock,
+        patch(f"{module}.time.time", return_value=now.timestamp()),
+        patch.object(
+            ArtifactFreshnessDetector,
+            "_has_matching_live_process",
+            return_value=case != "no_live_pid",
+        ),
+    ):
+        clock.now.return_value = now
+        detector = ArtifactFreshnessDetector()
+        if case == "past_source":
+            detector.postclose_source_date = "2026-09-10"
+        result = detector.check()
+    assert result.severity == expected
+    if expected == "warning":
+        assert result.details["threshold_postclose_status_content_status"] == "running"
+        assert (
+            result.details["threshold_postclose_status_upstream_status"]
+            == "running_before_deadline"
+        )
+    else:
+        assert result.details["threshold_postclose_status_status"] == "fail"
+
+
+@pytest.mark.parametrize(
+    "argv,expected",
+    [
+        (
+            ["bash", "/release/deploy/run_threshold_cycle_postclose.sh", "2026-09-10"],
+            True,
+        ),
+        (
+            [
+                "bash",
+                "/release/deploy/.run_threshold_cycle_postclose.snapshot.abc.sh",
+                "2026-09-10",
+            ],
+            True,
+        ),
+        (
+            ["bash", "/release/deploy/run_threshold_cycle_postclose.sh", "2026-09-09"],
+            False,
+        ),
+        (["bash", "-c", "echo run_threshold_cycle_postclose.sh 2026-09-10"], False),
+        (["python", "unrelated.py", "2026-09-10"], False),
+    ],
+)
+def test_bounded_postclose_process_matches_argv_date_and_snapshot(
+    tmp_path, argv, expected
+):
+    proc_root = tmp_path / "proc"
+    process = proc_root / "99999999"
+    process.mkdir(parents=True)
+    (process / "cmdline").write_bytes("\0".join(argv).encode() + b"\0")
+    with patch(
+        "src.engine.error_detectors.artifact_freshness.Path",
+        side_effect=lambda value: proc_root if value == "/proc" else Path(value),
+    ):
+        result = ArtifactFreshnessDetector._has_matching_live_process(
+            {"process_patterns": ["run_threshold_cycle_postclose.sh"]},
+            target_date="2026-09-10",
+        )
+    assert result is expected
 
 
 class TestArtifactFreshnessDetector:
