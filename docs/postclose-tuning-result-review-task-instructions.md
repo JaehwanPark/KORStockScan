@@ -89,6 +89,8 @@ source-date 9/8의 [장후 운영 리뷰](audit-reports/2026-09-08-postclose-mon
 
 ### 1.3 적응형 청산의 별도 후속 경계
 
+최신 별도 승인 배포는 [9/10 23:53 배포](audit-reports/2026-09-10-approved-additions-deployment.md)와 [9/11 전수 점검](audit-reports/2026-09-11-full-recommendation-deployment-audit.md)을 따른다. machine `f9d53a9a`/80-drop-in은 보조청산과 전체 기존 scope의 진입 악화 보류·WS 목표 상향을9/11 신규 진입에 연결한다. `machine_additions_deployment.json`의 추가 pin도 대사한다. 아래19:19/273807e3/PID1138215는 이전 배포 receipt이며 현재 source/PID 보증이 아니다. 공통 선택은 별도로 수리 `939d90f6`이다.
+
 현재 운영 인계는 [9/10 최소 보조청산 배포 receipt](audit-reports/2026-09-10-machine-profit-stagnation-deployment.md)와 `data/runtime/machine_profit_stagnation_deployment.json`이다. 19:19 당시 machine 릴리스273807e3,9개 service/preflight drop-in, widget 새 PID1138215와 정책 pin을 검증했다. **main/장후 공통 선택은 변경하지 않았다.** 이 숫자는 당시 기록이며 매 실행에서 실제 경로·HEAD·pin·process를 다시 확인한다.
 
 - 별도 사용자 승인된 최소 `machine_profit_stagnation_v1`은 **9/11 신규 진입부터 이후 거래일에도 같은 설정을 유지**한다. 정체180초·변동0.15%p·고점개선0.10%p, 비용0.23%+slippage5bps, SELL TTL10초·관측공백12초다. 기존 보유는 자동 이관하지 않는다. 숫자는 승인된 최초값이지 경제적 최적값이나 실현비용이 아니다.
@@ -274,8 +276,6 @@ bash restart.sh --print-plan
 일반 non-zero exit는 실패다. 단, R0–R3의 provider 미실행 source-only 모드처럼 producer가 명시적으로 `exit=2/source_only_blocked_or_deferred`를 정의한 경우에만 해당 모드·단계 결과·필수 artifact를 함께 확인해 source warning과 실행 결함을 구분한다. 이 예외를 strict verifier/controller 실패에 적용하거나 Provider 평가 완료·live 승격으로 해석하지 않는다.
 
 단순 elapsed time만으로 hang을 선언하지 않는다. 다음을 함께 확인한다.
-
-`threshold_postclose_status`의 `running`은 `succeeded`와 다르지만 그 자체가 terminal FAIL도 아니다. 감지기의 pending 예외는 당일 유효 status·시작시각, 같은 날짜의 미종결 최신 START, 실제 wrapper(immutable snapshot 포함)의 exact-date argv가 함께 확인되고 기본 finalization deadline23:20 이전인 경우에만 warning 대기로 분류한다. PID/진행 근거를 계속 관찰하며 성공으로 표시하지 않는다. 실제 failed/invalid status, 최신 FAIL/DONE과의 충돌, 잘못된 날짜·PID 부재 또는 deadline 도달은 이 예외로 숨기지 않는다. 이 계약의 코드 수리와 선택 배포/현재 detector 소비는 §6.5에 따라 별도로 기록한다.
 
 WS 무수신은 [장중 §4.2.1](intraday-monitoring-task-instructions.md#421-동시호가nxt-휴장-구간의-수신-기대)을 먼저 적용한다. 정상 평일08:50~09:00(확인된 NXT-only09:00:30까지)은 event/원 snapshot 시각·route 기준 `expected_market_quiet`이며 연속매매 무수신만으로 장애/recovery workorder를 만들지 않는다. 장후 현재 시각으로 과거 quiet를 stale로 바꾸지 않고, 개장 후 실제 결손·LOGIN/REG/연결/저장 실패·원천 제외·주문 freshness guard는 유지한다.
 

@@ -23,4 +23,14 @@
 
 코드 변경만으로 활성화를 승인하지 않는다. 10개 intraday pinned code와3개 source hash, 당일 env/PID·일일 사용량을 검증하고 main/widget/episode/manual 계좌·미체결을 대사한다. exact 기존 journal 원본을 보존한 뒤 새 frozen release에서 기존 restart.sh의 prepare/drain/new-PID/commit을 사용한다. 코드 적용 필요성은 확인됐지만 실제 재기동 결과와 자연 ACK는 아래 후속 기록으로 확정한다. 원래 코드680과 당일 정책은 rollback 근거로 유지한다. 다른 기계의 재기동·정책 변경/기존 보유 편입은 하지 않는다.
 
-진행 상태: 코드 검증 완료. commit/push/운영 수락 후 갱신 예정.
+진행 상태: 코드 commit `769952574cfbc3f7fa4af3115c847abc99237377`, branch `fix/holding-input-custody-20260910`를 origin에 push했다. 다른 세션 미커밋 변경과 분리했으며 main 병합은 이번 작업에 포함하지 않았다.
+
+### 13:52~13:56 실제 적용 수락
+
+- 새 frozen release `/home/ubuntu/KORStockScan-runtime-releases/holding-input-76995257`, PID772330. 기존 PID657193을 기존 restart.sh prepare/drain/commit으로 한 차례 우아하게 재기동했다. pinned code10개/source3개 hash 불일치0, 새 PID env verify passed/pid_passed=true, missing/mismatch 및 policy/dated fail0이다. 당일 approval SHA95a10c85…/KRX1주 일일100과 기존사용6을 보존했다. 운영 prompt/provider/수량/threshold/safety와 독립 machine 서비스는 변경하지 않았다.
+- WS LOGIN13:52:13,13:52:23 collector healthy_observer_canary_with_source_row_exclusions/stop=false, trade/depth persist187/256, queue full0/0, writer error0/0, callback p99 0.828ms, free28.36GB. timestamp 제외1건은 정상 데이터로 보간하지 않는다.
+- fresh broker 대사13:51:06→13:56:05: 삼성25·SKT10·와이씨1·레메디1주와 SKT SELL0022607 잔량10주 동일, 해당 미체결 exact owner1개. 삼성 기존10주 target은13:30:46에 자연 체결되어 이번 배포 효과가 아니다. 과거028050 registry deficit은 별도 OPEN, main1주 두 종목을 manual로 오분류하거나 machine에 편입하지 않는다. 기존 예수금 operator floor는 변경하지 않았다.
+- 원본 SELL42193은 `tmp/holding-restart-20260910-SKM1Uc/sell_receipt_recovery`에 백업했다. 원본 파일 SHA20aed058e60df96d2754cc36a3213a36d5d31b7517271dd5d82a89ad93a6707e.13:52:09 startup consumer가 sell_completed와 entry_opportunity_recheck_sell_completed를 실제 기록했고 canonical journal은 정상 consumer 정리로 없어졌다. exact attempt eor-b6c92dd93e6f6fe836656245/BUY0026276/SELL0029892/qty1/net175원/비용35원을 대사했다. 이는10:11 기존 거래의 귀속 복구이며 신규 수익/주문이 아니다. broker actual venue UNKNOWN/SOR 불확실성은 그대로다. 수동 ACK·원장 병합은 하지 않았고 백업으로 원본 복구 가능하다.
+- 실제13:55:42 와이씨 payload request holding_score:232140:1789016142850:1c8c47c9, SHA0bf24bc9f4d4414b017fa0871a8aad8c3ea9daf575c9e7403be03df880832c73: quote age87.031ms, ask/bid total17304/10793, fresh_consistent.13:55:48 레메디 request holding_score:387690:1789016148757:7ac2d6a0, SHA3a1d282b153c9a197320bdbb63d251f6d14d95eb0599e9770582d78e3669e120:219.987ms/661·3113/fresh_consistent. 실제 Provider parse 성공 및 각각 EXIT/TRIM, quality override=false를 확인했다. 강제 매도 실행이나 순이익 개선까지 입증한 것은 아니다. 비용 미제공 estimated net은 입력에서 누락/null로 유지되며 gross를 net으로 승격하지 않는다.
+- 같은 창의 stale_tick_context는 여전히 preflight 차단됐다. 안전장치를 완화하여 모든 호출을 정상화한 것이 아니다. source ingress 지연/과거 수집 손실, 매매빈도·빠른 청산·비용 차감 EV와 기존 compact payload 테스트 실패는 별도 수락이다. 오늘13:30 모니터링 완료 후 이번 사용자 수리 지시에 따른 짧은 배포 검증이며 무기한 모니터링 연장은 아니다.
+- 내일07:55 cron은 여전히 원 작업폴더 기동 경로다. 오늘 frozen PID 성공만으로 내일 동일 코드 사용을 보장하지 않는다. 기존 KRXDaily100NextDayStartupAcceptance0911에서 검증된 release 선택/정식 exact-date policy/100 carry/실제 PID를 확인한다. 이번 작업은 cron·배포 router를 변경하지 않았다.

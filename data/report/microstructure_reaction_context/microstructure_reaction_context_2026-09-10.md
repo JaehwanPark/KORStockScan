@@ -1,0 +1,65 @@
+# Microstructure Reaction Context - 2026-09-10
+
+- runtime_effect: `False`
+- decision_authority: `diagnostic_source_only_with_fail_closed_holding_quality_consumer`
+- forbidden_uses: `['standalone_buy', 'broker_guard_bypass', 'threshold_mutation', 'provider_route_change', 'bot_restart', 'cap_release']`
+
+## Summary
+- available: `True`
+- row_count: `29537`
+- ok/missing_or_unusable: `1115` / `28422`
+- usable_coverage_pct: `80.366` (diagnostic warning floor `None`)
+- delivery computed/sent/consumed (v2 only): `382` / `258` / `192`
+- delivery v2/legacy-unverifiable: `0` / `28467`
+- delivery_state_counts: `{'response_received': 258, 'not_attempted': 119, 'attempted_unconfirmed': 5}`
+- consumer_counts: `{'none': 190, 'holding_score_source_quality': 192}`
+- real_submitted_count: `12`
+- status_counts: `{'missing': 26710, 'not_evaluated': 1346, 'ok': 1115, 'source_quality_partial': 70, 'stale': 296}`
+- entry_reaction_quality_counts: `{'-': 26710, 'favorable_reaction': 20, 'mixed_reaction': 546, 'neutral_unusable': 1712, 'risk_context_only': 275, 'weak_reaction': 274}`
+- source_quality_counts: `{'-': 26710, 'ai_confirmed_terminal_no_budget_source_quality_missing': 89, 'ai_score_50_buy_hold_override_no_tick_audit': 93, 'blocked_ai_score_no_tick_audit': 47, 'fresh_short_window': 1115, 'pre_ai_liquidity_gate': 212, 'pre_ai_overbought_gate': 137, 'snapshot_pre_contract_backfill': 750, 'stale_tick_or_quote': 296, 'tick_aggressor_pressure_unusable': 70, 'watching_ai_cooldown_active': 18}`
+- stage_counts: `{'ai_confirmed': 176, 'ai_confirmed_terminal_no_budget': 210, 'ai_cooldown_blocked': 18, 'ai_holding_review': 335, 'blocked_ai_score': 223, 'blocked_liquidity': 212, 'blocked_overbought': 137, 'krx_direct_canary_live_ai_wait_submit_block': 6, 'latency_block': 383, 'latency_pass': 142, 'order_bundle_failed': 2, 'order_bundle_submitted': 6, 'post_sell_executable_bbo_horizon_observed': 20, 'pre_submit_entry_ai_authority_guard_block': 122, 'real_weak_ai_micro_entry_block': 5, 'real_weak_pullback_entry_block': 1, 'rising_missed_one_share_entry': 794, 'rising_missed_one_share_entry_blocked': 19, 'rising_missed_scout_quality_guard_blocked': 26, 'rising_missed_tick_absolute_throughput_relief_applied': 8, 'rising_missed_tick_speed_entry_block': 53, 'rising_missed_tp1_candidate_blocked': 1061, 'rising_missed_tp1_candidate_deferred': 1644, 'rising_missed_tp1_counterfactual_submit_safety': 2705, 'risky_micro_episode_executable_bbo_observed': 5101, 'scalp_entry_action_decision_snapshot': 1314, 'scalping_scanner_fast_precheck': 14814}`
+- opportunity_funnel raw/entry/unique_unsubmitted: `20` / `10` / `4`
+- opportunity_first_blocker_counts: `{'ai_confirmed': 3, 'scalp_entry_action_decision_snapshot': 1}`
+- opportunity_outcome_join_status_counts: `{'unrecoverable_historical_gap': 4}`
+- opportunity_outcome_source_status: `loaded`
+- opportunity_source_quality_pass/sample_floor: `0` / `rolling_source_quality_pass_unique_opportunities_ge_20`
+- cumulative available/included dates: `71` / `3`
+- cumulative unique/pass/EV: `23` / `10` / `0.3435`
+- cumulative_runtime_reflection_status: `not_applicable_diagnostic`
+- cumulative_source_quality_exclusion_warnings: `['daily_rollup_missing_or_stale_dates_excluded', 'exact_attempt_time_outcome_coverage_incomplete']`
+- v_pw_source_counts: `{'missing': 427, 'not_applicable': 27905, 'ws_0b_latest_strength': 1205}`
+- v_pw_rest_fallback_rate_pct: `0.0`
+- v_pw_runtime_support_unusable_count: `29537`
+- ka10046_rest_fallback_quote_freshness_counts: `{}`
+- ka10046_strength_runtime_effect_true_count: `0`
+- ka10046_strength_missing_received_ts_count: `0`
+- ka10046_0b_strength_diff: avg=`0.0` max=`0.0` divergence20=`0` / `0` (`0.0`%)
+- market_data_signed_tape_state_counts: `{'buy_dominated': 953, 'insufficient': 1928, 'missing': 21051, 'mixed': 538, 'sell_dominated': 787, 'stale': 4280}`
+- market_data_signed_tape_sample_count_total: `12850`
+- market_data_rest_signed_tape_pressure_usable_true_count: `0`
+- rest_signed_trade_ticks_row_count: `0`
+- rest_signed_trade_ticks_source_counts: `{}`
+- latency_true_ofi_direct_canary_signed_tape: sample_total=`6798` net_buy_volume_sum=`68075` sell_dominated=`332` latest_single_sell_dominated=`547`
+- latency_true_ofi_direct_canary_signed_tape_latest_side_counts: `{'BUY': 816, 'SELL': 547, 'missing': 28174}`
+- latency_true_ofi_direct_canary_tape_block_reason_counts: `{'missing': 28174, 'signed_tape_sell_dominated': 332, 'tape_support_ok_missing_pressure': 1031}`
+- tick_aggressor_source_counts: `{'kiwoom_0b_signed_trade_volume': 1979, 'missing_aggressor_side': 175, 'price_change_heuristic': 105}`
+- tick_trade_value_source_counts: `{'1313': 1979}`
+- tick_trade_value_1313_missing_rate_pct: `0.0`
+- trade_volume_source_counts: `{'15_abs': 1979}`
+- trade_volume_1030_1031_vs_15_mismatch: `1979` / `1979` (`100.0`%)
+- kiwoom_0b_latest_stock_count: `514`
+- kiwoom_0b_trade_value_source_counts: `{'1313': 28}`
+- kiwoom_0b_1313_missing_rate_pct: `0.0`
+- kiwoom_0b_trade_volume_source_counts: `{'15_abs': 28}`
+- kiwoom_0b_1030_1031_vs_15_mismatch: `28` / `28` (`100.0`%)
+- ka10003_buy_dominance_observation_source_counts: `{}`
+- ka10003_buy_dominance_observation_trade_value_source_counts: `{}`
+- ka10003_buy_dominance_observation_inside_spread_count: `0`
+- ka10003_buy_dominance_observation_split_vs_15_mismatch: `0` / `0` (`0.0`%)
+- avg_ask_sweep_score: `51.5`
+- avg_post_sweep_hold_score: `50.35`
+- avg_bid_replenishment_score: `56.232`
+- max_vi_proximity_risk: `40`
+- warnings: `['diagnostic_contract:evaluation_venue_missing_or_conflicting', 'diagnostic_contract:evaluation_anchor_contract_missing', 'clean_baseline:daily_rollup_missing_or_stale_dates_excluded', 'clean_baseline:exact_attempt_time_outcome_coverage_incomplete']`
+- code_improvement_order_count: `2`
+- top_code_improvement_orders: `[{'order_id': 'order_microstructure_v3_evaluation_anchor_contract_missing', 'title': 'Microstructure diagnostic contract: evaluation_anchor_contract_missing', 'route': 'instrumentation_order', 'improvement_type': 'source_quality_contract_gap'}, {'order_id': 'order_microstructure_v3_evaluation_venue_missing_or_conflicting', 'title': 'Microstructure diagnostic contract: evaluation_venue_missing_or_conflicting', 'route': 'instrumentation_order', 'improvement_type': 'source_quality_contract_gap'}]`

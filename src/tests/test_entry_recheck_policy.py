@@ -117,6 +117,38 @@ def decide(hist=None, evidence=None, previous=None):
     )
 
 
+@pytest.mark.parametrize("latest_quality_pass", [False, True])
+def test_rolling_current_contract_history_recovers_without_prior_live_economics(
+    latest_quality_pass,
+):
+    old_history = history(dates=("2026-09-07", "2026-09-08", "2026-09-09"))
+    old_history[0]["source_quality_pass"] = False
+    no_live_outcomes = exact(
+        armed=0, submitted=0, completed=0, paired=0, ev=None, net=None
+    )
+    blocked = decide(old_history, no_live_outcomes)
+    assert blocked["history_complete"] is True
+    assert blocked["history_source_quality_pass"] is False
+    assert "drought_history_source_quality_gap" in blocked["stop_reasons"]
+    assert blocked["desired_enabled"] is False
+    assert blocked["controller_state"]["stop_latched"] is False
+
+    next_history = old_history[1:] + history(dates=("2026-09-10",))
+    next_history[-1]["source_quality_pass"] = latest_quality_pass
+    recovered = decide(next_history, no_live_outcomes, blocked["controller_state"])
+    assert recovered["expected_source_dates"] == [
+        "2026-09-08", "2026-09-09", "2026-09-10"
+    ]
+    assert recovered["history_source_quality_pass"] is latest_quality_pass
+    assert recovered["desired_enabled"] is latest_quality_pass
+    assert (
+        "drought_history_source_quality_gap" in recovered["stop_reasons"]
+    ) is (not latest_quality_pass)
+    assert recovered["intraday_escalation_allowed"] is False
+    # The expired invalid day is not rewritten to manufacture a valid window.
+    assert old_history[0]["source_quality_pass"] is False
+
+
 def two_scope_case(krx=(10, 0.1, 100), nxt=(10, -0.1, -100)):
     hist = history()
     for day in hist:

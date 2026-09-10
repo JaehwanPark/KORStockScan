@@ -9,6 +9,10 @@ quantity guards.
 
 ## Official Kiwoom Reference Gate
 
+Adaptive-exit group clock follow-up at `2026-09-10T15:51:49+09:00`: upstream HEAD remains `234560d213acd8871ae344b5481aecd2f30287fa`. The official [1h portal guide](https://openapi.kiwoom.com/m/guide/apiguide/14/1h) identifies FID9068 as static/dynamic VI type (1/2), not activation/release state; FID1223/1224 are activation/release HHmmss timestamps. This supplements the earlier packaged-spec description gap, not permission to infer state from9068. Packet fields alone do not certify current collection continuity, complete halt history or a live clock. [Group receipt-only consumer and remaining source/service boundary](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#26-group-시계-결손의-주문-전환-차단과-기존-종료-유지). No wire/parser/auth/REG changes, additional subscription, or actual account/API calls were made.
+
+Adaptive-exit clock-gap reconciliation review at `2026-09-10T14:37:26+09:00`: upstream HEAD `234560d213acd8871ae344b5481aecd2f30287fa`, `kiwoom/specs.py`, `kiwoom/core/client.py`, packaged spec request/response for `kt00007`/`ka10075`/`kt10003`, and their PRD/MOCK Postman requests were inspected; `kiwoom_docs` is absent from this tree. [Scoped receipt and unchanged protocol/authority boundaries](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#24-시계-원천-결손과-원-주문-receipt-only-종료-연결). Unknown halt duration permits existing exact receipt reconciliation only, not a fabricated zero duration or any new order/cancel. No wire/parser/auth/REG changes or actual API calls were made.
+
 The official upstream implementation reference is
 [`Kiwoom-Securities/Kiwoom-REST-API`](https://github.com/Kiwoom-Securities/Kiwoom-REST-API).
 Initial registration was verified at `2026-07-26T19:28:13+09:00` against
@@ -58,6 +62,36 @@ paths, and retrieval time in the change/review evidence. Verify at least:
    stale/conflict, and hard-safety guards.
 
 ### 2026-09-09 Adaptive Exit Owned SELL Adapter Reference
+
+9/10 후속 [기한 경과 BUY terminal-only 복구 §18](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#18-확인-기한-경과-buy의-bounded-terminal-only-복구):12:31:20 KST 공식 HEAD/checkout SHA `234560d213acd8871ae344b5481aecd2f30287fa`·spec/core/packaged `kt00007/ka10075/kt10003` 전 request/response 필드·Postman PRD/MOCK를 재확인했다. 원 확인 기한 이후는 독립 명시적 조회 bound 안에서 기존 dated/current BUY·양수확정C/가격 proof만 재사용한다. 새 취소/원 deadline 연장·query cap 상향·현재 부재의 과거 terminal 정규화·실제 auth/API/계좌 호출은 없다.
+
+9/10 후속 [NXT F0/SOR handoff §17](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#17-nxt-무체결-종료와-기존-sor-fallback-연결):11:59:57 KST 공식 HEAD/checkout SHA `234560d213acd8871ae344b5481aecd2f30287fa`·spec/core/packaged `kt10000/kt10003/kt00007/ka10075`·Postman PRD/MOCK를 재확인했다. 원 NXT BUY/양수 취소 child terminal과 새 SOR BUY를 독립된 dated 주문으로 보존한다. 기존 `/api/dostk/ordr` normal limit `trde_tp=0`·양수 수량/가격·exact route를 사용하며 ACK는 fill이 아니다. 실제 API/계좌 호출·시장가/취소0·인증 retry/한도 상향은 없다.
+
+9/10 후속 [episode 부분체결 BUY §16](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#16-독립-episode-부분체결-buy-취소와-원-target-연결):11:33:21 KST 공식 HEAD/checkout SHA `234560d213acd8871ae344b5481aecd2f30287fa`·spec/core/packaged `kt10003/kt00007/ka10075`·Postman PRD/MOCK를 재확인했다. BUY 가격 포함 terminal-cancel 계약은 exact Q=F+양수확정C/child 확인시각·현재 부재와 F>0의 단일 양수 cntr_uv를 결속한다. F0 가격은 null이며 단가를 총금액/평균원가/비용으로 확대하지 않는다. 기존 양수 수량 cancel·side2/dated/current/route/continuation만 사용하고 실제 계좌/새 API·취소0/재시도·한도 상향은 없다.
+
+9/10 후속 [episode full BUY 가격 대사 §15](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#15-독립-episode-전량체결-sibling-연결):11:07:51 KST 동일 공식 SHA `234560d213acd8871ae344b5481aecd2f30287fa`·spec/core/packaged `kt00007/ka10075/kt10003`·Postman PRD/MOCK를 재확인했다. 새 read-only full BUY 계약만 exact F=Q/R=0·descendant 부재·단일 양수 `cntr_uv`를 요구한다. 원 단위 체결단가를 정산 금액/비용이나 실제 체결시각으로 추정하지 않는다. partial/cancelled/가격 충돌·전일은 이 계약으로 해소하지 않으며 새 API/취소0/재시도·실계좌 호출은 없다.
+
+9/10 최신 [BUY 취소/late fill §14](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#14-pending-buy-취소와-late-fill의-전체-청산-연결):10:30:52 KST 동일 공식 SHA `234560d213acd8871ae344b5481aecd2f30287fa`·spec/core/packaged `kt10003/kt00007/ka10075`·Postman PRD/MOCK를 대사했다. 별도 BUY-cancel adapter만 `sell_tp=2/trde_tp=2`로 조회하고 같은 original BUY/route/양수 cncl_qty의 취소를 사용한다. Q=최종F+확정C 및 child 양수 확인/시각·dated/current 대사 뒤 BUY 전용 proof를 원자 저장하며 SELL proof와 섞지 않는다. NEW BUY·0취소·write retry·한도 상향/실제 API·계좌 호출은 없다. 상세 consumer/잔여 복구는§14를 따른다.
+
+9/10 최신 [whole EXIT 중재 §13](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#13-원-정책-whole-target-exit와-runner-단일-writer-중재)은 기존 ordinary 지정가/양수 cancel wire를 재사용한다.10:03:46 KST upstream HEAD `234560d213acd8871ae344b5481aecd2f30287fa`·spec/core/packaged4 API/Postman PRD·MOCK를 재대사했다. 원 target/runner와 모든 부분·전체 취소 child의 양수 확인량·실제 체결합을 닫은 closed census hash/동일 owner 잔량만 single-use pooled successor에 허용한다. ACK/0 확인/거절은 terminal이 아니며 공통 호출 한도·continuation/parser는 변경하지 않았다. 실제 auth/API/주문·기동은 실행하지 않았다.
+
+9/10 [group 원 owner 연결 §12](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#12-group-session과-실제-위젯-원장-종료-연결)은 같은 adapter/registry proof를 실제 위젯의 frozen group session·동일 잠금/state·전체 terminal 원장으로 연결한다.09:33:00 KST 공식 HEAD `234560d213acd8871ae344b5481aecd2f30287fa`의 spec/core/packaged4 API/Postman PRD·MOCK를 재대사했다. 새 wire/parser/한도 변경이나 실제 API·주문 실행 없이, 수량·ordinary 주문별 receipt·비용 null/실제 lot 귀속 경계를 유지했다. actual launcher/승인/source 서비스는 아직 공급하지 않았다.
+
+9/10 [bounded runner 후속 §11](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#11-bounded-runner-후속-generation과-전체-종료-연결)은 같은 원 SELL/양수 취소 child terminal proof로 확인한 `Q-F`만 명시적 다음 generation에 넘긴다. 새 가격/source와 기존 전체 guard는 원장 예약 전/후에 별도 검증하며 원 SELL 종료만으로 자식·잔량을 추정하지 않는다.09:13:30 KST upstream HEAD `234560d213acd8871ae344b5481aecd2f30287fa`의 spec/core/packaged4 API/Postman PRD·MOCK를 재대사했다. 기존 request/parser/공통 한도는 그대로이고 실제 API/기동은 실행하지 않았다.
+
+9/10 [전체 활성화 목표 후속 §9](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#9-전체-활성화-목표-후속-trailing취소-자식-종료-통합)는 `kt00007` positive `cnfm_qty/cnfm_tm`와 dated/current 원 SELL `Q=F+prior C+confirmed C`, `R=0`를 함께 검증해 terminal cancel child를 원자 기록한다. late fill 뒤 `0<confirmed<=requested`는 허용하지만 zero 확인/ACK·미정의 거절은 추정하지 않는다. 기존 partial proof 이후 남겨둔 target가 종료되면 같은 proof/해제량과 현재 원천을 다시 대사하여 runner 소비를 유지한다. 원 terminal만으로 cancel child를 닫지 않으며 실제 widget/episode/TTL consumer에 연결한다. 구현 전 공식 spec/core/packaged/Postman을 열람했고09:06:49 KST HEAD 재조회도 동일 `234560d213acd8871ae344b5481aecd2f30287fa`다. wire endpoint/header/body·연속조회/공통 상한을 변경하거나 실제 주문/API를 실행하지 않았다.
+
+2026-09-10 group terminal 후속은 [리뷰 §7~§8](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#7-조합-선택-위임-후-운용-방향과-group-수량-종료-구현)을 따른다. 구현 전 upstream/spec/core/Postman을 열람하고08:31:19 KST 재조회에서도 SHA `234560d213acd8871ae344b5481aecd2f30287fa`를 확인했다. 기존 kt00007/ka10075 exact dated/current proof·부분취소 proof를 group 전체 수량 terminal consumer에서 재사용하며 REST 요청/parser/limit는 변경하지 않는다. registry의 새 position intent census는 로컬 read-only이며 broker 잔고/미체결 조회나 SELL 권한이 아니다. 실제 주문/정산/API 호출 검증은 수행하지 않았다.
+
+- Pre-release group decision follow-up retrieved upstream at
+  `2026-09-10T07:40:53+09:00`, unchanged SHA
+  `234560d213acd8871ae344b5481aecd2f30287fa`. Inspected `kiwoom/specs.py`,
+  `kiwoom/core/client.py`, packaged `kt10003/kt00007/ka10075` and Postman
+  production/demo envelopes; `kiwoom_docs` remains absent. The optional
+  decision-book consumer delegates to the existing positive-quantity cancel
+  adapter, with latest-receipt and quote-age checks before/after reservation.
+  No wire/parser/continuation/retry change or actual API call was made.
+  See [group decision review](audit-reports/2026-09-10-adaptive-exit-group-decision-review.md).
 
 - First group-runner write/TTL follow-up rechecked upstream `main` at
   `2026-09-09T19:29:04+09:00`, SHA

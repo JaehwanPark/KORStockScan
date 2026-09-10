@@ -3579,6 +3579,7 @@ def _evaluate_scalp_profit_stagnation_exit(
     now_ts: float,
 ) -> dict:
     from src.engine.scalping.strategy_owner_components import PROFIT
+    from src.trading.order.profit_stagnation import stagnation_window
 
     owner_state = _strategy_owner_component_state(stock)
     owned = (
@@ -3636,14 +3637,18 @@ def _evaluate_scalp_profit_stagnation_exit(
         stock.get("profit_stagnation_anchor_profit"), profit_rate
     )
     anchor_peak = _safe_float(stock.get("profit_stagnation_anchor_peak"), peak_profit)
-    profit_move = abs(profit_rate - anchor_profit)
-    peak_improve = peak_profit - anchor_peak
-
-    if (
-        started_at <= 0
-        or profit_move > max_profit_move
-        or peak_improve > max_peak_improve
-    ):
+    result = stagnation_window(
+        profit=profit_rate,
+        peak=peak_profit,
+        now=now_ts,
+        started=started_at,
+        anchor_profit=anchor_profit,
+        anchor_peak=anchor_peak,
+        min_sec=min_sec,
+        max_profit_move=max_profit_move,
+        max_peak_improve=max_peak_improve,
+    )
+    if result.get("reason") == "anchor_reset":
         _mutate_stock_state(
             stock,
             set_fields={
@@ -3652,43 +3657,12 @@ def _evaluate_scalp_profit_stagnation_exit(
                 "profit_stagnation_anchor_peak": float(peak_profit),
             },
         )
-        return {
-            "should_exit": False,
-            "reason": "anchor_reset",
-            "elapsed_sec": 0,
-            "anchor_profit": float(profit_rate),
-            "anchor_peak": float(peak_profit),
-            "profit_move": 0.0,
-            "peak_improve": 0.0,
-            **score_prior_fields,
-        }
-
-    elapsed_sec = max(0, int(float(now_ts) - started_at))
-    if elapsed_sec >= min_sec:
-        return {
-            "should_exit": True,
-            "exit_rule": "scalp_profit_stagnation_time_exit",
-            "sell_reason_type": "PROFIT_STAGNATION",
-            "elapsed_sec": elapsed_sec,
-            "anchor_profit": anchor_profit,
-            "anchor_peak": anchor_peak,
-            "profit_move": profit_move,
-            "peak_improve": max(0.0, peak_improve),
-            "min_sec": min_sec,
-            "max_profit_move": max_profit_move,
-            "max_peak_improve": max_peak_improve,
-            **score_prior_fields,
-        }
-    return {
-        "should_exit": False,
-        "reason": "waiting",
-        "elapsed_sec": elapsed_sec,
-        "anchor_profit": anchor_profit,
-        "anchor_peak": anchor_peak,
-        "profit_move": profit_move,
-        "peak_improve": max(0.0, peak_improve),
-        **score_prior_fields,
-    }
+    if result["should_exit"]:
+        result.update(
+            exit_rule="scalp_profit_stagnation_time_exit",
+            sell_reason_type="PROFIT_STAGNATION",
+        )
+    return {**result, **score_prior_fields}
 
 
 def _evaluate_scalp_low_profit_stagnation_hard_exit(

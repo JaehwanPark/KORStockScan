@@ -26,6 +26,7 @@
   - 9/10 장후 인계: 같은 ID/Due/Acceptance를9/11 실행 파일로 이관했다. [장후 최종 대사](../audit-reports/2026-09-10-postclose-monitoring-resume-review.md). 예약 경로/pin의 사전 검증이며 미래 PID/신규 entry 성공은 not_yet_due다.
 
 - [ ] `[KRXDaily100NextDayStartupAcceptance0911] KRX 일일100 정책과 다음날 실제 기동 경로 확인` (`Due: 2026-09-11`, `Slot: PREOPEN`, `TimeWindow: 07:30~08:05`, `Track: RuntimeStability`)
+  - 9/11 최신 소스 대사: [전수 점검](../audit-reports/2026-09-11-full-recommendation-deployment-audit.md). main 정체청산 adapter의 공통 함수 추출은 Git 통합 대상이나 선택939d90f6에는 미배포이며 의존성 `src/trading/order/profit_stagnation.py`도 필요하다. 기존 연산 parity 검증 완료/현행 기동 필수 blocker 아님. 배포 교체와07:35 정책·07:55 PID 수용을 분리한다.
   - Latest deployment 2026-09-10 23:51 KST: 공통 수리 배포 `939d90f6`/`postclose-repaired-20260911`, cron9/공유 경로와 V2.14 승인 코드10개 hash 일치. [배포 근거](../audit-reports/2026-09-10-approved-additions-deployment.md). 9/11 PREOPEN activation/env·07:55 실제 PID는 예정 전이며 본 ID OPEN 유지.
   - 경로 수리 리뷰: [9/10 routing review](../audit-reports/2026-09-10-runtime-release-routing-review.md). start env/log 보존·실제 cron 명령 판별·조회 lock 부작용을 보완했다. workspace bootstrap 수정과 선택 b665e0a3/실제 PID 세대를 구분하며, cron 재설치·선택 교체·매매 재기동 없이 내일 기존 예약/정책 소비를 확인한다.
   - 장후 handoff: [장후 지시문 §8.8](../postclose-tuning-result-review-task-instructions.md#88-다음-거래일-preopen0755-기동-handoff)에 따라 선택 원장/root/commit·cron9행·실제 장후 worker 세대, 다음 거래일 후보/source hash·정책 blocker·미배포 수리/rollback을 기록한다. 장후 준비 확인은 다음날 PID 성공이나 재기동 승인으로 대신하지 않는다. 이 문서 현행화에서는 실제 장후/배포/기동을 실행하지 않았다.

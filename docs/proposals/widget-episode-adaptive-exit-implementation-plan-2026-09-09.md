@@ -1,10 +1,36 @@
 # 위젯·에피소드 적응형 청산 상세 구현계획
 
-작성: `2026-09-09 KST` · 최신 상태: `PARTIAL_ALL_SCOPE_IMPLEMENTATION` · 실거래 활성화: `PENDING_APPROVED_ENVELOPE_AND_INTEGRATION`.
+작성: `2026-09-09 KST` · 현행 범위(9/10): `MINIMAL_PROFIT_STAGNATION_PLAN` · 계산/기계 owner·정책 로딩·서비스 연결: `IMPLEMENTED` · 운영 변경: 다른 세션.
+
+현행 후속은 [§32 실제 owner/service 연결](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#32-최소-보조청산-실제-owner와-서비스-연결)이다. **기계 보조청산은 비용·예상슬리피지 후 양수 구간**, main 기존1% 등은 불변이다. 원 목표 취소확정→양수 보호 지정가/잔량 원 목표 복구와 현재 서비스의 정책 핀 로딩·잠금을 연결했다. 다른 세션의 최초 배포/설정이 없으면 OFF이며 source-only 연구가 켜지게 하지 않는다. 주문번호 유실·익일 current-ledger 결손 등 정확한 receipt가 없는 복구는 자동 추정하지 않는다. 이 예외와 자연/경제성 acceptance를 새 개발 루프로 확대하지 않는다.
+
+현재 구현방안과 실제 삭제 범위는 [9/10 리뷰 §30](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#30-수익-정체-보조청산-최소안과-불필요-연결-삭제), 이후 변경은§31을 따른다. **기존 목표가 유지 + 양수 순수익권 정체 후보 + 원 owner 취소/잔량/체결 대사**만 남긴다. 아래 WP0~WP9·전체 활성화/envelope·부분 trailing·시간/손실 청산은 과거 설계이며 이번 개발 체크리스트가 아니다. §29의 factory 연결 및 §22의 live WS reader는 삭제됐고 공유 연구 계산·주문 복구는 보존됐다. 새 확률모형·손절·강제시간청산·AI 호출·연구 grid는 추가하지 않는다.
 
 상위 [검토 제안서](widget-episode-adaptive-exit-plan-2026-09-09.md)의 시간/진행률 조기청산과 빠른 접근 일부 잔량 trailing을 구현 가능한 작업 단위로 분해한다. 최초 요청은 상세계획 작성이었고, 이후 사용자가 코드 구현·반복 리뷰를 지시했다. 실제 완료/미완료 경계는 아래 후속 구현 상태와 [구현 리뷰](../audit-reports/2026-09-09-widget-episode-adaptive-exit-implementation-review.md)를 우선한다. 본문의 WP0~WP9·신규 schema/경로는 전체 목표 설계이며, 일부 코드 존재를 전체 구현·자동 적용 완료 또는 producer native 추천 ID로 해석하지 않는다.
 
 ### 후속 구현 상태
+
+9/10 [중간 점검·개발/운영 분리 §19](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#19-중간-점검과-개발운영-세션-분리)를 현재 실행 우선순위로 사용한다. 이 세션은 **정책/독립 validator·publisher/loader 코드→실제 서비스 공급/신규 편입 코드→선택 정책 필수 lifecycle·익일 잔량 관리→검증·인계**를 진행하며 운영 배포/재기동/설정 변경은 다른 세션에 남긴다. 안전 핵심은 유지하되 모든 legacy 자동 이관·과거 손익 완전 복원·미정의 정책 조합을 첫 활성화의 공통 gate로 추가하지 않는다. 전체 owner/profile 지원 목표·기존 보유 baseline carry·자연/경제성 별도 판정은 유지한다.
+
+최신 [초기 공통 승인 handoff §25](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#25-기존-공통-승인-handoff와-초기-발행의-직접-연결)는 기존 검증기/발행기의 재사용과 native ID→기존 공통 CLI/승인/08:00 이전 handoff→로더의281 PASS다. 초기 전용 trusted dispatch이며 자동 유지/R6 권한이 아니다. 외부 고정 context와 실제 service 실행준비 근거의 공급은 필요하고 전역 registry·운영 승인/정책 발행은 없다. 다음 필수 개발은 clock/session·원 safety/승인 공급과 실제 service 연결→group 승인·편입/필수 익일 lifecycle→동일 세대 통합 검증/인계다. §24의 원 주문 receipt-only·시계 gap 처리는 유지한다. R6 기록 수집 준비와 최초 활성화 후 효과/자동 유지·확대를 구분하며 후자를 최초 기동 전에 요구하지 않는다. 배포·재기동·운영 설정은 다른 세션이며 전체 활성화/자연/경제성은 OPEN이다. 아래 최신/미지원 표시는 당시 이력이다.
+
+9/10 최신 [기한 경과 BUY terminal-only 복구 §18](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#18-확인-기한-경과-buy의-bounded-terminal-only-복구)는 원 deadline 고정·독립 조회 bound/권한→같은 날의 최종 BUY/취소 proof→원 target 또는 NXT F0/SOR consumer를 연결한다. 새 취소/기한 연장·재시작 budget 초기화는 없고 테스트 숫자는 승인값이 아니다. 최신 검증 상태는§18, 아래§17의 기한 경과 전체 미지원은 이전 범위다. legacy/전일/거절·0확인·복구 상한 밖/선행 target 복구, 연구 whole/선택적 정책·독립 envelope/validator/발행/enrollment/실제 launcher 및 자연/정산 경제성은 남는다. 같은0910 OPEN/최종 실계좌 사용자 실행 경계를 유지한다.
+
+9/10 후속 [NXT F0→기존 SOR fallback §17](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#17-nxt-무체결-종료와-기존-sor-fallback-연결)는 §16의 partial/expired BUY→최종 F/C·체결단가→그 leg 원 target에 더해, 같은 날 오전 NXT 무체결 terminal 증거 보존→원 SOR 창/기존 guard→단일 후속 BUY/원 target을 연결한다. frozen session/두 leg 수량·원 정책을 유지한다. legacy·전일·거절/0확인/기한 경과 복구, 연구 whole/선택적 정책 및 실제 envelope/validator·발행/enrollment/launcher·자연/정산 경제성은 미완료다. 최신 검증은§17, 아래 미지원 표시는 당시 범위의 기록이며 현재 자연 owner는 같은0910 OPEN/최종 live 실행은 사용자 영역이다.
+
+9/10 후속 [독립 episode 전량체결 sibling §15](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#15-독립-episode-전량체결-sibling-연결)는 미등록 다른 leg의 자연 full BUY/가격과 그 leg의 원래 target을 연결한다. 두 target/수량/연구 lot를 합치지 않는다. 부분체결·취소/거절·전일 복구·연구 whole/선택적 정책과 실제 envelope/validator/발행/enrollment/launcher·자연/정산 경제성은 미완료다. 최종 검증은§15에 따르며 같은0910 OPEN/최종 사용자 live 실행 경계를 유지한다.
+
+9/10 최신 [pending BUY/late fill §14](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#14-pending-buy-취소와-late-fill의-전체-청산-연결)는 원 위젯 group의 별도 pending BUY 취소/최종 수량→whole 잔량→ordinary archive를 연결한다. frozen lot/연구/기존 수량 cap과 신규 BUY 금지를 유지한다. baseline 선행 target 취소·독립 episode/전일·거절 복구, 연구 whole/선택적 정책과 실제 envelope/validator·발행/enrollment/launcher·자연/정산 경제성은 미완료다. 운영 기동 없이 같은0910 OPEN을 유지한다.
+
+9/10 최신은 [원 정책 whole EXIT 중재 §13](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#13-원-정책-whole-target-exit와-runner-단일-writer-중재)다. §12의 실제 group owner/일반 원장 연결 위에 기존 entry policy의 final EXIT/명시적 force-flat을 sticky whole journal로 보존하고 runner 병렬 writer를 차단했다. 모든 기존 SELL/취소 child terminal→실제 pooled 잔량/제한된 TTL 후속→일반 archive까지 코드 연결하며 독립 two-leg target은 합산하지 않는다. 아래 원 정책 group final EXIT/force-flat 전체 미구현은 이전 이력이다. 연구 whole/선택적 결정·BUY/late fill/전일·거절 복구, 실제 source/clock/독립 envelope/validator·발행/enrollment/launcher와 자연/정산 경제성은 미완료다. 실제 계좌/기동 없이 기존0910 OPEN을 유지한다.
+
+최신 [9/10 리뷰 §11](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#11-bounded-runner-후속-generation과-전체-종료-연결)은 TTL 뒤 실제 잔량의 명시적 bounded 다음 runner generation·전체 체결합 terminal까지 기존 executor에 연결했다. 기본1/지원상한3은 live 선정값이 아니며 별도 fresh-price/원 의도 validator와 모든 guard가 필수다. ACK 불명확/저장·예약 실패는 재전송하지 않고 상한 소진 뒤 잔량 owner를 유지한다. 아래 다음 runner 미구현은 이전 이력이다. 일반 owner archive/whole-target·혼합/BUY·전일 복구·실제 validator/발행/enrollment/launcher·자연/경제성/최종 live는 여전히 미완료로 구분한다.
+
+9/10 전체 활성화 목표 후속 [§9](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#9-전체-활성화-목표-후속-trailing취소-자식-종료-통합)는 confirmed partial release→실제 trailing arm/추적→첫 SELL, 원 target 선행 완료 후 runner 소비, TTL/단일 lot cancel child의 양수 확인·원자 종료 proof를 연결했다. 실제 위젯/공통 episode 소비도 root만 종료한 ACK를 완료로 처리하지 않는다. 아래 pre/post-release·TTL 전체 미구현 표현은 이전 이력이다. **group 일반 owner handoff·whole-target/선택적/다음 runner generation·pending BUY/전일 복구와 실제 validator/발행/enrollment/launcher는 남아 있다.** 전체 활성화 목표는 active이며 개별 검증을 완료로 대체하지 않는다. source9/9 최초 lot/path 결손·후보0/경제성 미평가를 유지하고 최종 live 실행은 사용자 실행으로 분리한다.
+
+9/10 선택 위임 후 [운용 조합·group 수량 종료 §7](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md#7-조합-선택-위임-후-운용-방향과-group-수량-종료-구현)은 시간·진행률+일부 lot trailing/신규 편입/지정가/잔량 지속 관리 방향을 채택했다. 같은 선택 질문을 반복하지 않으며 기존 연구 숫자는 검증된 live 수치가 아니다. 원 target/첫 runner exact 전체 수량 종료·원자 receipt/재소비를 연결했지만 일반 owner archive/다음 신호, TTL/잔량/whole-target/전일 복구와 실제 활성화 연결은 남아 있다. 아래 이전 전체 terminal 미구현 문장은 해당 후속 범위에서 갱신된다.
+
+9/10 최신 후속은 [group 판단 receipt 리뷰](../audit-reports/2026-09-10-adaptive-exit-group-decision-review.md)다. 취소 전 lot별 기존 판단을 group에 결속하고 runner depth 중복 사용 방지→원자 최신 판단/한 번의 연장·veto 보존→기존 첫 부분취소 consumer를 opt-in으로 연결했다. 아래§16의 판단 producer 전체 미구현은 이 범위에서 갱신됐으며, 부분취소 이후 실제 trailing/SELL 판단·whole-target/잔량 복구·group 전체 terminal/owner handoff와 최초 승인/validator·PREOPEN/enrollment/launcher는 남아 있다. 연구 false/exclusion·실제 정책/PID/주문은 유지한다. 현재 후속 owner는 9/10 checklist의 기존 `MachineLifecycleTurnoverObjectiveFollowup0910`이며 0909는 이전 이력이다.
 
 - 사용자는 **전체 종목·전체 프로필 코드 지원/연구**와 **후보 자동 산출, 승인된 범위에서만 자동 적용**을 지시했다. 첫 연구 scope를 다시 선택하도록 요구하지 않는다. 실제 숫자 envelope·기존 보유 이관·현재 프로세스 재기동을 승인한 것으로 확대하지 않는다. 최신 근거는 [전체 scope 보완 리뷰](../audit-reports/2026-09-09-widget-episode-adaptive-exit-all-scope-review.md)다.
 - WP2는 조기청산·trailing·결합의 세 모드와 명시적 runner lot 배분을 지원한다. 지정되지 않은 lot을 전량 trailing으로 바꾸지 않으며 합산 target의 부분취소 미지원은 연구에서 별도 격리한다.

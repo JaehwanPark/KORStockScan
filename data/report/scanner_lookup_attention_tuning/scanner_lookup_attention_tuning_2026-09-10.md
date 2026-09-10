@@ -1,0 +1,26 @@
+# Scanner lookup-attention tuning — 2026-09-10
+
+- decision: `hold_sample`
+- base completed/dates: `4/2`
+- base candidate/control EV: `None` / `0.2550475`
+- base EV uplift: `None`
+- economic contract: `scanner_lookup_attention_small_net_v1`; candidate/control robust SE: `None` / `0.48382019830101924`
+- economic rule: positive candidate net and candidate/control increment after 2-SE robustness margins; no fixed minimum uplift; not a causal confidence interval.
+- natural acceptance / bounded maintenance: `{'schema': 'scanner_lookup_attention_natural_acceptance_v3', 'metric_role': 'funnel_count', 'decision_authority': 'diagnostic_only_no_runtime_mutation', 'runtime_effect': False, 'allowed_runtime_apply': False, 'valid_observation_dates': ['2026-09-02', '2026-09-03', '2026-09-04', '2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10'], 'valid_observation_day_count': 7, 'bounded_review_after_valid_days': 20, 'maintenance_calendar_deadline': '2026-10-02', 'calendar_review_due': False, 'maintenance_review_is_runtime_disable': False, 'maintenance_review_due': False, 'next_action': 'trace_exact_candidate_conversion_via_buy_funnel_before_waiting', 'blocking_stage': 'candidate_to_full_completed_conversion_unproven', 'full_completed_per_valid_source_day': 0.5714285714285714, 'net_per_valid_source_day_krw': 53.770807142857144, 'net_scope': 'completed_full_only_excludes_open_missing_and_partial', 'current_date_policy_bound_completed_count': 0, 'pid_consumption_status': 'not_observed', 'incremental_profit_status': 'not_proven_observational_cohorts_not_causal_pairs', 'cost_basis': 'actual_fill_prices_with_fixed_comparison_fees_and_tax_not_broker_cost_reconciliation', 'missing_capital_time_is_diagnostic_only': True, 'approval_feasibility': {'base_book': {'status': 'blocked_missing_evidence', 'current_completed': {'candidate': 0, 'control': 4}, 'sample_floor_deficit': {'candidate': 10, 'control': 6}, 'conditional_completed_required': None, 'finite_eta_trading_days': None, 'eta_reason': 'future_unique_fill_terminal_inflow_and_stable_day_clusters_not_proven', 'assumption': 'proportional_sample_growth_fixed_means_dispersion_mix_not_a_forecast', 'approval_gate_changed': False}, 'forward_holdout_book': {'status': 'blocked_missing_evidence', 'current_completed': {'candidate': 0, 'control': 0}, 'sample_floor_deficit': {'candidate': 10, 'control': 10}, 'conditional_completed_required': None, 'finite_eta_trading_days': None, 'eta_reason': 'future_unique_fill_terminal_inflow_and_stable_day_clusters_not_proven', 'assumption': 'proportional_sample_growth_fixed_means_dispersion_mix_not_a_forecast', 'approval_gate_changed': False}}, 'common_source_day_economics': {'candidate': {'completed_count': 0, 'completed_per_valid_source_day': 0.0, 'net_per_valid_source_day_krw': None, 'zero_completed_source_day_count': 7, 'comparison_role': 'observational_not_causal_or_equal_capital_policy_comparison'}, 'control': {'completed_count': 4, 'completed_per_valid_source_day': 0.5714285714285714, 'net_per_valid_source_day_krw': 53.770807142857144, 'zero_completed_source_day_count': 5, 'comparison_role': 'observational_not_causal_or_equal_capital_policy_comparison'}}, 'conversion_diagnostic_owner': 'buy_funnel_sentinel -> entry_recheck_drought_controller'}`
+- exact conversion receipt gaps (not actual veto counts): `{'entry_decision': 1448, 'submit': 1301, 'fast_precheck': 284, 'heavy_eval': 224, 'fill_or_terminal': 9}`
+- candidate net per capital-hour: `None`; missing duration remains null, not an approval blocker.
+- candidate/control observations: `131/3135`
+- candidate/control full-fill: `0/4`
+- resource allocation pair: `hold_sample` generations=`3` dates=`2` reordered=`2`
+- resolved marginal pairs/dates: `2/2`; missing observed labels=`0`
+- marginal snapshot net uplift / incoming return: `-3.11709658` / `-1.75696941` (source-only opportunity proxy, not real execution EV)
+- resource retention review: `collecting`; excluded partitions=`{}`
+- immutable base arm: `not_armed`
+- forward holdout completed/dates: `0/0`
+- post-apply status: `not_applicable_before_live_apply`
+- post-apply completed/dates: `0/0`
+- post-apply rollback: `False`
+- source quality/master: `pass` / `pass`
+- runtime handoff allowed: `False`
+- scope: same-priority-tier bounded score only; rollback bonus is 0.
+- automation: validated candidate -> next PREOPEN immutable exact-date receipt -> runtime; no additional operator approval. No receipt means zero bonus.

@@ -1,0 +1,1959 @@
+{
+  "schema_version": "postclose_two_pass_followup_ledger_v1",
+  "target_date": "2026-09-08",
+  "as_of_kst": "2026-09-08T23:57:29+09:00",
+  "status": "YELLOW_evidence_blocked",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "actual_order_submitted": false,
+  "broker_order_forbidden": true,
+  "previous_frozen_ledger": {
+    "path": "docs/audit-reports/2026-09-08-postclose-monitoring-intake-ledger.json",
+    "sha256": "ba0ad386d35d924a870c9e0996f7286d2c6d23bbd3b30967ee337a3c85a9459f",
+    "overwritten": false
+  },
+  "report": "docs/audit-reports/2026-09-08-implement-now-two-pass-followup.md",
+  "generation_id": "2026-09-08-5b2ea0c29812",
+  "generation_inputs": {
+    "source_hash": "804082546ae13aa4016e3b997f3311acb6c521fa0ecb4ea5171652a0c513d7c3",
+    "schema_version": 2,
+    "producer_contract_version": "code_improvement_workorder_producer_v6",
+    "max_orders": 12,
+    "include_swing": false
+  },
+  "source_inventory": [
+    {
+      "family": "code_improvement_workorder",
+      "path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+      "sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+      "generated_at": "2026-09-08T23:47:52+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": "2026-09-08-5b2ea0c29812",
+      "native_decision": null,
+      "authority": {},
+      "intake_row_count": 44
+    },
+    {
+      "family": "widget_collector_expansion_recommendation",
+      "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+      "sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+      "generated_at": "2026-09-08T22:15:21.091804+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": null,
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "authority": "widget_collector_expansion_recommendation_only"
+      },
+      "intake_row_count": 7
+    },
+    {
+      "family": "widget_symbol_signal_policy_research",
+      "path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+      "sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+      "generated_at": "2026-09-08T22:12:59+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "widget_signal_policy_candidates_ready",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "owner_contract": {
+          "authority": "widget_symbol_signal_policy_discovery_only",
+          "forbidden_cross_owner_actions": [
+            "read_other_owner_signal_as_widget_entry_or_exit",
+            "cancel_other_owner_order",
+            "sell_other_owner_quantity",
+            "reuse_other_owner_position_or_episode_state",
+            "mutate_low_price_two_leg_profile_policy_or_service"
+          ],
+          "order_ledger_namespace": "widget_symbol_auto_trade:<symbol>",
+          "owner": "widget_symbol_auto_trade",
+          "position_attribution": "own_filled_buy_quantity_only",
+          "state_namespace": "widget_symbol_auto_trade:<symbol>:<trade_date>"
+        }
+      },
+      "intake_row_count": 4
+    },
+    {
+      "family": "widget_symbol_runtime_policy_apply",
+      "path": "data/report/widget_symbol_runtime_policy_apply/widget_symbol_runtime_policy_apply_2026-09-08.json",
+      "sha256": "854d30841e12f6832e61dab19d68cdcb440d9e2689ada4616eb3ed3b621b0155",
+      "generated_at": "2026-09-08T22:13:04+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": null,
+      "authority": {
+        "runtime_effect": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "samsung_machine_entry_tuning",
+      "path": "data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_2026-09-08.json",
+      "sha256": "b0dfdc3500f1ce09ca001fdba7110deba7646515e34a57f500827f076f895bdd",
+      "generated_at": "2026-09-08T22:02:01+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "actual_machine_state_observation_collected_report_only; no_entry_threshold_or_runtime_change",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "low_price_two_leg_tuning",
+      "path": "data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-08.json",
+      "sha256": "4b86574c7f156a3558f95933e1f2550b7f9e392c077202293059f96b2d7a34b1",
+      "generated_at": "2026-09-08T22:42:33+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "profile_separated_actual_outcome_observation_only",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "low_price_two_leg_expanded_candidate_research",
+      "path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+      "sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+      "generated_at": "2026-09-08T21:24:54+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "authority": "lower_price_machine_candidate_recommendation_only"
+      },
+      "intake_row_count": 5
+    },
+    {
+      "family": "machine_microstructure_attribution",
+      "path": "data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-08.json",
+      "sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+      "generated_at": "2026-09-08T22:44:06.776081+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "partial_owner_or_micro_source_gap_base_tuning_unchanged",
+      "authority": {
+        "authority": {
+          "actual_order_submitted": false,
+          "allowed_runtime_apply": false,
+          "base_owner_tuning_continues_when_micro_missing": true,
+          "broker_order_forbidden": true,
+          "decision_authority": "postclose_diagnostic_only",
+          "runtime_effect": false
+        }
+      },
+      "intake_row_count": 1
+    },
+    {
+      "family": "machine_entry_timing_tuning",
+      "path": "data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_2026-09-08.json",
+      "sha256": "81245b395adeaf0fbc49e49e3ee017f0751514c10b389442a61494658bc7e291",
+      "generated_at": "2026-09-08T22:46:57+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "baseline_immediate_entry_carry_forward",
+      "authority": {
+        "runtime_effect": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "machine_microstructure_policy_approval",
+      "path": "data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-08.json",
+      "sha256": "2599833aa9ee47b31bd97b76a5f9442eb5f9a11be6f1b55ca6bd8c9cbd509080",
+      "generated_at": "2026-09-08T22:47:06+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "objective_followup_required",
+      "authority": {
+        "authority": {
+          "actual_order_submitted": false,
+          "broker_order_forbidden": true,
+          "runtime_apply_performed": false,
+          "runtime_effect": false
+        }
+      },
+      "intake_row_count": 0
+    }
+  ],
+  "counts": {
+    "intake_total": 61,
+    "implementation_requested_total": 9,
+    "nonimplementation_total": 52,
+    "eligible_runtime_effect_false_total": 9,
+    "user_authority_total": 0,
+    "invalid_or_missing_authority_total": 0,
+    "already_implemented_verified_eligible": 1,
+    "implemented_pass1": 0,
+    "implemented_pass2": 0,
+    "blocked_missing_evidence": 8,
+    "blocked_external_dependency": 0,
+    "eligible_actionable_open": 0,
+    "already_implemented_verified_nonrequest": 0,
+    "observed_no_patch": 28,
+    "deferred": 19,
+    "rejected": 3,
+    "blocked_missing_evidence_nonrequest": 2,
+    "blocked_external_dependency_nonrequest": 0,
+    "invalid_or_missing_authority_nonrequest": 0,
+    "implement_now_unaccounted_count": 0,
+    "intake_unaccounted_count": 0
+  },
+  "count_interpretation": "implemented_pass1/implemented_pass2 counters count fully closed native requests, not individual code patches. They remain zero because original source/root-cause acceptance is still evidence-blocked. Actual code implementation is separately recorded below and was performed in both passes.",
+  "pass_execution": {
+    "pass1": {
+      "actual_code_implementation": true,
+      "scopes": [
+        "strict_logger_boolean_receipt_parser",
+        "bounded_micro_diagnostic_provenance_and_consumer",
+        "pattern_actionability_producer_and_consumer"
+      ],
+      "workorder_generation_id": "2026-09-08-bb5364488849",
+      "temporary_max_orders": 24,
+      "selected_count": 31
+    },
+    "pass2": {
+      "actual_code_implementation": true,
+      "scopes": [
+        "native_bounded_and_source_quality_admission_taxonomy"
+      ],
+      "intermediate_workorder_generation_id": "2026-09-08-273235622393",
+      "final_canonical_generation_id": "2026-09-08-5b2ea0c29812",
+      "restored_original_max_orders": 12,
+      "selected_count": 25
+    },
+    "frozen_to_final": {
+      "new_native_ids": [],
+      "removed_native_ids": [],
+      "decision_changed_native_ids": [
+        "order_pattern_lab_ai_review_currentness_claude_small_net_generation_contract",
+        "order_pattern_lab_ai_review_currentness_pattern_lab_ai_review_contract"
+      ],
+      "source_row_count": 44,
+      "independent_owner_row_count": 17,
+      "unaccounted_count": 0
+    },
+    "new_provider_calls": 0,
+    "full_wrapper_reruns": 0,
+    "runtime_process_mutations": 0,
+    "fixed_point_status": "bounded_repairs_terminal_evidence_blocked_not_full_native_completion",
+    "eligible_actionable_open": 0,
+    "whole_implementation_complete": false,
+    "partial_repair_native_ids": [
+      "order_microstructure_v3_evaluation_venue_missing_or_conflicting",
+      "order_microstructure_v3_required_holding_payload_missing",
+      "order_scanner_funnel_executable_bbo_join",
+      "order_pattern_lab_ai_review_currentness_claude_small_net_generation_contract",
+      "order_pattern_lab_ai_review_currentness_pattern_lab_ai_review_contract"
+    ]
+  },
+  "diagnostic_result": {
+    "bbo": {
+      "full_census": 16073,
+      "scheduled_complete": 232,
+      "scheduled_receipt_gap": 24,
+      "bounded_not_admitted": 15159,
+      "source_quality_not_admitted": 657,
+      "admission_receipt_gap": 1,
+      "unaccounted_before": 914,
+      "unaccounted_after_pass1": 682,
+      "unaccounted_after_pass2": 25,
+      "exact_bbo_observed_episodes": 215,
+      "full_population_ev_extrapolation_allowed": false,
+      "historical_source_repaired": false
+    },
+    "micro": {
+      "venue_missing_or_conflicting": 100,
+      "required_holding_payload_missing": 116,
+      "provenance_cap_per_defect": 20,
+      "historical_source_repaired": false
+    },
+    "pattern": {
+      "original_response_hash": "c998439778b13a48d5a59d16f10c6b57fe73da7304119bb54b7cc89be4069992",
+      "original_response_preserved": true,
+      "provider_calls_used": 2,
+      "provider_calls_cap": 2,
+      "source_quality_resolved": false
+    }
+  },
+  "validation": {
+    "targeted_tests_passed": 395,
+    "targeted_suites": 8,
+    "python_compile": "pass",
+    "print_only_backlog_parser_exit": 0,
+    "print_only_backlog_task_count": 42,
+    "native_identity_conservation_source_pointer_decision_hash_validation": "pass",
+    "post_document_read_only_summary_and_drought_handoff": "pass",
+    "self_review_unresolved_findings_in_modified_scope": 0,
+    "native_source_acceptance_not_implied": true
+  },
+  "handoff": {
+    "strict_verifier_at": "2026-09-08T23:49:33+09:00",
+    "strict_verifier_status": "warning",
+    "summary_handoff": "pass",
+    "drought_canonical_handoff": "pass",
+    "missing_required_artifacts": 0,
+    "missing_downstream_links": 0,
+    "stale_downstream_links": 0,
+    "controller_at": "2026-09-08T23:49:34+09:00",
+    "controller_status": "done",
+    "controller_wrapper_exit": 0,
+    "unaffected_tail": {
+      "cleanup_at": "2026-09-08T22:53:19+09:00",
+      "detector_at": "2026-09-08T22:53:21+09:00",
+      "reused": true,
+      "read_only_predecessor_evidence_as_of_kst": "2026-09-08T23:57:29+09:00",
+      "predecessors": {
+        "threshold_artifact": "done",
+        "threshold_log": "done",
+        "controller_artifact": "done",
+        "controller_log": "done",
+        "tuning_artifact": "done",
+        "tuning_log": "done",
+        "dashboard_log": "done"
+      },
+      "scope_noninvalidation_reason": "Only diagnostic report receipt parsing, evidence provenance, AI actionability classification and their summary consumers changed. Cleanup/archive/raw and detector implementations were not changed in this pass; no later tail FAIL and the refreshed controller/strict chain are terminal."
+    }
+  },
+  "economic_acceptance": {
+    "main_submit_drought_resolved": false,
+    "incremental_realized_profit_claimed": false,
+    "live_or_preopen_application_claimed": false
+  },
+  "rows": [
+    {
+      "native_id": "order_pipeline_event_compaction_v2_shadow",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[0]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "already_implemented_verified",
+      "decision_reason": "Current v2 complete buckets from 16:41 contain identical 83,225 raw/producer events with exact identity parity; logger/report tests pass and raw suppression stays disabled. Whole-day 149-event loss and legacy 44,202 invalid rows remain excluded historical evidence, not resolved.",
+      "current_acceptance_owner": "PipelineVerbosityNaturalEvidence0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[0]",
+        "decision": "implement_now",
+        "final_disposition": "already_implemented_verified"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_scanner_eligible_no_heavy_closed_loop",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[1]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "26/1,521 eligible promotions lacked heavy evaluation. Exact missing terminal/BBO receipts are not reconstructible from aggregate causes; identify a fresh exact promotion/queue/eviction receipt before changing the diagnostic path. No scheduler, cap or guard change.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[1]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_scanner_scan_generation_conservation_gap",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[2]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "SCANGEN-20318-1788827192975-11103616514905 has ranked279/terminal65, missing214. Immutable metadata conflicts0; original missing ranks/terminal receipts are absent. Do not synthesize a successful census or rerun the closed market window.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[2]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_ws_decision_stage_stale_backoff_attribution",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[3]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "31,811 events include 21,662 without repair-cycle receipt. Current report preserves exact missing-state counts; no contemporaneous missing receipt exists to distinguish a runtime hook defect from legacy emission loss. Recheck fresh exact epoch/cycle source; do not resubscribe/restart.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[3]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_ws_total_stale_escalation",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[4]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "1,211 both-stale events: 1,180 without repair-cycle evidence, 31 persistent. The report cannot infer the absent repair action or invent recovery; next exact source is required, with safety unchanged.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[4]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_microstructure_v3_evaluation_venue_missing_or_conflicting",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[5]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "100 unique v3 contexts lack/conflict in evaluation venue. Historical exact source cannot be replaced with guessed KRX/NXT; verify a fresh exact request/context lineage before a scoped repair. This pass added up to 20 exact unique diagnostic receipts per defect and propagated them through the workorder consumer. Original venue100/payload116 defects are unchanged; reporting repair is not source or live payload repair.",
+      "current_acceptance_owner": "MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[5]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "implemented_pass1_bounded_exact_provenance"
+    },
+    {
+      "native_id": "order_microstructure_v3_required_holding_payload_missing",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[6]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "116 required holding payload deliveries missing while internal diagnostic consumption is observed. Canonical holding_decision_context_v1 omits the duplicate legacy view; exact prepared request/required micro-field binding is needed to distinguish intentional schema migration from omission. Do not exempt telemetry or alter live AI input by assumption. This pass added up to 20 exact unique diagnostic receipts per defect and propagated them through the workorder consumer. Original venue100/payload116 defects are unchanged; reporting repair is not source or live payload repair.",
+      "current_acceptance_owner": "AIDecisionActionOutcomeNaturalEvidence0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[6]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "implemented_pass1_bounded_exact_provenance"
+    },
+    {
+      "native_id": "order_scanner_funnel_executable_bbo_join",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[7]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "Actual pipeline boolean-string receipts now decode strictly; native bounded/source-quality rejection taxonomy is reconciled. Unaccounted episodes 914 -> 682 -> 25 across the two passes. Remaining 24 partial schedules and one missing admission are explicitly identified historical loss, not synthesized outcomes. Code repair is validated and consumed, but the native source workorder still requires new exact evidence and does not permit implementation-only root-cause closure.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[7]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "implemented_pass1_and_pass2_diagnostic_contract_closed",
+      "diagnostic_repair_acceptance": "passed",
+      "source_acceptance": "historical_25_gaps_preserved_next_exact_natural_source_pending"
+    },
+    {
+      "native_id": "order_ws_trade_tick_quiet_low_liquidity_classification",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[8]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "implement_now",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "5,692 quiet-tape events lack cumulative-volume provenance (2,318 signed-tape-only plus 3,374 missing). Signed prints cannot reconstruct cumulative volume or prove low liquidity. Preserve gaps and obtain exact new source.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[8]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_small_net_generation_contract",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[23]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "Exact named currentness checks remain PASS. Generic AI source-quality claims retain their original response hash and reason, but require a concrete failing field/row/consumer before implementation. Metadata-only actionability and consumer serialization repairs are verified; underlying claims are not declared resolved.",
+      "current_acceptance_owner": "PatternLabSmallNetNaturalEvidence0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[9]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "decision_changed",
+      "repair_status": "implemented_pass1_actionability_producer_and_consumer",
+      "diagnostic_actionability": {
+        "schema": "pattern_review_actionability_v1",
+        "status": "blocked_missing_evidence",
+        "check_id": "claude_small_net_generation_contract",
+        "check_status": "pass",
+        "reason": "ai_gap_claim_not_substantiated_by_named_currentness_check",
+        "required_evidence": "exact_failing_source_field_row_or_contract_and_owning_consumer",
+        "original_claim_preserved": true,
+        "source_quality_resolved": false,
+        "provider_retry_authorized": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      }
+    },
+    {
+      "native_id": "order_pattern_lab_ai_review_currentness_pattern_lab_ai_review_contract",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[24]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "Exact named currentness checks remain PASS. Generic AI source-quality claims retain their original response hash and reason, but require a concrete failing field/row/consumer before implementation. Metadata-only actionability and consumer serialization repairs are verified; underlying claims are not declared resolved.",
+      "current_acceptance_owner": "PatternLabSmallNetNaturalEvidence0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[10]",
+        "decision": "implement_now",
+        "final_disposition": "blocked_missing_evidence"
+      },
+      "comparison": "decision_changed",
+      "repair_status": "implemented_pass1_actionability_producer_and_consumer",
+      "diagnostic_actionability": {
+        "schema": "pattern_review_actionability_v1",
+        "status": "blocked_missing_evidence",
+        "check_id": "pattern_lab_ai_review_contract",
+        "check_status": "pass",
+        "reason": "ai_gap_claim_not_substantiated_by_named_currentness_check",
+        "required_evidence": "exact_failing_source_field_row_or_contract_and_owning_consumer",
+        "original_claim_preserved": true,
+        "source_quality_resolved": false,
+        "provider_retry_authorized": false,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      }
+    },
+    {
+      "native_id": "order_entry_submit_drought_auto_resolution",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[9]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[11]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[11]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[12]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_entry_broker_receipt_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[12]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[13]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_entry_fill_quality_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[13]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[14]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_entry_post_submit_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[14]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[15]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_entry_source_taxonomy_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[15]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[16]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_entry_telegram_post_submit_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[16]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[17]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_upstream_gate",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[17]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[18]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_price_revalidation",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[18]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[19]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[19]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[20]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_pattern_lab_ai_review_currentness_scalping_ldm_threshold_reentry_sources",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[20]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Retired ADM/LDM input is not required. Preserve the original AI claim and existing handoff; no restoration or new shortage.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[21]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_entry_recheck_bounded_maintenance_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[21]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[22]",
+        "decision": "defer_evidence",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_entry_recheck_history_transition_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[22]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[23]",
+        "decision": "defer_evidence",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.orders[10]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[0]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_latency_guard_miss_ev_recovery",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[0]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[1]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_observation_source_quality_unknown_token_provenance_gap",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[1]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[2]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_rising_missed_entry_turn_bbo_coverage",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[2]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[3]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_one_share_threshold_ai_score_near_buy_entry_hook_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[3]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[4]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_one_share_threshold_strength_momentum_vpw_entry_hook_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[4]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[5]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_partial_fill_quality_source_attribution",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[5]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[6]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_rising_missed_classifier_prior_feedback_bridge",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[6]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[7]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_rising_missed_classifier_prior_bridge",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[7]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[8]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_same_symbol_repeat_source_attribution",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[8]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[9]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_split_entry_rebase_수량_정합성_report_only_감사",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[9]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[10]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_ai_threshold_dominance",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[10]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[11]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_ai_threshold_miss_ev_recovery",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[11]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[12]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_panic_sell_defense_lifecycle_transition_pack",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[12]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "attach_existing_family",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[13]",
+        "decision": "attach_existing_family",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_budget_pass_without_submit",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[13]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "design_family_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[14]",
+        "decision": "design_family_candidate",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_overbought_gate_miss_ev_recovery",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[14]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "design_family_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[15]",
+        "decision": "design_family_candidate",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_market_census_krx_krx_regular",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[15]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[16]",
+        "decision": "defer_evidence",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_market_census_nxt_nxt_aftermarket",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[16]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[17]",
+        "decision": "defer_evidence",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_market_census_nxt_nxt_premarket",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[17]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[18]",
+        "decision": "defer_evidence",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "order_market_census_nxt_nxt_regular_overlap",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_pointer": "$.non_selected_orders[18]",
+        "source_sha256": "0fed3c3533f676fbd6aca809b63b05ab8179f7f2fbb4d07c0d30cda3e4ece9dc",
+        "decision": "defer_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[19]",
+        "decision": "defer_evidence",
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:7ff28758a02a80ced86c9d279c6b46cb0b02a95a5eb6186245551a68d8ee66d2",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[0]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[0]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:2eaf06787075f5631a2790102165df3f4813b7c8778c2d1e0bd34d9d264c9334",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[1]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[1]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:1876a96dff2b6afebb1f445538c9a487def36028174fe64880e497c68d19745a",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[2]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[2]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:519bad7f319ed282a6130f6ef2c55cc353c5cbf7f1de96bea8e07b8448bef3e3",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[3]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[3]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:1ed187a6c7bf27db9dd41bb361c3005e4bc961b64036fa65e2159e926ed22322",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[4]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[4]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:eb4436766d789ebf29bbd6af11c61eee7341b44a041c5d4280403a6291d009f2",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[5]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[5]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:d3845195b73790a6428270bb61f84eaaa065879844b08240e9995643f52e2b88",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_pointer": "$.recommendations[6]",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "decision": null,
+        "runtime_effect": null,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[6]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:2991bcc69c56990b25c4b08aaf4fdd60e5d3173a67c6592ec632d5328db3c16d",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.006800",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.006800",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "final_disposition": "rejected"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:814eab726593d89d0288fe3ad6a3d6fcb3d3dbc4fe5a1d6dff5ca6d17b32d0a0",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.010140",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.010140",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "final_disposition": "rejected"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:f4ef9259aaa1ee8420d52ce4303595054ec87d2981b617f425739820921042b3",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.080220",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_pass_widget_signal_policy_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "080220 passed existing producer guards and normal automatic consumer staged verified 2026-09-09 policy. Current/next PID consumption is not claimed.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.080220",
+        "decision": "holdout_pass_widget_signal_policy_candidate",
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:1a6aebfa63c42f751b0242e3e18a558d326ca01f58eb3055c6b699316120f216",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_pointer": "$.symbols.475150",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.475150",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "final_disposition": "rejected"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:71a76fc58230e78abde51898aebfac8088bb6af71c005c07e0b765508540c60c",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[0]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[0]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:2c12077e277ea743fbc2add1007b002a6d0fd3412fc31fa51a91d064914412d8",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[1]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[1]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:2fa713b05718abda99b058a7dd322550140feb1cc896ff96c2f67082be03c856",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[2]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[2]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:0bdfc39c76573e968028e3e36bea0f840b8249c225566ea71ae456c3c248b563",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.recommendations[3]",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": null
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[3]",
+        "decision": null,
+        "final_disposition": "deferred"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:3287c340cabe4b868a3283e957a49c5ae5bf8494fb936d371c8bd5f20b934400",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_pointer": "$.operator_observation_candidate_inventory.candidate_475560_morning",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "475560 morning remains source-only keep_collecting; no profile enrollment.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.operator_observation_candidate_inventory.candidate_475560_morning",
+        "decision": null,
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    },
+    {
+      "native_id": "machine_lifecycle_turnover_policy_research_v1",
+      "identity_field": "followup_id",
+      "implementation_requested": false,
+      "source": {
+        "family": "machine_microstructure_attribution",
+        "source_path": "data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-08.json",
+        "source_pointer": "$.objective_followups[0]",
+        "source_sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+        "decision": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native followup_id tracks EVIDENCE_ACCUMULATING with immutable source-date quarantine. It is not an order_id/recommendation_id granting implementation authority; same followup in approval is an alias. Exact new market/receipt evidence, not a same-day replay or live change, owns next acceptance.",
+      "current_acceptance_owner": "MachineLifecycleTurnoverObjectiveFollowup0908",
+      "authority_block": null,
+      "previous": {
+        "source_sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+        "source_pointer": "$.objective_followups[0]",
+        "decision": null,
+        "final_disposition": "observed_no_patch"
+      },
+      "comparison": "unchanged",
+      "repair_status": "no_new_code_change"
+    }
+  ]
+}

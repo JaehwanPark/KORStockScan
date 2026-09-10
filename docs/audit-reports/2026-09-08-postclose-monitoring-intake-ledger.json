@@ -1,0 +1,2609 @@
+{
+  "schema": "postclose_monitoring_intake_ledger_v1",
+  "target_date": "2026-09-08",
+  "phase": "fixed_point_no_eligible_actionable_open_with_evidence_blocks",
+  "runtime_effect": false,
+  "allowed_runtime_apply": false,
+  "actual_order_submitted": false,
+  "source_inventory": [
+    {
+      "family": "code_improvement_workorder",
+      "path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+      "sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+      "generated_at": "2026-09-08T22:30:10+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": "2026-09-08-eafb6d91dc74",
+      "native_decision": null,
+      "authority": {},
+      "intake_row_count": 44
+    },
+    {
+      "family": "widget_collector_expansion_recommendation",
+      "path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+      "sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+      "generated_at": "2026-09-08T22:15:21.091804+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": null,
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "authority": "widget_collector_expansion_recommendation_only"
+      },
+      "intake_row_count": 7
+    },
+    {
+      "family": "widget_symbol_signal_policy_research",
+      "path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+      "sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+      "generated_at": "2026-09-08T22:12:59+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "widget_signal_policy_candidates_ready",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "owner_contract": {
+          "authority": "widget_symbol_signal_policy_discovery_only",
+          "forbidden_cross_owner_actions": [
+            "read_other_owner_signal_as_widget_entry_or_exit",
+            "cancel_other_owner_order",
+            "sell_other_owner_quantity",
+            "reuse_other_owner_position_or_episode_state",
+            "mutate_low_price_two_leg_profile_policy_or_service"
+          ],
+          "order_ledger_namespace": "widget_symbol_auto_trade:<symbol>",
+          "owner": "widget_symbol_auto_trade",
+          "position_attribution": "own_filled_buy_quantity_only",
+          "state_namespace": "widget_symbol_auto_trade:<symbol>:<trade_date>"
+        }
+      },
+      "intake_row_count": 4
+    },
+    {
+      "family": "widget_symbol_runtime_policy_apply",
+      "path": "data/report/widget_symbol_runtime_policy_apply/widget_symbol_runtime_policy_apply_2026-09-08.json",
+      "sha256": "854d30841e12f6832e61dab19d68cdcb440d9e2689ada4616eb3ed3b621b0155",
+      "generated_at": "2026-09-08T22:13:04+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": null,
+      "authority": {
+        "runtime_effect": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "samsung_machine_entry_tuning",
+      "path": "data/report/samsung_machine_entry_tuning/samsung_machine_entry_tuning_2026-09-08.json",
+      "sha256": "b0dfdc3500f1ce09ca001fdba7110deba7646515e34a57f500827f076f895bdd",
+      "generated_at": "2026-09-08T22:02:01+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "actual_machine_state_observation_collected_report_only; no_entry_threshold_or_runtime_change",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "low_price_two_leg_tuning",
+      "path": "data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-08.json",
+      "sha256": "4b86574c7f156a3558f95933e1f2550b7f9e392c077202293059f96b2d7a34b1",
+      "generated_at": "2026-09-08T22:42:33+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "profile_separated_actual_outcome_observation_only",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "low_price_two_leg_expanded_candidate_research",
+      "path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+      "sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+      "generated_at": "2026-09-08T21:24:54+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "expanded_candidates_source_only_no_runtime_promotion",
+      "authority": {
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "authority": "lower_price_machine_candidate_recommendation_only"
+      },
+      "intake_row_count": 5
+    },
+    {
+      "family": "machine_microstructure_attribution",
+      "path": "data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-08.json",
+      "sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+      "generated_at": "2026-09-08T22:44:06.776081+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "partial_owner_or_micro_source_gap_base_tuning_unchanged",
+      "authority": {
+        "authority": {
+          "actual_order_submitted": false,
+          "allowed_runtime_apply": false,
+          "base_owner_tuning_continues_when_micro_missing": true,
+          "broker_order_forbidden": true,
+          "decision_authority": "postclose_diagnostic_only",
+          "runtime_effect": false
+        }
+      },
+      "intake_row_count": 1
+    },
+    {
+      "family": "machine_entry_timing_tuning",
+      "path": "data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_2026-09-08.json",
+      "sha256": "81245b395adeaf0fbc49e49e3ee017f0751514c10b389442a61494658bc7e291",
+      "generated_at": "2026-09-08T22:46:57+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "baseline_immediate_entry_carry_forward",
+      "authority": {
+        "runtime_effect": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true
+      },
+      "intake_row_count": 0
+    },
+    {
+      "family": "machine_microstructure_policy_approval",
+      "path": "data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_postclose_2026-09-08.json",
+      "sha256": "2599833aa9ee47b31bd97b76a5f9442eb5f9a11be6f1b55ca6bd8c9cbd509080",
+      "generated_at": "2026-09-08T22:47:06+09:00",
+      "target_date": "2026-09-08",
+      "generation_id": null,
+      "native_decision": "objective_followup_required",
+      "authority": {
+        "authority": {
+          "actual_order_submitted": false,
+          "broker_order_forbidden": true,
+          "runtime_apply_performed": false,
+          "runtime_effect": false
+        }
+      },
+      "intake_row_count": 0
+    }
+  ],
+  "counts": {
+    "intake_total": 61,
+    "implementation_requested_total": 11,
+    "nonimplementation_total": 50,
+    "eligible_runtime_effect_false_total": 11,
+    "user_authority_total": 0,
+    "invalid_or_missing_authority_total": 0,
+    "already_implemented_verified_eligible": 1,
+    "implemented_pass1": 0,
+    "implemented_pass2": 0,
+    "blocked_missing_evidence": 10,
+    "blocked_external_dependency": 0,
+    "eligible_actionable_open": 0,
+    "already_implemented_verified_nonrequest": 0,
+    "observed_no_patch": 28,
+    "deferred": 19,
+    "rejected": 3,
+    "blocked_missing_evidence_nonrequest": 0,
+    "blocked_external_dependency_nonrequest": 0,
+    "invalid_or_missing_authority_nonrequest": 0,
+    "implement_now_unaccounted_count": 0,
+    "intake_unaccounted_count": 0
+  },
+  "rows": [
+    {
+      "native_id": "order_pipeline_event_compaction_v2_shadow",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_pipeline_event_compaction_v2_shadow",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/utils/pipeline_event_logger.py",
+          "src/engine/pipeline_event_summary.py",
+          "src/engine/pipeline_event_verbosity_report.py"
+        ],
+        "acceptance_tests": [
+          "pytest src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[0]"
+      },
+      "final_disposition": "already_implemented_verified",
+      "decision_reason": "Current v2 complete buckets from 16:41 contain identical 83,225 raw/producer events with exact identity parity; logger/report tests pass and raw suppression stays disabled. Whole-day 149-event loss and legacy 44,202 invalid rows remain excluded historical evidence, not resolved.",
+      "current_acceptance_owner": "PipelineVerbosityNaturalEvidence0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_scanner_eligible_no_heavy_closed_loop",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_scanner_eligible_no_heavy_closed_loop",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "ws_freshness_intraday_monitor_source_only",
+        "files_likely_touched": [
+          "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+          "src/engine/monitoring/ws_freshness_acceptance.py",
+          "src/tests/test_intraday_ws_freshness_monitor.py"
+        ],
+        "acceptance_tests": [
+          "exact_event_owner_and_missing_field_attribution_reproduced",
+          "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+          "no_order_resubscribe_threshold_or_process_mutation"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[1]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "26/1,521 eligible promotions lacked heavy evaluation. Exact missing terminal/BBO receipts are not reconstructible from aggregate causes; identify a fresh exact promotion/queue/eviction receipt before changing the diagnostic path. No scheduler, cap or guard change.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "exact_event_owner_and_missing_field_attribution_reproduced",
+        "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+        "no_order_resubscribe_threshold_or_process_mutation"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_scanner_scan_generation_conservation_gap",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_scanner_scan_generation_conservation_gap",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "ws_freshness_intraday_monitor_source_only",
+        "files_likely_touched": [
+          "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+          "src/engine/monitoring/ws_freshness_acceptance.py",
+          "src/tests/test_intraday_ws_freshness_monitor.py"
+        ],
+        "acceptance_tests": [
+          "exact_event_owner_and_missing_field_attribution_reproduced",
+          "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+          "no_order_resubscribe_threshold_or_process_mutation"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[2]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "SCANGEN-20318-1788827192975-11103616514905 has ranked279/terminal65, missing214. Immutable metadata conflicts0; original missing ranks/terminal receipts are absent. Do not synthesize a successful census or rerun the closed market window.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "exact_event_owner_and_missing_field_attribution_reproduced",
+        "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+        "no_order_resubscribe_threshold_or_process_mutation"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_ws_decision_stage_stale_backoff_attribution",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_ws_decision_stage_stale_backoff_attribution",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "ws_freshness_intraday_monitor_source_only",
+        "files_likely_touched": [
+          "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+          "src/engine/monitoring/ws_freshness_acceptance.py",
+          "src/tests/test_intraday_ws_freshness_monitor.py"
+        ],
+        "acceptance_tests": [
+          "exact_event_owner_and_missing_field_attribution_reproduced",
+          "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+          "no_order_resubscribe_threshold_or_process_mutation"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[3]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "31,811 events include 21,662 without repair-cycle receipt. Current report preserves exact missing-state counts; no contemporaneous missing receipt exists to distinguish a runtime hook defect from legacy emission loss. Recheck fresh exact epoch/cycle source; do not resubscribe/restart.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "exact_event_owner_and_missing_field_attribution_reproduced",
+        "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+        "no_order_resubscribe_threshold_or_process_mutation"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_ws_total_stale_escalation",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_ws_total_stale_escalation",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "ws_freshness_intraday_monitor_source_only",
+        "files_likely_touched": [
+          "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+          "src/engine/monitoring/ws_freshness_acceptance.py",
+          "src/tests/test_intraday_ws_freshness_monitor.py"
+        ],
+        "acceptance_tests": [
+          "exact_event_owner_and_missing_field_attribution_reproduced",
+          "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+          "no_order_resubscribe_threshold_or_process_mutation"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[4]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "1,211 both-stale events: 1,180 without repair-cycle evidence, 31 persistent. The report cannot infer the absent repair action or invent recovery; next exact source is required, with safety unchanged.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "exact_event_owner_and_missing_field_attribution_reproduced",
+        "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+        "no_order_resubscribe_threshold_or_process_mutation"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_microstructure_v3_evaluation_venue_missing_or_conflicting",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_microstructure_v3_evaluation_venue_missing_or_conflicting",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "diagnostic_source_only",
+        "files_likely_touched": [
+          "src/engine/scalping/microstructure_reaction_context.py",
+          "src/engine/scalping/market_data_enrichment.py",
+          "src/utils/pipeline_event_logger.py",
+          "src/engine/build_code_improvement_workorder.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py",
+          "regenerated microstructure_reaction_context keeps runtime_effect=false and allowed_runtime_apply=false",
+          "postclose code_improvement_workorder includes or explicitly closes this source-only order"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[5]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "100 unique v3 contexts lack/conflict in evaluation venue. Historical exact source cannot be replaced with guessed KRX/NXT; verify a fresh exact request/context lineage before a scoped repair.",
+      "current_acceptance_owner": "MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py",
+        "regenerated microstructure_reaction_context keeps runtime_effect=false and allowed_runtime_apply=false",
+        "postclose code_improvement_workorder includes or explicitly closes this source-only order"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_microstructure_v3_required_holding_payload_missing",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_microstructure_v3_required_holding_payload_missing",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "diagnostic_source_only",
+        "files_likely_touched": [
+          "src/engine/scalping/microstructure_reaction_context.py",
+          "src/engine/scalping/market_data_enrichment.py",
+          "src/utils/pipeline_event_logger.py",
+          "src/engine/build_code_improvement_workorder.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py",
+          "regenerated microstructure_reaction_context keeps runtime_effect=false and allowed_runtime_apply=false",
+          "postclose code_improvement_workorder includes or explicitly closes this source-only order"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[6]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "116 required holding payload deliveries missing while internal diagnostic consumption is observed. Canonical holding_decision_context_v1 omits the duplicate legacy view; exact prepared request/required micro-field binding is needed to distinguish intentional schema migration from omission. Do not exempt telemetry or alter live AI input by assumption.",
+      "current_acceptance_owner": "AIDecisionActionOutcomeNaturalEvidence0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py",
+        "regenerated microstructure_reaction_context keeps runtime_effect=false and allowed_runtime_apply=false",
+        "postclose code_improvement_workorder includes or explicitly closes this source-only order"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_scanner_funnel_executable_bbo_join",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_scanner_funnel_executable_bbo_join",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "scanner_funnel_executable_bbo_source_only",
+        "files_likely_touched": [
+          "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+          "src/engine/monitoring/ws_freshness_acceptance.py",
+          "src/tests/test_intraday_ws_freshness_monitor.py"
+        ],
+        "acceptance_tests": [
+          "exact_event_owner_and_missing_field_attribution_reproduced",
+          "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+          "no_order_resubscribe_threshold_or_process_mutation"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[7]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "Collector configuration receipts4, bounded schedules256, exact BBO episodes215; full prune eligible census16,073 is not the bounded EV denominator. Historical missing sample-index receipts remain unaccounted. Do not raise API budget or extrapolate bounded EV to full census.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "exact_event_owner_and_missing_field_attribution_reproduced",
+        "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+        "no_order_resubscribe_threshold_or_process_mutation"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_ws_trade_tick_quiet_low_liquidity_classification",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_ws_trade_tick_quiet_low_liquidity_classification",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "ws_freshness_intraday_monitor_source_only",
+        "files_likely_touched": [
+          "src/engine/monitoring/intraday_ws_freshness_monitor.py",
+          "src/engine/monitoring/ws_freshness_acceptance.py",
+          "src/tests/test_intraday_ws_freshness_monitor.py"
+        ],
+        "acceptance_tests": [
+          "exact_event_owner_and_missing_field_attribution_reproduced",
+          "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+          "no_order_resubscribe_threshold_or_process_mutation"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[8]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "5,692 quiet-tape events lack cumulative-volume provenance (2,318 signed-tape-only plus 3,374 missing). Signed prints cannot reconstruct cumulative volume or prove low liquidity. Preserve gaps and obtain exact new source.",
+      "current_acceptance_owner": "PostcloseSourceQualityGateReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "exact_event_owner_and_missing_field_attribution_reproduced",
+        "producer_consumer_receipt_gap_closed_or_historical_loss_explicitly_quarantined",
+        "no_order_resubscribe_threshold_or_process_mutation"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_pattern_lab_ai_review_currentness_claude_small_net_generation_contract",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_pattern_lab_ai_review_currentness_claude_small_net_generation_contract",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/pattern_lab_ai_review.py",
+          "src/engine/pattern_lab_currentness_audit.py",
+          "analysis/gemini_scalping_pattern_lab",
+          "analysis/claude_scalping_pattern_lab",
+          "analysis/deepseek_swing_pattern_lab"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[9]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "Authoritative currentness check PASS; raw AI conclusion only says source-quality gap confirmed and names no exact missing field/row. Preserve raw response and hash, require concrete contradictory evidence. Provider budget exhausted (2/2); do not rerun or suppress the claim.",
+      "current_acceptance_owner": "PatternLabSmallNetNaturalEvidence0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_pattern_lab_ai_review_currentness_pattern_lab_ai_review_contract",
+      "identity_field": "order_id",
+      "implementation_requested": true,
+      "source": {
+        "order_id": "order_pattern_lab_ai_review_currentness_pattern_lab_ai_review_contract",
+        "decision": "implement_now",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/pattern_lab_ai_review.py",
+          "src/engine/pattern_lab_currentness_audit.py",
+          "analysis/gemini_scalping_pattern_lab",
+          "analysis/claude_scalping_pattern_lab",
+          "analysis/deepseek_swing_pattern_lab"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[10]"
+      },
+      "final_disposition": "blocked_missing_evidence",
+      "decision_reason": "Current two-pass/source-only contract check PASS; provider raw conclusion is generic without a reproducible missing contract. Original response is preserved. No further Provider attempt is allowed (2/2 used); hold for exact evidence, not guessed code or false PASS.",
+      "current_acceptance_owner": "PatternLabSmallNetNaturalEvidence0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py"
+      ],
+      "acceptance_status": "not_complete_exact_evidence_required"
+    },
+    {
+      "native_id": "order_entry_submit_drought_auto_resolution",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_submit_drought_auto_resolution",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/buy_funnel_sentinel.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/threshold_cycle_ev_report.py",
+          "src/engine/automation/conversion_lane.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "threshold_cycle_ev_report",
+          "runtime_approval_summary",
+          "postclose_verifier"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[11]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_conversion_lane_submit_drought_submit_drought_latency_pre_submit",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/automation/key_lineage_ledger.py",
+          "src/engine/automation/conversion_lane.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py",
+          "src/engine/build_code_improvement_workorder.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[12]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_entry_broker_receipt_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_broker_receipt_contract_gap_review",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_but_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/buy_funnel_sentinel.py",
+          "src/engine/scalping/main_lifecycle_paired.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "threshold_cycle_ev_report",
+          "runtime_approval_summary",
+          "postclose_verifier"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[13]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_entry_fill_quality_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_fill_quality_contract_gap_review",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_but_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/buy_funnel_sentinel.py",
+          "src/engine/scalping/main_lifecycle_paired.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "threshold_cycle_ev_report",
+          "runtime_approval_summary",
+          "postclose_verifier"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[14]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_entry_post_submit_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_post_submit_contract_gap_review",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_but_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/buy_funnel_sentinel.py",
+          "src/engine/scalping/main_lifecycle_paired.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "threshold_cycle_ev_report",
+          "runtime_approval_summary",
+          "postclose_verifier"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[15]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_entry_source_taxonomy_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_source_taxonomy_contract_gap_review",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_but_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/buy_funnel_sentinel.py",
+          "src/engine/scalping/main_lifecycle_paired.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "threshold_cycle_ev_report",
+          "runtime_approval_summary",
+          "postclose_verifier"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[16]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_entry_telegram_post_submit_contract_gap_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_telegram_post_submit_contract_gap_review",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_but_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/buy_funnel_sentinel.py",
+          "src/engine/scalping/main_lifecycle_paired.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "threshold_cycle_ev_report",
+          "runtime_approval_summary",
+          "postclose_verifier"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[17]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_upstream_gate",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_conversion_lane_submit_drought_submit_drought_upstream_gate",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/automation/key_lineage_ledger.py",
+          "src/engine/automation/conversion_lane.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py",
+          "src/engine/build_code_improvement_workorder.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[18]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_price_revalidation",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_conversion_lane_submit_drought_submit_drought_price_revalidation",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/automation/key_lineage_ledger.py",
+          "src/engine/automation/conversion_lane.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py",
+          "src/engine/build_code_improvement_workorder.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[19]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_conversion_lane_submit_drought_submit_drought_entry_ai_authority_revalidation",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/automation/key_lineage_ledger.py",
+          "src/engine/automation/conversion_lane.py",
+          "src/engine/verify_threshold_cycle_postclose_chain.py",
+          "src/engine/build_code_improvement_workorder.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[20]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_conversion_lane_key_lineage.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_pattern_lab_ai_review_currentness_scalping_ldm_threshold_reentry_sources",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_pattern_lab_ai_review_currentness_scalping_ldm_threshold_reentry_sources",
+        "decision": "attach_existing_family",
+        "implementation_status": "terminal_existing_family_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/pattern_lab_ai_review.py",
+          "src/engine/pattern_lab_currentness_audit.py",
+          "analysis/gemini_scalping_pattern_lab",
+          "analysis/claude_scalping_pattern_lab",
+          "analysis/deepseek_swing_pattern_lab"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[21]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Retired ADM/LDM input is not required. Preserve the original AI claim and existing handoff; no restoration or new shortage.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_ai_review.py src/tests/test_pattern_lab_currentness_audit.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_entry_recheck_bounded_maintenance_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_recheck_bounded_maintenance_review",
+        "decision": "defer_evidence",
+        "implementation_status": "natural_acceptance_pending",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/scalping/entry_ai_gate_backtest.py",
+          "src/engine/scalping/entry_recheck_review.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_entry_recheck_review.py src/tests/test_drought_handoff.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "runtime_approval_summary",
+          "postclose_verifier",
+          "EntryRecheckNaturalAttribution0907"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[22]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_entry_recheck_review.py src/tests/test_drought_handoff.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_entry_recheck_history_transition_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_entry_recheck_history_transition_review",
+        "decision": "defer_evidence",
+        "implementation_status": "natural_acceptance_pending",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/scalping/entry_ai_gate_backtest.py",
+          "src/engine/scalping/entry_recheck_review.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_entry_recheck_review.py src/tests/test_drought_handoff.py"
+        ],
+        "required_downstream": [
+          "code_improvement_workorder",
+          "runtime_approval_summary",
+          "postclose_verifier",
+          "EntryRecheckNaturalAttribution0907"
+        ],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.orders[23]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction. Drought/PREOPEN/PID/economic acceptance remains separate.",
+      "current_acceptance_owner": "EntryRecheckNaturalAttribution0907",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_entry_recheck_review.py src/tests/test_drought_handoff.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+        "decision": "attach_existing_family",
+        "implementation_status": "terminal_existing_family_evidence",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/observation_source_quality_audit.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/sniper_state_handlers.py",
+          "src/engine/lifecycle_decision_matrix.py",
+          "docs/report-based-automation-traceability.md"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[0]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py src/tests/test_verify_threshold_cycle_postclose_chain.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_latency_guard_miss_ev_recovery",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_latency_guard_miss_ev_recovery",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/sniper_performance_tuning_report.py",
+          "src/engine/daily_threshold_cycle_report.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[1]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_observation_source_quality_unknown_token_provenance_gap",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_observation_source_quality_unknown_token_provenance_gap",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_but_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/observation_source_quality_audit.py",
+          "src/engine/build_code_improvement_workorder.py",
+          "src/engine/sniper_state_handlers.py",
+          "src/engine/lifecycle_decision_matrix.py",
+          "src/engine/scalp_sim_overnight.py",
+          "docs/report-based-automation-traceability.md"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[2]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_rising_missed_entry_turn_bbo_coverage",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_rising_missed_entry_turn_bbo_coverage",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_source_quality_contract_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_operational_workorder",
+        "files_likely_touched": [
+          "src/engine/sniper_state_handlers.py",
+          "src/engine/kiwoom_sniper_v2.py",
+          "src/engine/monitoring/entry_turn_point_replay.py",
+          "src/engine/monitoring/rising_missed_intraday_feedback.py"
+        ],
+        "acceptance_tests": [
+          "exact_ws_bbo_join_coverage_pct>=95",
+          "pre_anchor_bbo_coverage_pct>=95",
+          "paired_coverage_pct>=95",
+          "primary_right_censored_pct<=20",
+          "primary_resolved_outcome_count>=20",
+          "source_quality_adjusted_ev_pct remains null until every floor passes",
+          "runtime_effect=false, allowed_runtime_apply=false, actual_order_submitted=false, broker_order_forbidden=true"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[3]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "exact_ws_bbo_join_coverage_pct>=95",
+        "pre_anchor_bbo_coverage_pct>=95",
+        "paired_coverage_pct>=95",
+        "primary_right_censored_pct<=20",
+        "primary_resolved_outcome_count>=20",
+        "source_quality_adjusted_ev_pct remains null until every floor passes",
+        "runtime_effect=false, allowed_runtime_apply=false, actual_order_submitted=false, broker_order_forbidden=true"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_one_share_threshold_ai_score_near_buy_entry_hook_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_one_share_threshold_ai_score_near_buy_entry_hook_review",
+        "decision": "attach_existing_family",
+        "implementation_status": "source_evidence_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_threshold_opportunity_audit",
+        "files_likely_touched": [],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/pytest src/tests/test_one_share_threshold_opportunity.py src/tests/test_build_code_improvement_workorder.py",
+          "A separate source-gap/root-cause order is required before any implementation decision",
+          "source-only audit must not mutate intraday runtime thresholds, broker/order guards, provider route, bot state, quantity, or caps"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[4]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest src/tests/test_one_share_threshold_opportunity.py src/tests/test_build_code_improvement_workorder.py",
+        "A separate source-gap/root-cause order is required before any implementation decision",
+        "source-only audit must not mutate intraday runtime thresholds, broker/order guards, provider route, bot state, quantity, or caps"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_one_share_threshold_strength_momentum_vpw_entry_hook_review",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_one_share_threshold_strength_momentum_vpw_entry_hook_review",
+        "decision": "attach_existing_family",
+        "implementation_status": "source_evidence_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_threshold_opportunity_audit",
+        "files_likely_touched": [],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/pytest src/tests/test_one_share_threshold_opportunity.py src/tests/test_build_code_improvement_workorder.py",
+          "A separate source-gap/root-cause order is required before any implementation decision",
+          "source-only audit must not mutate intraday runtime thresholds, broker/order guards, provider route, bot state, quantity, or caps"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[5]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest src/tests/test_one_share_threshold_opportunity.py src/tests/test_build_code_improvement_workorder.py",
+        "A separate source-gap/root-cause order is required before any implementation decision",
+        "source-only audit must not mutate intraday runtime thresholds, broker/order guards, provider route, bot state, quantity, or caps"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_partial_fill_quality_source_attribution",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_partial_fill_quality_source_attribution",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/sniper_performance_tuning_report.py",
+          "src/engine/daily_threshold_cycle_report.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[6]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_rising_missed_classifier_prior_feedback_bridge",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_rising_missed_classifier_prior_feedback_bridge",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_operational_workorder",
+        "files_likely_touched": [
+          "src/engine/monitoring/rising_missed_classifier_prior.py",
+          "src/engine/monitoring/rising_missed_scout_workorder.py",
+          "src/engine/scalping/rising_missed_one_share_entry.py"
+        ],
+        "acceptance_tests": [
+          "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_classifier_prior.py src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+          "prior bridge remains source-only and cannot mutate one-share allow/block, runtime thresholds, broker/order guards, provider route, or bot state"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[7]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_classifier_prior.py src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+        "prior bridge remains source-only and cannot mutate one-share allow/block, runtime thresholds, broker/order guards, provider route, or bot state"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_rising_missed_classifier_prior_bridge",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_rising_missed_classifier_prior_bridge",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "rising_missed_classifier_prior_source_only",
+        "files_likely_touched": [],
+        "acceptance_tests": [],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[8]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_same_symbol_repeat_source_attribution",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_same_symbol_repeat_source_attribution",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/sniper_performance_tuning_report.py",
+          "src/engine/daily_threshold_cycle_report.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[9]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_split_entry_rebase_수량_정합성_report_only_감사",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_split_entry_rebase_수량_정합성_report_only_감사",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/sniper_performance_tuning_report.py",
+          "src/engine/daily_threshold_cycle_report.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[10]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_ai_threshold_dominance",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_ai_threshold_dominance",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/daily_threshold_cycle_report.py",
+          "src/engine/sniper_missed_entry_counterfactual.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[11]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_ai_threshold_miss_ev_recovery",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_ai_threshold_miss_ev_recovery",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/daily_threshold_cycle_report.py",
+          "src/engine/sniper_missed_entry_counterfactual.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[12]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_panic_sell_defense_lifecycle_transition_pack",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_panic_sell_defense_lifecycle_transition_pack",
+        "decision": "attach_existing_family",
+        "implementation_status": "implemented_but_waiting_sample",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": null,
+        "files_likely_touched": [
+          "src/engine/panic_sell_defense_report.py",
+          "src/engine/daily_threshold_cycle_report.py",
+          "src/engine/runtime_approval_summary.py",
+          "docs/plan-korStockScanPerformanceOptimization.rebase.md"
+        ],
+        "acceptance_tests": [
+          "pytest panic sell defense/report lifecycle tests",
+          "pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[13]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest panic sell defense/report lifecycle tests",
+        "pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_budget_pass_without_submit",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_budget_pass_without_submit",
+        "decision": "design_family_candidate",
+        "implementation_status": "terminal_design_family_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/daily_threshold_cycle_report.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[14]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_overbought_gate_miss_ev_recovery",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_overbought_gate_miss_ev_recovery",
+        "decision": "design_family_candidate",
+        "implementation_status": "terminal_design_family_candidate",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": null,
+        "broker_order_forbidden": null,
+        "decision_authority": "pattern_lab_analysis_workorder_source_only",
+        "files_likely_touched": [
+          "src/engine/daily_threshold_cycle_report.py",
+          "src/engine/sniper_state_handlers.py"
+        ],
+        "acceptance_tests": [
+          "pytest relevant report/threshold tests",
+          "runtime_effect remains false until a separate implementation order is completed",
+          "daily EV report includes the order summary"
+        ],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[15]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [
+        "pytest relevant report/threshold tests",
+        "runtime_effect remains false until a separate implementation order is completed",
+        "daily EV report includes the order summary"
+      ],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_market_census_krx_krx_regular",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_market_census_krx_krx_regular",
+        "recommendation_id": "market_census_krx_krx_regular",
+        "decision": "defer_evidence",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_scanner_coverage_audit",
+        "files_likely_touched": [],
+        "acceptance_tests": [],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[16]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_market_census_nxt_nxt_aftermarket",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_market_census_nxt_nxt_aftermarket",
+        "recommendation_id": "market_census_nxt_nxt_aftermarket",
+        "decision": "defer_evidence",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_scanner_coverage_audit",
+        "files_likely_touched": [],
+        "acceptance_tests": [],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[17]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_market_census_nxt_nxt_premarket",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_market_census_nxt_nxt_premarket",
+        "recommendation_id": "market_census_nxt_nxt_premarket",
+        "decision": "defer_evidence",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_scanner_coverage_audit",
+        "files_likely_touched": [],
+        "acceptance_tests": [],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[18]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "order_market_census_nxt_nxt_regular_overlap",
+      "identity_field": "order_id",
+      "implementation_requested": false,
+      "source": {
+        "order_id": "order_market_census_nxt_nxt_regular_overlap",
+        "recommendation_id": "market_census_nxt_nxt_regular_overlap",
+        "decision": "defer_evidence",
+        "implementation_status": null,
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_scanner_coverage_audit",
+        "files_likely_touched": [],
+        "acceptance_tests": [],
+        "required_downstream": [],
+        "family": "code_improvement_workorder",
+        "source_path": "data/report/code_improvement_workorder/code_improvement_workorder_2026-09-08.json",
+        "source_sha256": "e196cce00b97fe5b8fd02a012411250619e366a27ff75eac2e2a6293582f09c0",
+        "source_pointer": "$.non_selected_orders[19]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native nonimplementation disposition retained; existing family/source-only handoff inspected, not converted to a code or live-policy instruction.",
+      "current_acceptance_owner": "CodeImprovementWorkorderReview0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "main_or_common_source_only_owner",
+      "authoritative_acceptance": [],
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:7ff28758a02a80ced86c9d279c6b46cb0b02a95a5eb6186245551a68d8ee66d2",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_collector_expansion_recommendation:7ff28758a02a80ced86c9d279c6b46cb0b02a95a5eb6186245551a68d8ee66d2",
+        "recommendation_tier": "research_watch",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "138080/KRX_REGULAR"
+        },
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "implementation_review_ready": false,
+        "implementation_review_blockers": [
+          "trading_date_floor_not_met",
+          "median_spread_too_wide",
+          "extreme_volatility"
+        ],
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[0]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:2eaf06787075f5631a2790102165df3f4813b7c8778c2d1e0bd34d9d264c9334",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_collector_expansion_recommendation:2eaf06787075f5631a2790102165df3f4813b7c8778c2d1e0bd34d9d264c9334",
+        "recommendation_tier": "research_watch",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "142760/KRX_REGULAR"
+        },
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "implementation_review_ready": false,
+        "implementation_review_blockers": [
+          "sample_floor_not_met",
+          "trading_date_floor_not_met",
+          "median_spread_too_wide",
+          "extreme_volatility"
+        ],
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[1]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:1876a96dff2b6afebb1f445538c9a487def36028174fe64880e497c68d19745a",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_collector_expansion_recommendation:1876a96dff2b6afebb1f445538c9a487def36028174fe64880e497c68d19745a",
+        "recommendation_tier": "research_watch",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "361610/KRX_REGULAR"
+        },
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "implementation_review_ready": false,
+        "implementation_review_blockers": [
+          "trading_date_floor_not_met",
+          "median_spread_too_wide",
+          "extreme_volatility"
+        ],
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[2]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:519bad7f319ed282a6130f6ef2c55cc353c5cbf7f1de96bea8e07b8448bef3e3",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_collector_expansion_recommendation:519bad7f319ed282a6130f6ef2c55cc353c5cbf7f1de96bea8e07b8448bef3e3",
+        "recommendation_tier": "research_watch",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "033640/KRX_REGULAR"
+        },
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "implementation_review_ready": false,
+        "implementation_review_blockers": [
+          "sample_floor_not_met",
+          "trading_date_floor_not_met",
+          "median_spread_too_wide",
+          "extreme_volatility"
+        ],
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[3]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:1ed187a6c7bf27db9dd41bb361c3005e4bc961b64036fa65e2159e926ed22322",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_collector_expansion_recommendation:1ed187a6c7bf27db9dd41bb361c3005e4bc961b64036fa65e2159e926ed22322",
+        "recommendation_tier": "research_watch",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "484870/KRX_REGULAR"
+        },
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "implementation_review_ready": false,
+        "implementation_review_blockers": [
+          "trading_date_floor_not_met",
+          "median_spread_too_wide",
+          "extreme_volatility"
+        ],
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[4]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:eb4436766d789ebf29bbd6af11c61eee7341b44a041c5d4280403a6291d009f2",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_collector_expansion_recommendation:eb4436766d789ebf29bbd6af11c61eee7341b44a041c5d4280403a6291d009f2",
+        "recommendation_tier": "research_watch",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "488280/KRX_REGULAR"
+        },
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "implementation_review_ready": false,
+        "implementation_review_blockers": [
+          "sample_floor_not_met",
+          "trading_date_floor_not_met",
+          "median_spread_too_wide",
+          "extreme_volatility"
+        ],
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[5]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_collector_expansion_recommendation:d3845195b73790a6428270bb61f84eaaa065879844b08240e9995643f52e2b88",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_collector_expansion_recommendation:d3845195b73790a6428270bb61f84eaaa065879844b08240e9995643f52e2b88",
+        "recommendation_tier": "research_watch",
+        "recommendation_scope": {
+          "axis": "research_watch_collection",
+          "producer": "widget_collector_expansion_recommendation",
+          "scope": "007810/KRX_REGULAR"
+        },
+        "recommendation_consumer": "widget_research_watch_collector",
+        "recommendation_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+        "implementation_review_ready": false,
+        "implementation_review_blockers": [
+          "sample_floor_not_met",
+          "trading_date_floor_not_met",
+          "median_spread_too_wide",
+          "extreme_volatility"
+        ],
+        "family": "widget_collector_expansion_recommendation",
+        "source_path": "data/report/widget_collector_expansion_recommendation/widget_collector_expansion_recommendation_2026-09-08.json",
+        "source_sha256": "7f75254e3487222a07f6e94ce4855ac98b53fce674e1cf67afc4bbf370305c99",
+        "source_pointer": "$.recommendations[6]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "research_watch; implementation_review_ready=false with explicit sample/spread/volatility blockers. No new collection enrollment or live universe expansion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Review source/sample/spread/volatility and shared capacity; research_watch alone does not enroll or authorize trading.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:2991bcc69c56990b25c4b08aaf4fdd60e5d3173a67c6592ec632d5328db3c16d",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_symbol_signal_policy_research:2991bcc69c56990b25c4b08aaf4fdd60e5d3173a67c6592ec632d5328db3c16d",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "006800/KRX_REGULAR"
+        },
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.006800"
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:814eab726593d89d0288fe3ad6a3d6fcb3d3dbc4fe5a1d6dff5ca6d17b32d0a0",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_symbol_signal_policy_research:814eab726593d89d0288fe3ad6a3d6fcb3d3dbc4fe5a1d6dff5ca6d17b32d0a0",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "010140/KRX_REGULAR"
+        },
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.010140"
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:f4ef9259aaa1ee8420d52ce4303595054ec87d2981b617f425739820921042b3",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_symbol_signal_policy_research:f4ef9259aaa1ee8420d52ce4303595054ec87d2981b617f425739820921042b3",
+        "decision": "holdout_pass_widget_signal_policy_candidate",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "080220/KRX_REGULAR"
+        },
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.080220"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "080220 passed existing producer guards and normal automatic consumer staged verified 2026-09-09 policy. Current/next PID consumption is not claimed.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "widget_symbol_signal_policy_research:1a6aebfa63c42f751b0242e3e18a558d326ca01f58eb3055c6b699316120f216",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "widget_symbol_signal_policy_research:1a6aebfa63c42f751b0242e3e18a558d326ca01f58eb3055c6b699316120f216",
+        "decision": "holdout_failed_no_widget_runtime_promotion",
+        "recommendation_scope": {
+          "axis": "symbol_signal_policy",
+          "producer": "widget_symbol_signal_policy_research",
+          "scope": "475150/KRX_REGULAR"
+        },
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "recommendation_consumer": "widget_symbol_runtime_policy",
+        "recommendation_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+        "family": "widget_symbol_signal_policy_research",
+        "source_path": "data/report/widget_symbol_signal_policy_research/widget_symbol_signal_policy_research_2026-09-08.json",
+        "source_sha256": "9c4192f387b58d5ae0f3c0c05af16ae4e7ad4dd98247dfb03787a0da4c9d0cb3",
+        "source_pointer": "$.symbols.475150"
+      },
+      "final_disposition": "rejected",
+      "decision_reason": "Holdout failed; existing consumer correctly withholds this symbol. No new implementation or promotion.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_widget_symbol_owner",
+      "authoritative_acceptance": "Existing holdout, source and policy guards must pass; exact next-session policy and loader receipt own application.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:71a76fc58230e78abde51898aebfac8088bb6af71c005c07e0b765508540c60c",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "low_price_two_leg_expanded_candidate_research:71a76fc58230e78abde51898aebfac8088bb6af71c005c07e0b765508540c60c",
+        "implementation_status": "source_only_requires_review_and_user_approval",
+        "discovery_lane": "existing_symbol_logic_improvement",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "475150/late_morning/logic_sk_eternix_late_morning"
+        },
+        "runtime_effect": false,
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[0]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_low_price_profile_owner",
+      "authoritative_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "acceptance_status": "not_applied_separate_authority_required"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:2c12077e277ea743fbc2add1007b002a6d0fd3412fc31fa51a91d064914412d8",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "low_price_two_leg_expanded_candidate_research:2c12077e277ea743fbc2add1007b002a6d0fd3412fc31fa51a91d064914412d8",
+        "implementation_status": "source_only_requires_review_and_user_approval",
+        "discovery_lane": "existing_symbol_time_extension",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "111770/late_morning/existing_111770_late_morning"
+        },
+        "runtime_effect": false,
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[1]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_low_price_profile_owner",
+      "authoritative_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "acceptance_status": "not_applied_separate_authority_required"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:2fa713b05718abda99b058a7dd322550140feb1cc896ff96c2f67082be03c856",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "low_price_two_leg_expanded_candidate_research:2fa713b05718abda99b058a7dd322550140feb1cc896ff96c2f67082be03c856",
+        "implementation_status": "source_only_requires_review_and_user_approval",
+        "discovery_lane": "existing_symbol_logic_improvement",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "002900/morning/logic_tym_morning"
+        },
+        "runtime_effect": false,
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[2]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_low_price_profile_owner",
+      "authoritative_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "acceptance_status": "not_applied_separate_authority_required"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:0bdfc39c76573e968028e3e36bea0f840b8249c225566ea71ae456c3c248b563",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "low_price_two_leg_expanded_candidate_research:0bdfc39c76573e968028e3e36bea0f840b8249c225566ea71ae456c3c248b563",
+        "implementation_status": "source_only_requires_review_and_user_approval",
+        "discovery_lane": "existing_symbol_time_extension",
+        "recommendation_scope": {
+          "axis": "profile_policy",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "034020/midday/existing_034020_midday"
+        },
+        "runtime_effect": false,
+        "recommendation_consumer": "low_price_two_leg_policy_apply",
+        "recommendation_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.recommendations[3]"
+      },
+      "final_disposition": "deferred",
+      "decision_reason": "Native profile-policy research recommendation, not implement_now. New session/entry policy change requires explicit profile review and exact-date authority. Previous 9/8 approval does not authorize this new generation.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": "user_authority",
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_low_price_profile_owner",
+      "authoritative_acceptance": "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+      "acceptance_status": "not_applied_separate_authority_required"
+    },
+    {
+      "native_id": "low_price_two_leg_expanded_candidate_research:3287c340cabe4b868a3283e957a49c5ae5bf8494fb936d371c8bd5f20b934400",
+      "identity_field": "recommendation_id",
+      "implementation_requested": false,
+      "source": {
+        "recommendation_id": "low_price_two_leg_expanded_candidate_research:3287c340cabe4b868a3283e957a49c5ae5bf8494fb936d371c8bd5f20b934400",
+        "status": "source_only_keep_collecting",
+        "recommendation_scope": {
+          "axis": "operator_observation",
+          "producer": "low_price_two_leg_expanded_candidate_research",
+          "scope": "candidate_475560_morning"
+        },
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "decision_authority": "source_only_observation_no_runtime_authority",
+        "recommendation_consumer": "low_price_two_leg_expanded_candidate_research",
+        "recommendation_acceptance": "Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+        "family": "low_price_two_leg_expanded_candidate_research",
+        "source_path": "data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-08.json",
+        "source_sha256": "220c1b35e2a92f9438803e20d92d6dc1675111bccf3dac9047e0110e87ab0861",
+        "source_pointer": "$.operator_observation_candidate_inventory.candidate_475560_morning"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "475560 morning remains source-only keep_collecting; no profile enrollment.",
+      "current_acceptance_owner": "WidgetEpisodeRecommendationApplyAcceptance0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_low_price_profile_owner",
+      "authoritative_acceptance": "Keep collecting exact source-only observations; no profile enrollment or trading authority.",
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    },
+    {
+      "native_id": "machine_lifecycle_turnover_policy_research_v1",
+      "identity_field": "followup_id",
+      "implementation_requested": false,
+      "source": {
+        "followup_id": "machine_lifecycle_turnover_policy_research_v1",
+        "state": "EVIDENCE_ACCUMULATING",
+        "runtime_effect": false,
+        "allowed_runtime_apply": false,
+        "actual_order_submitted": false,
+        "broker_order_forbidden": true,
+        "next_action": "quarantine_current_source_date_and_continue_next_exact_date_collection",
+        "remaining_gap_codes": [
+          "current_attribution_source_contract_invalid"
+        ],
+        "source_contract_recovery": {
+          "disposition": "immutable_source_date_quarantine",
+          "excluded_from_rolling_policy_evidence": true,
+          "next_action": "quarantine_current_source_date_and_continue_next_exact_date_collection",
+          "reason": "irreversible_intraday_observation_or_exact_route_receipt_loss_cannot_be_reconstructed",
+          "rerun_same_source_date_allowed": false
+        },
+        "family": "machine_microstructure_attribution",
+        "source_path": "data/report/machine_microstructure_attribution/machine_microstructure_attribution_2026-09-08.json",
+        "source_sha256": "0b15809fc5665c2bcbd22f6eefa74a90041fc8915d0b6d90b8e71c46ef5a2012",
+        "source_pointer": "$.objective_followups[0]"
+      },
+      "final_disposition": "observed_no_patch",
+      "decision_reason": "Native followup_id tracks EVIDENCE_ACCUMULATING with immutable source-date quarantine. It is not an order_id/recommendation_id granting implementation authority; same followup in approval is an alias. Exact new market/receipt evidence, not a same-day replay or live change, owns next acceptance.",
+      "current_acceptance_owner": "MachineLifecycleTurnoverObjectiveFollowup0908",
+      "authority_block": null,
+      "code_review_is_not_root_cause_or_economic_closure": true,
+      "owner": "independent_machine_diagnostic_owner",
+      "authoritative_acceptance": null,
+      "acceptance_status": "disposition_reviewed_not_economic_acceptance"
+    }
+  ],
+  "nonrequest_policy_approval_required_count": 4,
+  "as_of_kst": "2026-09-08T22:59:00+09:00",
+  "control_state": "YELLOW",
+  "final_eligible_actionable_open_count": 0,
+  "operational_closure": {
+    "target_date": "2026-09-08",
+    "controller_done_at": "2026-09-08T22:47:51+09:00",
+    "strict_verifier_at": "2026-09-08T22:47:50+09:00",
+    "summary_handoff": "pass",
+    "drought_canonical_handoff": "pass",
+    "cleanup_done_at": "2026-09-08T22:53:19+09:00",
+    "final_detector_done_at": "2026-09-08T22:53:21+09:00",
+    "final_detector_run_id": "cron-20260908T225319-1563320",
+    "final_detector_severity": "warning",
+    "unresolved_critical_count": 0
+  },
+  "pass1": {
+    "status": "intake_and_existing_implementation_review_complete",
+    "counts": {
+      "intake_total": 61,
+      "implementation_requested_total": 11,
+      "nonimplementation_total": 50,
+      "eligible_runtime_effect_false_total": 11,
+      "user_authority_total": 0,
+      "invalid_or_missing_authority_total": 0,
+      "already_implemented_verified_eligible": 1,
+      "implemented_pass1": 0,
+      "implemented_pass2": 0,
+      "blocked_missing_evidence": 10,
+      "blocked_external_dependency": 0,
+      "eligible_actionable_open": 0,
+      "already_implemented_verified_nonrequest": 0,
+      "observed_no_patch": 28,
+      "deferred": 19,
+      "rejected": 3,
+      "blocked_missing_evidence_nonrequest": 0,
+      "blocked_external_dependency_nonrequest": 0,
+      "invalid_or_missing_authority_nonrequest": 0,
+      "implement_now_unaccounted_count": 0,
+      "intake_unaccounted_count": 0
+    },
+    "implementation_new_patches": 0,
+    "blocked_items_are_not_completed": true
+  },
+  "pass2": {
+    "status": "same_frozen_sources_reintake_complete",
+    "checked_at_kst": "2026-09-08T22:59:00+09:00",
+    "source_sha256_changed_count": 0,
+    "new_native_id_count": 0,
+    "removed_native_id_count": 0,
+    "decision_changed_count": 0,
+    "eligible_new_or_changed_implement_now_count": 0,
+    "intake_unaccounted_count": 0,
+    "implementation_new_patches": 0,
+    "no_regeneration_reason": "No eligible new or decision-changed patch after operational repairs; same frozen source hashes rechecked. No unnecessary Provider or producer rerun."
+  },
+  "pre_intake_repairs": {
+    "review_evidence": "docs/audit-reports/2026-09-08-postclose-monitoring-review.md",
+    "counted_as_current_pass_implementation": false,
+    "removed_or_superseded_previous_generation": [
+      "order_threshold_window_policy_source_snapshot_alignment"
+    ],
+    "repairs": [
+      "market_close_heartbeat_keyword_and_terminal_metadata",
+      "detector_exact_target_date_and_latest_run",
+      "machine_candidates_after_final_audit_hash",
+      "negative_entry_ai_authority_exact_terminal_attribution",
+      "daily_valid_empty_scale_in_source",
+      "verified_target_fill_timestamp_loss_diagnostic_quarantine"
+    ]
+  },
+  "coverage_notes": [
+    "Main workorder orders and non_selected_orders are both counted: 24 + 20 = 44. Summary aliases are not additional recommendations.",
+    "Widget collector seven research_watch rows, widget signal four symbol rows and five low-price research/observation entries are preserved with native IDs.",
+    "Machine followup_id is a tracking identity only, not an invented order_id/recommendation_id or implementation authority; approval repeats the same followup and is an alias.",
+    "Samsung and low-price tuning candidates have no policy_mutations; runtime policy and timing/approval are consumers with no additional native implementation rows.",
+    "Four nonimplementation low-price policy recommendations require separate user authority. They remain deferred and are not included in implementation_requested_total.",
+    "Historical 9/7 ledgers and separately approved projection ledgers remain separate, not added to today's unique intake."
+  ]
+}

@@ -2,11 +2,15 @@
 
 작성 기준: `2026-09-08 KST`
 
+절차 보완: `2026-09-10 KST` — §4.3 장중 수집 결손 즉시 대응 추가. 아래 과거 운영 현황의 날짜를 갱신하거나 현재 PID·수집 정상성을 인증한 기록은 아니다.
+
 현재 가동 중인 키움증권 연동 SCALPING 런타임을 대상으로 EV와 누적 순이익 극대화를 위한 장중 모니터링·보완 작업을 수행한다. 메인 봇, 위젯 매매기계, 에피소드 매매기계는 서로 독립된 주문 owner로 평가하며 주문번호·보유수량·청산 귀속을 혼합하지 않는다.
 
 이 지시문에 따른 모니터링을 명시적으로 요청했을 때만 아래 점검·허용 범위 보완 절차를 실행한다. 문서 인용·열람·현행화는 실행 요청이 아니며, 단순 상태 조회·읽기 전용 검증도 구현이나 재생성을 자동 승인하지 않는다. 문서 수정만 요청받으면 운영 산출물·PID·env·주문을 변경하지 않는다.
 
 명시적 모니터링에는 §4.1의 **현재 시각까지 도래한 체크리스트 실행·점검**을 포함한다. 최신 결과가 있으면 수용조건까지 대사하고, 미실행인 허용 작업은 선행 조건·권한·중복 실행 여부를 확인한 뒤 수행한다. 실행 가능한 항목을 목록 제시만으로 끝내지 않되, 단회/지속 요청의 범위와 종료조건을 보존한다.
+
+명시적 모니터링 중 장중 수집 결손을 발견하면 §4.3에 따라 **같은 실행에서 원인 확인 → 허용된 최소 수리 → review/fix → 검증**을 수행한다. 이미 허용된 source-only 보완은 항목마다 별도 재지시를 기다리거나 장후 workorder 발행까지 미루지 않는다. 코드 수정과 현재 process 반영은 별개이며, 재기동·실주문·API 호출량 상향 권한을 추가하는 조항은 아니다.
 
 현재 튜닝 원칙과 active/open 상태는 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8, 실행 항목은 당일 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 `docs/time-based-operations-runbook.md`, producer/consumer와 R0→R6 의존 순서는 `docs/report-based-automation-traceability.md`를 기준으로 한다. 실제 기동 권한은 검증된 당일 PREOPEN apply plan/runtime env/verify와 exact-date machine policy, 이를 읽은 현재 PID의 provenance를 함께 기준으로 한다. 이 문서의 family 예시는 고정 ON 목록이나 재기동 권한이 아니다.
 
@@ -365,6 +369,28 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 - KRX09:00·NXT-only09:00:30 이후에는 현재 as-of로 예외를 다시 계산하고 기존 freshness/수집 SLA로 재개 여부를 확인한다.09:05~09:20에는 실제 입력→판단→제출 귀속을 대사한다. 영속된 quiet marker나 장후 실행 시각으로 과거 event의 판정을 바꾸지 않는다.
 - [9/10 구현 리뷰](audit-reports/2026-09-10-ws-opening-auction-quiet-review.md)는 코드 검증 기록이다. 기존 short-lived #89 producer는 다음 실행에서 새 코드를 읽지만 실행 중 WS PID의 reload/재기동은 별도 승인·receipt가 필요하다. 이 계약은 자동 재기동 승인이 아니다.
 
+### 4.3 장중 수집 결손 즉시 대응
+
+현재 우선 owner의 실제 신호·요청·수집 대상이 있는데 필요한 원천이 없거나, 유효 원천 뒤 저장·join·consumer가 끊기면 아래 절차를 즉시 시작한다. 일마감 보고서의 eligible 0이나 장후 실패를 기다리지 않는다. 단, 예정 전·정상 bounded wait·아직 성숙하지 않은 outcome·근거 있는 자연 대상 부재·OFF/퇴역은 결손으로 만들지 않는다. 감지 기준과 기한은 해당 owner의 기존 수집 주기·freshness·window·maturity 계약을 사용하며 임의의 공통 timeout이나 새 표본 floor를 만들지 않는다.
+
+1. **최초 단절과 영향 범위 고정**: 대상 거래일·관찰 시각, owner/symbol/profile·venue/session, 실제 signal/attempt/episode ID와 원래 시각, 필요한 입력창, 현재 PID/code/config generation, 마지막 정상 receipt와 최초 실패를 기록한다. raw·로그·checkpoint·manifest의 경로/hash와 재현 가능한 결손 행·구간을 보존한다. 계속 쓰이는 파일은 읽은 범위와 시점을 명시하며 진행 중 generation을 덮어쓰거나 원본·lock을 삭제하지 않는다.
+2. **수집부터 직접 consumer까지 추적**: 해당 경로에 적용되는 `설치 trigger/현재 PID 설정 → 대상 선정·예약/REG → REST 응답 또는 type별 WS 최초 수신 → callback → enqueue 이전 처리 → queue/worker → writer 영속 저장 → manifest/checkpoint → parser/projection/exact join → intended consumer의 실제 필드`를 대사한다. 단계별 입력·성공·중복·제외·실패·대기 수와 exact 행 연결로 첫 결손 owner를 찾는다. enqueue 이전 loss가 저장 raw 분모 밖이면 별도 ingress 증거/계측 결손으로 남기고 raw 감사 정상으로 가리지 않는다. 파일 증가·PID 생존·report exit 0만으로 유효 수집을 인정하지 않는다.
+3. **원인별 수리 선택**: 아래 구분으로 현재 복구 가능한 부분을 먼저 처리한다. 원천이 있는데 후단이 버린 경우 수집기를 불필요하게 바꾸지 않으며, 서로 다른 결함이 있으면 최초 원인과 후행 결함을 따로 기록한다.
+
+| 결손 유형 | 직접 확인과 허용된 대응 |
+| --- | --- |
+| 원천 미수집·손상 | 대상/예약·필수 type·route/epoch·freshness, callback/drop, queue/writer·disk·저장 실패를 확인. 기존 owner의 비권한 계측·저장·source-only 수집 코드 결함을 최소 수리하고, 실제 재가동은 아래 권한 경계를 따름 |
+| 원천은 있으나 사용 불가 | parser/sanitizer의 필드 유실, schema/date/hash·identity·projection/join 불일치, main/widget/episode 또는 real/sim 혼입을 수리. 정확한 원본이 있는 범위만 영향 consumer에 재전달하고 실제 누락값을 합성하지 않음 |
+| 후행 자동화·계약 결함 | stale receipt, generation/handoff 누락, wrapper 출력·중복 실행 판정 등을 직접 owner에서 분리. 이를 장중 시세 미수집이나 전략 판단 실패로 바꾸지 않음 |
+| 외부 제한·권한 필요·과거 원천 소실 | 기존 cooldown/bounded retry와 정상 원천은 보존. `external_dependency`, `user_authority`, `blocked_missing_evidence` 중 해당 상태와 정확한 필요한 조치·근거를 기록하고, 독립적으로 가능한 허용 코드 수리까지 포기하지 않음 |
+
+4. **같은 실행에서 수리·재발방지 검증**: §7의 source-only 권한 안이면 추가 구현 승인을 기다리지 않고 최소 보완한다. 최초 실패를 재현하는 회귀 테스트에 정상 입력 보존과 해당 수리에 관련된 malformed/missing·route/epoch/date 불일치의 명시적 제외를 포함하고, 조용한 drop이나 성공 위장이 남지 않도록 기존 계측·detector·consumer 계약을 보완한다. `$korstockscan-review-gate`의 review → fix → 재리뷰 → 관련 테스트/구문 검증을 미해결 finding 0까지 반복한 뒤, 허용된 최소 producer/consumer만 검증한다. 예정 전 장후 producer, 전체 postclose, Provider replay·호출을 조기/중복 실행하지 않는다.
+5. **실제 반영 권한 확인**: source-only라는 이름만으로 공유 BUY/WAIT/SELL 계산 변경, 거래 process나 collector의 기동·종료·재기동, live env/정책·REG 설정 수동 변경을 승인하지 않는다. 해당 실행에 유효한 별도 사용자 승인 또는 명시적인 runbook 복구 권한이 있을 때만 정확한 대상·명령·중복 PID/실제 lock·rollback을 확인하고 반영한다. 권한이 없으면 안전한 코드 수리는 검증까지 닫되 `deployment_status=user_authority`와 필요한 정확한 반영 조치를 즉시 사용자에게 알린다. 기존 process가 새 파일을 자동 소비하는 계약이라면 reload/consumer receipt로 확인하며 불필요한 재기동을 요구하지 않는다. Kiwoom 요청·응답 parser·FID·REG/REMOVE·재연결을 수정할 때는 [공식 API reference gate](./kiwoom-api-data-contract.md)의 upstream SHA/경로/조회시각 검증을 선행한다. rate/retry/동시성·조회 budget 상향, source-only reservation 침해, safety 완화로 수집을 회복하지 않는다.
+6. **실제 필요한 창과 새 원천으로 수용**: 위젯·에피소드 진입 확인은 실제 `signal_decision_at`과 각 0/1/3/5초 checkpoint의 계약상 past-only 입력창, 동일 route/epoch의 0B/0D·BBO와 window completeness를 확인한다. 긴 파일이나 이후 exit 연구 경로가 있어도 신호 직전 창 결손을 채운 것으로 보지 않는다. Main AI는 exact request/payload/response와 후행 label/terminal/cost 결속을 구분하고, scanner는 독립 모집단과 schedule/observation을 구분한다. 수정 후 자연 원천이 영속 저장되고 해당 parser/join·직접 consumer에 같은 identity/hash로 도달했는지 확인한다. 아직 예정 전인 최종 장후 consumer는 장중의 안전한 계약 검증과 실제 예정 handoff를 분리한다. 실주문 발생·양수 EV·승격 표본 floor를 진단 수리의 추가 조건으로 요구하지 않는다.
+7. **과거 손실과 잔여 조건 보존**: 수집하지 못한 과거 tick·호가·체결시각은 새 시세, 다른 session, 분봉·후행 고가 또는 복구 시각으로 채우지 않는다. 원본이 실제 존재하는 재파싱 복구와 비가역적 과거 exclusion을 분리하고, 재개 후 첫 유효 시각부터 새 원천을 판정한다. 같은 날에도 새 유효 입력창이 열리면 확인하되, 지나간 신호의 결손이 복원됐다고 하지 않는다. §4.1의 기존 OPEN ID에 원인/영향 창·수정/테스트·반영 권한/PID·새 수집/consumer receipt·남은 acceptance와 다음 확인 시각을 남긴다. 반복 결손은 같은 owner의 최초 미해결 지점을 재검토하며 동일 재실행을 무한 반복하지 않는다.
+
+완료는 `repair_status`(코드·계약 수리), `deployment_status`(실제 반영), 수집/전달의 자연 acceptance, §6의 `shortage_status`(유효 표본), `economic_acceptance`로 나눠 보고한다. 테스트 PASS나 코드 저장만으로 “장중 수집 정상화·재발방지 완료”라고 하지 않는다. 자연 대상이 없으면 configure/load receipt와 유효한 무대상 근거까지만 보고하고 다음 자연 창은 OPEN으로 둔다. 수집 경로가 닫혀도 경제성 미관측은 별도로 남기며, 결손 해결을 위해 실주문을 만들지 않는다.
+
 ## 5. 당일 runtime 판정
 
 당일 runtime과 policy는 이름이나 로그 존재만으로 정상 판정하지 않는다. 실제 owner·stage·eligible 표본에 연결해 다음 상태로 분류한다.
@@ -408,6 +434,8 @@ Swing, ADM/LDM/bucket/greenfield, 비우선 scalp/swing sim과 은퇴한 opening
 - 표본을 맞추기 위한 row 복제, owner·venue·session 병합, right-censored/HELD의 completed 변환, pre-baseline 재사용, child provenance 삭제, sample floor 하향, hard-safety·broker guard·threshold 완화는 금지한다.
 
 장중 shortage 판정은 source-only 계측·parser/schema·report·test·instrumentation 보완과 당일/장후 workorder handoff까지만 권한을 가진다. live threshold, provider, bot, cap, 수량, 주문 또는 safety 변경이 필요하면 `user_authority`로 분리한다.
+
+최초 고갈 원인이 수집·저장·전달의 구현 결함이면 §4.3을 같은 실행에서 수행한다. 구조적 결손이 확인됐는데도 `hold_sample`이나 유한 근거 없는 ETA로 돌려 장후까지 수리를 미루지 않는다. 반영 승인 또는 외부 원천이 필요한 부분은 코드 수리와 별도 차단 상태로 남긴다.
 
 ## 7. 보완 원칙
 
@@ -463,6 +491,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 - 적용한 보완, 코드 review/검증 결과, 현재 process 반영 여부와 rollback 조건; 문서-only/미재생성 범위와 미검증 자연/경제성 acceptance를 별도 공개
 - 별도 승인 추천의 원본/projection/승인 ledger·policy/현재 소비 대사; 중복 집계·미승인 확대 없음, 승인된 신규 신호와 기존 보유 target 분리
 - process 감사: authoritative expected set, PID/cgroup/lock/heartbeat, dead·hung·duplicate·no-op·orphan·unconsumed 분류와 valid-empty 오탐 제외
+- 장중 수집 결손: 원천 미수집/기존 원천의 파싱·전달 누락/후행 자동화 결함 구분, 최초 단절 단계·영향 신호/입력창, 이번 즉시 수리·회귀 검증, 실제 반영 권한/PID와 수정 후 첫 유효 저장·consumer receipt. 과거 비가역적 손실, 자연 수용 미확인, 별도 승인 필요 조치와 다음 확인 시각은 미해결로 명시
 - 부족 ledger: stable `shortage_id`, exact floor denominator, required/current/deficit, first depleted stage, funnel count, `time_resolvable_shortage|structural_population_exhaustion|blocked_missing_evidence|pending_declared_window`, finite ETA 또는 waiting 불가 이유, 다음 due·재분류 trigger·acceptance test
 - 아직 해결되지 않은 병목, 다음 표본·재검증·구현 owner
 
