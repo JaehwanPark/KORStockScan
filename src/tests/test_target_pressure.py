@@ -108,6 +108,35 @@ def test_combined_pressure_raises_one_tick_without_new_observation_wait():
     assert r["buy_speed_recent_qty_per_sec"] == 140
     assert r["feature"]["aggressive_buy_trade_backed_ratio"] == 1
     assert r["feature"]["refill_ratio"] == 0.05
+    assert r["target_reach_basis"] == "executable_bid_gte_target_price"
+    assert r["trade_target_touch_observed"] is True
+    assert r["target_touch_buy_qty_observed"] == 110
+    assert r["trade_watermark_age_ms"] == 150
+    assert r["depth_watermark_age_ms"] == 0
+    assert r["buy_qty_first_half_observed"] == 40
+    assert r["buy_qty_recent_half_observed"] == 70
+    assert r["source_scope"] == "exact_route_local_projection_not_exchange_completeness"
+    assert r["source_quality_status"] == "eligible_local_projection"
+    assert len(r["observed_window_trade_rows"]) == 3
+
+
+def test_recent_half_zero_is_explicit_local_observation_not_market_completeness():
+    s = snapshot()
+    src = source(s)
+    src["recent_trades"] = [
+        src["recent_trades"][0],
+        src["recent_trades"][1],
+    ]
+    src["realtime_types"]["0B"].update(
+        route_sequence=2,
+        observed_epoch=src["recent_trades"][1]["received_at_ms"] / 1000,
+    )
+    r = evaluate(s)
+    assert r["buy_qty_first_half_observed"] == 40
+    assert r["buy_qty_recent_half_observed"] == 0
+    assert r["buy_speed_recent_qty_per_sec"] == 0
+    assert r["source_complete_claim"] is None
+    assert r["source_sequence_authority"].endswith("not_exchange_completeness")
 
 
 @pytest.mark.parametrize(

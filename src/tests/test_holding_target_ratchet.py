@@ -245,6 +245,22 @@ def test_pressure_keep_does_not_claim_target_or_amend(enabled, monkeypatch):
         enabled.record_ratchet()["holding_target_last_decision"]["decision"]
         == "KEEP_TARGET"
     )
+    assert len(enabled.record_ratchet()["holding_target_decision_audit"]) == 1
+
+
+def test_quote_guard_records_exact_failed_component(enabled):
+    enabled.flags["bid"] = 10090
+    tick(enabled)
+    decision = enabled.record_ratchet()["holding_target_last_decision"]
+    assert decision["quote_guard_checks"] == {
+        "executable_bid_reached_target": False,
+        "net_edge_positive_after_cost": True,
+    }
+    assert "executable_bid_reached_target" in decision["reasons"]
+    assert "net_edge_positive_after_cost" not in decision["reasons"]
+    audit = enabled.record_ratchet()["holding_target_decision_audit"][-1]
+    assert audit["quote_guard_checks"] == decision["quote_guard_checks"]
+    assert audit["window_source_sha256"] is None
 
 
 def test_pressure_reversal_after_reservation_never_posts(enabled, monkeypatch):

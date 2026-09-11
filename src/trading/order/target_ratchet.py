@@ -98,14 +98,20 @@ def drive(
             now=current_time(),
         )
 
-    def quote_allows(q):
+    def quote_guard_checks(q):
         bid, entry = (
             Decimal(str(q["executable_bid"])),
             Decimal(str(binding["entry_price"])),
         )
-        return bid >= binding["price"] and bid * (
-            1 - Decimal(str(policy["slippage_bps"])) / 10000
-        ) > entry * (1 + Decimal(str(policy["round_trip_cost_pct"])) / 100)
+        return {
+            "executable_bid_reached_target": bid >= binding["price"],
+            "net_edge_positive_after_cost": bid
+            * (1 - Decimal(str(policy["slippage_bps"])) / 10000)
+            > entry * (1 + Decimal(str(policy["round_trip_cost_pct"])) / 100),
+        }
+
+    def quote_allows(q):
+        return all(quote_guard_checks(q).values())
 
     try:
         if not pending:
@@ -119,13 +125,48 @@ def drive(
                 return signal["decision"] == "RAISE_ONE_TICK" and quote_allows(
                     signal["quote"]
                 )
-            if not quote_allows(signal["quote"]):
+            quote_checks = quote_guard_checks(signal["quote"])
+            signal = dict(signal, quote_guard_checks=quote_checks)
+            if not all(quote_checks.values()):
                 signal = dict(
                     signal,
                     decision="KEEP_TARGET",
-                    reasons=signal["reasons"] + ["target_or_net_edge_guard"],
+                    reasons=signal["reasons"]
+                    + [k for k, ok in quote_checks.items() if not ok],
                 )
             container["holding_target_last_decision"] = deepcopy(signal)
+            audit = {
+                key: deepcopy(signal.get(key))
+                for key in (
+                    "checkpoint_at_ms",
+                    "decision",
+                    "reasons",
+                    "checks",
+                    "quote_guard_checks",
+                    "quote",
+                    "target_reach_basis",
+                    "trade_target_touch_observed",
+                    "target_touch_buy_qty_observed",
+                    "trade_watermark_age_ms",
+                    "depth_watermark_age_ms",
+                    "first_half_started_at_ms",
+                    "recent_half_started_at_ms",
+                    "window_ended_at_ms",
+                    "buy_qty_first_half_observed",
+                    "buy_qty_recent_half_observed",
+                    "sell_qty",
+                    "source_scope",
+                    "source_complete_claim",
+                    "source_quality_status",
+                    "source_sequence_authority",
+                )
+            }
+            audit["window_source_sha256"] = (signal.get("feature") or {}).get(
+                "window_source_sha256"
+            )
+            history = container.setdefault("holding_target_decision_audit", [])
+            history.append(audit)
+            del history[:-32]
             quote = signal["quote"]
             if signal["decision"] != "RAISE_ONE_TICK" or not quote_allows(quote):
                 container["holding_target_status"] = "pressure_keep_original_target"

@@ -114,6 +114,7 @@ def pressure_from_snapshot(*, snapshot, symbol, route, quantity, target_price, n
         if r["side"] == "BUY" and r["at_ms"] >= cutoff - 500
     )
     sold = sum(r["quantity"] for r in trades.values() if r["side"] == "SELL")
+    active = sorted(trades.values(), key=lambda row: (row["at_ms"], row["sequence"]))
     endpoint, anchor = feature["endpoint_depth"], feature["anchor_depth"]
     next_price = move_price_by_ticks(target_price, 1)
     if endpoint["asks"][-1][0] < next_price:
@@ -133,6 +134,13 @@ def pressure_from_snapshot(*, snapshot, symbol, route, quantity, target_price, n
         # This is not our queue position or a guarantee of a subsequent fill.
         "next_wall_consumable": wall + quantity <= late * 2,
     }
+    first_half_started_at_ms = cutoff - 1000
+    recent_half_started_at_ms = cutoff - 500
+    target_touch_trade_qty = sum(
+        r["quantity"]
+        for r in active
+        if r["side"] == "BUY" and r["price"] >= target_price
+    )
     return {
         "contract": CONTRACT,
         "decision": "RAISE_ONE_TICK" if all(checks.values()) else "KEEP_TARGET",
@@ -142,7 +150,21 @@ def pressure_from_snapshot(*, snapshot, symbol, route, quantity, target_price, n
         "next_price": next_price,
         "checkpoint_at_ms": cutoff,
         "source_sequence_authority": source.get("sequence_authority", "unspecified"),
+        "source_scope": "exact_route_local_projection_not_exchange_completeness",
+        "source_complete_claim": source.get("source_complete"),
+        "source_quality_status": "eligible_local_projection",
         "feature": feature,
+        "target_reach_basis": "executable_bid_gte_target_price",
+        "trade_target_touch_observed": target_touch_trade_qty > 0,
+        "target_touch_buy_qty_observed": target_touch_trade_qty,
+        "trade_watermark_age_ms": cutoff - feature["endpoint_trade"]["at_ms"],
+        "depth_watermark_age_ms": cutoff - feature["endpoint_depth"]["at_ms"],
+        "first_half_started_at_ms": first_half_started_at_ms,
+        "recent_half_started_at_ms": recent_half_started_at_ms,
+        "window_ended_at_ms": cutoff,
+        "buy_qty_first_half_observed": early,
+        "buy_qty_recent_half_observed": late,
+        "observed_window_trade_rows": active,
         "buy_speed_early_qty_per_sec": early * 2,
         "buy_speed_recent_qty_per_sec": late * 2,
         "sell_qty": sold,
