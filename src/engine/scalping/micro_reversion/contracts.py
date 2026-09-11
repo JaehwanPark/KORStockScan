@@ -64,6 +64,11 @@ class CoverageTier(StrEnum):
 
 def normalize_symbol(value: object) -> str:
     raw = str(value or "").strip().upper()
+    base = raw.removesuffix("_NX").removesuffix("_AL")
+    if len(base) == 7 and base.startswith("A"):
+        base = base[1:]
+    if len(base) == 6 and base.isascii() and base.isalnum():
+        return base
     digits = "".join(character for character in raw if character.isdigit())
     if digits:
         return digits[-6:].zfill(6)
@@ -89,7 +94,7 @@ def registration_item_identity(value: object) -> tuple[str, str]:
         base, venue = raw[:-3], "NXT"
     else:
         base, venue = raw, "KRX"
-    if len(base) != 6 or not base.isdigit():
+    if len(base) != 6 or not base.isascii() or not base.isalnum():
         return "", "UNKNOWN"
     return base, venue
 

@@ -487,7 +487,7 @@ def _load_source_snapshot(
 
 
 def _derived_official_common_stocks(
-    member_bytes: bytes, *, market: str
+    member_bytes: bytes, *, market: str, alphanumeric_symbols: bool = False
 ) -> tuple[set[tuple[str, str]], int]:
     layout = _OFFICIAL_MASTER_LAYOUT[market]
     trailer_width = layout["trailer_width"]
@@ -512,7 +512,15 @@ def _derived_official_common_stocks(
         preferred_class = trailer[preferred_offset : preferred_offset + 1]
         if security_group != "ST" or preferred_class != "0":
             continue
-        if len(symbol) != 6 or not symbol.isdigit():
+        if (
+            len(symbol) != 6
+            or not symbol.isascii()
+            or not (
+                symbol.isalnum() and symbol == symbol.upper()
+                if alphanumeric_symbols
+                else symbol.isdigit()
+            )
+        ):
             excluded_non_six_digit_symbol_count += 1
             continue
         if not standard_code or not korean_name:
@@ -551,8 +559,17 @@ def _official_symbol_upstream_contract(
     }
     for index, raw in enumerate(value):
         prefix = f"official_symbol_upstream:{index}"
-        if not isinstance(raw, Mapping) or set(raw) != expected_fields:
+        if not isinstance(raw, Mapping) or set(raw) not in (
+            expected_fields,
+            expected_fields | {"symbol_code_contract"},
+        ):
             blockers.append(f"{prefix}:fields_invalid")
+            continue
+        if (
+            "symbol_code_contract" in raw
+            and raw["symbol_code_contract"] != "krx_ascii_alphanumeric6_v1"
+        ):
+            blockers.append(f"{prefix}:symbol_code_contract_invalid")
             continue
         market = str(raw.get("market") or "")
         source_uri = str(raw.get("source_uri") or "")
@@ -658,6 +675,8 @@ def _official_symbol_upstream_contract(
             derived, derived_excluded_count = _derived_official_common_stocks(
                 member_bytes,
                 market=market,
+                alphanumeric_symbols=raw.get("symbol_code_contract")
+                == "krx_ascii_alphanumeric6_v1",
             )
         except ValueError as exc:
             blockers.append(f"{prefix}:{exc}")
@@ -853,7 +872,12 @@ def _parse_symbol_records(
             symbol = normalize_symbol(raw.get("symbol"))
             if not record_id:
                 raise ValueError(f"record_id_missing:{prefix}")
-            if len(symbol) != 6 or not symbol.isdigit():
+            if (
+                len(symbol) != 6
+                or not symbol.isascii()
+                or not symbol.isalnum()
+                or symbol != symbol.upper()
+            ):
                 raise ValueError(f"symbol_invalid:{prefix}")
             effective_from, effective_to = _record_window(
                 raw, prefix=prefix, descriptor=snapshot.descriptor
@@ -1413,7 +1437,10 @@ def build_daily_resolution(
                 normalize_symbol(symbol) for symbol in raw_symbols
             )
             if any(
-                len(symbol) != 6 or not symbol.isdigit()
+                len(symbol) != 6
+                or not symbol.isascii()
+                or not symbol.isalnum()
+                or symbol != symbol.upper()
                 for symbol in normalized_symbols
             ):
                 raise ValueError("coverage_symbols_invalid")

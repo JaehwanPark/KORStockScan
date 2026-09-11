@@ -464,3 +464,71 @@ def test_etn_q_prefix_is_normalized_only_with_official_en_group(tmp_path):
     )
     assert set(result) == {"760028"}
     assert result["760028"]["official_symbol"] == "Q760028"
+
+
+def test_alphanumeric_common_stock_survives_owner_and_exact_resolver(tmp_path):
+    archives = {spec.url: _archive(spec.market) for spec in MASTER_SPECS}
+    spec = next(s for s in MASTER_SPECS if s.market == "KOSDAQ")
+    with zipfile.ZipFile(io.BytesIO(archives[spec.url])) as bundle:
+        member = bundle.read(spec.member_name)
+    member += (
+        _master_line(market="KOSDAQ", symbol="0011A0", name="ordinary-alpha") + "\n"
+    ).encode("cp949")
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr(spec.member_name, member)
+    archives[spec.url] = output.getvalue()
+    owner = build_daily_sources(
+        target_date="2026-09-11",
+        policy_path=_write_policy(tmp_path),
+        output_root=tmp_path / "out",
+        fetcher=archives.__getitem__,
+        generated_at=datetime.fromisoformat("2026-09-11T13:00:00+09:00"),
+    )
+    resolution = build_daily_resolution(
+        target_date="2026-09-11",
+        source_manifest_path=Path(owner["economic_manifest_path"]),
+    )
+    assert resolution["status"] == "pass", resolution["blockers"]
+    assert "0011A0" in {
+        r["symbol"] for r in resolution["canonical_symbol_master_payload"]["records"]
+    }
+    from src.engine.scalping.micro_reversion.economic_reference import (
+        _derived_official_common_stocks,
+    )
+
+    legacy, excluded = _derived_official_common_stocks(member, market="KOSDAQ")
+    current, current_excluded = _derived_official_common_stocks(
+        member, market="KOSDAQ", alphanumeric_symbols=True
+    )
+    assert ("0011A0", "KOSDAQ") not in legacy and excluded == 1
+    assert ("0011A0", "KOSDAQ") in current and current_excluded == 0
+
+
+@pytest.mark.parametrize("symbol", ["0011a0", "００１１００", "001-A0", "0011A00"])
+def test_common_stock_code_rejects_malformed_or_non_ascii(symbol):
+    from src.engine.scalping.micro_reversion.economic_reference import (
+        _derived_official_common_stocks,
+    )
+
+    # Non-ASCII full width characters are valid CP949 bytes but not symbol keys.
+    member = (
+        _master_line(market="KOSDAQ", symbol=symbol, name="bad-code") + "\n"
+    ).encode("cp949")
+    rows, excluded = _derived_official_common_stocks(
+        member, market="KOSDAQ", alphanumeric_symbols=True
+    )
+    assert rows == set() and excluded == 1
+
+
+def test_alphanumeric_symbol_keeps_identity_and_exact_route():
+    from src.engine.scalping.micro_reversion.contracts import (
+        normalize_symbol,
+        registration_item_identity,
+    )
+
+    for raw in ["0011A0", "0011A0_NX", "A0011A0"]:
+        assert normalize_symbol(raw) == "0011A0"
+    assert registration_item_identity("0011A0_NX") == ("0011A0", "NXT")
+    assert registration_item_identity("0011A0_AL") == ("0011A0", "SOR")
+    assert normalize_symbol("001100") != normalize_symbol("0011A0")

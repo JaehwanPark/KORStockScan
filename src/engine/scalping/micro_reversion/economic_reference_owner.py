@@ -560,7 +560,12 @@ def _parse_master(
         preferred_class = trailer[spec.preferred_index]
         if security_group != "ST" or preferred_class != "0":
             continue
-        if len(symbol) != 6 or not symbol.isdigit():
+        if (
+            len(symbol) != 6
+            or not symbol.isascii()
+            or not symbol.isalnum()
+            or symbol != symbol.upper()
+        ):
             excluded_non_six_digit_symbol_count += 1
             continue
         if not standard_code or not korean_name:
@@ -599,6 +604,7 @@ def _parse_master(
         "source_repository": KIS_REPOSITORY,
         "eligible_common_stock_count": len(records),
         "excluded_non_six_digit_symbol_count": excluded_non_six_digit_symbol_count,
+        "symbol_code_contract": "krx_ascii_alphanumeric6_v1",
     }
     return records, provenance, member_bytes
 
