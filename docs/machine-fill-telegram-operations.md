@@ -15,7 +15,7 @@
 
 ## 검토된 전환 대상
 
-- 신규 알림 service의 코드 경로: `/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-20260911`.
+- 신규 알림 service의 코드 경로: `/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-v2-20260911`.
 - unit template: `deploy/systemd/korstockscan-machine-fill-telegram.service`.
 - 다음 네 service에만 `deploy/systemd/machine-fill-telegram-only.conf`를 `99-machine-fill-telegram-only.conf` drop-in으로 적용한다.
   - `korstockscan-doosan-widget-collector.service`
@@ -42,3 +42,9 @@ PYTHONPATH=. /home/ubuntu/KORStockScan/.venv/bin/python -m src.notify.machine_tr
 같은 명령의 `--initialize` 대신 `--check`는 active service와 함께 실행 가능한 read-only config/source/cursor 검사다. 외부 메시지를 보내지 않는다. `--check` 없는 정상 실행은 실제 새 체결을 발송한다.
 
 Rollback은 알림 service 중지와 해당 알림 drop-in의 백업 복원 범위다. state/cursor/receipt와 원장·정책은 보존한다. 기존 관찰/접수 알림 복원이 사용자 선택과 맞는지 확인하며, 불명확한 발송 row를 자동 replay하지 않는다. 매매 process 재기동 권한은 별도로 유지한다.
+
+## 추가 리뷰의 v2 상태 계약
+
+v2는 발송 row에 원장 관측 순서 `sequence`를 보존한다. JSON key 정렬/재시작과 관계없이 BUY/SELL 및 부분체결의 source 순서로 발송한다. sequence 중복·누락, 음수/NaN/무한대 재시도 시각, 잘못된 시도 횟수와 sent receipt는 전송 전에 차단한다. v1 준비본은 미배포이므로 v1 state를 자동 추정 이관하지 않는다. 이미 state가 있으면 삭제하지 말고 버전/receipt를 대사한다.
+
+`--check`는 실제 HTTP 전송 중의 `sending`을 `inflight`로 표시한다. 새 exclusive service owner가 재기동한 경우에만 이전 `sending`을 `uncertain`으로 복구한다. 초기 준비 root `machine-fill-telegram-20260911`/26d3e689는 이전 검토본이며 새 배포에는 v2 검토 commit과 위 v2 root를 사용한다. 코드 커밋/푸시는 이 root의 생성·운영 설치·재기동을 의미하지 않는다.

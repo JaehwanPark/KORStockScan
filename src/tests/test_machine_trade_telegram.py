@@ -238,3 +238,51 @@ def test_rate_limit_applies_to_other_pending_fills(tmp_path):
     n.deliver(path, s, reject, now=lambda: 0)
     n.deliver(path, s, lambda _: pytest.fail("global cooldown bypass"), now=lambda: 5)
     assert s["deliveries"]["b:1"]["attempts"] == 0
+
+
+def test_restart_preserves_source_order_not_uuid_sort_order(tmp_path):
+    path, s = state(tmp_path)
+    rows = []
+    reserve(rows, 'z-buy', side='BUY')
+    event(rows, 'FILL_RECORDED', 'z-buy', filled_qty=1)
+    reserve(rows, 'a-sell', side='SELL')
+    event(rows, 'FILL_RECORDED', 'a-sell', filled_qty=1)
+    n.collect(s, rows)
+    n.save(path, s)  # JSON sort_keys puts a-sell first on disk
+    s = n.load(path)
+    sent = []
+    n.deliver(path, s, lambda message: sent.append(message) or 1)
+    assert '매수 체결' in sent[0]
+    n.deliver(path, s, lambda message: sent.append(message) or 2)
+    assert '매도 체결' in sent[1]
+
+
+def test_read_only_check_does_not_mark_active_sender_uncertain(tmp_path):
+    path, s = queued(tmp_path)
+    def send(_):
+        assert n.load(path, recover_inflight=False)['deliveries']['a:1']['status'] == 'sending'
+        assert n.load(path)['deliveries']['a:1']['status'] == 'uncertain'
+        return 1
+    n.deliver(path, s, send)
+    assert n.load(path)['deliveries']['a:1']['status'] == 'sent'
+
+
+@pytest.mark.parametrize('key,value', [('attempts', -1), ('attempts', True), ('attempts', 4),
+    ('attempts', 3), ('next_attempt', float('nan')), ('next_attempt', float('inf')),
+    ('next_attempt', -1), ('next_attempt', 'later'), ('sequence', -1), ('sequence', None),
+    ('source_hash', 'bad'), ('message', None)])
+def test_invalid_delivery_state_fails_before_any_send(tmp_path, key, value):
+    path, s = queued(tmp_path)
+    s['deliveries']['a:1'][key] = value
+    n.save(path, s)
+    with pytest.raises(RuntimeError):
+        n.load(path)
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), -1, True, 'later'])
+def test_invalid_global_cooldown_fails_closed(tmp_path, value):
+    path, s = queued(tmp_path)
+    s['next_delivery_at'] = value
+    n.save(path, s)
+    with pytest.raises(RuntimeError):
+        n.load(path)

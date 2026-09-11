@@ -39,3 +39,15 @@
 ## 배포 준비 최종 검증
 
 main commit `26d3e689`를 고정한 `/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-20260911`을 준비했다. data/.venv는 기존 workspace 공유 경로이며 src/deploy tracked diff 0이다. 같은 고정 root에서 69 tests 재검증 PASS, production config 로컬 읽기·원장753행 hash chain PASS, Telegram API 호출0이다. systemd-analyze verify PASS, 문서 parser PASS 및 `MachineFillTelegramAcceptance0911`이 정확히1개 파싱된다. 실제 systemd 설치/daemon-reload/재기동/알림 state 초기화는 미실행이다.
+
+## 사용자 요청에 따른 추가 review/fix 반복
+
+체결 알림 변경만 다시 검토하고, 별도 worktree `review-machine-fill-telegram-followup-20260911`에서 다음 결함을 수정했다.
+
+1. 발송 원장의 JSON sort_keys 때문에 재시작하면 UUID 순서로 queue를 읽어 SELL이 이전 BUY보다 먼저 전송될 수 있었다. source 순서 sequence를 저장하고 발송 시 해당 순서로 정렬한다. 저장→reload 반례 테스트로 확인했다.
+2. read-only --check도 sending을 uncertain으로 바꿔 실제 전송 중 조회가 false unresolved를 표시했다. 조회는 inflight로 유지하고, 새 exclusive service owner의 재기동 복구에서만 uncertain으로 전환한다.
+3. 재시도 시각 NaN/무한대/음수와 invalid attempts가 저장 상태 검증을 통과했다. source hash, sequence 유일성, 유한한 비음수 시각, 시도 횟수와 sent message_id를 발송 전에 검증한다.
+
+상태 계약을 `machine_fill_telegram_v2`로 명시했다. v1은 미배포/초기화 미실행이므로 v1 상태의 자동 추정 이관은 하지 않는다. 신규 service template은 `machine-fill-telegram-v2-20260911` 검토 root를 요구한다. 기존 26d3e689 준비본을 최신 수리 배포로 사용하지 않는다.
+
+검증: 신규42개 및 기존46개 **88 passed**, py_compile/systemd-analyze verify/git diff --check PASS. 실제753행 원장을 발송 없이 재생하고99개 체결 후보의 저장/reload 순서 보존을 검증했다. Telegram 호출0. 수정 후 직접 consumer·실패/동시성·권한·문서를 재검토했고 검토 범위 미해결 P0~P2 finding0이다. 운영 배포·재기동·자연 수신은 이번 코드 리뷰/커밋·푸시 요청과 별개이며 미실행이다.

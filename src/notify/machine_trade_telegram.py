@@ -5,6 +5,7 @@ import argparse
 import fcntl
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import time
@@ -14,7 +15,7 @@ from src.trading.order.owner_custody_registry import OrderOwnerRegistry
 from src.utils.constants import CONFIG_PATH, PROJECT_ROOT
 
 LOG = logging.getLogger(__name__)
-SCHEMA = "machine_fill_telegram_v1"
+SCHEMA = "machine_fill_telegram_v2"
 FILL_EVENTS = {
     "FILL_RECORDED", "SELL_AMEND_RECONCILED",
     "PARTIAL_CANCEL_TARGET_FILL_REFRESHED", "SELL_PARTIAL_CANCEL_RECONCILED",
@@ -63,7 +64,7 @@ def send_telegram(message: str) -> int:
     if payload.get("ok") is False:
         raise RejectedDelivery("telegram_api_rejected", int(payload.get("parameters", {}).get("retry_after", 30)))
     message_id = payload.get("result", {}).get("message_id")
-    if payload.get("ok") is not True or type(message_id) is not int:
+    if payload.get("ok") is not True or type(message_id) is not int or message_id <= 0:
         raise RuntimeError("telegram_delivery_uncertain")
     return message_id
 
@@ -102,17 +103,45 @@ def initialize(path: Path, events: list[dict], account_key: str) -> None:
                 "deliveries": {}, "account_key": account_key, "initialized_at": time.time()})
 
 
-def load(path: Path) -> dict:
+def _nonnegative_number(value: object) -> bool:
+    return type(value) in {int, float} and math.isfinite(value) and value >= 0
+
+
+def _sha256(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def load(path: Path, *, recover_inflight: bool = True) -> dict:
     state = json.loads(path.read_text(encoding="utf-8"))
-    if (state.get("schema") != SCHEMA or type(state.get("cursor")) is not int
-            or state["cursor"] < 0 or not state.get("account_key")
+    if (not isinstance(state, dict) or state.get("schema") != SCHEMA
+            or type(state.get("cursor")) is not int or state["cursor"] < 0
+            or not isinstance(state.get("account_key"), str) or not state["account_key"]
+            or not _sha256(state.get("source_hash"))
+            or not _nonnegative_number(state.get("next_delivery_at", 0))
             or not isinstance(state.get("deliveries"), dict)):
         raise RuntimeError("notification_state_invalid")
+    sequences = set()
     for delivery in state["deliveries"].values():
-        if delivery.get("status") not in {"pending", "sending", "sent", "uncertain", "failed"}:
+        if (not isinstance(delivery, dict)
+                or delivery.get("status") not in {"pending", "sending", "sent", "uncertain", "failed"}
+                or not isinstance(delivery.get("message"), str) or not delivery["message"]
+                or not _sha256(delivery.get("source_hash"))
+                or type(delivery.get("sequence")) is not int
+                or delivery["sequence"] < 0 or delivery["sequence"] in sequences
+                or type(delivery.get("attempts")) is not int or not 0 <= delivery["attempts"] <= 3
+                or not _nonnegative_number(delivery.get("next_attempt"))):
             raise RuntimeError("notification_delivery_invalid")
-        if delivery["status"] == "sending":
-            delivery["status"] = "uncertain"  # crash after POST must not replay
+        sequences.add(delivery["sequence"])
+        status, attempts = delivery["status"], delivery["attempts"]
+        if ((status == "pending" and attempts >= 3)
+                or (status != "pending" and attempts == 0)
+                or (status == "sent" and (type(delivery.get("message_id")) is not int
+                                           or delivery["message_id"] <= 0))):
+            raise RuntimeError("notification_delivery_receipt_invalid")
+        if recover_inflight and status == "sending":
+            # Only the new exclusive service owner can conclude the prior sender died.
+            # An unlocked read-only health check may see an active HTTP request.
+            delivery["status"] = "uncertain"
     return state
 
 
@@ -162,7 +191,7 @@ def collect(state: dict, events: list[dict]) -> None:
                 key = f"{intent}:{new}"
                 state["deliveries"].setdefault(key, {
                     "status": "pending", "message": message, "source_hash": event["event_hash"],
-                    "attempts": 0, "next_attempt": 0,
+                    "attempts": 0, "next_attempt": 0, "sequence": len(state["deliveries"]),
                 })
         before = after
     state["cursor"] = len(events)
@@ -173,14 +202,14 @@ def deliver(path: Path, state: dict, sender=send_telegram, now=time.time) -> Non
     # One attempt per poll prevents bursts. Explicit rejections: max 3, 30s apart.
     if state.get("next_delivery_at", 0) > now():
         return
-    for key, row in state["deliveries"].items():
+    for key, row in sorted(state["deliveries"].items(), key=lambda item: item[1]["sequence"]):
         if row["status"] != "pending" or row["next_attempt"] > now():
             continue
         row.update(status="sending", attempts=row["attempts"] + 1)
         save(path, state)
         try:
             message_id = sender(row["message"])
-            if type(message_id) is not int:
+            if type(message_id) is not int or message_id <= 0:
                 raise RuntimeError("telegram_receipt_missing")
         except RejectedDelivery as exc:
             row.update(status="pending" if row["attempts"] < 3 else "failed",
@@ -210,11 +239,12 @@ def main() -> None:
     registry = OrderOwnerRegistry(args.registry)
     telegram_config()  # Local preflight only; never send a test message.
     if args.check:
-        state = load(args.state)  # atomic publisher permits read-only inspection while active
+        state = load(args.state, recover_inflight=False)  # active sender is not a crash
         if state["account_key"] != args.account_key:
             raise RuntimeError("notification_account_changed")
         collect(state, read_events(registry))
         print(json.dumps({"cursor": state["cursor"], "deliveries": len(state["deliveries"]),
+                          "inflight": sum(d["status"] == "sending" for d in state["deliveries"].values()),
                           "unresolved": sum(d["status"] in {"uncertain", "failed"} for d in state["deliveries"].values())}))
         return
     args.state.parent.mkdir(parents=True, exist_ok=True)

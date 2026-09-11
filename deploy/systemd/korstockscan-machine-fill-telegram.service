@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=www-data
-WorkingDirectory=/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-20260911
-Environment="PYTHONPATH=/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-20260911"
+WorkingDirectory=/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-v2-20260911
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-v2-20260911"
 ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.notify.machine_trade_telegram --registry /home/ubuntu/KORStockScan/data/runtime/order_owner_registry.jsonl --state /home/ubuntu/KORStockScan/data/runtime/machine_fill_telegram/state.json --account-key kiwoom-live-primary
 Restart=on-failure
 RestartSec=30
