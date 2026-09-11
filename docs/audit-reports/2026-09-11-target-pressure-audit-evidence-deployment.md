@@ -20,7 +20,7 @@
 - 직접·인접 consumer 회귀: `673 passed, 2 skipped`.
 - 새 release에서 widget/episode 목표가 상향 테스트: `120 passed`.
 - 관련 Python compile과 `git diff --check` PASS.
-- workspace, origin/main, release source는 `66a3189b`로 일치한다.
+- 운영 source tree는 검토 코드 commit `66a3189b`로 고정했다. 후행 배포 문서 commit은 실행 코드를 변경하지 않는다.
 - target-ratchet policy SHA256은 배포 전후 `d455951e180966d78cee6b70e8b11df3e69b3206c74c7c32d2c36a1a6acc6f08`로 동일하다. profit-stagnation `aa2d4794...`, entry-adverse `1536dfab...` pin도 실제 PID에서 검증했다.
 
 ## 배포·재기동 receipt
