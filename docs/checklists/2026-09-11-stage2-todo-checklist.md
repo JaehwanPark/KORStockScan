@@ -172,3 +172,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - [ ] `[MachineOneDayQuantityExpiryAcceptance0914] 9/11 신규1주 override 만료·다음 거래일 신규10주 복귀 확인` (`Due: 2026-09-14`, `Slot: INTRADAY`, `TimeWindow: 07:55~15:30`, `Track: RuntimeStability`)
   - Source: [1일 수량 구현/배포 receipt](../audit-reports/2026-09-11-one-day-machine-quantity.md), `data/runtime/machine_one_day_quantity_deployment.json`, 실제 machine PID/code·신규 signal feature/entry execution policy.
   - Acceptance: 9/12 00:00 KST 이후 신규 배정10/episode2개 총20의 자동 복귀와 실제 소비 code를 읽기 전용 대사한다. 자연 신규 신호가 있으면 원장 수량을 확인하며, 신호0을 실패로 만들거나 주문을 강제하지 않는다. 9/11에 이미 생성·접수·보유한1주 lot은 원래 수량으로 관리되고 신규10주와 섞어 재작성되지 않아야 한다. 배포·재시작·새 승인 재발행은 기본 요구가 아니다.
+
+## 모니터링 작업지시문 서버 자동 현행화
+
+- [ ] `[MonitoringInstructionRefreshNaturalAcceptance0911] 19:30 및 장후 종료 후 문서 자동 현행화 자연 실행 확인` (`Due: 2026-09-11`, `Slot: POSTCLOSE`, `TimeWindow: 19:30~23:59`, `Track: RuntimeStability`)
+  - Source: 사용자 서버 스케줄/API 구현 지시, [운영 계약](../monitoring-instruction-refresh.md), `data/report/monitoring_instruction_refresh/installed_trigger.json`.
+  - 구현·설치: [리뷰/실제 API 증거](../audit-reports/2026-09-11-monitoring-instruction-refresh-review.md), 42 tests PASS/finding0, cron 두 항목 설치·기존 항목 보존, gpt-5.6-sol/medium 작성·리뷰 preview PASS. 예약 자연 실행은 아래 Acceptance로 별도 확인한다.
+  - Acceptance: 19:30 postclose 문서 상태 updated/unchanged, source-date 9/11 실제 장후 최종 종료·strict hash/controller 이후 intraday 문서 상태 updated/unchanged, API response/model/usage 및 before/after hash를 확인한다. 자정 이후 실행도 source-date 9/11로 대사한다. 설치·preview 검증은 자연 실행 완료가 아니며 완료 전은 not_yet_due다.
+  - 실패 시 원본 보존·최대 2시도·기존 cron 보존·거래/runtime 영향 없음 확인. 실제 모니터링·주문·재기동·외부 sync를 실행하는 작업이 아니다.

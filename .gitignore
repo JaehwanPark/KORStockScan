@@ -131,3 +131,6 @@ data/cache/micro_reversion_relevant_source_index/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Document refresh receipts include private cron backups and API context snapshots.
+/data/report/monitoring_instruction_refresh/
