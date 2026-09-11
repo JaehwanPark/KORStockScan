@@ -50,8 +50,17 @@ def test_strict_completion_requires_current_hashes_and_real_controller(tmp_path,
     controller = report / f"postclose_done_controller/postclose_done_controller_{DAY}.json"
     m.save_json(verifier, {"date": DAY, "status": "warning", "summary_handoff": {"status": "pass"}})
     m.save_json(controller, {"date": DAY, "status": "done", "dry_run": False})
-    monkeypatch.setattr(handoff, "verify_summary_handoff", lambda *a, **k: {"status": "pass"})
-    assert m.completion_ready(tmp_path, DAY)["target_date"] == DAY
+    seen = {}
+
+    def verify(*args, **kwargs):
+        seen.update(kwargs)
+        return {"status": "pass"}
+
+    monkeypatch.setattr(handoff, "verify_summary_handoff", verify)
+    receipt = m.completion_ready(tmp_path, DAY)
+    assert receipt["target_date"] == DAY
+    assert receipt["checklist_date"] == "2026-09-14"
+    assert seen["checklist_path"] == tmp_path / "docs/checklists/2026-09-14-stage2-todo-checklist.md"
     monkeypatch.setattr(handoff, "verify_summary_handoff", lambda *a, **k: {"status": "fail"})
     with pytest.raises(ValueError, match="current_summary_hashes"):
         m.completion_ready(tmp_path, DAY)

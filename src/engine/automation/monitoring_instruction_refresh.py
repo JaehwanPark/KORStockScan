@@ -147,13 +147,16 @@ def completion_ready(root: Path, day: str) -> dict:
             or controller.get("dry_run") is not False):
         raise ValueError("waiting_strict_summary_or_controller")
     from src.engine.automation.postclose_summary_handoff import verify_summary_handoff
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
 
     # Read-only verification of actual source hashes/body, not another producer run.
+    checklist_date = _next_krx_trading_day(day)
     handoff = verify_summary_handoff(day, report_dir=report,
-                                    checklist_path=root / f"docs/checklists/{day}-stage2-todo-checklist.md")
+                                    checklist_path=root / f"docs/checklists/{checklist_date}-stage2-todo-checklist.md")
     if handoff.get("status") != "pass":
         raise ValueError("waiting_current_summary_hashes")
     return {"target_date": day, "final_marker": marker,
+            "checklist_date": checklist_date,
             "verifier_sha256": sha(json.dumps(verifier, sort_keys=True)),
             "controller_sha256": sha(json.dumps(controller, sort_keys=True))}
 
