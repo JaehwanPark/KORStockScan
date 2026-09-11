@@ -95523,6 +95523,20 @@ def handle_sell_ordered_state(stock, code):
     """
     주문 전송 후(SELL_ORDERED) 미체결 상태를 감시하고 타임아웃 시 취소 후 HOLDING으로 롤백합니다.
     """
+    # The WS receipt thread can complete and revive this same mutable target
+    # while the main loop is dispatching a previously observed SELL_ORDERED
+    # state.  Never let that stale dispatch enter cancellation and resurrect
+    # the fresh WATCHING row as SELL_ORDERED.
+    dispatch_target_id = stock.get("id")
+
+    def _dispatch_still_owns_sell() -> bool:
+        return bool(
+            stock.get("id") == dispatch_target_id
+            and str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
+        )
+
+    if not _dispatch_still_owns_sell():
+        return
     if str(stock.get("strategy") or "").strip().upper() == "S15_FAST":
         # S15 durable fast-state recovery is the sole owner of this order.
         # Main timeout/cancel handling must never race it.
@@ -95537,6 +95551,8 @@ def handle_sell_ordered_state(stock, code):
 
     if _sell_lifecycle_outbox_blocks_timeout_cancel(stock, code):
         return
+    if not _dispatch_still_owns_sell():
+        return
 
     sell_cancel_retry_at = _safe_float(
         stock.get("sell_cancel_reconciliation_retry_at"), 0.0
@@ -95547,7 +95563,10 @@ def handle_sell_ordered_state(stock, code):
     sell_order_time = stock.get("sell_order_time", 0)
 
     if sell_order_time == 0:
-        _mutate_stock_state(stock, set_fields={"sell_order_time": time.time()})
+        with ENTRY_LOCK:
+            if not _dispatch_still_owns_sell():
+                return
+            _mutate_stock_state(stock, set_fields={"sell_order_time": time.time()})
         return
 
     time_elapsed = time.time() - sell_order_time
@@ -95555,6 +95574,8 @@ def handle_sell_ordered_state(stock, code):
     timeout_sec = _rule_int("SELL_TIMEOUT_SEC", 40)
 
     if time_elapsed > timeout_sec:
+        if not _dispatch_still_owns_sell():
+            return
         log_error(
             f"⚠️ [{stock['name']}] 매도 대기 {timeout_sec}초 초과. 호가 꼬임/VI 의심 ➡️ "
             "취소 후 HOLDING 롤백 절차 진입."
@@ -96529,6 +96550,33 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
 
     target_id = stock.get("id")
     normalized_order_no = str(orig_ord_no or "").strip()
+
+    def _cancel_attempt_still_owns_sell() -> bool:
+        return bool(
+            stock.get("id") == target_id
+            and str(stock.get("status") or "").strip().upper() == "SELL_ORDERED"
+        )
+
+    def _mutate_cancel_attempt_if_owned(
+        *,
+        set_fields: dict | None = None,
+        pop_fields: list | tuple = (),
+        allowed_statuses: tuple[str, ...] = ("SELL_ORDERED",),
+    ) -> bool:
+        """Atomically reject mutations from a stale cancellation attempt."""
+        with ENTRY_LOCK:
+            current_status = str(stock.get("status") or "").strip().upper()
+            if stock.get("id") != target_id or current_status not in allowed_statuses:
+                return False
+            _mutate_stock_state(
+                stock,
+                set_fields=set_fields,
+                pop_fields=pop_fields,
+            )
+            return True
+
+    if not _cancel_attempt_still_owns_sell():
+        return False
     cancel_intent_reused = _pending_sell_cancel_intent_exact(
         stock,
         code=code,
@@ -96557,16 +96605,22 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
             code=code,
             order_no=normalized_order_no,
         ):
-            _mutate_stock_state(
-                stock,
+            # Persist validates the live mutable target.  A terminal receipt
+            # may have changed it to COMPLETED/WATCHING during the call; in
+            # that case the old timeout attempt has lost authority and must
+            # not restore SELL_ORDERED on the replacement row.
+            if not _cancel_attempt_still_owns_sell():
+                return False
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": "SELL_ORDERED",
                     "sell_cancel_reconciliation_required": True,
                     "sell_cancel_reconciliation_source": (
                         "cancel_intent_durability_failed"
                     ),
-                },
-            )
+                }
+            ):
+                return False
             return False
         res = kiwoom_orders.send_cancel_order(
             code=code,
@@ -96598,6 +96652,8 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 or _safe_int(stock.get("buy_qty"), 0),
             )
             err_msg = str(res.get("return_msg") or "사유 알 수 없음")
+        if not _cancel_attempt_still_owns_sell():
+            return False
         if is_success and not _persist_pending_sell_cancel_ack(
             stock,
             code=code,
@@ -96605,8 +96661,7 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
             cancel_response=res,
         ):
             retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
-            _mutate_stock_state(
-                stock,
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": "SELL_ORDERED",
                     "sell_cancel_reconciliation_required": True,
@@ -96614,14 +96669,17 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                         "cancel_ack_durability_failed"
                     ),
                     "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
-                },
-            )
+                }
+            ):
+                return False
             # Keep the exact pre-call intent.  A fresh terminal absence plus
             # all-venue inventory and receipt reconciliation can close this
             # generation without inventing an ACK.
             is_success = False
             err_msg = "cancel_ack_durability_failed"
 
+    if not _cancel_attempt_still_owns_sell():
+        return False
     cancel_terminal_proof_allowed = bool(
         is_success
         or cancel_intent_reused
@@ -96635,22 +96693,26 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
         terminal_absent, terminal_source = _sell_order_terminal_absence_confirmed(
             code, orig_ord_no
         )
+        if not _cancel_attempt_still_owns_sell():
+            return False
         if not terminal_absent:
             retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
-            _mutate_stock_state(
-                stock,
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": "SELL_ORDERED",
                     "sell_cancel_reconciliation_required": True,
                     "sell_cancel_reconciliation_source": terminal_source,
                     "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
-                },
-            )
+                }
+            ):
+                return False
             try:
                 with db.get_session() as session:
-                    session.query(RecommendationHistory).filter_by(id=target_id).update(
-                        {"status": "SELL_ORDERED"}
-                    )
+                    session.query(RecommendationHistory).filter_by(
+                        id=target_id,
+                        stock_code=str(code or "").strip()[:6],
+                        status="SELL_ORDERED",
+                    ).update({"status": "SELL_ORDERED"})
             except Exception as exc:
                 log_error(
                     f"[SELL_CANCEL_TERMINAL_PROOF] {stock.get('name')}({code}) "
@@ -96668,6 +96730,8 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
             broker_qty = None
             inventory_source = "inventory_lookup_failed"
             log_error(f"⚠️ [{stock['name']}] 매도 취소 후 잔고 재확인 실패: {exc}")
+        if not _cancel_attempt_still_owns_sell():
+            return False
         retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
         owner_position_qty = max(
             _safe_int(stock.get("sell_submit_owner_position_qty"), 0),
@@ -96701,8 +96765,7 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                     if broker_qty == 0 and owner_position_qty > 0
                     else inventory_source
                 )
-                _mutate_stock_state(
-                    stock,
+                if not _mutate_cancel_attempt_if_owned(
                     set_fields={
                         "status": "SELL_ORDERED",
                         "sell_cancel_reconciliation_required": True,
@@ -96710,8 +96773,9 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                             deferred_reconciliation_source
                         ),
                         "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
-                    },
-                )
+                    }
+                ):
+                    return False
         if not reconciliation_ok:
             _log_holding_pipeline(
                 stock,
@@ -96730,21 +96794,25 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 decision_authority="sell_cancel_receipt_inventory_reconciliation",
             )
             return False
+        if not _cancel_attempt_still_owns_sell():
+            return False
         terminalized, terminal_reason = _terminalize_registered_main_orders(
             stock=stock,
             code=code,
             order_nos={str(orig_ord_no or "").strip()},
         )
         if not terminalized:
-            _mutate_stock_state(
-                stock,
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": "SELL_ORDERED",
                     "sell_cancel_reconciliation_required": True,
                     "sell_cancel_reconciliation_source": terminal_reason,
                     "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
-                },
-            )
+                }
+            ):
+                return False
+            return False
+        if not _cancel_attempt_still_owns_sell():
             return False
         generation = str(stock.get("sell_submit_generation") or "").strip()
         if generation:
@@ -96766,17 +96834,21 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                     f"[SELL_CANCEL_TERMINAL_OUTCOME_PERSIST_FAILED] {code}: {exc}"
                 )
             if not terminal_outcome_persisted:
-                _mutate_stock_state(
-                    stock,
+                if not _mutate_cancel_attempt_if_owned(
                     set_fields={
                         "status": "SELL_ORDERED",
                         "sell_cancel_reconciliation_required": True,
                         "sell_cancel_reconciliation_source": (
                             "sell_cancel_terminal_outcome_persist_failed"
                         ),
-                    },
-                )
+                    }
+                ):
+                    return False
                 return False
+            if not _cancel_attempt_still_owns_sell():
+                return False
+        if not _cancel_attempt_still_owns_sell():
+            return False
         db_holding_committed = False
         try:
             with db.get_session() as session:
@@ -96803,16 +96875,19 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 f"🚨 [DB 에러] {stock['name']} 매도 취소 후 HOLDING 복구 실패: {e}"
             )
         if not db_holding_committed:
-            _mutate_stock_state(
-                stock,
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": "SELL_ORDERED",
                     "sell_cancel_reconciliation_required": True,
                     "sell_cancel_reconciliation_source": (
                         "sell_cancel_db_holding_commit_failed"
                     ),
-                },
-            )
+                }
+            ):
+                return False
+            return False
+
+        if not _cancel_attempt_still_owns_sell():
             return False
 
         current_order_no = str(
@@ -96860,8 +96935,7 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                         )
             except Exception as exc:
                 log_error(f"[SELL_CANCEL_DB_INTERLOCK_RESTORE_FAILED] {code}: {exc}")
-            _mutate_stock_state(
-                stock,
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": "SELL_ORDERED",
                     "scale_in_locked": True,
@@ -96869,8 +96943,9 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                     "sell_cancel_reconciliation_source": (
                         "sell_cancel_pending_generation_clear_failed"
                     ),
-                },
-            )
+                }
+            ):
+                return False
             return False
 
         holding_fields = {
@@ -96887,8 +96962,7 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                     "sell_partial_exit_carry_active": True,
                 }
             )
-        _mutate_stock_state(
-            stock,
+        if not _mutate_cancel_attempt_if_owned(
             set_fields=holding_fields,
             pop_fields=[
                 "sell_odno",
@@ -96903,7 +96977,9 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 "sell_cancel_reconciliation_retry_at",
                 *_SELL_SUBMIT_CONTEXT_KEYS,
             ],
-        )
+            allowed_statuses=("SELL_ORDERED", "HOLDING"),
+        ):
+            return False
         log_info(
             f"✅ [{stock['name']}] 미체결 매도 주문 취소 성공! HOLDING(보유) 상태로 복귀합니다."
         )
@@ -96925,14 +97001,16 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
         except Exception as exc:
             log_error(f"⚠️ [{stock['name']}] 매도 취소 실패 후 잔고 재확인 실패: {exc}")
 
+        if not _cancel_attempt_still_owns_sell():
+            return False
+
         if broker_qty == 0:
             new_status = "SELL_ORDERED"
             log_error(
                 f"[SELL_CANCEL_ZERO_INVENTORY_RECEIPT_REQUIRED] {stock['name']}({code}) "
                 "broker inventory is zero but an exact final receipt is missing"
             )
-            _mutate_stock_state(
-                stock,
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": new_status,
                     "sell_cancel_reconciliation_required": True,
@@ -96944,14 +97022,18 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                         1,
                         _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30),
                     ),
-                },
-            )
+                }
+            ):
+                return False
         elif broker_qty is not None and broker_qty > 0:
-            receipt_reconciliation = _rotate_cancelled_sell_receipt_ledger(
-                stock,
-                orig_ord_no=orig_ord_no,
-                broker_qty=broker_qty,
-            )
+            with ENTRY_LOCK:
+                if not _cancel_attempt_still_owns_sell():
+                    return False
+                receipt_reconciliation = _rotate_cancelled_sell_receipt_ledger(
+                    stock,
+                    orig_ord_no=orig_ord_no,
+                    broker_qty=broker_qty,
+                )
             original_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
             no_hidden_fill = bool(
                 not receipt_reconciliation.get("required")
@@ -96965,10 +97047,9 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 # generation interlocked until a verified acknowledgement or an
                 # official terminal receipt closes it.
                 new_status = "SELL_ORDERED"
-                stock["sell_reconciled_remaining_qty"] = broker_qty
-                _mutate_stock_state(
-                    stock,
+                if not _mutate_cancel_attempt_if_owned(
                     set_fields={
+                        "sell_reconciled_remaining_qty": broker_qty,
                         "status": new_status,
                         "sell_cancel_reconciliation_required": True,
                         "sell_cancel_reconciliation_source": (
@@ -96979,8 +97060,9 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                             1,
                             _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30),
                         ),
-                    },
-                )
+                    }
+                ):
+                    return False
                 _log_holding_pipeline(
                     stock,
                     code,
@@ -97001,8 +97083,7 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 )
             else:
                 new_status = "SELL_ORDERED"
-                _mutate_stock_state(
-                    stock,
+                if not _mutate_cancel_attempt_if_owned(
                     set_fields={
                         "status": new_status,
                         "sell_cancel_reconciliation_required": True,
@@ -97016,20 +97097,21 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                             1,
                             _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30),
                         ),
-                    },
-                )
+                    }
+                ):
+                    return False
         else:
             new_status = "SELL_ORDERED"
             retry_sec = max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30))
-            _mutate_stock_state(
-                stock,
+            if not _mutate_cancel_attempt_if_owned(
                 set_fields={
                     "status": new_status,
                     "sell_cancel_reconciliation_required": True,
                     "sell_cancel_reconciliation_source": inventory_source,
                     "sell_cancel_reconciliation_retry_at": time.time() + retry_sec,
-                },
-            )
+                }
+            ):
+                return False
             _log_holding_pipeline(
                 stock,
                 code,
@@ -97049,11 +97131,15 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
                 forbidden_uses="cancel_error_text_as_fill_proof|duplicate_sell_submit",
             )
 
+        if not _cancel_attempt_still_owns_sell():
+            return False
         try:
             with db.get_session() as session:
-                session.query(RecommendationHistory).filter_by(id=target_id).update(
-                    {"status": new_status}
-                )
+                session.query(RecommendationHistory).filter_by(
+                    id=target_id,
+                    stock_code=str(code or "").strip()[:6],
+                    status="SELL_ORDERED",
+                ).update({"status": new_status})
         except Exception as exc:
             log_error(
                 f"🚨 [DB 에러] {stock['name']} 매도 취소 reconciliation "

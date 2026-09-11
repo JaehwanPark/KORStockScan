@@ -79,6 +79,49 @@ def widget_position_buys(state):
     ]
 
 
+def _original_target_fill_facts(
+    registry, order, filled, *, owner_id, symbol
+):
+    """Return exact registry-backed price/time for the original target fill.
+
+    The profit-exit reducer intentionally tracks quantities only.  Shared WS
+    reconciliation can already have persisted the exact cumulative fill amount
+    in the immutable owner registry, so project it into the original episode
+    journal without inventing a target-price proxy.  Multi-price fills whose
+    exact average is not an integer remain unresolved.
+    """
+    if type(filled) is not int or filled <= 0:
+        return None
+    row = registry.order_owner(
+        order_date=order.trading_date, broker_order_no=order.order_no
+    )
+    if (
+        not row
+        or row.get("side") != "SELL"
+        or row.get("action") != "NEW"
+        or row.get("broker_order_no") != order.order_no
+        or row.get("order_date") != order.trading_date
+        or row.get("owner_type") != "episode"
+        or row.get("owner_id") != owner_id
+        or row.get("position_id") != owner_id
+        or row.get("symbol") != symbol
+        or row.get("quantity") != filled
+        or row.get("filled_qty") != filled
+        or type(row.get("fill_amount")) is not int
+        or row["fill_amount"] <= 0
+        or row["fill_amount"] % filled
+    ):
+        return None
+    observed_at = row.get("fill_observed_at_kst")
+    try:
+        observed = datetime.fromisoformat(observed_at)
+    except (TypeError, ValueError):
+        return None
+    if observed.tzinfo is None or observed.date().isoformat() != order.trading_date:
+        return None
+    return row["fill_amount"] // filled, observed.isoformat()
+
+
 def active_widget(state):
     from src.trading.order.target_ratchet import KEY as RATCHET_KEY
     return KEY in state or RATCHET_KEY in state
@@ -272,6 +315,16 @@ def episode_leg(machine, leg, now):
         leg[KEY] = payload
         records = order_history(payload)
         leg["target_filled_qty"] = records[0]["filled"]
+        original = records[0]["order"]
+        facts = _original_target_fill_facts(
+            adapter.registry,
+            OrderKey(original["trading_date"], original["order_no"]),
+            records[0]["filled"],
+            owner_id=context.owner_id,
+            symbol=symbol,
+        )
+        if facts is not None:
+            leg["target_fill_price"], leg["target_filled_at"] = facts
         leg["profit_stagnation_filled_qty"] = sum(r["filled"] for r in records[1:])
         leg["position_qty"] = leg["buy_filled_qty"] - sum(r["filled"] for r in records)
         leg["status"] = "COMPLETE" if leg["position_qty"] == 0 else "TARGET_OPEN"

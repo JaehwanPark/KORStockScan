@@ -24,6 +24,7 @@ from src.trading.config.machine_profit_stagnation_policy import (
 from src.trading.order import profit_stagnation_owners as bridge
 from src.trading.order.adaptive_exit.broker import RegisteredSellAdapter
 from src.trading.order.profit_stagnation_exit import KEY
+from src.trading.order.owner_custody_registry import OrderOwnerRegistry
 from src.trading.market.profit_stagnation_quote import executable_quote
 from src.trading.widget_auto_trade.engine import KST
 from types import SimpleNamespace
@@ -233,6 +234,97 @@ def test_actual_owner_cancel_positive_limit_restart_full_terminal(running):
             running.machine._open_qty(running.machine._state["symbols"]["005930"]) == 0
         )
     assert len(running.wire.writes) == 2
+
+
+def test_episode_projects_exact_original_target_fill_facts(running, monkeypatch):
+    if running.owner != "episode":
+        return
+    monkeypatch.setattr(
+        bridge,
+        "_original_target_fill_facts",
+        lambda registry, order, filled, **identity: (
+            10100,
+            DATE + "T13:00:01+09:00",
+        ),
+    )
+    running.wire.detailed[0].update(cntr_qty="10", ord_remnq="0")
+    running.wire.current = []
+    tick(running)
+    leg = running.machine._state["legs"][0]
+    assert leg["target_fill_price"] == 10100
+    assert leg["target_filled_at"].startswith(DATE + "T")
+
+
+def test_original_target_fill_facts_requires_exact_registry_amount_and_date():
+    row = {
+        "side": "SELL",
+        "action": "NEW",
+        "broker_order_no": TARGET.order_no,
+        "order_date": DATE,
+        "owner_type": "episode",
+        "owner_id": "episode:test:005930:" + DATE,
+        "position_id": "episode:test:005930:" + DATE,
+        "symbol": "005930",
+        "quantity": 10,
+        "filled_qty": 10,
+        "fill_amount": 101000,
+        "fill_observed_at_kst": DATE + "T13:00:01+09:00",
+    }
+    registry = SimpleNamespace(order_owner=lambda **kwargs: row)
+    assert bridge._original_target_fill_facts(
+        registry,
+        TARGET,
+        10,
+        owner_id="episode:test:005930:" + DATE,
+        symbol="005930",
+    ) == (
+        10100,
+        DATE + "T13:00:01+09:00",
+    )
+    assert bridge._original_target_fill_facts(
+        registry,
+        TARGET,
+        9,
+        owner_id="episode:test:005930:" + DATE,
+        symbol="005930",
+    ) is None
+    row["fill_amount"] = 101001
+    assert bridge._original_target_fill_facts(
+        registry,
+        TARGET,
+        10,
+        owner_id="episode:test:005930:" + DATE,
+        symbol="005930",
+    ) is None
+    row["fill_amount"] = 101000
+    row["owner_id"] = "episode:other:005930:" + DATE
+    assert bridge._original_target_fill_facts(
+        registry,
+        TARGET,
+        10,
+        owner_id="episode:test:005930:" + DATE,
+        symbol="005930",
+    ) is None
+
+
+def test_registry_projection_retains_fill_time_after_terminal_transition():
+    events = [
+        {
+            "intent_id": "target",
+            "event": "FILL_RECORDED",
+            "observed_at_kst": DATE + "T13:00:01+09:00",
+            "filled_qty": 10,
+        },
+        {
+            "intent_id": "target",
+            "event": "ORDER_TERMINAL",
+            "observed_at_kst": DATE + "T13:00:02+09:00",
+            "state": "ORDER_TERMINAL",
+        },
+    ]
+    assert OrderOwnerRegistry._state(events)["target"]["fill_observed_at_kst"] == (
+        DATE + "T13:00:01+09:00"
+    )
 
 
 def test_widget_observation_does_not_claim_existing_entry_path(running):

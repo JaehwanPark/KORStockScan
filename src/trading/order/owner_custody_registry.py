@@ -243,6 +243,11 @@ class OrderOwnerRegistry:
                 continue
             current = state.setdefault(intent_id, {})
             current.update(event)
+            if event.get("event") == "FILL_RECORDED":
+                # Keep the immutable fill-event receive time across a later
+                # terminal transition. Consumers must not substitute the
+                # reconciliation time for the execution receipt time.
+                current["fill_observed_at_kst"] = event.get("observed_at_kst")
             if event.get("event") == "SELL_AMEND_RECONCILED":
                 parent = state[event["amendment_parent_intent_id"]]
                 parent.update(

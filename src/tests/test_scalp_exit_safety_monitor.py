@@ -1940,6 +1940,61 @@ def test_sell_timeout_without_order_number_keeps_claim_until_reconciled(monkeypa
     assert db.updates == [{"status": "SELL_ORDERED"}]
 
 
+@pytest.mark.parametrize("terminal_status", ["WATCHING", "COMPLETED"])
+def test_stale_sell_timeout_dispatch_cannot_mutate_terminal_or_revived_target(
+    monkeypatch, terminal_status
+):
+    cancel_calls = []
+    monkeypatch.setattr(
+        handlers,
+        "process_sell_cancellation",
+        lambda *args, **kwargs: cancel_calls.append((args, kwargs)),
+    )
+    stock = {
+        "id": 2,
+        "name": "완료경합",
+        "status": terminal_status,
+        "sell_odno": "0000001",
+        "sell_order_time": 900.0,
+    }
+
+    handlers.handle_sell_ordered_state(stock, "123456")
+
+    assert stock["status"] == terminal_status
+    assert cancel_calls == []
+
+
+def test_cancel_intent_persist_race_cannot_resurrect_revived_target(monkeypatch):
+    monkeypatch.setattr(
+        handlers, "_pending_sell_cancel_intent_exact", lambda *a, **k: False
+    )
+    monkeypatch.setattr(
+        handlers, "_pending_sell_cancel_ack_exact", lambda *a, **k: False
+    )
+
+    def complete_and_revive(target, **_kwargs):
+        target.update({"id": 3, "status": "WATCHING"})
+        return False
+
+    monkeypatch.setattr(
+        handlers, "_persist_pending_sell_cancel_intent", complete_and_revive
+    )
+    stock = {
+        "id": 2,
+        "name": "취소의도경합",
+        "status": "SELL_ORDERED",
+        "sell_odno": "0000001",
+    }
+
+    assert (
+        handlers.process_sell_cancellation(stock, "123456", "0000001", _CancelDB())
+        is False
+    )
+    assert stock["id"] == 3
+    assert stock["status"] == "WATCHING"
+    assert "sell_cancel_reconciliation_required" not in stock
+
+
 @pytest.mark.parametrize("recovery_succeeds", [False, True])
 def test_sell_timeout_never_cancels_while_tp1_lifecycle_release_is_pending(
     monkeypatch,
