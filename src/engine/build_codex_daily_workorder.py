@@ -730,6 +730,9 @@ def build_runbook_operational_checks(
                 section="장후 확인 절차",
                 artifact_checks=(
                     "logs/threshold_cycle_postclose_cron.log",
+                    "data/report/monitoring_instruction_refresh/installed_trigger.json",
+                    f"data/report/monitoring_instruction_refresh/{date_text}/postclose/status.json",
+                    f"data/report/monitoring_instruction_refresh/{date_text}/intraday/status.json",
                     "logs/swing_model_retrain_cron.log",
                     "logs/tuning_monitoring_postclose_cron.log",
                     f"data/report/threshold_cycle_ev/threshold_cycle_ev_{date_text}.md",
@@ -752,6 +755,8 @@ def build_runbook_operational_checks(
                     "real/sim/combined split, swing lifecycle automation, swing runtime approval, pattern lab automation, "
                     "swing model retrain status/promotion guard, tuning monitoring의 threshold postclose predecessor DONE 확인, "
                     "code improvement workorder 생성 여부 확인. "
+                    "문서 현행화 19:30 결과와 실제 장후 완료 후 intraday 결과를 분리하고 완료 전은 not_yet_due. "
+                    "preview/설치 성공은 자연 실행 완료가 아니며 문서 writer에 매매/producer 실행 권한은 없다. "
                     "SystemErrorDetector 하루 누적 fail detector가 있으면 incident/playbook 분류. "
                     "Tuning Chain Control State는 GREEN|YELLOW|RED|GRAY 중 하나로 별도 기록하고, "
                     "blocked_stage=input_health|chain_completion|decision_integrity|disposition|runtime_uptake|feedback_closure|-와 "
