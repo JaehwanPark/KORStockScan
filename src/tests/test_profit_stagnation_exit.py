@@ -290,6 +290,80 @@ def test_widget_pending_buy_clears_observation_without_cancel(running):
     assert not running.wire.writes
 
 
+def unsent_widget_buy(buy):
+    """Durable EntryNotSent receipt after registry reservation release."""
+    row = deepcopy(buy)
+    row.update(
+        status="NOT_SENT", order_no="", broker_accepted=False,
+        actual_order_submitted=False, filled_qty=0, fill_price=None,
+        return_code="ENTRY_ADVERSE_NOT_SENT",
+        owner_registry_bind_confirmed=False,
+    )
+    return row
+
+
+def test_widget_unsent_attempt_preserves_observation_and_exit(running):
+    if running.owner != "widget":
+        return
+    state = running.machine._state["symbols"]["005930"]
+    unsent = unsent_widget_buy(state["orders"][0])
+    # An unexecuted older attempt must not determine enrollment time/basis.
+    unsent["intent_created_at"] = "2026-09-09T12:00:00+09:00"
+    before = deepcopy(unsent)
+    state["orders"].insert(0, unsent)
+    submitted(running)
+    assert state["orders"][0] == before
+    assert running.record()["entry_price"] == 10000
+    assert running.record()["quantity"] == 10
+
+
+@pytest.mark.parametrize("change", [
+    {"status": "AMBIGUOUS"}, {"status": "SUBMITTED"},
+    {"status": "FAILED"}, {"broker_accepted": True},
+    {"actual_order_submitted": True}, {"actual_order_submitted": None},
+    {"filled_qty": 1}, {"filled_qty": False}, {"filled_qty": "0"},
+    {"fill_price": 10000}, {"order_no": "0000006"},
+    {"return_code": "0"}, {"owner_registry_bind_confirmed": True},
+    {"owner_registry_reconciliation_required": True},
+    {"ambiguous": True}, {"fill_amount": 10000},
+    {"fill_amount_krw": 10000}, {"owner_registry_error": "failed_release"},
+])
+def test_widget_unproven_unsent_remains_blocked(running, change):
+    if running.owner != "widget":
+        return
+    state = running.machine._state["symbols"]["005930"]
+    unsent = unsent_widget_buy(state["orders"][0])
+    unsent.update(change)
+    state["orders"].append(unsent)
+    tick(running, 6)
+    tick(running, 6)
+    assert KEY not in state and bridge.OBSERVATION_KEY not in state
+    assert not running.wire.writes
+
+
+def test_unsent_receipt_requires_explicit_fill_fields():
+    order = unsent_widget_buy({"side": "BUY"})
+    assert bridge.widget_buy_proven_not_sent(order)
+    for field in ("fill_price", "filled_qty", "broker_accepted",
+                  "actual_order_submitted", "order_no", "return_code"):
+        missing = deepcopy(order)
+        missing.pop(field)
+        assert not bridge.widget_buy_proven_not_sent(missing), field
+
+
+def test_widget_custody_buy_selection_preserves_identity_and_audit():
+    filled = dict(side="BUY", status="FILLED", signal_id="entry")
+    child = dict(side="BUY", status="SUBMITTED", parent_entry_signal_id="entry")
+    other = dict(side="BUY", status="FILLED", signal_id="other")
+    unsent = unsent_widget_buy(filled)
+    state = dict(entry_signal_id="entry", orders=[unsent, filled, child, other])
+    before = deepcopy(state)
+    assert bridge.widget_position_buys(state) == [filled, child]
+    assert state == before
+    state.pop("entry_signal_id")
+    assert bridge.widget_position_buys(state) == []
+
+
 def test_widget_basis_change_restarts_only_observation(running):
     if running.owner != "widget":
         return

@@ -36,6 +36,49 @@ from src.trading.order.profit_stagnation_exit import (
 OBSERVATION_KEY = "profit_stagnation_observation"
 
 
+def widget_buy_proven_not_sent(order):
+    """Recognize only the owner's released pre-transport veto receipt.
+
+    EntryNotSent becomes NOT_SENT only after _transition_owner_submit releases
+    the reservation. Failed release is AMBIGUOUS. Keep all conflicting or
+    incomplete records in the custody checks; never rewrite the audit journal.
+    """
+    return bool(
+        order.get("side") == "BUY"
+        and order.get("status") == "NOT_SENT"
+        and order.get("return_code") == "ENTRY_ADVERSE_NOT_SENT"
+        and order.get("actual_order_submitted") is False
+        and order.get("broker_accepted") is False
+        and order.get("order_no") == ""
+        and type(order.get("filled_qty")) is int
+        and order["filled_qty"] == 0
+        and "fill_price" in order and order["fill_price"] is None
+        and order.get("fill_amount") in (None, 0)
+        and order.get("fill_amount_krw") in (None, 0)
+        and not order.get("ambiguous")
+        and not order.get("owner_registry_bind_confirmed")
+        and not any(
+            value for key, value in order.items()
+            if key.endswith("owner_registry_reconciliation_required")
+            or key.endswith("owner_registry_error")
+        )
+    )
+
+
+def widget_position_buys(state):
+    """Same-signal custody inputs, excluding proven zero-exposure attempts."""
+    signal = state.get("entry_signal_id")
+    if not isinstance(signal, str) or not signal.strip():
+        return []
+    return [
+        order for order in state.get("orders", [])
+        if order.get("side") == "BUY"
+        and (order.get("signal_id") == signal
+             or order.get("parent_entry_signal_id") == signal)
+        and not widget_buy_proven_not_sent(order)
+    ]
+
+
 def active_widget(state):
     from src.trading.order.target_ratchet import KEY as RATCHET_KEY
     return KEY in state or RATCHET_KEY in state
@@ -264,12 +307,7 @@ def widget_symbol(trader, state, now, *, allow_new_target_ratchet=False):
         raise OSError("profit_exit_owner_reload_required")
     orders = state.get("orders", [])
     signal = state.get("entry_signal_id")
-    buys = [
-        o
-        for o in orders
-        if o.get("side") == "BUY"
-        and (o.get("signal_id") == signal or o.get("parent_entry_signal_id") == signal)
-    ]
+    buys = widget_position_buys(state)
     entered = min((o.get("intent_created_at", "") for o in buys), default="")
     selected = policy_for(now, "widget_auto_trade", entered, diagnostic=trader._state)
     sessions = state.get(KEY, {})

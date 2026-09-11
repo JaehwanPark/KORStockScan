@@ -353,15 +353,7 @@ def widget(trader, state, now, *, allow_new=False, probe_only=False):
             if o.get("order_no") == pending["binding"]["order_no"]
             and o.get("order_date") == pending["binding"]["date"]
         ]
-    buys = [
-        o
-        for o in state.get("orders", [])
-        if o.get("side") == "BUY"
-        and (
-            o.get("signal_id") == state.get("entry_signal_id")
-            or o.get("parent_entry_signal_id") == state.get("entry_signal_id")
-        )
-    ]
+    buys = original.widget_position_buys(state)
     if not targets or not buys:
         return bool(pending)
     if not pending and (
@@ -410,6 +402,7 @@ def widget(trader, state, now, *, allow_new=False, probe_only=False):
                 )
                 and not any(
                     o.get("side") == "BUY"
+                    and not original.widget_buy_proven_not_sent(o)
                     and o.get("status")
                     not in {
                         "FILLED",

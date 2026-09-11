@@ -137,6 +137,51 @@ def test_original_owner_amends_one_tick_and_recovers_ack(enabled):
     assert "ai" not in claim
 
 
+def test_widget_released_unsent_attempt_does_not_block_target_amendment(enabled):
+    if enabled.owner != "widget":
+        return
+    from copy import deepcopy
+    from src.tests.test_profit_stagnation_exit import unsent_widget_buy
+
+    state = enabled.record_ratchet()
+    unsent = unsent_widget_buy(state["orders"][0])
+    unsent["intent_created_at"] = "2026-09-09T12:00:00+09:00"
+    before = deepcopy(unsent)
+    state["orders"].insert(0, unsent)
+    tick(enabled)
+    assert len(amendments(enabled)) == 1
+    assert amendments(enabled)[0]["payload"]["mdfy_qty"] == "10"
+    claim = state[ratchet.KEY]
+    assert claim["binding"]["entry_price"] == 10000
+    assert claim["binding"]["entered_at"] == DATE + "T12:59:00+09:00"
+    assert state["orders"][0] == before
+    tick(enabled)
+    assert len(amendments(enabled)) == 1
+
+
+@pytest.mark.parametrize("change", [
+    {"status": "AMBIGUOUS"}, {"status": "SUBMITTED"},
+    {"broker_accepted": True}, {"actual_order_submitted": None},
+    {"filled_qty": 1}, {"order_no": "0000006"},
+    {"owner_registry_reconciliation_required": True},
+])
+@pytest.mark.parametrize("same_signal", [True, False])
+def test_widget_unproven_unsent_blocks_target_amendment(enabled, change, same_signal):
+    if enabled.owner != "widget":
+        return
+    from src.tests.test_profit_stagnation_exit import unsent_widget_buy
+
+    state = enabled.record_ratchet()
+    unsent = unsent_widget_buy(state["orders"][0])
+    unsent.update(change)
+    if not same_signal:
+        unsent["signal_id"] = "other"
+    state["orders"].insert(0, unsent)
+    tick(enabled)
+    assert not amendments(enabled)
+    assert ratchet.KEY not in state
+
+
 def test_ws_trigger_never_calls_holding_ai(enabled, monkeypatch):
     from src.engine.ai_engine_openai import GPTSniperEngine
 
