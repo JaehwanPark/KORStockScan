@@ -65,3 +65,14 @@
 - `15:37:14` error detector는 `summary_severity=pass`, `log_scanner=pass`, `process_health=pass`다. `456010` 자동 hard-stop 수동관리 이관은 `expected_hard_stop_manual_handoff`로 정상 분류됐다.
 
 배포 manifest는 `data/runtime/unified_runtime_deployment.json`, rollback 백업은 `tmp/sell-timeout-race-deploy-20260911-1531`에 보존했다. 이 배포는 상태 경쟁과 exact receipt 투영 결함을 닫으며 threshold·수량·가격·provider·safety 정책은 바꾸지 않는다. 자연 재발 없음은 운영 수리 확인이고 비용 차감 경제성 개선의 별도 증명은 아니다.
+
+## 작업본·배포본 최종 형상 동기화
+
+사용자의 전수 커밋·형상 동기화 요청에 따라 당일 운영 문서·체크리스트·Markdown 산출물 27개를 `ceed57ac`으로 고정하고 새 release를 구성했다. 첫 sparse release에서 `configs/scalp_micro_reversion_canary_guard.toml`이 제외되어 startup final snapshot 오류 2건이 발생한 것을 추가 review finding으로 잡았다. 실행 중 release를 수정하지 않고 `configs/`를 포함한 successor `/home/ubuntu/KORStockScan-runtime-releases/workspace-sync-r2-20260911-1544`를 같은 검토 commit으로 새로 만들었다.
+
+- config 원본/배포 SHA256: `6fb3781d01b89352aeaf828a2aee25474066b9ab2581bbcad2880de71c5124cf`
+- 메인 우아한 재기동: PID `553860`, runtime verify PASS, mismatch/finding `0`
+- 독립 active collector: Doosan PID `554031`, Samsung PID `554039`, 모두 active/Result success
+- 공통 cron routing `9`개와 독립 drop-in `17`개가 최종 root를 가리킨다.
+- `15:44:35` detector: `summary_severity=pass`, log scanner/process/thread PASS. 새 PID에서 config-missing 오류 `0`건이다.
+- `src`, `deploy`, `restart.sh`는 작업본과 release 사이 변경 `0`이다. 재기동 후 생성된 market-regime cache 갱신은 별도 data commit이며 실행 코드 형상에 차이를 만들지 않는다.
