@@ -9,7 +9,7 @@ User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
-Environment="KORSTOCKSCAN_HANWHA_OCEAN_WIDGET_TELEGRAM_ENABLED=true"
+Environment="KORSTOCKSCAN_HANWHA_OCEAN_WIDGET_TELEGRAM_ENABLED=false"
 ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.hanwha_ocean_widget_advisory --interval-sec 10
 Restart=always
 RestartSec=3

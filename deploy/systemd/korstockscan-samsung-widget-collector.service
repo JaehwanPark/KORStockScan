@@ -4,6 +4,8 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Environment="KORSTOCKSCAN_SAMSUNG_WIDGET_TELEGRAM_ENABLED=false"
+Environment="KORSTOCKSCAN_SAMSUNG_WIDGET_ENTRY_TELEGRAM_ENABLED=false"
 Type=simple
 User=ubuntu
 Group=www-data
