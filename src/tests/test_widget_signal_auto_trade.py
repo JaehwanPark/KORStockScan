@@ -44,6 +44,33 @@ def _isolate_owner_policy_and_registry(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _isolate_market_weakness_counterfactual_writer(monkeypatch):
+    def released_market_weakness(**kwargs):
+        now = kwargs["now"]
+        return MarketWeaknessEntryDecision(
+            blocked=False,
+            reason="market_weakness_latch_not_active",
+            symbol=str(kwargs["symbol"]),
+            owner=str(kwargs["owner"]),
+            listing_market="KOSPI",
+            phase="released",
+            active_markets=(),
+            session_key=now.date().isoformat(),
+            observation_id="test-market-weakness-released",
+            observation_as_of=now.isoformat(),
+            source_status="test_isolated_released",
+            state_path="test-state.json",
+            symbol_master_path="test-master.json",
+            state_age_sec=0,
+            state_fresh=True,
+        )
+
+    # Unrelated widget tests must not consume the host's live weakness latch.
+    # Tests for the guard override this fixture with their own active decision.
+    monkeypatch.setattr(
+        engine,
+        "evaluate_market_weakness_entry_guard",
+        released_market_weakness,
+    )
     monkeypatch.setattr(
         engine,
         "record_market_weakness_blocked_entry",
@@ -483,6 +510,7 @@ def _samsung_policy_trader(
         state_path=tmp_path / "state.json",
         event_recorder=recorder,
         snapshot_loader=lambda path: payload_box["payload"],
+        policy_loader=FakeDatedPolicyLoader({}),
         entry_action_notifier=entry_action_notifier,
         entry_qty=engine.WIDGET_AUTO_TRADE_LEG_QUANTITY,
         enabled=True,

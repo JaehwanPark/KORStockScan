@@ -29,3 +29,7 @@
 ## 남은 확인
 
 배포 후 직접 runtime 판정과 PID 소비는 완료됐다. 배포 뒤 아직 새 entry signal이 없으므로 자연 signal에서 blocked-entry observation이 생성되는 acceptance는 다음 자연 신호까지 `not_yet_observed`다. 실제 시장 회복은 KOSPI/KOSDAQ active latch가 기존 60초 간격의 유효 recovery 관찰 3회를 충족하고 `release` transition/Telegram receipt가 생길 때 별도로 확인한다.
+
+## 후속 반복 리뷰
+
+14:42 KST 재리뷰에서 위젯 전체 신호 consumer와 notifier transition suite를 포함해 검증 범위를 확대했다. 최초 실행은 오늘의 live weakness latch와 exact-date widget runtime policy를 삼성 수량 단위 테스트가 읽어 3건 실패했다. 이는 운영 결함이 아니라 테스트 격리 결함이었다. `test_widget_signal_auto_trade.py`의 공통 fixture에 명시적 released weakness decision을, Samsung helper에 빈 dated-policy loader를 주입했다. 약세 전용 테스트는 자체 active decision을 계속 덮어쓰므로 실제 차단 coverage는 유지된다. 수정 뒤 직접 실패 3건과 확대 suite 628건이 모두 통과했고, runtime 코드는 바뀌지 않아 추가 배포·재기동은 하지 않았다. 14:42 자연 상태는 여전히 `BROAD_WEAKNESS`, `recovery_streak=0`; 시간창이 끝난 episode 8개는 `Result=success`로 정상 종료했고 widget PID `474978`은 새 release에서 계속 실행 중이다.
