@@ -4512,9 +4512,28 @@ def test_analyze_target_probe_prompt_keeps_exact_schema_and_version(monkeypatch)
     assert result["entry_probe_intent_status"] == "not_eligible"
 
 
-def test_analyze_target_v2_13_supplies_shared_recovery_analysis(monkeypatch):
+@pytest.mark.parametrize(
+    "fallback_status",
+    ["fallback_position_owner_out_of_scope", "fallback_operator_disabled",
+     "fallback_activation_hash_invalid"],
+)
+def test_analyze_target_v2_13_supplies_shared_recovery_analysis(
+    monkeypatch, fallback_status
+):
     engine = _build_engine()
     captured = {}
+    monkeypatch.setattr(
+        openai_module, "resolve_live_prompt_policy",
+        lambda **_kwargs: {
+            "enabled": False,
+            "status": fallback_status,
+            "selected_prompt_version": (
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
+            "target_date": "2026-09-11",
+            "runtime_effect": False,
+        },
+    )
     monkeypatch.setattr(
         openai_module,
         "TRADING_RULES",
@@ -4532,6 +4551,7 @@ def test_analyze_target_v2_13_supplies_shared_recovery_analysis(monkeypatch):
         captured["prompt"] = prompt
         captured["payload"] = json.loads(user_input)
         captured["schema_name"] = kwargs.get("schema_name")
+        captured["metadata_extra"] = kwargs.get("metadata_extra")
         return {
             "edge_state": "NO_EDGE",
             "action": "DROP",
@@ -4560,6 +4580,11 @@ def test_analyze_target_v2_13_supplies_shared_recovery_analysis(monkeypatch):
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
+        metadata_extra={
+            "entry_setup_live_policy_status": "stale_active",
+            "entry_setup_live_policy_target_date": "2026-09-10",
+            "entry_setup_live_policy_runtime_effect": True,
+        },
         candle_context=_allowed_entry_candle_context(),
     )
 
@@ -4580,6 +4605,31 @@ def test_analyze_target_v2_13_supplies_shared_recovery_analysis(monkeypatch):
     assert result["decision_quality_live_adapter"] == (
         "decision_quality_v2_13_recovery_confirmation_entry_v1"
     )
+
+    assert captured["metadata_extra"]["entry_setup_live_policy_status"] == fallback_status
+    assert captured["metadata_extra"]["entry_setup_live_policy_target_date"] == "2026-09-11"
+    assert captured["metadata_extra"]["entry_setup_live_policy_runtime_effect"] is False
+    assert result["entry_setup_live_policy_runtime_effect"] is False
+    assert result["entry_setup_live_policy_status"] == fallback_status
+    assert result["entry_setup_live_policy_target_date"] == "2026-09-11"
+
+    cached = dict(result)
+    cached["entry_setup_live_policy_status"] = "stale_active"
+    cached["entry_setup_live_policy_runtime_effect"] = True
+    monkeypatch.setattr(engine, "_cache_get", lambda *_args: cached)
+    monkeypatch.setattr(
+        engine, "_call_openai_safe",
+        lambda *_args, **_kwargs: pytest.fail("cached decision must not call provider"),
+    )
+    cached_result = engine.analyze_target(
+        "테스트", _sample_ws_data(), _sample_ticks(), _sample_candles(),
+        strategy="SCALPING", prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
+    )
+    assert cached_result["cache_hit"] is True
+    assert cached_result["action"] == result["action"]
+    assert cached_result["entry_setup_live_policy_status"] == fallback_status
+    assert cached_result["entry_setup_live_policy_runtime_effect"] is False
 
 
 def test_decision_quality_v2_7_semantic_failure_is_fail_closed(monkeypatch):

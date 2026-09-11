@@ -8561,11 +8561,26 @@ class GPTSniperEngine:
                 )
             )
 
+        fallback_policy_trace_fields = (
+            {
+                "entry_setup_live_policy_status": entry_setup_live_policy.get("status"),
+                "entry_setup_live_policy_target_date": entry_setup_live_policy.get(
+                    "target_date"
+                ),
+                "entry_setup_live_policy_runtime_effect": False,
+            }
+            if entry_setup_live_policy and not decision_quality_v2_14_selected
+            else {}
+        )
+
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
             if isinstance(entry_adm_runtime, dict):
                 merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
-            return merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
+            merged = merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
+            # Refresh diagnostic policy status even when reusing a cached decision.
+            merged.update(fallback_policy_trace_fields)
+            return merged
 
         candle_preflight = ai_input_preflight(candle_context)
         if (
@@ -9037,6 +9052,7 @@ class GPTSniperEngine:
                         ),
                     }
                 )
+            trace_metadata_extra.update(fallback_policy_trace_fields)
             snapshot = (
                 candle_context.get("ai_market_snapshot_v1")
                 if isinstance(candle_context, dict)
