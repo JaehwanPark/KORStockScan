@@ -7702,6 +7702,11 @@ def _build_code_improvement_workorder(
     )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
+        for order in microstructure_reaction_orders
+        if order.get("order_id")
+    )
+    required_handoff_order_ids.update(
+        str(order.get("order_id"))
         for order in observation_source_quality_orders
         if order.get("order_id")
         and order.get("improvement_type")

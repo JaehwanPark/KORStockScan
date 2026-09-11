@@ -4183,7 +4183,22 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
     microstructure_dir.mkdir()
     target_date = "2026-05-16"
     (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
-        json.dumps({"date": target_date, "code_improvement_orders": []}),
+        json.dumps(
+            {
+                "date": target_date,
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_competing_priority_zero",
+                        "title": "Competing priority-zero workorder",
+                        "target_subsystem": "reporting",
+                        "priority": 0,
+                        "route": "instrumentation_order",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
     (
@@ -4254,9 +4269,10 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
-    report = mod.build_code_improvement_workorder(target_date, max_orders=5)
+    report = mod.build_code_improvement_workorder(target_date, max_orders=1)
 
     order_by_id = {order["order_id"]: order for order in report["orders"]}
+    assert "order_competing_priority_zero" in order_by_id
     timestamp_order = order_by_id["order_microstructure_ka10046_received_timestamp_gap"]
     assert timestamp_order["source_report_type"] == "microstructure_reaction_context"
     assert timestamp_order["decision"] == "implement_now"
