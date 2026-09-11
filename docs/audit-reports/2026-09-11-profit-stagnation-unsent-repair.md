@@ -29,5 +29,5 @@
 - `test_profit_stagnation_exit.py` + `test_holding_target_ratchet.py`: **188 passed**. 확정 미전송 후 취소확정/보조주문, 목표 상향, 기존 진입시각 제외, 이력 보존, 모호함·접수·체결·금액 모순 및 원장 결손의 차단을 검증했다.
 - `test_entry_adverse_owners.py`, `test_machine_adaptive_exit_owner_loop.py`, `test_machine_adaptive_exit_broker.py`, `test_machine_adaptive_exit_reducer.py`, `test_profit_stagnation.py`, `test_machine_profit_stagnation_deployment.py`: **431 passed, 2 skipped**. skip은 widget 전용/episode 전용 계약의 반대 owner fixture이며 실패·미실행 수리를 숨긴 것이 아니다.
 - 합계 **619 passed, 2 skipped**. 테스트는 임시 원장과 fake transport를 사용했으며 실 broker/Provider 호출은 없다.
-- Python compile, `git diff --check`, 문서 print-only parser를 별도로 확인한다.
+- Python compile 및 `git diff --check` 통과. 문서 print-only parser exit 0, 기존 `MachineProfitStagnationStartupAcceptance0911`의 파싱을 확인했다. 수리 코드 commit `830783b9`를 workspace에 통합했고 검증 worktree와 코드/테스트 4개 파일의 SHA256 일치를 확인했다.
 - 기존 실행 owner: [당일 체크리스트의 MachineProfitStagnationStartupAcceptance0911](../checklists/2026-09-11-stage2-todo-checklist.md). 배포 승인·실제 consumer 적용 뒤 신규 자연 진입의 보조 익절 관찰/직접 차단 사유 및 target 전환·복구·수량 terminal을 대사한다. 이전 삼성 목표 익절 성공을 수리 효과로 귀속하지 않는다. 현재 보유나 주문을 임의 이관하지 않는다.
