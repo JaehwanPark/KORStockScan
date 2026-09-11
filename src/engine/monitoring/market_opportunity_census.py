@@ -85,6 +85,10 @@ EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION = (
 EXTERNAL_BBO_CAPTURE_TOP_N = 20
 EXTERNAL_BBO_MIN_REQUEST_INTERVAL_SEC = 0.25
 EXTERNAL_BBO_MAX_REQUESTS_PER_RUN = 40
+# Wait for the existing shared gate inside this capture instead of losing the
+# only executable anchor until the next five-minute capture. No extra retry.
+EXTERNAL_BBO_SHARED_ADMISSION_WAIT_SEC = 5.0
+EXTERNAL_BBO_CAPTURE_REQUEST_WINDOW_SEC = 240.0
 EXTERNAL_BBO_MAX_REQUESTS_PER_KST_DATE = 4_800
 EXTERNAL_BBO_BUDGET_DIR = DATA_DIR / "runtime" / REPORT_TYPE
 EXTERNAL_BBO_BUDGET_SCHEMA_VERSION = "market_opportunity_external_bbo_budget_v1"
@@ -464,7 +468,15 @@ def _load_symbol_master_binding(
             "artifact_sha256": None,
             "reason": type(exc).__name__,
         }
+    from src.engine.scalping.micro_reversion.economic_reference_owner import (
+        verified_non_common_stock_exclusions,
+    )
+
+    exclusions = verified_non_common_stock_exclusions(
+        payload, as_of=date.fromisoformat(target_date)
+    )
     return master, {
+        "non_common_stock_exclusions": exclusions,
         "status": "verified",
         "path": str(receipt.logical_path),
         "physical_path": str(receipt.physical_path),
@@ -644,7 +656,7 @@ def _capture_external_bbo_observation(
             max_retries=1,
             request_owner="market_opportunity_census.external_bbo",
             request_class="source_only",
-            read_rate_max_wait_sec=1.25,
+            read_rate_max_wait_sec=EXTERNAL_BBO_SHARED_ADMISSION_WAIT_SEC,
             return_meta=True,
         )
         if isinstance(raw, tuple) and len(raw) == 2 and isinstance(raw[1], dict):
@@ -820,6 +832,11 @@ def capture_market_snapshots(
         max(0, int(max_bbo_requests_per_run)),
         EXTERNAL_BBO_MAX_REQUESTS_PER_RUN,
     )
+    non_common_exclusions = {}
+    if collect_executable_bbo:
+        _, capture_master_binding = _load_symbol_master_binding(target_date, symbol_master_path=None)
+        if capture_master_binding.get("status") == "verified":
+            non_common_exclusions = capture_master_binding.get("non_common_stock_exclusions") or {}
     bbo_request_count = 0
     last_bbo_request_started_monotonic: float | None = None
     observed_at = captured_at or datetime.now(KST)
@@ -833,6 +850,7 @@ def capture_market_snapshots(
         )
     captured_at_text = observed_at.isoformat()
     records: list[dict[str, Any]] = []
+    capture_started_monotonic = monotonic()
 
     # All primary scopes precede optional panels. Materialize iterables once.
     venues = tuple(venues)
@@ -927,7 +945,23 @@ def capture_market_snapshots(
                     and panel == "liquid_common"
                     and rank <= EXTERNAL_BBO_CAPTURE_TOP_N
                 ):
-                    if bbo_request_count >= bbo_request_budget:
+                    if code in non_common_exclusions:
+                        normalized_row["executable_bbo_observation"] = _external_bbo_budget_gap(
+                            code=code, venue=venue, reason="verified_non_common_stock_excluded"
+                        )
+                        normalized_row["executable_bbo_observation"]["symbol_master_exclusion"] = non_common_exclusions[code]
+                    elif (
+                        monotonic() - capture_started_monotonic
+                        >= EXTERNAL_BBO_CAPTURE_REQUEST_WINDOW_SEC
+                    ):
+                        normalized_row["executable_bbo_observation"] = (
+                            _external_bbo_budget_gap(
+                                code=code,
+                                venue=venue,
+                                reason="capture_bbo_request_window_expired",
+                            )
+                        )
+                    elif bbo_request_count >= bbo_request_budget:
                         normalized_row["executable_bbo_observation"] = (
                             _external_bbo_budget_gap(
                                 code=code,
@@ -3614,9 +3648,21 @@ def build_report(
                         as_of=date.fromisoformat(target_date),
                     )
                     symbol_master_lookup_cache[code] = lookup
-                    symbol_master_lookup_counts[lookup.status.value] += 1
-                    symbol_master_lookup_codes[lookup.status.value].add(code)
+                    classification_status = lookup.status.value
+                    if classification_status == "missing" and (
+                        symbol_master_binding.get("non_common_stock_exclusions") or {}
+                    ).get(code):
+                        classification_status = "verified_non_common_stock"
+                    symbol_master_lookup_counts[classification_status] += 1
+                    symbol_master_lookup_codes[classification_status].add(code)
+                episode["symbol_master_raw_lookup_status"] = lookup.status.value
                 episode["symbol_master_status"] = lookup.status.value
+                exclusion = (
+                    symbol_master_binding.get("non_common_stock_exclusions") or {}
+                ).get(code)
+                if lookup.status.value == "missing" and exclusion:
+                    episode["symbol_master_status"] = "verified_non_common_stock"
+                    episode["symbol_master_exclusion"] = exclusion
                 if lookup.record is not None:
                     episode["listing_market"] = lookup.record.listing_market.value
                     episode["instrument_type"] = lookup.record.instrument_type.value
@@ -3718,7 +3764,7 @@ def build_report(
     if symbol_master_binding.get("status") != "verified":
         instrumentation_blockers.append("official_symbol_master_binding_missing")
     elif any(
-        status != "verified" and count > 0
+        status not in {"verified", "verified_non_common_stock"} and count > 0
         for status, count in primary_symbol_master_lookup_counts.items()
     ):
         instrumentation_blockers.append("official_symbol_master_lookup_gap")

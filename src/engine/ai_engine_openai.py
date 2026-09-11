@@ -2212,6 +2212,7 @@ class GPTSniperEngine:
         }
         policy_fields = {
             "entry_setup_live_policy_status": policy.get("status"),
+            "entry_setup_live_policy_scope_authority": policy.get("scope_authority"),
             "entry_setup_live_policy_mode": policy.get("canary_mode"),
             "entry_setup_live_policy_max_daily_exploration_probes": policy.get(
                 "maximum_daily_exploration_probes"
@@ -8155,6 +8156,19 @@ class GPTSniperEngine:
         metadata_extra=None,
         candle_context=None,
     ):
+        from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV, SHA_ENV
+
+        rollout_entry = (
+            str(strategy or "").upper() in {"SCALPING", "SCALP"}
+            and str(prompt_profile or "shared").lower() in {"shared", "watching"}
+            and not any(
+                (metadata_extra if isinstance(metadata_extra, dict) else {}).get(k)
+                for k in ("sim_record_id", "sim_parent_record_id", "is_sim")
+            )
+            and bool(os.getenv(PATH_ENV) or os.getenv(SHA_ENV))
+        )
+        if rollout_entry:
+            prompt_profile = "watching"
         analysis_started = time.perf_counter()
         prompt_version = "default_v1"
         cache_strategy = strategy
@@ -8185,6 +8199,7 @@ class GPTSniperEngine:
                 or "hot_v1"
             ).strip()
             entry_setup_live_policy = resolve_live_prompt_policy(
+                strategy=strategy if rollout_entry else None,
                 configured_prompt_version=configured_entry_prompt_version,
                 position_tag=(
                     metadata_extra.get("position_tag")
@@ -8383,6 +8398,10 @@ class GPTSniperEngine:
                 cache_strategy = (
                     f"{cache_strategy}:entry_setup_policy:"
                     f"{entry_setup_live_policy.get('activation_artifact_sha256', '-') }"
+                    f":{entry_setup_live_policy.get('target_date', '-')}"
+                    f":{entry_setup_live_policy.get('effective_venue', '-')}"
+                    f":{entry_setup_live_policy.get('session_bucket', '-')}"
+                    f":{entry_setup_live_policy.get('position_tag', '-')}"
                 )
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             decision_quality_v2_7_selected = False
@@ -8561,11 +8580,26 @@ class GPTSniperEngine:
                 )
             )
 
+        fallback_policy_trace_fields = (
+            {
+                "entry_setup_live_policy_status": entry_setup_live_policy.get("status"),
+                "entry_setup_live_policy_target_date": entry_setup_live_policy.get(
+                    "target_date"
+                ),
+                "entry_setup_live_policy_runtime_effect": False,
+            }
+            if entry_setup_live_policy and not decision_quality_v2_14_selected
+            else {}
+        )
+
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
             if isinstance(entry_adm_runtime, dict):
                 merged = merge_scalp_entry_adm_result_fields(merged, entry_adm_runtime)
-            return merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
+            merged = merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
+            # Refresh diagnostic policy status even when reusing a cached decision.
+            merged.update(fallback_policy_trace_fields)
+            return merged
 
         candle_preflight = ai_input_preflight(candle_context)
         if (
@@ -9037,6 +9071,7 @@ class GPTSniperEngine:
                         ),
                     }
                 )
+            trace_metadata_extra.update(fallback_policy_trace_fields)
             snapshot = (
                 candle_context.get("ai_market_snapshot_v1")
                 if isinstance(candle_context, dict)

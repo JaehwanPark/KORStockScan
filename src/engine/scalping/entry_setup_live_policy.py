@@ -289,7 +289,12 @@ def _runtime_probe_contract_errors(
             or ""
         ).split(",")
     }
-    if f"{cohort[0]}|{cohort[1]}" not in allowed_scopes:
+    from src.engine.scalping.entry_setup_scalping_rollout import authorized_scopes
+
+    allowed_scopes.update(authorized_scopes(env=env))
+    from src.engine.scalping.entry_recheck_policy import runtime_scope
+
+    if runtime_scope(*cohort) not in allowed_scopes:
         errors.append(
             "runtime_contract_krx_recheck_scope_missing"
             if cohort == DEFAULT_COHORT
@@ -1691,6 +1696,7 @@ def resolve_live_prompt_policy(
     effective_venue: Any,
     session_bucket: Any,
     position_tag: Any = None,
+    strategy: Any = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     current = (now or datetime.now(KST)).astimezone(KST)
@@ -1718,6 +1724,51 @@ def resolve_live_prompt_policy(
     }
     if fallback != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
         result["status"] = "fallback_same_stage_owner_conflict"
+        return result
+    from src.engine.scalping.entry_setup_scalping_rollout import load_rollout, SCOPES
+
+    rollout = load_rollout(now=current)
+    if rollout is not None and str(strategy or "").upper() in {"SCALPING", "SCALP"}:
+        if not rollout.get("valid"):
+            result["status"] = "fallback_operator_rollout_invalid"
+            return result
+        if f"{cohort[0]}|{cohort[1]}" not in SCOPES:
+            result["status"] = "fallback_operator_rollout_scope_invalid"
+            return result
+        if not _enabled_by_operator(cohort=cohort):
+            result["status"] = "fallback_operator_disabled"
+            return result
+        errors = _runtime_probe_contract_errors(target_date=target_date, cohort=cohort)
+        # The approved global cap is shared by all scopes; never reset by tag or venue.
+        for key in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
+            if os.getenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + key) != "100":
+                errors.append("operator_rollout_daily_cap_env_mismatch")
+        if errors:
+            result.update(
+                status="fallback_probe_first_runtime_contract_invalid",
+                runtime_contract_errors=errors,
+            )
+            return result
+        result.update(
+            enabled=True,
+            status=(
+                "active_bounded_krx_canary"
+                if cohort[0] == "KRX"
+                else "active_bounded_nxt_canary"
+            ),
+            selected_prompt_version=DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            source_date=rollout["payload"]["effective_from"][:10],
+            candidate_contract_sha256=rollout["sha256"],
+            activation_artifact_sha256=rollout["sha256"],
+            activation_path=rollout["path"],
+            entry_setup_evidence_version=ENTRY_SETUP_EVIDENCE_VERSION,
+            entry_decision_composer_version=ENTRY_DECISION_COMPOSER_VERSION,
+            entry_structure_phase_policy_version=STRUCTURE_PHASE_POLICY_VERSION,
+            canary_mode=EXPLORATION_CANARY_MODE,
+            maximum_daily_exploration_probes=100,
+            scope_authority="operator_all_scalping_rollout",
+            runtime_effect=True,
+        )
         return result
     if not _enabled_by_operator(cohort=cohort):
         result["status"] = "fallback_operator_disabled"

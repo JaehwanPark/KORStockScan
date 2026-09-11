@@ -532,8 +532,17 @@ def validate_submit_drought_contract(
                     or source.get("terminal_axis") != "UPSTREAM_GATE"
                     or record_id.lower()
                     in {
-                        "", "0", "0.0", "none", "null", "unknown", "-",
-                        "nan", "nat", "false", "true",
+                        "",
+                        "0",
+                        "0.0",
+                        "none",
+                        "null",
+                        "unknown",
+                        "-",
+                        "nan",
+                        "nat",
+                        "false",
+                        "true",
                     }
                     or not row["attempt_key"].startswith(f"id:{record_id}:cycle:")
                     or not isinstance(stages, list)
@@ -560,6 +569,7 @@ def validate_submit_drought_contract(
             }
             if expected != counts or len(eligible) != exact.get("attempt_count"):
                 issues.append("cash_shortfall_exclusion_partition_mismatch")
+
             # Filtering can renumber a record's derived cycle ordinal. Every
             # other source identity, lifecycle field and terminal must survive.
             def retained_row_digest(row):

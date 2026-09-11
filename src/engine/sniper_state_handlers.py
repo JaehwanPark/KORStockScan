@@ -50400,6 +50400,7 @@ def _build_ai_ops_log_fields(
         "ai_input_payload_sha256",
         "decision_quality_live_adapter",
         "entry_setup_live_policy_status",
+        "entry_setup_live_policy_scope_authority",
         "entry_setup_live_policy_mode",
         "entry_setup_live_policy_source_date",
         "entry_setup_live_policy_target_date",
@@ -57364,11 +57365,24 @@ def _clear_superseded_entry_setup_exploration_arm(
         return False
     if str(current_policy_mode or "").strip() == "one_share_exploration":
         return False
+    # Terminal probe phases do not revoke restrictions on an acquired holding.
+    # Clear only an arm with no evidence of a submitted or filled lifecycle.
+    if (
+        str(stock.get("status") or "").strip().upper() in {"HOLDING", "SELLING"}
+        or _safe_int(stock.get("buy_qty"), 0) > 0
+        or stock.get("entry_split_probe_order_no")
+        or stock.get("entry_split_probe_bundle_id")
+    ):
+        return False
     active_probe_phases = {
         "probe_submitting",
         "probe_submitted",
         "probe_filled",
         "probe_recheck_pending",
+        "residual_claimed",
+        "residual_submitting",
+        "residual_submitted",
+        "residual_partial_submitted",
     }
     if str(stock.get("entry_split_probe_phase") or "").strip() in active_probe_phases:
         return False
@@ -58530,6 +58544,7 @@ def _entry_setup_discovery_recheck_decision(
     )
     session = resolve_entry_candle_session(now_ts=now_ts)
     policy = resolve_live_prompt_policy(
+        strategy=stock.get("strategy"),
         configured_prompt_version=os.getenv(
             "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION", ""
         ),
@@ -58609,11 +58624,14 @@ def _arm_ai_wait_rebound_recheck_anchor(
     if not isinstance(stock, dict):
         fields["ai_wait_rebound_anchor_reason"] = "missing_stock_state"
         return fields
+    from src.engine.scalping.entry_setup_scalping_rollout import decision_authorized
+
     if (
         normalize_position_tag(
             str(stock.get("strategy") or ""), stock.get("position_tag")
         )
         != "SCANNER"
+        and not decision_authorized(stock.get("strategy"), ai_decision, now=datetime.fromtimestamp(now_ts, _KST))
     ):
         fields["ai_wait_rebound_anchor_reason"] = "non_scanner"
         return fields
@@ -65465,6 +65483,7 @@ def _handle_watching_strategy_branch(
                         ),
                         strategy=strategy,
                         position_tag=pos_tag,
+                        entry_setup_policy_decision=ai_decision,
                         ai_score=current_ai_score,
                         ai_action=current_ai_action,
                         ws_age_ms=ws_age_ms,
@@ -91465,6 +91484,14 @@ def can_consider_scale_in(
     if exit_authority_reason:
         return {"allowed": False, "reason": exit_authority_reason}
 
+    exploration_probe_only = bool(
+        _truthy_field(stock.get("entry_opportunity_recheck_exploration_probe_only"))
+        or _truthy_field(stock.get("entry_setup_bounded_exploration_probe_only"))
+        or str(stock.get("entry_setup_live_policy_mode") or "").strip().lower()
+        == "one_share_exploration"
+        or str(stock.get("entry_split_probe_terminal_abort_reason") or "")
+        == "entry_setup_bounded_exploration_probe_only"
+    )
     scale_in_recheck_allowed = bool(
         stock.get("entry_split_probe_scale_in_recheck_allowed")
     )
@@ -91472,7 +91499,8 @@ def can_consider_scale_in(
         stock.get("entry_split_probe_residual_expand_forbidden")
     )
     if (
-        (
+        exploration_probe_only
+        or (
             stock.get("probe_expand_forbidden")
             and not (scale_in_recheck_allowed and residual_expand_forbidden)
         )
@@ -91488,11 +91516,6 @@ def can_consider_scale_in(
             "residual_partial_submitted",
         }
     ):
-        exploration_probe_only = bool(
-            stock.get("entry_opportunity_recheck_exploration_probe_only")
-            or str(stock.get("entry_setup_live_policy_mode") or "").strip().lower()
-            == "one_share_exploration"
-        )
         return {
             "allowed": False,
             "reason": (

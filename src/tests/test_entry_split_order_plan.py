@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+
+import pytest
 from datetime import date, datetime, timezone, timedelta
 
 from src.engine.scalping import entry_split_order_plan as split_plan
@@ -3872,3 +3874,36 @@ def test_daily_report_handoff_does_not_expose_declared_authority_when_contract_i
     assert family["sample"]["exploration_seed_allowed"] is False
     assert family["recommended"]["enabled"] is False
     assert candidate["calibration_state"] == "hold"
+
+
+@pytest.mark.parametrize("existing", [None, False])
+@pytest.mark.parametrize("wrong_target", [False, True])
+def test_hydrated_exploration_restores_terminal_guards_exact_target(
+    monkeypatch, tmp_path, existing, wrong_target
+):
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "state.json")
+    now = datetime(2026, 9, 11, 11, tzinfo=timezone(timedelta(hours=9)))
+    split_plan._write_probe_runtime_state({
+        "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+        "target_date": "2026-09-11", "bundles": {"bundle": {
+            "bundle_id": "bundle", "code": "123456", "target_id": "10",
+            "phase": "aborted", "fill_qty": 1,
+            "terminal_abort_reason": "entry_setup_bounded_exploration_probe_only",
+        }},
+    })
+    stock = {"id": "11" if wrong_target else "10", "code": "123456", "buy_qty": 1,
+             "entry_split_probe_bundle_id": "bundle",
+             "entry_split_probe_scale_in_forbidden": existing}
+    before = dict(stock)
+    result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
+    if wrong_target:
+        assert result["reason"] == "hydrated_bundle_target_mismatch"
+        assert stock == before
+    else:
+        assert result["recovered"]
+        for key in ("entry_split_probe_scale_in_forbidden",
+                    "entry_split_probe_residual_expand_forbidden", "probe_expand_forbidden"):
+            assert stock[key] is True
+        assert stock["entry_split_probe_terminal_abort_reason"] == (
+            "entry_setup_bounded_exploration_probe_only"
+        )

@@ -3627,7 +3627,9 @@ def test_cash_source_time_compares_instants_in_kst():
 @pytest.mark.parametrize("tamper", ["record_id", "terminal_axis", "submitted_stage"])
 def test_cash_exclusion_validates_excluded_source_identity(tamper):
     from src.tests.submit_drought_fixtures import make_report
-    from src.engine.automation.submit_drought_contract import validate_submit_drought_contract
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
 
     report = make_report("2026-09-11", events=_cash_exclusion_events())
     contract = report["entry_submit_drought_contract"]
@@ -3645,12 +3647,16 @@ def test_cash_exclusion_validates_excluded_source_identity(tamper):
 def test_cash_exclusion_preserves_other_calls_on_same_record():
     from dataclasses import replace
     from src.tests.submit_drought_fixtures import make_report
-    from src.engine.automation.submit_drought_contract import validate_submit_drought_contract
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
 
     events = _cash_exclusion_events()[:6]
     # One cash-blocked call followed by a non-cash call on the same record.
     events[3:] = [replace(e, record_id="1") for e in events[3:]]
-    events[-1] = replace(events[-1], fields={**events[-1].fields, "kt00011_error": "timeout"})
+    events[-1] = replace(
+        events[-1], fields={**events[-1].fields, "kt00011_error": "timeout"}
+    )
     report = make_report("2026-09-11", events=events)
     contract = report["entry_submit_drought_contract"]
     assert contract["cash_shortfall_exclusion"]["excluded_attempt_count"] == 1
@@ -3661,4 +3667,7 @@ def test_cash_exclusion_preserves_other_calls_on_same_record():
     row["producer_attempt_id"] = "submit:unrelated"
     result = validate_submit_drought_contract(report, contract)
     assert result["status"] == "invalid"
-    assert "cash_shortfall_exclusion_retained_lineage_mismatch" in result["structural_issues"]
+    assert (
+        "cash_shortfall_exclusion_retained_lineage_mismatch"
+        in result["structural_issues"]
+    )

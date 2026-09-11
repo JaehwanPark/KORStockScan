@@ -582,7 +582,7 @@ def _assert_frozen_source_or_reviewed_mount(path, expected):
             b').resolve() / "observations/scalp_micro_reversion_forward"\n'
         )
         original = (
-            b'DEFAULT_OUTPUT_ROOT = (\n'
+            b"DEFAULT_OUTPUT_ROOT = (\n"
             b'    REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"\n)\n'
         )
         assert source.count(changed) == 1
@@ -591,7 +591,10 @@ def _assert_frozen_source_or_reviewed_mount(path, expected):
 
 
 def test_mount_compatibility_does_not_accept_unreviewed_source(tmp_path):
-    source = Path(__file__).parents[2] / "src/engine/scalping/micro_reversion/forward_collector.py"
+    source = (
+        Path(__file__).parents[2]
+        / "src/engine/scalping/micro_reversion/forward_collector.py"
+    )
     changed = tmp_path / "forward_collector.py"
     changed.write_bytes(source.read_bytes() + b"\n# Unreviewed change\n")
     with pytest.raises(AssertionError):

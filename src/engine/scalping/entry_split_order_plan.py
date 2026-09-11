@@ -543,6 +543,9 @@ def recover_probe_runtime_bundle_for_stock(
         bundle_code = str(bundle.get("code") or "").strip()[:6]
         if bundle and stock_code and bundle_code and stock_code != bundle_code:
             return {"recovered": False, "reason": "hydrated_bundle_code_mismatch"}
+        bundle_target_id = str(bundle.get("target_id") or "").strip()
+        if bundle_target_id and stock_target_id and bundle_target_id != stock_target_id:
+            return {"recovered": False, "reason": "hydrated_bundle_target_mismatch"}
         recovered_provenance = (
             _probe_recovered_execution_provenance(bundle)
             if stock.get("entry_execution_broker_route") in (None, "")
@@ -570,10 +573,26 @@ def recover_probe_runtime_bundle_for_stock(
                     ),
                 }
             )
+        # A hydrated identity is not proof that terminal guards survived.
+        exploration_terminal = str(bundle.get("terminal_abort_reason") or "") == (
+            "entry_setup_bounded_exploration_probe_only"
+        )
+        if exploration_terminal:
+            recovered_contract["entry_split_probe_terminal_abort_reason"] = (
+                "entry_setup_bounded_exploration_probe_only"
+            )
+        for key in (
+            "entry_split_probe_scale_in_forbidden",
+            "entry_split_probe_residual_expand_forbidden",
+            "probe_expand_forbidden",
+        ):
+            if exploration_terminal or _safe_bool(bundle.get(key)):
+                recovered_contract[key] = True
         missing_contract = {
             key: value
             for key, value in recovered_contract.items()
             if stock.get(key) in (None, "")
+            or (value is True and not _safe_bool(stock.get(key)))
         }
         if missing_provenance or missing_contract:
             stock.update(missing_provenance)

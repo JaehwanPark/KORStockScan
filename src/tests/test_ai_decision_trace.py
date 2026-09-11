@@ -2357,3 +2357,26 @@ def test_trace_preserves_input_timing_and_timeout_parse_status(monkeypatch, tmp_
         row["input_external_delay_attribution"]
         == "unproven_without_exchange_and_receive_clocks"
     )
+
+
+def test_fallback_policy_nonapplication_survives_trace_and_pending_label(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    trace.record_ai_decision_trace(
+        {"ai_decision_trace_id": "fallback-policy-1", "action": "WAIT", "score": 50},
+        input_contract_fields={
+            "entry_setup_live_policy_status": "fallback_position_owner_out_of_scope",
+            "entry_setup_live_policy_target_date": "2026-09-11",
+            "entry_setup_live_policy_runtime_effect": False,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_13_recovery_confirmation",
+        result_source="live",
+        provider_called=True,
+    )
+    for path in (trace._trace_path(trace._date_text()), trace._outcome_path(trace._date_text())):
+        row = _rows(path)[0]
+        assert row["entry_setup_live_policy_status"] == "fallback_position_owner_out_of_scope"
+        assert row["entry_setup_live_policy_target_date"] == "2026-09-11"
+        assert row["entry_setup_live_policy_runtime_effect"] is False
