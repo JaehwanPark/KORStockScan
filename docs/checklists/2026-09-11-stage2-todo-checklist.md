@@ -177,6 +177,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 - [ ] `[MonitoringInstructionRefreshNaturalAcceptance0911] 19:30 및 장후 종료 후 문서 자동 현행화 자연 실행 확인` (`Due: 2026-09-11`, `Slot: POSTCLOSE`, `TimeWindow: 19:30~23:59`, `Track: RuntimeStability`)
   - Source: 사용자 서버 스케줄/API 구현 지시, [운영 계약](../monitoring-instruction-refresh.md), `data/report/monitoring_instruction_refresh/installed_trigger.json`.
-  - 구현·설치: [리뷰/실제 API 증거](../audit-reports/2026-09-11-monitoring-instruction-refresh-review.md), 42 tests PASS/finding0, cron 두 항목 설치·기존 항목 보존, gpt-5.6-sol/medium 작성·리뷰 preview PASS. 예약 자연 실행은 아래 Acceptance로 별도 확인한다.
+  - 구현·설치: [리뷰/실제 API 증거](../audit-reports/2026-09-11-monitoring-instruction-refresh-review.md), 후속 48 tests PASS/finding0, 보완 cron 두 항목 재설치·기존 항목 보존, gpt-5.6-sol/medium 장후·장중 작성·리뷰 preview 모두 PASS. 예약 자연 실행은 아래 Acceptance로 별도 확인한다.
   - Acceptance: 19:30 postclose 문서 상태 updated/unchanged, source-date 9/11 실제 장후 최종 종료·strict hash/controller 이후 intraday 문서 상태 updated/unchanged, API response/model/usage 및 before/after hash를 확인한다. 자정 이후 실행도 source-date 9/11로 대사한다. 설치·preview 검증은 자연 실행 완료가 아니며 완료 전은 not_yet_due다.
+  - 후속 리뷰 보완: 19:30 lock 충돌/실패는 19:59까지 남은 시도로 재확인, 교체 전 journal 및 중단 복구, 최종 완료 재검증 후 동시 수정 검사, lock 후 enabled 읽기를 검증한다. `blocked_publication`은 원문 보존·자동 재호출 중단 상태다.
   - 실패 시 원본 보존·최대 2시도·기존 cron 보존·거래/runtime 영향 없음 확인. 실제 모니터링·주문·재기동·외부 sync를 실행하는 작업이 아니다.

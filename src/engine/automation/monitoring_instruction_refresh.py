@@ -26,6 +26,7 @@ STATE = "data/report/monitoring_instruction_refresh"
 CONFIG = "data/config/monitoring_instruction_refresh.json"
 MODEL = "gpt-5.6-sol"
 MAX_SOURCE_CHARS = 140_000
+TERMINAL_STATUSES = {"updated", "unchanged", "blocked_publication"}
 PROTECTED = re.compile(
     r"권한|금지|승인|안전|우회|보존|손절|수량|퇴역|OFF|rollback|guard|safety|"
     r"authority|forbidden|retired|baseline|PREOPEN|PID|source.only|runtime_effect",
@@ -323,12 +324,46 @@ def assert_context_unchanged(root: Path, bundle: dict) -> None:
             raise ValueError("context_changed:" + name)
 
 
+def recover_publication(root: Path, mode: str, day: str, previous: dict, status_path: Path) -> dict:
+    """Resolve a publish journal after interruption without another model call/write."""
+    attempt = previous.get("attempts")
+    if type(attempt) is not int or attempt not in {1, 2}:
+        raise ValueError("invalid_publication_journal_attempt")
+    report = dict(previous)
+    output = status_path.parent / f"attempt_{attempt}"
+    try:
+        target = root / TARGETS[mode]
+        candidate = output / "candidate.md"
+        valid = (previous.get("mode") == mode and previous.get("target_date") == day
+                 and previous.get("parser_validated") is True and previous.get("review_findings") == []
+                 and re.fullmatch(r"[0-9a-f]{64}", previous.get("before_sha256", ""))
+                 and re.fullmatch(r"[0-9a-f]{64}", previous.get("after_sha256", ""))
+                 and not target.is_symlink() and target.resolve().is_relative_to(root.resolve())
+                 and sha(candidate.read_bytes()) == previous["after_sha256"]
+                 and sha(target.read_bytes()) == previous["after_sha256"])
+    except (OSError, ValueError, TypeError, KeyError):
+        valid = False
+    if valid:
+        report["status"] = "unchanged" if previous["before_sha256"] == previous["after_sha256"] else "updated"
+        report["publication_recovered"] = True
+    else:
+        # An interrupted pre-swap or a later user edit cannot be distinguished safely.
+        report["status"] = "blocked_publication"
+        report["error"] = "publication_unconfirmed_preserve_document"
+    report["finished_at"] = now_kst().isoformat()
+    save_json(output / "status.json", report)
+    save_json(status_path, report)
+    return report
+
+
 def refresh(root: Path, mode: str, day: str, config: dict, *, preview: bool = False,
             call=api_call, validate=parser_validation) -> dict:
     output = root / STATE / day / (mode + ("_preview" if preview else ""))
     status_path = output / "status.json"
     previous = read_json(status_path) if status_path.exists() else {}
-    if not preview and (previous.get("status") in {"updated", "unchanged"} or previous.get("attempts", 0) >= 2):
+    if not preview and previous.get("status") == "publishing":
+        return recover_publication(root, mode, day, previous, status_path)
+    if not preview and (previous.get("status") in TERMINAL_STATUSES or previous.get("attempts", 0) >= 2):
         return previous
     if previous:
         save_json(output / f"attempt_{previous.get('attempts', 0)}" / "status.json", previous)
@@ -380,14 +415,20 @@ def refresh(root: Path, mode: str, day: str, config: dict, *, preview: bool = Fa
             original.splitlines(keepends=True), candidate.splitlines(keepends=True),
             fromfile=TARGETS[mode], tofile=TARGETS[mode])))
         validate(root)
-        assert_context_unchanged(root, bundle)
         if receipt and completion_ready(root, day) != receipt:
             raise ValueError("completion_changed_during_review")
         target = root / TARGETS[mode]
         if not target.resolve().is_relative_to(root.resolve()) or target.is_symlink():
             raise ValueError("unsafe_document_path")
+        assert_context_unchanged(root, bundle)
         report.update({"before_sha256": sha(original), "after_sha256": sha(candidate),
                        "review_findings": [], "parser_validated": True})
+        # Journal before swap: interruption must not trigger a duplicate model/edit cycle.
+        if not preview:
+            report["status"] = "publishing"
+            save_json(output / "status.json", report)
+            save_json(status_path, report)
+            assert_context_unchanged(root, bundle)
         # Publishing only these two allowlisted documents; no Git, env, runtime or sync writes.
         if not preview and candidate != original:
             atomic_write(target, candidate)
@@ -413,7 +454,7 @@ def refresh(root: Path, mode: str, day: str, config: dict, *, preview: bool = Fa
 
 def dispatch(root: Path, mode: str, config: dict, now: datetime) -> list[dict]:
     day = now.astimezone(KST).date()
-    if not config.get("enabled"):
+    if config.get("enabled") is not True:
         return [{"status": "disabled"}]
     if mode == "postclose":
         if now.astimezone(KST).strftime("%H:%M") < "19:30":
@@ -425,13 +466,16 @@ def dispatch(root: Path, mode: str, config: dict, now: datetime) -> list[dict]:
     for target in dates:
         if target.isoformat() < config["effective_from_date"]:
             continue
-        if mode == "intraday" and not completion_marker(root, target.isoformat()):
-            continue
         status = root / STATE / target.isoformat() / mode / "status.json"
         previous = read_json(status) if status.exists() else {}
-        if previous.get("status") in {"updated", "unchanged"} or previous.get("attempts", 0) >= 2:
+        if previous.get("status") == "publishing":
+            results.append(recover_publication(root, mode, target.isoformat(), previous, status))
+            continue
+        if previous.get("status") in TERMINAL_STATUSES or previous.get("attempts", 0) >= 2:
             continue
         if mode == "intraday":
+            if not completion_marker(root, target.isoformat()):
+                continue
             try:
                 completion_ready(root, target.isoformat())
             except (ValueError, OSError):
@@ -449,7 +493,6 @@ def main() -> int:
     args = parser.parse_args()
     if args.date and not args.preview:
         parser.error("--date requires --preview")
-    config = read_json(ROOT / CONFIG)
     lock = ROOT / STATE / "writer.lock"
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a") as handle:
@@ -458,6 +501,8 @@ def main() -> int:
         except BlockingIOError:
             print('{"status":"active_writer"}')
             return 0
+        # Read under the same lock used by installer/remove; never use stale enabled state.
+        config = read_json(ROOT / CONFIG)
         if args.preview:
             day = date.fromisoformat(args.date).isoformat() if args.date else now_kst().date().isoformat()
             results = [refresh(ROOT, args.mode, day, config, preview=True)]
@@ -465,7 +510,7 @@ def main() -> int:
             results = dispatch(ROOT, args.mode, config, now_kst())
     if results:
         print(json.dumps([{k: r.get(k) for k in ["mode", "target_date", "status", "error"]} for r in results]))
-    return 1 if any(r.get("status") == "failed" for r in results) else 0
+    return 1 if any(r.get("status") in {"failed", "blocked_publication"} for r in results) else 0
 
 
 if __name__ == "__main__":

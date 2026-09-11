@@ -24,14 +24,14 @@ wrapper = root / 'deploy/run_monitoring_instruction_refresh.sh'
 if any(c not in '/_-.' and not c.isalnum() for c in str(root)):
     raise SystemExit('unsupported cron project path')
 entries = [
-    f'30 19 * * * /bin/bash {wrapper} --mode postclose >> {root}/logs/monitoring_instruction_refresh.log 2>&1 {marker}1930',
+    f'30-59 19 * * * /bin/bash {wrapper} --mode postclose >> {root}/logs/monitoring_instruction_refresh.log 2>&1 {marker}1930',
     f'* * * * * /bin/bash {wrapper} --mode intraday >> {root}/logs/monitoring_instruction_refresh.log 2>&1 {marker}AFTER_COMPLETION',
 ]
 if mode == '--print-plan':
     print('\n'.join(entries))
     raise SystemExit(0)
 timezone = subprocess.check_output(['timedatectl', 'show', '--property=Timezone', '--value'], text=True).strip()
-if timezone != 'Asia/Seoul':
+if mode == '--install' and timezone != 'Asia/Seoul':
     raise SystemExit('cron requires system timezone Asia/Seoul; no timezone mutation performed')
 state = root / 'data/report/monitoring_instruction_refresh'
 state.mkdir(parents=True, exist_ok=True)
@@ -67,8 +67,8 @@ with (state / 'writer.lock').open('a') as lock:
     config['enabled'] = mode == '--install'
     stamp = datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y%m%dT%H%M%S%f')
     backup = state / f'crontab_before_{stamp}.txt'
-    backup.write_text(old)
-    backup.chmod(0o600)
+    with os.fdopen(os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as handle:
+        handle.write(old)
     # Compare again instead of overwriting an unrelated concurrent installation.
     if read_cron() != old:
         raise RuntimeError('crontab changed during installation')

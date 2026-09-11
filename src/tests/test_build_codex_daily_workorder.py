@@ -151,6 +151,8 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert postclose.time_window == "20:05~21:55"
     assert "monitoring_instruction_refresh/2026-05-11/intraday/status.json" in "\n".join(postclose.artifact_checks)
     assert "19:30" in postclose.decision_rule
+    assert "19:59" in postclose.decision_rule
+    assert "blocked_publication" in postclose.decision_rule
     assert "완료 전은 not_yet_due" in postclose.decision_rule
     assert "swing_model_retrain_2026-05-11.status.json" in "\n".join(
         postclose.artifact_checks
