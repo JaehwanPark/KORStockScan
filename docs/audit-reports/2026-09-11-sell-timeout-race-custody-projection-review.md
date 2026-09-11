@@ -47,4 +47,6 @@
 
 최신 main `59b5f6af` 위로 rebase한 뒤 sell/custody/profit-stagnation 및 S15 인접 suite를 확대 실행해 `329 passed`를 확인했다. compileall과 clean worktree 검사도 통과했다.
 
+고정 release의 공유 `data` mount에서 같은 suite를 재실행하자 S15 receipt 테스트 2개가 운영 exact-date owner policy를 읽어 fail-closed했다. runtime 결함은 아니지만 배포 환경에 따라 결과가 달라지는 테스트 격리 결함이므로, 두 테스트에 명시적인 unmanaged-symbol owner-policy/registry stub을 주입했다. 수정 뒤 동일 확대 suite는 다시 `329 passed`다.
+
 코드 리뷰 완료, 배포, 새 PID 소비, 자연 재발 0건과 비용 경제성은 별도 상태로 기록한다.

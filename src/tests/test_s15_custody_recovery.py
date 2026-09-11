@@ -1722,7 +1722,24 @@ def test_s15_committed_marker_cleanup_retry_does_not_replay_db_completion(
     assert "123456" not in s15.FAST_TRADE_STATE
 
 
-def test_fast_receipt_must_persist_before_returning(monkeypatch):
+def unmanaged_receipt_policy(monkeypatch):
+    """Keep S15 receipt tests independent of the host's dated owner policy."""
+    monkeypatch.setattr(
+        receipts,
+        "resolve_symbol_owner_policy",
+        lambda *_args, **_kwargs: SimpleNamespace(coexistence_enabled=False),
+    )
+    monkeypatch.setattr(
+        receipts,
+        "default_order_owner_registry",
+        lambda: SimpleNamespace(symbol_registered=lambda _code: False),
+    )
+
+
+def test_fast_receipt_must_persist_before_returning(
+    monkeypatch,
+):
+    unmanaged_receipt_policy(monkeypatch)
     state = _state()
     persisted = []
     monkeypatch.setattr(
@@ -1757,7 +1774,10 @@ def test_fast_receipt_must_persist_before_returning(monkeypatch):
     assert persisted == [("123456", 2)]
 
 
-def test_fast_receipt_missing_economics_requests_exact_broker_snapshot(monkeypatch):
+def test_fast_receipt_missing_economics_requests_exact_broker_snapshot(
+    monkeypatch,
+):
+    unmanaged_receipt_policy(monkeypatch)
     state = _state(
         status="EXIT_SENT",
         cum_buy_qty=5,
