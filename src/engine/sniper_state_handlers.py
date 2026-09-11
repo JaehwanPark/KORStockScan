@@ -57364,11 +57364,24 @@ def _clear_superseded_entry_setup_exploration_arm(
         return False
     if str(current_policy_mode or "").strip() == "one_share_exploration":
         return False
+    # Terminal probe phases do not revoke restrictions on an acquired holding.
+    # Clear only an arm with no evidence of a submitted or filled lifecycle.
+    if (
+        str(stock.get("status") or "").strip().upper() in {"HOLDING", "SELLING"}
+        or _safe_int(stock.get("buy_qty"), 0) > 0
+        or stock.get("entry_split_probe_order_no")
+        or stock.get("entry_split_probe_bundle_id")
+    ):
+        return False
     active_probe_phases = {
         "probe_submitting",
         "probe_submitted",
         "probe_filled",
         "probe_recheck_pending",
+        "residual_claimed",
+        "residual_submitting",
+        "residual_submitted",
+        "residual_partial_submitted",
     }
     if str(stock.get("entry_split_probe_phase") or "").strip() in active_probe_phases:
         return False
@@ -91465,6 +91478,14 @@ def can_consider_scale_in(
     if exit_authority_reason:
         return {"allowed": False, "reason": exit_authority_reason}
 
+    exploration_probe_only = bool(
+        _truthy_field(stock.get("entry_opportunity_recheck_exploration_probe_only"))
+        or _truthy_field(stock.get("entry_setup_bounded_exploration_probe_only"))
+        or str(stock.get("entry_setup_live_policy_mode") or "").strip().lower()
+        == "one_share_exploration"
+        or str(stock.get("entry_split_probe_terminal_abort_reason") or "")
+        == "entry_setup_bounded_exploration_probe_only"
+    )
     scale_in_recheck_allowed = bool(
         stock.get("entry_split_probe_scale_in_recheck_allowed")
     )
@@ -91472,7 +91493,8 @@ def can_consider_scale_in(
         stock.get("entry_split_probe_residual_expand_forbidden")
     )
     if (
-        (
+        exploration_probe_only
+        or (
             stock.get("probe_expand_forbidden")
             and not (scale_in_recheck_allowed and residual_expand_forbidden)
         )
@@ -91488,11 +91510,6 @@ def can_consider_scale_in(
             "residual_partial_submitted",
         }
     ):
-        exploration_probe_only = bool(
-            stock.get("entry_opportunity_recheck_exploration_probe_only")
-            or str(stock.get("entry_setup_live_policy_mode") or "").strip().lower()
-            == "one_share_exploration"
-        )
         return {
             "allowed": False,
             "reason": (

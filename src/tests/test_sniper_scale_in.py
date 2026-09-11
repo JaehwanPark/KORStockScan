@@ -53211,3 +53211,45 @@ def test_real_weak_ai_micro_entry_block_uses_live_clock_for_refreshed_tp1_contex
 
     assert decision["rising_missed_tp1_source_gap_relief_context_age_sec"] == 5.0
     assert decision["rising_missed_tp1_source_gap_relief_applied"] is True
+
+
+@pytest.mark.parametrize("evidence", [
+    {"status": "HOLDING"}, {"status": "SELLING"}, {"buy_qty": 1},
+    {"entry_split_probe_order_no": "123"},
+    {"entry_split_probe_bundle_id": "sample-probe"},
+    {"entry_split_probe_phase": "residual_submitting"},
+])
+def test_terminal_exploration_restrictions_survive_new_ai_decision(evidence):
+    stock = {
+        "entry_split_probe_phase": "aborted",
+        "entry_opportunity_recheck_exploration_probe_only": True,
+        "entry_split_probe_scale_in_forbidden": True,
+        **evidence,
+    }
+    before = dict(stock)
+    assert not state_handlers._clear_superseded_entry_setup_exploration_arm(
+        stock, current_policy_mode="performance_bounded"
+    )
+    assert stock == before
+    assert not state_handlers.can_consider_scale_in(
+        stock, "123456", {}, "SCALPING", "NORMAL",
+        skip_add_judgment_lock=True, bypass_scalping_buy_window=True,
+        bypass_scale_in_cooldown=True,
+    )["allowed"]
+
+
+@pytest.mark.parametrize("marker,value", [
+    ("entry_opportunity_recheck_exploration_probe_only", True),
+    ("entry_setup_bounded_exploration_probe_only", True),
+    ("entry_setup_live_policy_mode", "one_share_exploration"),
+    ("entry_split_probe_terminal_abort_reason", "entry_setup_bounded_exploration_probe_only"),
+])
+def test_exploration_identity_blocks_add_even_when_generic_flags_lost(marker, value):
+    stock = {marker: value, "entry_split_probe_phase": "aborted",
+             "entry_split_probe_scale_in_recheck_allowed": True}
+    result = state_handlers.can_consider_scale_in(
+        stock, "123456", {}, "SCALPING", "NORMAL",
+        skip_add_judgment_lock=True, bypass_scalping_buy_window=True,
+    )
+    assert not result["allowed"]
+    assert result["scale_in_block_owner"] == "entry_setup_v2_14_one_share_exploration"
