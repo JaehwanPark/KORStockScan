@@ -26,7 +26,7 @@ from src.engine.risk.market_weakness_state import (
     observation_freshness,
 )
 from src.engine.scalping.micro_reversion.symbol_master import VerifiedSymbolMaster
-from src.utils.constants import PROJECT_ROOT
+from src.utils.constants import DATA_DIR, TMP_DIR
 from src.utils.jsonl_io import (
     read_json_object_strict,
     write_json_object_generation_safe,
@@ -36,12 +36,12 @@ KST = ZoneInfo("Asia/Seoul")
 SUPPORTED_LISTING_MARKETS = frozenset({"KOSPI", "KOSDAQ"})
 SUPPORTED_OWNERS = frozenset({"widget", "episode"})
 
-DEFAULT_STATE_PATH = PROJECT_ROOT / "tmp" / "market_weakness_observer_state.json"
+DEFAULT_STATE_PATH = TMP_DIR / "market_weakness_observer_state.json"
 DEFAULT_SYMBOL_MASTER_DIR = (
-    PROJECT_ROOT / "data/report/micro_reversion_economic_reference"
+    DATA_DIR / "report/micro_reversion_economic_reference"
 )
 DEFAULT_BLOCKED_ENTRY_OBSERVATION_DIR = (
-    PROJECT_ROOT / "data/report/machine_market_weakness_blocked_entries"
+    DATA_DIR / "report/machine_market_weakness_blocked_entries"
 )
 BLOCKED_ENTRY_OBSERVATION_SCHEMA = "machine_market_weakness_blocked_entry_v1"
 ENABLE_ENV = "KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED"

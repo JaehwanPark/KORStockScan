@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from src.engine.risk.market_weakness_entry_guard import (
+    DEFAULT_BLOCKED_ENTRY_OBSERVATION_DIR,
+    DEFAULT_STATE_PATH,
+    DEFAULT_SYMBOL_MASTER_DIR,
     KST,
     evaluate_market_weakness_entry_guard,
     record_market_weakness_blocked_entry,
@@ -15,6 +18,15 @@ from src.utils.jsonl_io import read_json_object_strict
 
 def _now() -> datetime:
     return datetime(2026, 8, 31, 10, 0, tzinfo=KST)
+
+
+def test_default_shared_paths_are_canonical_before_strict_io():
+    assert DEFAULT_STATE_PATH.parent == DEFAULT_STATE_PATH.parent.resolve()
+    assert DEFAULT_SYMBOL_MASTER_DIR == DEFAULT_SYMBOL_MASTER_DIR.resolve()
+    assert (
+        DEFAULT_BLOCKED_ENTRY_OBSERVATION_DIR
+        == DEFAULT_BLOCKED_ENTRY_OBSERVATION_DIR.resolve()
+    )
 
 
 def test_cancel_requires_explicit_fresh_state_even_when_decision_is_constructed(

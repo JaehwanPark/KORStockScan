@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # Artifact-level symlink rejection remains in jsonl_io and its consumers.
 DATA_DIR = (PROJECT_ROOT / "data").resolve()
 LOGS_DIR = (PROJECT_ROOT / "logs").resolve()
+TMP_DIR = (PROJECT_ROOT / "tmp").resolve()
 LEGACY_LOGS_DIR = PROJECT_ROOT / "src" / "logs"
 # A reviewed release may share the canonical operator flag through a symlink.
 # Resolve once so claiming/unlinking the request never removes that symlink.
