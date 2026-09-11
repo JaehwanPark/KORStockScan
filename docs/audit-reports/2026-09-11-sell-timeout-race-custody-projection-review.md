@@ -50,3 +50,18 @@
 고정 release의 공유 `data` mount에서 같은 suite를 재실행하자 S15 receipt 테스트 2개가 운영 exact-date owner policy를 읽어 fail-closed했다. runtime 결함은 아니지만 배포 환경에 따라 결과가 달라지는 테스트 격리 결함이므로, 두 테스트에 명시적인 unmanaged-symbol owner-policy/registry stub을 주입했다. 수정 뒤 동일 확대 suite는 다시 `329 passed`다.
 
 코드 리뷰 완료, 배포, 새 PID 소비, 자연 재발 0건과 비용 경제성은 별도 상태로 기록한다.
+
+## 배포·기동 영수증
+
+- 배포 commit: `cb83006f9c5e31a44751354dbebcd993f0b3091e`
+- 선택 release: `/home/ubuntu/KORStockScan-runtime-releases/sell-timeout-race-fix-r2-20260911`
+- 선택 시각: `2026-09-11 15:32:25 KST`
+- 메인 우아한 재기동: 구 PID `363990` 종료 후 새 PID `545717`, cwd `.../sell-timeout-race-fix-r2-20260911/src`
+- runtime env verify: `status=pass`, `pid=545717`, `pid_passed=true`, mismatch/finding `0`
+- broker reconciliation: `2026-09-11 15:37:05 KST`, 보유 종목 `2`, 미체결 `0`, open-order snapshot verified
+- 독립 서비스: systemd drop-in `17`개가 같은 release를 가리킨다. 배포 당시 계속 실행 중이던 Doosan/Samsung read-only collector만 재기동해 PID `546356`/`546364`로 새 경로를 소비시켰다. 종료된 one-shot과 미래 예약 service는 강제 기동하지 않았다.
+- 기존 policy hash는 profit stagnation `aa2d4794...`, entry adverse `1536dfab...`, target ratchet `d455951e...`로 동일하다. V2.14의 최소 1주 floor와 daily recheck/BUY recovery 한도 `100/100`도 유지됐다.
+- 구 PID의 `SELL_CANCEL_INTENT_PERSIST_BLOCKED id=43185` 마지막 발생은 `15:32:57`이다. 새 PID 시작 뒤 같은 오류 및 전체 execution-receipt 신규 error는 `0`건이다.
+- `15:37:14` error detector는 `summary_severity=pass`, `log_scanner=pass`, `process_health=pass`다. `456010` 자동 hard-stop 수동관리 이관은 `expected_hard_stop_manual_handoff`로 정상 분류됐다.
+
+배포 manifest는 `data/runtime/unified_runtime_deployment.json`, rollback 백업은 `tmp/sell-timeout-race-deploy-20260911-1531`에 보존했다. 이 배포는 상태 경쟁과 exact receipt 투영 결함을 닫으며 threshold·수량·가격·provider·safety 정책은 바꾸지 않는다. 자연 재발 없음은 운영 수리 확인이고 비용 차감 경제성 개선의 별도 증명은 아니다.
