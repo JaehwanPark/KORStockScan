@@ -69,6 +69,7 @@ def pressure_from_snapshot(*, snapshot, symbol, route, quantity, target_price, n
         epoch=epoch,
         checkpoint_at_ms=cutoff,
         source_complete=source.get("source_complete", True),
+        include_observed_rows=True,
     )
     if not feature["eligible_for_feature_ablation"]:
         raise ValueError(

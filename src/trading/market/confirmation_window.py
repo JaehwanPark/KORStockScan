@@ -104,6 +104,7 @@ def build_confirmation_window(
     checkpoint_at_ms: int,
     maximum_age_ms: int = 1_500,
     source_complete: bool = True,
+    include_observed_rows: bool = False,
 ) -> dict[str, Any]:
     """Calculate a closed one-second window, including trades at its start.
 
@@ -282,4 +283,9 @@ def build_confirmation_window(
             allow_nan=False,
         ).encode()
     ).hexdigest()
+    if include_observed_rows:
+        # Target-pressure live diagnostics retain the exact normalized hash
+        # inputs so a later review can reproduce depletion/refill and volume.
+        result["source_hash_depth_rows"] = depths
+        result["source_hash_trade_rows"] = trades
     return result

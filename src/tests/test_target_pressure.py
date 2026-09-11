@@ -118,6 +118,8 @@ def test_combined_pressure_raises_one_tick_without_new_observation_wait():
     assert r["source_scope"] == "exact_route_local_projection_not_exchange_completeness"
     assert r["source_quality_status"] == "eligible_local_projection"
     assert len(r["observed_window_trade_rows"]) == 3
+    assert len(r["feature"]["source_hash_depth_rows"]) == 3
+    assert len(r["feature"]["source_hash_trade_rows"]) == 4
 
 
 def test_recent_half_zero_is_explicit_local_observation_not_market_completeness():
