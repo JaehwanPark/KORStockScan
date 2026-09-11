@@ -2,7 +2,7 @@
 
 - 검토 시각: 2026-09-11 10:02 KST.
 - 사용자 지시: 보조 익절 결함 점검·보완, 코드 리뷰와 수정보완 반복.
-- 판정: 코드 수리 및 검토 완료. 배포·서비스 재기동·현재 PID 소비·자연 보조청산 성과는 별도 미완료다.
+- 10:02 판정: 코드 수리 및 검토 완료, 당시 미배포. 이후 사용자 승인 배포·재기동은 아래 10:09 receipt를 따른다. 자연 보조청산 성과는 별도다.
 - 수리 branch: `fix/profit-stagnation-unsent-20260911`, base `18231b18d949cd458de719fb063da5fc038bb79d`. 별도 worktree에서 수정·테스트했고 선택 release source, policy pin, 주문 원장은 수정하지 않았다.
 
 ## 실제 근거와 원인
@@ -31,3 +31,15 @@
 - 합계 **619 passed, 2 skipped**. 테스트는 임시 원장과 fake transport를 사용했으며 실 broker/Provider 호출은 없다.
 - Python compile 및 `git diff --check` 통과. 문서 print-only parser exit 0, 기존 `MachineProfitStagnationStartupAcceptance0911`의 파싱을 확인했다. 수리 코드 commit `830783b9`를 workspace에 통합했고 검증 worktree와 코드/테스트 4개 파일의 SHA256 일치를 확인했다.
 - 기존 실행 owner: [당일 체크리스트의 MachineProfitStagnationStartupAcceptance0911](../checklists/2026-09-11-stage2-todo-checklist.md). 배포 승인·실제 consumer 적용 뒤 신규 자연 진입의 보조 익절 관찰/직접 차단 사유 및 target 전환·복구·수량 terminal을 대사한다. 이전 삼성 목표 익절 성공을 수리 효과로 귀속하지 않는다. 현재 보유나 주문을 임의 이관하지 않는다.
+
+## 사용자 승인 후 10:09 운영 배포·재기동
+
+- 승인: 사용자의 `운영 배포·재기동 하기 바람`. 변경 함수가 widget 전용이므로 `korstockscan-widget-signal-auto-trader.service`만 새 root에 연결했다. main·Samsung episode·저가주 episode의 코드 선택/기동은 이번 수정 대상이 아니다.
+- 신규 root: `/home/ubuntu/KORStockScan-runtime-releases/widget-profit-stagnation-20260911`, commit `a2e14f5d300972a5ada86d6025a2951a4916dd58`. 직전 운영 `e0116f6d`에서 검토된 source 2개와 테스트 2개만 반영했다. source/deploy clean, 검토본과 4개 파일 hash 일치, 신규 root의 직접 테스트 **188 passed**를 확인한 뒤 공유 data/logs/tmp/.venv/docs/restart.flag를 연결했다.
+- systemd: 기존 96 drop-in 뒤 `97-widget-profit-stagnation-repair.conf` 설치. 10:08:16 PID34176의 SIGTERM 종료 및 process 소멸, lock 비점유 확인. 10:08:44 서비스 start → 새 **PID144180**. `Result=success`, `ActiveState=active`, `SubState=running`, `NRestarts=0`. 실제 cwd/PYTHONPATH가 신규 root와 일치한다.
+- 전환 전·종료 후 widget 3개 symbol의 해당 매매분 보유0/미체결0, 보조 exit/정정 claim0을 확인했다. 재기동 후 삼성 기존 주문 이력6개 및 다른 두 symbol의 주문 이력은 동일하다. 원장 초기화·주문 취소·수동 매매는 실행하지 않았다.
+- 시작 receipt verifier: `passed=true`, findings0, 새 PID144180, exact date9/11 및 owner-policy 파일/보조 익절 pin을 대사했다. effective-config SHA256 `6e75c75fce0302c038b635583398879f5784f795afc762830c3310f70fd9eff3`과 loaded-execution-policy hash는 재기동 전후 동일하다. 시작 receipt는 이후 자연 청산 성공의 증거가 아니다.
+- 실제 PID의 보조 익절 `aa2d4794…`, 악화보류 `1536dfab…`, 목표 상향 `d455951e…` PATH/SHA256을 원 파일과 검증했다. 오늘 신규1주 코드 및 원래 정책·guard를 유지했다. 공통 selector와 cron은 전환 전 hash/본문 그대로다.
+- 원장: `data/runtime/widget_profit_stagnation_repair_deployment.json`. 기존 machine profit/additions/one-day-quantity/owner-scope manifest에 widget unit override와 successor pointer를 남겼다. 과거 설치 receipt는 보존했다.
+- 백업: `tmp/widget-profit-stagnation-deployment-20260911/`에 직전 unit/manifest/selector/cron, 정지 시 state/registry/startup receipt, 새 root source hash 및 검증 결과를 보존했다. rollback은 새97 drop-in을 제거하고 직전96 root로 연결하는 범위이며, 새 pending 청산/정정이 있다면 해당 successor terminal 또는 원 목표 복원 대사 전에 이전 코드로 되돌리지 않는다. 이후 발생한 state·주문을 과거 백업으로 덮지 않는다.
+- 잔여: 실제 새 신호에서 보조 익절 관찰→조건 충족 또는 직접 차단→전환/복구→수량 terminal·비용 순이익은 기존 owner OPEN이다. 기존 삼성 09:25 목표 익절을 배포 후 수익으로 재귀속하지 않는다.
