@@ -51,3 +51,16 @@ main commit `26d3e689`를 고정한 `/home/ubuntu/KORStockScan-runtime-releases/
 상태 계약을 `machine_fill_telegram_v2`로 명시했다. v1은 미배포/초기화 미실행이므로 v1 상태의 자동 추정 이관은 하지 않는다. 신규 service template은 `machine-fill-telegram-v2-20260911` 검토 root를 요구한다. 기존 26d3e689 준비본을 최신 수리 배포로 사용하지 않는다.
 
 검증: 신규42개 및 기존46개 **88 passed**, py_compile/systemd-analyze verify/git diff --check PASS. 실제753행 원장을 발송 없이 재생하고99개 체결 후보의 저장/reload 순서 보존을 검증했다. Telegram 호출0. 수정 후 직접 consumer·실패/동시성·권한·문서를 재검토했고 검토 범위 미해결 P0~P2 finding0이다. 운영 배포·재기동·자연 수신은 이번 코드 리뷰/커밋·푸시 요청과 별개이며 미실행이다.
+
+## 사용자 승인 후 운영 배포·재기동
+
+2026-09-11 11:54 KST 사용자의 “수집기 3개와 위젯 매매 서비스 재기동” 승인으로 실행했다. 새 알림 root `machine-fill-telegram-v2-20260911`/b49e7ecb를 고정하고 data/.venv만 기존 경로로 연결했다. workspace88 tests 및 고정 root42 tests PASS/src·deploy diff0을 확인했다.
+
+- 11:54:29 widget PID144180 정상 종료, 11:54:40 PID273930 기동. 기존 widget root/a2e14f5d 유지.
+- 11:54:40 Doosan655→273927, Hanwha656→273919, Samsung657→273928 정상 재기동. collector workspace 경로 유지.
+- 네 unit에 99-machine-fill-telegram-only.conf 적용. 실제 각 PID의 지정 알림5개 env 모두 false, 모든 unit active/Result success/NRestarts0.
+- 신규 체결 notifier PID273913, rootb49e7ecb, enabled/active/Result success/NRestarts0. 11:54:41 cursor753로 시작. 과거 재발송·시험 메시지·시험 주문0. --check 결과 cursor753/deliveries0/inflight0/unresolved0.
+- widget startup verifier `verified_requested_startup_fields`/PID273930, 기존 effective config hash6e75c75f 유지, 실제 세 policy 파일 pin 일치. 기존 주문 이력과 공통 runtime selector 보존. 오래된 CANCEL 원장 표시는 변경하지 않았다.
+- 초기 read-only 원장 조회의 nonblocking lock 경합은 재조회 성공으로 해소됐으며 lock 삭제/worker 중단을 하지 않았다.
+
+배포 원장은 `data/runtime/machine_fill_telegram_deployment.json`, 백업은 `tmp/machine-fill-telegram-deployment-20260911`이다. 재기동/설정 소비 완료와 다음 자연 체결의 실제 수신은 분리한다. `MachineFillTelegramAcceptance0911`은 자연 BUY/SELL receipt 수신 대사만 OPEN으로 유지한다. 앞 절의 미배포 기록은 당시 상태다.

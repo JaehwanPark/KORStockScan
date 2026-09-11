@@ -20,7 +20,7 @@
 
 - [ ] `[MachineFillTelegramAcceptance0911] 위젯·에피소드 체결 전용 알림 배포·수신 확인` (`Due: 2026-09-11`, `Slot: INTRADAY`, `TimeWindow: 11:45~20:00`, `Track: RuntimeStability`)
   - Source: 사용자 요청 및 “매수·매도 체결 시만 알림” 선택, [코드 리뷰](../audit-reports/2026-09-11-machine-fill-telegram-review.md), [운영 절차](../machine-fill-telegram-operations.md). 코드 commit `26d3e689`, 69 tests PASS/finding0, 원장753행 발송 없는 재생 대사 완료.
-  - 현재: code_review_closed / deployment_pending. 신규 알림 서비스·collector3개 관찰 알림 OFF·widget 접수 알림 OFF의 template 준비. 실제 설치·재기동은 미실행이며 기존 runtime 알림은 유지 중. 다른 session의 배포/root/policy/custody를 보존하고 이번 알림 변경의 widget trader 재기동 승인을 확인한다.
+  - 현재: 사용자 승인 후 11:54 배포·재기동 완료. notifier b49e7ecb/PID273913; Doosan273927/Hanwha273919/Samsung273928/widget273930 모두 active/Result success/NRestarts0. 실제 PID 알림 OFF, widget 시작 verifier·policy3pin·기존 주문 이력 보존 PASS. notifier cursor753/발송0/미해결0; 다음 자연 체결 수신 acceptance만 OPEN. [운영 receipt](../audit-reports/2026-09-11-machine-fill-telegram-review.md#사용자-승인-후-운영-배포재기동).
   - 추가 review/fix: `b49e7ecb`, 원장 순서 sequence·read-only inflight 분리·재시도/receipt 상태 검증을 보완. 신규42+기존46=88 tests PASS/finding0, source753행 발송 없는 재생 순서 검증. v2 service template은 `machine-fill-telegram-v2-20260911`을 요구하며 이전26d3e689 준비본은 최신 수리가 아니다. 운영 unit 미설치/state 미초기화 확인; 배포·자연 수신 OPEN 유지.
   - Acceptance: 검토 release 및 신규 notifier service active, 네 기존 service의 실제 PID가 알림 OFF env 소비, 원장/source hash·cursor 보존, 실제 widget/episode BUY/SELL 자연 체결의 sent/message_id와 사용자 수신 대사. 부분체결/amount-only 중복 없음, failed/uncertain 0 또는 개별 근거. 표본0을 만들기 위한 주문·과거 재발송은 금지하며 다음 자연 체결까지 관찰은 OPEN 유지.
 
