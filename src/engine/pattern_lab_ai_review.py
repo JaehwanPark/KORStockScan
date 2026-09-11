@@ -3605,7 +3605,9 @@ def _ai_review_followup_order(
 ) -> dict[str, Any]:
     reason_text = ", ".join(reasons) if reasons else "parsed_review_followup_required"
     return {
-        "order_id": f"order_{REPORT_TYPE}_ai_review_followup_{_slug(target_date)}",
+        "order_id": (
+            f"order_{REPORT_TYPE}_generic_ai_review_followup_{_slug(target_date)}"
+        ),
         "title": "Resolve Pattern Lab AI review follow-up",
         "source_report_type": REPORT_TYPE,
         "review_id": "ai_review_followup",
@@ -3997,7 +3999,9 @@ def build_pattern_lab_ai_review_report(
         "response_source": (
             "provided_response"
             if provided_ai_response
-            else "provider_call" if ai_status == "parsed" else "deterministic_fallback"
+            else "provider_call"
+            if ai_status == "parsed"
+            else "deterministic_fallback"
         ),
     }
     report = {

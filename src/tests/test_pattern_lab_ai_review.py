@@ -3777,6 +3777,25 @@ def test_pattern_lab_ai_review_keeps_sample_warning_followup_visible():
         assert provenance["allowed_runtime_apply"] is False
 
 
+def test_generic_ai_review_followup_id_cannot_collide_with_dated_review_id():
+    order = mod._ai_review_followup_order(
+        target_date="2026-06-04",
+        reasons=["audit_status_insufficient_context"],
+        audit={
+            "status": "insufficient_context",
+            "issues": ["source_quality_gap"],
+            "forbidden_use_violations": [],
+        },
+    )
+
+    assert order["order_id"] == (
+        "order_pattern_lab_ai_review_generic_ai_review_followup_2026_06_04"
+    )
+    assert order["order_id"] != (
+        "order_pattern_lab_ai_review_ai_review_followup_2026_06_04"
+    )
+
+
 def test_pattern_lab_ai_review_splits_report_state_warnings_from_source_hard_blocks():
     cases = {
         "lifecycle_bucket_discovery_granularity_too_broad": {
