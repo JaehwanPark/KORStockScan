@@ -560,7 +560,8 @@ def _recent_unowned_manual_control_holding_blocks(
     The runtime can preserve an automatic manual-control flag in the in-memory
     holding record after its file row has disappeared.  The recurring holding
     pipeline receipt is therefore the authoritative liveness signal; current
-    explicit ``manual_operator`` provenance is the only accepted owner veto.
+    explicit operator exclusions and current persisted hard-stop handoffs are
+    expected policy states. Other automatic or stale exclusions remain errors.
     This detector is read-only and never releases an exclusion or submits an
     order.
     """
@@ -573,6 +574,8 @@ def _recent_unowned_manual_control_holding_blocks(
         "max_age_sec": int(max_age_sec),
         "max_tail_bytes": int(max_tail_bytes),
         "active_blocks": [],
+        "expected_hard_stop_handoffs": [],
+        "expected_hard_stop_handoff_count": 0,
     }
     try:
         size = path.stat().st_size
@@ -642,6 +645,7 @@ def _recent_unowned_manual_control_holding_blocks(
             }
 
     active_blocks: list[dict] = []
+    expected_handoffs: list[dict] = []
     for row in latest_by_holding.values():
         if row["stage"] == "manual_control_legacy_scale_in_qty_handoff_retired":
             continue
@@ -656,6 +660,10 @@ def _recent_unowned_manual_control_holding_blocks(
         row["current_operator_source"] = ""
         row["current_auto_source"] = auto_source
         row["current_main_exclusion_reason"] = main_decision.reason
+        if auto_source == "auto_hard_stop_handoff":
+            row["classification"] = "expected_hard_stop_manual_handoff"
+            expected_handoffs.append(row)
+            continue
         row["classification"] = (
             "active_file_auto_exclusion"
             if auto_source
@@ -664,6 +672,9 @@ def _recent_unowned_manual_control_holding_blocks(
         active_blocks.append(row)
 
     active_blocks.sort(key=lambda row: (row["stock_code"], row["record_id"]))
+    expected_handoffs.sort(key=lambda row: (row["stock_code"], row["record_id"]))
+    details["expected_hard_stop_handoffs"] = expected_handoffs
+    details["expected_hard_stop_handoff_count"] = len(expected_handoffs)
     details["malformed_tail_rows"] = malformed_rows
     details["recent_holding_event_count"] = len(latest_by_holding)
     details["recent_blocked_holding_count"] = sum(
@@ -674,6 +685,8 @@ def _recent_unowned_manual_control_holding_blocks(
     details["active_blocks"] = active_blocks
     if active_blocks:
         details["status"] = "active_unowned_manual_control_holding_block"
+    elif expected_handoffs:
+        details["status"] = "expected_hard_stop_manual_handoff"
     return details
 
 

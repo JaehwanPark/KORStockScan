@@ -262,6 +262,44 @@ class TestProcessHealthDetector:
         assert guard["recent_blocked_holding_count"] == 1
         assert guard["active_block_count"] == 0
 
+    @pytest.mark.parametrize("thread_alive", [True, False])
+    @pytest.mark.parametrize("other_source", [None, "", "auto_open_loss", "auto_hard_stop_handoff_extra"])
+    def test_hard_stop_handoff_is_expected_but_other_unowned_blocks_still_fail(
+        self, monkeypatch, other_source, thread_alive
+    ):
+        now = datetime.now().astimezone().replace(microsecond=0)
+        monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+        monkeypatch.setattr(process_health_module, "manual_control_operator_exclusion_source", lambda code: "")
+        monkeypatch.setattr(
+            process_health_module, "manual_control_auto_exclusion_source",
+            lambda code: "auto_hard_stop_handoff" if code == "456010" else other_source,
+        )
+        monkeypatch.setattr(
+            process_health_module, "evaluate_main_bot_control_exclusion",
+            lambda code, **kwargs: type("Decision", (), {"excluded": True, "reason": "operator_manual_control_excluded_symbol"})(),
+        )
+        codes = ["456010"] + (["123456"] if other_source is not None else [])
+        rows = [{"stage": "manual_control_fast_exit_monitor_blocked", "stock_code": code,
+                 "record_id": i + 1, "emitted_at": now.isoformat(),
+                 "fields": {"target_status": "HOLDING", "target_strategy": "SCALPING"}}
+                for i, code in enumerate(codes)]
+        directory = process_health_module.PIPELINE_EVENTS_DIR
+        directory.mkdir(parents=True)
+        (directory / f"pipeline_events_{now.date().isoformat()}.jsonl").write_text(
+            "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram", alive=thread_alive)
+        result = ProcessHealthDetector().check()
+        guard = result.details["manual_control_holding_guard"]
+        assert guard["expected_hard_stop_handoff_count"] == 1
+        assert guard["expected_hard_stop_handoffs"][0]["stock_code"] == "456010"
+        assert guard["recent_blocked_holding_count"] == len(codes)
+        assert guard["active_block_count"] == len(codes) - 1
+        assert result.severity == ("pass" if other_source is None and thread_alive else "fail")
+        if other_source is None:
+            assert guard["status"] == "expected_hard_stop_manual_handoff"
+
     def test_detector_accepts_latest_legacy_handoff_retirement(self, monkeypatch):
         now = datetime.now().astimezone().replace(microsecond=0)
         monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
