@@ -57,6 +57,15 @@
 - [9/9 상세계획](proposals/widget-episode-adaptive-exit-implementation-plan-2026-09-09.md)의 전체 group/runner/부분 trailing·광범위한 enrollment/launcher 설계는 최소 보조청산의 추가 필수 gate나 현재 미완료 개발 목록이 아니다. 이미 생성되는 source-only attribution/replay child는 기존 producer/소비자 범위에서 확인하되 새 연구·전체 family 활성화를 재개하지 않는다.
 - 수량 terminal/원래 다음 신호 복귀와 실제 주문금액·비용/순이익 대사는 별개다. 결손은 null·직접 사유로 남기며 가짜0원·반복 같은 비용조회·새 next-entry 경제성 gate로 해결하지 않는다. 진입 개선·보조청산 전환·총 순이익/자본점유·불리한 결과를 별도 귀속한다. 기동/정책 소비와 장후 경제성은 현재 checklist의 각 acceptance owner로 추적한다.
 
+### 1.4 위젯·에피소드 승인 보조정책과 체결 알림 경계
+
+위젯·에피소드 진입은 별도 AI provider나 prompt version을 사용하지 않는다. 원 signal·micro 확인·주문 직전 guard·broker 집행을 기존 owner 안에서 분리하고 메인 Entry AI의 KRX/NXT prompt 선택·fallback을 기계 판단 또는 적용 증거로 사용하지 않는다.
+
+- `machine_entry_adverse_flow_v1`은 원 진입 신호 뒤 submit 직전 악화만 재평가한다. 정상 보류와 평가 미기동·stale source를 분리하며 signal·threshold·가격·수량·broker/hard-safety를 바꾸지 않는다.
+- `machine_ws_target_ratchet_v1`은 원 목표 도달과 fresh WS/BBO·원 주문·잔량을 확인한 custody owner만 목표를 한 tick씩 상향한다. 보조익절의 정체180초·보호 지정가 전환과 별도 정책이며 AMEND/체결/잔량 terminal을 각각 대사한다.
+- Telegram은 immutable machine order owner와 broker의 실제 BUY/SELL fill만 알린다. research-watch·표본 수집·신호·WAIT/HOLD/REJECT·미제출·미체결은 알림 대상이 아니다. partial/late fill과 재시작은 주문번호·원주문·누적수량·알림 state로 중복을 방지한다.
+- 승인·구현, `machine_additions_deployment.json`/`machine_profit_stagnation_deployment.json`/`machine_fill_telegram_deployment.json` 설치, systemd drop-in, 현재 PID env의 policy path/hash, 자연 판단·체결과 비용 후 경제성을 별도 상태로 보고한다. `unified_runtime_deployment.json`의 configured root가 바뀌어도 연속가동 PID가 자동 reload된 것으로 보지 않는다.
+
 ## 2. 권한 경계
 
 ### 2.1 허용 범위
@@ -199,7 +208,10 @@ Source가 전일 보고서를 지정한 오후 점검은 당일 20:10 producer �
 
 ```bash
 jq '{schema, workspace, release_root, git_commit, review_evidence}' data/runtime/runtime_release_selection.json
+jq '{release_root, git_commit, configured_release_verified, actual_active_pid_consumed_new_release}' data/runtime/unified_runtime_deployment.json
 jq '{release_root, git_commit, policy_path, policy_sha256, effective_from, persistence, units}' data/runtime/machine_profit_stagnation_deployment.json
+jq '{git_commit, effective_from, persistence, units}' data/runtime/machine_additions_deployment.json
+jq '{schema, release_root, git_commit}' data/runtime/machine_fill_telegram_deployment.json
 bash deploy/run_runtime_release.sh --check-cron
 bash deploy/run_runtime_release.sh postclose "$TARGET_DATE" --print-plan
 bash deploy/run_runtime_release.sh paired-replay "$TARGET_DATE" --print-plan

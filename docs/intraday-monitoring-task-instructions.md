@@ -164,6 +164,17 @@ promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved
 
 에피소드 수량은 자동 장후 튜닝축이 아니며 별도 승인 override를 기본값으로 덮지 않는다. 무손절·시간청산 없음, 목표 주문 유지 등 profile 고유 계약은 단순 post-sell MFE만으로 결함 판정하거나 임의 변경하지 않는다.
 
+### 2.4 위젯·에피소드 공통 보조정책과 체결 알림
+
+위젯·에피소드 진입은 별도 AI provider나 prompt version을 사용하지 않는다. 원 signal과 exact-date profile 뒤의 micro 확인, 주문 직전 guard와 broker 체결을 기존 owner가 순서대로 소비한다. 메인 Entry AI의 KRX/NXT prompt 선택·fallback·quota를 이 경로의 기동 또는 판단 근거로 합치지 않는다.
+
+승인된 공통 보조정책은 `data/runtime/machine_additions_deployment.json`, 보조익절은 `data/runtime/machine_profit_stagnation_deployment.json`, 체결 알림은 `data/runtime/machine_fill_telegram_deployment.json`과 실제 systemd drop-in·PID env의 path/hash로 대사한다. 공통 `runtime_release_selection.json` 또는 `unified_runtime_deployment.json`의 설치 경로와 현재 PID 소비도 분리한다.
+
+- `machine_entry_adverse_flow_v1`은 원 신호가 진입을 허용한 뒤 실제 submit 직전의 악화만 재평가한다. 정상 보류·freshness/market-weakness/broker guard를 BUY로 뒤집거나 signal·threshold·수량·가격을 바꾸지 않는다. 평가 미기동, stale 입력과 정상 `HOLD`를 각각 직접 사유로 남긴다.
+- `machine_ws_target_ratchet_v1`은 원 목표 도달과 fresh WS/BBO·수량·원 주문 receipt를 확인한 같은 custody owner만 목표를 한 tick씩 상향한다. 보조익절의 정체 판정·보호 지정가 전환과 별도 lifecycle이며, AMEND 미확정 또는 partial fill 뒤에는 새 목표 성공으로 기록하지 않는다.
+- Telegram 거래 알림은 immutable order owner와 broker의 실제 BUY/SELL fill에 대해서만 발송한다. research-watch·표본 수집·신호·WAIT/HOLD/REJECT·미제출·미체결 주문은 알리지 않는다. partial/late fill은 주문번호·원주문·누적 체결수량으로 중복 없이 결속하고, 알림 성공을 주문·체결 성공 근거로 사용하지 않는다.
+- 설치, 현재 PID의 정책 pin 소비, 자연 판단·주문 전환, terminal reconciliation과 비용 후 경제성을 각각 판정한다. 다음 예약이 새 경로를 가리키는 것만으로 현재 연속가동 PID가 reload됐다고 표시하지 않는다.
+
 ## 3. 현행 우선 분석축별 반복 점검
 
 ### 3.1 Micro-reversion
