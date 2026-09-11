@@ -152,6 +152,83 @@ def test_two_failed_attempts_stop_api(workspace):
     assert m.read_json(base / "attempt_2/status.json")["attempts"] == 2
 
 
+def test_edit_during_final_completion_check_is_preserved(workspace, monkeypatch):
+    target = workspace / m.TARGETS["intraday"]
+    count = 0
+    def completion(*args):
+        nonlocal count
+        count += 1
+        if count == 2:
+            target.write_text(ORIGINAL + "Concurrent edit during slow hash verification\n")
+        return {"id": "same receipt"}
+    monkeypatch.setattr(m, "completion_ready", completion)
+    result = m.refresh(workspace, "intraday", DAY, {}, call=good_api, validate=lambda root: None)
+    assert result["status"] == "failed"
+    assert "Concurrent edit during slow hash verification" in target.read_text()
+
+
+@pytest.mark.parametrize("after_swap,later_edit", [(False, False), (True, False), (True, True)])
+def test_publish_crash_never_repeats_api(workspace, monkeypatch, after_swap, later_edit):
+    target = workspace / m.TARGETS["postclose"]
+    write = m.atomic_write
+    class PowerLoss(BaseException):
+        pass
+    def crash(path, text):
+        if path == target:
+            if after_swap:
+                write(path, text)
+            raise PowerLoss()
+        return write(path, text)
+    monkeypatch.setattr(m, "atomic_write", crash)
+    with pytest.raises(PowerLoss):
+        m.refresh(workspace, "postclose", DAY, {}, call=good_api, validate=lambda root: None)
+    monkeypatch.setattr(m, "atomic_write", write)
+    if later_edit:
+        target.write_text("User edited after the interrupted publication\n")
+    result = m.refresh(workspace, "postclose", DAY, {}, call=lambda *a: pytest.fail("duplicate API after crash"))
+    assert result["status"] == ("updated" if after_swap and not later_edit else "blocked_publication")
+    assert result["attempts"] == 1
+    expected = ORIGINAL.replace("old-command", "new-command") if after_swap else ORIGINAL
+    if later_edit:
+        expected = "User edited after the interrupted publication\n"
+    assert target.read_text() == expected
+    assert m.refresh(workspace, "postclose", DAY, {}, call=lambda *a: pytest.fail("terminal repeat")) == result
+
+
+def test_dispatch_recovers_second_attempt_before_retry_budget_check(workspace, monkeypatch):
+    def failure(*args):
+        raise ValueError("provider failure")
+    m.refresh(workspace, "postclose", DAY, {}, call=failure)
+    write = m.atomic_write
+    target = workspace / m.TARGETS["postclose"]
+    def crash(path, text):
+        write(path, text)
+        if path == target:
+            raise KeyboardInterrupt()
+    monkeypatch.setattr(m, "atomic_write", crash)
+    with pytest.raises(KeyboardInterrupt):
+        m.refresh(workspace, "postclose", DAY, {}, call=good_api, validate=lambda root: None)
+    monkeypatch.setattr(m, "atomic_write", write)
+    monkeypatch.setattr(m, "refresh", lambda *a: pytest.fail("must recover without API"))
+    results = m.dispatch(workspace, "postclose", {"enabled": True, "effective_from_date": DAY},
+                         datetime(2026, 9, 11, 19, 59, tzinfo=m.KST))
+    assert results[0]["status"] == "updated"
+    assert results[0]["attempts"] == 2
+
+
+def test_disable_is_read_after_acquiring_writer_lock(workspace, monkeypatch, capsys):
+    monkeypatch.setattr(m, "ROOT", workspace)
+    monkeypatch.setattr(os.sys, "argv", ["refresh", "--mode", "postclose"])
+    m.save_json(workspace / m.CONFIG, {"enabled": True, "effective_from_date": DAY})
+    def lock_then_disable(*args):
+        m.save_json(workspace / m.CONFIG, {"enabled": False})
+    monkeypatch.setattr(m.fcntl, "flock", lock_then_disable)
+    monkeypatch.setattr(m, "dispatch", lambda root, mode, config, now: [{"status": "disabled"}]
+                        if config["enabled"] is False else pytest.fail("stale enabled config"))
+    assert m.main() == 0
+    assert "disabled" in capsys.readouterr().out
+
+
 def test_dispatch_kst_time_disabled_and_original_date_after_midnight(tmp_path, monkeypatch):
     config = {"enabled": True, "effective_from_date": DAY}
     seen = []
@@ -235,7 +312,7 @@ def test_installer_idempotent_preserves_cron_and_rolls_back_config(tmp_path):
     cron = tmp_path / "cron"
     original = "MAILTO=operator\n15 7 * * * /existing/job\n"
     cron.write_text(original)
-    (fakebin / "timedatectl").write_text("#!/bin/sh\necho Asia/Seoul\n")
+    (fakebin / "timedatectl").write_text('#!/bin/sh\necho "${TEST_TIMEZONE:-Asia/Seoul}"\n')
     (fakebin / "crontab").write_text("#!/bin/sh\nif [ \"$1\" = -l ]; then cat \"$TEST_CRON\"; else\n"
         "if [ \"${TEST_FAIL:-0}\" = 1 ]; then exit 1; fi\ncat > \"$TEST_CRON\"\nfi\n")
     for p in fakebin.iterdir():
@@ -250,11 +327,14 @@ def test_installer_idempotent_preserves_cron_and_rolls_back_config(tmp_path):
         assert run("--install").returncode == 0
     installed = cron.read_text()
     assert installed.startswith(original)
+    assert "30-59 19 * * *" in installed
     assert installed.count("# KORSTOCKSCAN_MONITORING_INSTRUCTION_REFRESH_") == 2
     before = m.read_json(root / m.CONFIG)
     assert run("--remove", TEST_FAIL="1").returncode != 0
     assert m.read_json(root / m.CONFIG) == before
     assert cron.read_text() == installed
-    assert run("--remove").returncode == 0
+    assert run("--install", TEST_TIMEZONE="UTC").returncode != 0
+    assert cron.read_text() == installed
+    assert run("--remove", TEST_TIMEZONE="UTC").returncode == 0
     assert cron.read_text() == original
     assert m.read_json(root / m.CONFIG)["enabled"] is False
