@@ -480,3 +480,28 @@ def test_restart_recovery_keeps_cross_midnight_event_on_candidate_trade_date(
     assert rows[-1]["trade_date"] == "2026-08-07"
     assert not current_path.exists()
     assert stock[lifecycle.CONTEXT_KEY]["recovered_after_restart"] is True
+
+
+def test_operator_rollout_preserves_premarket_lineage_without_relabelling(tmp_path):
+    fields = {
+        **_candidate_fields(mode="one_share_exploration"),
+        "decision_quality_live_adapter": "entry_setup_v2_14_nxt_bounded_probe_v1",
+        "entry_setup_live_policy_status": "active_bounded_nxt_canary",
+        "entry_setup_live_policy_effective_venue": "PREMARKET_KRX_LIKE",
+        "entry_setup_live_policy_session_bucket": "premarket_krx_like",
+        "entry_setup_live_policy_activation_sha256": "a" * 64,
+        "entry_setup_live_policy_scope_authority": "operator_all_scalping_rollout",
+    }
+    stock = {"id": 17, "code": "005930"}
+    context = lifecycle.bind_candidate_context(
+        stock, fields, output_path=tmp_path / "x.jsonl"
+    )
+    assert context["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert context["session_bucket"] == "premarket_krx_like"
+    fields.pop("entry_setup_live_policy_scope_authority")
+    assert (
+        lifecycle.bind_candidate_context(
+            {"id": 18, "code": "005930"}, fields, output_path=tmp_path / "y.jsonl"
+        )
+        is None
+    )

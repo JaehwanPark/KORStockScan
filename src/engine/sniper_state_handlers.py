@@ -50400,6 +50400,7 @@ def _build_ai_ops_log_fields(
         "ai_input_payload_sha256",
         "decision_quality_live_adapter",
         "entry_setup_live_policy_status",
+        "entry_setup_live_policy_scope_authority",
         "entry_setup_live_policy_mode",
         "entry_setup_live_policy_source_date",
         "entry_setup_live_policy_target_date",
@@ -58543,6 +58544,7 @@ def _entry_setup_discovery_recheck_decision(
     )
     session = resolve_entry_candle_session(now_ts=now_ts)
     policy = resolve_live_prompt_policy(
+        strategy=stock.get("strategy"),
         configured_prompt_version=os.getenv(
             "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION", ""
         ),
@@ -58622,11 +58624,14 @@ def _arm_ai_wait_rebound_recheck_anchor(
     if not isinstance(stock, dict):
         fields["ai_wait_rebound_anchor_reason"] = "missing_stock_state"
         return fields
+    from src.engine.scalping.entry_setup_scalping_rollout import decision_authorized
+
     if (
         normalize_position_tag(
             str(stock.get("strategy") or ""), stock.get("position_tag")
         )
         != "SCANNER"
+        and not decision_authorized(stock.get("strategy"), ai_decision, now=datetime.fromtimestamp(now_ts, _KST))
     ):
         fields["ai_wait_rebound_anchor_reason"] = "non_scanner"
         return fields
@@ -65478,6 +65483,7 @@ def _handle_watching_strategy_branch(
                         ),
                         strategy=strategy,
                         position_tag=pos_tag,
+                        entry_setup_policy_decision=ai_decision,
                         ai_score=current_ai_score,
                         ai_action=current_ai_action,
                         ws_age_ms=ws_age_ms,

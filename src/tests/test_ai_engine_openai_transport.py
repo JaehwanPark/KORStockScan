@@ -3454,7 +3454,14 @@ def test_analyze_target_operator_promotes_decision_quality_v2_7(monkeypatch):
     )
 
 
-def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch):
+@pytest.mark.parametrize("all_scope_rollout", [False, True])
+def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(
+    monkeypatch, all_scope_rollout
+):
+    if all_scope_rollout:
+        monkeypatch.setenv(
+            "KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_PATH", "/mock-resolver-pinned"
+        )
     engine = _build_engine()
     captured = {}
     live_policy_kwargs = {}
@@ -3560,8 +3567,10 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
         _sample_ticks(),
         _sample_candles(),
         strategy="SCALPING",
-        prompt_profile="watching",
-        metadata_extra={"position_tag": "SCANNER"},
+        prompt_profile="shared" if all_scope_rollout else "watching",
+        metadata_extra={
+            "position_tag": "SCALP_BASE" if all_scope_rollout else "SCANNER"
+        },
         candle_context=candle_context,
     )
 
@@ -3596,7 +3605,10 @@ def test_analyze_target_uses_active_v2_14_only_as_krx_bounded_probe(monkeypatch)
     assert captured["metadata_extra"]["entry_setup_live_policy_status"] == (
         "active_bounded_krx_canary"
     )
-    assert live_policy_kwargs["position_tag"] == "SCANNER"
+    assert live_policy_kwargs["position_tag"] == (
+        "SCALP_BASE" if all_scope_rollout else "SCANNER"
+    )
+    assert live_policy_kwargs["strategy"] == ("SCALPING" if all_scope_rollout else None)
     assert result["ai_prompt_version"] == (
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     )

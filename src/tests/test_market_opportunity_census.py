@@ -471,7 +471,7 @@ def test_capture_collects_bounded_exact_route_external_bbo():
                 "max_retries": 1,
                 "request_owner": "market_opportunity_census.external_bbo",
                 "request_class": "source_only",
-                "read_rate_max_wait_sec": 1.25,
+                "read_rate_max_wait_sec": 5.0,
                 "return_meta": True,
             },
         )
@@ -2929,3 +2929,65 @@ def test_report_pause_fence_covers_prune_and_promoted_ws_sources(tmp_path):
         == "2026-09-10T09:00:30+09:00"
     )
     assert path.read_bytes() == raw
+
+
+def test_capture_does_not_spend_reservation_after_bbo_window_expiry():
+    times = iter([0.0, 240.0])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("expired capture must not reserve or request")
+
+    rows = census.capture_market_snapshots(
+        "unused",
+        target_date="2026-09-11",
+        captured_at=datetime.fromisoformat("2026-09-11T12:00:00+09:00"),
+        venues=("KRX",),
+        panels=("liquid_common",),
+        fetcher=lambda *a, **k: [{"Code": "005930", "Price": 100000}],
+        collect_executable_bbo=True,
+        bbo_fetcher=forbidden,
+        bbo_request_reserver=forbidden,
+        monotonic_clock=lambda: next(times),
+    )
+    observation = rows[0]["rows"][0]["executable_bbo_observation"]
+    assert observation["gap_reason"] == "capture_bbo_request_window_expired"
+    assert observation["status"] != "captured"
+
+
+def test_verified_non_common_exclusion_is_not_a_master_join_gap(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    path = tmp_path / "snapshots.jsonl"
+    _write_jsonl(path, [{"schema_version": census.SCHEMA_VERSION, "target_date": "2026-09-11",
+        "captured_at": "2026-09-11T12:00:00+09:00", "venue": "KRX", "session": "KRX_REGULAR",
+        "panel": "liquid_common", "source_quality_status": "ok", "rows": [
+            {"rank": 1, "stock_code": "005930", "current_price": 100000, "change_rate_pct": 5},
+            {"rank": 2, "stock_code": "760028", "current_price": 10000, "change_rate_pct": 6}]}])
+    class Master:
+        def lookup(self, code, **kwargs):
+            return SimpleNamespace(status=SimpleNamespace(value="verified" if code == "005930" else "missing"),
+                record=SimpleNamespace(listing_market=SimpleNamespace(value="KOSPI"), instrument_type=SimpleNamespace(value="EQUITY")) if code == "005930" else None)
+    monkeypatch.setattr(census, "_load_symbol_master_binding", lambda *a, **k: (Master(),
+        {"status": "verified", "non_common_stock_exclusions": {"760028": {"security_group": "EN", "archive_sha256": "a"*64}}}))
+    for name in ("pipeline", "ai"):
+        _write_jsonl(tmp_path / (name+".jsonl"), [])
+    report = census.build_report("2026-09-11", snapshot_path=path, pipeline_path=tmp_path/"pipeline.jsonl",
+        ai_trace_path=tmp_path/"ai.jsonl", trigger_receipt_path=tmp_path/"missing.json")
+    assert report["source_quality"]["primary_symbol_master_lookup_counts"] == {"verified": 1, "verified_non_common_stock": 1}
+    assert "official_symbol_master_lookup_gap" not in report["instrumentation_blockers"]
+    assert report["primary_decision"]["by_venue"]["KRX"]["denominator_unique_opportunity_episode_count"] == 1
+
+
+def test_capture_preserves_benchmark_but_spares_bbo_budget_for_verified_etn(monkeypatch):
+    monkeypatch.setattr(census, "_load_symbol_master_binding", lambda *a, **k: (None,
+        {"status": "verified", "non_common_stock_exclusions": {"760028": {"security_group": "EN", "archive_sha256": "a"*64}}}))
+    def forbidden(*a, **k):
+        raise AssertionError("non-common stock must not consume BBO reservation")
+    rows = census.capture_market_snapshots("unused", target_date="2026-09-11",
+        captured_at=datetime.fromisoformat("2026-09-11T12:00:00+09:00"),
+        venues=("KRX",), panels=("liquid_common",),
+        fetcher=lambda *a, **k: [{"Code": "760028", "Price": 10000}],
+        collect_executable_bbo=True, bbo_fetcher=forbidden, bbo_request_reserver=forbidden)
+    assert rows[0]["rows"][0]["stock_code"] == "760028"
+    observation = rows[0]["rows"][0]["executable_bbo_observation"]
+    assert observation["gap_reason"] == "verified_non_common_stock_excluded"
+    assert observation["symbol_master_exclusion"]["security_group"] == "EN"

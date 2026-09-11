@@ -3326,3 +3326,348 @@ def test_summary_failure_falls_back_to_raw_events(monkeypatch, tmp_path):
         "SOURCE_TAXONOMY_LEAKAGE"
         not in report["entry_submit_drought_contract"]["weak_contract_matches"]
     )
+
+
+def _cash_exclusion_events(overrides=None, recovered=False):
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 11, 10)
+    result = []
+    fields = {
+        "kt00011_cash_orderable_contract_status": "valid",
+        "cash_orderable_qty_cap": "0",
+        "cash_orderable_amount": "500",
+        "kt00011_requested_unit_price": "1000",
+        "kt00011_capacity_observed_at": start.isoformat(),
+        "kt00011_capacity_source_sha256": "a" * 64,
+        **(overrides or {}),
+    }
+    for i in range(20):
+        stages = ["ai_confirmed", "budget_pass", "blocked_zero_qty"]
+        if recovered:
+            stages += ["latency_pass", "order_bundle_submitted"]
+        for j, stage in enumerate(stages):
+            result.append(
+                sentinel.PipelineEvent(
+                    start + timedelta(seconds=i * 6 + j),
+                    "ENTRY_PIPELINE",
+                    stage,
+                    "fixture",
+                    "005930",
+                    str(i + 1),
+                    {
+                        **fields,
+                        "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+                        "entry_submit_attempt_authority": "observation_only",
+                        "entry_submit_attempt_id": str(i + 1),
+                        "entry_submit_attempt_parent_promotion_id": "p" + str(i),
+                        "scanner_promotion_id": "p" + str(i),
+                    },
+                )
+            )
+    return result
+
+
+def test_cash_shortfall_removed_from_drought_but_raw_preserved():
+    from src.tests.submit_drought_fixtures import make_report
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    report = make_report("2026-09-11", events=_cash_exclusion_events())
+    c = report["entry_submit_drought_contract"]
+    assert not c["critical"]
+    assert c["stage_unique"]["ai_confirmed"] == 0
+    assert c["cash_shortfall_exclusion"]["excluded_attempt_count"] == 20
+    assert (
+        c["cash_shortfall_exclusion"]["raw_exact_attempt_contract"]["attempt_count"]
+        == 20
+    )
+    assert validate_submit_drought_contract(report, c)["status"] == "pass"
+    c["cash_shortfall_exclusion"]["excluded_attempts"][0]["evidence"][
+        "cash_orderable_qty_cap"
+    ] = 1
+    assert validate_submit_drought_contract(report, c)["status"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"kt00011_cash_orderable_contract_status": "missing"},
+        {"kt00011_error": "timeout"},
+        {"cash_orderable_qty_cap": "nan"},
+        {"cash_orderable_qty_cap": True},
+        {"cash_orderable_amount": "-1"},
+        {"kt00011_capacity_source_sha256": ""},
+        {"kt00011_capacity_observed_at": "2026-09-10T10:00:00"},
+        {"kt00011_capacity_observed_at": "2026-09-11T11:00:00"},
+        {"cash_orderable_qty_cap": "1", "cash_orderable_amount": "2000"},
+    ],
+)
+def test_unproven_cash_shortfall_keeps_drought(overrides):
+    from src.tests.submit_drought_fixtures import make_report
+
+    c = make_report("2026-09-11", events=_cash_exclusion_events(overrides))[
+        "entry_submit_drought_contract"
+    ]
+    assert c["critical"]
+    assert "cash_shortfall_exclusion" not in c
+
+
+def test_new_position_budget_excluded_but_scale_in_not_excluded():
+    from src.tests.submit_drought_fixtures import make_report
+
+    fields = {
+        "cash_orderable_qty_cap": "1",
+        "cash_orderable_amount": "2000",
+        "pre_cap_qty": "1",
+        "effective_qty": "0",
+        "budget_base": "2000",
+        "binding_caps": "max_position_qty_cap",
+        "allocation_stage": "initial_entry",
+        "formula_version": "entry_type_5stage_cap25_v1",
+    }
+    c = make_report("2026-09-11", events=_cash_exclusion_events(fields))[
+        "entry_submit_drought_contract"
+    ]
+    assert not c["critical"]
+    assert (
+        c["cash_shortfall_exclusion"]["excluded_attempts"][0]["reason"]
+        == "new_entry_position_budget_shortfall"
+    )
+    fields["allocation_stage"] = "scale_in"
+    c = make_report("2026-09-11", events=_cash_exclusion_events(fields))[
+        "entry_submit_drought_contract"
+    ]
+    assert c["critical"]
+
+
+def test_cash_block_followed_by_same_attempt_submit_is_not_removed():
+    from src.tests.submit_drought_fixtures import make_report
+
+    c = make_report("2026-09-11", events=_cash_exclusion_events(recovered=True))[
+        "entry_submit_drought_contract"
+    ]
+    assert c["stage_unique"]["order_bundle_submitted"] == 20
+    assert "cash_shortfall_exclusion" not in c
+
+
+def test_cash_exclusion_does_not_hide_other_attempts():
+    from datetime import datetime, timedelta
+    from src.tests.submit_drought_fixtures import make_report
+
+    cash = _cash_exclusion_events()
+    other = []
+    for i in range(3):
+        for j, stage in enumerate(("budget_pass", "latency_block")):
+            other.append(
+                sentinel.PipelineEvent(
+                    datetime(2026, 9, 11, 10, 5) + timedelta(seconds=i * 3 + j),
+                    "ENTRY_PIPELINE",
+                    stage,
+                    "other",
+                    "000001",
+                    "other" + str(i),
+                    {"reason": "latency_state_danger"},
+                )
+            )
+    report = make_report("2026-09-11", events=cash + other)
+    c = report["entry_submit_drought_contract"]
+    assert c["critical"]
+    assert c["stage_unique"]["budget_pass"] == 3
+    assert (
+        c["exact_attempt_contract"]["axis_terminal_causal_attempt_counts"][
+            "LATENCY_PRE_SUBMIT"
+        ]
+        == 3
+    )
+    assert (
+        c["cash_shortfall_exclusion"]["raw_exact_attempt_contract"]["attempt_count"]
+        == 23
+    )
+
+
+def test_cash_exclusion_removes_bound_call_finish_receipt():
+    from dataclasses import replace
+    from datetime import timedelta
+    from src.tests.submit_drought_fixtures import make_report
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    events = _cash_exclusion_events()
+    ends = [
+        replace(
+            e,
+            emitted_at=e.emitted_at + timedelta(milliseconds=1),
+            stage="entry_submit_attempt_finished",
+            fields={**e.fields, "submit_call_outcome": "returned_false"},
+        )
+        for e in events
+        if e.stage == "blocked_zero_qty"
+    ]
+    report = make_report("2026-09-11", events=events + ends)
+    c = report["entry_submit_drought_contract"]
+    assert c["exact_attempt_contract"]["attempt_count"] == 0
+    assert validate_submit_drought_contract(report, c)["status"] == "pass"
+
+
+def test_cash_exclusion_removes_duplicate_source_rows():
+    from dataclasses import replace
+    from src.tests.submit_drought_fixtures import make_report
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    events = _cash_exclusion_events()
+    report = make_report("2026-09-11", events=events + [replace(e) for e in events])
+    c = report["entry_submit_drought_contract"]
+    assert c["exact_attempt_contract"]["attempt_count"] == 0
+    assert validate_submit_drought_contract(report, c)["status"] == "pass"
+
+
+@pytest.mark.parametrize("bad", [True, False, "nan", "inf"])
+def test_position_shortfall_rejects_invalid_sizing_numbers(bad):
+    from src.engine.automation.submit_drought_contract import cash_shortfall_reason
+
+    fields = _cash_exclusion_events(
+        {
+            "cash_orderable_qty_cap": "1",
+            "cash_orderable_amount": "2000",
+            "pre_cap_qty": "1",
+            "effective_qty": "0",
+            "budget_base": "2000",
+            "binding_caps": "max_position_qty_cap",
+            "allocation_stage": "initial_entry",
+            "formula_version": "entry_type_5stage_cap25_v1",
+        }
+    )[0].fields
+    for key in ("pre_cap_qty", "effective_qty", "budget_base"):
+        assert cash_shortfall_reason({**fields, key: bad}, "2026-09-11T10:00:02") == ""
+
+
+@pytest.mark.parametrize("use_cache", [False, True])
+@pytest.mark.parametrize("use_summary", [False, True])
+def test_cash_exclusion_cache_summary_and_consumer_parity(
+    monkeypatch, tmp_path, use_cache, use_summary
+):
+    from dataclasses import asdict
+    from datetime import datetime
+    from src.engine.automation.submit_drought_contract import (
+        make_scope_evidence,
+        validate_scope_evidence,
+        validate_submit_drought_contract,
+    )
+
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sentinel, "previous_trading_day_with_events", lambda _: None)
+    rows = []
+    for event in _cash_exclusion_events():
+        row = asdict(event)
+        row["emitted_at"] = event.emitted_at.isoformat()
+        row["event_type"] = "pipeline_event"
+        row["fields"].update(effective_venue="KRX", market_session_bucket="krx_regular")
+        rows.append(row)
+    _write_events(tmp_path, "2026-09-11", rows)
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-09-11",
+        as_of=datetime(2026, 9, 11, 10, 3),
+        use_cache=use_cache,
+        use_summary=use_summary,
+    )
+    contract = report["entry_submit_drought_contract"]
+    assert contract["cash_shortfall_exclusion"]["excluded_attempt_count"] == 20
+    assert validate_submit_drought_contract(report, contract)["status"] == "pass"
+    scope = "KRX|KRX_REGULAR"
+    evidence = make_scope_evidence(report, scope, contract["by_venue_session"][scope])
+    assert validate_scope_evidence(evidence, source_date="2026-09-11", scope=scope)
+
+
+@pytest.mark.parametrize("tamper", ["date", "raw_duplicate", "raw_total", "terminal"])
+def test_cash_exclusion_rejects_bad_source_envelope(tamper):
+    from src.tests.submit_drought_fixtures import make_report
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    report = make_report("2026-09-11", events=_cash_exclusion_events())
+    c = report["entry_submit_drought_contract"]
+    x = c["cash_shortfall_exclusion"]
+    if tamper == "date":
+        report["target_date"] = "2026-09-12"
+    elif tamper == "raw_duplicate":
+        x["raw_exact_attempt_contract"]["attempt_ledger"].append(
+            x["raw_exact_attempt_contract"]["attempt_ledger"][0]
+        )
+    elif tamper == "raw_total":
+        x["raw_exact_attempt_contract"]["attempt_count"] += 1
+    else:
+        x["excluded_attempts"][0]["terminal_stage"] = "blocked_ai_score"
+    assert validate_submit_drought_contract(report, c)["status"] == "invalid"
+
+
+def test_cash_source_time_compares_instants_in_kst():
+    from src.engine.automation.submit_drought_contract import cash_shortfall_reason
+
+    fields = _cash_exclusion_events()[0].fields
+    # 02:00 UTC is 11:00 KST: future evidence must not justify a 10:00 terminal.
+    assert not cash_shortfall_reason(
+        {**fields, "kt00011_capacity_observed_at": "2026-09-11T02:00:00+00:00"},
+        "2026-09-11T10:00:02",
+    )
+    assert (
+        cash_shortfall_reason(
+            {**fields, "kt00011_capacity_observed_at": "2026-09-11T01:00:00+00:00"},
+            "2026-09-11T10:00:02",
+        )
+        == "broker_proven_cash_shortfall"
+    )
+
+
+@pytest.mark.parametrize("tamper", ["record_id", "terminal_axis", "submitted_stage"])
+def test_cash_exclusion_validates_excluded_source_identity(tamper):
+    from src.tests.submit_drought_fixtures import make_report
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    report = make_report("2026-09-11", events=_cash_exclusion_events())
+    contract = report["entry_submit_drought_contract"]
+    exclusion = contract["cash_shortfall_exclusion"]
+    row = exclusion["raw_exact_attempt_contract"]["attempt_ledger"][0]
+    if tamper == "record_id":
+        row["record_id"] = "another-record"
+    elif tamper == "terminal_axis":
+        row["terminal_axis"] = "BROKER_RECEIPT"
+    else:
+        row["stages"].append("order_bundle_submitted")
+    assert validate_submit_drought_contract(report, contract)["status"] == "invalid"
+
+
+def test_cash_exclusion_preserves_other_calls_on_same_record():
+    from dataclasses import replace
+    from src.tests.submit_drought_fixtures import make_report
+    from src.engine.automation.submit_drought_contract import (
+        validate_submit_drought_contract,
+    )
+
+    events = _cash_exclusion_events()[:6]
+    # One cash-blocked call followed by a non-cash call on the same record.
+    events[3:] = [replace(e, record_id="1") for e in events[3:]]
+    events[-1] = replace(
+        events[-1], fields={**events[-1].fields, "kt00011_error": "timeout"}
+    )
+    report = make_report("2026-09-11", events=events)
+    contract = report["entry_submit_drought_contract"]
+    assert contract["cash_shortfall_exclusion"]["excluded_attempt_count"] == 1
+    assert contract["exact_attempt_contract"]["attempt_count"] == 1
+    assert validate_submit_drought_contract(report, contract)["status"] == "pass"
+    # Equal stage counts cannot excuse a different retained source lineage.
+    row = contract["exact_attempt_contract"]["attempt_ledger"][0]
+    row["producer_attempt_id"] = "submit:unrelated"
+    result = validate_submit_drought_contract(report, contract)
+    assert result["status"] == "invalid"
+    assert (
+        "cash_shortfall_exclusion_retained_lineage_mismatch"
+        in result["structural_issues"]
+    )

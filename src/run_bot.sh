@@ -344,6 +344,10 @@ reset_runtime_policy_env_before_handoff() {
     # Never inherit yesterday's pinned exception from the long-lived shell.
     unset KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_PATH
     unset KORSTOCKSCAN_ENTRY_SETUP_INTRADAY_APPROVAL_SHA256
+    # Persistent rollout is reloaded from the current operator handoff; deletion
+    # must not leave a stale pin in this long-lived supervisor.
+    unset KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_PATH
+    unset KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_SHA256
     # The supervisor is long-lived across graceful child restarts. Clear
     # startup-retired authority before loading the reviewed PREOPEN/operator
     # handoff; the verifier must reject any sourced layer that restores it.

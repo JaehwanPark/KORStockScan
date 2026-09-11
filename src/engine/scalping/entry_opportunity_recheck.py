@@ -521,6 +521,8 @@ def _truthy(value: Any) -> bool:
 
 
 def config_from_env() -> EntryOpportunityRecheckConfig:
+    from src.engine.scalping.entry_setup_scalping_rollout import authorized_scopes
+
     prefix = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_"
     return EntryOpportunityRecheckConfig(
         enabled=_env_bool(f"{prefix}ENABLED", False),
@@ -533,7 +535,8 @@ def config_from_env() -> EntryOpportunityRecheckConfig:
             scope.strip()
             for scope in os.getenv(f"{prefix}ALLOWED_SCOPES", "").split(",")
             if scope.strip() in SCOPES
-        ),
+        )
+        | authorized_scopes(),
         intraday_escalation_scopes=frozenset(
             scope.strip()
             for scope in os.getenv(f"{prefix}INTRADAY_ESCALATION_SCOPES", "").split(",")
@@ -723,6 +726,7 @@ def evaluate_blocked_ai_score_recheck(
     source_stage: Any = "blocked_ai_score",
     source_reason: Any = "entry_policy_no_buy_score_prior",
     ai_contract_status: Any = None,
+    entry_setup_policy_decision: Mapping[str, Any] | None = None,
     ai_edge_state: Any = None,
     ai_probe_intent: Any = False,
     ai_probe_intent_status: Any = None,
@@ -870,7 +874,14 @@ def evaluate_blocked_ai_score_recheck(
             config=config,
             fields=base,
         )
-    if str(position_tag or "").strip().upper() != "SCANNER":
+    from src.engine.scalping.entry_setup_scalping_rollout import decision_authorized
+
+    rollout_scope = (
+        decision_authorized(strategy, entry_setup_policy_decision)
+        and (entry_setup_policy_decision or {}).get("entry_setup_live_policy_target_date") == state.trade_date
+        and runtime_scope((entry_setup_policy_decision or {}).get("entry_setup_live_policy_effective_venue"), (entry_setup_policy_decision or {}).get("entry_setup_live_policy_session_bucket")) == base["entry_opportunity_recheck_scope"]
+    )
+    if str(position_tag or "").strip().upper() != "SCANNER" and not rollout_scope:
         return _decision(
             allowed=False,
             reason="non_scanner",

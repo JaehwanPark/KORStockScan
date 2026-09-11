@@ -794,6 +794,96 @@ def build_daily_sources(
     return report
 
 
+def verified_non_common_stock_exclusions(
+    master_payload: dict[str, Any], *, as_of: date
+) -> dict[str, dict[str, Any]]:
+    """Classify exclusions from hash-bound official archives, never from names.
+
+    The caller must first validate the canonical master. Missing companion or
+    archive evidence leaves symbols unresolved; it never expands tax eligibility.
+    """
+    exclusions: dict[str, dict[str, Any]] = {}
+    for source in master_payload.get("source_artifacts", []):
+        if (
+            source.get("kind") != "symbol_product_master"
+            or source.get("status") != "verified"
+        ):
+            continue
+        try:
+            effective = date.fromisoformat(source["effective_from"])
+            until = source.get("effective_to")
+            if effective > as_of or (until and as_of > date.fromisoformat(until)):
+                continue
+            raw = Path(source["resolved_path"]).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != source["observed_sha256"]:
+                continue
+            payload = json.loads(raw)
+            for upstream in payload.get("upstream_sources", []):
+                spec = next(
+                    (s for s in MASTER_SPECS if s.market == upstream.get("market")),
+                    None,
+                )
+                if (
+                    spec is None
+                    or upstream.get("source_uri") != spec.url
+                    or upstream.get("member_name") != spec.member_name
+                ):
+                    continue
+                archive = Path(upstream["archive_path"]).read_bytes()
+                if hashlib.sha256(archive).hexdigest() != upstream["archive_sha256"]:
+                    continue
+                with zipfile.ZipFile(io.BytesIO(archive)) as z:
+                    member = z.read(spec.member_name)
+                if hashlib.sha256(member).hexdigest() != upstream["member_sha256"]:
+                    continue
+                parsed: dict[str, dict[str, Any]] = {}
+                width = sum(spec.widths)
+                for line in member.decode("cp949").splitlines():
+                    if len(line) <= width + 21:
+                        raise ValueError("official_master_row_too_short")
+                    prefix = line[:-width]
+                    fields = _split_fixed_width(line[-width:], spec.widths)
+                    symbol = prefix[:9].strip()
+                    official_symbol = symbol
+                    # KIS EN records use the Q-prefixed domestic ETN identifier;
+                    # Kiwoom's same instrument is keyed by the six-digit suffix.
+                    if (
+                        fields[0] == "EN"
+                        and len(symbol) == 7
+                        and symbol.startswith("Q")
+                        and symbol[1:].isdigit()
+                    ):
+                        symbol = symbol[1:]
+                    if (
+                        not fields[0].strip()
+                        or not fields[spec.preferred_index].strip()
+                    ):
+                        continue
+                    if len(symbol) != 6 or not symbol.isascii() or not symbol.isalnum():
+                        continue
+                    if fields[0] == "ST" and fields[spec.preferred_index] == "0":
+                        continue
+                    if symbol in parsed:
+                        raise ValueError("official_master_duplicate_symbol")
+                    parsed[symbol] = {
+                        "status": "verified_non_common_stock",
+                        "official_symbol": official_symbol,
+                        "standard_code": prefix[9:21].strip(),
+                        "security_group": fields[0],
+                        "preferred_class": fields[spec.preferred_index],
+                        "listing_market": spec.market,
+                        "source_date": effective.isoformat(),
+                        "archive_sha256": upstream["archive_sha256"],
+                        "member_sha256": upstream["member_sha256"],
+                        "economic_metadata_allowed": False,
+                    }
+                exclusions.update(parsed)
+        except (OSError, KeyError, TypeError, ValueError, zipfile.BadZipFile):
+            # A missing/non-verifiable companion remains a lookup gap.
+            continue
+    return exclusions
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", required=True)

@@ -341,11 +341,21 @@ def _candidate_context_from_fields(
         return None
     expected_venue = "NXT" if "_nxt_" in adapter else "KRX"
     expected_session = "nxt_aftermarket" if expected_venue == "NXT" else "krx_regular"
+    from src.engine.scalping.entry_setup_scalping_rollout import (
+        SCOPES as ROLLOUT_SCOPES,
+    )
+
+    approved_rollout_scope = (
+        fields.get("entry_setup_live_policy_scope_authority")
+        == "operator_all_scalping_rollout"
+        and f"{venue}|{session.upper()}" in ROLLOUT_SCOPES
+        and len(_text(fields.get("entry_setup_live_policy_activation_sha256"))) == 64
+        and expected_venue == ("KRX" if venue == "KRX" else "NXT")
+    )
     if (
-        venue != expected_venue
-        or session != expected_session
-        or status != f"active_bounded_{expected_venue.lower()}_canary"
-    ):
+        (venue != expected_venue or session != expected_session)
+        and not approved_rollout_scope
+    ) or status != f"active_bounded_{expected_venue.lower()}_canary":
         return None
     context = {
         "schema": CONTEXT_SCHEMA,

@@ -364,3 +364,103 @@ def test_owner_rejects_unreviewed_nonzero_provider_cost(tmp_path: Path) -> None:
             output_root=tmp_path / "output",
             fetcher=lambda _: b"not-called",
         )
+
+
+@pytest.mark.parametrize("tamper", [None, "archive", "member", "source", "future"])
+def test_non_common_classification_requires_exact_official_source(tmp_path, tamper):
+    import hashlib
+    from src.engine.scalping.micro_reversion.economic_reference_owner import (
+        verified_non_common_stock_exclusions,
+    )
+
+    archive = tmp_path / "kospi_code.mst.zip"
+    archive.write_bytes(_archive("KOSPI"))
+    spec = MASTER_SPECS[0]
+    with zipfile.ZipFile(archive) as z:
+        member = z.read(spec.member_name)
+    upstream = {
+        "market": "KOSPI",
+        "source_uri": spec.url,
+        "member_name": spec.member_name,
+        "archive_path": str(archive),
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "member_sha256": hashlib.sha256(member).hexdigest(),
+    }
+    if tamper == "member":
+        upstream["member_sha256"] = "0" * 64
+    raw = tmp_path / "source.json"
+    raw.write_text(json.dumps({"upstream_sources": [upstream]}))
+    source = {
+        "kind": "symbol_product_master",
+        "status": "verified",
+        "effective_from": "2026-09-10",
+        "resolved_path": str(raw),
+        "observed_sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+    }
+    if tamper == "source":
+        raw.write_text("{}")
+    if tamper == "archive":
+        archive.write_bytes(b"tampered")
+    if tamper == "future":
+        source["effective_from"] = "2026-09-12"
+    result = verified_non_common_stock_exclusions(
+        {"source_artifacts": [source]}, as_of=date(2026, 9, 11)
+    )
+    if tamper:
+        assert result == {}
+    else:
+        assert set(result) == {"005935", "069500"}
+        assert "005930" not in result
+        assert all(row["economic_metadata_allowed"] is False for row in result.values())
+
+
+def test_etn_q_prefix_is_normalized_only_with_official_en_group(tmp_path):
+    import hashlib
+    from src.engine.scalping.micro_reversion.economic_reference_owner import (
+        verified_non_common_stock_exclusions,
+    )
+
+    spec = MASTER_SPECS[0]
+    member = (
+        "\n".join(
+            [
+                _master_line(market="KOSPI", symbol="Q760028", name="etn", group="EN"),
+                _master_line(
+                    market="KOSPI", symbol="Q123456", name="not-etn", group="ST"
+                ),
+            ]
+        )
+        + "\n"
+    ).encode("cp949")
+    path = tmp_path / "archive.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(spec.member_name, member)
+    raw = tmp_path / "source.json"
+    raw.write_text(
+        json.dumps(
+            {
+                "upstream_sources": [
+                    {
+                        "market": "KOSPI",
+                        "source_uri": spec.url,
+                        "member_name": spec.member_name,
+                        "member_sha256": hashlib.sha256(member).hexdigest(),
+                        "archive_path": str(path),
+                        "archive_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                ]
+            }
+        )
+    )
+    source = {
+        "kind": "symbol_product_master",
+        "status": "verified",
+        "effective_from": "2026-09-10",
+        "resolved_path": str(raw),
+        "observed_sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+    }
+    result = verified_non_common_stock_exclusions(
+        {"source_artifacts": [source]}, as_of=date(2026, 9, 11)
+    )
+    assert set(result) == {"760028"}
+    assert result["760028"]["official_symbol"] == "Q760028"
