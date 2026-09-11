@@ -35,3 +35,7 @@
 이 리뷰 시점에는 code/unit template만 준비했고 신규 알림 service 설치·기동, 네 기존 service 알림 drop-in 적용·재기동은 실행하지 않았다. 기존 알림은 아직 runtime에서 유지된다. widget은 당시 PID144180/`widget-profit-stagnation-20260911`을 사용하며 원 source/정책 pin을 변경할 필요 없이 알림 flag만 false로 소비하면 된다. 실제 전환 시 최신 root/PID/order 상태를 재확인해야 한다.
 
 이전 보조익절 배포 승인은 그 수리의 receipt다. 이번 추가 알림 전환의 widget trader 재기동은 요청 범위를 명확히 확인한 뒤 수행한다. collector 세 개와 notification service는 알림 전환에 종속되며 에피소드 재기동은 불필요하다. 자연 체결 수신 후속은 당일 `MachineFillTelegramAcceptance0911` owner에 남긴다.
+
+## 배포 준비 최종 검증
+
+main commit `26d3e689`를 고정한 `/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-20260911`을 준비했다. data/.venv는 기존 workspace 공유 경로이며 src/deploy tracked diff 0이다. 같은 고정 root에서 69 tests 재검증 PASS, production config 로컬 읽기·원장753행 hash chain PASS, Telegram API 호출0이다. systemd-analyze verify PASS, 문서 parser PASS 및 `MachineFillTelegramAcceptance0911`이 정확히1개 파싱된다. 실제 systemd 설치/daemon-reload/재기동/알림 state 초기화는 미실행이다.
