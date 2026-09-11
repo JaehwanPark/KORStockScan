@@ -2,6 +2,8 @@
 
 작성일: 2026-09-10 KST. 최초 문서 작성은 설계-only였으며, 후속 명시 구현 요청의 최신 상태는 [구현·리뷰](../audit-reports/2026-09-10-entry-adverse-flow-implementation-review.md)를 따른다. **개발 코드 구현/검증과 배포·정책/PID·경제성은 별개다.** 아래 최초 문서 검증 receipt는 역사로 보존한다.
 
+2026-09-11 자연 표본 후 사용자 확인에 따라, 최근 체결이 드문 종목은 진입 후 청산 유동성과 자본 회전에 불리하므로 live guard에서 정상 0체결 창을 `CONTINUE`로 허용하지 않는다. 0D/등록/writer가 정상이어도 최근 0B watermark가 freshness를 충족하지 않으면 `SOURCE_UNAVAILABLE`로 미제출하며, 이는 source pipeline 장애와 구분하는 의도된 유동성 차단이다. 이 명확화는 기존 runtime 동작을 유지하며 실주문 조건을 완화하지 않는다.
+
 사용자 요청: “일단은 구현해서 가동을 해봐야 무엇이 맞을지 판단이 가능할 것 같아. 최종 구현안 작성해줘.” 이번 산출물은 구현안이며 해당 문장이 이번 문서 작성 중 실주문·재기동을 실행하라는 지시로 확대되지는 않는다. 이후 명시적인 구현/배포 요청의 범위를 기준으로 진행한다.
 
 원칙 owner는 [Plan Rebase §1~§8](../plan-korStockScanPerformanceOptimization.rebase.md), 후속 owner는 [9/10 체크리스트](../checklists/2026-09-10-stage2-todo-checklist.md)의 `MachineLifecycleTurnoverObjectiveFollowup0910`이다. 새 정기 producer나 별도 OPEN ID를 만들지 않는다. 이 설계명과 아래 제안 contract 이름은 producer가 발급한 native recommendation ID가 아니다.
@@ -65,7 +67,7 @@
 
 - exact owner의 symbol/venue/session/item, 수신시각, 0B/0D epoch·route 연결, 순서·중복·truncation과 양 끝 호가 freshness를 검증한다. 기존 더 엄격한 freshness 기준을 완화하지 않는다.
 - 120행/5호가 버퍼가 존재한다는 사실만으로 1초 완전성을 인정하지 않는다. local sequence 연속성은 로컬 투영 증거이며 거래소 전체 무손실 보증이 아니다. transport/collector의 원 health·누락 증거도 보존한다.
-- 불명 aggressor, clock 역행, 음수/비유한 값, cross-epoch, 과거 창 탈락, stale 시작/끝 호가는 `SOURCE_UNAVAILABLE`다. UNKNOWN을 SELL로 간주하거나 결측 체결을 0으로 보간하지 않는다. 확인된 정상 무체결 창만 0을 허용한다.
+- 불명 aggressor, clock 역행, 음수/비유한 값, cross-epoch, 과거 창 탈락, stale 시작/끝 호가와 최근 체결 watermark 결손은 `SOURCE_UNAVAILABLE`다. UNKNOWN을 SELL로 간주하거나 결측·저빈도 체결을 0으로 보간하지 않는다. source-only 진단에는 정상 무체결 사실을 그대로 보존할 수 있지만 live `CONTINUE` 권한은 만들지 않는다.
 - 활성 scope에서는 유효한 checkpoint가 남으면 다음 시점까지 기다리고, 끝까지 결손이면 `SKIP_SOURCE_UNAVAILABLE`로 이번 신호를 종료한다. 원래 baseline으로 조용히 우회하지 않는다. 기존 dynamic의 source fallback 계약을 변경하는 것은 아니다.
 - 결손은 영향 route/scope에만 적용한다. 전역 snapshot 계약이 깨졌으면 이 guard에 의존하는 활성 scope의 새 진입을 차단하되 기존 보유/청산·비대상 owner까지 중단하지 않는다. 반복 결손은 source owner 결함으로 보고하며 threshold/호출량을 완화하지 않는다.
 
@@ -108,7 +110,7 @@ identity는 원 owner/account scope·거래일·symbol/venue/session·signal ID�
 
 ## 7. 반드시 통과할 테스트
 
-1. 악화 결합 참/각 조건 하나씩 거짓, 매도 속도 감소, bid 저점 회복, 정상 무체결, 매도잔량 감소만 있는 경우. 알려지지 않은 aggressor와 결측은 정상 0으로 처리되지 않는다.
+1. 악화 결합 참/각 조건 하나씩 거짓, 매도 속도 감소, bid 저점 회복, 최근 체결 없는 창, 매도잔량 감소만 있는 경우. 최근 체결 없는 창·알려지지 않은 aggressor·결측은 live 정상 0이나 `CONTINUE`로 처리되지 않는다.
 2. 정확한 반창 경계·동일 timestamp 순서·중복·late/out-of-order·cross-route/epoch·truncation·stale 왼쪽 호가·cutoff 이후 자료 배제. 같은 원천의 runtime/offline 결과 일치.
 3. 즉시 CONTINUE, 0초 악화→1/3초 회복, 마지막 5초 회복/악화/결손, 각 checkpoint+1,500ms 경계와 초과, 전체6,500ms 상한과 더 빠른 원 deadline, missed checkpoint·clock 역행·재시작.
 4. 신호 소멸/새 ID/중복 payload·policy/source pin 변경·기존 fixed/dynamic 충돌. 기존 dynamic ADVERSE→REJECT와 source fallback 동작은 불변.

@@ -33,3 +33,27 @@ SCALP_BASE 등 유효한 SCALPING 입력도 같은 V2.14 판단을 받고 기존
 ## 최종 코드 재검토 (12:52 KST)
 
 새 tag 재검사는 당일 실제 V2.14 결정의 승인 SHA·scope·runtime-effect가 현재 pin과 일치할 때만 허용한다. 발견/재검사와 수동 분석의 Entry/Holding 역할도 대사했다. 승인 publisher는 기존 파일 덮어쓰기를 원자적으로 거절한다. 검증된 비보통주는 census에 보존하되 BBO quota를 예약하지 않는다. 최종 권한 회귀1126 PASS, pin/publisher48 PASS, 마지막 BBO/master75 PASS. 검토 범위 미해결 finding0이며 실배포·자연 경제성은 아래 실행 receipt로 별도 판정한다.
+
+## 실제 consumer 추가 발견과 최종 배포 (13:09 KST)
+
+첫 배포 뒤 새로 나타난 액스비스0011A0는 공식 KOSDAQ ST/보통주0 원본이 있었지만 숫자6자리 parser와 숫자만 남기는 normalizer 때문에 누락됐다. ASCII 영숫자6자리 identity를 source→resolver→BBO route에 보존했다. 새 원천은 `symbol_code_contract=krx_ascii_alphanumeric6_v1`을 명시하고, 과거 계약은 원래 숫자 전용 파생 검증을 유지해 기존 source hash/고정 보고서를 무효화하지 않는다. 관련 consumer 전체945 tests PASS, 신규 exact owner/resolver·malformed code·legacy 대비 회귀103 PASS. 보완 범위 finding0.
+
+- 최종 workspace/main과 공통·독립 배포 코드: **57a90bd9a19aa6baac5e78624eb9f0a27168b57a**, root `/home/ubuntu/KORStockScan-runtime-releases/unified-scalping-r2-20260911`. source clean. 이전 fe6415dc/첫 통합 PID348715는 중간 receipt로 보존한다.
+- main graceful restart: **363990**, 당일 verify PASS, pid_mismatches/pid_missing 각0. 현재 PID의 rollout SHA `14d30e97aa9b320d216419390d812ff174107e3f9e64a68a69639a0ec3301a2f`, 글로벌 MAX_DAILY_RECHECK/MAX_DAILY_BUY_RECOVERY 각100. 이 source-only 추가 수리에서 V2.14 승인·quota 원장은 변경하지 않았다.
+- 서비스17개 `zz-unified-runtime.conf`로 같은 root/정책 파일을 연결했다. 현재 가동7개는 widget364143, notifier364154, 삼성collector364162, 두산364171, 한화364179, symbol364251, research364414로 확인했다. 위젯 startup 기대 env10개 일치/PASS, 기존 보조청산·entry-adverse·target-ratchet policy 바이트 hash 유지. 과거 manifest는 `unified_runtime_successor_manifest`와 현재 unit override로 연결하고 이전 receipt 시각/PID는 보존했다.
+- 기존 예약9개 공통 cron routing PASS. 삼성/저가주 미래 service와 preflight,20:10/21:15 분석은 설치 경로 검증이며 조기 실행하지 않았다. 다음 자연 기동은 기존 checklist owner에서 확인한다.
+- 재기동 전후 broker12:52/12:57 및13:06/13:08 KRX·NXT 보유 삼성25·흥구석유1·우리기술1·ICTK1, 미체결0으로 동일. 다른 owner 수량을 흡수하거나 수동관리 ICTK를 자동 매도로 복귀시키지 않았다. notifier cursor773 보존.
+- 첫 통합 후12:57~12:59 실제 OpenAI Entry trace의 V2.14·새 승인 SHA·parse PASS를 확인했다. Holding은 holding_score_v2, entry-price는 기존 별도 Bedrock 역할이다. 두 번째 배포는 master source-only 수리이며 다음 자연 Entry 및 NXT/전장 호출·경제성까지 완료로 확대하지 않는다.
+- 12:55 자연 census는 BBO captured28/invalid8, 검증된 비보통주4는 미요청으로 보존했다. 조회 cap·retry 증가 없이 새 코드가 소비됐으며 2개 panel의 ka10027 shared-budget defer는 그대로 결손이다.
+- 오늘13:06 새 공식 master를 기존 producer로 수집, 검토 resolver로 보통주2604/0011A0 VERIFIED를 확인했다. 원본은 `data/policy/micro_reversion/repair-20260911/`, 오늘 canonical master에 최초 발행했다. 기존9/10 원본과 비용·Provider 계약은 보존했다.13:08:40 영향 census report 재검증·native write_report publish 결과 primary master verified315 episode/비보통주18 episode/**missing0**. unique 비보통주9종목이며 episode 수와 혼합하지 않는다.
+- 잔여: 과거 BBO 미획득·capture cadence·미성숙/right-censored로 경제성 floor는 미충족이다. 코드·master 연결 완료를 scanner recall 정상 또는 순이익 개선으로 보고하지 않는다. 기존 RuntimeEnvIntradayObserve0911과 machine startup/economic owner를 OPEN 유지한다.
+
+선택 원장·현재 기계 경로 owner는 `data/runtime/unified_runtime_deployment.json`; 검증/이전 selector·unit 원문·정책 env·원장 snapshot·tests는 `tmp/scalping-unification-20260911/`에 보존한다. rollback은 이전 검토 root와 기존 주문 terminal 대사를 따르며 quota/custody 초기화나 과거 원천 재라벨링을 하지 않는다.
+
+## 종료 대사 (13:12 KST)
+
+현재 PID363990 환경에서24개 scope/tag 모두 V2.14·100회 선택을 재검증했다.13:11 자연 Entry1건은 V2.14 prompt가 지정됐지만 input preflight 차단으로 Provider 미호출이며 정상 판단 완료로 세지 않는다. 이전 첫 통합의 실제 Provider 성공과 구분한다.13:11:34 micro observer는 healthy_observer_canary/0B14425·0D18527 callback으로 새 PID 원천 유입을 확인했다.13:10 TYM·롯데케미칼 정오 preflight는 R2 root에서 Result=success/exit0이며 향후 실제 매매 기동·체결 성공은 별개다.
+
+최종 영향 census의 primary master missing0, 남은3개 blocker는 capture cadence/BBO coverage/right-censored다. 문서 print-only parser와 git diff --check PASS. 최종 소스 commit과 작업본/선택본 src·deploy·restart.sh 차이는0이며 종료 기록의 문서 변경은 실행 코드 변경과 분리한다.
+
+후속 상태: `15:32` sell-timeout race/custody projection 수리 release가 이 배포를 승계했다. 현재 root·commit·PID는 [후속 배포 영수증](2026-09-11-sell-timeout-race-custody-projection-review.md)과 runtime selector를 사용하며, 위 `57a90bd9`/PID `363990`은 당시 완료 기록이다.
