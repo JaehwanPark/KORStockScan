@@ -274,3 +274,25 @@ def test_all_scope_morning_routes_use_guard_before_wire(
         for leg in machine._state["legs"]
         if leg.get("route") == route
     )
+
+
+def test_morning_prearm_starts_real_adverse_checkpoint_at_open(tmp_path, setup):
+    from src.tests import test_samsung_morning_one_share as morning
+
+    setup["time"] = morning._at(10, 8, 30)
+    gateway = morning.FakeGateway()
+    gateway.entry_adverse_transport_supported = True
+    machine = morning._machine(tmp_path, gateway)
+    setup["enable"](dict(
+        owner="episode", scope_id="morning", symbol="005930",
+        route="SOR", session="KRX_REGULAR",
+    ))
+    machine.run_once(setup["time"])
+    setup["time"] = morning._at(10, 9)
+    machine.run_once(setup["time"])
+    assert not gateway.buy_calls  # Fresh but adverse tape still blocks entry.
+    for leg in machine._state["legs"]:
+        state = leg[guard.KEY]
+        assert state["signal_at"] == setup["time"].isoformat()
+        assert "0" in state["checkpoints"]
+        assert state["action"] != "SKIP_DEADLINE"

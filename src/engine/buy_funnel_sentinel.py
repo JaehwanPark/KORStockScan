@@ -1085,6 +1085,8 @@ def _exact_submit_drought_axis_summary(
             # no ai_confirmed event, but requires its own ordered call receipts.
             local_gates = call_local_gate_progress.setdefault(attempt_key, [])
             if event.stage in ENTRY_CALL_FINISH_STAGES:
+                if _event_bindings is not None:
+                    _event_bindings.append((event, attempt_key))
                 current["call_outcome"] = event.fields.get(
                     "submit_call_outcome", "unknown"
                 )
@@ -2105,12 +2107,124 @@ def _apply_terminal_summary_gaps(exact, gaps):
         exact["status"] = "source_quality_gap_excluded"
 
 
-def _summarize_events(
+def _cash_shortfall_attempt_exclusions(exact, bindings):
+    """Exclude only terminal, exact-bound and broker-proven cash shortfalls."""
+    from src.engine.automation.submit_drought_contract import cash_shortfall_reason
+
+    by_key = {}
+    for event, key in bindings:
+        by_key.setdefault(key, []).append(event)
+    excluded = []
+    for row in exact["attempt_ledger"]:
+        if row["state"] != "blocked" or row.get("terminal_stage") != "blocked_zero_qty":
+            continue
+        terminal = next(
+            (
+                e
+                for e in reversed(by_key.get(row["attempt_key"], []))
+                if e.stage == row["terminal_stage"]
+            ),
+            None,
+        )
+        if terminal is None or not cash_shortfall_reason(
+            terminal.fields, terminal.emitted_at.isoformat()
+        ):
+            continue
+        excluded.append(
+            {
+                "attempt_key": row["attempt_key"],
+                "stages": row["stages"],
+                "terminal_stage": terminal.stage,
+                "terminal_at": terminal.emitted_at.isoformat(),
+                "stock_code": terminal.stock_code,
+                "reason": cash_shortfall_reason(
+                    terminal.fields, terminal.emitted_at.isoformat()
+                ),
+                "evidence": {
+                    k: terminal.fields.get(k)
+                    for k in (
+                        "kt00011_cash_orderable_contract_status",
+                        "kt00011_error",
+                        "cash_orderable_qty_cap",
+                        "cash_orderable_amount",
+                        "kt00011_requested_unit_price",
+                        "kt00011_capacity_observed_at",
+                        "kt00011_capacity_source_sha256",
+                        "pre_cap_qty",
+                        "effective_qty",
+                        "binding_caps",
+                        "allocation_stage",
+                        "sizing_config_valid",
+                        "budget_base",
+                        "formula_version",
+                    )
+                },
+            }
+        )
+    return excluded
+
+
+def _summarize_events(events, *, start_at, end_at, summary_rows=None):
+    raw = _summarize_events_included(
+        events, start_at=start_at, end_at=end_at, summary_rows=summary_rows
+    )
+    scoped = [
+        e
+        for e in events
+        if start_at <= e.emitted_at <= end_at
+        and not _is_early_accel_recheck_retry_event(e)
+    ]
+    bindings = []
+    exact = _exact_submit_drought_axis_summary(scoped, _event_bindings=bindings)
+    excluded = _cash_shortfall_attempt_exclusions(exact, bindings)
+    if not excluded:
+        return raw
+    keys = {r["attempt_key"] for r in excluded}
+
+    def event_signature(event):
+        return (
+            event.emitted_at,
+            event.pipeline,
+            event.stage,
+            event.stock_code,
+            event.record_id,
+            tuple(sorted(event.fields.items())),
+        )
+
+    # The exact ledger deduplicates source rows before binding. Remove their
+    # duplicate copies too, without borrowing another record or submit cycle.
+    excluded_signatures = {event_signature(e) for e, key in bindings if key in keys}
+    included = [e for e in events if event_signature(e) not in excluded_signatures]
+    result = _summarize_events_included(
+        included,
+        start_at=start_at,
+        end_at=end_at,
+        summary_rows=summary_rows,
+        terminal_gap_events=events,
+    )
+    # Input liveness is independent of the cash-eligible decision population.
+    result["latest_event_at"] = raw["latest_event_at"]
+    result["cash_shortfall_exclusion"] = {
+        "schema": "submit_drought_cash_shortfall_exclusion_v1",
+        "runtime_effect": False,
+        "excluded_attempt_count": len(excluded),
+        "excluded_attempts": excluded,
+        "raw_exact_attempt_contract": raw["exact_attempt_contract"],
+        "raw_stage_events": raw["stage_events"],
+        "raw_blocker_top": raw["blocker_top"],
+        "raw_zero_qty_diagnostics": raw["zero_qty_diagnostics"],
+        "decision_population": "exact_attempts_excluding_proven_terminal_capital_shortfall",
+    }
+    return result
+
+
+def _summarize_events_included(
     events: list[PipelineEvent],
     *,
     start_at: datetime,
     end_at: datetime,
     summary_rows: list[dict[str, Any]] | None = None,
+    terminal_gap_events: list[PipelineEvent] | None = None,
 ) -> dict[str, Any]:
     scoped = [
         event
@@ -2132,7 +2246,13 @@ def _summarize_events(
     ]
     stage_event_counts = Counter(event.stage for event in lossless_scoped)
     terminal_summary_gaps = _terminal_summary_gaps(
-        [event for event in events if start_at <= event.emitted_at <= end_at],
+        [
+            event
+            for event in (
+                events if terminal_gap_events is None else terminal_gap_events
+            )
+            if start_at <= event.emitted_at <= end_at
+        ],
         summary_rows,
         start_at=start_at,
         end_at=end_at,
@@ -3469,6 +3589,11 @@ def _entry_submit_drought_contract(
             "supporting_diagnostic_axes"
         ],
         "exact_attempt_contract": observation_breakdown["exact_attempt_contract"],
+        **(
+            {"cash_shortfall_exclusion": session_summary["cash_shortfall_exclusion"]}
+            if "cash_shortfall_exclusion" in session_summary
+            else {}
+        ),
         **{
             key: session_summary.get(key, {"status": "not_reported"})
             for key in (
@@ -4179,6 +4304,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"order_violation={exact_attempt_contract.get('stage_order_violation_event_count', 0)}, "
         f"terminal_causal={exact_attempt_contract.get('terminal_causal_attempt_count', 0)}`",
         f"- submit drought core axes: `{', '.join((report.get('entry_submit_drought_contract') or {}).get('core_handoff_axes') or []) or '-'}`",
+        f"- capital-shortfall attempts excluded from drought: `{(session.get('cash_shortfall_exclusion') or {}).get('excluded_attempt_count', 0)}` (raw evidence retained)",
         f"- top blockers: `{_format_top_blockers(session['blocker_top'])}`",
         f"- swing blockers: `{_format_top_blockers(session.get('swing_blocker_top') or [])}`",
         f"- upstream blockers: `{_format_top_blockers(session['upstream_blocker_top'])}`",

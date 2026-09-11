@@ -572,6 +572,22 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             if plan:
                 pending_leg["entry_price"] = int(plan["entry_price"])
         features = dict(self._state.get("signal_features") or {})
+        if features.get("signal_clock_basis") == "prearmed_before_route_open":
+            # A reservation made before the venue opens is not an executable
+            # signal. Freeze the clock once the deferred opening price exists;
+            # later liquidity waits/retries must not renew the adverse deadline.
+            features.update(
+                prearmed_signal_decision_at=features.get("signal_decision_at"),
+                prearmed_source_entry_event_id=features.get("source_entry_event_id"),
+                prearmed_signal_bar=features.get("signal_bar"),
+                signal_bar=opening.source_timestamp,
+                signal_decision_at=now.isoformat(),
+                source_entry_event_id=(
+                    f"samsung_morning_two_leg:SOR:{opening.source_timestamp}:"
+                    f"{now.isoformat()}"
+                ),
+                signal_clock_basis="deferred_opening_price_available",
+            )
         opening_prices = dict(features.get("opening_prices") or {})
         opening_prices["SOR"] = int(opening.price)
         routes = sorted(
@@ -1290,6 +1306,11 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 "new_entry_quantity_receipt": new_entry_quantity_receipt(now),
                 "signal_decision_at": signal_decision_at,
                 "source_entry_event_id": source_entry_event_id,
+                "signal_clock_basis": (
+                    "prearmed_before_route_open"
+                    if route == "SOR" and open_price == 0
+                    else "executable_signal_observed"
+                ),
                 "entry_confirmation_delay_sec": confirmation_delay_sec,
                 "entry_timing_policy_provenance": timing_policy_provenance,
                 "entry_confirmation_anchor_snapshot": (

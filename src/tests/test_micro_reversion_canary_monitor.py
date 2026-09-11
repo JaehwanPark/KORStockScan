@@ -565,6 +565,42 @@ def test_main_server_preflight_is_reproducible_and_drop_free() -> None:
     assert report["frozen_limits"]["producer_callback_latency_p99_max_ms"] > 0
 
 
+def _assert_frozen_source_or_reviewed_mount(path, expected):
+    import hashlib
+
+    source = path.read_bytes()
+    if hashlib.sha256(source).hexdigest() == expected:
+        return
+    if path.name == "forward_collector.py" and expected == (
+        "7f63c64aa7f2d3feb6da814d4dcbfda3dae25be8f22a8b96c92b7df58a8f7df4"
+    ):
+        # 9e0044b8 changes only the trusted shared data mount resolution.
+        # Preserve the 9/10 measured receipt and verify every other byte.
+        changed = (
+            b"# Canonicalize only the trusted deployment mount, not artifact descendants.\n"
+            b'DEFAULT_OUTPUT_ROOT = (\n    REPOSITORY_ROOT / "data"\n'
+            b').resolve() / "observations/scalp_micro_reversion_forward"\n'
+        )
+        original = (
+            b'DEFAULT_OUTPUT_ROOT = (\n'
+            b'    REPOSITORY_ROOT / "data/observations/scalp_micro_reversion_forward"\n)\n'
+        )
+        assert source.count(changed) == 1
+        source = source.replace(changed, original, 1)
+    assert hashlib.sha256(source).hexdigest() == expected
+
+
+def test_mount_compatibility_does_not_accept_unreviewed_source(tmp_path):
+    source = Path(__file__).parents[2] / "src/engine/scalping/micro_reversion/forward_collector.py"
+    changed = tmp_path / "forward_collector.py"
+    changed.write_bytes(source.read_bytes() + b"\n# Unreviewed change\n")
+    with pytest.raises(AssertionError):
+        _assert_frozen_source_or_reviewed_mount(
+            changed,
+            "7f63c64aa7f2d3feb6da814d4dcbfda3dae25be8f22a8b96c92b7df58a8f7df4",
+        )
+
+
 def test_repository_guard_matches_frozen_baseline_artifact() -> None:
     repository_root = Path(__file__).parents[2]
     guard_path = repository_root / "configs/scalp_micro_reversion_canary_guard.toml"
@@ -736,7 +772,7 @@ def test_repository_guard_matches_frozen_baseline_artifact() -> None:
             expected = (
                 "f2165af17dae160535ddd5ac6ef5a5406eaf1bc8bacf423c3f475ceb514ba15c"
             )
-        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
+        _assert_frozen_source_or_reviewed_mount(path, expected)
 
 
 def test_packet_diagnostic_measurement_keeps_existing_latency_limits() -> None:
@@ -755,7 +791,7 @@ def test_packet_diagnostic_measurement_keeps_existing_latency_limits() -> None:
 
     root = Path(__file__).resolve().parents[2]
     for source, expected_hash in evidence["source_hashes"].items():
-        assert hashlib.sha256((root / source).read_bytes()).hexdigest() == expected_hash
+        _assert_frozen_source_or_reviewed_mount(root / source, expected_hash)
     for kind, prefix in (
         ("0B", "producer_callback_latency"),
         ("0D", "producer_0d_callback_latency"),

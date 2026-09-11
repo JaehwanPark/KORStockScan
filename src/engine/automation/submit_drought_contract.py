@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 CURRENT_SCHEMA_VERSION = 6
@@ -65,6 +65,88 @@ TERMINAL_STAGES_BY_AXIS = {
         "submit_order_failed",
     },
 }
+
+
+def cash_shortfall_reason(fields: dict[str, Any], terminal_at: str) -> str:
+    """Distinguish broker cash shortage from new-entry allocation shortage."""
+    if fields.get("kt00011_cash_orderable_contract_status") != "valid" or fields.get(
+        "kt00011_error"
+    ):
+        return ""
+    try:
+        values = [
+            fields.get(k)
+            for k in (
+                "cash_orderable_qty_cap",
+                "cash_orderable_amount",
+                "kt00011_requested_unit_price",
+            )
+        ]
+        if any(isinstance(v, bool) or v is None for v in values):
+            return ""
+        qty, cash, price = map(float, values)
+        observed = datetime.fromisoformat(
+            str(fields.get("kt00011_capacity_observed_at") or "")
+        )
+        terminal = datetime.fromisoformat(terminal_at)
+        kst = timezone(timedelta(hours=9))
+        observed = (
+            observed.replace(tzinfo=kst)
+            if observed.tzinfo is None
+            else observed.astimezone(kst)
+        )
+        terminal = (
+            terminal.replace(tzinfo=kst)
+            if terminal.tzinfo is None
+            else terminal.astimezone(kst)
+        )
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    digest = str(fields.get("kt00011_capacity_source_sha256") or "")
+    valid_source = (
+        all(math.isfinite(v) for v in (qty, cash, price))
+        and price > 0
+        and cash >= 0
+        and qty >= 0
+        and observed.date() == terminal.date()
+        and observed <= terminal
+        and len(digest) == 64
+        and all(c in "0123456789abcdef" for c in digest.lower())
+    )
+    if not valid_source:
+        return ""
+    if qty == 0 and cash < price:
+        return "broker_proven_cash_shortfall"
+    if any(
+        isinstance(fields.get(k), bool)
+        for k in ("pre_cap_qty", "effective_qty", "budget_base")
+    ):
+        return ""
+    try:
+        pre = float(fields.get("pre_cap_qty"))
+        effective = float(fields.get("effective_qty"))
+        budget = float(fields.get("budget_base"))
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    if (
+        qty >= 1
+        and cash >= price
+        and pre >= 1
+        and effective == 0
+        and all(math.isfinite(v) for v in (pre, effective, budget))
+        and budget > 0
+        and fields.get("binding_caps") == "max_position_qty_cap"
+        and fields.get("allocation_stage")
+        in {"initial_entry", "rising_missed_scout_initial"}
+        and fields.get("formula_version") == "entry_type_5stage_cap25_v1"
+        and (
+            fields.get("sizing_config_valid") is None
+            or fields.get("sizing_config_valid") is True
+            or fields.get("sizing_config_valid") in ("True", "true")
+        )
+    ):
+        return "new_entry_position_budget_shortfall"
+    return ""
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -426,6 +508,69 @@ def validate_submit_drought_contract(
         issues = result["structural_issues"]
         exact = result["exact_attempt_contract"]
         counts = exact.get("denominator_exact_attempt_counts") or {}
+        exclusion = contract.get("cash_shortfall_exclusion")
+        if exclusion is not None:
+            raw = exclusion["raw_exact_attempt_contract"]
+            excluded = exclusion["excluded_attempts"]
+            raw_rows = {r["attempt_key"]: r for r in raw["attempt_ledger"]}
+            keys = [r["attempt_key"] for r in excluded]
+            if (
+                exclusion.get("schema") != "submit_drought_cash_shortfall_exclusion_v1"
+                or exclusion.get("runtime_effect") is not False
+                or exclusion.get("excluded_attempt_count") != len(excluded)
+                or len(set(keys)) != len(keys)
+                or len(raw_rows) != len(raw["attempt_ledger"])
+                or raw.get("attempt_count") != len(raw_rows)
+            ):
+                issues.append("cash_shortfall_exclusion_census_invalid")
+            for row in excluded:
+                source = raw_rows.get(row["attempt_key"], {})
+                record_id = str(source.get("record_id") or "")
+                stages = source.get("stages")
+                if (
+                    source.get("state") != "blocked"
+                    or source.get("terminal_axis") != "UPSTREAM_GATE"
+                    or record_id.lower()
+                    in {
+                        "", "0", "0.0", "none", "null", "unknown", "-",
+                        "nan", "nat", "false", "true",
+                    }
+                    or not row["attempt_key"].startswith(f"id:{record_id}:cycle:")
+                    or not isinstance(stages, list)
+                    or len(stages) != len(set(stages))
+                    or not set(stages) <= set(counts)
+                    or "order_bundle_submitted" in stages
+                    or source.get("terminal_stage") != "blocked_zero_qty"
+                    or source.get("stages") != row.get("stages")
+                    or row.get("terminal_stage") != source.get("terminal_stage")
+                    or datetime.fromisoformat(row["terminal_at"]).date().isoformat()
+                    != report.get("target_date")
+                    or not cash_shortfall_reason(
+                        row.get("evidence", {}), row["terminal_at"]
+                    )
+                    or cash_shortfall_reason(row["evidence"], row["terminal_at"])
+                    != row.get("reason")
+                ):
+                    issues.append("cash_shortfall_exclusion_evidence_invalid")
+            eligible = [
+                r for r in raw["attempt_ledger"] if r["attempt_key"] not in set(keys)
+            ]
+            expected = {
+                stage: sum(stage in r["stages"] for r in eligible) for stage in counts
+            }
+            if expected != counts or len(eligible) != exact.get("attempt_count"):
+                issues.append("cash_shortfall_exclusion_partition_mismatch")
+            # Filtering can renumber a record's derived cycle ordinal. Every
+            # other source identity, lifecycle field and terminal must survive.
+            def retained_row_digest(row):
+                return evidence_digest(
+                    {key: value for key, value in row.items() if key != "attempt_key"}
+                )
+
+            if sorted(map(retained_row_digest, eligible)) != sorted(
+                map(retained_row_digest, exact.get("attempt_ledger", []))
+            ):
+                issues.append("cash_shortfall_exclusion_retained_lineage_mismatch")
         # V4 archive fixtures may not have a decision envelope; actual current
         # decisions always do. Never accept a contradictory envelope at any date.
         if current or "stage_unique" in contract:

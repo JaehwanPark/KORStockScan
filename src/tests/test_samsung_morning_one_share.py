@@ -32,6 +32,11 @@ from src.trading.samsung_morning_one_share import service as service_module
 
 @pytest.fixture(autouse=True)
 def _isolate_market_weakness_counterfactual_writer(tmp_path, monkeypatch):
+    from src.trading.config import symbol_owner_policy
+
+    # Current-date fixtures must not load the operator's live owner policy.
+    monkeypatch.setattr(symbol_owner_policy, "DEFAULT_POLICY_DIR", tmp_path / "policies")
+    monkeypatch.delenv(symbol_owner_policy.POLICY_FILE_ENV, raising=False)
     monkeypatch.setenv(
         "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner_registry.jsonl")
     )
@@ -439,6 +444,49 @@ def test_late_start_arms_sor_fallback_without_attempting_nxt(tmp_path):
     assert [
         leg["entry_price"] for leg in submitted["signal_features"]["entry_legs"]
     ] == [298_000, 297_500]
+
+
+def test_prearmed_adverse_clock_starts_once_when_opening_price_arrives(
+    tmp_path, monkeypatch
+):
+    from src.trading.order import entry_adverse_owners
+
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+    reserved_at = _at(11, 8, 30)
+    waiting = machine.run_once(reserved_at)
+    assert waiting["signal_features"]["signal_clock_basis"] == "prearmed_before_route_open"
+    gateway.opens["SOR"] = None
+    machine.run_once(_at(11, 9))
+    assert machine.snapshot()["signal_features"]["signal_decision_at"] == reserved_at.isoformat()
+    observed = []
+
+    def prepare(owner, leg, now):
+        observed.append(dict(owner._state["signal_features"]))
+        return False  # Leave planned legs waiting; never submit a test order.
+
+    monkeypatch.setattr(entry_adverse_owners, "episode_prepare", prepare)
+    gateway.opens["SOR"] = 300_000
+    actual_signal = _at(11, 9) + timedelta(seconds=18)
+    machine.run_once(actual_signal)
+    machine = _machine(tmp_path, gateway)  # Durable anchor survives process reload.
+    machine.run_once(actual_signal + timedelta(seconds=10))
+    assert len(observed) == 4
+    assert all(x["signal_decision_at"] == actual_signal.isoformat() for x in observed)
+    assert all(x["prearmed_signal_decision_at"] == reserved_at.isoformat() for x in observed)
+    assert all(x["signal_bar"] == "20260811080000" for x in observed)
+    assert len({x["source_entry_event_id"] for x in observed}) == 1
+    assert gateway.buy_calls == []
+
+
+def test_expired_prearmed_window_does_not_create_fresh_signal(tmp_path):
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+    machine.run_once(_at(11, 8, 30))
+    state = machine.run_once(_at(11, 9, 31))
+    assert not gateway.buy_calls
+    assert state["signal_features"]["signal_clock_basis"] == "prearmed_before_route_open"
+    assert all(leg["status"] == "NO_FILL" for leg in state["legs"])
 
 
 @pytest.mark.parametrize("terminal_action", ["ENTER", "REJECT"])
