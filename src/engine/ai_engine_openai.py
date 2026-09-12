@@ -103,6 +103,10 @@ from src.engine.scalping import main_ai_current_axis_runtime  # noqa: E402
 from src.engine.scalping.entry_price_live_policy import (  # noqa: E402
     resolve_entry_price_live_policy,
 )
+from src.engine.scalping.holding_prompt_live_policy import (  # noqa: E402
+    PROMPT_SCHEMA_NAME as HOLDING_PROMPT_LIVE_SCHEMA_NAME,
+    resolve_holding_prompt_policy,
+)
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     entry_candle_context_log_fields,
@@ -138,6 +142,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION,
     DECISION_QUALITY_V2_REASON_CODES,
     decision_quality_v2_detailed_system_prompt,
     decision_quality_v2_system_prompt,
@@ -145,6 +150,7 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_v2_15_bounded_recovery_system_prompt,
+    decision_quality_holding_v2_4_live_score_system_prompt,
     decision_quality_entry_price_v2_5_live_krx_system_prompt,
 )
 
@@ -157,6 +163,7 @@ def _expected_semantic_contract_version(schema_name):
         "entry_price_explicit_fill_value_v1": (ENTRY_PRICE_SEMANTIC_VALIDATOR_VERSION),
         "entry_price_v1": "live_entry_price_v1_schema_semantic_v1",
         "holding_score_v2": "holding_score_live_normalizer_v1",
+        HOLDING_PROMPT_LIVE_SCHEMA_NAME: "holding_score_decision_quality_live_v1",
         "holding_exit_flow_v1": "holding_flow_live_schema_semantic_v1",
     }
     return known.get(schema, f"live_{schema or 'json'}_semantic_contract_v1")
@@ -10369,8 +10376,40 @@ class GPTSniperEngine:
             )
             input_contract_fields.update(trace_context_fields)
             input_contract_fields.update(feature_audit_fields)
+            holding_prompt_policy = resolve_holding_prompt_policy(
+                effective_venue=trace_context_fields.get("holding_context_venue"),
+                session_bucket=trace_context_fields.get("holding_context_session"),
+            )
+            holding_prompt_active = holding_prompt_policy.get("enabled") is True
+            selected_holding_prompt = (
+                decision_quality_holding_v2_4_live_score_system_prompt()
+                if holding_prompt_active
+                else SCALPING_HOLDING_SCORE_SYSTEM_PROMPT
+            )
+            selected_holding_schema = (
+                HOLDING_PROMPT_LIVE_SCHEMA_NAME
+                if holding_prompt_active
+                else "holding_score_v2"
+            )
+            selected_holding_prompt_version = (
+                DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION
+                if holding_prompt_active
+                else "holding_score_v2"
+            )
+            input_contract_fields.update(
+                {
+                    "holding_prompt_policy_status": holding_prompt_policy.get("status"),
+                    "holding_prompt_policy_activation_path": (
+                        holding_prompt_policy.get("activation_path")
+                    ),
+                    "holding_prompt_policy_artifact_sha256": (
+                        holding_prompt_policy.get("activation_artifact_sha256")
+                    ),
+                    "holding_prompt_policy_runtime_effect": bool(holding_prompt_active),
+                }
+            )
             result = self._call_openai_safe(
-                SCALPING_HOLDING_SCORE_SYSTEM_PROMPT,
+                selected_holding_prompt,
                 user_input,
                 require_json=True,
                 context_name=f"HOLDING_SCORE:{stock_name}",
@@ -10382,7 +10421,7 @@ class GPTSniperEngine:
                     )
                     or "gpt-5.4-nano"
                 ),
-                schema_name="holding_score_v2",
+                schema_name=selected_holding_schema,
                 endpoint_name="holding_score",
                 symbol=stock_code,
                 metadata_extra=metadata_extra,
@@ -10390,6 +10429,17 @@ class GPTSniperEngine:
             holding_score_semantic_errors = _holding_score_response_contract_errors(
                 result
             )
+            if holding_prompt_active and isinstance(result, dict):
+                holding_score_semantic_errors.extend(
+                    validate_candidate_response(
+                        result,
+                        stage="holding",
+                        exact_payload=user_input,
+                    )
+                )
+                holding_score_semantic_errors = list(
+                    dict.fromkeys(holding_score_semantic_errors)
+                )
             transport_meta = self._consume_last_transport_meta()
             if isinstance(result, dict) and transport_meta:
                 result.update(transport_meta)
@@ -10398,9 +10448,15 @@ class GPTSniperEngine:
             )
             normalized.update(
                 {
-                    "semantic_validator_version": ("holding_score_live_normalizer_v1"),
+                    "semantic_validator_version": (
+                        "holding_score_decision_quality_live_v1"
+                        if holding_prompt_active
+                        else "holding_score_live_normalizer_v1"
+                    ),
                     "expected_semantic_validator_version": (
-                        "holding_score_live_normalizer_v1"
+                        "holding_score_decision_quality_live_v1"
+                        if holding_prompt_active
+                        else "holding_score_live_normalizer_v1"
                     ),
                     "semantic_validator_applied": True,
                     "semantic_validation_status": (
@@ -10414,10 +10470,22 @@ class GPTSniperEngine:
                 }
             )
             if holding_score_semantic_errors:
-                # Quality provenance only: keep the established normalized live
-                # action, but exclude malformed local-fallback responses from
-                # natural-control and outcome cohorts.
                 normalized["ai_decision_outcome_eligible"] = False
+                if holding_prompt_active:
+                    # A promoted prompt must not influence live holding quality
+                    # when its combined response contract is malformed.  The
+                    # deterministic exit and hard-safety owners remain active.
+                    normalized.update(
+                        {
+                            "action": "HOLD",
+                            "score": 50,
+                            "confidence": 0,
+                            "position_state": "stale_or_insufficient",
+                            "data_quality": "stale",
+                            "score_basis": "holding_prompt_semantic_rejected",
+                            "reason": "holding_prompt_semantic_rejected",
+                        }
+                    )
             model_holding_score = dict(normalized)
             model_holding_score_data_quality = (
                 self._normalize_holding_score_data_quality(
@@ -10542,6 +10610,8 @@ class GPTSniperEngine:
                         "source_quality_reason", "-"
                     ),
                     "holding_context_provider_expected": "openai",
+                    "holding_prompt_policy_status": holding_prompt_policy.get("status"),
+                    "holding_prompt_policy_runtime_effect": bool(holding_prompt_active),
                     **holding_decision_context_log_fields(snapshot_context),
                 }
             )
@@ -10549,7 +10619,7 @@ class GPTSniperEngine:
             return self._annotate_analysis_result(
                 normalized,
                 prompt_type="scalping_holding_score",
-                prompt_version="holding_score_v2",
+                prompt_version=selected_holding_prompt_version,
                 response_ms=int((time.perf_counter() - started) * 1000),
                 parse_ok=True,
                 parse_fail=False,

@@ -642,6 +642,124 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         ],
         "additionalProperties": False,
     },
+    "decision_quality_holding_score_v1": {
+        "type": "object",
+        "properties": {
+            "edge_state": {
+                "type": "string",
+                "enum": ["EDGE", "NO_EDGE", "INSUFFICIENT_DATA"],
+            },
+            "action": {"type": "string", "enum": ["HOLD", "TRIM", "EXIT"]},
+            "expected_upside_pct": {"type": ["number", "null"], "minimum": 0},
+            "expected_downside_pct": {"type": ["number", "null"], "maximum": 0},
+            "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+            "reason_codes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {
+                    "type": "string",
+                    "enum": list(DECISION_QUALITY_V2_REASON_CODES),
+                },
+            },
+            "evidence": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "trend": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "liquidity": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "tape": {
+                        "type": "string",
+                        "enum": ["supportive", "mixed", "adverse", "insufficient"],
+                    },
+                    "risk": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "insufficient"],
+                    },
+                    "uncertainty": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                    },
+                    "setup": {
+                        "type": "string",
+                        "enum": [
+                            "continuation",
+                            "pullback_recovery",
+                            "reversal",
+                            "no_setup",
+                            "not_applicable",
+                            "insufficient",
+                        ],
+                    },
+                    "positive_edge": {
+                        "type": "string",
+                        "enum": ["strong", "moderate", "weak", "none", "insufficient"],
+                    },
+                    "adverse_risk": {
+                        "type": "string",
+                        "enum": ["low", "moderate", "high", "blocking", "insufficient"],
+                    },
+                    "trigger": {
+                        "type": "string",
+                        "enum": [
+                            "confirmed",
+                            "recovery_required",
+                            "failed",
+                            "not_applicable",
+                            "insufficient",
+                        ],
+                    },
+                },
+                "required": [
+                    "trend",
+                    "liquidity",
+                    "tape",
+                    "risk",
+                    "uncertainty",
+                    "setup",
+                    "positive_edge",
+                    "adverse_risk",
+                    "trigger",
+                ],
+            },
+            "score": {"type": "integer", "minimum": 0, "maximum": 100},
+            "position_state": {
+                "type": "string",
+                "enum": ["continuation", "mixed", "risk", "stale_or_insufficient"],
+            },
+            "score_basis": {"type": "string"},
+            "risk_factors": {"type": "array", "items": {"type": "string"}},
+            "support_factors": {"type": "array", "items": {"type": "string"}},
+            "data_quality": {
+                "type": "string",
+                "enum": ["fresh", "stale", "partial", "insufficient"],
+            },
+            "reason": {"type": "string"},
+        },
+        "required": [
+            "edge_state",
+            "action",
+            "expected_upside_pct",
+            "expected_downside_pct",
+            "confidence",
+            "reason_codes",
+            "evidence",
+            "score",
+            "position_state",
+            "score_basis",
+            "risk_factors",
+            "support_factors",
+            "data_quality",
+            "reason",
+        ],
+        "additionalProperties": False,
+    },
     "holding_exit_flow_v1": {
         "type": "object",
         "properties": {

@@ -813,6 +813,9 @@ Entry edge/risk separation:
 """.strip()
 
 DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION = "decision_quality_holding_v2_3"
+DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION = (
+    "decision_quality_holding_v2_4_live_score"
+)
 DECISION_QUALITY_HOLDING_FLOW_V2_1_PROMPT_VERSION = "decision_quality_holding_flow_v2_1"
 DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION = (
     "decision_quality_holding_flow_v2_2_bounded_defer"
@@ -1098,12 +1101,21 @@ Bounded-defer V2.2 rules:
 """.strip()
 
 
-def decision_quality_v2_system_prompt(stage: str, *, live_entry: bool = False) -> str:
+def decision_quality_v2_system_prompt(
+    stage: str,
+    *,
+    live_entry: bool = False,
+    live_holding_score: bool = False,
+) -> str:
     """Return an English ASCII decision-quality prompt for one stage."""
 
     normalized = str(stage or "").strip().lower()
     if live_entry and normalized != "entry":
         raise ValueError("live decision-quality prompt supports entry stage only")
+    if live_holding_score and normalized != "holding":
+        raise ValueError("live holding-score prompt supports holding stage only")
+    if live_entry and live_holding_score:
+        raise ValueError("live prompt authority must select exactly one stage")
     stage_rule = _DECISION_QUALITY_V2_STAGE_RULES.get(normalized)
     stage_input_rule = _DECISION_QUALITY_V2_STAGE_INPUT_RULES.get(normalized)
     if stage_rule is None or stage_input_rule is None:
@@ -1120,9 +1132,19 @@ def decision_quality_v2_system_prompt(stage: str, *, live_entry: bool = False) -
         "hard-safety and broker guards remain authoritative."
         if live_entry
         else (
-            "You are an offline Korean-stock scalping decision-quality evaluator.\n"
-            "You have no live order, threshold, provider, model-routing, quantity, "
-            "or safety authority."
+            "You are the live Korean-stock scalping holding-score classifier "
+            "selected by an exact-date PREOPEN policy. Your authority is limited "
+            "to HOLD, TRIM, or EXIT as a quality input for the existing holding "
+            "consumer. You do not decide order price, quantity, provider/model "
+            "routing, broker submission, stop/target policy, or safety policy. "
+            "Existing deterministic exit and hard-safety guards remain "
+            "authoritative."
+            if live_holding_score
+            else (
+                "You are an offline Korean-stock scalping decision-quality evaluator.\n"
+                "You have no live order, threshold, provider, model-routing, quantity, "
+                "or safety authority."
+            )
         )
     )
     return f"""
@@ -1191,6 +1213,41 @@ def decision_quality_holding_v2_3_system_prompt() -> str:
         decision_quality_v2_system_prompt("holding")
         + "\n\n"
         + _DECISION_QUALITY_HOLDING_V2_3_RULES
+    )
+
+
+def decision_quality_holding_v2_4_live_score_system_prompt() -> str:
+    """Return the exact replay/live Holding prompt with score compatibility."""
+
+    return (
+        decision_quality_v2_system_prompt("holding", live_holding_score=True)
+        + "\n\n"
+        + _DECISION_QUALITY_HOLDING_V2_3_RULES
+        + "\n\n"
+        + """Holding-score compatibility rules:
+1. Extend the same JSON object with score, position_state, score_basis,
+   risk_factors, support_factors, data_quality, and reason. Do not omit any
+   decision-quality or holding-score field.
+2. score is continuation quality from 0 through 100. HOLD normally uses 50-100,
+   EXIT normally uses 0-49, and TRIM is reserved for mixed reducible exposure.
+   The action and score must describe the same position state.
+3. position_state is continuation, mixed, risk, or stale_or_insufficient.
+   data_quality is fresh, partial, stale, or insufficient and must agree with
+   edge_state and the exact source-quality ledger.
+4. score_basis, risk_factors, support_factors, and reason use concise English
+   ASCII. They are explanation fields and cannot create order authority.
+
+The complete JSON object must also contain exactly these holding-score fields:
+{
+  "score": integer from 0 to 100,
+  "position_state": "continuation|mixed|risk|stale_or_insufficient",
+  "score_basis": "one short score basis",
+  "risk_factors": ["risk factor"],
+  "support_factors": ["support factor"],
+  "data_quality": "fresh|stale|partial|insufficient",
+  "reason": "one concise holding-score rationale"
+}
+Do not nest these fields and do not add any other fields."""
     )
 
 

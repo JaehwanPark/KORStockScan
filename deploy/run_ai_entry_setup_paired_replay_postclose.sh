@@ -6,6 +6,7 @@ PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 MAX_NEW_PER_COHORT="${AI_ENTRY_SETUP_REPLAY_MAX_NEW_PER_COHORT:-30}"
+HOLDING_MAX_NEW_TOTAL="${AI_HOLDING_PROMPT_REPLAY_MAX_NEW_TOTAL:-10}"
 CANDIDATE_WORKERS="${AI_ENTRY_SETUP_REPLAY_WORKERS:-2}"
 PREDECESSOR_WAIT_SEC="${AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200}"
 MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"
@@ -57,6 +58,14 @@ refresh_main_ai_consumer() {
     --date "$TARGET_DATE" \
     --write \
     --print-summary && \
+  nice -n 10 ionice -c 2 -n 7 -t \
+    "$VENV_PY" -m src.engine.scalping.holding_prompt_live_policy \
+    --phase postclose \
+    --target-date "$TARGET_DATE" \
+    --execute-candidate \
+    --max-new-total "$HOLDING_MAX_NEW_TOTAL" \
+    --candidate-workers "$CANDIDATE_WORKERS" \
+    --write && \
   nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.main_ai_prompt_consumer \
     --target-date "$TARGET_DATE" \

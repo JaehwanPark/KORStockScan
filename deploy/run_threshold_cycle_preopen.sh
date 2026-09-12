@@ -232,6 +232,10 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
   --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env" \
   --dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env" \
   --write
+PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.holding_prompt_live_policy \
+  --phase preopen \
+  --target-date "$TARGET_DATE" \
+  --write
 current_axis_preopen_args=(--phase preopen --target-date "$TARGET_DATE")
 if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ]; then
   current_axis_preopen_args+=(--write)

@@ -195,6 +195,28 @@ def test_prepare_stage_requests_freezes_exact_holding_without_outcome():
     assert summary["strict_eligible_count"] == 1
 
 
+def test_prepare_stage_requests_live_holding_contract_is_opt_in():
+    requests, _ = replay.prepare_stage_requests(
+        stage="holding",
+        dates=["2026-07-29"],
+        max_rows=1,
+        control_manifest=_control(),
+        promotion={"promoted_at": "2026-07-29T08:56:00+09:00"},
+        traces=[_trace()],
+        payloads=[_payload()],
+        holding_live_compatible=True,
+    )
+
+    candidate = requests[0]["candidate"]
+    assert candidate["prompt_version"] == "decision_quality_holding_v2_4_live_score"
+    assert candidate["schema_name"] == "decision_quality_holding_score_v1"
+    assert "score" in candidate["response_schema"]["required"]
+    assert (
+        "live Korean-stock scalping holding-score classifier"
+        in candidate["system_prompt"]
+    )
+
+
 def test_holding_control_and_candidate_use_distinct_response_contracts():
     requests, _ = replay.prepare_stage_requests(
         stage="holding",

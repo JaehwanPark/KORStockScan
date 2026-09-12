@@ -21,10 +21,12 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_ENTRY_PRICE_V2_5_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
+    DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
     decision_quality_entry_price_v2_5_system_prompt,
     decision_quality_holding_flow_v2_2_system_prompt,
     decision_quality_holding_v2_3_system_prompt,
+    decision_quality_holding_v2_4_live_score_system_prompt,
     decision_quality_v2_8_detailed_system_prompt,
 )
 from src.engine.ai_response_contracts import build_openai_response_text_format
@@ -102,6 +104,7 @@ def prepare_stage_requests(
     payloads: list[dict[str, Any]],
     eligible_trace_ids: set[str] | None = None,
     allow_approved_cache_redaction_supplemental: bool = False,
+    holding_live_compatible: bool = False,
     effective_venue: str | None = None,
     session_bucket: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
@@ -209,26 +212,39 @@ def prepare_stage_requests(
     )
     prompt = {
         "entry": decision_quality_v2_8_detailed_system_prompt("entry"),
-        "holding": decision_quality_holding_v2_3_system_prompt(),
+        "holding": (
+            decision_quality_holding_v2_4_live_score_system_prompt()
+            if holding_live_compatible
+            else decision_quality_holding_v2_3_system_prompt()
+        ),
         "holding_flow": decision_quality_holding_flow_v2_2_system_prompt(),
         "entry_price": decision_quality_entry_price_v2_5_system_prompt(),
     }[normalized_stage]
     candidate_schema_name = {
         "entry": "decision_quality_v2_entry_candidate",
-        "holding": "decision_quality_holding_v2_3_candidate",
+        "holding": (
+            "decision_quality_holding_score_v1"
+            if holding_live_compatible
+            else "decision_quality_holding_v2_3_candidate"
+        ),
         "holding_flow": "decision_quality_holding_flow_v2_2_candidate",
         "entry_price": "entry_price_explicit_fill_value_v1",
     }[normalized_stage]
     response_schema = (
         build_openai_response_text_format(candidate_schema_name)["schema"]
         if normalized_stage == "entry_price"
+        or (normalized_stage == "holding" and holding_live_compatible)
         else quality._prompt_v2_openai_schema(
             "entry" if normalized_stage == "entry" else "holding"
         )
     )
     candidate = {
         "prompt_version": (
-            DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
+            (
+                DECISION_QUALITY_HOLDING_V2_4_LIVE_SCORE_PROMPT_VERSION
+                if holding_live_compatible
+                else DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION
+            )
             if normalized_stage == "holding"
             else (
                 DECISION_QUALITY_HOLDING_FLOW_V2_2_PROMPT_VERSION

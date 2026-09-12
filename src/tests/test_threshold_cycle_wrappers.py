@@ -3867,6 +3867,13 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
         "print(json.dumps({'target_date': date, 'status': 'inactive_fallback_v2_13'}))\n",
         encoding="utf-8",
     )
+    (scalping_dir / "holding_prompt_live_policy.py").write_text(
+        "import json\n"
+        "import sys\n"
+        "date = sys.argv[sys.argv.index('--target-date') + 1]\n"
+        "print(json.dumps({'target_date': date, 'status': 'completed'}))\n",
+        encoding="utf-8",
+    )
     (engine_dir / "threshold_cycle_preopen_apply.py").write_text(
         "import json\n"
         "import sys\n"
