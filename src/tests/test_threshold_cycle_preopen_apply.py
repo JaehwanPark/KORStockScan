@@ -11336,7 +11336,7 @@ def test_verify_runtime_env_handoff_rejects_recheck_without_probe_dependencies(
     )
     assert finding["family"] == "entry_opportunity_recheck_runtime"
     assert "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED" in finding["missing_env_keys"]
-    assert "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY" in finding["missing_env_keys"]
+    assert "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY" not in finding["missing_env_keys"]
 
 
 def test_entry_split_daily_operator_contract_accepts_recurring_stale_policy(

@@ -366,6 +366,7 @@ def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(monkeypa
         "source_date": "2026-09-11",
         "active_date": "2026-09-14",
         "formula_version": allocator.FORMULA_VERSION,
+        "tier_ratios": [0.10, 0.15, 0.20, 0.25, 0.25],
         "decision": "retain_current",
         "runtime_apply_allowed": True,
         "canary_quantity_cap_precedence": True,
@@ -390,3 +391,36 @@ def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(monkeypa
     fallback = allocator.resolve_scalping_allocation(_context("2026-09-14T14:00:00"))
     assert fallback.formula_version == allocator.ROLLBACK_FORMULA_VERSION
     assert fallback.ratio == 0.10
+
+
+def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(monkeypatch, tmp_path):
+    policy_path = tmp_path / "flat10.json"
+    policy = {
+        "schema_version": "position_sizing_dynamic_formula_policy_v1",
+        "policy_version": "position_sizing_dynamic_formula:2026-09-11",
+        "source_date": "2026-09-11",
+        "active_date": "2026-09-14",
+        "formula_version": allocator.ROLLBACK_FORMULA_VERSION,
+        "tier_ratios": [0.10, 0.10, 0.10, 0.10, 0.10],
+        "decision": "adjust_down_flat10",
+        "runtime_apply_allowed": True,
+        "canary_quantity_cap_precedence": True,
+        "source_quality_passed": True,
+    }
+    policy["policy_content_sha256"] = allocator._policy_content_sha256(policy)
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    for key, value in {
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": policy["policy_version"],
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE": policy["source_date"],
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-09-14",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    decision = allocator.resolve_scalping_allocation(_context("2026-09-14T14:00:00"))
+
+    assert decision.formula_version == allocator.ROLLBACK_FORMULA_VERSION
+    assert decision.ratio == pytest.approx(0.10)
+    assert decision.policy_status == "policy_loaded"

@@ -5056,6 +5056,11 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256",
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE",
     ],
+    "dynamic_entry_price_resolver": [
+        "KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_TICKS",
+        "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
+        "KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED",
+    ],
     "entry_cancel_wait_runtime": [
         "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED",
         "KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC",
@@ -6731,13 +6736,6 @@ def verify_runtime_env_handoff(
             effective_env_overrides.get(probe_first_enabled_key)
         ):
             recheck_contract_failures.append(probe_first_enabled_key)
-        if (
-            str(
-                effective_env_overrides.get("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY") or ""
-            ).strip()
-            != "1"
-        ):
-            recheck_contract_failures.append("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY")
         if not _runtime_env_enabled(
             effective_env_overrides.get(post_probe_resolver_enabled_key)
         ):
@@ -6766,7 +6764,7 @@ def verify_runtime_env_handoff(
                     "severity": "runtime_policy_unusable",
                     "detail": (
                         "entry opportunity recheck requires canonical WAIT probe "
-                        "intent, one-share probe-first, and post-probe resolver"
+                        "intent, an active probe-first contract, and post-probe resolver"
                     ),
                     "policy_reason": (
                         "entry_recheck_probe_dependency_contract_invalid"

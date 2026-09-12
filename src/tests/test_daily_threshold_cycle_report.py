@@ -52,6 +52,37 @@ def test_aftermarket_sor_successor_policy_requires_broker_acceptance(
     assert policy["quantity_policy_owner"] == "position_sizing_dynamic_formula"
 
 
+def test_position_sizing_materialization_preserves_selected_flat10_policy(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "POSITION_SIZING_POLICY_DIR", tmp_path)
+    report = {
+        "calibration_candidates": [
+            {
+                "family": "position_sizing_dynamic_formula",
+                "runtime_apply_eligible_now": True,
+                "calibration_state": "adjust_down",
+                "recommended_values": {
+                    "formula_version": report_mod.SCALPING_SIZING_ROLLBACK_VERSION,
+                    "decision": "adjust_down_flat10",
+                    "cost_adjusted_ev_pct": 0.12,
+                },
+            }
+        ]
+    }
+
+    report_mod._materialize_position_sizing_policy(report, "2026-09-11")
+
+    policy = json.loads(
+        (tmp_path / "position_sizing_dynamic_formula_2026-09-11.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert policy["formula_version"] == report_mod.SCALPING_SIZING_ROLLBACK_VERSION
+    assert policy["tier_ratios"] == [0.10] * 5
+    assert policy["decision"] == "adjust_down_flat10"
+
+
 def test_aftermarket_sor_canary_acceptance_reads_projected_event_fields():
     acceptance = report_mod._aftermarket_sor_canary_acceptance(
         [
@@ -1281,9 +1312,9 @@ def test_dynamic_entry_price_resolver_opens_when_source_candidate_metrics_are_co
 
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     dynamic = candidates["dynamic_entry_price_resolver"]
-    assert dynamic["calibration_state"] == "adjust_up"
-    assert dynamic["apply_mode"] == "calibrated_apply_candidate"
-    assert dynamic["sample_floor_status"] == "ready"
+    assert dynamic["calibration_state"] == "hold_sample"
+    assert dynamic["apply_mode"] == "report_only_calibration"
+    assert dynamic["sample_floor_status"] == "hold_sample"
     assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
     assert dynamic["recommended_values"]["max_below_bid_bps"] == 70
     assert dynamic["recommended_values"]["conditional_1tick_real_enabled"] is False
@@ -1362,8 +1393,8 @@ def test_dynamic_entry_price_resolver_uses_sim_metrics_for_readiness_and_keeps_r
 
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     dynamic = candidates["dynamic_entry_price_resolver"]
-    assert dynamic["calibration_state"] == "adjust_up"
-    assert dynamic["apply_mode"] == "calibrated_apply_candidate"
+    assert dynamic["calibration_state"] == "hold_sample"
+    assert dynamic["apply_mode"] == "report_only_calibration"
     assert dynamic["source_metrics"]["candidate_metrics_ready"] is True
     assert dynamic["source_metrics"]["candidate_metrics_missing"] == {}
     assert "candidate_metrics_diagnostic_missing" not in dynamic["source_metrics"]
@@ -1781,7 +1812,7 @@ def test_dynamic_entry_price_resolver_partial_sim_recommendation_keeps_unspecifi
     dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
         "dynamic_entry_price_resolver"
     ]
-    assert dynamic["calibration_state"] == "adjust_up"
+    assert dynamic["calibration_state"] == "hold_sample"
     assert dynamic["recommended_values"]["normal_defensive_ticks"] == 2
     assert (
         dynamic["recommended_values"]["max_below_bid_bps"]

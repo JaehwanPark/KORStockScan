@@ -1264,7 +1264,7 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
             if isinstance(item, dict)
             and item.get("family") == "position_sizing_dynamic_formula"
             and item.get("runtime_apply_eligible_now") is True
-            and item.get("calibration_state") == "retain_current"
+            and item.get("calibration_state") in {"retain_current", "adjust_down"}
         ),
         None,
     )
@@ -1272,14 +1272,34 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
         return
     effective_date = _next_krx_trading_date(source_date)
     policy_version = f"position_sizing_dynamic_formula:{source_date}"
+    recommended = (
+        candidate.get("recommended_values")
+        if isinstance(candidate.get("recommended_values"), dict)
+        else {}
+    )
+    formula_version = str(
+        recommended.get("formula_version") or SCALPING_SIZING_FORMULA_VERSION
+    )
+    if formula_version not in {
+        SCALPING_SIZING_FORMULA_VERSION,
+        SCALPING_SIZING_ROLLBACK_VERSION,
+    }:
+        return
+    tier_ratios = (
+        [0.10, 0.15, 0.20, 0.25, 0.25]
+        if formula_version == SCALPING_SIZING_FORMULA_VERSION
+        else [0.10, 0.10, 0.10, 0.10, 0.10]
+    )
+    decision = str(recommended.get("decision") or "retain_current")
     policy = {
         "schema_version": "position_sizing_dynamic_formula_policy_v1",
         "policy_version": policy_version,
         "source_date": source_date,
         "active_date": effective_date,
-        "formula_version": SCALPING_SIZING_FORMULA_VERSION,
+        "formula_version": formula_version,
         "formula_allowlist": [SCALPING_SIZING_FORMULA_VERSION, SCALPING_SIZING_ROLLBACK_VERSION],
-        "decision": "retain_current",
+        "tier_ratios": tier_ratios,
+        "decision": decision,
         "runtime_apply_allowed": True,
         "source_quality_passed": True,
         "canary_quantity_cap_precedence": True,
@@ -1296,7 +1316,7 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_bytes(encoded)
     temporary.replace(path)
-    recommended = dict(candidate.get("recommended_values") or {})
+    recommended = dict(recommended)
     recommended.update(
         {
             "enabled": True,
@@ -13608,12 +13628,10 @@ def _calibration_state_for_family(
                 "hold_sample",
                 f"가격 후보별 fill/cancel/late-fill/EV 필수 지표 미완성({missing_by_book}); PREOPEN apply 보류",
             )
-        if primary_book != "real" and not bool(
-            source_metrics.get("recommended_values_runtime_change_ready")
-        ):
+        if primary_book != "real":
             return (
                 "hold_sample",
-                "dynamic entry price 후보 지표는 준비됐지만 유효한 bounded 추천값 또는 runtime env 변경값이 없어 PREOPEN apply 보류",
+                "dynamic entry price sim/probe 후보는 진단 전용이며, exact real submit/fill/cancel/late-fill/EV 결속 전에는 PREOPEN runtime apply를 허용하지 않는다.",
             )
         ev = _safe_float(
             (candidate_metrics.get(primary_book) or {}).get(
@@ -15156,32 +15174,41 @@ def _runtime_apply_candidate_for_state(
 
 
 def _position_sizing_runtime_selection(candidate: dict) -> tuple[dict | None, str]:
-    """Return the only promotable profile, without optimizing a new formula."""
+    """Choose the best already-allowlisted sizing profile from exact outcomes."""
     source = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
     grid = source.get("candidate_grid") if isinstance(source.get("candidate_grid"), list) else []
-    current = next(
-        (item for item in grid if isinstance(item, dict) and item.get("formula_version") == SCALPING_SIZING_FORMULA_VERSION),
-        None,
-    )
-    if not isinstance(current, dict):
-        return None, "current_formula_candidate_missing"
-    exact = _safe_int(current.get("exact_terminal_join_count"), 0) or 0
-    unmatched = _safe_int(current.get("unmatched_real_submit_count"), 0) or 0
-    gross = _safe_float(current.get("gross_notional_weighted_ev_pct"), None)
-    net = _safe_float(current.get("notional_weighted_ev_pct"), None)
-    if exact < 30:
-        return None, "exact_terminal_join_floor_not_met"
-    if gross is None or gross < 0.1:
-        return None, "gross_ev_floor_not_met"
-    if net is None or net < 0.0:
-        return None, "cost_adjusted_ev_not_nonnegative"
     if source.get("source_quality_passed") is not True:
         return None, "source_quality_not_passed"
-    return current, (
-        "retain_current_exact_cost_adjusted_candidate"
-        if unmatched == 0
-        else f"retain_current_exact_cost_adjusted_candidate_unmatched_preserved:{unmatched}"
+    eligible: list[dict] = []
+    for item in grid:
+        if not isinstance(item, dict):
+            continue
+        formula = str(item.get("formula_version") or "")
+        if formula not in {
+            SCALPING_SIZING_FORMULA_VERSION,
+            SCALPING_SIZING_ROLLBACK_VERSION,
+        }:
+            continue
+        exact = _safe_int(item.get("exact_terminal_join_count"), 0) or 0
+        gross = _safe_float(item.get("gross_notional_weighted_ev_pct"), None)
+        net = _safe_float(item.get("notional_weighted_ev_pct"), None)
+        if exact >= 30 and gross is not None and gross >= 0.1 and net is not None and net > 0.0:
+            eligible.append(item)
+    if not eligible:
+        return None, "no_exact_positive_cost_adjusted_candidate"
+    selected = max(
+        eligible,
+        key=lambda item: (
+            _safe_float(item.get("notional_weighted_ev_pct"), -float("inf")),
+            _safe_float(item.get("real_completed_overall_ev_pct"), -float("inf")),
+            _safe_float(item.get("full_fill_rate"), -float("inf")),
+            _safe_float(item.get("downside_p10_profit_rate"), -float("inf")),
+        ),
     )
+    formula = str(selected.get("formula_version") or "")
+    unmatched = _safe_int(selected.get("unmatched_real_submit_count"), 0) or 0
+    decision = "retain_current" if formula == SCALPING_SIZING_FORMULA_VERSION else "adjust_down_flat10"
+    return selected, f"{decision}_exact_cost_adjusted_candidate_unmatched_preserved:{unmatched}"
 
 
 def _apply_mode_for_candidate_state(
@@ -15252,8 +15279,6 @@ def _refresh_candidate_from_primary_window(
         sample_ready=primary_ready,
     )
     if family == "position_sizing_dynamic_formula":
-        # The postclose report may compare flat-10, but it cannot promote it.
-        # A valid policy only records the already-active five-stage formula.
         family_sample = family_like.get("sample") if isinstance(family_like.get("sample"), dict) else {}
         source_metrics = {
             **source_metrics,
@@ -15264,7 +15289,13 @@ def _refresh_candidate_from_primary_window(
             {"source_metrics": source_metrics}
         )
         if selected is not None:
-            state, reason = "retain_current", selection_reason
+            selected_formula = str(selected.get("formula_version") or "")
+            state = (
+                "retain_current"
+                if selected_formula == SCALPING_SIZING_FORMULA_VERSION
+                else "adjust_down"
+            )
+            reason = selection_reason
         else:
             state, reason = "hold_sample", selection_reason
     sample_floor_status = _sample_floor_status_for_candidate_state(
@@ -15286,11 +15317,16 @@ def _refresh_candidate_from_primary_window(
     )
     current = current if isinstance(current, dict) else {}
     recommended = recommended if isinstance(recommended, dict) else {}
-    if family == "position_sizing_dynamic_formula" and state == "retain_current":
+    if family == "position_sizing_dynamic_formula" and state in {"retain_current", "adjust_down"}:
         selected, _ = _position_sizing_runtime_selection({"source_metrics": source_metrics})
+        selected_formula = str(selected.get("formula_version") or "") if selected else ""
         recommended = {
-            "formula_version": SCALPING_SIZING_FORMULA_VERSION,
-            "decision": "retain_current",
+            "formula_version": selected_formula,
+            "decision": (
+                "retain_current"
+                if selected_formula == SCALPING_SIZING_FORMULA_VERSION
+                else "adjust_down_flat10"
+            ),
             "gross_notional_weighted_ev_pct": selected.get("gross_notional_weighted_ev_pct") if selected else None,
             "cost_adjusted_ev_pct": selected.get("notional_weighted_ev_pct") if selected else None,
         }

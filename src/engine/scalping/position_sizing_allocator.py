@@ -191,7 +191,22 @@ def _runtime_position_sizing_policy(reference_time: Any) -> tuple[str, tuple[flo
         or formula not in {FORMULA_VERSION, ROLLBACK_FORMULA_VERSION}
     ):
         return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_contract_invalid_fallback", None, None
-    ratios = DEFAULT_TIER_RATIOS if formula == FORMULA_VERSION else _FLAT_10_TIER_RATIOS
+    expected_ratios = (
+        DEFAULT_TIER_RATIOS
+        if formula == FORMULA_VERSION
+        else _FLAT_10_TIER_RATIOS
+    )
+    ratios, ratios_valid = _validated_tier_ratios(policy.get("tier_ratios"))
+    # The report currently owns exactly two bounded formulas.  Do not let a
+    # syntactically valid policy file introduce a third allocation schedule.
+    if not ratios_valid or ratios != expected_ratios:
+        return (
+            ROLLBACK_FORMULA_VERSION,
+            _FLAT_10_TIER_RATIOS,
+            "policy_ratio_contract_invalid_fallback",
+            None,
+            None,
+        )
     return formula, ratios, "policy_loaded", expected_version, expected_sha
 
 
