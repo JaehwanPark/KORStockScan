@@ -15015,15 +15015,19 @@ def _position_sizing_runtime_selection(candidate: dict) -> tuple[dict | None, st
     unmatched = _safe_int(current.get("unmatched_real_submit_count"), 0) or 0
     gross = _safe_float(current.get("gross_notional_weighted_ev_pct"), None)
     net = _safe_float(current.get("notional_weighted_ev_pct"), None)
-    if exact < 30 or unmatched != 0:
-        return None, "exact_terminal_join_floor_or_conservation_failed"
+    if exact < 30:
+        return None, "exact_terminal_join_floor_not_met"
     if gross is None or gross < 0.1:
         return None, "gross_ev_floor_not_met"
     if net is None or net < 0.0:
         return None, "cost_adjusted_ev_not_nonnegative"
     if source.get("source_quality_passed") is not True:
         return None, "source_quality_not_passed"
-    return current, "retain_current_exact_cost_adjusted_candidate"
+    return current, (
+        "retain_current_exact_cost_adjusted_candidate"
+        if unmatched == 0
+        else f"retain_current_exact_cost_adjusted_candidate_unmatched_preserved:{unmatched}"
+    )
 
 
 def _apply_mode_for_candidate_state(

@@ -110,7 +110,7 @@ primary metric은 아래 둘 중 하나만 사용한다.
 
 source-quality 결손 후보는 EV 분모에서 제외하고 `source_quality_blocked`로 닫는다.
 
-runtime apply는 selected five-stage formula를 유지하는 dated policy에만 한정한다. exact terminal join 30건 이상, unmatched submit 0, source-quality pass, gross EV `>=0.1%`, cost-adjusted EV `>=0%`, PREOPEN file/version/source-date/SHA256 검증이 모두 충족돼야 한다. `flat_10_fallback`은 신규 승격 후보가 아니라 loader의 fail-closed fallback이다.
+runtime apply는 selected five-stage formula를 유지하는 dated policy에만 한정한다. exact terminal join 30건 이상, source-quality pass, gross EV `>=0.1%`, cost-adjusted EV `>=0%`, PREOPEN file/version/source-date/SHA256 검증이 모두 충족돼야 한다. 미종결 submit은 exact terminal 경제성 분모에 넣지 않고 `unmatched_real_submit_count`로 보존한다. `flat_10_fallback`은 신규 승격 후보가 아니라 loader의 fail-closed fallback이다.
 
 ## 6.1 Approval Artifact Schema
 
