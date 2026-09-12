@@ -33,6 +33,7 @@ SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL = {
 }
 CUMULATIVE_RESEARCH_START_DATE = date(2026, 8, 12)
 CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES = 40
+MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE = date(2026, 9, 14)
 CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT = (
     "KRX_trading_date;KRX_REGULAR/KRX;source_quality_PASS_rows>=300;"
     "first_PASS_observation<=09:30;last_PASS_observation>=15:20"
@@ -44,6 +45,16 @@ SESSION_VENUES = {
     "NXT_PREMARKET": "NXT",
     "KRX_REGULAR": "KRX",
     "NXT_AFTERMARKET": "NXT",
+}
+SESSION_MARKET_DATA_ROUTES = {
+    "NXT_PREMARKET": "nxt_only",
+    "KRX_REGULAR": "krx_only",
+    "NXT_AFTERMARKET": "nxt_only",
+}
+SESSION_MARKET_DATA_SUFFIXES = {
+    "NXT_PREMARKET": "_NX",
+    "KRX_REGULAR": "",
+    "NXT_AFTERMARKET": "_NX",
 }
 
 
@@ -180,6 +191,18 @@ def _validated_session_policy(
         "symbol": symbol,
         "session": session,
         "market_venue": venue,
+        "session_contract_version": (
+            "market_session_contract_v2"
+            if effective_date >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
+            else "market_session_contract_v1"
+        ),
+        "market_session_regime": session,
+        "market_data_route": SESSION_MARKET_DATA_ROUTES[session],
+        "market_data_request_code": (
+            f"{symbol}{SESSION_MARKET_DATA_SUFFIXES[session]}"
+        ),
+        "broker_route_requested": venue,
+        "actual_execution_venue": "UNKNOWN",
         "allowed_entry_sessions": (session,),
         "allowed_entry_venues": (venue,),
         "allowed_entry_states": entry_states,
@@ -551,6 +574,11 @@ class WidgetAutoTradePolicyLoader:
         if candidates:
             _, _, selected = max(candidates, key=lambda item: (item[0], item[1]))
             selected = {symbol: dict(sessions) for symbol, sessions in selected.items()}
+        if observed_date >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE:
+            for symbol in list(selected):
+                selected[symbol].pop("NXT_AFTERMARKET", None)
+                if not selected[symbol]:
+                    selected.pop(symbol, None)
         if not self.include_symbol_expansion:
             return selected
 
@@ -567,6 +595,11 @@ class WidgetAutoTradePolicyLoader:
         for symbol, payload in expansion.items():
             execution = payload["execution_policy"]
             session = str(execution["session"])
+            if (
+                observed_date >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
+                and session == "NXT_AFTERMARKET"
+            ):
+                continue
             if session in selected.get(symbol, {}):
                 continue
             selected.setdefault(symbol, {})[session] = {

@@ -18,7 +18,7 @@
 
 1. SOR 주문·통합시세 코드 `_AL`을 실제 체결시장으로 오인한다.
 2. KRX 애프터마켓에서 허용되지 않는 주문유형을 제출하거나 broker reject 뒤에야 보정한다.
-3. 15:30 KRX 정규장 미체결, 15:40 NXT 단독장, 16:00 양시장 개장 사이의 주문 lifecycle이 섞인다.
+3. 15:30 KRX 정규장 미체결과 16:00 통합 애프터마켓 개장 사이의 주문 lifecycle이 섞인다.
 4. 장후 보고서가 KRX/NXT 애프터마켓 손익을 기존 `NXT/NXT_AFTERMARKET`으로 합쳐 잘못된 EV와 승인 후보를 만든다.
 5. 기존 V2.14 NXT 승인 범위가 새 KRX+NXT 통합 세션까지 자동 확장될 수 있다.
 6. postclose DONE controller의 고정 cohort 집합 때문에 올바른 신규 cohort를 거부하거나, 반대로 이전 artifact 재사용으로 변경을 놓칠 수 있다.
@@ -27,7 +27,7 @@
 
 | 축 | 의미 | 허용 예시 |
 | --- | --- | --- |
-| `market_session_regime` | 시간과 시행일에 따른 시장 상태 | `KRX_REGULAR`, `NXT_AFTERMARKET_SOLO`, `KRX_NXT_AFTERMARKET`, `CLOSED` |
+| `market_session_regime` | 시간과 시행일에 따른 시장 상태 | `KRX_REGULAR`, `SESSION_TRANSITION`, `KRX_NXT_AFTERMARKET`, `CLOSED` |
 | `market_data_route` | 구독·조회한 시세 범위 | `krx_only`, `nxt_only`, `krx_nxt_integrated` |
 | `broker_route_requested` | 주문 시 broker에 지정한 route | `KRX`, `NXT`, `SOR` |
 | `actual_execution_venue` | 체결 receipt가 증명한 물리 시장 | `KRX`, `NXT`, `UNKNOWN` |
@@ -38,7 +38,7 @@
 
 ### 2.1 시장 운영 전제
 
-증권사 공지들은 2026-09-14부터 KRX 애프터마켓 16:00~20:00, NXT 애프터마켓 15:40~20:00, 16:00 이후 양시장 최선집행/SOR 제공을 안내한다.
+2026-09-14 적용 계약은 정규장을 15:30까지 현행 유지하고, 15:30~16:00을 주문 불가 전환 구간으로 둔 뒤, 16:00~20:00을 KRX/NXT 통합 애프터마켓으로 운영한다. NXT 단독 애프터마켓 구간은 없다. Kiwoom 공식 자료는 KRX/NXT/SOR wire 값과 주문유형을 확인하는 근거이며, 세션 정책은 이 사용자 승인 계약을 따른다.
 
 - [카카오페이증권 거래시간 변경 안내](https://www.kakaopaysec.com/customer/notice/dynamicBoardPageDetail.do?id=7452): KRX 16:00~20:00 연속매매, 기존 정규장 미체결의 비이월, 지원 주문유형 안내.
 - [KB증권 KRX 애프터마켓 안내](https://www.kbsec.com/go.able?idt=20260904&linkcd=s060901010000&seq=10010298): 양시장 거래시간, 주문조건과 VI 관련 안내.
@@ -118,8 +118,7 @@ explicit SOR market order     = order type 3, pre-remapped=false
 | --- | --- | --- | --- | --- |
 | `< 2026-09-14`, 기존 시간 | 기존 contract | 기존대로 | 기존대로 | 과거 결과 불변 |
 | `>= 2026-09-14`, 09:00~15:30 | `KRX_REGULAR` | KRX 및 기존 NXT 정규 세션 계약 | 현행 규칙 | 현행 승인 유지 |
-| 15:30~15:40 | `SESSION_TRANSITION` | 주문·종목별 상태 확인 | read/reconcile only | 신규 주문 금지 |
-| 15:40~16:00 | `NXT_AFTERMARKET_SOLO` | NXT | `nxt_only` 또는 기존 승인 route | 기존 NXT 계약의 versioned 후속 |
+| 15:30~16:00 | `SESSION_TRANSITION` | 주문·종목별 상태 확인 | read/reconcile only | 신규 주문 금지 |
 | 16:00~19:40 | `KRX_NXT_AFTERMARKET` | KRX+NXT | `krx_nxt_integrated` | 신규 별도 승인 전 observe-only |
 | 19:40~19:45 | `KRX_NXT_AFTERMARKET_CLOSE_ONLY` | KRX+NXT | 통합 + 실제시장 receipt | 신규 BUY 금지, 보유청산만 |
 | 19:45~20:00 | `KRX_NXT_AFTERMARKET_TERMINAL_EXIT` | KRX+NXT | 통합 + 실제시장 receipt | 기존 terminal exit safety만 |
@@ -279,7 +278,6 @@ REGULAR_OPEN
      -> KRX child terminal/released proof
      -> NXT child still-open 또는 terminal proof
      -> SOR parent와 각 확인 가능한 child 상태 대사
-  -> 15:40 NXT_AFTERMARKET_SOLO_READY
   -> 16:00 KRX_NXT_AFTERMARKET_READY
 ```
 
@@ -347,7 +345,7 @@ schema `aftermarket_close_reconciliation_v1`은 원 주문 identity, parent/chil
 
 [scalping_scanner.py](../../src/scanners/scalping_scanner.py)의 `stex_tp=1|2` 단일 선택을 중앙 contract로 이동한다.
 
-- 15:40~16:00: NXT 조회 `2`.
+- 15:30~16:00: rank 조회 없음; reconciliation/state 확인만 수행.
 - 16:00~20:00: 공식 API가 통합 순위 조회값을 지원하면 검증된 값 사용.
 - 통합값이 없으면 KRX `1`과 NXT `2`를 독립 조회하고 base symbol 기준으로 merge한다.
 - merge 시 같은 종목의 rank/price/volume을 한 시장 값으로 덮지 않고 source route를 보존한다.
@@ -360,7 +358,7 @@ schema `aftermarket_close_reconciliation_v1`은 원 주문 identity, parent/chil
 
 | 영역 | 파일 | 설계 변경 |
 | --- | --- | --- |
-| 세션 | [sniper_time.py](../../src/engine/sniper_time.py) | 중앙 resolver 호출, 시행일·15:40/16:00/19:40/19:45 경계 |
+| 세션 | [sniper_time.py](../../src/engine/sniper_time.py) | 중앙 resolver 호출, 시행일·15:30/16:00/19:40/19:45 경계 |
 | scanner | [scalping_scanner.py](../../src/scanners/scalping_scanner.py) | dual 조회/통합 source quality/종목 dedupe |
 | 주문 | [kiwoom_orders.py](../../src/engine/kiwoom_orders.py) | default route 제거, SOR after type preflight, buy/sell 동일 clock 전달 |
 | sniper 보유 | [sniper_state_handlers.py](../../src/engine/sniper_state_handlers.py) | dual after exit와 boundary reconciliation |
@@ -443,7 +441,7 @@ session_contract_version
 - `SOR` cohort는 요청 방식 분석용이며 물리 시장 손익 cohort가 아니다.
 - full/partial fill, real/sim/probe/CF, owner를 계속 분리한다.
 - 비용/결과 누락은 0이 아니라 null/coverage다.
-- `15:40~16:00 NXT solo`와 `16:00~20:00 dual`을 한 NXT after bucket으로 합치지 않는다.
+- `15:30~16:00 SESSION_TRANSITION` 행을 `16:00~20:00` 통합 애프터마켓 경제성 분모에 합치지 않는다.
 - KRX/NXT 체결 차이를 비교하더라도 비무작위 SOR routing 편향을 명시한다.
 
 ## 10. 장후 전 체인 상세 설계
@@ -469,7 +467,7 @@ session_contract_version
 | --- | --- | --- |
 | [buy_funnel_sentinel.py](../../src/engine/buy_funnel_sentinel.py) | after=NXT, venue allowlist 제한 | decision scope/route/actual venue 분리, dual source gap 이유 |
 | [holding_exit_sentinel.py](../../src/engine/holding_exit_sentinel.py) | 같은 단일 venue/session map | entry·exit 실제시장과 SOR route 별도 |
-| [market_opportunity_census.py](../../src/engine/monitoring/market_opportunity_census.py) | 15:30 이후 전부 NXT, integrated UNKNOWN 제거 가능 | 15:40 solo/16:00 dual 분리, route별 census와 merge coverage |
+| [market_opportunity_census.py](../../src/engine/monitoring/market_opportunity_census.py) | 15:30 이후 전부 NXT, integrated UNKNOWN 제거 가능 | 15:30~16:00 수집 차단, 16:00 이후 route별 census와 merge coverage |
 | [rising_missed_intraday_feedback.py](../../src/engine/monitoring/rising_missed_intraday_feedback.py) | KRX/NXT/PREMARKET allowlist | 신규 schema 수용, dual scope와 actual venue 분리 |
 | [scalping_pyramid_intraday_feedback.py](../../src/engine/monitoring/scalping_pyramid_intraday_feedback.py) | 기존 cohort 고정 | 동일 변경, scale-in 권한은 늘리지 않음 |
 | [observation_source_quality_audit.py](../../src/engine/observation_source_quality_audit.py) | 장후 KRX 차단을 정상 사유로 봄 | 시행일 이후 해당 사유를 결함으로 판정, attribution coverage 검사 |
@@ -483,7 +481,7 @@ session_contract_version
 | [machine_microstructure_attribution.py](../../src/engine/monitoring/machine_microstructure_attribution.py) | after session=>NXT | integrated scope 보존; regular-only machine 범위 불변 |
 | [widget_advisory_calibration.py](../../src/engine/monitoring/widget_advisory_calibration.py) | NXT after spec 고정 | solo/dual cohort와 source coverage 분리 |
 | [widget_auto_trade_policy_calibration.py](../../src/engine/monitoring/widget_auto_trade_policy_calibration.py) | 같은 문제 | 신규 cohort 자동 정책 승격 금지 |
-| [samsung_widget_advisory_evaluation.py](../../src/engine/monitoring/samsung_widget_advisory_evaluation.py) | expected 260분 NXT after | solo20분/dual240분을 별도 expected minutes로 관리 |
+| [samsung_widget_advisory_evaluation.py](../../src/engine/monitoring/samsung_widget_advisory_evaluation.py) | expected 260분 NXT after | 통합 애프터마켓 240분 expected minutes로 관리 |
 | [samsung_widget_advisory.py](../../src/engine/monitoring/samsung_widget_advisory.py) | NXT 전용 threshold/peer 가정 | dual context 별도 진단, 기존 NXT 경제정책 상속 금지 |
 | [ai_multi_timeframe_context_promotion.py](../../src/engine/automation/ai_multi_timeframe_context_promotion.py) | 세션 집합 고정 | source schema 수용만, 자동 promotion 없음 |
 | [daily_threshold_cycle_report.py](../../src/engine/daily_threshold_cycle_report.py) | `infer_scalping_venue`와 upstream legacy field | session version 필수, actual venue별 EV와 unknown coverage |
@@ -503,7 +501,7 @@ NXT/NXT_AFTERMARKET
 ```text
 KRX/KRX_REGULAR                  -> 기존 live 승인 계약
 NXT/NXT_AFTERMARKET              -> 2026-09-14 이전 replay 호환 계약
-NXT/NXT_AFTERMARKET_SOLO         -> versioned 기존/관찰 계약
+SESSION_TRANSITION               -> 신규 진입·시장 rank 수집 차단, reconciliation only
 INTEGRATED/KRX_NXT_AFTERMARKET   -> source-only, live_candidate=null
 ```
 
@@ -565,7 +563,7 @@ controller는 `expected_cohorts_by_contract_version`을 사용하고 각 cohort�
   - holding-exit sentinel과 WS freshness 종료를 19:20에서 최소 19:50까지 연장해 19:45 terminal exit를 관찰.
   - buy-funnel은 기존 19:20/19:40 정책 의도에 맞춰 별도 유지 여부를 명시.
 - [install_market_opportunity_census_cron.sh](../../deploy/install_market_opportunity_census_cron.sh)
-  - 16:00 이후 dual label/route, 15:40~16:00 NXT solo 분리.
+  - 16:00 이후 통합 label/route, 15:30~16:00 transition 분리.
 - [install_eod_data_chain_cron.sh](../../deploy/install_eod_data_chain_cron.sh)
   - 설명·receipt 명칭 갱신, 시각은 20:05 유지.
 - [run_threshold_cycle_postclose.sh](../../deploy/run_threshold_cycle_postclose.sh)
@@ -615,6 +613,10 @@ threshold promotion   = forbidden until cohort-specific evidence/approval
 
 ### 13.2 모든 작업에 공통인 중단·토큰 절약 규칙
 
+**구현 위치 계약:** `AM-S00`~`AM-S25`의 문서·코드·테스트 변경은 사용자가 연 현재 작업본 repository root에서만 수행한다. 이 문서 작성 시점의 작업본은 `/home/ubuntu/KORStockScan`이며, executor는 수정 전에 `git rev-parse --show-toplevel` 결과가 현재 작업본인지 확인한다. 선택 배포본, 고정 release 디렉터리, release symlink의 실제 대상, 실행 중 PID가 읽는 source tree에는 직접 수정·복사·patch하지 않는다. root가 다르거나 작업본 여부를 증명할 수 없으면 변경 없이 `BLOCKED_IMPLEMENTATION_ROOT_MISMATCH`로 종료한다.
+
+현재 작업본에 이미 존재하는 사용자 변경은 구현 대상이 아니라 보존 대상이다. 해당 task의 `Write` 경로와 겹치지 않으면 건드리지 않고, 겹치더라도 사용자 diff를 유지한 채 task 변경만 분리할 수 있을 때 진행한다. `AM-S00`~`AM-S25` 완료 뒤에도 작업본을 배포본으로 간주하지 않으며, 별도 사용자 배포 승인이 있는 `AM-S26`만 검토된 결과를 새 고정 release로 패키징할 수 있다. `AM-S26`도 기존 release를 제자리 수정하지 않는다.
+
 1. **한 호출=한 ID**다. 사용자가 `AM-Sxx` 하나를 명시하지 않고 “전체 구현”이라고 해도 executor는 첫 미완료 ID 하나만 수행하고 결과를 반환한다. 다음 ID는 새 지시를 기다린다.
 2. 작업 시작 시 AGENTS, Plan Rebase §1~§8, 현재 체크리스트 목적·강제규칙을 읽거나 같은 세션에서 이미 읽은 최신 context를 재사용한다. 본 문서는 공통규칙, 해당 ID 행, 해당 세부 section만 읽는다. 역사 audit/archive 전체를 재귀 탐색하지 않는다.
 3. `Read`에 적힌 파일과 그 파일이 직접 import하는 필수 contract/nearby test만 연다. repo 전체 검색은 최초 위치 확인용 `rg` 한 번으로 제한하고, 출력이 크면 path/pattern을 좁힌다. `sniper_state_handlers.py`, `daily_threshold_cycle_report.py`, verifier 같은 거대 파일은 관련 함수의 `rg` 결과와 인접 범위만 읽고 파일 전체를 반복 출력하지 않는다.
@@ -645,6 +647,12 @@ Execute exactly one task ID from
 docs/proposals/krx-aftermarket-sor-detailed-implementation-design-2026-09-11.md.
 
 Task ID: AM-Sxx
+
+Implementation root: the current working copy only. At the time this design was
+written it is /home/ubuntu/KORStockScan. Verify it with git rev-parse
+--show-toplevel before editing. Do not edit or copy into any selected release,
+fixed release directory, release symlink target, or running PID source tree.
+Stop with BLOCKED_IMPLEMENTATION_ROOT_MISMATCH if the root is not the working copy.
 
 Obey AGENTS.md and the task row's Read/Write/Validate/Stop boundaries.
 Do not implement any later task, deploy, restart services, install cron,
@@ -693,13 +701,13 @@ AM-S25 + 별도 사용자 승인 -> AM-S26
 | `AM-S05A` | `_AL/_NX/plain`을 data route로만 정규화 | AM-S01, `src/engine/kiwoom_websocket.py`, `src/engine/scalping/micro_reversion/contracts.py` | production 2개, `src/tests/test_kiwoom_websocket.py`, `src/tests/test_micro_reversion_contracts.py` | `_AL=>integrated/actual UNKNOWN`, `_NX=>NXT route`, reconnect 관련 test | 새 FID enum/REG 변경 금지; `NEXT_ID=AM-S05B` |
 | `AM-S05B` | 공식 0s 상태값만 versioned enum으로 정규화 | AM-S00/S05A, 0s 처리부만 `src/engine/kiwoom_websocket.py` | production 1개, `src/tests/test_kiwoom_websocket.py` | known state transitions/raw 보존/unknown fail-closed | 공식 enum 미확정 시 코드0 `BLOCKED_OFFICIAL_CONTRACT`; REG/REMOVE 변경 금지 |
 | `AM-S05C` | WS freshness/quiet expectation이 dual state를 소비 | AM-S05B, `src/engine/monitoring/intraday_ws_freshness_monitor.py`, `src/engine/monitoring/ws_receive_expectation.py` | production 2개, `src/tests/test_intraday_ws_freshness_monitor.py`, `src/tests/test_ws_freshness_acceptance.py` | integrated route, VI/call-auction known-only quiet, 19:45 coverage | subscription·threshold 변경 금지; `NEXT_ID=AM-S06` |
-| `AM-S06` | scanner의 15:40 solo/16:00 dual source 수집 | AM-S01/S05A, `src/scanners/scalping_scanner.py`, `src/scanners/scanner_source_census.py` | production 2개, `src/tests/test_scalping_scanner_candidate_pool.py`, `src/tests/test_scanner_source_census.py` | route별 성공/partial/merge/dedupe fixture | official integrated rank 값이 없으면 두 조회 merge만; 주문/score 변경 금지 |
+| `AM-S06` | scanner의 15:30~16:00 차단/16:00 통합 source 수집 | AM-S01/S05A, `src/scanners/scalping_scanner.py`, `src/scanners/scanner_source_census.py` | production 2개, `src/tests/test_scalping_scanner_candidate_pool.py`, `src/tests/test_scanner_source_census.py` | transition no-call, route별 성공/partial/merge/dedupe fixture | official integrated rank 값이 없으면 두 조회 merge만; 주문/score 변경 금지 |
 | `AM-S07` | 공식 evidence에 맞춘 순수 order-type preflight | AM-S00/S01/S03/S04B, 본 문서 §6.2, `src/engine/kiwoom_orders.py`의 remap 함수 | `src/trading/market/session_contract.py`, `src/tests/test_market_session_contract.py` | route×side×session×type table tests | type code 미확정 시 `BLOCKED_OFFICIAL_CONTRACT`; broker adapter 수정 금지 |
 | `AM-S08` | `kiwoom_orders` buy/sell에 route/type preflight 연결 | AM-S07, `src/engine/kiwoom_orders.py`, `src/tests/test_kiwoom_orders.py` | 읽은 두 파일만 | explicit now, SOR-after type3 pre-submit block/remap, no reject-reroute tests | 실제 API0, retry/cap/quantity 불변; `NEXT_ID=AM-S09` |
 | `AM-S09` | 15:30 parent/child reconciliation 순수 ledger 구현 | AM-S00/S01, 본 문서 §6.3, `src/trading/order/owner_custody_registry.py`, `src/engine/kiwoom_orders.py`의 read-only reconciliation helper | 신규 `src/trading/order/aftermarket_reconciliation.py`, 신규 `src/tests/test_aftermarket_reconciliation.py` | KRX release/NXT open/SOR split/partial/cancel/restart quantity conservation | broker call adapter·sniper integration 금지; 모호 receipt는 UNKNOWN terminal 금지 |
 | `AM-S10` | sniper holding/terminal-exit session·route 전환 | AM-S01/S08/S09, 관련 함수만 `src/engine/sniper_state_handlers.py`, `src/engine/sniper_trade_utils.py` | production 2개, `src/tests/test_sniper_trade_utils.py`, `src/tests/test_scalp_exit_safety_monitor.py` | 19:40/19:45, KRX/NXT/SOR, custody/duplicate-sell 관련 test만 | 거대 handler의 무관 refactor 금지; 대상 함수 밖 수정 필요 시 BLOCKED |
 | `AM-S11` | sniper execution/post-sell receipt에 4축 저장 | AM-S05A/S10, `src/engine/sniper_execution_receipts.py`, `src/engine/sniper_post_sell_feedback.py` | production 2개, `src/tests/test_post_sell_feedback.py`, `src/tests/test_main_lifecycle_receipt_integration.py` | SOR requested vs actual KRX/NXT/UNKNOWN, solo/dual, cost-null 관련 test | AI/report 집계 금지; `NEXT_ID=AM-S12` |
-| `AM-S12` | widget session/request-route contract 전환 | AM-S02/S05A, `src/engine/monitoring/samsung_widget_contract.py`, `src/web/samsung_price_widget_routes.py`, `src/trading/widget_auto_trade/policy.py` | production 3개, `src/tests/test_samsung_price_widget_routes.py`, `src/tests/test_widget_auto_trade_policy.py` | 15:40 `_NX`, 16:00 `_AL`, actual venue 미추론 | engine/gateway/manual order 금지 |
+| `AM-S12` | widget session/request-route contract 전환 | AM-S02/S05A, `src/engine/monitoring/samsung_widget_contract.py`, `src/web/samsung_price_widget_routes.py`, `src/trading/widget_auto_trade/policy.py` | production 3개, `src/tests/test_samsung_price_widget_routes.py`, `src/tests/test_widget_auto_trade_policy.py` | 15:30~16:00 차단, 16:00 `_AL`, actual venue 미추론 | engine/gateway/manual order 금지 |
 | `AM-S13` | widget manual/gateway 주문 preflight 연결 | AM-S08/S12, `src/trading/widget_auto_trade/manual_orders.py`, `src/trading/widget_auto_trade/gateway.py` | production 2개, `src/tests/test_widget_manual_orders.py`, `src/tests/test_widget_signal_auto_trade.py` | SOR-after SELL type, unsupported type pre-submit 0, explicit route 관련 test | engine/advisory 수정 금지; `NEXT_ID=AM-S14` |
 | `AM-S14` | widget engine이 새 session/route receipt를 보존 | AM-S12/S13, 관련 함수만 `src/trading/widget_auto_trade/engine.py` | production 1개, `src/tests/test_widget_signal_auto_trade.py` | unapproved dual BUY 0, existing regular/NXT regression, receipt fields | advisory/calibration/refactor 금지 |
 | `AM-S15A` | AI 입력 3곳의 `_AL=>NXT` 제거 | AM-S05A, `src/engine/scalping/entry_candle_context.py`, `src/engine/scalping/ai_market_snapshot.py`, `src/engine/scalping/holding_decision_context.py` | production 3개, `src/tests/test_entry_candle_context.py`, `src/tests/test_ai_market_snapshot.py`, `src/tests/test_holding_decision_context.py` | integrated scope/actual UNKNOWN, old `_NX` and KRX behavior | score/prompt/threshold 변경 금지; `NEXT_ID=AM-S15B` |
@@ -711,7 +719,7 @@ AM-S25 + 별도 사용자 승인 -> AM-S26
 | `AM-S18B` | pure-market backfill/replay를 시행일별 세션으로 분리 | AM-S18A, `src/engine/monitoring/pure_market_kiwoom_backfill.py`, `src/engine/monitoring/pure_market_adaptive_opportunity_replay.py`, `src/engine/monitoring/pure_market_reversal_replay.py` | production 3개, `src/tests/test_pure_market_kiwoom_backfill.py`, `src/tests/test_pure_market_adaptive_opportunity_replay.py`, `src/tests/test_pure_market_reversal_replay.py` | legacy replay 불변, dual route provenance, partial source | remote backfill/API 호출·새 연구축 금지 |
 | `AM-S18C` | machine/micro attribution의 dual source-only 축 보존 | AM-S18B, `src/engine/monitoring/machine_microstructure_attribution.py`, `src/engine/scalping/micro_reversion/ai_quality_cycle.py`, `src/engine/automation/ai_multi_timeframe_context_promotion.py` | production 3개, `src/tests/test_machine_microstructure_attribution.py`, `src/tests/test_micro_reversion_ai_quality_cycle.py`, `src/tests/test_ai_multi_timeframe_context_promotion.py` | regular-only machine 불변, dual actual UNKNOWN coverage, auto-promotion 0 | machine scope·threshold·provider 변경 금지 |
 | `AM-S19A` | widget advisory가 NXT-only 정책을 dual에 상속하지 않음 | AM-S14/S18A, 관련 함수만 `src/engine/monitoring/samsung_widget_advisory.py`, `src/engine/monitoring/widget_collector_expansion_recommendation.py` | production 2개, `src/tests/test_samsung_widget_advisory.py`, `src/tests/test_widget_collector_expansion_recommendation.py` | solo NXT caution 유지, dual 별도 context/observe-only, 20:00 close | 숫자 threshold·peer 전략·새 advisory 기능 금지 |
-| `AM-S19B` | widget 장후 평가·calibration 세션 분리 | AM-S19A, `src/engine/monitoring/samsung_widget_advisory_evaluation.py`, `src/engine/monitoring/widget_advisory_calibration.py`, `src/engine/monitoring/widget_auto_trade_policy_calibration.py` | production 3개, `src/tests/test_samsung_widget_advisory_evaluation.py`, `src/tests/test_widget_advisory_calibration.py`, `src/tests/test_widget_auto_trade_policy_calibration.py` | solo20/dual240 coverage, dual auto-promotion 0, legacy replay | advisory 전략 자체·숫자 threshold 변경 금지 |
+| `AM-S19B` | widget 장후 평가·calibration 세션 분리 | AM-S19A, `src/engine/monitoring/samsung_widget_advisory_evaluation.py`, `src/engine/monitoring/widget_advisory_calibration.py`, `src/engine/monitoring/widget_auto_trade_policy_calibration.py` | production 3개, `src/tests/test_samsung_widget_advisory_evaluation.py`, `src/tests/test_widget_advisory_calibration.py`, `src/tests/test_widget_auto_trade_policy_calibration.py` | transition 제외/dual240 coverage, dual auto-promotion 0, legacy replay | advisory 전략 자체·숫자 threshold 변경 금지 |
 | `AM-S19C` | widget execution/replay 경제성 cohort 분리 | AM-S19A/S19B, `src/engine/monitoring/widget_execution_quality.py`, `src/engine/monitoring/widget_mechanical_entry_replay.py`, `src/engine/monitoring/widget_paired_policy_replay.py` | production 3개, `src/tests/test_widget_mechanical_entry_replay.py`, `src/tests/test_widget_paired_policy_replay.py`, 기존 execution-quality test가 없으면 신규 1개 | actual venue/route/session, legacy replay, cost-null | 새 counterfactual·정책 추천 금지 |
 | `AM-S20A` | daily EV report의 route/actual venue/cohort 집계 | AM-S11/S18C/S19C, 관련 함수만 `src/engine/daily_threshold_cycle_report.py` | production 1개, `src/tests/test_daily_threshold_cycle_report.py` | COMPLETED+valid PnL, full/partial, KRX/NXT/UNKNOWN, cost-null 관련 test | 거대 파일의 무관 section 수정 금지; report 재생성 금지 |
 | `AM-S20B` | action-outcome calibration의 route/session key version화 | AM-S20A, `src/engine/scalping/ai_action_outcome_calibration.py` | production 1개, `src/tests/test_ai_action_outcome_calibration.py` | legacy keys, dual source-only key, UNKNOWN/cost missing exclusion | threshold recommendation/promotion 금지 |
@@ -774,8 +782,8 @@ AM-S25 + 별도 사용자 승인 -> AM-S26
 
 1. 2026-09-11 16:05 replay는 기존 NXT 결과 유지.
 2. 2026-09-14 15:29:59, 15:30, 15:39:59 transition.
-3. 15:40:00 NXT solo, `_NX`.
-4. 15:59:59까지 dual로 조기 전환되지 않음.
+3. 15:40:00 및 15:59:59는 `SESSION_TRANSITION`, 주문·rank 조회 0.
+4. 전환 구간에서 `_NX` 또는 `_AL`을 활성 route로 선택하지 않음.
 5. 16:00:00 dual, integrated route.
 6. 19:39:59 entry clock 허용 가능, 기존 추가 guard 유지.
 7. 19:40:00 신규 BUY 금지.
@@ -798,7 +806,7 @@ AM-S25 + 별도 사용자 승인 -> AM-S26
 - `_AL` event actual venue UNKNOWN.
 - 동일 종목 KRX/NXT 응답 merge와 중복 신호 0.
 - 한 route failure 시 PARTIAL, 전체 성공으로 표시하지 않음.
-- 15:40~16:00 bar와 16:00 이후 bar 분리.
+- 15:30~16:00 transition과 16:00 이후 bar 분리.
 - route/epoch/reconnect/out-of-order/stale 상태.
 - `0s` known/unknown VI·call auction·close state.
 
@@ -860,13 +868,15 @@ AM-S25 + 별도 사용자 승인 -> AM-S26
 6. 별도 승인된 작은 canary만 SOR entry 활성화.
 7. old compatibility field 제거는 충분한 retention window 뒤 별도 변경.
 
-workspace를 직접 배포하지 않고 [runtime release routing](../runtime-release-routing.md)의 고정 release 절차를 따른다. 현재 사용자 작업트리의 변경을 이 구현에 포함하지 않는다.
+`AM-S00`~`AM-S25` 구현은 현재 작업본 `/home/ubuntu/KORStockScan`에만 누적한다. 이때 task 이전부터 존재하던 무관한 사용자 변경은 task diff와 배포 범위에서 제외해 보존한다. 작업본 자체를 직접 배포하거나 선택/고정 release를 제자리 수정하지 않는다.
+
+모든 필수 task의 작업본 구현·review·targeted validation이 닫힌 뒤에도 자동 배포하지 않는다. 별도 사용자 승인이 있는 `AM-S26`에서만 [runtime release routing](../runtime-release-routing.md)에 따라 검토된 변경을 새 고정 release로 패키징하고 selector/PID 소비를 별도 증거로 확인한다.
 
 ### 15.2 canary acceptance
 
 - exact PID root/commit/clean 상태.
 - market contract/eligibility/approval hash 실제 소비.
-- 15:40 solo와 16:00 dual 전환 receipt.
+- 15:30 transition과 16:00 통합 애프터마켓 전환 receipt.
 - SOR 요청 route와 실제 KRX/NXT fill venue 분리.
 - 미체결·부분체결·cancel 수량 보존.
 - 중복 주문, authority leak, unsupported type submit 0.

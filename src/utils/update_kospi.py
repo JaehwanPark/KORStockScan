@@ -16,7 +16,7 @@ import time
 import logging
 import json
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from sqlalchemy import text
 import FinanceDataReader as fdr
 
@@ -24,7 +24,10 @@ import FinanceDataReader as fdr
 from src.utils import kiwoom_utils
 from src.model.common_v2 import calculate_all_features
 from src.database.db_manager import DBManager
-from src.database.models import DailyStockQuote
+from src.database.models import DailyStockQuote, SecurityMarketEligibilityDaily
+from src.trading.market.aftermarket_eligibility import (
+    resolve_symbol_venue_eligibility,
+)
 from src.core.event_bus import EventBus
 
 # 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
@@ -303,6 +306,78 @@ def _normalize_stock_code(code) -> str:
         raw = raw[1:]
     digits = "".join(ch for ch in raw if ch.isdigit())
     return digits[-6:].zfill(6) if digits else raw
+
+
+def _store_market_eligibility_rows(
+    session,
+    *,
+    trade_date: date,
+    source_rows: dict[str, dict],
+) -> dict:
+    quality_counts: dict[str, int] = {}
+    for code, source_snapshot in sorted((source_rows or {}).items()):
+        resolved = resolve_symbol_venue_eligibility(
+            code,
+            trade_date,
+            source_snapshot,
+        )
+        session.merge(
+            SecurityMarketEligibilityDaily(
+                trade_date=trade_date,
+                stock_code=resolved.stock_code,
+                krx_regular_eligible=resolved.krx_regular_eligible,
+                nxt_eligible=resolved.nxt_eligible,
+                krx_aftermarket_eligible=resolved.krx_aftermarket_eligible,
+                eligible_venues_json=list(resolved.eligible_venues),
+                audit_info=resolved.audit_info,
+                stock_state=resolved.stock_state,
+                order_warning=resolved.order_warning,
+                market_code=resolved.market_code,
+                source_api_id=resolved.source_api_id,
+                source_revision=resolved.source_revision,
+                observed_at_kst=resolved.observed_at_kst,
+                payload_sha256=resolved.payload_sha256,
+                quality_state=resolved.quality_state,
+                blocked_reasons_json=list(resolved.blockers),
+            )
+        )
+        quality_counts[resolved.quality_state] = (
+            quality_counts.get(resolved.quality_state, 0) + 1
+        )
+    return {
+        "stored_count": int(sum(quality_counts.values())),
+        "quality_counts": quality_counts,
+    }
+
+
+def _collect_and_store_market_eligibility(
+    db: DBManager,
+    session,
+    *,
+    token: str,
+    stock_codes: list[str],
+    trade_date: date,
+) -> tuple[dict[str, bool], dict]:
+    source_rows, source_meta = kiwoom_utils.get_stock_eligibility_map_ka10099(
+        token,
+        stock_codes,
+        mrkt_tps=("0", "10"),
+        trade_date=trade_date,
+    )
+    storage = _store_market_eligibility_rows(
+        session,
+        trade_date=trade_date,
+        source_rows=source_rows,
+    )
+    nxt_map = {
+        code: bool(row["nxt_eligible"])
+        for code, row in source_rows.items()
+        if row.get("nxt_eligible") is not None and row.get("complete") is True
+    }
+    missing_nxt_codes = sorted(set(stock_codes) - set(nxt_map))
+    if missing_nxt_codes:
+        nxt_map.update(db.get_latest_is_nxt_map(missing_nxt_codes))
+    return nxt_map, {**source_meta, **storage}
 
 
 # ==========================================
@@ -592,19 +667,6 @@ def update_kospi_data():
     update_status = "completed"
     update_reason = None
 
-    nxt_map = kiwoom_utils.get_nxt_flag_map_ka10099(
-        kiwoom_token, kospi_codes, mrkt_tps=("0", "10")
-    )
-    if nxt_map:
-        nxt_count = int(sum(1 for v in nxt_map.values() if v))
-        logger.info(f"✅ [ka10099] NXT 가능 종목 매핑 완료: {nxt_count}개")
-    else:
-        logger.warning(
-            "⚠️ [ka10099] NXT 가능 종목 매핑 실패. 최신 거래일 DB is_nxt 플래그로 폴백합니다."
-        )
-        nxt_map = db.get_latest_is_nxt_map(kospi_codes)
-        nxt_count = int(sum(1 for v in nxt_map.values() if v))
-
     # 💡 [핵심] 900개 종목의 데이터를 담을 거대한 빈 리스트
     all_stocks_data = []
 
@@ -612,6 +674,23 @@ def update_kospi_data():
 
     # [PHASE 1] 메모리에 데이터 차곡차곡 모으기
     with db.get_session() as session:
+        eligibility_trade_date = date.fromisoformat(_today_str())
+        nxt_map, eligibility_summary = _collect_and_store_market_eligibility(
+            db,
+            session,
+            token=kiwoom_token,
+            stock_codes=kospi_codes,
+            trade_date=eligibility_trade_date,
+        )
+        nxt_count = int(sum(1 for value in nxt_map.values() if value))
+        logger.info(
+            "✅ [ka10099] 날짜별 자격 ledger 저장: "
+            f"{eligibility_summary.get('stored_count', 0)}개 "
+            f"(status={eligibility_summary.get('status')}, NXT={nxt_count})"
+        )
+        if eligibility_summary.get("status") != "pass":
+            update_status = "completed_with_warnings"
+            update_reason = "market_eligibility_partial"
         for i, code in enumerate(kospi_codes):
             code_str = _normalize_stock_code(code)
             df_stock = process_and_save_stock(
@@ -744,6 +823,7 @@ def update_kospi_data():
         "successful_count": int(len(successful_codes)),
         "inserted_rows": inserted_rows,
         "nxt_count": int(nxt_count),
+        "eligibility": eligibility_summary,
     }
 
 

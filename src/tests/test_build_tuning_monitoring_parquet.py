@@ -78,6 +78,48 @@ def test_convert_to_dataframe():
     assert "emitted_date" in df.columns
 
 
+def test_pipeline_route_session_venue_round_trip_to_parquet(monkeypatch, tmp_path):
+    source_dir = tmp_path / "pipeline_events"
+    analytics_root = tmp_path / "analytics" / "parquet"
+    source_dir.mkdir(parents=True)
+    monkeypatch.setitem(parquet_builder.DATASET_PATHS, "pipeline_events", source_dir)
+    monkeypatch.setattr(parquet_builder, "ANALYTICS_ROOT", analytics_root)
+    target_date = date(2026, 9, 11)
+    source_dir.joinpath("pipeline_events_2026-09-11.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "event_type": "pipeline_event",
+                "record_id": "route-context-1",
+                "emitted_at": "2026-09-11T16:00:00+09:00",
+                "emitted_date": target_date.isoformat(),
+                "fields": {
+                    "route": "SOR",
+                    "session_bucket": "KRX_NXT_AFTERMARKET",
+                    "effective_venue": "INTEGRATED",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    read, written = process_single_date("pipeline_events", target_date)
+
+    assert (read, written) == (1, 1)
+    out_file = (
+        analytics_root
+        / "pipeline_events"
+        / "date=2026-09-11"
+        / "pipeline_events_20260911.parquet"
+    )
+    row = pd.read_parquet(out_file).iloc[0]
+    assert row["fields_route"] == "SOR"
+    assert row["fields_session_bucket"] == "KRX_NXT_AFTERMARKET"
+    assert row["fields_effective_venue"] == "INTEGRATED"
+
+
 def test_deduplicate_by_event_id():
     """중복 제거 테스트."""
     import pandas as pd

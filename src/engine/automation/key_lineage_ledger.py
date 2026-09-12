@@ -129,6 +129,143 @@ def _bool_field(value: Any, default: bool | None = None) -> bool | None:
     return default
 
 
+def entry_replay_observe_only_status(
+    batch: dict[str, Any], consumer: dict[str, Any], *, target_date: str
+) -> dict[str, Any]:
+    """Bind dual-aftermarket replay evidence without creating runtime lineage."""
+    if not batch and not consumer:
+        return {
+            "status": "not_enabled",
+            "issues": [],
+            "contract_hash": None,
+            "cohorts": [],
+        }
+    issues: list[str] = []
+    contract = batch.get("cohort_contract") if isinstance(batch, dict) else None
+    if not isinstance(contract, dict) or batch.get("target_date") != target_date:
+        issues.append("batch_contract_or_date_invalid")
+        contract = {}
+    if not consumer or consumer.get("target_date") != target_date:
+        issues.append("consumer_missing_or_date_invalid")
+    for label, payload in (("batch", batch), ("consumer", consumer)):
+        for field in (
+            "runtime_effect",
+            "allowed_runtime_apply",
+            "actual_order_submitted",
+        ):
+            if payload.get(field) is not False:
+                issues.append(f"{label}_{field}_invalid")
+        if payload.get("broker_order_forbidden") is not True:
+            issues.append(f"{label}_broker_order_forbidden_invalid")
+    expected = (
+        (contract.get("expected_cohorts_by_contract_version") or {}).get(
+            contract.get("contract_version")
+        )
+        if isinstance(contract.get("expected_cohorts_by_contract_version"), dict)
+        else None
+    )
+    if contract.get("schema") != "entry_replay_cohort_contract_v1" or not isinstance(
+        expected, list
+    ):
+        issues.append("cohort_contract_invalid")
+        expected = []
+    contract_hash = hashlib.sha256(
+        json.dumps(
+            contract,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    def identity(row: Any) -> tuple[str, str] | None:
+        if not isinstance(row, dict):
+            return None
+        key = str(row.get("cohort_key") or "").strip()
+        version = str(row.get("cohort_key_version") or "").strip()
+        return (key, version) if key and version else None
+
+    def has_hash(payload: Any) -> bool:
+        if isinstance(payload, dict):
+            return any(
+                (str(key).endswith("cohort_contract_sha256") and value == contract_hash)
+                or has_hash(value)
+                for key, value in payload.items()
+            )
+        if isinstance(payload, list):
+            return any(has_hash(value) for value in payload)
+        return False
+
+    if not has_hash(batch):
+        issues.append("batch_contract_hash_invalid")
+    if not has_hash(consumer):
+        issues.append("consumer_contract_hash_invalid")
+    batch_rows = {identity(row): row for row in batch.get("cohorts") or [] if identity(row)}
+    request_paths = consumer.get("request_paths") if isinstance(consumer, dict) else {}
+    entry_base = request_paths.get("entry_base") if isinstance(request_paths, dict) else {}
+    consumer_rows = {
+        identity(row): row
+        for row in (entry_base.get("cohorts") if isinstance(entry_base, dict) else []) or []
+        if identity(row)
+    }
+    cohorts: list[dict[str, Any]] = []
+    for row in expected:
+        cohort_id = identity(row)
+        if cohort_id is None:
+            issues.append("expected_cohort_identity_invalid")
+            continue
+        venue = str(row.get("effective_venue") or "")
+        session = str(row.get("session_bucket") or "")
+        route = str(row.get("market_data_route") or "")
+        if "UNKNOWN" in {venue.upper(), session.upper(), route.upper()}:
+            issues.append("unknown_session_coverage")
+        if venue != "INTEGRATED" or session != "KRX_NXT_AFTERMARKET":
+            continue
+        batch_row = batch_rows.get(cohort_id)
+        consumer_row = consumer_rows.get(cohort_id)
+        # Compare the contract fields only; batch adds terminal receipts.
+        if not isinstance(batch_row, dict) or any(
+            batch_row.get(field) != row.get(field)
+            for field in (
+                "cohort_key", "cohort_key_version", "effective_venue",
+                "session_bucket", "market_data_route", "authority_state",
+            )
+        ):
+            issues.append("batch_dual_cohort_reconciliation_invalid")
+        if not isinstance(consumer_row, dict) or any(
+            consumer_row.get(field) != row.get(field)
+            for field in (
+                "cohort_key", "cohort_key_version", "effective_venue",
+                "session_bucket", "market_data_route", "authority_state",
+            )
+        ):
+            issues.append("consumer_dual_cohort_reconciliation_invalid")
+        if (
+            not isinstance(batch_row, dict)
+            or batch_row.get("authority_state") not in {"OBSERVE_ONLY", "BLOCKED_MISSING_APPROVAL"}
+            or batch_row.get("status") not in {"completed_observe_only", "blocked_missing_approval"}
+            or any(batch_row.get(field) is not False for field in (
+                "runtime_effect", "allowed_runtime_apply", "actual_order_submitted"
+            ))
+            or batch_row.get("candidate_contract_sha256") is not None
+            or not isinstance(consumer_row, dict)
+            or consumer_row.get("path_status") != "intentionally_blocked_with_owner_and_acceptance_test"
+            or consumer_row.get("terminality") != "terminal_source_observation"
+        ):
+            issues.append("dual_observe_only_authority_invalid")
+        cohorts.append({
+            "cohort_key": cohort_id[0], "cohort_key_version": cohort_id[1],
+            "effective_venue": venue, "session_bucket": session,
+            "market_data_route": route, "authority_state": row.get("authority_state"),
+            "contract_hash": contract_hash,
+            "conversion_state": "terminal_source_only_exclusion",
+            "excluded_from_real_queue_reason": "dual_aftermarket_observe_only_no_live_approval",
+        })
+    return {"status": "fail" if issues else "pass", "issues": sorted(set(issues)),
+            "contract_hash": contract_hash, "cohorts": cohorts}
+
+
 def _serialized_sequence(value: Any) -> list[Any]:
     if isinstance(value, (list, tuple, set)):
         return list(value)
@@ -1740,6 +1877,23 @@ def build_key_lineage_ledger(
     ) = _latest_hypothesis_plan(target_date)
     discovery = _load_json(discovery_path)
     refinement = _load_json(refinement_path)
+    entry_replay_batch_path = (
+        DATA_DIR
+        / "report"
+        / "ai_entry_setup_paired_replay_batch"
+        / f"ai_entry_setup_paired_replay_batch_{target_date}.json"
+    )
+    entry_replay_consumer_path = (
+        DATA_DIR
+        / "report"
+        / "main_ai_prompt_consumer"
+        / f"main_ai_prompt_consumer_{target_date}.json"
+    )
+    entry_replay_observe_only = entry_replay_observe_only_status(
+        _load_json(entry_replay_batch_path),
+        _load_json(entry_replay_consumer_path),
+        target_date=target_date,
+    )
     scalp_catalog = _load_json(scalp_catalog_path)
     swing_catalog = _load_json(swing_catalog_path) if include_swing else {}
     events = _event_field_values(
@@ -1881,6 +2035,8 @@ def build_key_lineage_ledger(
             "threshold_preopen_apply_next": str(apply_path),
             "ldm_hypothesis_observation_plan": str(hypothesis_plan_path),
             "ldm_hypothesis_parent_refinement": str(refinement_path),
+            "ai_entry_setup_paired_replay_batch": str(entry_replay_batch_path),
+            "main_ai_prompt_consumer": str(entry_replay_consumer_path),
         },
         "hypothesis_plan_clean_baseline_gate": hypothesis_plan_clean_baseline_gate,
         "summary": {
@@ -1895,6 +2051,12 @@ def build_key_lineage_ledger(
                 else "not_due_until_next_preopen"
             ),
             "source_key_count": len(rows),
+            "entry_replay_dual_observe_only_count": len(
+                entry_replay_observe_only["cohorts"]
+            ),
+            "entry_replay_dual_observe_only_status": entry_replay_observe_only[
+                "status"
+            ],
             "same_key_continuity_pass_count": continuity_pass_count,
             "bucket_same_key_continuity_pass_count": sum(
                 1
@@ -2194,6 +2356,7 @@ def build_key_lineage_ledger(
         },
         "lineage_rows": rows,
         "lineage_blockers": blockers,
+        "entry_replay_observe_only": entry_replay_observe_only,
     }
 
 

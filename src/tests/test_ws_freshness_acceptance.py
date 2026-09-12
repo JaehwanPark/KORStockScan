@@ -2,12 +2,111 @@
 
 import json
 import gzip
+from datetime import datetime
 
 import pytest
 
 from src.engine.monitoring import ws_freshness_acceptance as mod
 from src.engine.monitoring import intraday_ws_freshness_monitor as monitor
 from src.engine import build_code_improvement_workorder as consumer
+
+
+def _market_state_receipt(scope, state, *, known=True, remaining="000030"):
+    raw_state = "c" if scope == "KRX" else "T"
+    return {
+        "receive_timestamp": "2026-09-14T19:44:50+09:00",
+        "exchange_time_raw": "194450",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "market_session_state_contract_version": "kiwoom_0s_market_operation_v1",
+        "market_session_state_market_scope": scope,
+        "market_session_state_raw": raw_state,
+        "market_session_state_normalized": state,
+        "market_session_state_known": known,
+        "market_session_remaining_raw": remaining,
+    }
+
+
+def _stale_receive_row(route, states):
+    return {
+        "registered_market_routes": [route],
+        "market_session_states_by_scope": states,
+        "freshness_state": "stale",
+        "last_receive_age_sec": 25.0,
+        "stale_after_sec": 30.0,
+        "subscribed": True,
+        "required_realtime_missing_types": ["0B"],
+        "repair_reason": "subscription_stale",
+        "repair_recommended": True,
+        "recommended_repair": "reconnect",
+    }
+
+
+def test_integrated_route_quiet_requires_both_verified_market_states_at_1945():
+    at = datetime.fromisoformat("2026-09-14T19:45:00+09:00")
+    both = {
+        "KRX": _market_state_receipt("KRX", "CALL_AUCTION"),
+        "NXT": _market_state_receipt("NXT", "CALL_AUCTION"),
+    }
+    result = monitor.classify_receive_gap(
+        _stale_receive_row("krx_nxt_integrated", both), at
+    )
+
+    assert result["expected_market_quiet"] is True
+    assert result["receive_expectation"]["required_market_scopes"] == ["KRX", "NXT"]
+    assert result["receive_expectation"]["verified_quiet_scopes"] == ["KRX", "NXT"]
+    assert result["receive_expectation"]["resume_at"] == (
+        "2026-09-14T19:45:20+09:00"
+    )
+
+    one_scope = monitor.classify_receive_gap(
+        _stale_receive_row("krx_nxt_integrated", {"NXT": both["NXT"]}), at
+    )
+    assert one_scope["expected_market_quiet"] is False
+
+
+def test_unknown_or_expired_market_state_never_waives_receive_gap():
+    unknown = _market_state_receipt("NXT", "VI", known=True)
+    at = datetime.fromisoformat("2026-09-14T19:45:00+09:00")
+    result = monitor.classify_receive_gap(
+        _stale_receive_row("nxt_only", {"NXT": unknown}), at
+    )
+    assert result["expected_market_quiet"] is False
+
+    expired = _market_state_receipt("NXT", "CALL_AUCTION", remaining="000030")
+    after_expiry = monitor.classify_receive_gap(
+        _stale_receive_row("nxt_only", {"NXT": expired}),
+        datetime.fromisoformat("2026-09-14T19:45:20+09:00"),
+    )
+    assert after_expiry["expected_market_quiet"] is False
+
+
+def test_legacy_opening_quiet_marker_is_restored_without_verified_state():
+    row = {
+        **_stale_receive_row("krx_only", {}),
+        "receive_expectation": {
+            "contract_version": "ws_opening_receive_expectation_v1"
+        },
+        "freshness_state": "expected_market_quiet",
+        "expected_market_quiet": True,
+        "observed_freshness_state": "stale",
+        "observed_trade_tick_quiet": False,
+        "observed_repair_reason": "subscription_stale",
+        "observed_repair_recommended": True,
+        "observed_recommended_repair": "reconnect",
+        "repair_reason": "scheduled_opening_auction_or_nxt_pause",
+        "repair_recommended": False,
+        "recommended_repair": "none",
+    }
+
+    result = monitor.classify_receive_gap(
+        row, datetime.fromisoformat("2026-09-14T09:00:00+09:00")
+    )
+
+    assert result["expected_market_quiet"] is False
+    assert result["freshness_state"] == "stale"
+    assert result["repair_reason"] == "subscription_stale"
+    assert result["repair_recommended"] is True
 
 
 def _group(

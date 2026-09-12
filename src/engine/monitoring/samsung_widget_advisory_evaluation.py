@@ -43,6 +43,38 @@ SESSION_EXPECTED_MINUTES = {
     "KRX_REGULAR": 390,
     "NXT_AFTERMARKET": 260,
 }
+MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE = date(2026, 9, 14)
+DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
+DUAL_AFTERMARKET_EXPECTED_MINUTES = 240
+DUAL_AFTERMARKET_SESSION_PREFIX = f"{DUAL_AFTERMARKET_SESSION}_"
+
+
+def expected_sessions_for_date(target_date: date) -> dict[str, int]:
+    """Return the dated evaluation cohort contract without rewriting history."""
+    if target_date < MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE:
+        return dict(SESSION_EXPECTED_MINUTES)
+    return {
+        "NXT_PREMARKET": 50,
+        "KRX_REGULAR": 390,
+        DUAL_AFTERMARKET_SESSION: DUAL_AFTERMARKET_EXPECTED_MINUTES,
+    }
+
+
+def _canonical_session(session: object) -> str:
+    value = str(session or "unknown")
+    if value == DUAL_AFTERMARKET_SESSION or value.startswith(
+        DUAL_AFTERMARKET_SESSION_PREFIX
+    ):
+        return DUAL_AFTERMARKET_SESSION
+    return value
+
+
+def _expected_venue(session: str) -> str:
+    if session == "KRX_REGULAR":
+        return "KRX"
+    if session == DUAL_AFTERMARKET_SESSION:
+        return "UNKNOWN"
+    return "NXT"
 
 EVALUATION_CONTRACT = {
     "schema_version": 2,
@@ -56,6 +88,9 @@ EVALUATION_CONTRACT = {
     ),
     "legacy_real_replay_policy": (
         "exclude_sources_without_same-session_completed_ohlcv_bbo_venue_and_advisory"
+    ),
+    "dual_aftermarket_policy": (
+        "post_2026-09-14_krx_nxt_integrated_240m_observe_only_no_auto_promotion"
     ),
     "allowed_consumers": [
         "diagnostic_daily_and_rolling_report",
@@ -170,12 +205,22 @@ def _signal_contract_issue(
     validity_sec = (valid_until - signal_time).total_seconds()
     if validity_sec < 0 or validity_sec > 60.001:
         return "advisory_validity_window_invalid"
-    session = str(row.get("market_session") or "")
+    session = _canonical_session(row.get("market_session"))
     venue = str(row.get("market_venue") or "")
-    if advisory.get("session") != session or venue not in {"KRX", "NXT"}:
+    advisory_session = _canonical_session(advisory.get("session"))
+    allowed_venues = (
+        {"UNKNOWN"}
+        if session == DUAL_AFTERMARKET_SESSION
+        else {"KRX", "NXT"}
+    )
+    if advisory_session != session or venue not in allowed_venues:
         return "advisory_session_or_venue_mismatch"
     provenance = advisory.get("provenance")
-    expected_request_code = f"{symbol_code}_NX" if venue == "NXT" else symbol_code
+    expected_request_code = (
+        f"{symbol_code}_AL"
+        if session == DUAL_AFTERMARKET_SESSION
+        else f"{symbol_code}_NX" if venue == "NXT" else symbol_code
+    )
     if (
         not isinstance(provenance, dict)
         or provenance.get("market_venue") != venue
@@ -189,6 +234,8 @@ def _signal_contract_issue(
         return "advisory_entry_range_invalid"
     if entry_low <= 0 or entry_high < entry_low:
         return "advisory_entry_range_invalid"
+    if session == DUAL_AFTERMARKET_SESSION:
+        return "dual_aftermarket_observe_only"
     return None
 
 
@@ -703,7 +750,7 @@ def _session_coverage(
     grouped: dict[tuple[str, str], set[str]] = defaultdict(set)
     total_grouped: dict[tuple[str, str], set[str]] = defaultdict(set)
     for row in source_rows:
-        session = str(row.get("market_session") or "unknown")
+        session = _canonical_session(row.get("market_session"))
         venue = str(row.get("market_venue") or "unknown")
         if session not in session_expectations:
             continue
@@ -717,7 +764,7 @@ def _session_coverage(
             grouped[(session, venue)].add(minute_key)
     result: list[dict[str, Any]] = []
     for session, expected in session_expectations.items():
-        venue = "KRX" if session == "KRX_REGULAR" else "NXT"
+        venue = _expected_venue(session)
         observed = len(grouped.get((session, venue), set()))
         total_observed = len(total_grouped.get((session, venue), set()))
         ratio = min(1.0, observed / expected)
@@ -748,6 +795,8 @@ def build_daily_evaluation(
         raise ValueError("target_return_pct_must_be_positive")
     if fallback_adverse_pct >= 0:
         raise ValueError("fallback_adverse_pct_must_be_negative")
+    if expected_sessions is None:
+        expected_sessions = expected_sessions_for_date(target_date)
     source_rows = [row for row in rows if row["_observed_at"].date() == target_date]
     outcomes: list[dict[str, Any]] = []
     episode_policy_comparisons: list[dict[str, Any]] = []
@@ -793,7 +842,7 @@ def build_daily_evaluation(
             )
         except (TypeError, ValueError):
             support_key = 0
-        signal_session = str(row.get("market_session") or "unknown")
+        signal_session = _canonical_session(row.get("market_session"))
         signal_venue = str(row.get("market_venue") or "unknown")
         episode_key = (signal_session, signal_venue, support_key)
         previous_episode_signal = last_signal_by_episode.get(episode_key)
@@ -830,7 +879,7 @@ def build_daily_evaluation(
         same_scope_future_rows = [
             candidate
             for candidate in source_rows[index + 1 :]
-            if str(candidate.get("market_session") or "unknown") == signal_session
+            if _canonical_session(candidate.get("market_session")) == signal_session
             and str(candidate.get("market_venue") or "unknown") == signal_venue
         ]
         touch_status, touch_time = _entry_touch(
@@ -974,6 +1023,13 @@ def build_daily_evaluation(
             for outcome in outcomes
         ),
         "session_coverage": session_coverage,
+        "market_session_contract": {
+            "effective_date": MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE.isoformat(),
+            "expected_sessions": expected_sessions,
+            "dual_aftermarket_policy": (
+                "observe_only_not_actionable_or_auto_promotable"
+            ),
+        },
         "qualified_trading_day": qualified_trading_day,
         "summary": summary,
         "reason_cohort_summary": _summarize_reason_cohorts(outcomes),

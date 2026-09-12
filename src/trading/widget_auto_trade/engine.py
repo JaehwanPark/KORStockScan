@@ -138,6 +138,13 @@ ACTIVE_ORDER_STATUSES = frozenset(
         "CANCEL_FAILED_TERMINAL",
     }
 )
+INTEGRATED_AFTERMARKET_SESSIONS = frozenset(
+    {
+        "KRX_NXT_AFTERMARKET",
+        "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
+    }
+)
 MAX_ENTRY_QTY = 100
 MAX_CANCEL_ATTEMPTS = 3
 MAX_SELL_ATTEMPTS = 3
@@ -228,12 +235,29 @@ class OrderGateway(Protocol):
     def entry_liquidity_snapshot(self, *, code: str, route: str): ...
     def entry_execution_velocity_snapshot(self, *, code: str, route: str): ...
 
-    def submit_buy(self, *, code: str, qty: int, route: str) -> SubmitResult: ...
+    def submit_buy(
+        self, *, code: str, qty: int, route: str, now: datetime | None = None
+    ) -> SubmitResult: ...
 
-    def submit_sell(self, *, code: str, qty: int, route: str) -> SubmitResult: ...
+    def submit_sell(
+        self,
+        *,
+        code: str,
+        qty: int,
+        route: str,
+        now: datetime | None = None,
+        existing_holding: bool = False,
+    ) -> SubmitResult: ...
 
     def submit_limit_sell(
-        self, *, code: str, qty: int, route: str, price: int
+        self,
+        *,
+        code: str,
+        qty: int,
+        route: str,
+        price: int,
+        now: datetime | None = None,
+        existing_holding: bool = False,
     ) -> SubmitResult: ...
 
     def cancel(
@@ -941,6 +965,7 @@ class WidgetSignalAutoTrader:
     def _event(
         self, event_type: str, spec: WidgetSpec, now: datetime, **fields: Any
     ) -> None:
+        market_context = spec.contract.session_context(now)
         policy_session = str(fields.pop("execution_policy_session", "") or "")
         symbol_state = (self._state.get("symbols") or {}).get(spec.code)
         symbol_state = symbol_state if isinstance(symbol_state, dict) else None
@@ -983,13 +1008,24 @@ class WidgetSignalAutoTrader:
             }:
                 policy_session = stored_session
         if not policy_session:
-            policy_session = str(spec.contract.session_context(now).name or "")
+            policy_session = str(market_context.name or "")
         execution_policy = self._execution_policy(
             spec,
             session=policy_session,
             symbol_state=symbol_state,
         )
         explicit_policy_id = fields.get("execution_policy_id")
+        broker_route_requested = str(fields.get("broker_route") or "").upper()
+        if broker_route_requested not in {"KRX", "NXT", "SOR"}:
+            broker_route_requested = ""
+        actual_execution_venue = str(
+            fields.get("actual_execution_venue")
+            or fields.get("broker_execution_venue")
+            or getattr(market_context, "actual_execution_venue", "UNKNOWN")
+            or "UNKNOWN"
+        ).upper()
+        if actual_execution_venue not in {"KRX", "NXT"}:
+            actual_execution_venue = "UNKNOWN"
         payload = {
             "schema": EVENT_SCHEMA,
             "event_type": event_type,
@@ -1002,6 +1038,26 @@ class WidgetSignalAutoTrader:
             # and downstream execution-quality calibration must never borrow
             # a successful KRX event to clear an NXT session (or vice versa).
             "execution_policy_session": policy_session or None,
+            "session_contract_version": getattr(
+                market_context, "session_contract_version", None
+            ),
+            "market_session_regime": getattr(
+                market_context, "market_session_regime", market_context.name
+            ),
+            "decision_market_scope": getattr(
+                market_context, "decision_market_scope", market_context.market_venue
+            ),
+            "market_data_route": getattr(market_context, "market_data_route", None),
+            "market_data_request_code": getattr(
+                market_context, "market_data_request_code", None
+            ),
+            "broker_route_requested": broker_route_requested or None,
+            "actual_execution_venue": actual_execution_venue,
+            "actual_execution_venue_source": (
+                "broker_execution_snapshot"
+                if actual_execution_venue in {"KRX", "NXT"}
+                else "not_yet_reconciled"
+            ),
             "execution_authority": EXECUTION_AUTHORITY,
             "runtime_effect": True,
             "actual_order_submitted": False,
@@ -1320,6 +1376,17 @@ class WidgetSignalAutoTrader:
                 )
             )
         )
+        if context.name in INTEGRATED_AFTERMARKET_SESSIONS:
+            if execution_policy is None:
+                policy_block_reason = (
+                    "entry_blocked_execution_policy_session_unavailable"
+                )
+            elif (
+                execution_policy.get("new_entry_runtime_eligible") is not False
+                and str(execution_policy.get("broker_route_requested") or "").upper()
+                not in {"KRX", "NXT", "SOR"}
+            ):
+                policy_block_reason = "entry_blocked_execution_policy_route_unavailable"
         if spec.event_based:
             event = payload.get("entry_event")
             if not isinstance(
@@ -1439,13 +1506,27 @@ class WidgetSignalAutoTrader:
         )
 
     @staticmethod
-    def _route(payload: dict[str, Any]) -> str:
+    def _route(
+        payload: dict[str, Any],
+        execution_policy: dict[str, Any] | None = None,
+        *,
+        fallback_route: object = "",
+    ) -> str:
         route = str(payload.get("market_venue") or "").upper()
-        return route if route in {"KRX", "NXT"} else ""
+        if route in {"KRX", "NXT"}:
+            return route
+        policy_route = str(
+            (execution_policy or {}).get("broker_route_requested") or ""
+        ).upper()
+        if policy_route in {"KRX", "NXT", "SOR"}:
+            return policy_route
+        fallback = str(fallback_route or "").upper()
+        return fallback if fallback in {"KRX", "NXT", "SOR"} else ""
 
     def _order_record(
         self,
         *,
+        spec: WidgetSpec,
         side: str,
         qty: int,
         route: str,
@@ -1457,15 +1538,40 @@ class WidgetSignalAutoTrader:
         scale_in_leg_index: int | None = None,
         execution_policy_id: str | None = None,
     ) -> dict[str, Any]:
-        broker_route = resolve_widget_broker_route(route)
+        market_context = spec.contract.session_context(now)
+        integrated_aftermarket = market_context.name in INTEGRATED_AFTERMARKET_SESSIONS
+        broker_route = (
+            route if integrated_aftermarket else resolve_widget_broker_route(route)
+        )
+        market_venue = (
+            str(market_context.market_venue or "UNKNOWN").upper()
+            if integrated_aftermarket
+            else route
+        )
         return {
             "side": side,
             "requested_qty": qty,
             "filled_qty": 0,
             "remaining_qty": qty,
-            "market_venue": route,
+            "market_venue": market_venue,
             "route": broker_route,
             "broker_route": broker_route,
+            "session_contract_version": getattr(
+                market_context, "session_contract_version", None
+            ),
+            "market_session_regime": getattr(
+                market_context, "market_session_regime", market_context.name
+            ),
+            "decision_market_scope": getattr(
+                market_context, "decision_market_scope", market_context.market_venue
+            ),
+            "market_data_route": getattr(market_context, "market_data_route", None),
+            "market_data_request_code": getattr(
+                market_context, "market_data_request_code", None
+            ),
+            "broker_route_requested": broker_route,
+            "actual_execution_venue": "UNKNOWN",
+            "actual_execution_venue_source": "not_yet_reconciled",
             "signal_id": signal_id,
             "order_role": order_role,
             "limit_price": limit_price,
@@ -1770,6 +1876,7 @@ class WidgetSignalAutoTrader:
         scale_in_leg_index: int | None = None,
     ) -> dict[str, Any]:
         order = self._order_record(
+            spec=spec,
             side=side,
             qty=qty,
             route=route,
@@ -1830,7 +1937,10 @@ class WidgetSignalAutoTrader:
                 )
                 with entry_adverse_guard.transport_check(callback):
                     result = self.gateway.submit_buy(
-                        code=spec.code, qty=qty, route=broker_route
+                        code=spec.code,
+                        qty=qty,
+                        route=broker_route,
+                        now=now,
                     )
             elif order_role == ORDER_ROLE_TAKE_PROFIT and limit_price is not None:
                 result = self.gateway.submit_limit_sell(
@@ -1838,10 +1948,16 @@ class WidgetSignalAutoTrader:
                     qty=qty,
                     route=broker_route,
                     price=limit_price,
+                    now=now,
+                    existing_holding=True,
                 )
             else:
                 result = self.gateway.submit_sell(
-                    code=spec.code, qty=qty, route=broker_route
+                    code=spec.code,
+                    qty=qty,
+                    route=broker_route,
+                    now=now,
+                    existing_holding=True,
                 )
         except entry_adverse_guard.EntryNotSent as exc:
             released = self._transition_owner_submit(order, exc.result)
@@ -1875,7 +1991,7 @@ class WidgetSignalAutoTrader:
                 requested_qty=qty,
                 signal_id=signal_id,
                 error=type(exc).__name__,
-                market_venue=route,
+                market_venue=order.get("market_venue"),
                 broker_route=broker_route,
             )
             return order
@@ -1928,8 +2044,11 @@ class WidgetSignalAutoTrader:
             requested_qty=qty,
             signal_id=signal_id,
             route=broker_route,
-            market_venue=route,
+            market_venue=order.get("market_venue"),
             broker_route=broker_route,
+            market_session_regime=order.get("market_session_regime"),
+            market_data_route=order.get("market_data_route"),
+            market_data_request_code=order.get("market_data_request_code"),
             order_no=result.order_no,
             return_code=result.return_code,
             ambiguous=result.ambiguous,
@@ -2061,6 +2180,10 @@ class WidgetSignalAutoTrader:
                 # is reconciliation provenance only and never changes submit,
                 # cancel, price, quantity, or owner authority.
                 order["broker_execution_venue"] = snapshot.execution_venue
+                order["actual_execution_venue"] = snapshot.execution_venue
+                order["actual_execution_venue_source"] = (
+                    "broker_execution_snapshot"
+                )
             order["last_reconciled_at"] = now.isoformat()
             if remaining == 0:
                 order["status"] = (
@@ -2096,6 +2219,13 @@ class WidgetSignalAutoTrader:
                     market_venue=order.get("market_venue"),
                     broker_route=order.get("broker_route"),
                     broker_execution_venue=order.get("broker_execution_venue"),
+                    actual_execution_venue=order.get("actual_execution_venue"),
+                    actual_execution_venue_source=order.get(
+                        "actual_execution_venue_source"
+                    ),
+                    market_session_regime=order.get("market_session_regime"),
+                    market_data_route=order.get("market_data_route"),
+                    market_data_request_code=order.get("market_data_request_code"),
                     submitted_at=order.get("submitted_at"),
                     scale_in_leg_index=order.get("scale_in_leg_index"),
                     actual_order_submitted=True,
@@ -3161,8 +3291,21 @@ class WidgetSignalAutoTrader:
             and (now - last_attempt).total_seconds() < SELL_RETRY_SEC
         ):
             return
-        route = str(symbol_state.get("exit_route") or self._route(payload))
-        if route not in {"KRX", "NXT"}:
+        current_context = spec.contract.session_context(now)
+        execution_policy = self._execution_policy(
+            spec,
+            session=current_context.name,
+            symbol_state=symbol_state,
+        )
+        route = str(
+            symbol_state.get("exit_route")
+            or self._route(
+                payload,
+                execution_policy,
+                fallback_route=symbol_state.get("entry_route"),
+            )
+        )
+        if route not in {"KRX", "NXT", "SOR"}:
             return
         symbol_state["sell_attempt_count"] = attempts + 1
         symbol_state["last_sell_attempt_at"] = now.isoformat()
@@ -3332,7 +3475,11 @@ class WidgetSignalAutoTrader:
                 {
                     "exit_signal_id": exit_signal_id,
                     "exit_requested": True,
-                    "exit_route": self._route(payload),
+                    "exit_route": self._route(
+                        payload,
+                        execution_policy,
+                        fallback_route=symbol_state.get("entry_route"),
+                    ),
                     "exit_requested_at": now.isoformat(),
                 }
             )
@@ -3596,8 +3743,8 @@ class WidgetSignalAutoTrader:
                     prior_day_unmanaged_qty=symbol_state.get("prior_day_unmanaged_qty"),
                 )
                 return
-        route = self._route(payload)
-        if route not in {"KRX", "NXT"}:
+        route = self._route(payload, entry_policy)
+        if route not in {"KRX", "NXT", "SOR"}:
             pending_confirmation = symbol_state.get("pending_entry_confirmation")
             if isinstance(pending_confirmation, dict):
                 symbol_state["pending_entry_confirmation"] = None

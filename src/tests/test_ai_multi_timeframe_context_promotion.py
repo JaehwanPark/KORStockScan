@@ -176,6 +176,14 @@ def test_evaluate_promotion_is_binary_full_market(tmp_path):
     assert report["runtime_activation"] is True
     assert report["scope"]["sessions"] == list(promotion.EXPECTED_SESSIONS)
     assert report["scope"]["endpoints"] == list(promotion.EXPECTED_ENDPOINTS)
+    assert report["scope"]["dual_aftermarket"] == {
+        "effective_from": "2026-09-14",
+        "decision_market_scope": "KRX_NXT_INTEGRATED",
+        "market_session_regime_prefix": "KRX_NXT_AFTERMARKET",
+        "observation_mode": "source_only",
+        "runtime_activation": False,
+        "auto_promotion_candidate_count": 0,
+    }
     assert report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] == "exact_v2"
     assert report["env_overrides"]["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_REQUIRED"] == "true"
     assert "KORSTOCKSCAN_OVERNIGHT_CONTEXT_ENABLED" not in report["env_overrides"]
@@ -803,6 +811,47 @@ def test_first_observation_keeps_missing_endpoint_pending():
     assert report["status"] == "global_runtime_full_pending_natural_endpoint"
     assert "entry_price" in report["pending_natural_endpoints"]
     assert "NXT_AFTERMARKET" in report["pending_natural_sessions"]
+    assert report["rollback_required"] is False
+
+
+def test_dual_aftermarket_observation_is_source_only_and_never_promoted():
+    trace = {
+        **_trace("analyze_target", venue="KRX_NXT_INTEGRATED"),
+        "decision_ts": "2026-09-14T16:00:01+09:00",
+        "session_bucket": "KRX_NXT_AFTERMARKET",
+        "decision_market_scope": "KRX_NXT_INTEGRATED",
+        "market_data_route": "krx_nxt_integrated",
+        "actual_execution_venue": "UNKNOWN",
+    }
+    validation = _same_day_krx_validation()
+    validation["date"] = "2026-09-14"
+    report = promotion.build_first_observation_report(
+        target_date="2026-09-14",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-09-14T08:30:00+09:00",
+        },
+        traces=[trace],
+        payloads=[
+            _payload(
+                "analyze_target",
+                "entry_candle_context_v1",
+                venue="KRX_NXT_INTEGRATED",
+            )
+        ],
+        validation=validation,
+        now=datetime(2026, 9, 14, 16, 1, tzinfo=KST),
+    )
+
+    assert report["observations"] == []
+    assert report["dual_source_only_observation_count"] == 1
+    assert report["dual_actual_execution_venue_unknown_count"] == 1
+    assert report["dual_auto_promotion_candidate_count"] == 0
+    assert report["dual_source_only_observations"][0][
+        "auto_promotion_eligible"
+    ] is False
     assert report["rollback_required"] is False
 
 

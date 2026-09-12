@@ -382,6 +382,78 @@ def test_explicit_nxt_entry_window_uses_clock_only_for_session_split(tmp_path):
     assert after["venue_lineage_sources"]["explicit_venue_session_clock"] == 1
 
 
+def test_post_effective_dual_is_versioned_and_legacy_after_is_unknown(tmp_path):
+    events_dir = tmp_path / "events"
+    audit_dir = tmp_path / "audit"
+    _write_jsonl(
+        events_dir / "pipeline_events_2026-09-14.jsonl",
+        [
+            _event(
+                "probe_submitted",
+                code="005930",
+                emitted_at="2026-09-14T16:01:00+09:00",
+                fields={
+                    "post_probe_direction_effective_venue": (
+                        "KRX_NXT_INTEGRATED"
+                    ),
+                    "post_probe_direction_market_session_bucket": (
+                        "krx_nxt_aftermarket"
+                    ),
+                    "ai_market_snapshot_market_data_route": (
+                        "krx_nxt_integrated"
+                    ),
+                    "ai_market_snapshot_actual_execution_venue": "UNKNOWN",
+                    "post_probe_live_micro_fresh": True,
+                },
+            ),
+            _event(
+                "probe_submitted",
+                code="000660",
+                emitted_at="2026-09-14T18:00:00+09:00",
+                fields={
+                    "post_probe_direction_effective_venue": "NXT",
+                    "post_probe_direction_market_session_bucket": (
+                        "nxt_entry_window"
+                    ),
+                    "post_probe_live_micro_fresh": True,
+                },
+            ),
+        ],
+    )
+    _write_audit(audit_dir / "observation_source_quality_audit_2026-09-14.json")
+
+    payload = mod.build_baseline_policy(
+        target_date="2026-09-14",
+        pipeline_events_dir=events_dir,
+        source_audit_dir=audit_dir,
+        clean_policy=_clean_policy(),
+    )
+
+    dual = next(
+        item
+        for item in payload["venue_decision_matrix"]
+        if item["cohort"] == "KRX_NXT_AFTERMARKET"
+        and item["decision_point"] == "post_probe"
+    )
+    unknown = next(
+        item
+        for item in payload["venue_decision_matrix"]
+        if item["cohort"] == "UNKNOWN"
+        and item["decision_point"] == "post_probe"
+    )
+    assert dual["real_row_count"] == 1
+    assert dual["policy_state"] == "post_effective_dual_observed_source_only"
+    assert dual["market_data_route_counts"] == {"krx_nxt_integrated": 1}
+    assert dual["actual_execution_venue_counts"] == {"UNKNOWN": 1}
+    assert dual["session_contract_version_counts"] == {
+        "market_session_contract_v2": 1
+    }
+    assert unknown["real_row_count"] == 1
+    assert unknown["venue_lineage_sources"][
+        "post_effective_legacy_nxt_aftermarket_ambiguous"
+    ] == 1
+
+
 def test_plain_pipeline_file_wins_over_same_date_gzip(tmp_path):
     events_dir = tmp_path / "events"
     events_dir.mkdir()

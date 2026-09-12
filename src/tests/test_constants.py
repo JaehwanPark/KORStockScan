@@ -1,5 +1,6 @@
 import importlib
-from datetime import time
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -1616,3 +1617,51 @@ def test_holding_ai_models_and_openai_primary_fallback_defaults(monkeypatch):
         == 8000
     )
     assert reloaded.TRADING_RULES.OPENAI_PRIMARY_BEDROCK_FALLBACK_TIMEOUT_MS == 9000
+
+
+def test_scalping_session_venue_provenance_preserves_legacy_bucket_before_effective_date():
+    from src.engine import sniper_time
+
+    assert sniper_time.scalping_session_venue_provenance(
+        datetime(2026, 9, 13, 16, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    ) == {
+        "venue": "NXT",
+        "effective_venue": "NXT",
+        "venue_resolution": "scanner_session_clock:nxt",
+        "market_session_bucket": "nxt",
+        "session_contract_version": "market_session_contract_v1",
+        "market_session_regime": "nxt_aftermarket",
+        "decision_market_scope": "NXT",
+        "market_data_route": "nxt_only",
+        "actual_execution_venue": "UNKNOWN",
+    }
+
+
+def test_scalping_session_venue_provenance_preserves_integrated_route_without_inventing_venue():
+    from src.engine import sniper_time
+
+    assert sniper_time.scalping_session_venue_provenance(
+        datetime(2026, 9, 14, 16, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    ) == {
+        "venue": "KRX_NXT_INTEGRATED",
+        "effective_venue": "UNKNOWN",
+        "venue_resolution": "scanner_session_clock:krx_nxt_integrated",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "session_contract_version": "market_session_contract_v2",
+        "market_session_regime": "KRX_NXT_AFTERMARKET",
+        "decision_market_scope": "KRX_NXT_INTEGRATED",
+        "market_data_route": "krx_nxt_integrated",
+        "actual_execution_venue": "UNKNOWN",
+    }
+
+
+def test_scalping_session_venue_provenance_blocks_post_effective_transition():
+    from src.engine import sniper_time
+
+    fields = sniper_time.scalping_session_venue_provenance(
+        datetime(2026, 9, 14, 15, 45, tzinfo=ZoneInfo("Asia/Seoul"))
+    )
+
+    assert fields["effective_venue"] == "UNKNOWN"
+    assert fields["market_session_bucket"] == "SESSION_TRANSITION"
+    assert fields["market_data_route"] == "unknown"

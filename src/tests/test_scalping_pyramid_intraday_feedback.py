@@ -505,6 +505,51 @@ def test_normal_winner_expansion_venue_provenance_keeps_premarket_cohort_separat
     assert item["effective_venue_resolution"] == "conflicting_explicit_effective_venue"
 
 
+def test_pyramid_provenance_preserves_integrated_route_and_unknown_actual_venue():
+    item = {}
+    row = _event(
+        352,
+        "352352",
+        "dual-aftermarket",
+        "rising_missed_one_share_entry",
+        {
+            "decision_market_scope": "KRX_NXT_INTEGRATED",
+            "market_data_route": "krx_nxt_integrated",
+            "market_session_regime": "KRX_NXT_AFTERMARKET",
+            "actual_execution_venue": "UNKNOWN",
+            "rising_missed_effective_venue": "NXT",
+            "rising_missed_market_session_bucket": "nxt_entry_window",
+        },
+    )
+
+    mod._update_venue_provenance(item, row)
+
+    assert item["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert item["decision_market_scope"] == "KRX_NXT_INTEGRATED"
+    assert item["market_data_route"] == "krx_nxt_integrated"
+    assert item["market_session_regime"] == "KRX_NXT_AFTERMARKET"
+    assert item["actual_execution_venue"] == "UNKNOWN"
+    assert item["venue_source_quality_valid"] is True
+
+    receipt_fields = {
+        **row["fields"],
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "order_no": "A-1",
+        "fill_price": 10_000,
+        "fill_qty": 1,
+    }
+    receipt = mod._real_scale_in_execution_record(
+        {**row, "stage": "scale_in_executed", "fields": receipt_fields},
+        receipt_fields,
+    )
+    assert receipt is not None
+    assert receipt["decision_market_scope"] == "KRX_NXT_INTEGRATED"
+    assert receipt["market_data_route"] == "krx_nxt_integrated"
+    assert receipt["market_session_regime"] == "KRX_NXT_AFTERMARKET"
+    assert receipt["actual_execution_venue"] == "UNKNOWN"
+
+
 def test_pyramid_intraday_feedback_backtests_all_one_share_events(tmp_path):
     pipeline_path = tmp_path / "pipeline_events_2026-07-03.jsonl"
     rows = [

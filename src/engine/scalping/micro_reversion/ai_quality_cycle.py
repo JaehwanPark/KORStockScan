@@ -93,6 +93,7 @@ from src.utils.jsonl_io import (
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
+DUAL_AFTERMARKET_SESSION_PREFIX = "KRX_NXT_AFTERMARKET"
 
 CYCLE_SCHEMA = "main_ai_quality_postclose_r0_r3_cycle_v1"
 PREPARED_SCHEMA = quality.MICRO_REVERSION_PREPARED_REQUEST_ARTIFACT_SCHEMA
@@ -6168,6 +6169,19 @@ def _research_candidates(
     return result
 
 
+def _dual_source_only_market_axis(row: Mapping[str, Any]) -> bool:
+    decision_scope = str(
+        row.get("decision_market_scope") or row.get("effective_venue") or ""
+    ).strip().upper()
+    session = str(
+        row.get("market_session_regime") or row.get("session_bucket") or ""
+    ).strip().upper()
+    return bool(
+        decision_scope == "KRX_NXT_INTEGRATED"
+        or session.startswith(DUAL_AFTERMARKET_SESSION_PREFIX)
+    )
+
+
 def _validated_r2_partition_candidate_state(
     partition: Mapping[str, Any],
     *,
@@ -6246,6 +6260,27 @@ def _validated_r2_partition_candidate_state(
             ]
     if global_candidate_blockers:
         expected_findings["global_execution_artifact"] = list(global_candidate_blockers)
+    partition_scopes = partition.get("decision_market_scopes") or []
+    partition_regimes = partition.get("market_session_regimes") or []
+    if not isinstance(partition_scopes, list) or not isinstance(
+        partition_regimes, list
+    ):
+        raise ValueError("r2_partition_market_axis_census_invalid")
+    axis_declares_dual = bool(
+        "KRX_NXT_INTEGRATED" in partition_scopes
+        or any(
+            str(value).startswith(DUAL_AFTERMARKET_SESSION_PREFIX)
+            for value in partition_regimes
+        )
+    )
+    if bool(partition.get("dual_source_only")) is not axis_declares_dual:
+        raise ValueError("r2_partition_dual_source_only_mismatch")
+    if axis_declares_dual and partition.get("auto_promotion_eligible") is not False:
+        raise ValueError("r2_partition_dual_auto_promotion_invalid")
+    if axis_declares_dual:
+        expected_findings["market_scope"] = [
+            "dual_market_source_only_no_r3_promotion"
+        ]
     gate_findings = partition.get("gate_findings")
     if isinstance(gate_findings, Mapping) and "identity" in gate_findings:
         identity_findings = gate_findings.get("identity")
@@ -7230,6 +7265,11 @@ def build_rolling_source_only_candidates(
                 ]
         if global_candidate_blockers:
             gate_findings["global_execution_artifact"] = list(global_candidate_blockers)
+        dual_source_only = any(_dual_source_only_market_axis(row) for row in rows)
+        if dual_source_only:
+            gate_findings["market_scope"] = [
+                "dual_market_source_only_no_r3_promotion"
+            ]
         all_gates_pass = not global_candidate_blockers and all(
             not values for values in gate_findings.values()
         )
@@ -7302,6 +7342,45 @@ def build_rolling_source_only_candidates(
             ),
             "source_row_count": len(rows),
             "source_dates": sorted({row["target_date"] for row in rows}),
+            "decision_market_scopes": sorted(
+                {
+                    str(
+                        row.get("decision_market_scope")
+                        or row.get("effective_venue")
+                        or "UNKNOWN"
+                    ).upper()
+                    for row in rows
+                }
+            ),
+            "market_data_routes": sorted(
+                {
+                    str(row.get("market_data_route") or "unknown").lower()
+                    for row in rows
+                }
+            ),
+            "market_session_regimes": sorted(
+                {
+                    str(
+                        row.get("market_session_regime")
+                        or row.get("session_bucket")
+                        or "UNKNOWN"
+                    ).upper()
+                    for row in rows
+                }
+            ),
+            "actual_execution_venues": sorted(
+                {
+                    (
+                        str(row.get("actual_execution_venue") or "UNKNOWN").upper()
+                        if str(row.get("actual_execution_venue") or "UNKNOWN").upper()
+                        in {"KRX", "NXT"}
+                        else "UNKNOWN"
+                    )
+                    for row in rows
+                }
+            ),
+            "dual_source_only": dual_source_only,
+            "auto_promotion_eligible": False if dual_source_only else None,
             "confirmation_window_tuning_axis": (
                 _confirmation_window_tuning_census(rows)
             ),
@@ -7356,6 +7435,15 @@ def build_rolling_source_only_candidates(
         "joined_parent_count": len(joined_rows),
         "excluded_parent_count": len(exclusions),
         "partitions": partitions,
+        "dual_source_only_partition_count": sum(
+            partition.get("dual_source_only") is True for partition in partitions
+        ),
+        "dual_actual_execution_venue_unknown_partition_count": sum(
+            partition.get("dual_source_only") is True
+            and "UNKNOWN" in (partition.get("actual_execution_venues") or [])
+            for partition in partitions
+        ),
+        "dual_auto_promotion_candidate_count": 0,
         "exclusions": exclusions,
         "global_candidate_blockers": global_candidate_blockers,
         "current_run_global_blockers": current_run_blockers,
@@ -7418,6 +7506,10 @@ def build_rolling_source_only_candidates(
         "source_current_run_global_blockers_sha256": current_run_blockers_sha256,
         "blocked_pre_clear_candidate_count": blocked_pre_clear_candidate_count,
         "first_runtime_candidate_auto_apply_performed": False,
+        "dual_source_only_partition_count": rolling_body[
+            "dual_source_only_partition_count"
+        ],
+        "dual_auto_promotion_candidate_count": 0,
         "runtime_apply_blocker": (
             "exact_candidate_bound_operator_approval_and_trusted_registered_"
             "preopen_consumer_required"

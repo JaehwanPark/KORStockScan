@@ -184,6 +184,95 @@ def test_conflicting_duplicate_market_bar_is_excluded(tmp_path):
     assert quality["conflict_count"] == 1
 
 
+def test_loader_preserves_dual_route_provenance_and_marks_partial_source(tmp_path):
+    market_path = tmp_path / "dual.jsonl"
+    base_row = {
+        "schema": "pure_market_minute_bar_v1",
+        "symbol": "005930",
+        "session": "NXT_AFTERMARKET",
+        "source_timestamp": "20260914160000",
+        "open": 100,
+        "high": 101,
+        "low": 99,
+        "close": 100,
+        "volume": 50,
+        "actual_execution_venue": "UNKNOWN",
+    }
+    market_path.write_text(
+        json.dumps({**base_row, "venue": "KRX", "market_data_route": "krx_only"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    partial_bars, partial_quality = replay.load_market_bars(
+        market_paths=[market_path], widget_observation_dir=None
+    )
+
+    assert partial_bars[0].session == "KRX_NXT_AFTERMARKET"
+    assert partial_bars[0].decision_market_scope == "KRX_NXT_INTEGRATED"
+    assert partial_bars[0].market_data_route == "krx_only"
+    assert partial_bars[0].actual_execution_venue == "UNKNOWN"
+    assert partial_quality["status"] == "PARTIAL"
+    assert partial_quality["partial_dual_route_dates"] == ["2026-09-14"]
+
+    market_path.write_text(
+        "".join(
+            json.dumps(
+                {
+                    **base_row,
+                    "venue": venue,
+                    "market_data_route": route,
+                }
+            )
+            + "\n"
+            for venue, route in (("KRX", "krx_only"), ("NXT", "nxt_only"))
+        ),
+        encoding="utf-8",
+    )
+    complete_bars, complete_quality = replay.load_market_bars(
+        market_paths=[market_path], widget_observation_dir=None
+    )
+    assert len(complete_bars) == 2
+    assert complete_quality["status"] == "PASS"
+    assert complete_quality["partial_dual_route_dates"] == []
+
+    market_path.write_text(
+        json.dumps(
+            {
+                **base_row,
+                "venue": "KRX",
+                "request_code": "005930_AL",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    integrated_bars, integrated_quality = replay.load_market_bars(
+        market_paths=[market_path], widget_observation_dir=None
+    )
+    assert integrated_bars[0].market_data_route == "krx_nxt_integrated"
+    assert integrated_bars[0].route_source_quality == "PASS"
+    assert integrated_quality["status"] == "PASS"
+    assert integrated_quality["partial_dual_route_dates"] == []
+
+    market_path.write_text(
+        json.dumps(
+            {
+                **base_row,
+                "venue": "KRX",
+                "source_timestamp": "20260914150000",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _regular_only_bars, regular_only_quality = replay.load_market_bars(
+        market_paths=[market_path], widget_observation_dir=None
+    )
+    assert regular_only_quality["status"] == "PARTIAL"
+    assert regular_only_quality["partial_dual_route_dates"] == ["2026-09-14"]
+
+
 def test_opportunity_labels_are_ex_post_and_match_near_trough_entry():
     bars = []
     for minute in range(45):

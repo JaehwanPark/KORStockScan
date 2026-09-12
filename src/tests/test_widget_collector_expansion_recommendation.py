@@ -170,6 +170,77 @@ def test_recommendation_ranks_positive_liquid_non_active_symbol(tmp_path):
     assert active_report["recommended_not_enrolled_count"] == 0
 
 
+def test_recommendation_keeps_dual_aftermarket_source_as_observe_only(tmp_path):
+    replay_dir = tmp_path / "replay"
+    payload_dir = tmp_path / "payload"
+    replay_dir.mkdir()
+    payload_dir.mkdir()
+    target_date = date(2026, 9, 14)
+    dual_replay = _replay_row("111111", hit="target_first", end_return=9.9)
+    dual_replay.update(
+        {
+            "effective_venue": "UNKNOWN",
+            "session_bucket": "krx_nxt_aftermarket",
+            "market_data_route": "krx_nxt_integrated",
+        }
+    )
+    replay = {
+        "schema": "widget_mechanical_entry_replay_v1",
+        "target_date": target_date.isoformat(),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "rows": [
+            _replay_row("111111", hit="target_first", end_return=0.8),
+            _replay_row("111111", hit="target_first", end_return=0.4),
+            dual_replay,
+        ],
+    }
+    (replay_dir / f"widget_mechanical_entry_replay_{target_date}.json").write_text(
+        json.dumps(replay), encoding="utf-8"
+    )
+    dual_payload = _payload_row("111111", liquidity=99, intraday_range=9.9)
+    dual_payload.update(
+        {
+            "effective_venue": "UNKNOWN",
+            "session_bucket": "krx_nxt_aftermarket",
+            "market_data_route": "krx_nxt_integrated",
+        }
+    )
+    (payload_dir / f"ai_decision_payloads_{target_date}.jsonl").write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _payload_row("111111", liquidity=85, intraday_range=3.0),
+                dual_payload,
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = rec.build_recommendation_report(
+        target_date=target_date,
+        replay_dir=replay_dir,
+        payload_dir=payload_dir,
+    )
+
+    assert report["source"]["market_session_scope"] == "KRX_REGULAR_ONLY"
+    assert report["source"]["dual_aftermarket_policy"] == "observe_only_not_scored"
+    assert report["source"]["dual_aftermarket_context"] == {
+        "market_data_route": "krx_nxt_integrated",
+        "actual_execution_venue": "UNKNOWN",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    assert report["source"]["dual_aftermarket_source_coverage"] == {
+        "replay_rows": 1,
+        "payload_rows": 1,
+    }
+    assert report["recommendations"][0]["source_quality_adjusted_ev_pct"] == 0.37
+
+
 def test_recommendation_artifact_retains_twenty_and_surfaces_collector_overflow(
     monkeypatch,
 ):

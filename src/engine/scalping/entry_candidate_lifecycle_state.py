@@ -58,6 +58,16 @@ _ACTIVE_ADAPTERS = {
     for version in ("v2_14", "v2_15")
     for venue in ("krx", "nxt")
 }
+_ACTIVE_ADAPTER_SCOPES = {
+    f"entry_setup_{version}_krx_bounded_probe_v1": ("KRX", "krx_regular")
+    for version in ("v2_14", "v2_15")
+}
+_ACTIVE_ADAPTER_SCOPES.update(
+    {
+        f"entry_setup_{version}_nxt_bounded_probe_v1": ("NXT", "nxt_aftermarket")
+        for version in ("v2_14", "v2_15")
+    }
+)
 _VALID_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
 
 _COMPONENT_COMPLETE_STATUSES = {
@@ -90,6 +100,7 @@ _STAGE_COMPONENTS = {
 
 _ALLOWED_EXACT_FIELDS = {
     "action",
+    "actual_execution_venue",
     "actual_order_submitted",
     "ai_decision_trace_id",
     "ai_input_payload_sha256",
@@ -140,6 +151,8 @@ _ALLOWED_EXACT_FIELDS = {
     "fill_qty",
     "filled_qty",
     "holding_started_at",
+    "market_data_route",
+    "market_session_regime",
     "mark_price_at_submit",
     "new_avg_price",
     "new_buy_qty",
@@ -177,6 +190,7 @@ _ALLOWED_EXACT_FIELDS = {
     "sell_price",
     "sell_qty",
     "session_bucket",
+    "session_contract_version",
     "submitted_broker_price",
     "submitted_price",
     "tag",
@@ -339,8 +353,7 @@ def _candidate_context_from_fields(
         or not session
     ):
         return None
-    expected_venue = "NXT" if "_nxt_" in adapter else "KRX"
-    expected_session = "nxt_aftermarket" if expected_venue == "NXT" else "krx_regular"
+    expected_venue, expected_session = _ACTIVE_ADAPTER_SCOPES[adapter]
     from src.engine.scalping.entry_setup_scalping_rollout import (
         SCOPES as ROLLOUT_SCOPES,
     )

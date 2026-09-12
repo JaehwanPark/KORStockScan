@@ -18,6 +18,12 @@ from src.utils.pipeline_event_logger import emit_pipeline_event
 _cycle = ContextVar("scanner_source_census_cycle", default="")
 MAX_ROWS = 1024
 AUTHORITY = "scanner_adapter_pool_observation_only"
+MARKET_DATA_ROUTES = {
+    "krx_only",
+    "nxt_only",
+    "krx_nxt_integrated",
+    "unknown",
+}
 
 
 def source_cycle_id():
@@ -32,6 +38,23 @@ def source_target_venue(code, request_venue="UNKNOWN"):
     if code.endswith("_NX"):
         return "UNKNOWN" if request_venue == "KRX" else "NXT"
     return request_venue if request_venue in {"KRX", "NXT"} else "UNKNOWN"
+
+
+def source_target_market_data_route(code, request_route="unknown"):
+    """Preserve the requested data route; suffix conflicts fail closed."""
+    code = str(code or "")
+    request_route = str(request_route or "unknown")
+    if request_route not in MARKET_DATA_ROUTES:
+        return "unknown"
+    if code.endswith("_AL"):
+        return (
+            "krx_nxt_integrated"
+            if request_route == "krx_nxt_integrated"
+            else "unknown"
+        )
+    if code.endswith("_NX"):
+        return "nxt_only" if request_route == "nxt_only" else "unknown"
+    return request_route
 
 
 def _best_effort(fn):
@@ -100,7 +123,14 @@ def _emit(stage, rows, *, source, status, total, rejected, generation=""):
 
 
 @_best_effort
-def observe_fetch(source, targets, *, status, request_venue="UNKNOWN"):
+def observe_fetch(
+    source,
+    targets,
+    *,
+    status,
+    request_venue="UNKNOWN",
+    request_route="unknown",
+):
     rows = []
     rejected = 0
     for target in targets:
@@ -113,7 +143,15 @@ def observe_fetch(source, targets, *, status, request_venue="UNKNOWN"):
             rejected += 1
             continue
         venue = source_target_venue(code, request_venue)
-        rows.append({"stock_code": match.group(1), "venue": venue})
+        rows.append(
+            {
+                "stock_code": match.group(1),
+                "venue": venue,
+                "market_data_route": source_target_market_data_route(
+                    code, request_route
+                ),
+            }
+        )
     return _emit(
         "scalping_scanner_source_fetch_census",
         rows,
@@ -143,11 +181,15 @@ def observe_pool(targets, *, generation):
             venue = "UNKNOWN"
         elif len(proven_venues) == 1:
             venue = next(iter(proven_venues))
+        proven_routes = sorted(
+            set(target.get("ScannerSourceRoutes") or []) & MARKET_DATA_ROUTES
+        )
         # A strategy's clock-derived venue is not quote-route evidence.
         rows.append(
             {
                 "stock_code": code,
                 "venue": venue,
+                "market_data_routes": proven_routes,
                 "rank": rank,
                 "sources": sorted(target.get("SourceSet") or []),
             }
@@ -209,6 +251,20 @@ def decode_receipt(fields):
             not isinstance(r, dict)
             or not re.fullmatch(r"\d{6}", str(r.get("stock_code") or ""))
             or r.get("venue") not in {"KRX", "NXT", "UNKNOWN"}
+            or (
+                "market_data_route" in r
+                and r.get("market_data_route") not in MARKET_DATA_ROUTES
+            )
+            or (
+                "market_data_routes" in r
+                and (
+                    not isinstance(r.get("market_data_routes"), list)
+                    or any(
+                        route not in MARKET_DATA_ROUTES
+                        for route in r.get("market_data_routes")
+                    )
+                )
+            )
             for r in rows
         ):
             return None

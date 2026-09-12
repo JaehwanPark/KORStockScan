@@ -97,6 +97,8 @@ def _exact_sell_execution_stock(
     occurred_at: str = "2026-08-14T10:01:02.000000+09:00",
     intended_route: str = "SOR",
     intended_effective_venue: str = "KRX",
+    actual_venue: str = "UNKNOWN",
+    intended_session_bucket: str = "krx_regular",
 ) -> dict[str, Any]:
     stock = _exact_buy_execution_stock(
         order_no=order_no,
@@ -116,17 +118,21 @@ def _exact_sell_execution_stock(
         }
     )
     if intended_route == "SOR":
+        actual_code = {"KRX": "1", "NXT": "2"}.get(actual_venue, "0")
+        actual_name = actual_venue if actual_venue in {"KRX", "NXT"} else "SOR"
         stock.update(
             {
-                "broker_actual_execution_venue": "UNKNOWN",
+                "broker_actual_execution_venue": actual_venue,
                 "broker_actual_execution_venue_source": (
-                    "official_exchange_fields_ambiguous_or_missing"
+                    "official_fid_2134_2135"
+                    if actual_venue in {"KRX", "NXT"}
+                    else "official_exchange_fields_ambiguous_or_missing"
                 ),
-                "broker_actual_exchange_code": "0",
-                "broker_actual_exchange_name": "SOR",
+                "broker_actual_exchange_code": actual_code,
+                "broker_actual_exchange_name": actual_name,
                 "broker_sor_flag": "Y",
-                "2134": "0",
-                "2135": "SOR",
+                "2134": actual_code,
+                "2135": actual_name,
                 "2136": "Y",
             }
         )
@@ -152,7 +158,7 @@ def _exact_sell_execution_stock(
             started_at=started_at,
             intended_route=intended_route,
             intended_effective_venue=intended_effective_venue,
-            intended_session_bucket="krx_regular",
+            intended_session_bucket=intended_session_bucket,
         )
     )
     return stock
@@ -724,7 +730,53 @@ def test_exit_receipt_submission_custody_accepts_exact_integrated_sor_envelope(
     assert emitted[0]["submission_custody_broker_cumulative_qty"] == 1
     assert emitted[0]["submission_custody_broker_remaining_qty"] == 1
     assert emitted[0]["submission_custody_broker_unit_qty"] == 1
-    assert emitted[0]["effective_venue"] == "KRX"
+    assert emitted[0]["broker_route_requested"] == "SOR"
+    assert emitted[0]["actual_execution_venue"] == "UNKNOWN"
+    assert emitted[0]["effective_venue"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("actual_venue", ["KRX", "NXT", "UNKNOWN"])
+def test_exit_receipt_submission_custody_separates_sor_from_dual_actual_venue(
+    monkeypatch: pytest.MonkeyPatch,
+    actual_venue: str,
+) -> None:
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        execution_receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: (
+            emitted.append(kwargs)
+            or {
+                "structured_append_succeeded": True,
+                "structured_append_status": "raw_appended",
+            }
+        ),
+    )
+    stock = _exact_sell_execution_stock(
+        received_at="2026-09-14T16:30:02.345000+09:00",
+        occurred_at="2026-09-14T16:30:02.000000+09:00",
+        actual_venue=actual_venue,
+        intended_session_bucket="KRX_NXT_AFTERMARKET",
+    )
+
+    assert execution_receipts._emit_execution_receipt_submission_custody(
+        target_stock=stock,
+        target_id=701,
+        code="005930",
+        stage="exit_execution_receipt_submission_custody",
+        order_no="0000456",
+        execution_no="0000002",
+        requested_qty=2,
+    )
+    assert emitted[0]["market_session_regime"] == "KRX_NXT_AFTERMARKET"
+    assert emitted[0]["market_data_route"] == "krx_nxt_integrated"
+    assert emitted[0]["broker_route_requested"] == "SOR"
+    assert emitted[0]["actual_execution_venue"] == actual_venue
+    assert emitted[0]["actual_execution_venue_source"] == (
+        "official_fid_2134_2135"
+        if actual_venue in {"KRX", "NXT"}
+        else "official_exchange_fields_ambiguous_or_missing"
+    )
 
 
 def test_exit_receipt_submission_custody_materializes_as_exit_submit_phase(

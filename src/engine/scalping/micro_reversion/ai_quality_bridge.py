@@ -897,6 +897,8 @@ class ResolvedMicroScope:
     session_bucket: str
     status: str
     reason: str | None = None
+    market_data_route: str = "unknown"
+    actual_execution_venue: str = "UNKNOWN"
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -1462,6 +1464,8 @@ def resolve_micro_scope(trace: Mapping[str, Any]) -> ResolvedMicroScope:
             "UNKNOWN",
             "source_unavailable",
             "premarket_route_ambiguous",
+            "unknown",
+            "UNKNOWN",
         )
     else:
         micro_venue = venue
@@ -1471,6 +1475,8 @@ def resolve_micro_scope(trace: Mapping[str, Any]) -> ResolvedMicroScope:
             "UNKNOWN",
             "source_unavailable",
             "effective_venue_missing",
+            market_route or "unknown",
+            "UNKNOWN",
         )
     if "PREMARKET" in session:
         phase = "PREMARKET"
@@ -1484,11 +1490,16 @@ def resolve_micro_scope(trace: Mapping[str, Any]) -> ResolvedMicroScope:
             session or "UNKNOWN",
             "source_unavailable",
             "venue_session_mapping_missing",
+            market_route or "unknown",
+            "UNKNOWN",
         )
     return ResolvedMicroScope(
         micro_venue,
         f"{micro_venue}_{phase}",
         "resolved",
+        None,
+        market_route or "unknown",
+        "UNKNOWN",
     )
 
 
@@ -1911,10 +1922,8 @@ def exact_snapshot_watermark(
         blockers.append("payload_trace_market_data_route_mismatch")
     integrated_sor_route_proven = bool(
         ("integrated" in trace_route or "sor" in trace_route)
-        and (
-            snapshot.get("integrated_sor_route_proven") is True
-            or snapshot.get("nxt_integrated_execution_view_proven") is True
-        )
+        and snapshot_route == trace_route
+        and payload_route == trace_route
     )
     if ("integrated" in trace_route or "sor" in trace_route) and not (
         integrated_sor_route_proven
@@ -1944,6 +1953,7 @@ def exact_snapshot_watermark(
         "effective_venue": snapshot_venue,
         "session_bucket": snapshot_session,
         "trace_market_data_route": trace_route,
+        "actual_execution_venue": "UNKNOWN",
         "integrated_sor_route_proven": integrated_sor_route_proven,
         "provider_payload_semantic_hash_status": provider_semantic_hash_status,
         "exact_replay_source_semantic_status": (exact_replay_source_semantic_status),
@@ -5375,7 +5385,12 @@ def build_tactical_evidence(
         "trace_effective_venue": trace.get("effective_venue"),
         "trace_session_bucket": trace.get("session_bucket"),
         "trace_decision_ts": trace.get("decision_ts"),
-        "trace_market_data_route": (watermark or {}).get("trace_market_data_route"),
+        # Preserve the requested data route even when the exact snapshot is
+        # unavailable; watermark validity and physical fill venue remain
+        # separate axes.
+        "trace_market_data_route": _route(trace.get("market_data_route")),
+        "market_data_route": scope.market_data_route,
+        "actual_execution_venue": scope.actual_execution_venue,
         "integrated_sor_route_proven": (watermark or {}).get(
             "integrated_sor_route_proven"
         )
@@ -7932,6 +7947,8 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         "trace_session_bucket",
         "trace_decision_ts",
         "trace_market_data_route",
+        "market_data_route",
+        "actual_execution_venue",
         "integrated_sor_route_proven",
         "micro_venue",
         "micro_session_bucket",
@@ -8271,6 +8288,10 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
     ):
         raise ValueError("micro_context_bridge_contract_invalid")
     trace_market_data_route = _route(evidence.get("trace_market_data_route"))
+    market_data_route = _route(evidence.get("market_data_route"))
+    actual_execution_venue = str(
+        evidence.get("actual_execution_venue") or ""
+    ).strip().upper()
     integrated_sor_route_proven = evidence.get("integrated_sor_route_proven")
     micro_venue = normalize_venue(evidence.get("micro_venue"))
     source_quality = evidence.get("source_quality")
@@ -8279,6 +8300,16 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
     source_unavailable = evidence.get("state") == "source_unavailable"
     if not isinstance(integrated_sor_route_proven, bool):
         raise ValueError("micro_context_route_provenance_invalid")
+    if producer_version == LEGACY_BRIDGE_PRODUCER_VERSION:
+        if market_data_route and market_data_route != trace_market_data_route:
+            raise ValueError("micro_context_route_provenance_invalid")
+        if actual_execution_venue and actual_execution_venue != "UNKNOWN":
+            raise ValueError("micro_context_actual_execution_venue_invalid")
+    else:
+        if market_data_route != trace_market_data_route:
+            raise ValueError("micro_context_route_provenance_invalid")
+        if actual_execution_venue != "UNKNOWN":
+            raise ValueError("micro_context_actual_execution_venue_invalid")
     if not trace_market_data_route:
         # A row already blocked as source-unavailable may retain an empty
         # route as diagnostic evidence. It cannot become replay/economic

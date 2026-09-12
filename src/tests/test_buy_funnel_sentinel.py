@@ -425,6 +425,52 @@ def test_effective_nxt_scope_overrides_legacy_entry_venue_and_uses_time_phase():
     )
 
 
+def test_dual_aftermarket_scope_preserves_unknown_and_actual_execution_venue():
+    payload = _event(
+        "2026-09-14",
+        "16:00:00",
+        "ai_confirmed",
+        fields={
+            "decision_market_scope": "KRX_NXT_INTEGRATED",
+            "market_data_route": "krx_nxt_integrated",
+            "market_session_regime": "KRX_NXT_AFTERMARKET",
+            "actual_execution_venue": "",
+        },
+    )
+    event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
+
+    assert event is not None
+    assert sentinel._explicit_event_scope(event) == (
+        "KRX_NXT_INTEGRATED",
+        "KRX_NXT_AFTERMARKET",
+        "pass",
+    )
+    assert sentinel._actual_execution_venue(event) == "UNKNOWN"
+    event.fields["actual_execution_venue"] = "NXT"
+    assert sentinel._actual_execution_venue(event) == "NXT"
+
+
+def test_solo_aftermarket_scope_is_not_folded_into_dual():
+    payload = _event(
+        "2026-09-14",
+        "15:45:00",
+        "ai_confirmed",
+        fields={
+            "decision_market_scope": "NXT",
+            "market_data_route": "nxt_only",
+            "market_session_regime": "NXT_AFTERMARKET_SOLO",
+        },
+    )
+    event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
+
+    assert event is not None
+    assert sentinel._explicit_event_scope(event) == (
+        "NXT",
+        "NXT_AFTERMARKET_SOLO",
+        "pass",
+    )
+
+
 def test_premarket_venue_rejects_regular_krx_session():
     payload = _event(
         "2026-05-06",

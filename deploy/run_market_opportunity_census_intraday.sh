@@ -23,8 +23,11 @@ if (( 10#$now_hhmm >= 800 && 10#$now_hhmm < 900 )); then
   venues="NXT"
 elif (( 10#$now_hhmm >= 900 && 10#$now_hhmm <= 1530 )); then
   venues="KRX,NXT"
-elif (( 10#$now_hhmm > 1530 && 10#$now_hhmm < 2000 )); then
-  venues="NXT"
+elif (( 10#$now_hhmm > 1530 && 10#$now_hhmm < 1600 )); then
+  echo "[SKIP] market opportunity census session transition target_date=${TARGET_DATE} hhmm=${now_hhmm} session=SESSION_TRANSITION" | tee -a "$LOG_FILE"
+  exit 0
+elif (( 10#$now_hhmm >= 1600 && 10#$now_hhmm < 2000 )); then
+  venues="KRX,NXT"
 else
   echo "[SKIP] market opportunity census outside capture window target_date=${TARGET_DATE} hhmm=${now_hhmm}" | tee -a "$LOG_FILE"
   exit 0
@@ -38,7 +41,14 @@ if [[ "$REFRESH_REPORT" == "auto" ]]; then
 fi
 
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[START] market opportunity census target_date=${TARGET_DATE} venues=${venues} refresh_report=${REFRESH_REPORT} runtime_effect=false started_at=${started_at}" | tee -a "$LOG_FILE"
+session_contract_version="market_session_contract_v2"
+session_regime="KRX_REGULAR"
+if (( 10#$now_hhmm < 900 )); then
+  session_regime="PREMARKET"
+elif (( 10#$now_hhmm >= 1600 )); then
+  session_regime="KRX_NXT_AFTERMARKET"
+fi
+echo "[START] market opportunity census target_date=${TARGET_DATE} venues=${venues} session=${session_regime} session_contract_version=${session_contract_version} refresh_report=${REFRESH_REPORT} runtime_effect=false started_at=${started_at}" | tee -a "$LOG_FILE"
 
 capture_cmd=(
   env PYTHONPATH=.
@@ -73,4 +83,4 @@ if [[ "$REFRESH_REPORT" == "1" || "$REFRESH_REPORT" == "true" || "$REFRESH_REPOR
 fi
 
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] market opportunity census target_date=${TARGET_DATE} venues=${venues} refresh_report=${REFRESH_REPORT} runtime_effect=false finished_at=${finished_at}" | tee -a "$LOG_FILE"
+echo "[DONE] market opportunity census target_date=${TARGET_DATE} venues=${venues} session=${session_regime} session_contract_version=${session_contract_version} refresh_report=${REFRESH_REPORT} runtime_effect=false finished_at=${finished_at}" | tee -a "$LOG_FILE"

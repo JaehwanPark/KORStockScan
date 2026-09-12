@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from src.engine.monitoring import market_opportunity_census as census
 from src.utils import kiwoom_utils
 
@@ -165,6 +167,26 @@ def test_ka10027_forwards_official_venue_and_filter_contract(monkeypatch):
             "CntrStr": 112.5,
         }
     ]
+
+
+def test_ka10027_exposes_verified_response_contract_for_empty_success(monkeypatch):
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **_kwargs: (
+            [{"return_code": 0, "pred_pre_flu_rt_upper": []}],
+            {"request_attempt_count": 1, "last_http_status_code": 200},
+        ),
+    )
+
+    rows, meta = kiwoom_utils.get_top_fluctuation_ka10027(
+        "token", return_meta=True
+    )
+
+    assert rows == []
+    assert meta["response_contract_status"] == "verified_success"
+    assert meta["response_return_codes"] == ["0"]
+    assert meta["response_page_count"] == 1
 
 
 def test_ka10027_applies_pure_equity_filter_before_output_limit(monkeypatch):
@@ -380,6 +402,114 @@ def test_capture_distinguishes_ka10027_shared_budget_defer_from_natural_empty():
     assert rows[0]["source_error"] == "ka10027_shared_read_budget_deferred"
     assert rows[0]["source"]["request_control"]["request_pid"] == 123
     assert "secret-token" not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_capture_blocks_transition_and_classifies_integrated_without_inventing_actual_venue():
+    fetch_calls = []
+
+    def fake_fetch(_token, **_kwargs):
+        fetch_calls.append(_kwargs)
+        return [{"Code": "005930", "Name": "삼성전자", "Price": 100000}]
+
+    with pytest.raises(ValueError, match="disabled during session transition"):
+        census.capture_market_snapshots(
+            "secret-token",
+            target_date="2026-09-14",
+            captured_at=datetime.fromisoformat("2026-09-14T15:45:00+09:00"),
+            venues=("NXT",),
+            panels=("all",),
+            fetcher=fake_fetch,
+        )
+    assert fetch_calls == []
+
+    dual = census.capture_market_snapshots(
+        "secret-token",
+        target_date="2026-09-14",
+        captured_at=datetime.fromisoformat("2026-09-14T16:00:00+09:00"),
+        venues=("KRX",),
+        panels=("all",),
+        fetcher=fake_fetch,
+    )[0]
+
+    assert (dual["session"], dual["decision_market_scope"]) == (
+        "KRX_NXT_AFTERMARKET",
+        "KRX_NXT_INTEGRATED",
+    )
+    assert dual["market_data_route"] == "krx_only"
+    assert dual["actual_execution_venue"] == "UNKNOWN"
+
+
+def test_capture_preserves_valid_empty_and_partial_source_states():
+    empty = census.capture_market_snapshots(
+        "token",
+        target_date="2026-09-14",
+        captured_at=datetime.fromisoformat("2026-09-14T16:00:00+09:00"),
+        venues=("KRX",),
+        panels=("all",),
+        fetcher=lambda *_args, **_kwargs: (
+            [],
+            {
+                "response_contract_status": "verified_success",
+                "response_return_codes": ["0"],
+                "response_page_count": 1,
+            },
+        ),
+    )[0]
+    partial = census.capture_market_snapshots(
+        "token",
+        target_date="2026-09-14",
+        captured_at=datetime.fromisoformat("2026-09-14T16:00:00+09:00"),
+        venues=("KRX",),
+        panels=("all",),
+        fetcher=lambda *_args, **_kwargs: (
+            [{"Code": "005930", "Name": "삼성전자", "Price": 100000}],
+            {"read_rate_control_status": "deferred"},
+        ),
+    )[0]
+
+    assert empty["source_quality_status"] == "valid_empty"
+    assert empty["rows"] == []
+    assert partial["source_quality_status"] == "partial_source"
+    assert partial["row_count"] == 1
+
+
+def test_report_exposes_empty_and_partial_counts_without_partial_ok(tmp_path):
+    captured_at = datetime.fromisoformat("2026-09-14T16:00:00+09:00")
+    base = {
+        "schema_version": census.SCHEMA_VERSION,
+        "target_date": "2026-09-14",
+        "captured_at": captured_at.isoformat(),
+        "venue": "KRX",
+        "session": "KRX_NXT_AFTERMARKET",
+        "panel": "all",
+    }
+    path = tmp_path / "snapshots.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {**base, "source_quality_status": "valid_empty", "rows": []},
+            {
+                **base,
+                "capture_id": "partial",
+                "source_quality_status": "partial_source",
+                "rows": [{"rank": 1, "stock_code": "005930"}],
+            },
+        ],
+    )
+
+    report = census.build_report(
+        "2026-09-14",
+        snapshot_path=path,
+        pipeline_path=tmp_path / "pipeline.jsonl",
+        ai_trace_path=tmp_path / "ai.jsonl",
+        symbol_master_path=tmp_path / "master.json",
+        trigger_receipt_path=tmp_path / "trigger.json",
+        external_bbo_budget_path=tmp_path / "budget.json",
+    )
+
+    assert report["source_quality"]["valid_empty_snapshot_count"] == 1
+    assert report["source_quality"]["partial_source_snapshot_count"] == 1
+    assert report["status"] != "ok"
 
 
 def test_capture_keeps_valid_ka10027_rows_after_bounded_rate_limit_recovery():
@@ -2290,9 +2420,16 @@ def test_ex_post_ev_remains_non_authoritative_until_full_floor():
     assert scope_summaries["NXT|NXT_REGULAR_OVERLAP"]["resolved_outcome_count"] == 10
 
 
-def test_empty_fetch_preserves_source_unavailable_evidence():
+def test_empty_fetch_preserves_valid_empty_evidence():
     def fake_fetch(*args, **kwargs):
-        return []
+        return (
+            [],
+            {
+                "response_contract_status": "verified_success",
+                "response_return_codes": ["0"],
+                "response_page_count": 1,
+            },
+        )
 
     rows = census.capture_market_snapshots(
         "token",
@@ -2303,7 +2440,7 @@ def test_empty_fetch_preserves_source_unavailable_evidence():
         fetcher=fake_fetch,
     )
 
-    assert rows[0]["source_quality_status"] == "source_unavailable"
+    assert rows[0]["source_quality_status"] == "valid_empty"
     assert rows[0]["row_count"] == 0
 
 

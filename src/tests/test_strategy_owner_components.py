@@ -751,6 +751,14 @@ def test_runtime_stock_scope_preserves_exact_nxt_and_rejects_conflicts():
         {"effective_venue": "NXT", "market_session_bucket": "nxt_aftermarket"}
     ) == ("NXT", "nxt_aftermarket")
     assert mod.stock_scope(
+        {
+            "effective_venue": "NXT",
+            "market_session_bucket": "nxt_aftermarket",
+            "market_data_route": "krx_nxt_integrated",
+            "actual_execution_venue": "UNKNOWN",
+        }
+    ) == (None, None)
+    assert mod.stock_scope(
         {"effective_venue": "NXT", "venue": "KRX", "market_session_bucket": "nxt"}
     ) == (None, None)
     assert mod.stock_scope({"effective_venue": "NXT"}) == (None, None)

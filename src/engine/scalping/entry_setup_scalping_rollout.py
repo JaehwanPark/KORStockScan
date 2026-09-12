@@ -29,6 +29,7 @@ SCOPES = (
     "PREMARKET_KRX_LIKE|NXT_PREMARKET",
     "NXT|NXT_AFTERMARKET",
 )
+OBSERVE_ONLY_SCOPES = ("KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET",)
 CONTRACT = {
     "schema": SCHEMA,
     "strategy": "SCALPING",
@@ -91,6 +92,17 @@ def scope_authorized(
     scope = f"{str(venue or '').strip().upper()}|{str(session or '').strip().upper()}"
     rollout = load_rollout(now=now)
     return bool(scope in SCOPES and rollout and rollout.get("valid") is True)
+
+
+def scope_authority_mode(venue: Any, session: Any) -> str:
+    """Classify scope without extending the immutable live rollout."""
+
+    scope = f"{str(venue or '').strip().upper()}|{str(session or '').strip().upper()}"
+    if scope in SCOPES:
+        return "existing_live_scope"
+    if scope in OBSERVE_ONLY_SCOPES:
+        return "observe_only_no_live_approval"
+    return "unsupported"
 
 
 def authorized_scopes(

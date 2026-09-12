@@ -52,6 +52,30 @@ def test_nxt_v2_15_adapter_is_recorded_and_not_relabelled_as_krx(tmp_path):
     assert lifecycle.bind_candidate_context(stock, fields, output_path=path) is None
 
 
+def test_post_effective_dual_does_not_inherit_legacy_nxt_live_adapter(tmp_path):
+    fields = {
+        **_candidate_fields(),
+        "decision_quality_live_adapter": "entry_setup_v2_15_nxt_bounded_probe_v1",
+        "entry_setup_live_policy_status": "active_bounded_nxt_canary",
+        "entry_setup_live_policy_effective_venue": "KRX_NXT_INTEGRATED",
+        "entry_setup_live_policy_session_bucket": "krx_nxt_aftermarket",
+        "entry_setup_live_policy_target_date": "2026-09-14",
+        "session_contract_version": "market_session_contract_v2",
+        "market_session_regime": "KRX_NXT_AFTERMARKET",
+        "market_data_route": "krx_nxt_integrated",
+        "actual_execution_venue": "UNKNOWN",
+    }
+    stock = {"id": 18, "code": "005930"}
+
+    assert (
+        lifecycle.bind_candidate_context(
+            stock, fields, output_path=tmp_path / "dual.jsonl"
+        )
+        is None
+    )
+    assert lifecycle.CONTEXT_KEY not in stock
+
+
 def test_materializer_preserves_exact_candidate_full_lifecycle(tmp_path):
     path = tmp_path / "events.jsonl"
     stock = {"id": 17, "code": "005930", "name": "삼성전자"}

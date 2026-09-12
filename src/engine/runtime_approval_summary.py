@@ -27,6 +27,7 @@ from src.engine.automation.source_quality_hard_gate import (
     load_source_quality_preflight,
     source_quality_preflight_blocked,
 )
+from src.engine.automation.key_lineage_ledger import entry_replay_observe_only_status
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.lifecycle_bucket_discovery import discovery_report_path
 from src.engine.threshold_cycle_ev_report import ev_report_paths
@@ -2189,6 +2190,21 @@ def build_runtime_approval_summary(
         SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{target_date}.json"
     )
     ev_report = _load_json(ev_json)
+    entry_replay_batch_path = (
+        REPORT_DIR
+        / "ai_entry_setup_paired_replay_batch"
+        / f"ai_entry_setup_paired_replay_batch_{target_date}.json"
+    )
+    entry_replay_consumer_path = (
+        REPORT_DIR
+        / "main_ai_prompt_consumer"
+        / f"main_ai_prompt_consumer_{target_date}.json"
+    )
+    entry_replay_observe_only = entry_replay_observe_only_status(
+        _load_json(entry_replay_batch_path),
+        _load_json(entry_replay_consumer_path),
+        target_date=target_date,
+    )
     clean_policy = (
         ev_report.get("clean_tuning_baseline")
         if isinstance(ev_report.get("clean_tuning_baseline"), dict)
@@ -2330,6 +2346,12 @@ def build_runtime_approval_summary(
         "source_quality_preflight_gate": source_quality_preflight_gate,
         "sources": {
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
+            "ai_entry_setup_paired_replay_batch": str(entry_replay_batch_path)
+            if entry_replay_batch_path.exists()
+            else None,
+            "main_ai_prompt_consumer": str(entry_replay_consumer_path)
+            if entry_replay_consumer_path.exists()
+            else None,
             "threshold_cycle_ai_review": (
                 str(threshold_ai_review_path)
                 if threshold_ai_review_path.exists()
@@ -2388,6 +2410,12 @@ def build_runtime_approval_summary(
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
         "summary": {
             "scalping_items": len(scalping_rows),
+            "entry_replay_dual_observe_only_count": len(
+                entry_replay_observe_only["cohorts"]
+            ),
+            "entry_replay_dual_observe_only_status": entry_replay_observe_only[
+                "status"
+            ],
             "scalping_selected_auto_bounded_live": sum(
                 1 for row in scalping_rows if row["selected_auto_bounded_live"]
             ),
@@ -2597,6 +2625,7 @@ def build_runtime_approval_summary(
             ),
         },
         "application_timing": _application_timing(target_date, ev_report),
+        "entry_replay_observe_only": entry_replay_observe_only,
         "strategy_owner_components": [
             item
             for item in _runtime_selection_by_family(ev_report).values()

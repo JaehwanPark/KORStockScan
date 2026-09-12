@@ -1087,6 +1087,36 @@ def test_tp1_counterfactual_preserves_explicit_premarket_venue_provenance(
         assert row["venue_resolution"] == "canonicalized:rising_missed_effective_venue"
 
 
+def test_tp1_market_axes_preserve_integrated_aftermarket_without_nxt_inference():
+    fields = {
+        "decision_market_scope": "KRX_NXT_INTEGRATED",
+        "market_data_route": "krx_nxt_integrated",
+        "market_session_regime": "KRX_NXT_AFTERMARKET",
+        "actual_execution_venue": "UNKNOWN",
+        "rising_missed_effective_venue": "NXT",
+        "rising_missed_market_session_bucket": "nxt_entry_window",
+    }
+
+    axes = mod._tp1_market_axes(fields)
+
+    assert axes == {
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "decision_market_scope": "KRX_NXT_INTEGRATED",
+        "market_data_route": "krx_nxt_integrated",
+        "market_session_bucket": "nxt_entry_window",
+        "market_session_regime": "KRX_NXT_AFTERMARKET",
+        "actual_execution_venue": "UNKNOWN",
+    }
+    assert not (
+        axes["effective_venue"] == "NXT"
+        and axes["market_session_regime"] == "KRX_NXT_AFTERMARKET"
+    )
+    assert mod._risky_micro_venue_session(fields) == (
+        "KRX_NXT_INTEGRATED",
+        "KRX_NXT_AFTERMARKET",
+    )
+
+
 def test_tp1_net_label_keeps_fixed_comparison_cost_separate_from_broker_receipt(
     tmp_path,
 ):

@@ -38,6 +38,10 @@ MAXIMUM_LOSS_BUDGET_BREACH_RATE_PCT = 20.0
 MAXIMUM_SEVERE_TAIL_RATE_PCT = 20.0
 OFI_LEDGER_SCHEMA = "ofi_exact_trace_action_outcome_calibration_v2"
 ACTION_OUTCOME_OPTIMIZER_HANDOFF_SCHEMA = "ai_action_outcome_optimizer_handoff_v1"
+LEGACY_COHORT_KEY_VERSION = "v1"
+ROUTE_SESSION_COHORT_KEY_VERSION = "v2"
+DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
+DUAL_AFTERMARKET_SCOPE = "INTEGRATED"
 REPORT_SUBDIR = "ai_decision_action_outcome_calibration"
 PAIRED_SUBDIR = "ai_prompt_detailed_paired_replay"
 OFI_STAGES = {
@@ -235,6 +239,25 @@ def _normalized_session(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _cohort_route_scope(venue: str, session: str, route: str) -> str:
+    """Keep legacy keys stable; version dual keys by explicit route."""
+    if session == DUAL_AFTERMARKET_SESSION:
+        return "|".join(
+            (ROUTE_SESSION_COHORT_KEY_VERSION, venue, session, route or "UNKNOWN")
+        )
+    return f"{venue}:{session}"
+
+
+def _unpack_cohort_route_scope(scope: str) -> tuple[str, str, str, str]:
+    parts = scope.split("|")
+    if len(parts) == 4 and parts[0] == ROUTE_SESSION_COHORT_KEY_VERSION:
+        return parts[0], parts[1], parts[2], parts[3]
+    if ":" in scope:
+        venue, session = scope.split(":", 1)
+        return LEGACY_COHORT_KEY_VERSION, venue, session, ""
+    return "", "", "", ""
+
+
 def _probe_worst_loss(row: dict[str, Any], actor: str) -> float | None:
     actor_value = row.get(f"{actor}_probe_worst_loss_pct")
     if actor_value is not None:
@@ -343,6 +366,13 @@ def _candidate_source_contract(
     stage = _normalized_stage(stages[0]) if len(stages) == 1 else ""
     venue = _normalized_venue(venues[0]) if len(venues) == 1 else ""
     session = _normalized_session(sessions[0]) if len(sessions) == 1 else ""
+    routes = (
+        cohort.get("market_data_routes")
+        if isinstance(cohort.get("market_data_routes"), list)
+        else []
+    )
+    route = _normalized_venue(routes[0]) if len(routes) == 1 else ""
+    is_dual_aftermarket = session == DUAL_AFTERMARKET_SESSION
     if (
         not stage
         or not venue
@@ -359,6 +389,14 @@ def _candidate_source_contract(
         and _normalized_session(cohort_filter.get("session_bucket")) == session
     ):
         errors.append("cohort_filter_mismatch")
+    if is_dual_aftermarket:
+        if venue != DUAL_AFTERMARKET_SCOPE or not route:
+            errors.append("dual_route_session_contract_missing")
+        elif not (
+            isinstance(cohort_filter, dict)
+            and _normalized_venue(cohort_filter.get("market_data_route")) == route
+        ):
+            errors.append("dual_route_cohort_filter_mismatch")
 
     candidate_version = str(cumulative.get("candidate_prompt_version") or "").strip()
     candidate_contract_sha256 = str(
@@ -442,10 +480,20 @@ def _candidate_source_contract(
             exclusions["decision_trace_id_missing"] += 1
         elif _normalized_stage(row.get("stage")) != stage:
             exclusions["stage_mismatch"] += 1
-        elif _normalized_venue(row.get("effective_venue")) != venue:
+        elif not is_dual_aftermarket and _normalized_venue(
+            row.get("effective_venue")
+        ) != venue:
             exclusions["venue_mismatch"] += 1
         elif _normalized_session(row.get("session_bucket")) != session:
             exclusions["session_mismatch"] += 1
+        elif is_dual_aftermarket and _normalized_venue(
+            row.get("market_data_route")
+        ) != route:
+            exclusions["dual_market_data_route_mismatch"] += 1
+        elif is_dual_aftermarket and _normalized_venue(
+            row.get("actual_execution_venue")
+        ) not in {"KRX", "NXT"}:
+            exclusions["dual_actual_execution_venue_unknown"] += 1
         elif not row_date:
             exclusions["decision_timestamp_invalid_or_naive"] += 1
         elif row_date != source_date:
@@ -461,6 +509,16 @@ def _candidate_source_contract(
             for actor in ("control", "candidate")
         ):
             exclusions["exposure_execution_cost_missing_or_invalid"] += 1
+        elif is_dual_aftermarket and any(
+            str(row.get(f"{actor}_action") or "").upper() in EXPOSURE_ACTIONS
+            and (
+                row.get("candidate_execution_cost_contract_applied") is not True
+                or (cost := _number(row.get(f"{actor}_execution_cost_pct"))) is None
+                or cost < 0
+            )
+            for actor in ("control", "candidate")
+        ):
+            exclusions["dual_exposure_cost_missing_or_invalid"] += 1
         else:
             comparisons.append(row)
 
@@ -469,7 +527,7 @@ def _candidate_source_contract(
         candidate_prompt_sha256,
         candidate_contract_sha256,
         stage,
-        f"{venue}:{session}",
+        _cohort_route_scope(venue, session, route),
     )
     count_fields: dict[str, int] = {}
     for source_key, output_key in (
@@ -492,6 +550,13 @@ def _candidate_source_contract(
         "stage": stage,
         "effective_venue": venue,
         "session_bucket": session,
+        "market_data_route": route or None,
+        "cohort_key_version": (
+            ROUTE_SESSION_COHORT_KEY_VERSION
+            if is_dual_aftermarket
+            else LEGACY_COHORT_KEY_VERSION
+        ),
+        "authority_state": "OBSERVE_ONLY" if is_dual_aftermarket else "LEGACY",
         "paired_comparable_count": len(comparisons),
         "raw_paired_comparable_count": len(raw_comparisons),
         "row_exclusion_count": sum(exclusions.values()),
@@ -544,6 +609,7 @@ def _transition_rows(
             rejected_reports.append(metadata)
             continue
         source_reports.append(metadata)
+        rows_by_cohort.setdefault(identity, {})
         if metadata.get("candidate_selection_eligible") is not True:
             legacy_hashless_diagnostic_row_count += len(comparisons)
             continue
@@ -561,6 +627,9 @@ def _transition_rows(
                     "stage": identity[3],
                     "effective_venue": metadata["effective_venue"],
                     "session_bucket": metadata["session_bucket"],
+                    "market_data_route": metadata["market_data_route"],
+                    "cohort_key_version": metadata["cohort_key_version"],
+                    "authority_state": metadata["authority_state"],
                 }
             )
             existing = rows_by_cohort[identity].get(trace_id)
@@ -819,7 +888,12 @@ def _transition_summary(
         stage,
         route_scope,
     ) = candidate_identity
-    effective_venue, session_bucket = route_scope.split(":", 1)
+    (
+        cohort_key_version,
+        effective_venue,
+        session_bucket,
+        market_data_route,
+    ) = _unpack_cohort_route_scope(route_scope)
     values = list(rows)
     raw_value_pairs: list[tuple[float, float]] = []
     for row in values:
@@ -1144,6 +1218,8 @@ def _transition_summary(
         "stage": stage,
         "effective_venue": effective_venue,
         "session_bucket": session_bucket,
+        "market_data_route": market_data_route or None,
+        "cohort_key_version": cohort_key_version,
         "cohort_isolated": True,
         "exact_trace_count": len(values),
         "unique_symbol_count": unique_symbol_count,
@@ -1765,6 +1841,26 @@ def build_report(
         for identity, rows in sorted(rows_by_cohort.items())
         if rows or cohort_conflicts[identity]
     ]
+    for candidate in candidates:
+        if (
+            candidate.get("cohort_key_version")
+            == ROUTE_SESSION_COHORT_KEY_VERSION
+            and candidate.get("session_bucket") == DUAL_AFTERMARKET_SESSION
+        ):
+            gate = candidate.get("prompt_review_gate")
+            gate = gate if isinstance(gate, dict) else {}
+            checks = dict(gate.get("checks") or {})
+            checks["dual_aftermarket_observe_only"] = False
+            blockers = list(gate.get("blockers") or [])
+            if "dual_aftermarket_observe_only" not in blockers:
+                blockers.append("dual_aftermarket_observe_only")
+            candidate.update(
+                authority_state="OBSERVE_ONLY",
+                review_classification="dual_aftermarket_observe_only",
+                review_ready_for_prompt_candidate=False,
+                prompt_review_gate={**gate, "checks": checks, "blockers": blockers},
+                runtime_apply_authority=False,
+            )
     review_ready = [
         row for row in candidates if row["review_ready_for_prompt_candidate"]
     ]
@@ -1781,6 +1877,9 @@ def build_report(
         "stage",
         "effective_venue",
         "session_bucket",
+        "market_data_route",
+        "cohort_key_version",
+        "authority_state",
     )
 
     def identity_summary(row: dict[str, Any]) -> dict[str, Any]:
@@ -1895,7 +1994,8 @@ def build_report(
         "source_contract_summary": source_contract_summary,
         "dedupe_key": (
             "candidate_prompt_version+candidate_prompt_sha256+"
-            "candidate_contract_sha256+stage+effective_venue+session_bucket+"
+            "candidate_contract_sha256+stage+cohort_key_version+effective_venue+"
+            "session_bucket+market_data_route+"
             "decision_trace_id"
         ),
         "update_policy": (

@@ -95,19 +95,28 @@ def _fields(row: dict[str, Any]) -> dict[str, Any]:
 
 def _venue_token(value: Any) -> str:
     token = str(value or "").strip().upper()
-    return token if token in {"KRX", "NXT", "PREMARKET_KRX_LIKE"} else ""
+    return (
+        token
+        if token in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
+        else ""
+    )
 
 
 def _update_venue_provenance(item: dict[str, Any], row: dict[str, Any]) -> None:
     fields = _fields(row)
-    authoritative = {
-        token
-        for token in (
-            _venue_token(fields.get("rising_missed_effective_venue")),
-            _venue_token(fields.get("effective_venue")),
-        )
-        if token
-    }
+    decision_scope = _venue_token(fields.get("decision_market_scope"))
+    authoritative = (
+        {decision_scope}
+        if decision_scope
+        else {
+            token
+            for token in (
+                _venue_token(fields.get("rising_missed_effective_venue")),
+                _venue_token(fields.get("effective_venue")),
+            )
+            if token
+        }
+    )
     fallback = _venue_token(fields.get("venue"))
     authoritative_seen = set(item.get("_effective_venue_authoritative_seen") or [])
     fallback_seen = set(item.get("_effective_venue_fallback_seen") or [])
@@ -139,10 +148,35 @@ def _update_venue_provenance(item: dict[str, Any], row: dict[str, Any]) -> None:
     session_bucket = str(
         fields.get("rising_missed_market_session_bucket")
         or fields.get("market_session_bucket")
+        or fields.get("market_session_regime")
         or ""
     ).strip()
     if session_bucket and not item.get("market_session_bucket"):
         item["market_session_bucket"] = session_bucket
+    session_regime = str(fields.get("market_session_regime") or session_bucket).strip()
+    if session_regime and not item.get("market_session_regime"):
+        item["market_session_regime"] = session_regime
+    item["decision_market_scope"] = item.get("effective_venue", "UNKNOWN")
+    route = str(fields.get("market_data_route") or "").strip().lower()
+    if route not in {"krx_only", "nxt_only", "krx_nxt_integrated"}:
+        route = {
+            "KRX": "krx_only",
+            "NXT": "nxt_only",
+            "KRX_NXT_INTEGRATED": "krx_nxt_integrated",
+            "PREMARKET_KRX_LIKE": "krx_only",
+        }.get(str(item.get("decision_market_scope") or ""), "unknown")
+    if not item.get("market_data_route") or item.get("market_data_route") == "unknown":
+        item["market_data_route"] = route
+    actual = str(fields.get("actual_execution_venue") or "UNKNOWN").strip().upper()
+    if actual not in {"KRX", "NXT"}:
+        actual = "UNKNOWN"
+    actual_seen = set(item.get("_actual_execution_venues_seen") or [])
+    if actual != "UNKNOWN":
+        actual_seen.add(actual)
+    item["_actual_execution_venues_seen"] = sorted(actual_seen)
+    item["actual_execution_venue"] = (
+        next(iter(actual_seen)) if len(actual_seen) == 1 else "UNKNOWN"
+    )
 
 
 def _pipeline_path(target_date: str) -> Path:
@@ -671,7 +705,7 @@ def _finalize_real_entry_lifecycle(
     item["venue_source_quality_valid"] = bool(
         item.get("venue_source_quality_valid")
         and str(item.get("effective_venue") or "")
-        in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
     )
     planned_qty = max(0, int(item.get("planned_qty") or 0))
     item["single_share_plan"] = bool(
@@ -897,6 +931,18 @@ def _real_entry_lifecycle_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "by_effective_venue": _dimension_metrics("effective_venue", venue_valid_rows),
         "by_market_session_bucket": _dimension_metrics(
             "market_session_bucket", venue_valid_rows
+        ),
+        "by_decision_market_scope": _dimension_metrics(
+            "decision_market_scope", venue_valid_rows
+        ),
+        "by_market_data_route": _dimension_metrics(
+            "market_data_route", venue_valid_rows
+        ),
+        "by_market_session_regime": _dimension_metrics(
+            "market_session_regime", venue_valid_rows
+        ),
+        "by_actual_execution_venue": _dimension_metrics(
+            "actual_execution_venue", venue_valid_rows
         ),
     }
 
@@ -1125,11 +1171,30 @@ def _pyramid_evaluation_event(row: dict[str, Any]) -> dict[str, Any] | None:
             "pyramid_price_observation_source"
         ),
         "effective_venue": _venue_token(
-            fields.get("effective_venue") or fields.get("holding_context_venue")
+            fields.get("decision_market_scope")
+            or fields.get("effective_venue")
+            or fields.get("holding_context_venue")
         )
         or "UNKNOWN",
+        "decision_market_scope": _venue_token(
+            fields.get("decision_market_scope")
+            or fields.get("effective_venue")
+            or fields.get("holding_context_venue")
+        )
+        or "UNKNOWN",
+        "market_data_route": str(fields.get("market_data_route") or "unknown").lower(),
         "market_session_bucket": fields.get("market_session_bucket")
+        or fields.get("holding_context_session")
+        or fields.get("market_session_regime"),
+        "market_session_regime": fields.get("market_session_regime")
+        or fields.get("market_session_bucket")
         or fields.get("holding_context_session"),
+        "actual_execution_venue": (
+            str(fields.get("actual_execution_venue") or "UNKNOWN").strip().upper()
+            if str(fields.get("actual_execution_venue") or "UNKNOWN").strip().upper()
+            in {"KRX", "NXT"}
+            else "UNKNOWN"
+        ),
         "runtime_family": fields.get("runtime_family"),
         "rising_missed_scout_pyramid_bridge_lineage": _optional_boolish(
             fields.get("rising_missed_scout_pyramid_bridge_lineage")
@@ -4073,6 +4138,18 @@ def _normal_winner_expansion_summary(rows: list[dict[str, Any]]) -> dict[str, An
         "by_market_session_bucket": _dimension_metrics(
             "market_session_bucket", venue_valid_closed
         ),
+        "by_decision_market_scope": _dimension_metrics(
+            "decision_market_scope", venue_valid_closed
+        ),
+        "by_market_data_route": _dimension_metrics(
+            "market_data_route", venue_valid_closed
+        ),
+        "by_market_session_regime": _dimension_metrics(
+            "market_session_regime", venue_valid_closed
+        ),
+        "by_actual_execution_venue": _dimension_metrics(
+            "actual_execution_venue", venue_valid_closed
+        ),
     }
 
 
@@ -4114,17 +4191,43 @@ def _real_scale_in_execution_record(
         "fill_qty": fill_qty,
         "fill_notional_krw": round(fill_price * fill_qty, 4),
         "entry_effective_venue": str(
-            fields.get("effective_venue")
+            fields.get("decision_market_scope")
+            or fields.get("effective_venue")
             or fields.get("rising_missed_effective_venue")
             or "UNKNOWN"
         )
         .strip()
         .upper(),
+        "decision_market_scope": str(
+            fields.get("decision_market_scope")
+            or fields.get("effective_venue")
+            or fields.get("rising_missed_effective_venue")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper(),
+        "market_data_route": str(fields.get("market_data_route") or "unknown")
+        .strip()
+        .lower(),
         "market_session_bucket": str(
             fields.get("market_session_bucket")
             or fields.get("rising_missed_market_session_bucket")
+            or fields.get("market_session_regime")
             or "UNKNOWN"
         ).strip(),
+        "market_session_regime": str(
+            fields.get("market_session_regime")
+            or fields.get("market_session_bucket")
+            or fields.get("rising_missed_market_session_bucket")
+            or "UNKNOWN"
+        ).strip(),
+        "actual_execution_venue": str(
+            fields.get("actual_execution_venue")
+            or fields.get("broker_actual_execution_venue")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper(),
         "scale_in_broker_actual_execution_venue": str(
             fields.get("broker_actual_execution_venue") or "UNKNOWN"
         )
@@ -4638,10 +4741,15 @@ def build_report(
                 "scanner_promotion_reason",
                 "_effective_venue_authoritative_seen",
                 "_effective_venue_fallback_seen",
+                "_actual_execution_venues_seen",
                 "effective_venue",
+                "decision_market_scope",
+                "market_data_route",
                 "effective_venue_resolution",
                 "venue_source_quality_valid",
                 "market_session_bucket",
+                "market_session_regime",
+                "actual_execution_venue",
                 "entry_split_order_probe_qty",
                 "entry_split_order_leg_count",
                 "entry_split_order_qty_weight_min",

@@ -366,14 +366,20 @@ def _normalize_venue_cohort(*, venue: str, session: str) -> tuple[str, str]:
     session_value = str(session or "").strip().lower()
     if "premarket" in session_value or venue_value == "PREMARKET_KRX_LIKE":
         return "PREMARKET_KRX_LIKE", "session"
+    if venue_value in {
+        "SOR",
+        "INTEGRATED",
+        "KRX_NXT_INTEGRATED",
+    }:
+        if session_value == "krx_regular":
+            return "KRX", "legacy_route_value_normalized_by_session"
+        return "KRX_NXT_INTEGRATED", "integrated_scope"
+    if "krx_nxt_aftermarket" in session_value:
+        return "KRX_NXT_INTEGRATED", "integrated_scope"
     if "nxt" in session_value or venue_value == "NXT":
         return "NXT", "explicit_or_session"
     if venue_value == "KRX":
         return "KRX", "explicit"
-    if venue_value in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
-        if "krx" in session_value:
-            return "KRX", "legacy_route_value_normalized_by_session"
-        return "UNKNOWN", "legacy_route_value_without_session"
     return venue_value or "UNKNOWN", "explicit_or_missing"
 
 
@@ -391,6 +397,7 @@ def realtime_type_provenance(
     suffixes = _mapping(ws, "last_realtime_type_market_suffix")
     routes = _mapping(ws, "last_realtime_type_market_route")
     effective_venues = _mapping(ws, "last_realtime_type_effective_venue")
+    actual_venues = _mapping(ws, "last_realtime_type_actual_execution_venue")
     result: dict[str, dict[str, Any]] = {}
     for realtime_type in _MARKET_TYPES:
         observed_epoch = _epoch(timestamps.get(realtime_type))
@@ -405,6 +412,9 @@ def realtime_type_provenance(
             "market_suffix": str(suffixes.get(realtime_type) or "").upper(),
             "market_route": str(routes.get(realtime_type) or "").lower(),
             "effective_venue": str(effective_venues.get(realtime_type) or "").upper(),
+            "actual_execution_venue": str(
+                actual_venues.get(realtime_type) or "UNKNOWN"
+            ).upper(),
             "observed_at": _iso(observed_epoch),
             "observed_epoch": observed_epoch,
             "age_ms": (round(max(0.0, age_ms), 3) if age_ms is not None else None),
@@ -842,6 +852,8 @@ def _broker_route_matches_cohort(
         return route == "NXT"
     if cohort == "NXT":
         return route == "NXT"
+    if cohort == "KRX_NXT_INTEGRATED":
+        return route in {"KRX", "NXT", "SOR"}
     return False
 
 
@@ -1088,102 +1100,6 @@ def _integrated_sor_execution_view_proof(
     return True, "entry_sor_integrated_execution_view"
 
 
-def _nxt_aftermarket_integrated_execution_view_proof(
-    *,
-    stock_code: str,
-    decision_stage: str,
-    venue: str,
-    session: str,
-    broker_route: str,
-    candle_context: dict[str, Any],
-    position: dict[str, Any],
-    provenance: dict[str, dict[str, Any]],
-    now_epoch: float,
-) -> tuple[bool, str]:
-    """Accept a bounded NXT execution view without inventing event venue.
-
-    Kiwoom may deliver NXT-aftermarket 0B/0D observations through the
-    integrated ``_AL`` route.  The route is usable for an NXT decision only
-    when the session candle producer independently proved the closed-KRX
-    ``_AL`` -> ``_NX`` equivalence and every required realtime type carries
-    the same fresh integrated route.  This proof never grants underlying
-    event-venue attribution.
-    """
-
-    stage = str(decision_stage or "").strip().lower()
-    session_value = str(session or "").strip().lower()
-    clock = datetime.fromtimestamp(now_epoch, tz=KST).time()
-    holding_stage = stage in {
-        "holding_score",
-        "holding_score_submit_authority",
-        "holding_flow",
-    } or stage.startswith("overnight")
-    entry_stage = stage in {"entry_context", "entry_screen", "gatekeeper"}
-    candle_quality = (
-        candle_context.get("source_quality")
-        if isinstance(candle_context.get("source_quality"), dict)
-        else {}
-    )
-    route_proof = (
-        candle_quality.get("route_equivalence_proof")
-        if isinstance(candle_quality.get("route_equivalence_proof"), dict)
-        else {}
-    )
-    rows = [provenance[key] for key in _MARKET_TYPES]
-    conditions = {
-        "supported_stage": holding_stage or entry_stage,
-        "stage_position_contract": (
-            _active_holding_position(position) if holding_stage else entry_stage
-        ),
-        "nxt_aftermarket_cohort": str(venue or "").strip().upper() == "NXT"
-        and session_value == "nxt_aftermarket"
-        and datetime.strptime("16:00", "%H:%M").time()
-        <= clock
-        <= datetime.strptime("20:00", "%H:%M").time(),
-        "nxt_broker_route": str(broker_route or "").strip().upper() == "NXT",
-        "candle_route_equivalence": (
-            str(candle_context.get("schema") or "").strip()
-            in {"session_candle_source_v1", "entry_candle_context_v1"}
-            and _base_code(candle_context.get("request_code")) == _base_code(stock_code)
-            and str(candle_context.get("rest_route") or "").strip().upper() == "_NX"
-            and str(candle_context.get("ws_route") or "").strip().lower()
-            == "krx_nxt_integrated"
-            and bool(candle_context.get("route_equivalence_proven", False))
-            and str(candle_context.get("route_equivalence") or "").strip()
-            == "nxt_aftermarket_integrated_ws_to_nx_rest"
-            and candle_quality.get("status") == "fresh_consistent"
-        ),
-        "candle_route_proof": (
-            bool(route_proof.get("proven", False))
-            and str(route_proof.get("proof_session") or "").strip() == "nxt_aftermarket"
-            and bool(route_proof.get("krx_regular_closed_by_clock", False))
-            and str(route_proof.get("required_rest_suffix") or "").strip().upper()
-            == "_NX"
-            and str(route_proof.get("required_ws_suffix") or "").strip().upper()
-            == "_AL"
-            and str(route_proof.get("required_ws_route") or "").strip().lower()
-            == "krx_nxt_integrated"
-        ),
-        "integrated_realtime_routes": all(
-            row.get("quality") == "fresh"
-            and _base_code(row.get("item")) == _base_code(stock_code)
-            and str(row.get("market_suffix") or "").strip().upper() == "_AL"
-            and _market_data_route(
-                suffix=str(row.get("market_suffix") or ""),
-                route=str(row.get("market_route") or ""),
-            )
-            == "krx_nxt_integrated"
-            for row in rows
-        ),
-    }
-    missing = [name for name, passed in conditions.items() if not passed]
-    if missing:
-        return False, "missing:" + ",".join(missing)
-    if holding_stage:
-        return True, "holding_nxt_aftermarket_integrated_execution_view"
-    return True, "entry_nxt_aftermarket_integrated_execution_view"
-
-
 def _venue_consistency(
     *,
     stock_code: str,
@@ -1192,7 +1108,6 @@ def _venue_consistency(
     provenance: dict[str, dict[str, Any]],
     now_epoch: float,
     integrated_sor_execution_view_proven: bool = False,
-    nxt_integrated_execution_view_proven: bool = False,
 ) -> tuple[bool, list[str]]:
     blockers: list[str] = []
     rows = [provenance[key] for key in _MARKET_TYPES]
@@ -1223,7 +1138,12 @@ def _venue_consistency(
     venue_value = str(venue or "").upper()
     session_value = str(session or "").lower()
     now_clock = datetime.fromtimestamp(now_epoch, tz=KST).time()
-    if venue_value not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
+    if venue_value not in {
+        "KRX",
+        "NXT",
+        "PREMARKET_KRX_LIKE",
+        "KRX_NXT_INTEGRATED",
+    }:
         blockers.append("effective_venue_unknown_or_unsupported")
     for row in fresh_rows:
         suffix = str(row.get("market_suffix") or "")
@@ -1245,17 +1165,7 @@ def _venue_consistency(
                 blockers.append("krx_integrated_event_venue_unproven")
         elif venue_value == "NXT" and "aftermarket" in session_value:
             nx_exact = data_route == "nxt_only"
-            al_proven = (
-                data_route == "krx_nxt_integrated"
-                and (
-                    str(row.get("effective_venue") or "").strip().upper() == "NXT"
-                    or nxt_integrated_execution_view_proven
-                )
-                and datetime.strptime("16:00", "%H:%M").time()
-                <= now_clock
-                <= datetime.strptime("20:00", "%H:%M").time()
-            )
-            if not (nx_exact or al_proven):
+            if not nx_exact:
                 blockers.append("nxt_aftermarket_source_unproven")
         elif venue_value == "NXT":
             if data_route != "nxt_only":
@@ -1269,6 +1179,9 @@ def _venue_consistency(
             route_ok = data_route in {"nxt_only", "krx_nxt_integrated"}
             if not within or not route_ok:
                 blockers.append("premarket_actual_route_proof_missing")
+        elif venue_value == "KRX_NXT_INTEGRATED":
+            if data_route != "krx_nxt_integrated":
+                blockers.append("integrated_market_data_route_required")
     return not blockers, sorted(set(blockers))
 
 
@@ -1617,20 +1530,10 @@ def build_ai_market_snapshot(
             now_epoch=now_epoch,
         )
     )
-    (
-        nxt_integrated_execution_view_proven,
-        nxt_integrated_execution_view_proof,
-    ) = _nxt_aftermarket_integrated_execution_view_proof(
-        stock_code=stock_code,
-        decision_stage=decision_stage,
-        venue=normalized_venue,
-        session=session_bucket,
-        broker_route=str(broker_route or ""),
-        candle_context=candle_ctx,
-        position=position_ctx,
-        provenance=provenance,
-        now_epoch=now_epoch,
-    )
+    # Compatibility fields remain explicit and false. Integrated market data
+    # is its own scope; it can never prove that the underlying venue was NXT.
+    nxt_integrated_execution_view_proven = False
+    nxt_integrated_execution_view_proof = "removed:_AL_does_not_prove_NXT"
     venue_consistent, venue_blockers = _venue_consistency(
         stock_code=stock_code,
         venue=normalized_venue,
@@ -1638,7 +1541,6 @@ def build_ai_market_snapshot(
         provenance=provenance,
         now_epoch=now_epoch,
         integrated_sor_execution_view_proven=integrated_sor_route_proven,
-        nxt_integrated_execution_view_proven=(nxt_integrated_execution_view_proven),
     )
     blockers = list(venue_blockers)
     required_sources = ["current_price", "bbo", "tape"]
@@ -1820,6 +1722,7 @@ def build_ai_market_snapshot(
         "position_reconciliation_mode": position_reconciliation_mode,
         "simulation_position_reconciled": simulation_position_reconciled,
         "market_data_route": market_data_route,
+        "actual_execution_venue": "UNKNOWN",
         "underlying_event_venue": underlying_event_venue,
         "underlying_event_venue_source": underlying_event_venue_source,
         "integrated_sor_route_proven": integrated_sor_route_proven,
@@ -1851,6 +1754,7 @@ def build_ai_market_snapshot(
         "position_reconciliation_mode": position_reconciliation_mode,
         "simulation_position_reconciled": simulation_position_reconciled,
         "market_data_route": market_data_route,
+        "actual_execution_venue": "UNKNOWN",
         "underlying_event_venue": underlying_event_venue,
         "underlying_event_venue_source": underlying_event_venue_source,
         "integrated_sor_route_proven": integrated_sor_route_proven,
@@ -1973,6 +1877,9 @@ def ai_market_snapshot_log_fields(
             "broker_route_match_state"
         ),
         "ai_market_snapshot_market_data_route": snapshot.get("market_data_route"),
+        "ai_market_snapshot_actual_execution_venue": snapshot.get(
+            "actual_execution_venue", "UNKNOWN"
+        ),
         "ai_market_snapshot_route_partition_used": bool(
             (snapshot.get("route_partition") or {}).get("used", False)
         ),

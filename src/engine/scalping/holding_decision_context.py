@@ -291,12 +291,7 @@ def _tick_route_compatible(
     if ws_route and not tick_route:
         return False
     if request_suffix and tick_suffix and tick_suffix != request_suffix:
-        if not (
-            request_suffix == "_NX"
-            and tick_suffix == "_AL"
-            and ws_route == "krx_nxt_integrated"
-        ):
-            return False
+        return False
     if not request_suffix and tick_suffix:
         return False
     if ws_route and tick_route and tick_route != ws_route:
@@ -644,9 +639,9 @@ def _nxt_current_session_execution_view(
     """Resolve a current NXT execution view without claiming a historic fill.
 
     Kiwoom account balance rows do not carry the order exchange.  For a real,
-    positive holding in NXT aftermarket, exact `_NX` REST plus fresh NXT or
-    proven `_AL` integrated candle provenance is sufficient for AI input route
-    consistency.  This observation-only view never becomes order authority.
+    positive holding in NXT aftermarket, only exact `_NX` REST plus fresh NXT
+    provenance is sufficient for AI input route consistency. Integrated `_AL`
+    data remains an independent scope and never proves NXT execution.
     """
 
     broker_quantity = next(
@@ -691,22 +686,11 @@ def _nxt_current_session_execution_view(
     ws_route = str(candle.get("ws_route") or "").strip().lower()
     ws_suffix = str(candle.get("ws_suffix") or "").strip().upper()
     exact_nxt = ws_route == "nxt_only" and ws_suffix == "_NX"
-    integrated_nxt = (
-        ws_route == "krx_nxt_integrated"
-        and ws_suffix == "_AL"
-        and bool(candle.get("route_equivalence_proven", False))
-        and str(candle.get("route_equivalence") or "").strip()
-        == "nxt_aftermarket_integrated_ws_to_nx_rest"
-    )
-    if not (exact_nxt or integrated_nxt):
+    if not exact_nxt:
         return None, "missing", "broker_execution_provenance_required"
     return (
         "NXT",
-        (
-            "current_session_exact_nxt_candle_route"
-            if exact_nxt
-            else "current_session_nxt_candle_route_equivalence"
-        ),
+        "current_session_exact_nxt_candle_route",
         "current_session_execution_view_only_no_fill_claim",
     )
 
@@ -1097,6 +1081,8 @@ def build_holding_decision_context(
         "decision_kind": decision_kind,
         "venue": candle.get("venue"),
         "session": candle.get("session"),
+        "market_data_route": candle.get("market_data_route"),
+        "actual_execution_venue": "UNKNOWN",
         "rest_route": candle.get("rest_route"),
         "ws_route": selected_ws_route,
         "request_code": candle.get("request_code"),
@@ -1470,6 +1456,8 @@ def holding_decision_context_model_payload(
             "decision_kind",
             "venue",
             "session",
+            "market_data_route",
+            "actual_execution_venue",
             "rest_route",
             "ws_route",
         )
@@ -1668,6 +1656,10 @@ def holding_decision_context_log_fields(
         "holding_context_decision_kind": context.get("decision_kind"),
         "holding_context_venue": context.get("venue"),
         "holding_context_session": context.get("session"),
+        "holding_context_market_data_route": context.get("market_data_route"),
+        "holding_context_actual_execution_venue": context.get(
+            "actual_execution_venue", "UNKNOWN"
+        ),
         "holding_context_rest_route": context.get("rest_route"),
         "holding_context_ws_route": context.get("ws_route"),
         "holding_context_broker_route": broker_route.get("route"),

@@ -2936,6 +2936,18 @@ def _reviewed_unknown_reason_for_stage_field(
         return "" if value is None else str(value).strip()
 
     if (
+        str(key or "") == "actual_execution_venue"
+        and str(value or "").strip().upper() == "UNKNOWN"
+        and _field_text("decision_market_scope").upper() == "KRX_NXT_INTEGRATED"
+        and _field_text("market_data_route").lower()
+        in {"krx_only", "nxt_only", "krx_nxt_integrated"}
+        and _field_text("market_session_regime").upper().startswith(
+            "KRX_NXT_AFTERMARKET"
+        )
+    ):
+        return "reviewed_integrated_route_actual_execution_venue_unobserved"
+
+    if (
         stage == "scalping_scanner_scheduler_boot_restore_expired"
         and str(key or "") in {"venue", "effective_venue"}
         and str(value or "").strip().upper() == "UNKNOWN"
@@ -5310,6 +5322,38 @@ def _row_contract_violations(
         if _zero_sensitive_contract_gap(field, fields)
     ]
     invalid: list[str] = []
+    decision_scope = str(fields.get("decision_market_scope") or "").strip().upper()
+    data_route = str(fields.get("market_data_route") or "").strip().lower()
+    session_regime = str(fields.get("market_session_regime") or "").strip().upper()
+    actual_venue = str(fields.get("actual_execution_venue") or "").strip().upper()
+    has_market_axes = any(
+        _is_present(fields.get(field))
+        for field in (
+            "decision_market_scope",
+            "market_data_route",
+            "market_session_regime",
+        )
+    )
+    transition_axes = bool(
+        session_regime == "SESSION_TRANSITION"
+        and decision_scope == "KRX_NXT_TRANSITION"
+        and data_route == "unknown"
+        and actual_venue == "UNKNOWN"
+    )
+    normal_axes = bool(
+        decision_scope
+        in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
+        and data_route in {"krx_only", "nxt_only", "krx_nxt_integrated"}
+        and session_regime
+        and actual_venue in {"KRX", "NXT", "UNKNOWN"}
+        and session_regime != "NXT_AFTERMARKET_SOLO"
+        and (
+            not session_regime.startswith("KRX_NXT_AFTERMARKET")
+            or decision_scope == "KRX_NXT_INTEGRATED"
+        )
+    )
+    if has_market_axes and not (transition_axes or normal_axes):
+        invalid.append("aftermarket_market_axes_contract")
     if stage == "entry_submit_attempt_finished" and (
         fields.get("entry_submit_attempt_schema") != "call_local_submit_attempt_v1"
         or fields.get("entry_submit_attempt_authority") != "observation_only"

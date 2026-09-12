@@ -27,7 +27,6 @@ from src.engine.monitoring.pruned_candidate_bbo_collector import (
     OBSERVATION_SCHEMA_VERSION as PRUNE_BBO_OBSERVATION_SCHEMA_VERSION,
 )
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
-from src.engine.monitoring.ws_receive_expectation import receive_expectation
 from src.engine.monitoring.market_opportunity_review import (
     decision_disposition,
     diagnostic_followups,
@@ -101,7 +100,7 @@ DEFAULT_TRIGGER_WRAPPER = (
     / "deploy"
     / "run_market_opportunity_census_intraday.sh"
 )
-TRIGGER_SCHEMA_VERSION = "market_opportunity_census_trigger_v2"
+TRIGGER_SCHEMA_VERSION = "market_opportunity_census_trigger_v3"
 EXPECTED_TRIGGER_LINE_COUNT = 5
 EXPECTED_TRIGGER_SCHEDULE_PREFIXES = (
     "*/5 8 * * 1-5 ",
@@ -194,6 +193,7 @@ METRIC_CONTRACT = {
 }
 
 VENUE_REQUEST_CODES = {"KRX": "1", "NXT": "2"}
+VALID_SOURCE_QUALITY_STATUSES = {"ok", "valid_empty", "partial_source"}
 PANEL_CONTRACTS = {
     "all": {
         "trde_qty_cnd": "0000",
@@ -317,7 +317,7 @@ def _normalize_event_venue(value: Any) -> str:
         or "COMBINED" in text
         or text in {"SOR", "KRX+NXT", "KRX_NXT"}
     ):
-        return "UNKNOWN"
+        return "KRX_NXT_INTEGRATED"
     if "NXT" in text and "KRX" not in text:
         return "NXT"
     if text in {"NXT", "NXT_REGULAR_OVERLAP", "NXT_AFTERMARKET"}:
@@ -330,6 +330,10 @@ def _normalize_event_venue(value: Any) -> str:
 def _event_venue(row: dict[str, Any]) -> str:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
     for value in (
+        row.get("decision_market_scope"),
+        row.get("market_data_route"),
+        fields.get("decision_market_scope"),
+        fields.get("market_data_route"),
         row.get("effective_venue"),
         row.get("venue"),
         fields.get("effective_venue"),
@@ -340,6 +344,27 @@ def _event_venue(row: dict[str, Any]) -> str:
         if normalized != "UNKNOWN":
             return normalized
     return "UNKNOWN"
+
+
+def _actual_execution_venue(row: dict[str, Any]) -> str:
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    value = str(
+        row.get("actual_execution_venue")
+        or fields.get("actual_execution_venue")
+        or ""
+    ).strip().upper()
+    return value if value in {"KRX", "NXT"} else "UNKNOWN"
+
+
+def _decision_market_scope(*, venue: str, captured_at: datetime) -> str:
+    if captured_at.date() < date(2026, 9, 14):
+        return venue
+    minute = captured_at.hour * 60 + captured_at.minute
+    if 15 * 60 + 30 <= minute < 16 * 60:
+        return "KRX_NXT_TRANSITION"
+    if 16 * 60 <= minute < 20 * 60:
+        return "KRX_NXT_INTEGRATED"
+    return venue
 
 
 def _capture_id(*, target_date: str, captured_at: str, venue: str, panel: str) -> str:
@@ -367,6 +392,17 @@ def _normalized_source_payload_sha256(
 
 def _session_for_capture(*, venue: str, captured_at: datetime) -> str:
     minute = captured_at.hour * 60 + captured_at.minute
+    if captured_at.date() >= date(2026, 9, 14):
+        if 15 * 60 + 30 <= minute < 16 * 60:
+            return "SESSION_TRANSITION"
+        if 16 * 60 <= minute < 19 * 60 + 40:
+            return "KRX_NXT_AFTERMARKET"
+        if 19 * 60 + 40 <= minute < 19 * 60 + 45:
+            return "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+        if 19 * 60 + 45 <= minute < 20 * 60:
+            return "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
+        if minute >= 20 * 60:
+            return "CLOSED"
     if venue == "PREMARKET_KRX_LIKE":
         return "PREMARKET_KRX_LIKE" if 480 <= minute < 540 else "UNKNOWN"
     if venue == "KRX":
@@ -848,6 +884,12 @@ def capture_market_snapshots(
         raise ValueError(
             "ka10027 snapshots can only be labeled with their actual capture date"
         )
+    if (
+        observed_at.date() >= date(2026, 9, 14)
+        and _session_for_capture(venue="KRX", captured_at=observed_at)
+        == "SESSION_TRANSITION"
+    ):
+        raise ValueError("market opportunity census is disabled during session transition")
     captured_at_text = observed_at.isoformat()
     records: list[dict[str, Any]] = []
     capture_started_monotonic = monotonic()
@@ -914,6 +956,11 @@ def capture_market_snapshots(
             if not isinstance(fetched, list):
                 fetched = []
                 source_error = source_error or "ka10027_response_not_list"
+            response_contract_status = str(
+                source_request_meta.get("response_contract_status") or ""
+            ).strip()
+            if not fetched and response_contract_status != "verified_success":
+                source_error = source_error or "ka10027_response_contract_unverified"
 
             # Real captures are known only after the response, not at batch start.
             panel_observed_at = (
@@ -1030,7 +1077,20 @@ def capture_market_snapshots(
                         bbo_request_count += 1
                 rows.append(normalized_row)
 
-            status = "ok" if rows else "source_unavailable"
+            status = (
+                "partial_source"
+                if rows
+                and (
+                    source_error
+                    or response_contract_status
+                    not in {"", "verified_success"}
+                )
+                else (
+                    "ok"
+                    if rows
+                    else ("source_unavailable" if source_error else "valid_empty")
+                )
+            )
             normalized_source_payload_sha256 = _normalized_source_payload_sha256(
                 request_contract=request_contract,
                 rows=rows,
@@ -1047,6 +1107,14 @@ def capture_market_snapshots(
                     "target_date": target_date,
                     "captured_at": captured_at_text,
                     "venue": venue,
+                    "decision_market_scope": _decision_market_scope(
+                        venue=venue,
+                        captured_at=panel_observed_at,
+                    ),
+                    "market_data_route": (
+                        "nxt_only" if venue == "NXT" else "krx_only"
+                    ),
+                    "actual_execution_venue": "UNKNOWN",
                     "session": _session_for_capture(
                         venue=venue,
                         captured_at=panel_observed_at,
@@ -1097,6 +1165,13 @@ def capture_market_snapshots(
                             ),
                             "rate_limit_retry_exhausted": source_request_meta.get(
                                 "rate_limit_retry_exhausted"
+                            ),
+                            "response_contract_status": response_contract_status,
+                            "response_return_codes": source_request_meta.get(
+                                "response_return_codes"
+                            ),
+                            "response_page_count": source_request_meta.get(
+                                "response_page_count"
                             ),
                         },
                         "executable_bbo_collection": {
@@ -2037,8 +2112,13 @@ def _load_stage_index(
             "session": (
                 _session_for_capture(venue=event_venue, captured_at=ts)
                 if event_venue in {*VENUE_REQUEST_CODES, "PREMARKET_KRX_LIKE"}
+                or (
+                    event_venue == "KRX_NXT_INTEGRATED"
+                    and ts.date() >= date(2026, 9, 14)
+                )
                 else "UNKNOWN"
             ),
+            "actual_execution_venue": _actual_execution_venue(row),
             "record_id": _lineage_value(
                 row.get("record_id") or fields.get("runtime_record_id")
             ),
@@ -2072,6 +2152,7 @@ def _load_stage_index(
             ai_row = {
                 "ts": ts,
                 "venue": _normalize_event_venue(row.get("effective_venue")),
+                "actual_execution_venue": _actual_execution_venue(row),
                 "action": str(row.get("action") or ""),
                 "provider_called": _boolish(row.get("provider_called")),
                 "provider_actual": str(row.get("provider_actual") or ""),
@@ -2082,6 +2163,10 @@ def _load_stage_index(
             ai_row["session"] = (
                 _session_for_capture(venue=ai_row["venue"], captured_at=ts)
                 if ai_row["venue"] in {*VENUE_REQUEST_CODES, "PREMARKET_KRX_LIKE"}
+                or (
+                    ai_row["venue"] == "KRX_NXT_INTEGRATED"
+                    and ts.date() >= date(2026, 9, 14)
+                )
                 else "UNKNOWN"
             )
             index[code]["entry_ai_trace"].append(ai_row)
@@ -2168,11 +2253,12 @@ def _matching_stage_rows(
 def _nxt_scheduled_capture_pause(*, venue: str, captured_at: datetime | None) -> bool:
     # Ranking snapshots remain raw evidence during the NXT opening pause, but
     # cannot anchor continuous-session recall or executable opportunities.
-    return (
-        venue == "NXT"
-        and receive_expectation({"registered_market_routes": [venue]}, captured_at)[
-            "scheduled_quiet"
-        ]
+    if venue != "NXT" or captured_at is None:
+        return False
+    local = captured_at.astimezone(KST) if captured_at.tzinfo else captured_at
+    wall_time = local.time()
+    return wall_time >= datetime.strptime("08:50:00", "%H:%M:%S").time() and (
+        wall_time < datetime.strptime("09:00:30", "%H:%M:%S").time()
     )
 
 
@@ -3142,9 +3228,19 @@ def _summarize_rows_base(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     summary = _summarize_rows_base(rows)
+    scope_values = {
+        str(row.get("decision_market_scope") or row.get("venue") or "UNKNOWN")
+        for row in rows
+    }
     summary["by_venue"] = {
-        venue: _summarize_rows_base([row for row in rows if row.get("venue") == venue])
-        for venue in VENUE_REQUEST_CODES
+        venue: _summarize_rows_base(
+            [
+                row
+                for row in rows
+                if str(row.get("decision_market_scope") or row.get("venue")) == venue
+            ]
+        )
+        for venue in sorted(scope_values | set(VENUE_REQUEST_CODES))
     }
     summary["by_venue_session"] = {
         f"{venue}|{session}": _summarize_rows_base(
@@ -3152,7 +3248,11 @@ def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 row
                 for row in rows
                 if (
-                    str(row.get("venue") or "UNKNOWN"),
+                    str(
+                        row.get("decision_market_scope")
+                        or row.get("venue")
+                        or "UNKNOWN"
+                    ),
                     str(row.get("session") or "UNKNOWN"),
                 )
                 == (venue, session)
@@ -3161,13 +3261,20 @@ def _summarize_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         for venue, session in sorted(
             {
                 (
-                    str(row.get("venue") or "UNKNOWN"),
+                    str(
+                        row.get("decision_market_scope")
+                        or row.get("venue")
+                        or "UNKNOWN"
+                    ),
                     str(row.get("session") or "UNKNOWN"),
                 )
                 for row in rows
             }
         )
     }
+    summary["actual_execution_venue_counts"] = dict(
+        sorted(Counter(_actual_execution_venue(row) for row in rows).items())
+    )
     return summary
 
 
@@ -3261,8 +3368,13 @@ def _snapshot_contract_error(row: dict[str, Any], *, target_date: str) -> str:
             return "source_payload_not_canonical"
         if source_hash != expected_source_hash:
             return "source_payload_hash_mismatch"
-    if row.get("source_quality_status") == "ok" and not rows:
+    status = row.get("source_quality_status")
+    if status == "ok" and not rows:
         return "ok_status_without_rows"
+    if status == "valid_empty" and rows:
+        return "valid_empty_status_with_rows"
+    if status == "partial_source" and not rows:
+        return "partial_status_without_rows"
     return ""
 
 
@@ -3337,7 +3449,17 @@ def build_report(
         and latest_observer_runtime_receipt.get("market_data_request_effect") is True
     )
     source_ok_snapshots = [
-        row for row in snapshots if row.get("source_quality_status") == "ok"
+        row
+        for row in snapshots
+        if row.get("source_quality_status") in VALID_SOURCE_QUALITY_STATUSES
+    ]
+    valid_empty_snapshots = [
+        row for row in source_ok_snapshots if row.get("source_quality_status") == "valid_empty"
+    ]
+    partial_source_snapshots = [
+        row
+        for row in source_ok_snapshots
+        if row.get("source_quality_status") == "partial_source"
     ]
     paused_snapshots = [
         row
@@ -3938,7 +4060,11 @@ def build_report(
         },
         "status": (
             "ok"
-            if valid_snapshots and not instrumentation_blockers
+            if (
+                valid_snapshots
+                and not partial_source_snapshots
+                and not instrumentation_blockers
+            )
             else (
                 "partial_diagnostics_ready"
                 if scoped_ready
@@ -3988,6 +4114,8 @@ def build_report(
                 {error for error in contract_errors if error}
             ),
             "valid_snapshot_count": len(valid_snapshots),
+            "valid_empty_snapshot_count": len(valid_empty_snapshots),
+            "partial_source_snapshot_count": len(partial_source_snapshots),
             "unavailable_snapshot_count": len(snapshots) - len(source_ok_snapshots),
             "scheduled_pause_snapshot_count": len(paused_snapshots),
             "scheduled_pause_capture_ids": [

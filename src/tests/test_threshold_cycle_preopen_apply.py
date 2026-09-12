@@ -10220,6 +10220,72 @@ def test_scale_in_split_low_sample_does_not_carry_negative_economic_evidence(
     )
 
 
+@pytest.mark.parametrize(
+    "candidate, expected",
+    [
+        (
+            {
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "cohort_key_version": "v1",
+            },
+            "",
+        ),
+        (
+            {
+                "effective_venue": "NXT",
+                "session_bucket": "NXT_AFTERMARKET",
+                "cohort_key_version": "v1",
+            },
+            "",
+        ),
+        (
+            {
+                "effective_venue": "KRX_NXT_INTEGRATED",
+                "session_bucket": "KRX_NXT_AFTERMARKET",
+                "cohort_key_version": "v2",
+                "authority_state": "OBSERVE_ONLY",
+            },
+            "dual_cohort_observe_only_no_live_approval",
+        ),
+    ],
+)
+def test_dual_aftermarket_preopen_gate_preserves_legacy_cohorts(candidate, expected):
+    assert mod._dual_aftermarket_live_apply_blocker(candidate) == expected
+
+
+def test_dual_aftermarket_candidate_cannot_be_selected_for_preopen_live_apply():
+    candidate = {
+        "family": "dual_aftermarket_entry_candidate",
+        "stage": "entry",
+        "priority": 1,
+        "calibration_state": "adjust_up",
+        "allowed_runtime_apply": True,
+        "safety_revert_required": False,
+        "session_bucket": "KRX_NXT_AFTERMARKET",
+        "cohort_key_version": "v2",
+        "authority_state": "OBSERVE_ONLY",
+        "source_date": "2026-09-14",
+        "source_artifact_sha256": "a" * 64,
+        "target_env_keys": ["ENTRY_OPPORTUNITY_RECHECK_ENABLED"],
+        "recommended_values": {"enabled": True},
+    }
+
+    selected, decisions, env = mod._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=False,
+        target_date="2026-09-15",
+    )
+
+    assert selected == []
+    assert env == {}
+    assert decisions[0]["selected"] is False
+    assert decisions[0]["decision_reason"] == (
+        "dual_cohort_observe_only_no_live_approval"
+    )
+
+
 def test_hold_carry_forward_blocked_by_safety_revert_required(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

@@ -1,3 +1,7 @@
+import hashlib
+import json
+from pathlib import Path
+
 import requests
 import re
 import threading
@@ -14,6 +18,7 @@ from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.risk.manual_control_exclusion import evaluate_main_bot_control_exclusion
+from src.trading.market import session_contract
 from src.trading.config.symbol_owner_policy import (
     SymbolOwnerPolicyError,
     resolve_symbol_owner_policy,
@@ -42,6 +47,12 @@ _LAST_SUCCESSFUL_DEPOSIT_BY_KEY = {}
 _ORDERABLE_AMOUNT_CACHE = {}
 _LOCAL_SELL_NO_CALL_TOKEN = object()
 KST = ZoneInfo("Asia/Seoul")
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_AFTERMARKET_SOR_CANARY_SCHEMA = "krx_aftermarket_sor_canary_approval_v1"
+_AFTERMARKET_SOR_CANARY_SYMBOL_SCOPE = "ALL_EXISTING_GUARD_ELIGIBLE_SYMBOLS"
+_AFTERMARKET_SOR_CANARY_OFFICIAL_COMMIT = (
+    "234560d213acd8871ae344b5481aecd2f30287fa"
+)
 KRX_REGULAR_OPEN = datetime_time(hour=9, minute=0)
 KRX_REGULAR_CLOSE = datetime_time(hour=15, minute=30)
 _DEFENSIVE_BUY_TIME_BLOCK_OVERRIDE_REASONS = frozenset(
@@ -66,16 +77,184 @@ def _owner_registry_context(value):
     return None
 
 
-def _owner_registry_retry_context(value, *, retry_tag):
-    context = _owner_registry_context(value)
-    if context is None:
-        return None
-    return OwnerOrderContext(
-        owner_type=context.owner_type,
-        owner_id=context.owner_id,
-        position_id=context.position_id,
-        client_intent_id=f"{context.client_intent_id}:{retry_tag}",
+def _aftermarket_sor_canary_approval_path(trade_date) -> Path:
+    return (
+        PROJECT_ROOT
+        / "data/runtime/krx_aftermarket_sor_canary_approval"
+        / f"krx_aftermarket_sor_canary_approval_{trade_date.isoformat()}.json"
     )
+
+
+def _runtime_release_identity() -> tuple[str, str]:
+    selection_path = PROJECT_ROOT / "data/runtime/runtime_release_selection.json"
+    payload = json.loads(selection_path.read_text(encoding="utf-8"))
+    if payload.get("schema") != "runtime_release_selection_v1":
+        raise ValueError("runtime_release_selection_schema_invalid")
+    release_root = str(payload.get("release_root") or "").strip()
+    commit = str(payload.get("git_commit") or "").strip().lower()
+    if Path(release_root).resolve() != PROJECT_ROOT.resolve():
+        raise ValueError("runtime_release_selection_root_mismatch")
+    if len(commit) != 40 or any(char not in "0123456789abcdef" for char in commit):
+        raise ValueError("runtime_release_selection_commit_invalid")
+    return release_root, commit
+
+
+def _session_contract_sha256() -> str:
+    return hashlib.sha256(Path(session_contract.__file__).read_bytes()).hexdigest()
+
+
+def _approval_payload_sha256(payload: dict) -> str:
+    content = dict(payload)
+    content.pop("artifact_sha256", None)
+    encoded = json.dumps(
+        content,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _main_aftermarket_sor_canary_eligibility(
+    *,
+    code,
+    qty,
+    now,
+    route_resolution,
+    owner_context,
+):
+    """Load the exact-date operator approval for one main initial BUY.
+
+    The approval augments symbol route eligibility only. Existing main entry,
+    owner/custody, price freshness, quantity/cap, cooldown, and hard-safety
+    guards remain upstream and in the owner registry.
+    """
+
+    session = session_contract.resolve_market_session(now)
+    if (
+        session.session_regime
+        != session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+    ):
+        return None, {
+            "aftermarket_sor_canary_approval_required": False,
+            "aftermarket_sor_canary_approval_reason": "outside_canary_session",
+        }
+
+    provenance = {
+        "aftermarket_sor_canary_approval_required": True,
+        "aftermarket_sor_canary_approval_valid": False,
+        "aftermarket_sor_canary_approval_reason": "approval_not_loaded",
+        "aftermarket_sor_canary_approval_id": "-",
+        "aftermarket_sor_canary_approval_sha256": "-",
+    }
+    context = _owner_registry_context(owner_context)
+    if context is None or context.owner_type != "main_scalping":
+        provenance["aftermarket_sor_canary_approval_reason"] = (
+            "main_scalping_owner_context_required"
+        )
+        return None, provenance
+    if ":ENTRY_BUY:" not in f":{context.client_intent_id.upper()}:":
+        provenance["aftermarket_sor_canary_approval_reason"] = (
+            "initial_entry_buy_action_required"
+        )
+        return None, provenance
+    if int(qty or 0) != 1:
+        provenance["aftermarket_sor_canary_approval_reason"] = (
+            "one_share_probe_quantity_required"
+        )
+        return None, provenance
+    if (
+        route_resolution.get("requested_dmst_stex_tp") != "SOR"
+        or route_resolution.get("effective_dmst_stex_tp") != "SOR"
+    ):
+        provenance["aftermarket_sor_canary_approval_reason"] = (
+            "explicit_sor_route_required"
+        )
+        return None, provenance
+
+    approval_path = _aftermarket_sor_canary_approval_path(session.trade_date)
+    try:
+        approval = json.loads(approval_path.read_text(encoding="utf-8"))
+        if not isinstance(approval, dict):
+            raise ValueError("approval_payload_invalid")
+        artifact_sha256 = str(approval.get("artifact_sha256") or "").strip().lower()
+        if artifact_sha256 != _approval_payload_sha256(approval):
+            raise ValueError("approval_hash_mismatch")
+        release_root, release_commit = _runtime_release_identity()
+        effective_at = datetime.fromisoformat(str(approval["effective_at_kst"]))
+        expires_at = datetime.fromisoformat(str(approval["expires_at_kst"]))
+        if effective_at.tzinfo is None or expires_at.tzinfo is None:
+            raise ValueError("approval_time_zone_missing")
+        effective_at = effective_at.astimezone(KST)
+        expires_at = expires_at.astimezone(KST)
+        required = {
+            "schema": _AFTERMARKET_SOR_CANARY_SCHEMA,
+            "approval_id": "krx-aftermarket-sor-canary-2026-09-14",
+            "authority_source": "user_explicit_approval_2026-09-12",
+            "target_date": session.trade_date.isoformat(),
+            "code_release_root": release_root,
+            "code_commit": release_commit,
+            "market_session_contract_version": session.contract_version,
+            "market_session_contract_sha256": _session_contract_sha256(),
+            "owner_type": "main_scalping",
+            "symbol_scope": _AFTERMARKET_SOR_CANARY_SYMBOL_SCOPE,
+            "allowed_route": "SOR",
+            "max_order_qty": 1,
+            "existing_cap_unchanged": True,
+            "existing_cooldown_unchanged": True,
+            "hard_guards_preserved": True,
+            "krx_aftermarket_eligible": True,
+            "nxt_eligible": True,
+            "actual_canary_order_approved": True,
+            "runtime_effect": True,
+            "allowed_runtime_apply": True,
+            "rollback_owner": "main operator",
+            "official_reference_commit": _AFTERMARKET_SOR_CANARY_OFFICIAL_COMMIT,
+        }
+        for key, expected in required.items():
+            if approval.get(key) != expected:
+                raise ValueError(f"approval_field_mismatch:{key}")
+        if approval.get("allowed_order_types") != ["0", "00", "6"]:
+            raise ValueError("approval_order_types_invalid")
+        if approval.get("market_order_remap") != {"3": "6"}:
+            raise ValueError("approval_market_order_remap_invalid")
+        if effective_at != datetime(2026, 9, 14, 16, 0, tzinfo=KST):
+            raise ValueError("approval_effective_at_invalid")
+        if expires_at != datetime(2026, 9, 14, 19, 40, tzinfo=KST):
+            raise ValueError("approval_expires_at_invalid")
+        if not effective_at <= now.astimezone(KST) < expires_at:
+            raise ValueError("approval_outside_effective_window")
+        approval_id = str(approval["approval_id"])
+    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        provenance["aftermarket_sor_canary_approval_reason"] = str(exc)[:160]
+        return None, provenance
+
+    eligibility = session_contract.resolve_symbol_venue_eligibility(
+        str(code)[:6],
+        session.trade_date,
+        {
+            "source_id": approval_id,
+            "source_sha256": artifact_sha256,
+            "observed_at_kst": effective_at,
+            "quality_state": session_contract.SOURCE_QUALITY_VALID,
+            "krx_regular_eligible": True,
+            "krx_aftermarket_eligible": True,
+            "nxt_eligible": True,
+        },
+    )
+    provenance.update(
+        {
+            "aftermarket_sor_canary_approval_valid": True,
+            "aftermarket_sor_canary_approval_reason": "exact_date_approval_valid",
+            "aftermarket_sor_canary_approval_id": approval_id,
+            "aftermarket_sor_canary_approval_sha256": artifact_sha256,
+            "aftermarket_sor_canary_release_root": release_root,
+            "aftermarket_sor_canary_code_commit": release_commit,
+            "aftermarket_sor_canary_symbol_scope": approval["symbol_scope"],
+            "aftermarket_sor_canary_rollback_owner": approval["rollback_owner"],
+        }
+    )
+    return eligibility, provenance
 
 
 def _owner_registry_block_response(
@@ -1289,22 +1468,6 @@ def _resolve_sell_order_type(order_type, price=0, dmst_stex_tp=None, *, now=None
     return normalized_type, normalized_price
 
 
-def _is_sor_market_time_reject(data) -> bool:
-    msg = str(data.get("return_msg") or data.get("err_msg") or "")
-    code = str(data.get("return_code") or data.get("rt_cd") or "")
-    return (
-        "571034" in code
-        or "571034" in msg
-        or "SOR 시장가 주문은 08:30 이후" in msg
-        or "407022" in msg
-        or "주문이 불가능한 주문종류" in msg
-    )
-
-
-def _is_sor_market_sell_time_reject(data) -> bool:
-    return _is_sor_market_time_reject(data)
-
-
 def _buy_time_block_cutoff():
     raw_cutoff = str(
         getattr(TRADING_RULES, "BUY_SIDE_TIME_BLOCK_UNTIL_HHMM", "09:10") or ""
@@ -1435,6 +1598,71 @@ def _with_order_route_provenance(
     enriched.update(route_resolution)
     enriched["broker_route_attempted"] = bool(broker_route_attempted)
     return enriched
+
+
+def _resolve_submit_order_type_preflight(
+    *,
+    now,
+    route_resolution,
+    side,
+    order_type,
+    venue_eligibility=None,
+    existing_holding=False,
+):
+    order_now = now if now is not None else datetime.now(KST)
+    market_session = session_contract.resolve_market_session(order_now)
+    requested_route = route_resolution["requested_dmst_stex_tp"]
+    after_market_regimes = {
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+    }
+    preflight_route = route_resolution["effective_dmst_stex_tp"]
+    if (
+        market_session.session_regime in after_market_regimes
+        and requested_route == "AUTO"
+    ):
+        preflight_route = requested_route
+    preflight = session_contract.resolve_order_type_preflight(
+        market_session,
+        preflight_route,
+        side,
+        order_type,
+        eligibility=venue_eligibility,
+        existing_holding=existing_holding,
+    )
+    return market_session, preflight
+
+
+def _order_type_preflight_provenance(market_session, preflight):
+    return {
+        "market_session_contract_version": market_session.contract_version,
+        "market_session_regime": market_session.session_regime,
+        "market_session_observed_at": market_session.observed_at_kst.isoformat(),
+        "order_type_preflight_allowed": preflight.allowed,
+        "order_type_preflight_reason": preflight.reason,
+        "order_type_preflight_requested_route": preflight.requested_route,
+        "order_type_preflight_requested_type": preflight.requested_order_type,
+        "order_type_preflight_effective_type": preflight.effective_order_type,
+        "order_type_preflight_remapped": preflight.remapped,
+    }
+
+
+def _order_type_preflight_block_response(
+    *, market_session, preflight, route_resolution, side
+):
+    response = {
+        "rt_cd": "ORDER_TYPE_PREFLIGHT_BLOCKED",
+        "return_code": "ORDER_TYPE_PREFLIGHT_BLOCKED",
+        "return_msg": preflight.reason,
+        "ord_no": "",
+        "broker_order_attempted": False,
+        **route_resolution,
+        **_order_type_preflight_provenance(market_session, preflight),
+    }
+    if str(side).upper() == "SELL":
+        response["_local_sell_no_call_token"] = _LOCAL_SELL_NO_CALL_TOKEN
+    return response
 
 
 def _inside_scalping_buy_window(now_t) -> bool:
@@ -1638,6 +1866,8 @@ def send_buy_order_market(
     time_block_override_reason=None,
     dmst_stex_tp=None,
     owner_context=None,
+    now=None,
+    venue_eligibility=None,
 ):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
@@ -1666,10 +1896,11 @@ def send_buy_order_market(
             "ord_no": "",
         }
 
-    buy_window_blocked = is_scalping_buy_window_blocked()
+    order_now = now if now is not None else datetime.now(KST)
+    buy_window_blocked = is_scalping_buy_window_blocked(order_now)
     if buy_window_blocked:
         allow_time_block_override = False
-    buy_time_blocked = is_buy_side_time_blocked()
+    buy_time_blocked = is_buy_side_time_blocked(order_now)
     if buy_time_blocked and not allow_time_block_override:
         clean_code = str(code)[:6]
         label = get_buy_side_time_block_label()
@@ -1703,16 +1934,66 @@ def send_buy_order_market(
         price=price,
         tif=tif,
         dmst_stex_tp=dmst_stex_tp,
+        now=order_now,
         emit_log=True,
     )
     resolved_dmst_stex_tp = order_resolution["effective_dmst_stex_tp"]
     normalized_type = order_resolution["effective_order_type"]
     normalized_price = order_resolution["effective_order_price"]
+    market_session = session_contract.resolve_market_session(order_now)
+    canary_provenance = {}
+    effective_venue_eligibility = venue_eligibility
+    if (
+        market_session.session_regime
+        == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+        and str(normalized_type) in {"0", "00", "3", "6"}
+    ):
+        effective_venue_eligibility, canary_provenance = (
+            _main_aftermarket_sor_canary_eligibility(
+                code=clean_code,
+                qty=qty,
+                now=order_now,
+                route_resolution=order_resolution,
+                owner_context=owner_context,
+            )
+        )
+    market_session, order_preflight = _resolve_submit_order_type_preflight(
+        now=order_now,
+        route_resolution=order_resolution,
+        side="buy",
+        order_type=normalized_type,
+        venue_eligibility=effective_venue_eligibility,
+    )
+    if not order_preflight.allowed:
+        blocked = _order_type_preflight_block_response(
+            market_session=market_session,
+            preflight=order_preflight,
+            route_resolution=order_resolution,
+            side="buy",
+        )
+        blocked.update(canary_provenance)
+        return blocked
+    normalized_type = order_preflight.effective_order_type
+    if order_preflight.remapped:
+        normalized_price = 0
     ord_price_str = (
         str(int(normalized_price))
-        if str(normalized_type) == "00" and normalized_price > 0
+        if str(normalized_type) in {"0", "00"} and normalized_price > 0
         else ""
     )
+    submit_provenance = {
+        key: order_resolution[key]
+        for key in (
+            "requested_dmst_stex_tp",
+            "effective_dmst_stex_tp",
+            "broker_route",
+            "broker_route_resolution",
+        )
+    }
+    submit_provenance.update(
+        _order_type_preflight_provenance(market_session, order_preflight)
+    )
+    submit_provenance.update(canary_provenance)
 
     payload = {
         "dmst_stex_tp": resolved_dmst_stex_tp,
@@ -1752,73 +2033,10 @@ def send_buy_order_market(
                 data["owner_registry_intent_id"] = owner_intent_id
             return _with_order_route_provenance(
                 data,
-                route_resolution={
-                    key: order_resolution[key]
-                    for key in (
-                        "requested_dmst_stex_tp",
-                        "effective_dmst_stex_tp",
-                        "broker_route",
-                        "broker_route_resolution",
-                    )
-                },
+                route_resolution=submit_provenance,
                 broker_route_attempted=True,
             )
         else:
-            if str(payload.get("trde_tp")) == "3" and _is_sor_market_time_reject(data):
-                registry_block = _finish_owner_registry_intent(
-                    owner_registry, owner_intent_id, response=data
-                )
-                if registry_block is not None:
-                    return registry_block
-                owner_registry, owner_intent_id, owner_block = (
-                    _reserve_owner_registry_intent(
-                        code=clean_code,
-                        side="BUY",
-                        qty=qty,
-                        route=resolved_dmst_stex_tp,
-                        owner_context=_owner_registry_retry_context(
-                            owner_context, retry_tag="SOR_MARKET_TO_BEST"
-                        ),
-                    )
-                )
-                if owner_block is not None:
-                    return owner_block
-                retry_payload = dict(payload)
-                retry_payload["trde_tp"] = "6"
-                retry_payload["ord_uv"] = ""
-                log_info(
-                    f"[BUY_MARKET_RETRY_AS_BEST] {clean_code} SOR market buy rejected; "
-                    "retrying with order type 6"
-                )
-                retry_res, retry_data = _post_kiwoom_with_auth_retry(
-                    url, headers, retry_payload, "kt10000", timeout=5
-                )
-                retry_success = (
-                    str(retry_data.get("rt_cd", "")) == "0"
-                    or str(retry_data.get("return_code", "")) == "0"
-                )
-                if retry_res.status_code == 200 and retry_success:
-                    registry_block = _finish_owner_registry_intent(
-                        owner_registry, owner_intent_id, response=retry_data
-                    )
-                    if registry_block is not None:
-                        return registry_block
-                    if owner_intent_id:
-                        retry_data["owner_registry_intent_id"] = owner_intent_id
-                    return _with_order_route_provenance(
-                        retry_data,
-                        route_resolution={
-                            key: order_resolution[key]
-                            for key in (
-                                "requested_dmst_stex_tp",
-                                "effective_dmst_stex_tp",
-                                "broker_route",
-                                "broker_route_resolution",
-                            )
-                        },
-                        broker_route_attempted=True,
-                    )
-                data = retry_data
             registry_block = _finish_owner_registry_intent(
                 owner_registry, owner_intent_id, response=data
             )
@@ -1833,15 +2051,7 @@ def send_buy_order_market(
             # EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
             return _with_order_route_provenance(
                 data,
-                route_resolution={
-                    key: order_resolution[key]
-                    for key in (
-                        "requested_dmst_stex_tp",
-                        "effective_dmst_stex_tp",
-                        "broker_route",
-                        "broker_route_resolution",
-                    )
-                },
+                route_resolution=submit_provenance,
                 broker_route_attempted=True,
             )
 
@@ -1873,6 +2083,8 @@ def send_buy_order(
     time_block_override_reason=None,
     dmst_stex_tp=None,
     owner_context=None,
+    now=None,
+    venue_eligibility=None,
 ):
     """
     Legacy wrapper for send_buy_order_market.
@@ -1890,6 +2102,8 @@ def send_buy_order(
         time_block_override_reason=time_block_override_reason,
         dmst_stex_tp=dmst_stex_tp,
         owner_context=owner_context,
+        now=now,
+        venue_eligibility=venue_eligibility,
     )
 
 
@@ -1905,6 +2119,9 @@ def send_sell_order_market(
     bypass_open_time_block=False,
     dmst_stex_tp=None,
     owner_context=None,
+    now=None,
+    venue_eligibility=None,
+    existing_holding=False,
 ):
     """
     [kt10001] 주식 매도 주문 (시장가/지정가/최유리지정가 통합 지원)
@@ -1913,12 +2130,15 @@ def send_sell_order_market(
         return None
 
     clean_code = str(code)[:6]
+    order_now = now if now is not None else datetime.now(KST)
     if not bypass_open_time_block and is_sell_side_open_time_blocked(
+        now=order_now,
         reason_type=reason_type,
         strategy=strategy,
     ):
         label = get_sell_side_open_time_block_label()
         fields = get_sell_side_open_time_block_fields(
+            now=order_now,
             reason_type=reason_type,
             strategy=strategy,
         )
@@ -1944,17 +2164,40 @@ def send_sell_order_market(
         "api-id": "kt10001",
     }
 
-    route_resolution = describe_order_route_resolution(dmst_stex_tp)
+    route_resolution = describe_order_route_resolution(dmst_stex_tp, now=order_now)
     resolved_dmst_stex_tp = route_resolution["effective_dmst_stex_tp"]
     normalized_type, normalized_price = _resolve_sell_order_type(
         order_type,
         price=price,
         dmst_stex_tp=resolved_dmst_stex_tp,
+        now=order_now,
     )
+    market_session, order_preflight = _resolve_submit_order_type_preflight(
+        now=order_now,
+        route_resolution=route_resolution,
+        side="sell",
+        order_type=normalized_type,
+        venue_eligibility=venue_eligibility,
+        existing_holding=existing_holding,
+    )
+    if not order_preflight.allowed:
+        return _order_type_preflight_block_response(
+            market_session=market_session,
+            preflight=order_preflight,
+            route_resolution=route_resolution,
+            side="sell",
+        )
+    normalized_type = order_preflight.effective_order_type
+    if order_preflight.remapped:
+        normalized_price = 0
+    submit_provenance = {
+        **route_resolution,
+        **_order_type_preflight_provenance(market_session, order_preflight),
+    }
 
     # 💡 [핵심] 지정가("00") 매도일 경우 단가를 호가단위로 정규화합니다.
     ord_price_str = ""
-    if str(normalized_type) == "00" and normalized_price > 0:
+    if str(normalized_type) in {"0", "00"} and normalized_price > 0:
         try:
             raw_price = int(normalized_price)
             tick = int(kiwoom_utils.get_tick_size(raw_price))
@@ -2009,59 +2252,10 @@ def send_sell_order_market(
                 data["owner_registry_intent_id"] = owner_intent_id
             return _with_order_route_provenance(
                 data,
-                route_resolution=route_resolution,
+                route_resolution=submit_provenance,
                 broker_route_attempted=True,
             )
         else:
-            if str(payload.get("trde_tp")) == "3" and _is_sor_market_sell_time_reject(
-                data
-            ):
-                registry_block = _finish_owner_registry_intent(
-                    owner_registry, owner_intent_id, response=data
-                )
-                if registry_block is not None:
-                    return registry_block
-                owner_registry, owner_intent_id, owner_block = (
-                    _reserve_owner_registry_intent(
-                        code=clean_code,
-                        side="SELL",
-                        qty=qty,
-                        route=resolved_dmst_stex_tp,
-                        owner_context=_owner_registry_retry_context(
-                            owner_context, retry_tag="SOR_MARKET_TO_BEST"
-                        ),
-                    )
-                )
-                if owner_block is not None:
-                    return owner_block
-                retry_payload = dict(payload)
-                retry_payload["trde_tp"] = "6"
-                retry_payload["ord_uv"] = ""
-                log_info(
-                    f"[SELL_MARKET_RETRY_AS_BEST] {clean_code} SOR market sell rejected; "
-                    "retrying with order type 6"
-                )
-                retry_res, retry_data = _post_kiwoom_with_auth_retry(
-                    url, headers, retry_payload, "kt10001", timeout=5
-                )
-                retry_success = (
-                    str(retry_data.get("rt_cd", "")) == "0"
-                    or str(retry_data.get("return_code", "")) == "0"
-                )
-                if retry_res.status_code == 200 and retry_success:
-                    registry_block = _finish_owner_registry_intent(
-                        owner_registry, owner_intent_id, response=retry_data
-                    )
-                    if registry_block is not None:
-                        return registry_block
-                    if owner_intent_id:
-                        retry_data["owner_registry_intent_id"] = owner_intent_id
-                    return _with_order_route_provenance(
-                        retry_data,
-                        route_resolution=route_resolution,
-                        broker_route_attempted=True,
-                    )
-                data = retry_data
             registry_block = _finish_owner_registry_intent(
                 owner_registry, owner_intent_id, response=data
             )
@@ -2082,7 +2276,7 @@ def send_sell_order_market(
             # EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
             return _with_order_route_provenance(
                 data,
-                route_resolution=route_resolution,
+                route_resolution=submit_provenance,
                 broker_route_attempted=True,
             )
 

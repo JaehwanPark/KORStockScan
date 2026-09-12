@@ -1480,6 +1480,9 @@ def evaluate_advisory(
             "market_venue": context.market_venue,
             "market_cohort": context.market_cohort,
             "quote_request_code": context.request_code,
+            "market_data_route": context.market_data_route,
+            "actual_execution_venue": context.actual_execution_venue,
+            "decision_market_scope": context.decision_market_scope,
             "external_provider": "yahoo_best_effort",
             "premarket_context": premarket_provenance,
             "quote_received_at": quote_received_at,
@@ -1492,6 +1495,24 @@ def evaluate_advisory(
         "broker_order_forbidden": True,
         "metric_contract": METRIC_CONTRACT,
     }
+    if context.market_data_route == "krx_nxt_integrated":
+        base["unmet_conditions"] = list(
+            dict.fromkeys(
+                [*base["unmet_conditions"], "dual_aftermarket_observe_only"]
+            )
+        )
+        base["derived"] = {
+            "dual_aftermarket_context": {
+                "policy": "separate_observe_only_no_nxt_policy_inheritance_v1",
+                "market_data_route": context.market_data_route,
+                "actual_execution_venue": context.actual_execution_venue,
+                "session": context.name,
+                "runtime_effect": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        }
+        return base
     if source_quality["status"] != "PASS":
         return base
 

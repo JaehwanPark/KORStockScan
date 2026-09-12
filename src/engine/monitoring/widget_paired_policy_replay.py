@@ -26,6 +26,7 @@ BASELINE = date(2026, 6, 5)
 HORIZON_SEC = 1200
 SELECTION_START_DATE = date(2026, 9, 9)
 ACTIONABLE = {"ENTRY_READY", "ENTRY_CAUTION"}
+DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
 CONTRACT = {
     "metric_role": "paired_existing_axis_counterfactual_ev",
     "decision_authority": "existing_widget_policy_candidate_only",
@@ -76,6 +77,8 @@ def capture_input(advisory, *, symbol, venue, bbo):
         "venue": venue,
         "observed_at": advisory.get("observed_at"),
         "session": advisory.get("session"),
+        "market_data_route": advisory.get("market_data_route"),
+        "actual_execution_venue": advisory.get("actual_execution_venue"),
         "raw_state": advisory.get("raw_state") or advisory.get("state"),
         "source_quality_status": (advisory.get("source_quality") or {}).get("status"),
         "signal_contract": advisory.get("strategy_profile") or "widget_raw_signal_v1",
@@ -361,6 +364,16 @@ def build_study(
         "candidates": [],
         "status": "source_gap",
     }
+    if session == DUAL_AFTERMARKET_SESSION:
+        result.update(
+            status="dual_aftermarket_observe_only",
+            cost_status="not_applicable_source_only",
+            source_only_row_count=sum(
+                r.get("symbol") == symbol and r.get("session") == session for r in rows
+            ),
+        )
+        result["content_hash"] = digest(result)
+        return result
     if (
         not isinstance(parameters, dict)
         or type(parameters.get("leg_quantity_each")) is not int

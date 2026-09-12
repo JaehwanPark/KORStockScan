@@ -5775,6 +5775,105 @@ def _completed_cohort_summary(rows: list[dict]) -> dict:
     }
 
 
+def _completed_economics_route_venue_cohorts(rows: list[dict]) -> dict:
+    """Aggregate only explicit completed-economics provenance.
+
+    An absent actual venue or cost contract remains observable as UNKNOWN/null;
+    it is never inferred from an effective venue or replaced with zero cost.
+    """
+    valid_rows: list[dict] = []
+    excluded = Counter()
+    for row in rows or []:
+        if str(row.get("status") or "").upper() != "COMPLETED":
+            excluded["status_not_completed"] += 1
+            continue
+        if _safe_float(row.get("profit_rate"), None) is None:
+            excluded["profit_rate_missing_or_invalid"] += 1
+            continue
+        valid_rows.append(row)
+
+    def session(row: dict) -> str:
+        value = str(
+            row.get("market_session_regime")
+            or row.get("market_session_bucket")
+            or row.get("session")
+            or "UNKNOWN"
+        ).upper()
+        return "KRX_NXT_AFTERMARKET" if value.startswith("KRX_NXT_AFTERMARKET") else value
+
+    def route(row: dict) -> str:
+        value = str(
+            row.get("market_data_route")
+            or row.get("broker_route_requested")
+            or "UNKNOWN"
+        ).upper()
+        return value or "UNKNOWN"
+
+    def actual_venue(row: dict) -> str:
+        value = str(row.get("actual_execution_venue") or "").upper()
+        return value if value in {"KRX", "NXT"} else "UNKNOWN"
+
+    def fill_state(row: dict) -> str:
+        status = str(row.get("fill_type") or row.get("order_status") or "").lower()
+        requested = _safe_float(row.get("requested_qty"), None)
+        filled = _safe_float(row.get("filled_qty"), None)
+        if row.get("full_fill") is True or "full" in status or (
+            requested is not None and filled is not None and requested > 0 and filled == requested
+        ):
+            return "FULL"
+        if row.get("partial_fill") is True or "partial" in status or (
+            requested is not None and filled is not None and 0 < filled < requested
+        ):
+            return "PARTIAL"
+        return "UNKNOWN"
+
+    def cost_status(row: dict) -> str:
+        explicit = (
+            row.get("cost_status")
+            or row.get("cost_contract_status")
+            or row.get("realized_pnl_status")
+        )
+        if explicit not in (None, "", "-"):
+            return str(explicit)
+        if _safe_float(row.get("cost_adjusted_profit_rate"), None) is not None:
+            return "cost_adjusted_profit_rate_observed"
+        return "cost_null"
+
+    grouped: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+    for row in valid_rows:
+        grouped[(session(row), route(row), actual_venue(row))].append(row)
+    cohorts: dict[str, dict] = {}
+    for (market_session, market_route, venue), cohort_rows in sorted(grouped.items()):
+        cost_adjusted = [
+            _safe_float(row.get("cost_adjusted_profit_rate"), None)
+            for row in cohort_rows
+        ]
+        cost_adjusted = [value for value in cost_adjusted if value is not None]
+        cohorts[f"{market_session}|{market_route}|{venue}"] = {
+            "market_session_regime": market_session,
+            "market_data_route": market_route,
+            "actual_execution_venue": venue,
+            "completed_valid_profit": _completed_profit_summary(cohort_rows),
+            "fill_state_counts": dict(Counter(fill_state(row) for row in cohort_rows)),
+            "cost_status_counts": dict(Counter(cost_status(row) for row in cohort_rows)),
+            "cost_null_count": sum(cost_status(row) == "cost_null" for row in cohort_rows),
+            "cost_adjusted_ev_pct": round(_avg(cost_adjusted), 4)
+            if cost_adjusted
+            else None,
+        }
+    return {
+        "profit_basis": "COMPLETED + valid profit_rate only",
+        "cost_null_policy": "cost-null is retained as null and never converted to zero",
+        "completed_valid_profit_count": len(valid_rows),
+        "excluded_counts": dict(sorted(excluded.items())),
+        "actual_execution_venue_counts": dict(
+            Counter(actual_venue(row) for row in valid_rows)
+        ),
+        "market_data_route_counts": dict(Counter(route(row) for row in valid_rows)),
+        "cohorts": cohorts,
+    }
+
+
 def _field_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -18608,6 +18707,12 @@ def build_cumulative_threshold_cycle_report(
         )
         for label in completed_by_window
     }
+    completed_route_venue_cohorts_by_window = {
+        label: _completed_economics_route_venue_cohorts(
+            real_completed_by_window.get(label, [])
+        )
+        for label in completed_by_window
+    }
     source_flags = {
         "profit_basis": "real COMPLETED + valid profit_rate; scalp_sim completed rows are split into completed_by_source/scalp_simulator only",
         "clean_tuning_baseline_date": CLEAN_TUNING_BASELINE_DATE,
@@ -18647,6 +18752,9 @@ def build_cumulative_threshold_cycle_report(
         },
         "completed_cohorts": completed_summary_by_window,
         "completed_by_source": completed_source_summary_by_window,
+        "completed_route_venue_cohorts_by_window": (
+            completed_route_venue_cohorts_by_window
+        ),
         "scalp_simulator": scalp_simulator_by_window,
         "threshold_snapshot_by_window": family_snapshots,
         "smoothing_source_only_rolling_decision": (
@@ -18997,6 +19105,32 @@ def build_daily_threshold_cycle_report(
             ),
         ),
     }
+    completed_route_venue_cohorts_by_window = {
+        "same_day": _completed_economics_route_venue_cohorts(
+            _filter_completed_rows_by_date(
+                real_completed_rows,
+                same_day[0],
+                same_day[-1],
+                allow_missing_date_fallback=False,
+            )
+        ),
+        "rolling_3d": _completed_economics_route_venue_cohorts(
+            _filter_completed_rows_by_date(
+                real_completed_rows,
+                rolling_3d[0],
+                rolling_3d[-1],
+                allow_missing_date_fallback=False,
+            )
+        ),
+        "rolling_7d": _completed_economics_route_venue_cohorts(
+            _filter_completed_rows_by_date(
+                real_completed_rows,
+                rolling_7d[0],
+                rolling_7d[-1],
+                allow_missing_date_fallback=False,
+            )
+        ),
+    }
     families = _build_family_reports(
         same_day_events, real_completed_rows, target_date=target_date
     )
@@ -19138,6 +19272,9 @@ def build_daily_threshold_cycle_report(
         ),
         "completed_by_source_window": "legacy_loader_window_rolling_7d",
         "completed_by_source_by_window": completed_by_source_by_window,
+        "completed_route_venue_cohorts_by_window": (
+            completed_route_venue_cohorts_by_window
+        ),
         "scalp_simulator": _scalp_simulator_event_summary(
             same_day_events,
             same_day_sim_completed_rows,

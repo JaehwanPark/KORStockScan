@@ -5,6 +5,7 @@ import time
 from datetime import datetime, time as datetime_time, timedelta, timezone
 
 from src.engine import kiwoom_orders
+from src.trading.market import session_contract
 from src.trading.order.owner_custody_registry import OwnerOrderContext
 from src.utils import kiwoom_utils
 from src.engine.sniper_time import (
@@ -123,7 +124,39 @@ def _pending_sell_order_time_epoch(row, *, requested_date):
 
 
 def _pending_sell_order_session(order_epoch):
-    observed_t = datetime.fromtimestamp(order_epoch, _KST).time().replace(tzinfo=None)
+    observed_at = datetime.fromtimestamp(order_epoch, _KST)
+    return holding_sell_session_bucket(observed_at)
+
+
+def holding_sell_session_bucket(observed_at: datetime) -> str:
+    """Return a versioned holding-SELL session without inferring a venue."""
+
+    context = session_contract.resolve_market_session(observed_at)
+    legacy_transition = bool(
+        context.contract_version == session_contract.MARKET_SESSION_CONTRACT_VERSION_V1
+        and context.blocker == session_contract.VENDOR_LEGACY_UNSUPPORTED_TIME_BLOCKER
+    )
+    if context.blocker is not None and not legacy_transition:
+        return "outside_krx_nxt_window"
+    if context.contract_version == session_contract.MARKET_SESSION_CONTRACT_VERSION_V2:
+        return {
+            session_contract.MARKET_SESSION_REGIME_KRX_REGULAR: "krx_regular",
+            session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION: (
+                "session_transition"
+            ),
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET: (
+                "krx_nxt_aftermarket"
+            ),
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY: (
+                "krx_nxt_aftermarket_close_only"
+            ),
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT: (
+                "krx_nxt_aftermarket_terminal_exit"
+            ),
+            session_contract.MARKET_SESSION_REGIME_CLOSED: "outside_krx_nxt_window",
+        }.get(context.session_regime, "outside_krx_nxt_window")
+
+    observed_t = observed_at.time().replace(tzinfo=None)
     if datetime_time(hour=8) <= observed_t < datetime_time(hour=8, minute=50):
         return "krx_like_premarket"
     if datetime_time(hour=9) <= observed_t < TIME_15_30:
@@ -137,6 +170,75 @@ def _pending_sell_order_session(order_epoch):
     if TIME_SCALPING_NEW_BUY_CUTOFF <= observed_t < TIME_20_00:
         return "nxt_close_only"
     return "outside_krx_nxt_window"
+
+
+def holding_sell_reconciliation_block_reason(
+    stock: dict | None,
+    code: str,
+) -> str:
+    """Block a duplicate SELL when a durable boundary ledger is unresolved.
+
+    The helper consumes an already-built AM-S09 result attached to the stock;
+    it performs no file or broker I/O.  A malformed terminal claim fails closed.
+    """
+
+    stock = stock if isinstance(stock, dict) else {}
+    reconciliation = stock.get("aftermarket_close_reconciliation")
+    if reconciliation is None:
+        return ""
+
+    def value(name: str, default=None):
+        if isinstance(reconciliation, dict):
+            return reconciliation.get(name, default)
+        return getattr(reconciliation, name, default)
+
+    side = str(value("side", "") or "").strip().upper()
+    if side and side != "SELL":
+        return ""
+    symbol = str(value("symbol", "") or "").strip()[:6]
+    expected_symbol = str(code or "").strip()[:6]
+    raw_state = value("state", "")
+    state = str(getattr(raw_state, "value", raw_state) or "").strip().upper()
+    terminal = value("terminal")
+    releasable_qty = _strict_nonnegative_int(value("releasable_qty"))
+    successor_blocked = value("successor_blocked")
+    position_qty = _strict_nonnegative_int(stock.get("buy_qty"))
+    intent_sha256 = str(value("intent_sha256", "") or "").strip()
+    source_sha256s = value("source_sha256s", ())
+    source_sha256s = source_sha256s if isinstance(source_sha256s, (list, tuple)) else ()
+    hashes_valid = bool(
+        len(intent_sha256) == 64
+        and all(char in "0123456789abcdef" for char in intent_sha256)
+        and source_sha256s
+        and all(
+            isinstance(item, str)
+            and len(item) == 64
+            and all(char in "0123456789abcdef" for char in item)
+            for item in source_sha256s
+        )
+    )
+    if (
+        side != "SELL"
+        or not expected_symbol
+        or symbol != expected_symbol
+        or state not in {"OPEN", "UNKNOWN", "TERMINAL"}
+        or not hashes_valid
+        or (state == "TERMINAL") != (terminal is True)
+    ):
+        return "aftermarket_sell_reconciliation_invalid"
+    if state == "OPEN":
+        return "aftermarket_sell_child_open"
+    if state == "UNKNOWN":
+        return "aftermarket_sell_reconciliation_unknown"
+    if (
+        releasable_qty is None
+        or position_qty is None
+        or releasable_qty <= 0
+        or releasable_qty != position_qty
+        or successor_blocked is not False
+    ):
+        return "aftermarket_sell_terminal_quantity_not_released"
+    return ""
 
 
 def resolve_pending_sell_order_no(target_stock, token, *, now_epoch=None):

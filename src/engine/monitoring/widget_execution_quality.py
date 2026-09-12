@@ -24,7 +24,13 @@ FAILURES = {
     "take_profit_cancel_terminal_failure",
     "take_profit_terminal_failure",
 }
-SESSIONS = {"KRX_REGULAR", "NXT_PREMARKET", "NXT_AFTERMARKET"}
+DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
+SESSIONS = {
+    "KRX_REGULAR",
+    "NXT_PREMARKET",
+    "NXT_AFTERMARKET",
+    DUAL_AFTERMARKET_SESSION,
+}
 EXECUTION_OWNER = "operator_directed_widget_auto_trade_v1"
 
 
@@ -178,8 +184,14 @@ def event_session(row: dict) -> str | None:
         "session",
     ):
         value = str(row.get(key) or "").upper()
+        if value == DUAL_AFTERMARKET_SESSION or value.startswith(
+            f"{DUAL_AFTERMARKET_SESSION}_"
+        ):
+            return DUAL_AFTERMARKET_SESSION
         if value in SESSIONS:
             return value
+    if str(row.get("market_data_route") or "").lower() == "krx_nxt_integrated":
+        return DUAL_AFTERMARKET_SESSION
     for key in ("parent_entry_signal_id", "signal_id"):
         for session in sorted(SESSIONS):
             if f":{session}:" in str(row.get(key) or ""):
@@ -325,6 +337,8 @@ def load_execution_incidents(
                     "owner": owner,
                     "symbol": symbol,
                     "session": scope,
+                    "market_data_route": row.get("market_data_route"),
+                    "actual_execution_venue": row.get("actual_execution_venue"),
                     "policy_id": policy,
                     "parent_signal_id": parent,
                     "order_role": role,
@@ -397,6 +411,10 @@ def load_execution_incidents(
                 "requested_qty": _number(
                     row.get("requested_qty", prior_order.get("requested_qty"))
                 ),
+                "market_data_route": row.get("market_data_route")
+                or prior_order.get("market_data_route"),
+                "actual_execution_venue": row.get("actual_execution_venue")
+                or prior_order.get("actual_execution_venue"),
             }
         prior = incidents.get(key) if exact else None
         previous_stamp = _timestamp(prior.get("last_failure_at")) if prior else None
@@ -451,6 +469,10 @@ def load_execution_incidents(
         registry_path=custody_registry_path,
     )
     unresolved = [item for item in incidents.values() if item["status"] == "unresolved"]
+    dual_aftermarket_observe_only_count = sum(
+        item.get("session") == DUAL_AFTERMARKET_SESSION
+        for item in incidents.values()
+    )
     return {
         "schema": "widget_execution_incidents_v1",
         "source_target_date": target_date.isoformat(),
@@ -492,7 +514,13 @@ def load_execution_incidents(
         "partial_fill_order_count": sum(
             0 < item["filled_qty"] < item["requested_qty"] for item in orders.values()
         ),
-        "runtime_apply_allowed": not unresolved and not gaps and not same_day_failures,
+        "dual_aftermarket_observe_only_count": dual_aftermarket_observe_only_count,
+        "runtime_apply_allowed": (
+            not unresolved
+            and not gaps
+            and not same_day_failures
+            and not dual_aftermarket_observe_only_count
+        ),
         "status": (
             "SOURCE_GAP"
             if gaps

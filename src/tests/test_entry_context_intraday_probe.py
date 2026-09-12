@@ -392,6 +392,61 @@ def test_venue_preflight_matrix_separates_cohort_and_blocks_provider_leak():
     assert matrix["overall_status"] == "not_ready"
 
 
+def test_post_effective_integrated_preflight_uses_dual_cohort_and_unknown_actual():
+    fields = {
+        "ai_input_schema": "holding_flow_v2",
+        "ai_market_snapshot_id": "aims-dual-1",
+        "ai_market_snapshot_captured_at": "2026-09-14T16:01:00+09:00",
+        "ai_market_snapshot_effective_venue": "KRX_NXT_INTEGRATED",
+        "ai_market_snapshot_session_bucket": "krx_nxt_aftermarket",
+        "ai_market_snapshot_broker_route": "SOR",
+        "ai_market_snapshot_market_data_route": "krx_nxt_integrated",
+        "ai_market_snapshot_actual_execution_venue": "UNKNOWN",
+        "ai_market_snapshot_underlying_event_venue_source": "not_provided",
+        "ai_market_snapshot_venue_resolution": "integrated_scope",
+        "ai_input_preflight_source_allowed": True,
+        "ai_input_preflight_allowed": True,
+        "ai_input_preflight_venue_consistent": True,
+        "ai_input_preflight_position_reconciled": True,
+        "ai_market_snapshot_missing_as_zero": False,
+        "provider_called": False,
+    }
+
+    legacy_after_fields = {
+        **fields,
+        "ai_market_snapshot_id": "aims-legacy-after-1",
+        "ai_market_snapshot_effective_venue": "NXT",
+        "ai_market_snapshot_session_bucket": "nxt_aftermarket",
+        "ai_market_snapshot_broker_route": "NXT",
+        "ai_market_snapshot_market_data_route": "nxt_only",
+        "ai_market_snapshot_actual_execution_venue": "NXT",
+        "ai_market_snapshot_venue_resolution": "explicit_or_session",
+    }
+    matrix = mod._venue_preflight_matrix(
+        [
+            {"stage": "holding_flow_review", "fields": fields},
+            {"stage": "holding_flow_review", "fields": legacy_after_fields},
+        ]
+    )
+    dual = next(
+        item
+        for item in matrix["rows"]
+        if item["row_id"] == "KRX_NXT_AFTERMARKET:holding_flow"
+    )
+    legacy = next(
+        item
+        for item in matrix["rows"]
+        if item["row_id"] == "NXT_AFTERMARKET:holding_flow"
+    )
+
+    assert dual["observed_rows"] == 1
+    assert dual["exact_provenance_rows"] == 1
+    assert dual["market_data_route_counts"] == {"KRX_NXT_INTEGRATED": 1}
+    assert dual["actual_execution_venue_counts"] == {"UNKNOWN": 1}
+    assert dual["status"] == "ready"
+    assert legacy["observed_rows"] == 0
+
+
 def test_venue_preflight_requires_payload_identity_for_provider_rows():
     fields = {
         "ai_input_schema": "entry_screen_hot_v1",

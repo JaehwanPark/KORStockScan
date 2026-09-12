@@ -781,15 +781,16 @@ def test_real_post_sell_registers_bounded_exact_route_bbo_observer(
     feedback_mod._RECORDED_KEYS.clear()
     feedback_mod._WS_RETAIN_UNTIL.clear()
     feedback_mod._POST_SELL_EXECUTABLE_BBO_OBSERVERS.clear()
-    sell_dt = datetime.now().replace(microsecond=0)
+    sell_dt = datetime.fromisoformat("2026-09-14T16:30:00+09:00")
 
     candidate = feedback_mod.record_post_sell_candidate(
         recommendation_id=92,
         stock={
             "name": "경로유지테스트",
             "last_sell_execution_broker_route": "SOR",
-            "last_sell_execution_cohort": "KRX",
-            "last_sell_execution_session_bucket": "krx_regular",
+            "market_data_route": "krx_nxt_integrated",
+            "actual_execution_venue": "KRX",
+            "market_session_regime": "KRX_NXT_AFTERMARKET",
         },
         code="444445",
         sell_time=sell_dt,
@@ -805,7 +806,9 @@ def test_real_post_sell_registers_bounded_exact_route_bbo_observer(
         == "krx_nxt_integrated"
     )
     assert candidate["post_sell_executable_bbo_venue"] == "KRX"
-    assert candidate["post_sell_executable_bbo_session"] == "krx_regular"
+    assert candidate["post_sell_executable_bbo_session"] == "KRX_NXT_AFTERMARKET"
+    assert candidate["broker_route_requested"] == "SOR"
+    assert candidate["actual_execution_venue"] == "KRX"
     assert candidate["post_sell_executable_bbo_horizons_sec"] == [60, 180, 300, 600]
     assert feedback_mod.should_retain_ws_subscription(
         "444445", now_ts=sell_dt.timestamp() + 610.0
@@ -881,7 +884,48 @@ def test_post_sell_route_contract_preserves_nxt_close_only_session(monkeypatch):
     assert route["expected_market_route"] == "nxt_only"
     assert route["session"] == "nxt_close_only"
     assert fallback_route["status"] == "route_contract_ready"
-    assert fallback_route["session"] == "nxt_close_only"
+    assert fallback_route["session"] == "nxt_aftermarket"
+
+
+def test_post_sell_dual_sor_preserves_unknown_venue_and_null_cost(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_WS_RETAIN_MINUTES=0,
+        ),
+    )
+    feedback_mod._RECORDED_KEYS.clear()
+    sell_dt = datetime.fromisoformat("2026-09-14T16:30:00+09:00")
+
+    candidate = feedback_mod.record_post_sell_candidate(
+        recommendation_id=94,
+        stock={
+            "name": "통합경로비용결손",
+            "broker_route_requested": "SOR",
+            "market_data_route": "krx_nxt_integrated",
+            "market_session_regime": "KRX_NXT_AFTERMARKET",
+            "actual_execution_venue": "UNKNOWN",
+            "sell_execution_receipt_economics_complete": False,
+        },
+        code="444447",
+        sell_time=sell_dt,
+        sell_price=10_000,
+        buy_price=9_900,
+        profit_rate=1.0,
+    )
+
+    assert candidate is not None
+    assert candidate["market_session_regime"] == "KRX_NXT_AFTERMARKET"
+    assert candidate["market_data_route"] == "krx_nxt_integrated"
+    assert candidate["broker_route_requested"] == "SOR"
+    assert candidate["actual_execution_venue"] == "UNKNOWN"
+    assert candidate["cost_attribution_status"] == "cost_missing"
+    assert candidate["realized_net_pnl_krw"] is None
 
 
 def test_post_sell_route_contract_blocks_venue_session_mismatch():

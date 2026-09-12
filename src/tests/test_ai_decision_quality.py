@@ -681,6 +681,27 @@ def test_cohort_filter_and_artifact_paths_do_not_mix_krx_and_nxt():
     ).name.endswith("_venue_krx_session_krx_regular.json")
 
 
+def test_dual_aftermarket_is_an_integrated_offline_cohort() -> None:
+    row = {
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "session_bucket": "KRX_NXT_AFTERMARKET",
+    }
+    assert quality._request_code_for_venue("000001", row["effective_venue"]) == (
+        "000001_AL"
+    )
+    assert quality._venue_session_consistent(
+        row["effective_venue"], row["session_bucket"]
+    )
+    assert quality._filter_rows_for_cohort(
+        [row],
+        effective_venue="KRX_NXT_INTEGRATED",
+        session_bucket="KRX_NXT_AFTERMARKET",
+    ) == [row]
+    assert quality._timestamp_in_session(
+        datetime(2026, 9, 14, 16, 0, tzinfo=KST), row["session_bucket"]
+    )
+
+
 def test_daily_materialization_builds_ordered_chain_without_candidate_execution():
     label = {
         **_pending(),
@@ -7507,6 +7528,8 @@ def test_micro_reversion_bridge_outcome_rejects_unproven_integrated_micro_scope(
             "micro_venue": "SOR",
             "micro_session_bucket": "SOR_REGULAR",
             "trace_market_data_route": "krx_nxt_integrated",
+            "market_data_route": "krx_nxt_integrated",
+            "actual_execution_venue": "UNKNOWN",
             "integrated_sor_route_proven": True,
         }
     )

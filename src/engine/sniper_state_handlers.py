@@ -33,6 +33,7 @@ from sqlalchemy import or_
 
 from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders, sniper_trade_utils
+from src.trading.market import session_contract
 from src.engine.automation.source_quality_clean_baseline import (
     embedded_source_date_gate,
 )
@@ -26139,6 +26140,14 @@ def _active_sell_order_pending_fields(stock: dict | None) -> tuple[str, ...]:
     for key in ("sell_odno", "sell_ord_no", "pending_sell_msg"):
         if bool(str(stock.get(key, "") or "").strip()):
             active_fields.append(key)
+    reconciliation_reason = (
+        sniper_trade_utils.holding_sell_reconciliation_block_reason(
+            stock,
+            str(stock.get("code") or "").strip()[:6],
+        )
+    )
+    if reconciliation_reason:
+        active_fields.append(reconciliation_reason)
     return tuple(active_fields)
 
 
@@ -28740,6 +28749,7 @@ def _fast_exit_execution_route_fields(
         and recorded_entry_cohort in {"NXT", "PREMARKET_KRX_LIKE"}
     )
     observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    market_session = session_contract.resolve_market_session(observed_dt)
     if _holding_sell_krx_regular_session(observed_dt.time()):
         resolution = {
             "blocked": False,
@@ -28748,7 +28758,11 @@ def _fast_exit_execution_route_fields(
             "nxt_flag_source": "krx_regular_session",
             "reason": "krx_regular_session_sor",
         }
-    elif confirmed_nxt_entry_position:
+    elif (
+        confirmed_nxt_entry_position
+        and market_session.contract_version
+        == session_contract.MARKET_SESSION_CONTRACT_VERSION_V1
+    ):
         resolution = {
             "blocked": False,
             "dmst_stex_tp": "NXT",
@@ -28758,7 +28772,10 @@ def _fast_exit_execution_route_fields(
         }
     else:
         resolution = _resolve_holding_sell_dmst_stex_tp(
-            stock, code, now_t=observed_dt.time()
+            stock,
+            code,
+            now_t=observed_dt.time(),
+            observed_at=observed_dt,
         )
     broker_route = str(resolution.get("dmst_stex_tp") or "").strip().upper()
     session_bucket = _holding_sell_execution_session_bucket(float(now_ts))
@@ -28807,11 +28824,20 @@ def _fast_exit_execution_route_fields(
     )
     ws_nxt_route_ready = bool(
         broker_route == "NXT"
+        and not session_bucket.startswith("krx_nxt_aftermarket")
         and quote_age_ms is not None
         and quote_age_ms <= 3000.0
         and quote_item_is_nxt
         and quote_item_code == expected_code
         and quote_route in {"krx_nxt_integrated", "nxt_only"}
+    )
+    ws_integrated_route_ready = bool(
+        session_bucket.startswith("krx_nxt_aftermarket")
+        and quote_age_ms is not None
+        and quote_age_ms <= 3000.0
+        and quote_item_code == expected_code
+        and (quote_suffix == "_AL" or quote_item.endswith("_AL"))
+        and quote_route == "krx_nxt_integrated"
     )
 
     rest = rest_snapshot if isinstance(rest_snapshot, dict) else {}
@@ -28825,8 +28851,23 @@ def _fast_exit_execution_route_fields(
         and rest_stock_code == expected_code
         and rest_request_code.endswith(("_AL", "_NX"))
     )
+    rest_integrated_route_ready = bool(
+        session_bucket.startswith("krx_nxt_aftermarket")
+        and str(rest.get("source") or "").strip() == "ka10004_rest_orderbook"
+        and rest_stock_code == expected_code
+        and rest_request_code.endswith("_AL")
+    )
     source_quality_ready = bool(
-        broker_route in {"KRX", "SOR"} or ws_nxt_route_ready or rest_nxt_route_ready
+        ws_integrated_route_ready
+        or rest_integrated_route_ready
+        or (
+            not session_bucket.startswith("krx_nxt_aftermarket")
+            and (
+                broker_route in {"KRX", "SOR"}
+                or ws_nxt_route_ready
+                or rest_nxt_route_ready
+            )
+        )
     )
     source_quality_blocked = bool(not broker_route_blocked and not source_quality_ready)
     if resolution.get("blocked"):
@@ -28838,7 +28879,15 @@ def _fast_exit_execution_route_fields(
     elif execution_session_blocked:
         reason = "fast_exit_outside_supported_execution_session"
     elif not source_quality_ready:
-        reason = "nxt_executable_quote_route_unproven"
+        reason = (
+            "integrated_executable_quote_route_unproven"
+            if session_bucket.startswith("krx_nxt_aftermarket")
+            else "nxt_executable_quote_route_unproven"
+        )
+    elif rest_integrated_route_ready:
+        reason = "integrated_rest_route_proven"
+    elif ws_integrated_route_ready:
+        reason = "integrated_ws_route_proven"
     elif rest_nxt_route_ready:
         reason = "nxt_rest_route_proven"
     elif ws_nxt_route_ready:
@@ -28871,15 +28920,17 @@ def _fast_exit_execution_route_fields(
             "observed" if quote_route != "unknown" else "not_available"
         ),
         "fast_exit_ws_nxt_route_ready": ws_nxt_route_ready,
+        "fast_exit_ws_integrated_route_ready": ws_integrated_route_ready,
         "fast_exit_rest_request_code": rest_request_code or "-",
         "fast_exit_rest_nxt_route_ready": rest_nxt_route_ready,
+        "fast_exit_rest_integrated_route_ready": rest_integrated_route_ready,
         "metric_role": "source_quality_gate",
         "decision_authority": "real_scalping_fast_exit_venue_guard",
         "window_policy": "same_position_current_execution_session",
         "sample_floor": "not_applicable_runtime_guard",
         "primary_decision_metric": "venue_proven_executable_sell_dispatch",
         "source_quality_gate": (
-            "explicit_broker_route_and_actual_nxt_0d_or_nxt_rest_request_code"
+            "explicit_broker_route_and_matching_session_route_quote"
         ),
         "forbidden_uses": (
             "implicit_time_only_route|krx_only_nxt_sell|venue_conflict_bypass|"
@@ -47168,7 +47219,10 @@ def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
 
     observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
     route_resolution = _resolve_holding_sell_dmst_stex_tp(
-        stock, code, now_t=observed_dt.time()
+        stock,
+        code,
+        now_t=observed_dt.time(),
+        observed_at=observed_dt,
     )
     route = str(route_resolution.get("dmst_stex_tp") or "").strip().upper()
     nxt_enabled = route_resolution.get("nxt_enabled")
@@ -73731,12 +73785,10 @@ def _scalping_execution_cohort(now_ts: float, broker_route: str) -> str:
 
 
 def _holding_sell_execution_session_bucket(now_ts: float) -> str:
-    """Apply the operator-selected 15:45 NXT start only to held-position exits."""
+    """Use the effective-date session contract for held-position exits."""
 
-    now_t = datetime.fromtimestamp(float(now_ts), tz=_KST).time()
-    if datetime_time(hour=15, minute=45) <= now_t < datetime_time(hour=16):
-        return "nxt_aftermarket_early_sell"
-    return _rising_missed_nxt_session_bucket(now_ts)
+    observed_at = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    return sniper_trade_utils.holding_sell_session_bucket(observed_at)
 
 
 def _holding_sell_execution_cohort(now_ts: float, broker_route: str) -> str:
@@ -73744,6 +73796,12 @@ def _holding_sell_execution_cohort(now_ts: float, broker_route: str) -> str:
     session_bucket = _holding_sell_execution_session_bucket(now_ts)
     if session_bucket == "nxt_aftermarket_early_sell" and route == "NXT":
         return "NXT"
+    if session_bucket.startswith("krx_nxt_aftermarket") and route in {
+        "KRX",
+        "NXT",
+        "SOR",
+    }:
+        return "KRX_NXT_INTEGRATED"
     return _scalping_execution_cohort(now_ts, broker_route)
 
 
@@ -77937,11 +77995,47 @@ def _holding_sell_krx_regular_session(now_t) -> bool:
     return datetime_time(hour=9, minute=0) <= now_t < TIME_15_30
 
 
+def _holding_sell_nullable_flag(stock: dict, *keys: str) -> tuple[bool | None, str]:
+    for key in keys:
+        if key not in stock:
+            continue
+        raw = stock.get(key)
+        if isinstance(raw, bool):
+            return raw, f"stock.{key}"
+        normalized = str(raw if raw is not None else "").strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y"}:
+            return True, f"stock.{key}"
+        if normalized in {"0", "false", "f", "no", "n"}:
+            return False, f"stock.{key}"
+        return None, f"stock.{key}_unknown"
+    return None, "stock_flag_missing"
+
+
+def _holding_sell_recorded_route(stock: dict) -> tuple[str, str]:
+    for key in (
+        "sell_submit_intended_route",
+        "sell_pending_order_broker_route",
+        "entry_execution_broker_route",
+        "approved_exit_route",
+    ):
+        route = str(stock.get(key) or "").strip().upper()
+        if route:
+            return route, f"stock.{key}"
+    return "", "recorded_route_missing"
+
+
 def _resolve_holding_sell_dmst_stex_tp(
-    stock: dict | None, code: str, now_t=None
+    stock: dict | None,
+    code: str,
+    now_t=None,
+    *,
+    observed_at: datetime | None = None,
 ) -> dict:
     stock = stock if isinstance(stock, dict) else {}
-    current_t = now_t or datetime.now().time()
+    current_t = now_t or (observed_at.time() if observed_at is not None else datetime.now().time())
+    if observed_at is None:
+        observed_at = datetime.combine(datetime.now(_KST).date(), current_t, tzinfo=_KST)
+    session = session_contract.resolve_market_session(observed_at)
     is_nxt_enabled, source = _holding_sell_nxt_enabled_status(stock, code)
     confirmed_nxt_position = bool(
         str(stock.get("status") or "").strip().upper() == "HOLDING"
@@ -77955,6 +78049,130 @@ def _resolve_holding_sell_dmst_stex_tp(
         # matching sell route; freshness and order guards remain independent.
         is_nxt_enabled = True
         source = "confirmed_entry_execution_route"
+
+    legacy_transition = bool(
+        session.contract_version == session_contract.MARKET_SESSION_CONTRACT_VERSION_V1
+        and session.blocker == session_contract.VENDOR_LEGACY_UNSUPPORTED_TIME_BLOCKER
+    )
+    if session.blocker is not None and not legacy_transition:
+        return {
+            "blocked": True,
+            "dmst_stex_tp": "UNKNOWN",
+            "nxt_enabled": is_nxt_enabled,
+            "nxt_flag_source": source,
+            "market_session_regime": session.session_regime,
+            "reason": str(session.blocker),
+        }
+
+    if session.contract_version == session_contract.MARKET_SESSION_CONTRACT_VERSION_V2:
+        reconciliation_reason = (
+            sniper_trade_utils.holding_sell_reconciliation_block_reason(stock, code)
+        )
+        if session.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR:
+            return {
+                "blocked": False,
+                "dmst_stex_tp": "SOR",
+                "nxt_enabled": is_nxt_enabled,
+                "nxt_flag_source": source,
+                "market_session_regime": session.session_regime,
+                "reason": "krx_regular_session_sor",
+            }
+        if not session.exit_allowed_by_clock:
+            return {
+                "blocked": True,
+                "dmst_stex_tp": "UNKNOWN",
+                "nxt_enabled": is_nxt_enabled,
+                "nxt_flag_source": source,
+                "market_session_regime": session.session_regime,
+                "reason": (
+                    "aftermarket_session_transition_reconciliation_only"
+                    if session.session_regime
+                    == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION
+                    else "outside_supported_sell_execution_session"
+                ),
+            }
+        recorded_route, route_source = _holding_sell_recorded_route(stock)
+        if reconciliation_reason:
+            return {
+                "blocked": True,
+                "dmst_stex_tp": recorded_route or "UNKNOWN",
+                "nxt_enabled": is_nxt_enabled,
+                "nxt_flag_source": source,
+                "market_session_regime": session.session_regime,
+                "route_source": route_source,
+                "reason": reconciliation_reason,
+            }
+        if recorded_route:
+            if recorded_route not in {"KRX", "NXT", "SOR"}:
+                return {
+                    "blocked": True,
+                    "dmst_stex_tp": "UNKNOWN",
+                    "nxt_enabled": is_nxt_enabled,
+                    "nxt_flag_source": source,
+                    "market_session_regime": session.session_regime,
+                    "route_source": route_source,
+                    "reason": "holding_sell_recorded_route_invalid",
+                }
+            return {
+                "blocked": False,
+                "dmst_stex_tp": recorded_route,
+                "nxt_enabled": is_nxt_enabled,
+                "nxt_flag_source": source,
+                "market_session_regime": session.session_regime,
+                "route_source": route_source,
+                "reason": "holding_sell_recorded_route_preserved",
+            }
+
+        krx_aftermarket_enabled, krx_source = _holding_sell_nullable_flag(
+            stock,
+            "krx_aftermarket_eligible",
+            "is_krx_aftermarket",
+        )
+        eligible_routes = {
+            route
+            for route, enabled in (
+                ("KRX", krx_aftermarket_enabled),
+                ("NXT", is_nxt_enabled),
+            )
+            if enabled is True
+        }
+        if eligible_routes:
+            if eligible_routes == {"KRX", "NXT"}:
+                return {
+                    "blocked": True,
+                    "dmst_stex_tp": "UNKNOWN",
+                    "nxt_enabled": is_nxt_enabled,
+                    "nxt_flag_source": source,
+                    "krx_aftermarket_enabled": krx_aftermarket_enabled,
+                    "krx_aftermarket_flag_source": krx_source,
+                    "market_session_regime": session.session_regime,
+                    "route_source": "exact_symbol_aftermarket_eligibility",
+                    "reason": "holding_sell_route_authority_missing",
+                }
+            selected_route = next(iter(eligible_routes))
+            return {
+                "blocked": False,
+                "dmst_stex_tp": selected_route,
+                "nxt_enabled": is_nxt_enabled,
+                "nxt_flag_source": source,
+                "krx_aftermarket_enabled": krx_aftermarket_enabled,
+                "krx_aftermarket_flag_source": krx_source,
+                "market_session_regime": session.session_regime,
+                "route_source": "exact_symbol_aftermarket_eligibility",
+                "reason": "holding_sell_exact_eligibility_route",
+            }
+        return {
+            "blocked": True,
+            "dmst_stex_tp": "UNKNOWN",
+            "nxt_enabled": is_nxt_enabled,
+            "nxt_flag_source": source,
+            "krx_aftermarket_enabled": krx_aftermarket_enabled,
+            "krx_aftermarket_flag_source": krx_source,
+            "market_session_regime": session.session_regime,
+            "route_source": route_source,
+            "reason": "holding_sell_route_authority_missing",
+        }
+
     krx_regular = _holding_sell_krx_regular_session(current_t)
     nxt_execution_session = bool(
         datetime_time(hour=8) <= current_t < datetime_time(hour=8, minute=50)
@@ -78007,6 +78225,7 @@ def _scalping_same_session_terminal_exit_fields(
     *,
     strategy: str,
     now_t,
+    observed_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Select the existing SELL path before the held symbol's last session closes.
 
@@ -78053,6 +78272,101 @@ def _scalping_same_session_terminal_exit_fields(
                 "simulator_terminal_window"
                 if due
                 else "before_simulator_terminal_window"
+            ),
+        }
+
+    if observed_at is None:
+        observed_at = datetime.combine(datetime.now(_KST).date(), now_t, tzinfo=_KST)
+    session = session_contract.resolve_market_session(observed_at)
+    if session.blocker is not None:
+        return {
+            **base,
+            "terminal_venue": "UNKNOWN",
+            "terminal_route": "UNKNOWN",
+            "terminal_start": _SCALPING_NXT_TERMINAL_EXIT_START.isoformat(),
+            "venue_source": "market_session_contract_v2",
+            "reason": str(session.blocker),
+        }
+    if session.contract_version == session_contract.MARKET_SESSION_CONTRACT_VERSION_V2:
+        reconciliation_reason = (
+            sniper_trade_utils.holding_sell_reconciliation_block_reason(stock, code)
+        )
+        if reconciliation_reason:
+            return {
+                **base,
+                "terminal_venue": "UNKNOWN",
+                "terminal_route": "UNKNOWN",
+                "terminal_start": _SCALPING_NXT_TERMINAL_EXIT_START.isoformat(),
+                "venue_source": "aftermarket_close_reconciliation_v1",
+                "reason": reconciliation_reason,
+            }
+
+        if session.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR:
+            future_at = observed_at.replace(hour=16, minute=0, second=0, microsecond=0)
+            future_route = _resolve_holding_sell_dmst_stex_tp(
+                stock,
+                code,
+                now_t=future_at.time(),
+                observed_at=future_at,
+            )
+            due = bool(
+                future_route.get("blocked")
+                and _SCALPING_KRX_TERMINAL_EXIT_START <= now_t < TIME_15_30
+            )
+            terminal_route = "SOR" if due else str(
+                future_route.get("dmst_stex_tp") or "UNKNOWN"
+            ).upper()
+            return {
+                **base,
+                "should_exit": due,
+                "terminal_venue": "KRX" if due else "UNKNOWN",
+                "terminal_route": terminal_route,
+                "terminal_start": (
+                    _SCALPING_KRX_TERMINAL_EXIT_START if due else _SCALPING_NXT_TERMINAL_EXIT_START
+                ).isoformat(),
+                "venue_source": future_route.get("route_source")
+                or future_route.get("reason")
+                or "UNKNOWN",
+                "reason": (
+                    "last_regular_sell_window_without_aftermarket_route"
+                    if due
+                    else "aftermarket_exit_route_preserved"
+                ),
+            }
+
+        route_resolution = _resolve_holding_sell_dmst_stex_tp(
+            stock,
+            code,
+            now_t=now_t,
+            observed_at=observed_at,
+        )
+        terminal_window = (
+            session.session_regime
+            == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT
+        )
+        due = bool(terminal_window and not route_resolution.get("blocked"))
+        terminal_route = str(
+            route_resolution.get("dmst_stex_tp") or "UNKNOWN"
+        ).upper()
+        return {
+            **base,
+            "should_exit": due,
+            "terminal_venue": "UNKNOWN",
+            "terminal_route": terminal_route,
+            "terminal_start": _SCALPING_NXT_TERMINAL_EXIT_START.isoformat(),
+            "venue_source": route_resolution.get("route_source")
+            or route_resolution.get("reason")
+            or "UNKNOWN",
+            "market_session_regime": session.session_regime,
+            "reason": (
+                "integrated_terminal_exit_window"
+                if due
+                else str(
+                    route_resolution.get("reason")
+                    or "before_integrated_terminal_exit_window"
+                )
+                if route_resolution.get("blocked")
+                else "before_integrated_terminal_exit_window"
             ),
         }
 
@@ -78147,7 +78461,10 @@ def _nxt_aftermarket_early_sell_quote_context(
     )
 
     route_resolution = _resolve_holding_sell_dmst_stex_tp(
-        stock, normalized_code, now_t=observed_time
+        stock,
+        normalized_code,
+        now_t=observed_time,
+        observed_at=observed_dt,
     )
     confirmed_nxt_position = bool(
         str(stock.get("status") or "").strip().upper() == "HOLDING"
@@ -78414,7 +78731,12 @@ def _maybe_submit_nxt_rising_missed_tp1_partial_runner(
     session_bucket = _rising_missed_nxt_session_bucket(now_ts)
     if not session_bucket.startswith("nxt_"):
         return False
-    exchange = _resolve_holding_sell_dmst_stex_tp(stock, code, now_t=now_dt.time())
+    exchange = _resolve_holding_sell_dmst_stex_tp(
+        stock,
+        code,
+        now_t=now_dt.time(),
+        observed_at=now_dt,
+    )
     if exchange.get("blocked") or exchange.get("nxt_enabled") is not True:
         return False
 
@@ -85659,6 +85981,7 @@ def handle_holding_state(
         code,
         strategy=strategy,
         now_t=now_t,
+        observed_at=now_dt,
     )
     if same_session_terminal_exit.get("should_exit"):
         is_sell_signal = True
@@ -90313,7 +90636,10 @@ def handle_holding_state(
                 )
 
         sell_exchange_resolution = _resolve_holding_sell_dmst_stex_tp(
-            stock, code, now_t=now_t
+            stock,
+            code,
+            now_t=now_t,
+            observed_at=now_dt,
         )
         sell_quote_fields.update(
             {

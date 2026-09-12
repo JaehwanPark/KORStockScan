@@ -34,6 +34,7 @@ PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 CONTEXT_CANDIDATE_DIR = DATA_DIR / "ai_canonical_context_candidates"
 CLEAN_BASELINE_POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
 AI_MARKET_SNAPSHOT_SCHEMA_INTRODUCED_DATE = "2026-07-23"
+DUAL_AFTERMARKET_EFFECTIVE_DATE = "2026-09-14"
 HOLDING_FLOW_EXACT_CONTEXT_RECOVERY_CONTRACT = {
     "metric_role": "holding_flow_exact_context_recovery",
     "decision_authority": "forensics_only_no_runtime_change",
@@ -202,6 +203,14 @@ VENUE_PREFLIGHT_REQUIRED_ROWS = {
         "holding_flow",
     ),
     "NXT_AFTERMARKET": (
+        "entry_screen",
+        "gatekeeper",
+        "entry_price",
+        "post_probe",
+        "holding_score",
+        "holding_flow",
+    ),
+    "KRX_NXT_AFTERMARKET": (
         "entry_screen",
         "gatekeeper",
         "entry_price",
@@ -409,8 +418,30 @@ def _preflight_cohort(fields: dict[str, Any], point: str) -> str | None:
         or fields.get("holding_context_session")
         or ""
     ).lower()
+    observed_at = str(
+        fields.get("event_time")
+        or fields.get("emitted_at")
+        or fields.get("ai_market_snapshot_captured_at")
+        or ""
+    )
+    observed_date = observed_at[:10]
+    post_effective = observed_date >= DUAL_AFTERMARKET_EFFECTIVE_DATE
+    market_data_route = str(
+        fields.get("ai_market_snapshot_market_data_route") or ""
+    ).lower()
     if "premarket" in session or venue == "PREMARKET_KRX_LIKE":
         return "PREMARKET_KRX_LIKE"
+    if post_effective and (
+        venue in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}
+        or "krx_nxt_aftermarket" in session
+    ):
+        if market_data_route == "krx_nxt_integrated":
+            return "KRX_NXT_AFTERMARKET"
+        return None
+    if post_effective and venue == "NXT" and (
+        "aftermarket" in session or "nxt_entry_window" in session
+    ):
+        return None
     if venue == "NXT" and ("aftermarket" in session or "nxt_entry_window" in session):
         return "NXT_AFTERMARKET"
     if venue == "NXT":
@@ -464,6 +495,10 @@ def _venue_preflight_matrix(
                 and _nonempty(row.get("ai_market_snapshot_venue_resolution"))
                 and _nonempty(
                     row.get("ai_market_snapshot_underlying_event_venue_source")
+                )
+                and (
+                    cohort != "KRX_NXT_AFTERMARKET"
+                    or _nonempty(row.get("ai_market_snapshot_actual_execution_venue"))
                 )
             ]
             valid = [
@@ -536,6 +571,7 @@ def _venue_preflight_matrix(
             broker_route_counts: dict[str, int] = {}
             market_data_route_counts: dict[str, int] = {}
             underlying_event_venue_counts: dict[str, int] = {}
+            actual_execution_venue_counts: dict[str, int] = {}
             for row in exact:
                 for field, target in (
                     ("ai_market_snapshot_broker_route", broker_route_counts),
@@ -546,6 +582,10 @@ def _venue_preflight_matrix(
                     (
                         "ai_market_snapshot_underlying_event_venue",
                         underlying_event_venue_counts,
+                    ),
+                    (
+                        "ai_market_snapshot_actual_execution_venue",
+                        actual_execution_venue_counts,
                     ),
                 ):
                     value = str(row.get(field) or "UNKNOWN").strip().upper()
@@ -594,6 +634,9 @@ def _venue_preflight_matrix(
                     ),
                     "underlying_event_venue_counts": dict(
                         sorted(underlying_event_venue_counts.items())
+                    ),
+                    "actual_execution_venue_counts": dict(
+                        sorted(actual_execution_venue_counts.items())
                     ),
                 }
             )

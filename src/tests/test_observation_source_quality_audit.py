@@ -47,6 +47,94 @@ def _prune_observer_contract_fields() -> dict:
     }
 
 
+def test_aftermarket_axes_exclude_only_identifiable_misclassified_row(monkeypatch):
+    stage = "test_aftermarket_axes"
+    contract = audit.StageContract(required_fields=())
+    monkeypatch.setitem(audit.STAGE_CONTRACTS, stage, contract)
+    valid_fields = {
+        "decision_market_scope": "KRX_NXT_INTEGRATED",
+        "market_data_route": "krx_nxt_integrated",
+        "market_session_regime": "KRX_NXT_AFTERMARKET",
+        "actual_execution_venue": "UNKNOWN",
+    }
+    bad_fields = {**valid_fields, "decision_market_scope": "NXT"}
+    valid = audit._row_contract_violations(stage, {"fields": valid_fields}, contract)
+    bad = audit._row_contract_violations(stage, {"fields": bad_fields}, contract)
+    contract_result = {
+        "stage_contracts": {
+            stage: {
+                "status": "warning",
+                "missing_violations": {},
+                "zero_violations": {},
+                "invalid_label_violations": {
+                    "aftermarket_market_axes_contract": 1,
+                },
+            }
+        }
+    }
+
+    exclusions = audit._hard_blocking_row_exclusions(
+        [
+            {"stage": stage, "record_id": 1, "fields": valid_fields},
+            {"stage": stage, "record_id": 2, "fields": bad_fields},
+        ],
+        contract_result,
+    )
+
+    assert valid["invalid_fields"] == []
+    assert bad["invalid_fields"] == ["aftermarket_market_axes_contract"]
+    assert [item["record_id"] for item in exclusions] == [2]
+    assert (
+        audit._reviewed_unknown_reason_for_stage_field(
+            stage,
+            "actual_execution_venue",
+            "UNKNOWN",
+            valid_fields,
+        )
+        == "reviewed_integrated_route_actual_execution_venue_unobserved"
+    )
+    actual_only = audit._row_contract_violations(
+        stage,
+        {"fields": {"actual_execution_venue": "KRX"}},
+        contract,
+    )
+    assert actual_only["invalid_fields"] == []
+
+
+def test_aftermarket_axes_accept_exact_transition_and_reject_removed_nxt_solo(monkeypatch):
+    stage = "test_aftermarket_transition_axes"
+    contract = audit.StageContract(required_fields=())
+    monkeypatch.setitem(audit.STAGE_CONTRACTS, stage, contract)
+
+    transition = audit._row_contract_violations(
+        stage,
+        {
+            "fields": {
+                "decision_market_scope": "KRX_NXT_TRANSITION",
+                "market_data_route": "unknown",
+                "market_session_regime": "SESSION_TRANSITION",
+                "actual_execution_venue": "UNKNOWN",
+            }
+        },
+        contract,
+    )
+    removed_solo = audit._row_contract_violations(
+        stage,
+        {
+            "fields": {
+                "decision_market_scope": "NXT",
+                "market_data_route": "nxt_only",
+                "market_session_regime": "NXT_AFTERMARKET_SOLO",
+                "actual_execution_venue": "UNKNOWN",
+            }
+        },
+        contract,
+    )
+
+    assert transition["invalid_fields"] == []
+    assert removed_solo["invalid_fields"] == ["aftermarket_market_axes_contract"]
+
+
 @pytest.mark.parametrize(
     "stage",
     [

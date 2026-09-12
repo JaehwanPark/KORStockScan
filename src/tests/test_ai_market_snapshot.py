@@ -1357,7 +1357,7 @@ def test_minute_candle_has_interval_aware_freshness_without_weakening_ws():
     assert stale_ws["sources"]["bbo"]["quality"] == "stale"
 
 
-def test_nxt_aftermarket_accepts_integrated_route_with_event_and_clock_proof():
+def test_nxt_aftermarket_rejects_integrated_route_even_with_legacy_event_label():
     now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
     snapshot = mod.build_ai_market_snapshot(
         stock_code="005930",
@@ -1374,7 +1374,9 @@ def test_nxt_aftermarket_accepts_integrated_route_with_event_and_clock_proof():
         now_ts=now,
     )
 
-    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is False
+    assert snapshot["actual_execution_venue"] == "UNKNOWN"
+    assert snapshot["underlying_event_venue"] is None
 
 
 def test_nxt_aftermarket_rejects_integrated_route_without_event_venue_proof():
@@ -1396,31 +1398,38 @@ def test_nxt_aftermarket_rejects_integrated_route_without_event_venue_proof():
     )
 
 
-def test_nxt_aftermarket_accepts_bounded_integrated_execution_view_without_attribution():
+def test_integrated_aftermarket_keeps_scope_without_actual_venue_attribution():
     now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
     snapshot = mod.build_ai_market_snapshot(
         stock_code="005930",
         decision_stage="entry_context",
         ws_data=_ws(now, suffix="_AL", route="krx_nxt_integrated"),
-        effective_venue="NXT",
-        session_bucket="nxt_aftermarket",
-        broker_route="NXT",
-        candle_context=_nxt_integrated_candle(),
+        effective_venue="KRX_NXT_INTEGRATED",
+        session_bucket="krx_nxt_aftermarket",
+        broker_route="SOR",
+        candle_context=_candle(
+            rest_route="_AL",
+            ws_route="krx_nxt_integrated",
+            request_code="005930_AL",
+        ),
         now_ts=now,
     )
 
     assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
     assert snapshot["ai_input_preflight_v1"]["venue_consistent"] is True
-    assert snapshot["nxt_integrated_execution_view_proven"] is True
-    assert snapshot["nxt_integrated_execution_view_only"] is True
+    assert snapshot["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert snapshot["market_data_route"] == "krx_nxt_integrated"
+    assert snapshot["actual_execution_venue"] == "UNKNOWN"
+    assert snapshot["nxt_integrated_execution_view_proven"] is False
+    assert snapshot["nxt_integrated_execution_view_only"] is False
     assert snapshot["underlying_event_venue"] is None
     assert snapshot["venue_attribution_allowed"] is False
     assert (
-        snapshot["venue_attribution_reason"]
-        == "nxt_integrated_execution_view_not_event_venue"
+        snapshot["venue_attribution_reason"] == "not_provided"
     )
     fields = mod.ai_market_snapshot_log_fields(snapshot)
-    assert fields["ai_market_snapshot_nxt_integrated_execution_view_proven"] is True
+    assert fields["ai_market_snapshot_nxt_integrated_execution_view_proven"] is False
+    assert fields["ai_market_snapshot_actual_execution_venue"] == "UNKNOWN"
 
 
 def test_nxt_integrated_execution_view_rejects_unproven_candle_route():
@@ -1479,7 +1488,7 @@ def test_nxt_integrated_execution_view_rejects_wrong_broker_route_and_clock():
         )
 
 
-def test_nxt_holding_accepts_integrated_execution_view_only_with_position():
+def test_nxt_holding_never_treats_integrated_route_as_nxt_with_position():
     now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
     common = {
         "stock_code": "005930",
@@ -1497,8 +1506,9 @@ def test_nxt_holding_accepts_integrated_execution_view_only_with_position():
     )
     flat = mod.build_ai_market_snapshot(**common, position={})
 
-    assert active["nxt_integrated_execution_view_proven"] is True
-    assert active["ai_input_preflight_v1"]["source_allowed"] is True
+    assert active["nxt_integrated_execution_view_proven"] is False
+    assert active["ai_input_preflight_v1"]["source_allowed"] is False
+    assert active["actual_execution_venue"] == "UNKNOWN"
     assert active["venue_attribution_allowed"] is False
     assert flat["nxt_integrated_execution_view_proven"] is False
     assert flat["ai_input_preflight_v1"]["source_allowed"] is False

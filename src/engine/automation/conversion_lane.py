@@ -934,6 +934,32 @@ def _is_swing_scoped(value: Any) -> bool:
     )
 
 
+def _dual_observe_only_conversion_candidate(row: dict[str, Any]) -> dict[str, Any]:
+    contract_hash = str(row.get("contract_hash") or "")
+    cohort_key = str(row.get("cohort_key") or "")
+    return {
+        "candidate_id": _hash("entry_replay_observe_only", [contract_hash, cohort_key]),
+        "source_key_id": cohort_key,
+        "source_key_type": "entry_replay_observe_only",
+        "strategy_scope": "scalp",
+        "primary_ev": None,
+        "sample": 0,
+        "source_quality_state": "source_only_observe_only",
+        "runtime_observation_state": "not_observed",
+        "runtime_observed_same_key": False,
+        "conversion_state": "terminal_source_only_exclusion",
+        "next_blocker": "dual_aftermarket_observe_only_no_live_approval",
+        "excluded_from_real_queue_reason": "dual_aftermarket_observe_only_no_live_approval",
+        "evidence": {
+            "contract_hash": contract_hash,
+            "effective_venue": row.get("effective_venue"),
+            "session_bucket": row.get("session_bucket"),
+            "market_data_route": row.get("market_data_route"),
+            "authority_state": row.get("authority_state"),
+        },
+    }
+
+
 def build_conversion_lane(
     target_date: str, *, include_swing: bool = True
 ) -> dict[str, Any]:
@@ -941,6 +967,7 @@ def build_conversion_lane(
     key_ledger = _load_json(key_json_path)
     if not key_ledger:
         key_ledger = build_key_lineage_ledger(target_date)
+    entry_replay_observe_only = key_ledger.get("entry_replay_observe_only") or {}
     lifecycle = _load_json(
         DATA_DIR
         / "report"
@@ -981,6 +1008,15 @@ def build_conversion_lane(
         for item in candidates
         if item.get("source_key_id")
     }
+    if entry_replay_observe_only.get("status") == "pass":
+        for row in entry_replay_observe_only.get("cohorts") or []:
+            if not isinstance(row, dict):
+                continue
+            candidate = _dual_observe_only_conversion_candidate(row)
+            if candidate["candidate_id"] in seen:
+                continue
+            candidates.append(candidate)
+            seen.add(candidate["candidate_id"])
     lineage_by_key = _lineage_by_source_key(key_ledger)
     for candidate in candidates:
         lineage = lineage_by_key.get(str(candidate.get("source_key_id") or ""))
@@ -1467,6 +1503,11 @@ def build_conversion_lane(
         "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
         "swing_sources_enabled": include_swing,
         "summary": summary,
+        "entry_replay_observe_only": {
+            "status": entry_replay_observe_only.get("status", "not_enabled"),
+            "contract_hash": entry_replay_observe_only.get("contract_hash"),
+            "cohort_count": len(entry_replay_observe_only.get("cohorts") or []),
+        },
         "conversion_candidates": candidates[:500],
         "real_conversion_queue": real_queue[:100],
         "conversion_blocker_rank": blockers[:200],

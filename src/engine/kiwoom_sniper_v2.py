@@ -153,6 +153,7 @@ from src.engine.sniper_s15_fast_track import (
     update_s15_shadow_record,
     execute_fast_track_scalp_v2,
 )
+from src.trading.market import session_contract
 from src.engine.sniper_condition_handlers import (
     bind_condition_dependencies,
     resolve_condition_profile,
@@ -375,7 +376,12 @@ _SCANNER_MARKET_DATA_ENRICHMENT_LOCK = threading.Lock()
 _SCANNER_PROMOTION_PENDING_ATTACH_UNTIL: dict[str, float] = {}
 _SCANNER_PROMOTION_PENDING_ATTACH_LOCK = threading.Lock()
 _SCANNER_PROMOTION_INBOX = ScannerPromotionInbox(max_active=40)
-_SCANNER_SCHEDULER_DEFAULT_VENUES = "KRX,PREMARKET_KRX_LIKE,NXT"
+_SCANNER_SCHEDULER_DEFAULT_VENUES = (
+    "KRX,PREMARKET_KRX_LIKE,NXT,KRX_NXT_INTEGRATED"
+)
+_SCANNER_RUNTIME_SUPPORTED_COHORTS = frozenset(
+    {"KRX", "PREMARKET_KRX_LIKE", "NXT", "KRX_NXT_INTEGRATED"}
+)
 # ``async_v1`` owns only the SCALPING scanner continuation: immutable market
 # preparation plus the WATCHING analyze-target call, followed by the existing
 # main-thread generation/freshness/order revalidation.  Holding score/flow,
@@ -2208,6 +2214,12 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("payload.effective_venue", payload.get("effective_venue")),
         ("payload.venue", payload.get("venue")),
+        ("payload.decision_market_scope", payload.get("decision_market_scope")),
+        ("payload.market_data_route", payload.get("market_data_route")),
+        (
+            "payload.scanner_market_gainer_market_data_route",
+            payload.get("scanner_market_gainer_market_data_route"),
+        ),
         (
             "target.rising_missed_effective_venue",
             target.get("rising_missed_effective_venue"),
@@ -2218,12 +2230,22 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("target.effective_venue", target.get("effective_venue")),
         ("target.venue", target.get("venue")),
+        ("target.decision_market_scope", target.get("decision_market_scope")),
+        ("target.market_data_route", target.get("market_data_route")),
+        (
+            "target.scanner_market_gainer_market_data_route",
+            target.get("scanner_market_gainer_market_data_route"),
+        ),
     )
     explicit_venues = []
-    supported_cohorts = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    cohort_aliases = {
+        "KRX_NXT": "KRX_NXT_INTEGRATED",
+        "KRX_NXT_AFTERMARKET": "KRX_NXT_INTEGRATED",
+    }
     for venue_source, venue_value in venue_candidates:
         normalized_venue = str(venue_value or "").strip().upper()
-        if normalized_venue in supported_cohorts:
+        normalized_venue = cohort_aliases.get(normalized_venue, normalized_venue)
+        if normalized_venue in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
             explicit_venues.append((venue_source, normalized_venue))
     unique_venues = {venue for _, venue in explicit_venues}
     if len(unique_venues) == 1:
@@ -2256,13 +2278,18 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
     if len(unique_buckets) == 1:
         market_session_bucket = next(iter(unique_buckets))
         venue_fields["market_session_bucket"] = market_session_bucket
-        expected_bucket_by_venue = {
-            "KRX": "krx_regular",
-            "PREMARKET_KRX_LIKE": "krx_like_premarket",
-            "NXT": "nxt",
+        expected_buckets_by_venue = {
+            "KRX": {"krx_regular"},
+            "PREMARKET_KRX_LIKE": {"krx_like_premarket"},
+            "NXT": {"nxt"},
+            "KRX_NXT_INTEGRATED": {
+                "KRX_NXT_AFTERMARKET",
+                "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+                "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
+            },
         }
-        expected_bucket = expected_bucket_by_venue.get(canonical_venue)
-        if expected_bucket and market_session_bucket != expected_bucket:
+        expected_buckets = expected_buckets_by_venue.get(canonical_venue)
+        if expected_buckets and market_session_bucket not in expected_buckets:
             venue_fields.update(
                 {
                     "venue": "UNKNOWN",
@@ -6503,7 +6530,7 @@ def _scanner_scheduler_pre_recovery_block_reason(target, *, scheduler):
     venue = normalize_scanner_scheduler_venue(
         target.get("effective_venue") or target.get("venue")
     )
-    if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+    if venue not in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
         return "scanner_scheduler_canonical_venue_missing_fail_closed"
     if not _scanner_scheduler_enabled_for_venue(venue):
         return ""
@@ -7371,11 +7398,7 @@ def _scanner_scheduler_register_revived_watch_on_fresh_ws(
     if not code or record_id <= 0:
         return None
     venue_fields = _scanner_runtime_target_venue_fields(target, target=target)
-    if venue_fields.get("effective_venue") not in {
-        "KRX",
-        "PREMARKET_KRX_LIKE",
-        "NXT",
-    }:
+    if venue_fields.get("effective_venue") not in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
         return None
 
     promotion_id = f"SCALPREVIVE-{code}-{record_id}-{int(received_epoch * 1000)}"
@@ -8835,7 +8858,7 @@ def _register_scanner_scheduler_generation(
             "venue_resolution": boot_restore_block_reason,
         }
     venue = venue_fields["effective_venue"]
-    if venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+    if venue not in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
         registration_reason = boot_restore_block_reason or (
             "scanner_scheduler_canonical_venue_missing_fail_closed"
         )
@@ -9063,12 +9086,50 @@ def _register_scanner_scheduler_generation(
     return generation
 
 
-def _scanner_scheduler_boot_restore_payload(target, *, boot_epoch):
+def _scanner_scheduler_session_context_at_epoch(boot_epoch):
+    observed_at = datetime.fromtimestamp(float(boot_epoch), tz=session_contract.KST)
+    return session_contract.resolve_market_session(observed_at)
+
+
+def _scanner_scheduler_effective_venue_from_session_context(context):
+    if context.blocker is not None:
+        return "UNKNOWN"
+    if context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET:
+        return "PREMARKET_KRX_LIKE"
+    if context.session_regime in {
+        session_contract.MARKET_SESSION_REGIME_LEGACY_KRX_ONLY,
+        session_contract.MARKET_SESSION_REGIME_KRX_REGULAR,
+    }:
+        return "KRX"
+    if context.session_regime in {
+        session_contract.MARKET_SESSION_REGIME_LEGACY_NXT_ONLY,
+        session_contract.MARKET_SESSION_REGIME_NXT_AFTERMARKET_SOLO,
+    }:
+        return "NXT"
+    return "UNKNOWN"
+
+
+def _scanner_scheduler_boot_restore_payload(
+    target,
+    *,
+    boot_epoch,
+    session_context=None,
+):
     """Build a fail-closed boot envelope from persisted scanner provenance."""
     target = target if isinstance(target, dict) else {}
     persisted_venue_fields = _scanner_runtime_target_venue_fields({}, target=target)
     persisted_venue = persisted_venue_fields["effective_venue"]
-    current_venue_fields = scalping_session_venue_provenance(float(boot_epoch))
+    current_venue_fields = (
+        scalping_session_venue_provenance(float(boot_epoch))
+        if session_context is None
+        else {
+            "effective_venue": (
+                _scanner_scheduler_effective_venue_from_session_context(
+                    session_context
+                )
+            )
+        }
+    )
     current_venue = (
         str(current_venue_fields.get("effective_venue") or "UNKNOWN").strip().upper()
     )
@@ -9088,9 +9149,9 @@ def _scanner_scheduler_boot_restore_payload(target, *, boot_epoch):
         else float("inf")
     )
     block_reason = ""
-    if persisted_venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+    if persisted_venue not in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
         block_reason = "scanner_scheduler_boot_persisted_venue_missing"
-    elif current_venue not in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}:
+    elif current_venue not in _SCANNER_RUNTIME_SUPPORTED_COHORTS:
         block_reason = "scanner_scheduler_boot_current_session_unsupported"
     elif persisted_venue != current_venue:
         block_reason = "scanner_scheduler_boot_session_venue_mismatch"
@@ -9533,7 +9594,7 @@ def _scanner_scheduler_reconcile_active_targets(scheduler, targets, *, now_epoch
                 "venue_resolution": (
                     "scheduler_generation_canonical_venue"
                     if decision.fields.get("effective_venue")
-                    in {"KRX", "PREMARKET_KRX_LIKE", "NXT"}
+                    in _SCANNER_RUNTIME_SUPPORTED_COHORTS
                     else "missing_tradable_explicit_venue"
                 ),
                 "scheduler_action": decision.action,
@@ -11990,12 +12051,16 @@ def run_sniper(is_test_mode=False):
     _restore_holding_runtime_state(ACTIVE_TARGETS)
     if _scanner_scheduler_startup_mode() in {"deadline_v1", "async_v1"}:
         scheduler_boot_epoch = time.time()
+        scheduler_boot_session_context = _scanner_scheduler_session_context_at_epoch(
+            scheduler_boot_epoch
+        )
         for scheduler_target in list(ACTIVE_TARGETS):
             if not _is_scanner_watching_target(scheduler_target):
                 continue
             scheduler_boot_payload = _scanner_scheduler_boot_restore_payload(
                 scheduler_target,
                 boot_epoch=scheduler_boot_epoch,
+                session_context=scheduler_boot_session_context,
             )
             generation = _register_scanner_scheduler_generation(
                 run_sniper.scanner_runtime_scheduler,

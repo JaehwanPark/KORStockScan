@@ -112,6 +112,35 @@ def test_confirmation_extra_ten_seconds_changes_cost_ev_on_same_opportunity():
     ).total_seconds() == 10
 
 
+def test_integrated_aftermarket_is_source_only_without_cost_or_candidate():
+    rows = path()
+    for row in rows:
+        row.update(
+            venue="UNKNOWN",
+            session="KRX_NXT_AFTERMARKET",
+            market_data_route="krx_nxt_integrated",
+            actual_execution_venue="UNKNOWN",
+        )
+
+    report = replay.build_study(
+        rows,
+        symbol="005930",
+        session="KRX_NXT_AFTERMARKET",
+        parameters=parameters(),
+        baseline_confirmations=2,
+        axis="target_bps",
+        values=(30, 100),
+        target_date=DAY,
+        source_audit={},
+    )
+
+    assert report["status"] == "dual_aftermarket_observe_only"
+    assert report["cost_status"] == "not_applicable_source_only"
+    assert report["candidates"] == []
+    assert report["source_only_row_count"] == len(rows)
+    assert replay.select_candidate(report, previous_value=100)["candidate_ready"] is False
+
+
 @pytest.mark.parametrize(
     "kind",
     [

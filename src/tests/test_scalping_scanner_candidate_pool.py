@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 
 import pytest
 
@@ -424,6 +424,59 @@ def test_market_gainer_route_uses_upcoming_nxt_venue_during_prewarm():
 
     assert scalping_scanner._market_gainer_stex_tp(nxt_prewarm_ts) == "2"
     assert scalping_scanner._market_gainer_stex_tp(outside_supported_session_ts) == ""
+
+
+def test_market_gainer_route_blocks_transition_then_uses_integrated_value():
+    assert scalping_scanner._market_gainer_stex_tp(datetime(2026, 9, 14, 16, 0)) == ""
+    assert (
+        scalping_scanner._market_gainer_stex_tp(
+            datetime(2026, 9, 14, 15, 40, tzinfo=timezone(timedelta(hours=9)))
+        )
+        == ""
+    )
+    assert (
+        scalping_scanner._market_gainer_stex_tp(
+            datetime(2026, 9, 14, 15, 59, 59, tzinfo=timezone(timedelta(hours=9)))
+        )
+        == ""
+    )
+    assert (
+        scalping_scanner._market_gainer_stex_tp(
+            datetime(2026, 9, 14, 16, 0, tzinfo=timezone(timedelta(hours=9)))
+        )
+        == "3"
+    )
+
+
+def test_integrated_market_gainer_dedupes_without_losing_route_observations():
+    targets = scalping_scanner._annotate_market_gainer_targets(
+        [
+            {
+                "Code": "005930",
+                "Price": 70000,
+                "ChangeRate": 3.2,
+                "Volume": 100,
+                "SourceRank": 1,
+            },
+            {
+                "Code": "005930",
+                "Price": 70010,
+                "ChangeRate": 3.3,
+                "Volume": 120,
+                "SourceRank": 2,
+            },
+        ],
+        stex_tp="3",
+        candidate_limit=20,
+    )
+
+    assert len(targets) == 1
+    assert targets[0]["MarketGainerVenue"] == "UNKNOWN"
+    assert targets[0]["MarketGainerMarketDataRoute"] == "krx_nxt_integrated"
+    assert targets[0]["Price"] == 70000
+    assert [
+        row["price"] for row in targets[0]["MarketGainerSourceObservations"]
+    ] == [70000, 70010]
 
 
 def test_ranked_prewarm_registers_ws_without_promotion_or_order_authority(
@@ -6664,7 +6717,16 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
     assert len(db.records) == 3
 
 
-def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
+@pytest.mark.parametrize(
+    "stex_tp,expected_venue,expected_route",
+    [
+        ("1", "KRX", "krx_only"),
+        ("3", "UNKNOWN", "krx_nxt_integrated"),
+    ],
+)
+def test_market_gainer_source_uses_official_ka10027_route_contract(
+    monkeypatch, stex_tp, expected_venue, expected_route
+):
     captured = {}
     logs = []
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_ENABLED", "true")
@@ -6672,7 +6734,7 @@ def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
     monkeypatch.setattr(
         scalping_scanner,
         "_market_gainer_stex_tp",
-        lambda now_ts=None: "1",
+        lambda now_ts=None: stex_tp,
     )
 
     def fetch_market_gainers(*args, **kwargs):
@@ -6730,7 +6792,7 @@ def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
         "mrkt_tp": "000",
         "trde_qty_cnd": "0010",
         "limit": 60,
-        "stex_tp": "1",
+        "stex_tp": stex_tp,
         "sort_tp": "1",
         "stk_cnd": "4",
         "crd_cnd": "0",
@@ -6738,12 +6800,15 @@ def test_market_gainer_source_uses_venue_isolated_ka10027_contract(monkeypatch):
         "pric_cnd": "8",
         "trde_prica_cnd": "10",
         "pure_equity_only": True,
+        "return_meta": True,
     }
     payload = _event_payloads(event_bus, "SCALPING_SCANNER_PROMOTED_TARGET")[0]
     assert payload["source_signature"] == "PREV_CLOSE_GAINER"
     assert payload["scanner_market_gainer_reserved_slots"] == 6
     assert payload["scanner_market_gainer_reserved_promotion"] is True
     assert payload["scanner_market_gainer_active_count"] == 1
+    assert payload["scanner_market_gainer_venue"] == expected_venue
+    assert payload["scanner_market_gainer_market_data_route"] == expected_route
     assert db.records[0].scanner_watch_budget_owner == "rising_missed"
     fetch_logs = [
         message

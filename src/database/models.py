@@ -8,6 +8,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Boolean,
+    JSON,
     Index,
     UniqueConstraint,
     ForeignKey,
@@ -66,6 +67,34 @@ class DailyStockQuote(Base):
 
     def __repr__(self):
         return f"<DailyStockQuote(quote_date='{self.quote_date}', stock_code='{self.stock_code}')>"
+
+
+class SecurityMarketEligibilityDaily(Base):
+    __tablename__ = "security_market_eligibility_daily"
+
+    trade_date = Column(Date, primary_key=True)
+    stock_code = Column(String(10), primary_key=True)
+    krx_regular_eligible = Column(Boolean, nullable=True)
+    nxt_eligible = Column(Boolean, nullable=True)
+    krx_aftermarket_eligible = Column(Boolean, nullable=True)
+    eligible_venues_json = Column(JSON, nullable=False)
+    audit_info = Column(Text)
+    stock_state = Column(Text)
+    order_warning = Column(Text)
+    market_code = Column(Text)
+    source_api_id = Column(Text)
+    source_revision = Column(Text)
+    observed_at_kst = Column(DateTime(timezone=True))
+    payload_sha256 = Column(Text)
+    quality_state = Column(String(16), nullable=False)
+    blocked_reasons_json = Column(JSON, nullable=False)
+
+    def __repr__(self):
+        return (
+            "<SecurityMarketEligibilityDaily("
+            f"trade_date='{self.trade_date}', stock_code='{self.stock_code}', "
+            f"quality_state='{self.quality_state}')>"
+        )
 
 
 class MacroAlert(Base):

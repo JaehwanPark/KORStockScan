@@ -32,6 +32,9 @@ from src.engine.scalping.micro_estimator_state import (
     DEFAULT_STORE as MICRO_ESTIMATOR_STORE,
 )
 from src.engine.scalping.limit_down_watch import observe_raw_market_data
+from src.engine.scalping.micro_reversion.contracts import (
+    registration_item_market_data_identity,
+)
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
@@ -65,6 +68,37 @@ WS_CONDITION_SEARCH_ENABLED_ENV = "KORSTOCKSCAN_WS_CONDITION_SEARCH_ENABLED"
 # only the documented 0B trade and 0D depth types. 0B FID 10 owns current price;
 # KRX/NXT/SOR items use 005930/005930_NX/005930_AL.
 KST = ZoneInfo("Asia/Seoul")
+# Official Kiwoom 0s/FID 215 contract (verified 2026-09-11T19:36:05+09:00):
+# upstream SHA 234560d213acd8871ae344b5481aecd2f30287fa; inspected
+# kiwoom/_data/kiwoom_api_spec.json, kiwoom/realtime/{packets,schemas}.py,
+# and examples/국내주식/실시간시세/subscribe_domestic_market_open_time_async.py.
+# Only values in the official packaged 0s table are recognized. An official raw
+# notification without an actionable coarse state remains UNKNOWN/fail-closed.
+_KIWOOM_0S_STATE_CONTRACT_VERSION = "kiwoom_0s_market_operation_v1"
+_KIWOOM_0S_UNKNOWN_STATE = "UNKNOWN"
+_KIWOOM_0S_OFFICIAL_STATE_ENUM = {
+    "0": ("KRX_PREOPEN", "CLOSED", "KRX"),
+    "3": ("KRX_OPEN", "OPEN", "KRX"),
+    "2": ("KRX_CLOSING_CALL_AUCTION_NOTICE", "CALL_AUCTION", "KRX"),
+    "4": ("KRX_MARKET_CLOSE", "CLOSED", "KRX"),
+    "8": ("KRX_REGULAR_MARKET_CLOSE", "CLOSED", "KRX"),
+    "9": ("ALL_MARKETS_CLOSE", "CLOSED", "ALL"),
+    "a": ("KRX_AFTER_HOURS_CLOSING_PRICE_OPEN", "OPEN", "KRX"),
+    "b": ("KRX_AFTER_HOURS_CLOSING_PRICE_CLOSE", "CLOSED", "KRX"),
+    "c": ("KRX_AFTER_HOURS_CALL_AUCTION_OPEN", "CALL_AUCTION", "KRX"),
+    "d": ("KRX_AFTER_HOURS_CALL_AUCTION_CLOSE", "CLOSED", "KRX"),
+    "e": ("DERIVATIVES_CLOSING_CALL_AUCTION_CLOSE", "CLOSED", "DERIVATIVES"),
+    "f": ("DERIVATIVES_EARLY_OPEN_TIME_NOTICE", "UNKNOWN", "DERIVATIVES"),
+    "o": ("DERIVATIVES_MARKET_OPEN", "OPEN", "DERIVATIVES"),
+    "s": ("DERIVATIVES_CLOSING_CALL_AUCTION_OPEN", "CALL_AUCTION", "DERIVATIVES"),
+    "P": ("NXT_PREMARKET_OPEN", "OPEN", "NXT"),
+    "Q": ("NXT_PREMARKET_CLOSE", "CLOSED", "NXT"),
+    "R": ("NXT_MAIN_MARKET_OPEN", "OPEN", "NXT"),
+    "S": ("NXT_MAIN_MARKET_CLOSE", "CLOSED", "NXT"),
+    "T": ("NXT_AFTERMARKET_CALL_AUCTION_OPEN", "CALL_AUCTION", "NXT"),
+    "U": ("NXT_AFTERMARKET_OPEN", "OPEN", "NXT"),
+    "V": ("NXT_AFTERMARKET_CLOSE", "CLOSED", "NXT"),
+}
 _ORDER_EXECUTION_RAW_ENVELOPE_SCHEMA = "kiwoom_websocket_order_execution_00_values_v1"
 _ORDER_EXECUTION_RECEIVE_TIME_SOURCE = "websocket_packet_ingress"
 _ORDER_EXECUTION_UNTRUSTED_RECEIVE_TIME_SOURCE = (
@@ -402,6 +436,14 @@ class KiwoomWSManager:
         self.condition_dict = {}  # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
         self.market_session_state = ""
         self.market_session_remaining = ""
+        self.market_session_state_contract_version = (
+            _KIWOOM_0S_STATE_CONTRACT_VERSION
+        )
+        self.market_session_state_event = _KIWOOM_0S_UNKNOWN_STATE
+        self.market_session_state_normalized = _KIWOOM_0S_UNKNOWN_STATE
+        self.market_session_state_known = False
+        self.market_session_state_entry_usable = False
+        self.market_session_state_blocker = "kiwoom_0s_state_missing"
         self._last_market_session_event_key = None
 
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
@@ -418,6 +460,39 @@ class KiwoomWSManager:
             return abs(int(float(str(val).replace(",", "").strip())))
         except Exception:
             return default
+
+    @staticmethod
+    def _normalize_market_session_0s(raw_state):
+        raw = str(raw_state or "").strip()
+        official_state = _KIWOOM_0S_OFFICIAL_STATE_ENUM.get(raw)
+        if official_state is None:
+            return {
+                "contract_version": _KIWOOM_0S_STATE_CONTRACT_VERSION,
+                "raw_state": raw,
+                "state_event": _KIWOOM_0S_UNKNOWN_STATE,
+                "state_market_scope": _KIWOOM_0S_UNKNOWN_STATE,
+                "normalized_state": _KIWOOM_0S_UNKNOWN_STATE,
+                "known": False,
+                "entry_state_usable": False,
+                "blocker": "kiwoom_0s_state_unknown",
+            }
+        state_event, normalized_state, state_market_scope = official_state
+        actionable_state = normalized_state != _KIWOOM_0S_UNKNOWN_STATE
+        return {
+            "contract_version": _KIWOOM_0S_STATE_CONTRACT_VERSION,
+            "raw_state": raw,
+            "state_event": state_event,
+            "state_market_scope": state_market_scope,
+            "normalized_state": normalized_state,
+            "known": actionable_state,
+            "entry_state_usable": normalized_state == "OPEN"
+            and state_market_scope in {"KRX", "NXT", "ALL"},
+            "blocker": (
+                None
+                if actionable_state
+                else "kiwoom_0s_state_semantics_not_actionable"
+            ),
+        }
 
     @classmethod
     def _optional_abs_int(cls, values, fid):
@@ -843,12 +918,13 @@ class KiwoomWSManager:
 
     @classmethod
     def _ws_item_route(cls, item):
-        suffix = cls._ws_item_market_suffix(item)
-        if suffix == "_AL":
-            return "krx_nxt_integrated"
-        if suffix == "_NX":
-            return "nxt_only"
-        return "krx_regular"
+        _symbol, route, _actual_venue = registration_item_market_data_identity(item)
+        return route
+
+    @staticmethod
+    def _ws_item_actual_execution_venue(item):
+        _symbol, _route, actual_venue = registration_item_market_data_identity(item)
+        return actual_venue
 
     @classmethod
     def _ws_item_effective_venue(cls, item):
@@ -1909,10 +1985,12 @@ class KiwoomWSManager:
                 "last_ws_item": "",
                 "last_ws_market_suffix": "",
                 "last_ws_market_route": "unknown",
+                "last_ws_actual_execution_venue": "UNKNOWN",
                 "last_realtime_type_item": {},
                 "last_realtime_type_market_suffix": {},
                 "last_realtime_type_market_route": {},
                 "last_realtime_type_effective_venue": {},
+                "last_realtime_type_actual_execution_venue": {},
                 "realtime_type_snapshots_by_route": {},
                 "received_types": set(),
                 "last_ws_update_ts": 0.0,
@@ -3336,16 +3414,31 @@ class KiwoomWSManager:
                         continue
 
                     if real_type == "0s" or d.get("name") == "장시작시간":
-                        self.market_session_state = str(
-                            values.get("215", "") or ""
-                        ).strip()
+                        state_receipt = self._normalize_market_session_0s(
+                            values.get("215", "")
+                        )
+                        self.market_session_state = state_receipt["raw_state"]
                         self.market_session_remaining = str(
                             values.get("214", "") or ""
                         ).strip()
+                        self.market_session_state_contract_version = state_receipt[
+                            "contract_version"
+                        ]
+                        self.market_session_state_event = state_receipt["state_event"]
+                        self.market_session_state_normalized = state_receipt[
+                            "normalized_state"
+                        ]
+                        self.market_session_state_known = state_receipt["known"]
+                        self.market_session_state_entry_usable = state_receipt[
+                            "entry_state_usable"
+                        ]
+                        self.market_session_state_blocker = state_receipt["blocker"]
                         event_key = (
                             self.market_session_state,
+                            self.market_session_state_normalized,
                             self.market_session_remaining,
                             str(real_type or ""),
+                            str(d.get("item") or ""),
                         )
                         if event_key != self._last_market_session_event_key:
                             self._last_market_session_event_key = event_key
@@ -3356,8 +3449,30 @@ class KiwoomWSManager:
                                         "source": "kiwoom_websocket_0s",
                                         "real_type": real_type,
                                         "name": d.get("name"),
+                                        "item": str(d.get("item") or ""),
+                                        "market_data_route": self._ws_item_route(
+                                            d.get("item")
+                                        ),
                                         "market_session_state": self.market_session_state,
+                                        "market_session_state_raw": self.market_session_state,
                                         "market_session_remaining": self.market_session_remaining,
+                                        "market_session_remaining_raw": self.market_session_remaining,
+                                        "exchange_time_raw": str(
+                                            values.get("20", "") or ""
+                                        ).strip(),
+                                        "receive_timestamp": packet_received_at.isoformat(
+                                            timespec="milliseconds"
+                                        ),
+                                        "receive_time_source": packet_receive_time_source,
+                                        "market_session_state_contract_version": self.market_session_state_contract_version,
+                                        "market_session_state_event": self.market_session_state_event,
+                                        "market_session_state_market_scope": state_receipt[
+                                            "state_market_scope"
+                                        ],
+                                        "market_session_state_normalized": self.market_session_state_normalized,
+                                        "market_session_state_known": self.market_session_state_known,
+                                        "market_session_state_entry_usable": self.market_session_state_entry_usable,
+                                        "market_session_state_blocker": self.market_session_state_blocker,
                                         "raw_values": dict(values),
                                     },
                                 )
@@ -3710,6 +3825,11 @@ class KiwoomWSManager:
                                     "volume": int(trade_volume or 0),
                                     "market_suffix": current_tick_suffix,
                                     "market_route": current_tick_route,
+                                    "actual_execution_venue": (
+                                        self._ws_item_actual_execution_venue(
+                                            raw_item_code
+                                        )
+                                    ),
                                     "volume_source": aux_fields["trade_volume_source"],
                                     "dir": aggressor_side,
                                     "aggressor_side": aggressor_side,
@@ -4102,6 +4222,9 @@ class KiwoomWSManager:
                             target["last_ws_item"] = str(raw_item_code or "")
                             target["last_ws_market_suffix"] = market_suffix
                             target["last_ws_market_route"] = market_route
+                            target["last_ws_actual_execution_venue"] = (
+                                self._ws_item_actual_execution_venue(raw_item_code)
+                            )
                             type_ts = target.setdefault("last_realtime_type_ts", {})
                             if isinstance(type_ts, dict):
                                 type_ts[real_type] = now_update_ts
@@ -4126,6 +4249,13 @@ class KiwoomWSManager:
                             if isinstance(type_venues, dict):
                                 type_venues[real_type] = self._ws_item_effective_venue(
                                     raw_item_code
+                                )
+                            type_actual_venues = target.setdefault(
+                                "last_realtime_type_actual_execution_venue", {}
+                            )
+                            if isinstance(type_actual_venues, dict):
+                                type_actual_venues[real_type] = (
+                                    self._ws_item_actual_execution_venue(raw_item_code)
                                 )
                             route_snapshots = target.setdefault(
                                 "realtime_type_snapshots_by_route", {}
@@ -4160,6 +4290,11 @@ class KiwoomWSManager:
                                         "market_route": market_route,
                                         "effective_venue": (
                                             self._ws_item_effective_venue(raw_item_code)
+                                        ),
+                                        "actual_execution_venue": (
+                                            self._ws_item_actual_execution_venue(
+                                                raw_item_code
+                                            )
                                         ),
                                         "transport_epoch": int(
                                             self._market_data_transport_epoch

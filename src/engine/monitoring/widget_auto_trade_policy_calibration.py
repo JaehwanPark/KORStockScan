@@ -72,6 +72,10 @@ from src.engine.monitoring.widget_advisory_calibration_policy import (
 )
 
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
+MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE = date(2026, 9, 14)
+DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
+DUAL_AFTERMARKET_SESSION_PREFIX = f"{DUAL_AFTERMARKET_SESSION}_"
+DUAL_AFTERMARKET_EXPECTED_MINUTES = 240
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_auto_trade_policy_calibration")
 DEFAULT_EXECUTION_EVENT_DIR = Path("data/report/widget_signal_auto_trade_events")
 ACTIONABLE_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
@@ -1033,11 +1037,25 @@ def _load_execution_quality(
             "session",
         ):
             value = str(row.get(key) or "").strip().upper()
-            if value in {"KRX_REGULAR", "NXT_PREMARKET", "NXT_AFTERMARKET"}:
+            if value == DUAL_AFTERMARKET_SESSION or value.startswith(
+                DUAL_AFTERMARKET_SESSION_PREFIX
+            ):
+                return DUAL_AFTERMARKET_SESSION
+            if value in {
+                "KRX_REGULAR",
+                "NXT_PREMARKET",
+                "NXT_AFTERMARKET",
+                DUAL_AFTERMARKET_SESSION,
+            }:
                 return value
         for key in ("signal_id", "parent_entry_signal_id"):
             value = str(row.get(key) or "").upper()
-            for candidate in ("KRX_REGULAR", "NXT_PREMARKET", "NXT_AFTERMARKET"):
+            for candidate in (
+                "KRX_REGULAR",
+                "NXT_PREMARKET",
+                "NXT_AFTERMARKET",
+                DUAL_AFTERMARKET_SESSION,
+            ):
                 if f":{candidate}:" in value:
                     return candidate
         venue = str(row.get("market_venue") or "").strip().upper()
@@ -1150,6 +1168,39 @@ def _load_execution_quality(
         # than silently excluding submit failures.
         "unattributed_terminal_failure_count": (unattributed_execution_failure_count),
         "execution_sample_observed": accepted_order_count > 0 or execution_failures > 0,
+    }
+
+
+def _dual_aftermarket_observe_only_calibration(
+    rows: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Retain integrated-session provenance without creating an auto policy."""
+    source_rows = [
+        row
+        for row in rows
+        if str(row.get("session") or "") == DUAL_AFTERMARKET_SESSION
+        or str(row.get("session") or "").startswith(DUAL_AFTERMARKET_SESSION_PREFIX)
+    ]
+    pass_rows = [
+        row for row in source_rows if row.get("source_quality_status") == "PASS"
+    ]
+    return {
+        "decision": "dual_aftermarket_observe_only",
+        "automatic_promotion_allowed": False,
+        "runtime_selected_policy": None,
+        "selected_policy": None,
+        "candidate_count": 0,
+        "source_row_count": len(source_rows),
+        "source_quality_pass_row_count": len(pass_rows),
+        "expected_minute_count": DUAL_AFTERMARKET_EXPECTED_MINUTES,
+        "market_venue": "UNKNOWN",
+        "market_data_route": "krx_nxt_integrated",
+        "actual_execution_venue": "UNKNOWN",
+        "reason": "integrated_aftermarket_has_no_nxt_solo_policy_inheritance",
+        "policy_tier": "source_observation_only",
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
     }
 
 
@@ -1831,6 +1882,15 @@ def build_report(
             if int(source_load_audit.get(key) or 0) > 0
         )
         source_contract_valid = not source_contract_gap_codes
+        active_session_specs = tuple(
+            session_spec
+            for session_spec in spec.sessions
+            if not (
+                spec.symbol == SAMSUNG_CODE
+                and target_date >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
+                and session_spec.session == "NXT_AFTERMARKET"
+            )
+        )
         sessions = {
             session.session: _calibrate_session(
                 spec,
@@ -1841,8 +1901,15 @@ def build_report(
                     spec.symbol, {}
                 ).get(session.session),
             )
-            for session in spec.sessions
+            for session in active_session_specs
         }
+        if (
+            spec.symbol == SAMSUNG_CODE
+            and target_date >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
+        ):
+            sessions[DUAL_AFTERMARKET_SESSION] = (
+                _dual_aftermarket_observe_only_calibration(rows)
+            )
         if (
             target_date >= paired_replay.SELECTION_START_DATE
             and spec.symbol == SAMSUNG_CODE
@@ -1853,7 +1920,7 @@ def build_report(
                 target_date=target_date,
             )
             confirmation_loader = WidgetCalibrationPolicyLoader()
-            for session_spec in spec.sessions:
+            for session_spec in active_session_specs:
                 previous = previous_session_policies.get(spec.symbol, {}).get(
                     session_spec.session
                 )
@@ -1893,8 +1960,19 @@ def build_report(
                 target_date=target_date,
                 session=session.session,
             )
-            for session in spec.sessions
+            for session in active_session_specs
         }
+        if DUAL_AFTERMARKET_SESSION in sessions:
+            execution_quality_by_session[DUAL_AFTERMARKET_SESSION] = {
+                **_load_execution_quality(
+                    spec.symbol,
+                    target_date=target_date,
+                    session=DUAL_AFTERMARKET_SESSION,
+                ),
+                "status": "OBSERVE_ONLY",
+                "runtime_apply_allowed": False,
+                "runtime_apply_block_reason": "dual_aftermarket_observe_only",
+            }
         symbol_reports[spec.symbol] = {
             "name": spec.name,
             "source_row_count": len(rows),
@@ -1912,6 +1990,9 @@ def build_report(
             "execution_quality": execution_quality,
             "execution_quality_by_session": execution_quality_by_session,
             "sessions": sessions,
+            "dual_aftermarket_observe_only": sessions.get(
+                DUAL_AFTERMARKET_SESSION
+            ),
             "microstructure_prior_trading_day_diagnostic": {
                 "status": (
                     "loaded"
@@ -2070,13 +2151,38 @@ def apply_paired_target_selection(
 def build_policy(report: dict[str, Any]) -> dict[str, Any]:
     target_date = str(report["target_date"])
     effective_date = str(report["effective_date"])
+    effective_date_value = date.fromisoformat(effective_date)
     policy_symbols: dict[str, Any] = {}
     blocked_sessions: dict[str, dict[str, str]] = {}
+    observe_only_sessions: dict[str, dict[str, dict[str, Any]]] = {}
     for spec in SPECS:
         source = report["symbols"][spec.symbol]
         session_specs = {value.session: value for value in spec.sessions}
         sessions: dict[str, Any] = {}
         for session_name, calibration in source["sessions"].items():
+            if (
+                effective_date_value >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
+                and session_name == "NXT_AFTERMARKET"
+            ):
+                observe_only_sessions.setdefault(spec.symbol, {})[session_name] = {
+                    "decision": "legacy_nxt_aftermarket_replay_only",
+                    "reason": "integrated_aftermarket_has_no_nxt_solo_policy",
+                    "automatic_promotion_allowed": False,
+                }
+                continue
+            if calibration.get("automatic_promotion_allowed") is False:
+                observe_only_sessions.setdefault(spec.symbol, {})[session_name] = {
+                    "decision": calibration.get("decision"),
+                    "reason": calibration.get("reason"),
+                    "market_venue": calibration.get("market_venue"),
+                    "market_data_route": calibration.get("market_data_route"),
+                    "actual_execution_venue": calibration.get(
+                        "actual_execution_venue"
+                    ),
+                    "expected_minute_count": calibration.get("expected_minute_count"),
+                    "automatic_promotion_allowed": False,
+                }
+                continue
             execution_quality = _session_execution_quality(source, session_name)
             block_reason = None
             if source.get("source_quality_status") != "PASS":
@@ -2173,6 +2279,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "symbols": policy_symbols,
         "blocked_sessions": blocked_sessions,
+        "observe_only_sessions": observe_only_sessions,
         "metric_contract": METRIC_CONTRACT,
         "runtime_effect": True,
         "actual_order_submitted": False,

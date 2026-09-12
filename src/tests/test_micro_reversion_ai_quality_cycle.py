@@ -89,6 +89,48 @@ def test_research_progress_does_not_grant_full_gate_authority(
             )
 
 
+def test_dual_market_partition_is_source_only_and_never_r3_eligible():
+    rolling, _manifest = _review_history(20)
+    partition = deepcopy(rolling["partitions"][0])
+    partition.update(
+        decision_market_scopes=["KRX_NXT_INTEGRATED"],
+        market_data_routes=["krx_nxt_integrated"],
+        market_session_regimes=["KRX_NXT_AFTERMARKET"],
+        actual_execution_venues=["UNKNOWN"],
+        dual_source_only=True,
+        auto_promotion_eligible=False,
+    )
+    partition["gate_findings"] = {
+        **partition["gate_findings"],
+        "market_scope": ["dual_market_source_only_no_r3_promotion"],
+    }
+    partition["r3_source_candidate_eligible"] = False
+    partition["research_progress"] = cycle._research_progress(partition)
+
+    assert cycle._dual_source_only_market_axis(
+        {
+            "decision_market_scope": "KRX_NXT_INTEGRATED",
+            "market_data_route": "krx_nxt_integrated",
+            "market_session_regime": "KRX_NXT_AFTERMARKET",
+            "actual_execution_venue": "UNKNOWN",
+        }
+    )
+    assert (
+        cycle.validate_r2_partition_candidate_state(
+            partition,
+            target_date=rolling["target_date"],
+            global_candidate_blockers=[],
+        )
+        is False
+    )
+    forged = deepcopy(partition)
+    forged["dual_source_only"] = False
+    with pytest.raises(ValueError, match="dual_source_only_mismatch"):
+        cycle.validate_r2_partition_candidate_state(
+            forged,
+            target_date=rolling["target_date"],
+            global_candidate_blockers=[],
+        )
 def test_paired_notional_gate_rejects_lower_profit_despite_positive_percentage_ev():
     rolling, _ = _review_history(20)
     metrics = rolling["partitions"][0]["windows"]["20"]

@@ -1,4 +1,8 @@
+import hashlib
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -164,6 +168,286 @@ def test_summary_only_mode_rejects_upstream_repairs_before_running_any(
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _entry_setup_followup_state(project_dir, target_date):
+    script_path = Path(__file__).resolve().parents[2] / "deploy/run_postclose_done_controller.sh"
+    script = script_path.read_text(encoding="utf-8")
+    function_start = script.index("entry_setup_replay_followup_state() {")
+    python_start = script.index("import hashlib", function_start)
+    python_end = script.index("\nPY\n}", python_start)
+    inline_validator = script[python_start:python_end]
+    batch_path = (
+        project_dir
+        / "data/report/ai_entry_setup_paired_replay_batch"
+        / f"ai_entry_setup_paired_replay_batch_{target_date}.json"
+    )
+    result = subprocess.run(
+        [sys.executable, "-", str(project_dir), target_date, str(batch_path)],
+        input=inline_validator,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _write_entry_setup_followup_consumer(project_dir, target_date):
+    consumer = {
+        "schema": "main_ai_prompt_consumer_v1",
+        "target_date": target_date,
+        "status": "ready_source_only_consumer_closure",
+        "unclassified_request_path_count": 0,
+        "terminal_request_path_contract_invalid_count": 0,
+        "entry_followup_terminal_ready": True,
+        "runtime_effect": False,
+        "runtime_authority": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "performance_evidence": {"runtime_prompt_update_allowed": False},
+        "request_paths": {
+            "entry_base": {"path_status": "connected_and_hash_bound", "cohorts": []},
+            "holding_base": {"path_status": "connected_and_hash_bound", "cohorts": []},
+            "optional_micro_enriched_2x2": {
+                "path_status": "connected_and_hash_bound",
+                "cells": [],
+            },
+        },
+    }
+    consumer["artifact_content_sha256"] = hashlib.sha256(
+        json.dumps(
+            consumer,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    _write_json(
+        project_dir
+        / "data/report/main_ai_prompt_consumer"
+        / f"main_ai_prompt_consumer_{target_date}.json",
+        consumer,
+    )
+
+
+def _entry_replay_cohort(key, version, venue, session, route, authority, **extra):
+    return {
+        "cohort_key": key,
+        "cohort_key_version": version,
+        "effective_venue": venue,
+        "session_bucket": session,
+        "market_data_route": route,
+        "authority_state": authority,
+        **extra,
+    }
+
+
+def _write_entry_setup_followup_batch(project_dir, target_date, payload):
+    _write_json(
+        project_dir
+        / "data/report/ai_entry_setup_paired_replay_batch"
+        / f"ai_entry_setup_paired_replay_batch_{target_date}.json",
+        payload,
+    )
+
+
+def test_entry_setup_followup_accepts_legacy_batch_without_versioned_contract(tmp_path):
+    target_date = "2026-09-12"
+    _write_entry_setup_followup_consumer(tmp_path, target_date)
+    nxt_path = (
+        tmp_path
+        / "data/threshold_cycle/bounded_live_candidates"
+        / f"entry_setup_v2_14_bounded_live_candidate_{target_date}_nxt_nxt_aftermarket.json"
+    )
+    nxt = {
+        "source_date": target_date,
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_AFTERMARKET",
+        "status": "blocked",
+        "effective_date": "2026-09-15",
+        "effective_date_policy": "first_available_krx_preopen_v1",
+        "preopen_candidate_cutoff_kst": "07:35:00",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    nxt["artifact_sha256"] = hashlib.sha256(
+        json.dumps(
+            nxt,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    _write_json(nxt_path, nxt)
+    _write_entry_setup_followup_batch(
+        tmp_path,
+        target_date,
+        {
+            "target_date": target_date,
+            "status": "completed_offline_only",
+            "cohorts": [],
+            "bounded_live_cohort_contract": "exact_cohort_candidates_v1",
+            "bounded_live_candidates_by_cohort": {
+                "KRX/KRX_REGULAR": None,
+                "NXT/NXT_AFTERMARKET": {
+                    "path": str(nxt_path.relative_to(tmp_path)),
+                    "artifact_sha256": nxt["artifact_sha256"],
+                    "artifact_status": "blocked",
+                    "effective_date": nxt["effective_date"],
+                    "allowed_runtime_apply": False,
+                },
+            },
+            "krx_bounded_live_candidate": None,
+        },
+    )
+
+    assert _entry_setup_followup_state(tmp_path, target_date) == (
+        "terminal_ready:validated_batch_and_main_ai_consumer_no_krx_candidate"
+    )
+
+
+def test_entry_setup_followup_accepts_versioned_dual_aftermarket_observe_only(tmp_path):
+    target_date = "2026-09-12"
+    _write_entry_setup_followup_consumer(tmp_path, target_date)
+    expected = [
+        _entry_replay_cohort(
+            "KRX/KRX_REGULAR", "v1", "KRX", "KRX_REGULAR", "KRX", "SOURCE_ONLY"
+        ),
+        _entry_replay_cohort(
+            "NXT/NXT_AFTERMARKET",
+            "v1",
+            "NXT",
+            "NXT_AFTERMARKET",
+            "NXT",
+            "SOURCE_ONLY",
+        ),
+        _entry_replay_cohort(
+            "INTEGRATED/KRX_NXT_AFTERMARKET",
+            "v2",
+            "INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+            "SOR",
+            "OBSERVE_ONLY",
+        ),
+    ]
+    cohorts = [
+        {**expected[0], "status": "completed_offline_only"},
+        {**expected[1], "status": "completed_offline_only"},
+        {
+            **expected[2],
+            "status": "completed_observe_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "candidate_contract_sha256": None,
+        },
+    ]
+    _write_entry_setup_followup_batch(
+        tmp_path,
+        target_date,
+        {
+            "target_date": target_date,
+            "status": "completed_offline_only",
+            "cohort_contract": {
+                "schema": "entry_replay_cohort_contract_v1",
+                "contract_version": "v2",
+                "expected_cohorts_by_contract_version": {"v2": expected},
+            },
+            "cohorts": cohorts,
+            "krx_bounded_live_candidate": None,
+        },
+    )
+
+    assert _entry_setup_followup_state(tmp_path, target_date) == (
+        "terminal_ready:validated_batch_and_main_ai_consumer_no_krx_candidate"
+    )
+
+
+def test_entry_setup_followup_rejects_dual_aftermarket_live_authority(tmp_path):
+    target_date = "2026-09-12"
+    _write_entry_setup_followup_consumer(tmp_path, target_date)
+    dual = _entry_replay_cohort(
+        "INTEGRATED/KRX_NXT_AFTERMARKET",
+        "v2",
+        "INTEGRATED",
+        "KRX_NXT_AFTERMARKET",
+        "SOR",
+        "LIVE_APPROVED",
+    )
+    _write_entry_setup_followup_batch(
+        tmp_path,
+        target_date,
+        {
+            "target_date": target_date,
+            "status": "completed_offline_only",
+            "cohort_contract": {
+                "schema": "entry_replay_cohort_contract_v1",
+                "contract_version": "v2",
+                "expected_cohorts_by_contract_version": {"v2": [dual]},
+            },
+            "cohorts": [
+                {
+                    **dual,
+                    "status": "completed_observe_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "candidate_contract_sha256": None,
+                }
+            ],
+            "krx_bounded_live_candidate": None,
+        },
+    )
+
+    assert _entry_setup_followup_state(tmp_path, target_date) == (
+        "retry_required:dual_aftermarket_live_authority_forbidden"
+    )
+
+
+def test_entry_setup_followup_rejects_nxt_candidate_hash_reused_for_dual_aftermarket(tmp_path):
+    target_date = "2026-09-12"
+    _write_entry_setup_followup_consumer(tmp_path, target_date)
+    dual = _entry_replay_cohort(
+        "INTEGRATED/KRX_NXT_AFTERMARKET",
+        "v2",
+        "INTEGRATED",
+        "KRX_NXT_AFTERMARKET",
+        "SOR",
+        "OBSERVE_ONLY",
+    )
+    _write_entry_setup_followup_batch(
+        tmp_path,
+        target_date,
+        {
+            "target_date": target_date,
+            "status": "completed_offline_only",
+            "cohort_contract": {
+                "schema": "entry_replay_cohort_contract_v1",
+                "contract_version": "v2",
+                "expected_cohorts_by_contract_version": {"v2": [dual]},
+            },
+            "cohorts": [
+                {
+                    **dual,
+                    "status": "completed_observe_only",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "candidate_contract_sha256": "a" * 64,
+                }
+            ],
+            "krx_bounded_live_candidate": None,
+        },
+    )
+
+    assert _entry_setup_followup_state(tmp_path, target_date) == (
+        "retry_required:dual_aftermarket_live_candidate_forbidden"
+    )
 
 
 def _write_succeeded_status(report_dir, target_date="2026-06-03"):

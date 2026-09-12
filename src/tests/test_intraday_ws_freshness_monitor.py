@@ -23,6 +23,214 @@ def _write_jsonl(path, rows):
     )
 
 
+def _write_market_session_events(path):
+    path.write_text(
+        json.dumps(
+            {
+                "report_type": "market_halt_windows",
+                "target_date": "2026-09-14",
+                "schema_version": 1,
+                "decision_authority": "source_quality_only",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "session_events": [
+                    {
+                        "receive_timestamp": "2026-09-14T19:44:50+09:00",
+                        "exchange_time_raw": "194450",
+                        "runtime_effect": False,
+                        "allowed_runtime_apply": False,
+                        "market_session_state_contract_version": "kiwoom_0s_market_operation_v1",
+                        "market_session_state_market_scope": scope,
+                        "market_session_state_raw": "c" if scope == "KRX" else "T",
+                        "market_session_state_normalized": state,
+                        "market_session_state_known": True,
+                        "market_session_remaining_raw": "000030",
+                    }
+                    for scope, state in (
+                        ("KRX", "CALL_AUCTION"),
+                        ("NXT", "CALL_AUCTION"),
+                    )
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_build_report_consumes_dual_market_state_receipts_at_1945(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    session_path = tmp_path / "session.json"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "ws_subscription_freshness_snapshot",
+                {
+                    "registered_market_routes": ["krx_nxt_integrated"],
+                    "freshness_state": "stale",
+                    "last_receive_age_sec": 25.0,
+                    "stale_after_sec": 30.0,
+                    "subscribed": True,
+                    "required_realtime_missing_types": ["0B"],
+                    "repair_reason": "subscription_stale",
+                    "repair_recommended": True,
+                    "recommended_repair": "reconnect",
+                },
+                emitted_at="2026-09-14T19:45:00+09:00",
+            )
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+    _write_market_session_events(session_path)
+
+    report = mod.build_report(
+        "2026-09-14",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        subscription_snapshot_path=tmp_path / "missing-snapshot.json",
+        symbol_master_path=tmp_path / "missing-master.json",
+        market_session_events_path=session_path,
+        generated_at="2026-09-14T19:45:00+09:00",
+    )
+
+    assert report["pipeline_counts"]["expected_market_quiet"] == 1
+    assert report["pipeline_counts"].get("subscription_stale", 0) == 0
+    assert report["market_session_state_provenance"]["status"] == "verified"
+    assert report["market_session_state_provenance"]["valid_receipt_count"] == 2
+
+
+def test_build_report_retains_stale_snapshot_during_verified_1945_quiet(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    session_path = tmp_path / "session.json"
+    snapshot_path = tmp_path / "snapshot.json"
+    _write_jsonl(pipeline_path, [])
+    _write_jsonl(threshold_path, [])
+    _write_market_session_events(session_path)
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+                "generated_at": "2026-09-14T19:44:20+09:00",
+                "stocks": {
+                    "005930": {
+                        "last_realtime_type_ages_ms": {"0B": 0, "0D": 0},
+                        "last_ws_market_route": "krx_nxt_integrated",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_report(
+        "2026-09-14",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        subscription_snapshot_path=snapshot_path,
+        symbol_master_path=tmp_path / "missing-master.json",
+        market_session_events_path=session_path,
+        generated_at="2026-09-14T19:45:00+09:00",
+    )
+
+    provenance = report["subscription_snapshot_provenance"]
+    assert provenance["selected"] is True
+    assert provenance["selection_reason"] == "verified_market_state_quiet_snapshot"
+    assert provenance["current_freshness_usable"] is False
+    assert report["snapshot_summary"]["row_count"] == 1
+    assert report["snapshot_summary"]["freshness_state_counts"] == {
+        "expected_market_quiet": 1
+    }
+
+
+def test_build_report_does_not_extend_quiet_past_bounded_receipt(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    session_path = tmp_path / "session.json"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "ws_subscription_freshness_snapshot",
+                {
+                    "registered_market_routes": ["krx_nxt_integrated"],
+                    "freshness_state": "stale",
+                    "last_receive_age_sec": 25.0,
+                    "stale_after_sec": 30.0,
+                    "subscribed": True,
+                    "required_realtime_missing_types": ["0B"],
+                    "repair_reason": "subscription_stale",
+                    "repair_recommended": True,
+                    "recommended_repair": "reconnect",
+                },
+                emitted_at="2026-09-14T19:45:20+09:00",
+            )
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+    _write_market_session_events(session_path)
+
+    report = mod.build_report(
+        "2026-09-14",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        subscription_snapshot_path=tmp_path / "missing-snapshot.json",
+        symbol_master_path=tmp_path / "missing-master.json",
+        market_session_events_path=session_path,
+        generated_at="2026-09-14T19:45:20+09:00",
+    )
+
+    assert report["pipeline_counts"].get("expected_market_quiet", 0) == 0
+    assert report["pipeline_counts"]["subscription_stale"] == 1
+
+
+def test_build_report_rejects_conflicting_child_session_authority(tmp_path):
+    pipeline_path = tmp_path / "pipeline.jsonl"
+    threshold_path = tmp_path / "threshold.jsonl"
+    session_path = tmp_path / "session.json"
+    _write_jsonl(
+        pipeline_path,
+        [
+            _event(
+                "ws_subscription_freshness_snapshot",
+                {
+                    "registered_market_routes": ["nxt_only"],
+                    "freshness_state": "stale",
+                    "last_receive_age_sec": 25.0,
+                    "stale_after_sec": 30.0,
+                    "subscribed": True,
+                    "required_realtime_missing_types": ["0B"],
+                    "repair_reason": "subscription_stale",
+                    "repair_recommended": True,
+                    "recommended_repair": "reconnect",
+                },
+                emitted_at="2026-09-14T19:45:00+09:00",
+            )
+        ],
+    )
+    _write_jsonl(threshold_path, [])
+    _write_market_session_events(session_path)
+    payload = json.loads(session_path.read_text(encoding="utf-8"))
+    payload["session_events"][1]["runtime_effect"] = True
+    session_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = mod.build_report(
+        "2026-09-14",
+        pipeline_path=pipeline_path,
+        threshold_path=threshold_path,
+        subscription_snapshot_path=tmp_path / "missing-snapshot.json",
+        symbol_master_path=tmp_path / "missing-master.json",
+        market_session_events_path=session_path,
+        generated_at="2026-09-14T19:45:00+09:00",
+    )
+
+    assert report["market_session_state_provenance"]["valid_receipt_count"] == 1
+    assert report["market_session_state_provenance"]["invalid_receipt_count"] == 1
+    assert report["pipeline_counts"].get("expected_market_quiet", 0) == 0
+    assert report["pipeline_counts"]["subscription_stale"] == 1
+
+
 def _install_verified_symbol_master(monkeypatch):
     class _VerifiedMaster:
         def lookup(self, symbol, *, as_of):

@@ -32,6 +32,8 @@ DEFAULT_COHORTS = (
     ("KRX", "KRX_REGULAR"),
     ("NXT", "NXT_AFTERMARKET"),
 )
+DUAL_AFTERMARKET_SESSION = optimizer.ENTRY_DUAL_AFTERMARKET_SESSION
+DUAL_AFTERMARKET_VENUE = optimizer.ENTRY_DUAL_AFTERMARKET_VENUE
 DEFAULT_CANDIDATE_PROMPT_VERSION = (
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
 )
@@ -137,6 +139,29 @@ def _optimizer_candidate_plan(
         or report.get("broker_order_forbidden") is not True
     ):
         return fallback, source
+    cohort_contract = report.get("entry_cohort_contract")
+    cohort_contract = cohort_contract if isinstance(cohort_contract, dict) else {}
+    cohort_contract_body = {
+        key: value
+        for key, value in cohort_contract.items()
+        if key != "contract_content_sha256"
+    }
+    contract_valid = bool(
+        cohort_contract.get("schema") == optimizer.ENTRY_COHORT_CONTRACT_SCHEMA
+        and cohort_contract.get("version")
+        in {
+            optimizer.ENTRY_COHORT_CONTRACT_V1,
+            optimizer.ENTRY_COHORT_CONTRACT_V2,
+        }
+        and isinstance(cohort_contract.get("expected_cohorts"), list)
+        and cohort_contract.get("contract_content_sha256")
+        == optimizer._canonical_sha256(cohort_contract_body)
+        and cohort_contract.get("runtime_effect") is False
+        and cohort_contract.get("allowed_runtime_apply") is False
+        and cohort_contract.get("dual_aftermarket_provider_forbidden") is True
+    )
+    if not contract_valid:
+        return fallback, source
     entry = (report.get("stage_optimizers") or {}).get("entry") or {}
     rows = entry.get("cohort_optimizers") or []
     selected: dict[tuple[str, str], str] = {}
@@ -176,9 +201,44 @@ def _optimizer_candidate_plan(
         "status": "optimizer_candidate_plan_applied_offline_only",
         "reason": "stage_venue_session_isolated_selection",
         "artifact_content_sha256": artifact_hash,
+        "cohort_contract": cohort_contract,
+        "cohort_contract_sha256": cohort_contract["contract_content_sha256"],
         "fallback_or_v2_14_cohorts": fallback_cohorts,
         "research_only_cohorts": research_only_cohorts,
     }
+
+
+def _dual_source_only_cohorts(source: dict[str, Any]) -> list[dict[str, Any]]:
+    """Materialize v2 routes as terminal observations without provider work."""
+    contract = source.get("cohort_contract")
+    if not isinstance(contract, dict):
+        return []
+    result: list[dict[str, Any]] = []
+    for cohort in contract.get("expected_cohorts") or []:
+        if not isinstance(cohort, dict):
+            continue
+        if (
+            cohort.get("effective_venue") != DUAL_AFTERMARKET_VENUE
+            or cohort.get("session_bucket") != DUAL_AFTERMARKET_SESSION
+            or cohort.get("cohort_key_version")
+            != optimizer.ENTRY_COHORT_CONTRACT_V2
+            or cohort.get("authority_state") != "OBSERVE_ONLY"
+            or not cohort.get("market_data_route")
+        ):
+            continue
+        result.append(
+            {
+                **cohort,
+                "status": "completed_observe_only",
+                "provider_call_performed": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "next_action": "retain_route_isolated_source_observation",
+            }
+        )
+    return result
 
 
 def _selection_checkpoint_contract_pass(
@@ -519,9 +579,10 @@ def run_batch(
             for venue, session in DEFAULT_COHORTS
         },
         "candidate_prompt_selection_source": candidate_plan_source,
+        "cohort_contract": candidate_plan_source.get("cohort_contract"),
         "full_day_maturity_time_kst": "21:00:00",
         "max_new_requests_per_cohort": max_new_requests,
-        "cohorts": [],
+        "cohorts": _dual_source_only_cohorts(candidate_plan_source),
         **OFFLINE_BATCH_CONTRACT,
     }
     path = batch_status_path(target_date)

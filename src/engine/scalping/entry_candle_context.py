@@ -182,16 +182,17 @@ def resolve_entry_candle_venue(
         if venue_value in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}:
             if "premarket" in session_value:
                 return "PREMARKET_KRX_LIKE"
-            if "nxt" in session_value:
-                return "NXT"
-            if "krx" in session_value:
+            if session_value == "krx_regular":
                 return "KRX"
+            return "KRX_NXT_INTEGRATED"
         return venue_value
     ws = ws_data if isinstance(ws_data, dict) else {}
     suffix, route = _ws_route(ws)
     session_value = str(session or "").lower()
     if "premarket" in session_value:
         return "PREMARKET_KRX_LIKE"
+    if suffix == "_AL" or route == "krx_nxt_integrated":
+        return "KRX_NXT_INTEGRATED"
     if session_value.startswith("nxt_"):
         return "NXT"
     exact_venues = {
@@ -402,7 +403,6 @@ def _nxt_integrated_closed_krx_session_route_proof(
 ) -> dict[str, Any]:
     session_value = str(session or "").strip().lower()
     within_premarket_clock = dt_time(8, 0) <= now.time() < dt_time(9, 0)
-    within_aftermarket_clock = dt_time(16, 0) <= now.time() <= dt_time(20, 0)
     common_route_proof = bool(
         request_suffix == "_NX"
         and ws_suffix == "_AL"
@@ -414,19 +414,10 @@ def _nxt_integrated_closed_krx_session_route_proof(
         and within_premarket_clock
         and common_route_proof
     )
-    aftermarket_proven = bool(
-        str(venue or "").strip().upper() == "NXT"
-        and session_value == "nxt_aftermarket"
-        and within_aftermarket_clock
-        and common_route_proof
-    )
-    proven = premarket_proven or aftermarket_proven
+    proven = premarket_proven
     if premarket_proven:
         route_equivalence = "nxt_premarket_integrated_ws_to_nx_rest"
         proof_session = "premarket_krx_like"
-    elif aftermarket_proven:
-        route_equivalence = "nxt_aftermarket_integrated_ws_to_nx_rest"
-        proof_session = "nxt_aftermarket"
     else:
         route_equivalence = "not_proven"
         proof_session = "not_proven"
@@ -434,10 +425,8 @@ def _nxt_integrated_closed_krx_session_route_proof(
         "proven": proven,
         "route_equivalence": route_equivalence,
         "proof_session": proof_session,
-        "krx_regular_closed_by_clock": (
-            within_premarket_clock or within_aftermarket_clock
-        ),
-        "required_session": "premarket_krx_like|nxt_aftermarket",
+        "krx_regular_closed_by_clock": within_premarket_clock,
+        "required_session": "premarket_krx_like",
         "required_rest_suffix": "_NX",
         "required_ws_suffix": "_AL",
         "required_ws_route": "krx_nxt_integrated",
@@ -1188,6 +1177,12 @@ def build_session_candle_source(
         "schema": SOURCE_SCHEMA,
         "venue": venue_value,
         "session": session_value,
+        "market_data_route": (
+            "krx_nxt_integrated"
+            if ws_suffix == "_AL" or ws_route == "krx_nxt_integrated"
+            else ("nxt_only" if ws_suffix == "_NX" else "krx_only")
+        ),
+        "actual_execution_venue": "UNKNOWN",
         "request_code": request_code,
         "rest_route": request_suffix or "KRX",
         "ws_route": ws_route or "unknown",
@@ -1648,6 +1643,10 @@ def entry_candle_context_log_fields(
         "entry_candle_context_enabled": bool(context.get("enabled", False)),
         "entry_candle_venue": context.get("venue"),
         "entry_candle_session": context.get("session"),
+        "entry_candle_market_data_route": context.get("market_data_route"),
+        "entry_candle_actual_execution_venue": context.get(
+            "actual_execution_venue", "UNKNOWN"
+        ),
         "entry_candle_rest_route": context.get("rest_route"),
         "entry_candle_ws_route": context.get("ws_route"),
         "entry_candle_route_equivalence": context.get("route_equivalence"),

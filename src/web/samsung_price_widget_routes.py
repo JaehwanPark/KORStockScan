@@ -108,6 +108,8 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
         "age_ms": None,
         "ws_item": None,
         "market_route": None,
+        "market_data_route": None,
+        "actual_execution_venue": "UNKNOWN",
         "source": "shared_kiwoom_ws_dashboard_snapshot_0B",
         "authority": _WS_COMPARISON_AUTHORITY,
         "runtime_effect": False,
@@ -169,9 +171,9 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
         result["reason"] = "samsung_0b_item_mismatch"
         return result
     route = (
-        "SOR"
+        "krx_nxt_integrated"
         if ws_item.endswith("_AL")
-        else "NXT" if ws_item.endswith("_NX") else "KRX"
+        else "nxt_only" if ws_item.endswith("_NX") else "krx_only"
     )
     tick_time = datetime.fromtimestamp(tick_ts, tz=ZoneInfo("Asia/Seoul"))
     result.update(
@@ -183,6 +185,8 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
             "age_ms": round(max(0.0, age_sec) * 1000.0, 1),
             "ws_item": ws_item,
             "market_route": route,
+            "market_data_route": route,
+            "actual_execution_venue": "UNKNOWN",
             "reason": None,
         }
     )
@@ -196,12 +200,12 @@ def _quote_route_for_observed_at(observed_at: datetime) -> tuple[str, str, str]:
         if observed_at.tzinfo is None
         else observed_at.astimezone(ZoneInfo("Asia/Seoul"))
     )
-    clock = normalized.time()
-    if _NXT_PREMARKET_START <= clock < _NXT_PREMARKET_END:
-        return f"{_SAMSUNG_CODE}_NX", "NXT", "krx_like_premarket"
-    if _NXT_AFTERMARKET_START <= clock < _NXT_AFTERMARKET_END:
-        return f"{_SAMSUNG_CODE}_NX", "NXT", "nxt_aftermarket"
-    return _SAMSUNG_CODE, "KRX", "krx_or_closed"
+    context = samsung_widget_contract.session_context(normalized)
+    return (
+        context.request_code,
+        context.market_venue,
+        samsung_widget_contract.legacy_market_session(context),
+    )
 
 
 def _completed_minute_closes(
@@ -805,6 +809,7 @@ def get_samsung_price():
     session_start = {
         "krx_like_premarket": _NXT_PREMARKET_START,
         "nxt_aftermarket": _NXT_AFTERMARKET_START,
+        "krx_nxt_aftermarket": samsung_widget_contract.KRX_NXT_AFTERMARKET_START,
         "krx_or_closed": _KRX_SESSION_START,
     }[market_session]
     quote_payload = _cached_direct_quote(
@@ -869,11 +874,29 @@ def get_samsung_price():
             "market_cohort": (
                 "PREMARKET_KRX_LIKE"
                 if market_session == "krx_like_premarket"
-                else market_venue
+                else samsung_widget_contract.session_context(
+                    observed_at
+                ).market_cohort
             ),
             "market_session": market_session,
+            "session_contract_version": samsung_widget_contract.session_context(
+                observed_at
+            ).session_contract_version,
+            "market_session_regime": samsung_widget_contract.session_context(
+                observed_at
+            ).market_session_regime,
+            "decision_market_scope": samsung_widget_contract.session_context(
+                observed_at
+            ).decision_market_scope,
+            "market_data_route": samsung_widget_contract.session_context(
+                observed_at
+            ).market_data_route,
+            "actual_execution_venue": "UNKNOWN",
             "minute_session_start_kst": session_start.strftime("%H:%M"),
             "quote_request_code": request_code,
+            "market_data_request_code": samsung_widget_contract.session_context(
+                observed_at
+            ).market_data_request_code,
             "source": f"kiwoom_ka10001_{market_venue.lower()}_quote_only_fallback",
             "token_mode": "shared_cache_only",
             "position": _cached_samsung_position(token, observed_at),

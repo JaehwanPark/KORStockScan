@@ -18,6 +18,7 @@ from typing import Any
 from uuid import UUID
 
 from src.engine.monitoring.samsung_widget_contract import KST, SAMSUNG_CODE
+from src.trading.market import session_contract
 from src.trading.order.tick_utils import clamp_price_to_tick, move_price_down_by_bps
 from src.trading.widget_auto_trade.gateway import (
     KiwoomSharedTokenOrderGateway,
@@ -34,6 +35,13 @@ MAX_ORDER_QTY_ENV = "KORSTOCKSCAN_SAMSUNG_WIDGET_MANUAL_MAX_QTY"
 DEFAULT_MAX_ORDER_QTY = 100
 BUY_DISCOUNT_BPS = 50
 ACTIVE_SESSIONS = frozenset({"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET"})
+INTEGRATED_AFTERMARKET_SESSIONS = frozenset(
+    {
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+    }
+)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -253,6 +261,9 @@ class ManualWidgetOrderExecutor:
         session: object,
         snapshot_observed_at: str,
         now: datetime,
+        broker_route: object | None = None,
+        venue_eligibility: session_contract.SymbolVenueEligibility | None = None,
+        existing_holding: bool = False,
     ) -> dict[str, Any]:
         clean_side = str(side or "").strip().upper()
         if clean_side not in {"BUY", "SELL"}:
@@ -262,12 +273,28 @@ class ManualWidgetOrderExecutor:
         clean_price = _positive_price(reference_price)
         clean_session = str(session or "").strip().upper()
         clean_venue = str(market_venue or "").strip().upper()
-        if clean_session not in ACTIVE_SESSIONS:
-            raise ValueError("inactive_market_session")
-        expected_venue = "KRX" if clean_session == "KRX_REGULAR" else "NXT"
-        if clean_venue != expected_venue:
-            raise ValueError("market_venue_session_mismatch")
-        route = resolve_widget_broker_route(clean_venue)
+        market_session = session_contract.resolve_market_session(now)
+        integrated_aftermarket = (
+            market_session.session_regime in INTEGRATED_AFTERMARKET_SESSIONS
+        )
+        requested_route = str(broker_route or "").strip().upper()
+        if integrated_aftermarket:
+            if clean_session != market_session.session_regime:
+                raise ValueError("inactive_market_session")
+            if clean_venue != session_contract.ACTUAL_EXECUTION_VENUE_UNKNOWN:
+                raise ValueError("market_venue_session_mismatch")
+            if requested_route not in {"KRX", "NXT", "SOR"}:
+                raise ValueError("explicit_order_route_required")
+            route = requested_route
+        else:
+            if clean_session not in ACTIVE_SESSIONS:
+                raise ValueError("inactive_market_session")
+            expected_venue = "KRX" if clean_session == "KRX_REGULAR" else "NXT"
+            if clean_venue != expected_venue:
+                raise ValueError("market_venue_session_mismatch")
+            route = resolve_widget_broker_route(clean_venue)
+            if requested_route and requested_route != route:
+                raise ValueError("market_venue_session_mismatch")
         trade_date = now.astimezone(KST).date().isoformat()
         normalized_price = clamp_price_to_tick(clean_price)
         intent = {
@@ -277,6 +304,7 @@ class ManualWidgetOrderExecutor:
             "normalized_price": normalized_price,
             "market_venue": clean_venue,
             "broker_route": route,
+            "broker_route_explicit": bool(requested_route),
             "session": clean_session,
             "snapshot_observed_at": snapshot_observed_at,
         }
@@ -297,6 +325,7 @@ class ManualWidgetOrderExecutor:
             "reference_price": clean_price,
             "market_venue": clean_venue,
             "broker_route": route,
+            "broker_route_explicit": bool(requested_route),
             "session": clean_session,
             "snapshot_observed_at": snapshot_observed_at,
             "submitted_at": submitted_at,
@@ -314,6 +343,8 @@ class ManualWidgetOrderExecutor:
                     quantity=clean_quantity,
                     price=normalized_price,
                     route=route,
+                    now=now if integrated_aftermarket else None,
+                    venue_eligibility=venue_eligibility,
                 )
             else:
                 response = self._submit_sell(
@@ -322,6 +353,8 @@ class ManualWidgetOrderExecutor:
                     price=normalized_price,
                     route=route,
                     session=clean_session,
+                    now=now if integrated_aftermarket else None,
+                    existing_holding=existing_holding,
                 )
         except Exception as exc:
             response = {
@@ -339,7 +372,14 @@ class ManualWidgetOrderExecutor:
         return response
 
     def _submit_buy(
-        self, *, base: dict[str, Any], quantity: int, price: int, route: str
+        self,
+        *,
+        base: dict[str, Any],
+        quantity: int,
+        price: int,
+        route: str,
+        now: datetime | None,
+        venue_eligibility: session_contract.SymbolVenueEligibility | None,
     ) -> dict[str, Any]:
         upper_qty = (quantity + 1) // 2
         lower_qty = quantity // 2
@@ -355,12 +395,16 @@ class ManualWidgetOrderExecutor:
         orders: list[dict[str, Any]] = []
         for role, leg_qty, leg_price in legs:
             try:
-                result = self.gateway.submit_limit_buy(
-                    code=SAMSUNG_CODE,
-                    qty=leg_qty,
-                    route=route,
-                    price=leg_price,
-                )
+                submit_kwargs: dict[str, Any] = {
+                    "code": SAMSUNG_CODE,
+                    "qty": leg_qty,
+                    "route": route,
+                    "price": leg_price,
+                }
+                if now is not None:
+                    submit_kwargs["now"] = now
+                    submit_kwargs["venue_eligibility"] = venue_eligibility
+                result = self.gateway.submit_limit_buy(**submit_kwargs)
             except Exception as exc:
                 orders.append(
                     {
@@ -417,14 +461,22 @@ class ManualWidgetOrderExecutor:
         price: int,
         route: str,
         session: str,
+        now: datetime | None,
+        existing_holding: bool,
     ) -> dict[str, Any]:
-        if session == "KRX_REGULAR":
-            result = self.gateway.submit_sell(
-                code=SAMSUNG_CODE,
-                qty=quantity,
-                route=route,
+        if session == "KRX_REGULAR" or session in INTEGRATED_AFTERMARKET_SESSIONS:
+            submit_kwargs: dict[str, Any] = {
+                "code": SAMSUNG_CODE,
+                "qty": quantity,
+                "route": route,
+            }
+            if now is not None:
+                submit_kwargs["now"] = now
+                submit_kwargs["existing_holding"] = existing_holding
+            result = self.gateway.submit_sell(**submit_kwargs)
+            order_type = (
+                "BEST_LIMIT" if session in INTEGRATED_AFTERMARKET_SESSIONS else "MARKET"
             )
-            order_type = "MARKET"
             order_price = None
         else:
             result = self.gateway.submit_limit_sell(

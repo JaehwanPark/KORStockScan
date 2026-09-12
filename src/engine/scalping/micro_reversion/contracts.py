@@ -7,6 +7,14 @@ from datetime import date
 from enum import StrEnum
 from typing import Any
 
+from src.trading.market.session_contract import (
+    ACTUAL_EXECUTION_VENUE_UNKNOWN,
+    MARKET_DATA_ROUTE_KRX_NXT_INTEGRATED,
+    MARKET_DATA_ROUTE_KRX_ONLY,
+    MARKET_DATA_ROUTE_NXT_ONLY,
+    MARKET_DATA_ROUTE_UNKNOWN,
+)
+
 from .tax import (
     InstrumentType,
     ListingMarket,
@@ -97,6 +105,27 @@ def registration_item_identity(value: object) -> tuple[str, str]:
     if len(base) != 6 or not base.isascii() or not base.isalnum():
         return "", "UNKNOWN"
     return base, venue
+
+
+def registration_item_market_data_identity(value: object) -> tuple[str, str, str]:
+    """Return symbol, data route, and the non-inferred execution venue.
+
+    Kiwoom's ``_AL`` and ``_NX`` suffixes identify the requested market-data
+    scope.  Neither suffix is broker fill evidence, so this contract always
+    preserves the physical execution venue as ``UNKNOWN``.
+    """
+
+    raw = str(value or "").strip().upper()
+    symbol, _legacy_venue = registration_item_identity(raw)
+    if not symbol:
+        return "", MARKET_DATA_ROUTE_UNKNOWN, ACTUAL_EXECUTION_VENUE_UNKNOWN
+    if raw.endswith("_AL"):
+        route = MARKET_DATA_ROUTE_KRX_NXT_INTEGRATED
+    elif raw.endswith("_NX"):
+        route = MARKET_DATA_ROUTE_NXT_ONLY
+    else:
+        route = MARKET_DATA_ROUTE_KRX_ONLY
+    return symbol, route, ACTUAL_EXECUTION_VENUE_UNKNOWN
 
 
 def coverage_tier_for(

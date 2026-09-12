@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 import os
 from datetime import datetime
@@ -73,6 +74,187 @@ def test_threshold_ev_reconciliation_accepts_declared_diagnostic_source_split():
         )
         == []
     )
+
+
+def _entry_setup_session_cohort(
+    key, version, venue, session, route, authority, **extra
+):
+    return {
+        "cohort_key": key,
+        "cohort_key_version": version,
+        "effective_venue": venue,
+        "session_bucket": session,
+        "market_data_route": route,
+        "authority_state": authority,
+        **extra,
+    }
+
+
+def _entry_setup_session_contract_payload(target_date="2026-09-12"):
+    expected = [
+        _entry_setup_session_cohort(
+            "KRX/KRX_REGULAR",
+            "v1",
+            "KRX",
+            "KRX_REGULAR",
+            "KRX",
+            "SOURCE_ONLY",
+        ),
+        _entry_setup_session_cohort(
+            "NXT/NXT_AFTERMARKET",
+            "v1",
+            "NXT",
+            "NXT_AFTERMARKET",
+            "NXT",
+            "SOURCE_ONLY",
+        ),
+        _entry_setup_session_cohort(
+            "INTEGRATED/KRX_NXT_AFTERMARKET",
+            "v2",
+            "INTEGRATED",
+            "KRX_NXT_AFTERMARKET",
+            "SOR",
+            "OBSERVE_ONLY",
+        ),
+    ]
+    contract = {
+        "schema": "entry_replay_cohort_contract_v1",
+        "contract_version": "v2",
+        "expected_cohorts_by_contract_version": {"v2": expected},
+    }
+    contract_hash = hashlib.sha256(
+        json.dumps(
+            contract,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    batch_cohorts = [
+        {**expected[0], "status": "completed_offline_only"},
+        {**expected[1], "status": "completed_offline_only"},
+        {
+            **expected[2],
+            "status": "completed_observe_only",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "candidate_contract_sha256": None,
+        },
+    ]
+    consumer_cohorts = [
+        {**expected[0], "path_status": "connected_and_hash_bound"},
+        {**expected[1], "path_status": "connected_and_hash_bound"},
+        {
+            **expected[2],
+            "path_status": "intentionally_blocked_with_owner_and_acceptance_test",
+            "terminality": "terminal_source_observation",
+        },
+    ]
+    batch = {
+        "target_date": target_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "cohort_contract": contract,
+        "source_cohort_contract_sha256": contract_hash,
+        "cohorts": batch_cohorts,
+    }
+    consumer = {
+        "target_date": target_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_cohort_contract_sha256": contract_hash,
+        "request_paths": {"entry_base": {"cohorts": consumer_cohorts}},
+    }
+    return batch, consumer
+
+
+def test_entry_setup_replay_session_contract_accepts_versioned_observe_only_dual():
+    batch, consumer = _entry_setup_session_contract_payload()
+
+    status = mod._entry_setup_replay_session_contract_status(
+        batch, consumer, target_date="2026-09-12"
+    )
+
+    assert status["status"] == "pass"
+    assert status["expected_cohort_count"] == 3
+    assert status["batch_cohort_count"] == 3
+    assert status["consumer_cohort_count"] == 3
+
+
+def test_entry_setup_replay_session_contract_rejects_hash_date_or_unknown_coverage():
+    batch, consumer = _entry_setup_session_contract_payload()
+    consumer["target_date"] = "2026-09-11"
+    consumer["source_cohort_contract_sha256"] = "b" * 64
+    batch["cohort_contract"]["expected_cohorts_by_contract_version"]["v2"][2][
+        "market_data_route"
+    ] = "UNKNOWN"
+
+    status = mod._entry_setup_replay_session_contract_status(
+        batch, consumer, target_date="2026-09-12"
+    )
+
+    assert status["status"] == "fail"
+    assert "consumer_target_date_mismatch" in status["issues"]
+    assert "consumer_cohort_contract_hash_missing_or_invalid" in status["issues"]
+    assert "cohort_contract_expected_session_invalid" in status["issues"]
+
+
+def test_entry_setup_replay_session_contract_rejects_raw_cohort_exclusion_gap():
+    batch, consumer = _entry_setup_session_contract_payload()
+    batch["cohorts"].append(
+        _entry_setup_session_cohort(
+            "RAW/UNKNOWN",
+            "v2",
+            "UNKNOWN",
+            "KRX_NXT_AFTERMARKET",
+            "SOR",
+            "OBSERVE_ONLY",
+        )
+    )
+
+    status = mod._entry_setup_replay_session_contract_status(
+        batch, consumer, target_date="2026-09-12"
+    )
+
+    assert status["status"] == "fail"
+    assert "batch_cohort_coverage_mismatch" in status["issues"]
+
+
+def test_entry_setup_replay_session_contract_rejects_dual_authority_leak():
+    batch, consumer = _entry_setup_session_contract_payload()
+    dual = batch["cohorts"][2]
+    dual["authority_state"] = "LIVE_APPROVED"
+    batch["cohort_contract"]["expected_cohorts_by_contract_version"]["v2"][2][
+        "authority_state"
+    ] = "LIVE_APPROVED"
+    contract = batch["cohort_contract"]
+    contract_hash = hashlib.sha256(
+        json.dumps(
+            contract,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    batch["source_cohort_contract_sha256"] = contract_hash
+    consumer["source_cohort_contract_sha256"] = contract_hash
+    consumer["request_paths"]["entry_base"]["cohorts"][2][
+        "authority_state"
+    ] = "LIVE_APPROVED"
+
+    status = mod._entry_setup_replay_session_contract_status(
+        batch, consumer, target_date="2026-09-12"
+    )
+
+    assert status["status"] == "fail"
+    assert "dual_aftermarket_authority_or_candidate_invalid" in status["issues"]
 
 
 def test_workorder_source_fingerprint_detects_changed_bytes(tmp_path):

@@ -991,6 +991,7 @@ def test_scanner_runtime_target_venue_fields_preserve_canonical_session_by_venue
         "KRX": "krx_regular",
         "PREMARKET_KRX_LIKE": "krx_like_premarket",
         "NXT": "nxt",
+        "KRX_NXT_INTEGRATED": "KRX_NXT_AFTERMARKET",
     }
 
     for venue, market_session_bucket in expected_buckets.items():
@@ -1007,6 +1008,57 @@ def test_scanner_runtime_target_venue_fields_preserve_canonical_session_by_venue
         assert fields["venue_resolution"].startswith("consistent_explicit:")
         assert fields["venue_source_quality_status"] == "pass"
         assert fields["venue_unknown_reviewed_reason"] == "not_applicable"
+
+
+def test_scanner_runtime_integrated_route_registers_without_actual_venue_inference(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_mode",
+        "deadline_v1",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.run_sniper,
+        "scanner_scheduler_venues",
+        frozenset({"KRX_NXT_INTEGRATED"}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_emit_scanner_scheduler_event",
+        lambda **_kwargs: None,
+    )
+    scheduler = kiwoom_sniper_v2.ScannerRuntimeScheduler(max_active=16)
+    target = {
+        "id": 1,
+        "code": "005930",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "actual_execution_venue": "UNKNOWN",
+    }
+
+    generation = kiwoom_sniper_v2._register_scanner_scheduler_generation(
+        scheduler,
+        payload={
+            **target,
+            "scanner_promotion_id": "INTEGRATED-1",
+            "scanner_promotion_emitted_epoch": 100.0,
+            "current_price_observed": 70_000,
+            "scanner_market_gainer_market_data_route": "krx_nxt_integrated",
+            "market_session_bucket": "KRX_NXT_AFTERMARKET",
+            "actual_execution_venue": "UNKNOWN",
+        },
+        target=target,
+        attach_epoch=101.0,
+    )
+
+    assert generation is not None
+    assert generation.venue == "KRX_NXT_INTEGRATED"
+    assert target["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert target["actual_execution_venue"] == "UNKNOWN"
 
 
 def test_deadline_scheduler_callback_only_enqueues_immutable_promotion(monkeypatch):
@@ -1271,6 +1323,89 @@ def test_scheduler_boot_restore_reuses_persisted_same_session_generation(
     assert payload["effective_venue"] == "NXT"
     assert payload["current_price_observed"] == 70_000
     assert payload["scanner_scheduler_boot_promotion_age_sec"] == 10.0
+
+
+@pytest.mark.parametrize(
+    "observed_at,expected_version,expected_regime,expected_venue,expected_reason",
+    [
+        (
+            datetime(
+                2026,
+                9,
+                11,
+                16,
+                5,
+                tzinfo=kiwoom_sniper_v2.session_contract.KST,
+            ),
+            kiwoom_sniper_v2.session_contract.MARKET_SESSION_CONTRACT_VERSION_V1,
+            kiwoom_sniper_v2.session_contract.MARKET_SESSION_REGIME_LEGACY_NXT_ONLY,
+            "NXT",
+            "",
+        ),
+        (
+            datetime(
+                2026,
+                9,
+                14,
+                15,
+                45,
+                tzinfo=kiwoom_sniper_v2.session_contract.KST,
+            ),
+            kiwoom_sniper_v2.session_contract.MARKET_SESSION_CONTRACT_VERSION_V2,
+            kiwoom_sniper_v2.session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION,
+            "UNKNOWN",
+            "scanner_scheduler_boot_current_session_unsupported",
+        ),
+        (
+            datetime(
+                2026,
+                9,
+                14,
+                16,
+                5,
+                tzinfo=kiwoom_sniper_v2.session_contract.KST,
+            ),
+            kiwoom_sniper_v2.session_contract.MARKET_SESSION_CONTRACT_VERSION_V2,
+            kiwoom_sniper_v2.session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+            "UNKNOWN",
+            "scanner_scheduler_boot_current_session_unsupported",
+        ),
+    ],
+)
+def test_scheduler_boot_restore_consumes_injected_central_session_context(
+    monkeypatch,
+    observed_at,
+    expected_version,
+    expected_regime,
+    expected_venue,
+    expected_reason,
+):
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "scalping_session_venue_provenance",
+        lambda _epoch: pytest.fail("legacy clock resolver must not be called"),
+    )
+    boot_epoch = observed_at.timestamp()
+    context = kiwoom_sniper_v2._scanner_scheduler_session_context_at_epoch(
+        boot_epoch
+    )
+    payload = kiwoom_sniper_v2._scanner_scheduler_boot_restore_payload(
+        {
+            "code": "005930",
+            "effective_venue": "NXT",
+            "venue_resolution": "session_window:nxt",
+            "scanner_promotion_id": "SCANPROM-005930-BOOT",
+            "scanner_promotion_emitted_epoch": boot_epoch,
+            "buy_price": 70_000,
+        },
+        boot_epoch=boot_epoch,
+        session_context=context,
+    )
+
+    assert context.contract_version == expected_version
+    assert context.session_regime == expected_regime
+    assert payload["scanner_scheduler_boot_current_venue"] == expected_venue
+    assert payload["scanner_scheduler_boot_restore_block_reason"] == expected_reason
 
 
 def test_scheduler_boot_restore_registers_without_shared_deadline_backlog(

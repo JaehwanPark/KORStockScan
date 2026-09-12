@@ -26,7 +26,7 @@ import shlex
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from src.engine.auto_promotion_contracts import tier2_validation_passed
 from src.engine.approval_contracts import annotate_approval_request
@@ -148,6 +148,8 @@ RUNTIME_HANDOFF_CONTRACT_REQUIRED_TARGET_DATE = "2026-08-04"
 
 AUTO_APPLY_MODES = {"auto_bounded_live"}
 AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down"}
+DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
+DUAL_COHORT_KEY_VERSION = "v2"
 AUTO_APPLY_BLOCK_STATES = {"freeze", "hold_sample", "hold_no_edge"}
 HOLD_SUB_STATES = frozenset({"hold", "hold_sample", "hold_no_edge"})
 HOLD_CARRY_FORWARD_STATES = frozenset({"hold"})
@@ -3773,6 +3775,18 @@ def _scale_in_cumulative_quality_stage_coexist(
     return False
 
 
+def _dual_aftermarket_live_apply_blocker(candidate: Mapping[str, Any]) -> str:
+    """Never infer live authority from a v2 integrated source-only cohort."""
+    session = str(candidate.get("session_bucket") or "").strip().upper()
+    cohort_version = str(candidate.get("cohort_key_version") or "").strip()
+    if session != DUAL_AFTERMARKET_SESSION and cohort_version != DUAL_COHORT_KEY_VERSION:
+        return ""
+    authority = str(candidate.get("authority_state") or "").strip().upper()
+    if authority == "OBSERVE_ONLY":
+        return "dual_cohort_observe_only_no_live_approval"
+    return "dual_cohort_missing_live_approval"
+
+
 def _select_auto_apply_candidates(
     calibration_candidates: list[dict[str, Any]],
     *,
@@ -3925,6 +3939,8 @@ def _select_auto_apply_candidates(
             or str(candidate.get("family_type") or "") == "sim_lifecycle_source"
         ):
             reject_reason = "non_live_selectable_sim_lifecycle_source"
+        elif dual_blocker := _dual_aftermarket_live_apply_blocker(candidate):
+            reject_reason = dual_blocker
         elif not bool(candidate.get("allowed_runtime_apply")) and not (
             avg_down_hold_carry_forward or scale_in_split_hold_carry_forward
         ):

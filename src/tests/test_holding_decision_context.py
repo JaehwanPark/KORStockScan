@@ -848,7 +848,7 @@ def test_future_broker_snapshot_is_reported_as_provenance_conflict(monkeypatch):
     assert reconciliation["broker_snapshot_freshness_state"] == "future_conflict"
 
 
-def test_nxt_aftermarket_real_holding_uses_current_session_execution_view(
+def test_nxt_aftermarket_real_holding_does_not_infer_integrated_execution_view(
     monkeypatch,
 ):
     _enable(monkeypatch)
@@ -898,35 +898,34 @@ def test_nxt_aftermarket_real_holding_uses_current_session_execution_view(
 
     assert context["request_code"] == "066570_NX"
     assert context["broker_route_provenance"] == {
-        "route": "NXT",
-        "source": "current_session_nxt_candle_route_equivalence",
-        "authority": "current_session_execution_view_only_no_fill_claim",
+        "route": None,
+        "source": "missing",
+        "authority": "broker_execution_provenance_required",
         "actual_order_submitted": True,
         "broker_order_forbidden": False,
     }
     snapshot = context["ai_market_snapshot_v1"]
-    assert snapshot["broker_route"] == "NXT"
+    assert context["actual_execution_venue"] == "UNKNOWN"
+    assert snapshot["actual_execution_venue"] == "UNKNOWN"
+    assert snapshot["broker_route"] is None
     preflight = snapshot["ai_input_preflight_v1"]
-    assert preflight["broker_route_matches_venue"] is True
-    assert "nxt_aftermarket_source_unproven" not in preflight["blockers"]
-    assert preflight["allowed"] is True
+    assert preflight["broker_route_matches_venue"] is False
+    assert "nxt_aftermarket_source_unproven" in preflight["blockers"]
+    assert preflight["allowed"] is False
     log_fields = holding_decision_context_log_fields(context)
-    assert log_fields["holding_context_broker_route_provenance_state"] == (
-        "observation_view_only"
-    )
+    assert log_fields["holding_context_broker_route_provenance_state"] == "missing"
     assert log_fields["holding_context_broker_snapshot_freshness_state"] == "fresh"
 
 
-def test_holding_submit_authority_requires_fresh_broker_reconciliation(
+def test_integrated_aftermarket_holding_preserves_scope_and_unknown_execution_venue(
     monkeypatch,
 ):
     _enable(monkeypatch)
     now = datetime(2026, 7, 31, 16, 10, 30, tzinfo=KST)
     stock = {
         **_stock(),
-        "actual_order_submitted": True,
-        "broker_order_forbidden": False,
-        "broker_snapshot_at": now.timestamp() - 61.0,
+        "entry_execution_broker_route": "SOR",
+        "broker_snapshot_at": now.timestamp() - 0.2,
         "open_buy_qty": 0,
         "open_sell_qty": 0,
     }
@@ -945,6 +944,65 @@ def test_holding_submit_authority_requires_fresh_broker_reconciliation(
             "last_realtime_type_market_route": {
                 "0B": "krx_nxt_integrated",
                 "0D": "krx_nxt_integrated",
+            },
+        }
+    )
+
+    context = build_holding_decision_context(
+        None,
+        "066570",
+        ws,
+        stock,
+        "KRX_NXT_INTEGRATED",
+        "krx_nxt_aftermarket",
+        "holding_score",
+        now_ts=now,
+        recent_candles=_candles(
+            60,
+            start=datetime(2026, 7, 31, 15, 30, tzinfo=KST),
+        ),
+        candle_meta={"api_id": "ka10080", "received_count": 60},
+    )
+
+    assert context["request_code"] == "066570_AL"
+    assert context["market_data_route"] == "krx_nxt_integrated"
+    assert context["actual_execution_venue"] == "UNKNOWN"
+    snapshot = context["ai_market_snapshot_v1"]
+    assert snapshot["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert snapshot["market_data_route"] == "krx_nxt_integrated"
+    assert snapshot["actual_execution_venue"] == "UNKNOWN"
+    assert snapshot["broker_route"] == "SOR"
+    assert snapshot["ai_input_preflight_v1"]["allowed"] is True
+
+
+def test_holding_submit_authority_requires_fresh_broker_reconciliation(
+    monkeypatch,
+):
+    _enable(monkeypatch)
+    now = datetime(2026, 7, 31, 16, 10, 30, tzinfo=KST)
+    stock = {
+        **_stock(),
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "broker_snapshot_at": now.timestamp() - 61.0,
+        "open_buy_qty": 0,
+        "open_sell_qty": 0,
+    }
+    ws = _ws(now, suffix="_NX", route="nxt_only")
+    ws.update(
+        {
+            "last_realtime_type_ts": {
+                "0B": now.timestamp() - 0.1,
+                "0D": now.timestamp() - 0.2,
+            },
+            "last_realtime_type_item": {
+                "0B": "066570_NX",
+                "0D": "066570_NX",
+            },
+            "last_realtime_type_market_suffix": {"0B": "_NX", "0D": "_NX"},
+            "last_realtime_type_market_route": {
+                "0B": "nxt_only",
+                "0D": "nxt_only",
             },
         }
     )
@@ -983,7 +1041,7 @@ def test_holding_score_preserves_stale_broker_snapshot_as_partial_warning(
         "open_buy_qty": 0,
         "open_sell_qty": 0,
     }
-    ws = _ws(now, suffix="_AL", route="krx_nxt_integrated")
+    ws = _ws(now, suffix="_NX", route="nxt_only")
     ws.update(
         {
             "last_realtime_type_ts": {
@@ -991,13 +1049,13 @@ def test_holding_score_preserves_stale_broker_snapshot_as_partial_warning(
                 "0D": now.timestamp() - 0.2,
             },
             "last_realtime_type_item": {
-                "0B": "066570_AL",
-                "0D": "066570_AL",
+                "0B": "066570_NX",
+                "0D": "066570_NX",
             },
-            "last_realtime_type_market_suffix": {"0B": "_AL", "0D": "_AL"},
+            "last_realtime_type_market_suffix": {"0B": "_NX", "0D": "_NX"},
             "last_realtime_type_market_route": {
-                "0B": "krx_nxt_integrated",
-                "0D": "krx_nxt_integrated",
+                "0B": "nxt_only",
+                "0D": "nxt_only",
             },
         }
     )
@@ -1617,6 +1675,7 @@ def test_runtime_fetch_request_code_matches_actual_holding_venue(monkeypatch):
     _enable(monkeypatch)
     regular = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     premarket = datetime(2026, 7, 23, 8, 30, tzinfo=KST).timestamp()
+    aftermarket = datetime(2026, 7, 23, 16, 30, tzinfo=KST).timestamp()
 
     assert (
         state_handlers._resolve_holding_context_request_code(
@@ -1667,6 +1726,18 @@ def test_runtime_fetch_request_code_matches_actual_holding_venue(monkeypatch):
             position_ctx={"entry_execution_broker_route": "SOR"},
             decision_kind="holding_score",
             now_ts=regular,
+        )
+        == "000660_AL"
+    )
+    assert (
+        state_handlers._resolve_holding_context_request_code(
+            "000660",
+            ws_data={
+                "market_suffix": "_AL",
+                "market_route": "krx_nxt_integrated",
+            },
+            decision_kind="holding_score",
+            now_ts=aftermarket,
         )
         == "000660_AL"
     )

@@ -54,6 +54,29 @@ def test_late_source_arrival_invalidates_both_consumers(tmp_path):
     assert len(result["issues"]) == 2
 
 
+def test_route_session_venue_provenance_hashes_bind_both_consumers(tmp_path):
+    reports, _, checklist = _publish(tmp_path)
+    for consumer in ("tower", "checklist"):
+        labels = mod.source_paths(reports, "2026-09-07", consumer)
+        assert {"key_lineage_ledger", "conversion_lane"} <= labels.keys()
+
+    source = mod.source_paths(reports, "2026-09-07", "checklist")[
+        "conversion_lane"
+    ]
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        '{"route":"SOR","session_bucket":"KRX_NXT_AFTERMARKET",'
+        '"effective_venue":"INTEGRATED"}',
+        encoding="utf-8",
+    )
+
+    result = mod.verify_summary_handoff(
+        "2026-09-07", report_dir=reports, checklist_path=checklist
+    )
+    assert result["status"] == "fail"
+    assert len(result["issues"]) == 2
+
+
 def test_verifier_refresh_does_not_create_cycle(tmp_path):
     reports, _, checklist = _publish(tmp_path)
     path = reports / "threshold_cycle_postclose_verification"

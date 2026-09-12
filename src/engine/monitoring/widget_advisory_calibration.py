@@ -146,6 +146,23 @@ WIDGET_SPECS = (
 )
 
 
+def _expected_sessions_for_date(spec: WidgetSpec, target_date: date) -> dict[str, int]:
+    if spec.symbol != SAMSUNG_CODE:
+        return dict(spec.expected_sessions)
+    return evaluation.expected_sessions_for_date(target_date)
+
+
+def _calibration_sessions_for_date(
+    spec: WidgetSpec, target_date: date
+) -> tuple[str, ...]:
+    """Keep legacy NXT replay but never promote the new integrated cohort."""
+    return tuple(
+        session
+        for session in _expected_sessions_for_date(spec, target_date)
+        if session != evaluation.DUAL_AFTERMARKET_SESSION
+    )
+
+
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -204,7 +221,7 @@ def build_and_write_evaluation(
         rows,
         target_date=target_date,
         symbol_code=spec.symbol,
-        expected_sessions=spec.expected_sessions,
+        expected_sessions=_expected_sessions_for_date(spec, target_date),
         target_return_pct=spec.target_return_pct,
     )
     daily["confirmation_comparison"] = confirmation_comparison(
@@ -568,7 +585,7 @@ def build_calibration_policy(
             and spec.symbol == SAMSUNG_CODE
             else ([], {})
         )
-        for session in spec.expected_sessions:
+        for session in _calibration_sessions_for_date(spec, target_date):
             previous = loader.resolve(
                 symbol=spec.symbol,
                 session=session,
@@ -648,6 +665,19 @@ def build_calibration_policy(
             "confirmation_comparison": (daily or {}).get("confirmation_comparison"),
             "downstream_signal_eligibility_effect": True,
             "direct_order_authority": False,
+            "dual_aftermarket_observe_only": (
+                {
+                    "session": evaluation.DUAL_AFTERMARKET_SESSION,
+                    "expected_minute_count": evaluation.DUAL_AFTERMARKET_EXPECTED_MINUTES,
+                    "automatic_promotion_allowed": False,
+                    "reason": "integrated_aftermarket_has_no_nxt_solo_policy_inheritance",
+                }
+                if (
+                    spec.symbol == SAMSUNG_CODE
+                    and target_date >= evaluation.MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
+                )
+                else None
+            ),
         }
     policy_version = (
         f"widget_advisory_policy_{effective_date.isoformat()}_from_"
@@ -751,7 +781,7 @@ def _policy_verification_issues(
         sessions = (
             symbol_policy.get("sessions") if isinstance(symbol_policy, dict) else None
         )
-        for session in spec.expected_sessions:
+        for session in _calibration_sessions_for_date(spec, source_target_date):
             session_policy = (
                 sessions.get(session) if isinstance(sessions, dict) else None
             )

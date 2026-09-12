@@ -142,6 +142,7 @@ TIMEOUT_RESEARCH_MAX_QUOTE_AGE_SEC = 5
 CANARY_COMPLETE_AFTER_KST = time(20, 0)
 GROSS_PROFIT_TOUCH_BPS = (1, 3, 5, 10, 20, 30, 50)
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
+DUAL_AFTERMARKET_SESSION_PREFIX = "KRX_NXT_AFTERMARKET"
 REGISTRATION_RECEIPT_REQUIRED_FROM_DATE = date(2026, 9, 4)
 SOURCE_ENTRY_EVENT_ID_REQUIRED_FROM_DATE = date(2026, 9, 7)
 POSTCLOSE_COMPLETE_TIME = time(20, 0)
@@ -4718,6 +4719,49 @@ def _physical_scope_matches_row(payload: dict[str, Any]) -> bool:
     )
 
 
+def _market_axis_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve market-data scope without inferring a physical fill venue."""
+
+    venue = str(payload.get("venue") or "").strip().upper()
+    session = str(
+        payload.get("market_session_regime")
+        or payload.get("session_bucket")
+        or "UNKNOWN"
+    ).strip().upper()
+    decision_scope = str(
+        payload.get("decision_market_scope")
+        or payload.get("effective_venue")
+        or venue
+        or "UNKNOWN"
+    ).strip().upper()
+    route = str(payload.get("market_data_route") or "").strip().lower()
+    if route not in {"krx_only", "nxt_only", "krx_nxt_integrated"}:
+        route = {
+            "KRX": "krx_only",
+            "NXT": "nxt_only",
+            "SOR": "krx_nxt_integrated",
+            "KRX_NXT_INTEGRATED": "krx_nxt_integrated",
+        }.get(decision_scope, "unknown")
+    actual_venue = str(
+        payload.get("actual_execution_venue") or "UNKNOWN"
+    ).strip().upper()
+    if actual_venue not in {"KRX", "NXT"}:
+        actual_venue = "UNKNOWN"
+    dual_source_only = bool(
+        decision_scope == "KRX_NXT_INTEGRATED"
+        or session.startswith(DUAL_AFTERMARKET_SESSION_PREFIX)
+    )
+    return {
+        "decision_market_scope": decision_scope,
+        "market_data_route": route,
+        "market_session_regime": session,
+        "actual_execution_venue": actual_venue,
+        "dual_source_only": dual_source_only,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _depth_item_matches_scope(payload: dict[str, Any]) -> bool:
     symbol = str(payload.get("symbol") or "").strip()
     venue = str(payload.get("venue") or "").strip().upper()
@@ -5201,6 +5245,12 @@ def _micro_context(
             "depth_row_count": 0,
             "venues": set(),
             "sessions": set(),
+            "decision_market_scopes": set(),
+            "market_data_routes": set(),
+            "market_session_regimes": set(),
+            "actual_execution_venue_counts": defaultdict(int),
+            "dual_actual_execution_venue_counts": defaultdict(int),
+            "dual_source_only_row_count": 0,
         }
         for symbol in symbols
     }
@@ -5266,6 +5316,20 @@ def _micro_context(
             continue
         item["venues"].add(str(payload.get("venue") or "unknown"))
         item["sessions"].add(str(payload.get("session_bucket") or "unknown"))
+        market_axes = _market_axis_context(payload)
+        item["decision_market_scopes"].add(market_axes["decision_market_scope"])
+        item["market_data_routes"].add(market_axes["market_data_route"])
+        item["market_session_regimes"].add(market_axes["market_session_regime"])
+        item["actual_execution_venue_counts"][
+            market_axes["actual_execution_venue"]
+        ] += 1
+        item["dual_source_only_row_count"] += int(
+            market_axes["dual_source_only"]
+        )
+        if market_axes["dual_source_only"]:
+            item["dual_actual_execution_venue_counts"][
+                market_axes["actual_execution_venue"]
+            ] += 1
         if is_excluded(payload):
             item["source_excluded_row_count"] += 1
             item["ineligible_row_count"] += 1
@@ -5325,6 +5389,7 @@ def _micro_context(
                         "venue": payload.get("venue"),
                         "session": payload.get("session_bucket"),
                         "sequence_epoch": payload.get("sequence_epoch"),
+                        **market_axes,
                     }
                 )
                 windows[anchor["anchor_id"]]["raw_market_rows"].append(dict(payload))
@@ -5441,6 +5506,15 @@ def _micro_context(
     for item in inventory.values():
         item["venues"] = sorted(item["venues"])
         item["sessions"] = sorted(item["sessions"])
+        item["decision_market_scopes"] = sorted(item["decision_market_scopes"])
+        item["market_data_routes"] = sorted(item["market_data_routes"])
+        item["market_session_regimes"] = sorted(item["market_session_regimes"])
+        item["actual_execution_venue_counts"] = dict(
+            sorted(item["actual_execution_venue_counts"].items())
+        )
+        item["dual_actual_execution_venue_counts"] = dict(
+            sorted(item["dual_actual_execution_venue_counts"].items())
+        )
         item["invalid_contract_scope_counts"] = dict(
             sorted(item["invalid_contract_scope_counts"].items())
         )
@@ -5481,6 +5555,14 @@ def _micro_context(
             ),
             "canary_source_quality": canary_source,
             "source_contract_ready": source_contract_ready,
+            "dual_source_only_row_count": sum(
+                item["dual_source_only_row_count"] for item in inventory.values()
+            ),
+            "dual_actual_execution_venue_unknown_row_count": sum(
+                item["dual_actual_execution_venue_counts"].get("UNKNOWN", 0)
+                for item in inventory.values()
+            ),
+            "dual_auto_promotion_candidate_count": 0,
         },
         inventory,
         windows,
@@ -5771,6 +5853,9 @@ def _anchor_result(
     registration_receipt_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     rows = sorted(window["rows"], key=lambda row: row["timestamp"])
+    dual_source_only_row_count = sum(
+        row.get("dual_source_only") is True for row in rows
+    )
     depth_points_by_epoch: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for point in window.get("depth_points") or []:
         if not isinstance(point, dict):
@@ -5881,6 +5966,7 @@ def _anchor_result(
     }
     metrics: dict[str, Any] = {
         "eligible_window_row_count": len(rows),
+        "dual_source_only_row_count": dual_source_only_row_count,
         "post_anchor_row_count": len(post),
         "depth_window_row_count": window["depth_rows"],
         "shock_reference_count": window["shock_reference_count"],
@@ -6914,7 +7000,10 @@ def _anchor_result(
             "micro_tuning_input_allowed": bool(
                 status == "matched"
                 and anchor.get("owner_policy_tuning_eligible") is not False
+                and dual_source_only_row_count == 0
             ),
+            "dual_source_only_observed": dual_source_only_row_count > 0,
+            "dual_auto_promotion_candidate_count": 0,
             "base_owner_tuning_effect": False,
             "runtime_registration_receipt_binding": (
                 dict(registration_receipt_binding)
@@ -8881,9 +8970,19 @@ def build_report(
             else "source_only_rolling_paired_research_evidence_accumulating"
         )
     )
-    policy_promotion_candidates = list(
+    raw_policy_promotion_candidates = list(
         rolling_paired_policy_research.get("policy_promotion_candidates") or []
     )
+    dual_source_only_policy_candidates = [
+        candidate
+        for candidate in raw_policy_promotion_candidates
+        if _market_axis_context(candidate)["dual_source_only"] is True
+    ]
+    policy_promotion_candidates = [
+        candidate
+        for candidate in raw_policy_promotion_candidates
+        if _market_axis_context(candidate)["dual_source_only"] is False
+    ]
     objective_followups = [
         _fast_lifecycle_objective_followup(
             target_date=target_date,
@@ -8967,6 +9066,7 @@ def build_report(
         "policy_change_readiness": POLICY_CHANGE_READINESS_CONTRACT,
         "promotion_candidate_intake_contract": PROMOTION_CANDIDATE_INTAKE_CONTRACT,
         "policy_promotion_candidates": policy_promotion_candidates,
+        "dual_source_only_policy_observations": dual_source_only_policy_candidates,
         "authority": {
             "decision_authority": "postclose_diagnostic_only",
             "runtime_effect": False,
@@ -9003,6 +9103,10 @@ def build_report(
                 "summary"
             ]["cohort_count"],
             "policy_promotion_candidate_count": len(policy_promotion_candidates),
+            "dual_source_only_policy_observation_count": len(
+                dual_source_only_policy_candidates
+            ),
+            "dual_auto_promotion_candidate_count": 0,
             "micro_entry_confirmation_eligible_count": (
                 micro_entry_confirmation["summary"]["source_quality_eligible_count"]
             ),

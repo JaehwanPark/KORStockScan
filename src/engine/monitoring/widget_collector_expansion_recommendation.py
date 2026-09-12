@@ -193,6 +193,7 @@ def _load_feature_history(
     *,
     through_date: date,
     eligible_codes: frozenset[str] | None = None,
+    source_scope_coverage: dict[str, int] | None = None,
 ) -> tuple[dict[str, list[dict[str, float | bool]]], list[str]]:
     history: dict[str, list[dict[str, float | bool]]] = defaultdict(list)
     paths = _dated_paths(
@@ -211,9 +212,18 @@ def _load_feature_history(
         try:
             rows = iter_jsonl_objects_strict(path)
             for row in rows:
+                session_bucket = str(row.get("session_bucket") or "").lower()
+                market_data_route = str(row.get("market_data_route") or "").lower()
+                if (
+                    session_bucket.startswith("krx_nxt_aftermarket")
+                    or market_data_route == "krx_nxt_integrated"
+                ):
+                    if source_scope_coverage is not None:
+                        source_scope_coverage["dual_payload_rows_observe_only"] += 1
+                    continue
                 if (
                     str(row.get("effective_venue") or "").upper() != "KRX"
-                    or str(row.get("session_bucket") or "").lower() != "krx_regular"
+                    or session_bucket != "krx_regular"
                 ):
                     continue
                 exact = _source_qualified_exact_payload(row)
@@ -256,6 +266,7 @@ def _load_replay_history(
     *,
     through_date: date,
     current_replay_report: dict[str, Any] | None = None,
+    source_scope_coverage: dict[str, int] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], list[Path]]:
     aggregates: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
@@ -316,9 +327,18 @@ def _load_replay_history(
         for row in report.get("rows", []):
             if not isinstance(row, dict):
                 continue
+            session_bucket = str(row.get("session_bucket") or "").lower()
+            market_data_route = str(row.get("market_data_route") or "").lower()
+            if (
+                session_bucket.startswith("krx_nxt_aftermarket")
+                or market_data_route == "krx_nxt_integrated"
+            ):
+                if source_scope_coverage is not None:
+                    source_scope_coverage["dual_replay_rows_observe_only"] += 1
+                continue
             if (
                 str(row.get("effective_venue") or "").upper() != "KRX"
-                or str(row.get("session_bucket") or "").lower() != "krx_regular"
+                or session_bucket != "krx_regular"
             ):
                 continue
             code = str(row.get("stock_code") or "").strip()
@@ -438,10 +458,12 @@ def build_recommendation_report(
     action boundary and must not censor collection, replay, or evaluation.
     """
 
+    source_scope_coverage: dict[str, int] = defaultdict(int)
     replay, replay_paths = _load_replay_history(
         replay_dir,
         through_date=target_date,
         current_replay_report=current_replay_report,
+        source_scope_coverage=source_scope_coverage,
     )
     exclusion_counts: dict[str, int] = defaultdict(int)
     outcome_candidates: dict[str, dict[str, Any]] = {}
@@ -481,6 +503,7 @@ def build_recommendation_report(
         payload_dir,
         through_date=target_date,
         eligible_codes=frozenset(outcome_candidates),
+        source_scope_coverage=source_scope_coverage,
     )
     names = _load_names(replay_paths)
     candidates: list[dict[str, Any]] = []
@@ -660,6 +683,21 @@ def build_recommendation_report(
         "exclusion_counts": dict(sorted(exclusion_counts.items())),
         "source": {
             "market_session_scope": "KRX_REGULAR_ONLY",
+            "dual_aftermarket_policy": "observe_only_not_scored",
+            "dual_aftermarket_context": {
+                "market_data_route": "krx_nxt_integrated",
+                "actual_execution_venue": "UNKNOWN",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            },
+            "dual_aftermarket_source_coverage": {
+                "replay_rows": source_scope_coverage[
+                    "dual_replay_rows_observe_only"
+                ],
+                "payload_rows": source_scope_coverage[
+                    "dual_payload_rows_observe_only"
+                ],
+            },
             "replay_paths": [str(path) for path in replay_paths],
             "current_replay_in_memory_target_date": (
                 str(current_replay_report.get("target_date") or "")

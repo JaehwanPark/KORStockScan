@@ -72,7 +72,9 @@ def test_websocket_price_comparison_accepts_fresh_shared_0b(monkeypatch, tmp_pat
     assert comparison["status"] == "OK"
     assert comparison["current_price"] == 242_500
     assert comparison["price_delta"] == 500
-    assert comparison["market_route"] == "SOR"
+    assert comparison["market_route"] == "krx_nxt_integrated"
+    assert comparison["market_data_route"] == "krx_nxt_integrated"
+    assert comparison["actual_execution_venue"] == "UNKNOWN"
     assert comparison["age_ms"] == 400.0
     assert comparison["used_for_manual_order"] is False
     assert comparison["runtime_effect"] is False
@@ -664,6 +666,27 @@ def test_quote_route_uses_nxt_only_during_nxt_aftermarket():
     assert routes._quote_route_for_observed_at(
         datetime(2026, 7, 28, 20, 0, tzinfo=ZoneInfo("Asia/Seoul"))
     ) == ("005930", "KRX", "krx_or_closed")
+
+
+def test_quote_route_uses_effective_aftermarket_bucket_in_post_9_14_window():
+    assert routes._quote_route_for_observed_at(
+        datetime(2026, 9, 14, 15, 35, tzinfo=ZoneInfo("Asia/Seoul"))
+    ) == ("005930", "KRX", "krx_or_closed")
+    assert routes._quote_route_for_observed_at(
+        datetime(2026, 9, 14, 15, 40, tzinfo=ZoneInfo("Asia/Seoul"))
+    ) == ("005930", "KRX", "krx_or_closed")
+    assert routes._quote_route_for_observed_at(
+        datetime(2026, 9, 14, 16, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    ) == ("005930_AL", "UNKNOWN", "krx_nxt_aftermarket")
+
+    context = routes.samsung_widget_contract.session_context(
+        datetime(2026, 9, 14, 16, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    )
+    assert context.market_session_regime == "KRX_NXT_AFTERMARKET"
+    assert context.decision_market_scope == "KRX_NXT"
+    assert context.market_data_route == "krx_nxt_integrated"
+    assert context.market_data_request_code == "005930_AL"
+    assert context.actual_execution_venue == "UNKNOWN"
 
 
 def test_samsung_widget_fails_closed_when_shared_token_is_missing(monkeypatch):

@@ -75,6 +75,145 @@ def test_login_success_message_helpers():
     assert KiwoomWSManager._is_login_failure_message(failure) is True
 
 
+@pytest.mark.parametrize(
+    (
+        "raw_state",
+        "state_event",
+        "state_market_scope",
+        "normalized_state",
+        "entry_state_usable",
+    ),
+    [
+        ("0", "KRX_PREOPEN", "KRX", "CLOSED", False),
+        ("3", "KRX_OPEN", "KRX", "OPEN", True),
+        ("2", "KRX_CLOSING_CALL_AUCTION_NOTICE", "KRX", "CALL_AUCTION", False),
+        ("4", "KRX_MARKET_CLOSE", "KRX", "CLOSED", False),
+        ("8", "KRX_REGULAR_MARKET_CLOSE", "KRX", "CLOSED", False),
+        ("9", "ALL_MARKETS_CLOSE", "ALL", "CLOSED", False),
+        ("a", "KRX_AFTER_HOURS_CLOSING_PRICE_OPEN", "KRX", "OPEN", True),
+        ("b", "KRX_AFTER_HOURS_CLOSING_PRICE_CLOSE", "KRX", "CLOSED", False),
+        ("c", "KRX_AFTER_HOURS_CALL_AUCTION_OPEN", "KRX", "CALL_AUCTION", False),
+        ("d", "KRX_AFTER_HOURS_CALL_AUCTION_CLOSE", "KRX", "CLOSED", False),
+        ("e", "DERIVATIVES_CLOSING_CALL_AUCTION_CLOSE", "DERIVATIVES", "CLOSED", False),
+        ("o", "DERIVATIVES_MARKET_OPEN", "DERIVATIVES", "OPEN", False),
+        ("s", "DERIVATIVES_CLOSING_CALL_AUCTION_OPEN", "DERIVATIVES", "CALL_AUCTION", False),
+        ("P", "NXT_PREMARKET_OPEN", "NXT", "OPEN", True),
+        ("Q", "NXT_PREMARKET_CLOSE", "NXT", "CLOSED", False),
+        ("R", "NXT_MAIN_MARKET_OPEN", "NXT", "OPEN", True),
+        ("S", "NXT_MAIN_MARKET_CLOSE", "NXT", "CLOSED", False),
+        ("T", "NXT_AFTERMARKET_CALL_AUCTION_OPEN", "NXT", "CALL_AUCTION", False),
+        ("U", "NXT_AFTERMARKET_OPEN", "NXT", "OPEN", True),
+        ("V", "NXT_AFTERMARKET_CLOSE", "NXT", "CLOSED", False),
+    ],
+)
+def test_official_0s_market_session_states_are_versioned_and_normalized(
+    raw_state,
+    state_event,
+    state_market_scope,
+    normalized_state,
+    entry_state_usable,
+):
+    receipt = KiwoomWSManager._normalize_market_session_0s(raw_state)
+
+    assert receipt == {
+        "contract_version": "kiwoom_0s_market_operation_v1",
+        "raw_state": raw_state,
+        "state_event": state_event,
+        "state_market_scope": state_market_scope,
+        "normalized_state": normalized_state,
+        "known": True,
+        "entry_state_usable": entry_state_usable,
+        "blocker": None,
+    }
+
+
+@pytest.mark.parametrize("raw_state", ["", "B", "W", "X", "VI"])
+def test_unknown_0s_market_session_state_preserves_raw_and_fails_closed(raw_state):
+    receipt = KiwoomWSManager._normalize_market_session_0s(raw_state)
+
+    assert receipt["raw_state"] == raw_state
+    assert receipt["state_event"] == "UNKNOWN"
+    assert receipt["state_market_scope"] == "UNKNOWN"
+    assert receipt["normalized_state"] == "UNKNOWN"
+    assert receipt["known"] is False
+    assert receipt["entry_state_usable"] is False
+    assert receipt["blocker"] == "kiwoom_0s_state_unknown"
+
+
+def test_official_0s_notification_without_actionable_state_fails_closed():
+    receipt = KiwoomWSManager._normalize_market_session_0s("f")
+
+    assert receipt["raw_state"] == "f"
+    assert receipt["state_event"] == "DERIVATIVES_EARLY_OPEN_TIME_NOTICE"
+    assert receipt["state_market_scope"] == "DERIVATIVES"
+    assert receipt["normalized_state"] == "UNKNOWN"
+    assert receipt["known"] is False
+    assert receipt["entry_state_usable"] is False
+    assert receipt["blocker"] == "kiwoom_0s_state_semantics_not_actionable"
+
+
+def test_0s_handler_preserves_raw_route_and_packet_timestamps(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    events = []
+    ingress = datetime(2026, 9, 14, 16, 0, 1, tzinfo=kiwoom_websocket.KST)
+    monkeypatch.setattr(
+        kiwoom_websocket,
+        "append_market_session_event",
+        lambda **kwargs: events.append(kwargs),
+    )
+
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0s",
+                            "name": "장시작시간",
+                            "item": "005930_AL",
+                            "values": {
+                                "20": "160001",
+                                "214": "000059",
+                                "215": "T",
+                            },
+                        }
+                    ],
+                }
+            ),
+            received_at=ingress,
+        )
+    )
+
+    assert manager.market_session_state == "T"
+    assert manager.market_session_state_event == "NXT_AFTERMARKET_CALL_AUCTION_OPEN"
+    assert manager.market_session_state_normalized == "CALL_AUCTION"
+    assert manager.market_session_state_known is True
+    assert manager.market_session_state_entry_usable is False
+    assert events[0]["event"] == {
+        "source": "kiwoom_websocket_0s",
+        "real_type": "0s",
+        "name": "장시작시간",
+        "item": "005930_AL",
+        "market_data_route": "krx_nxt_integrated",
+        "market_session_state": "T",
+        "market_session_state_raw": "T",
+        "market_session_remaining": "000059",
+        "market_session_remaining_raw": "000059",
+        "exchange_time_raw": "160001",
+        "receive_timestamp": "2026-09-14T16:00:01.000+09:00",
+        "receive_time_source": "websocket_packet_ingress",
+        "market_session_state_contract_version": "kiwoom_0s_market_operation_v1",
+        "market_session_state_event": "NXT_AFTERMARKET_CALL_AUCTION_OPEN",
+        "market_session_state_market_scope": "NXT",
+        "market_session_state_normalized": "CALL_AUCTION",
+        "market_session_state_known": True,
+        "market_session_state_entry_usable": False,
+        "market_session_state_blocker": None,
+        "raw_values": {"20": "160001", "214": "000059", "215": "T"},
+    }
+
+
 def test_raw_tick_snapshot_does_not_traverse_accumulated_history():
     class HistoryMustNotBeCopied:
         def __deepcopy__(self, memo):
@@ -571,10 +710,10 @@ def test_recent_trade_ticks_are_partitioned_by_subscription_route(monkeypatch):
     latest = manager.get_latest_data("005930")
     partitions = latest["recent_trade_ticks_by_route"]
     assert set(partitions) == {
-        "KRX|krx_regular",
+        "KRX|krx_only",
         "_AL|krx_nxt_integrated",
     }
-    assert partitions["KRX|krx_regular"][0]["market_suffix"] == ""
+    assert partitions["KRX|krx_only"][0]["market_suffix"] == ""
     assert (
         partitions["_AL|krx_nxt_integrated"][0]["market_route"] == "krx_nxt_integrated"
     )
@@ -1163,7 +1302,11 @@ def test_post_login_bootstrap_restores_symbols_after_readiness_boundary(monkeypa
     manager.websocket = fake_ws
     manager.is_reconnected = True
     manager.subscribed_codes.add("005930")
-    manager._registered_items_by_code["005930"] = ("005930",)
+    manager._registered_items_by_code["005930"] = (
+        "005930",
+        "005930_NX",
+        "005930_AL",
+    )
     original_enqueue = manager._enqueue_state_event
 
     def record_enqueue(event_type, payload):
@@ -1187,6 +1330,16 @@ def test_post_login_bootstrap_restores_symbols_after_readiness_boundary(monkeypa
     assert manager._session_ready.is_set()
     assert len(symbol_regs) == 1
     assert symbol_regs[0]["refresh"] == "1"
+    restored_items = {
+        item
+        for row in symbol_regs[0]["data"]
+        for item in row.get("item", [])
+    }
+    assert restored_items == {"005930", "005930_NX", "005930_AL"}
+    assert KiwoomWSManager._ws_item_route("005930") == "krx_only"
+    assert KiwoomWSManager._ws_item_route("005930_NX") == "nxt_only"
+    assert KiwoomWSManager._ws_item_route("005930_AL") == "krx_nxt_integrated"
+    assert KiwoomWSManager._ws_item_actual_execution_venue("005930_AL") == "UNKNOWN"
     assert collector.epochs == [1_000]
     assert boundary_order[:2] == ["transport_epoch", "WS_RECONNECTED"]
 
@@ -3154,12 +3307,23 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
         manager.realtime_data["039490"]["last_realtime_type_effective_venue"]["0B"]
         == ""
     )
+    assert (
+        manager.realtime_data["039490"]["last_ws_actual_execution_venue"]
+        == "UNKNOWN"
+    )
+    assert (
+        manager.realtime_data["039490"][
+            "last_realtime_type_actual_execution_venue"
+        ]["0B"]
+        == "UNKNOWN"
+    )
     route_snapshot = manager.realtime_data["039490"][
         "realtime_type_snapshots_by_route"
     ]["_AL|krx_nxt_integrated"]["0B"]
     assert route_snapshot["item"] == "039490_AL"
     assert route_snapshot["current_price"] == 10000
     assert route_snapshot["effective_venue"] == ""
+    assert route_snapshot["actual_execution_venue"] == "UNKNOWN"
 
 
 def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently():
@@ -3226,7 +3390,7 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
     snapshots = manager.realtime_data["039490"]["realtime_type_snapshots_by_route"]
     assert set(snapshots) == {
         "_AL|krx_nxt_integrated",
-        "KRX|krx_regular",
+        "KRX|krx_only",
     }
     assert snapshots["_AL|krx_nxt_integrated"]["0B"]["current_price"] == 10000
     assert (
@@ -3238,8 +3402,8 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
         "KRX": {"ask": 0, "bid": 0},
         "NXT": {"ask": 100, "bid": 200},
     }
-    assert snapshots["KRX|krx_regular"]["0B"]["current_price"] == 9990
-    assert snapshots["KRX|krx_regular"]["0D"]["orderbook"]["bids"][0]["price"] == 9990
+    assert snapshots["KRX|krx_only"]["0B"]["current_price"] == 9990
+    assert snapshots["KRX|krx_only"]["0D"]["orderbook"]["bids"][0]["price"] == 9990
     depth = manager.realtime_data["039490"]["last_depth_tick"]
     assert depth["item"] == "039490"
     assert depth["orderbook_time_raw"] == "090002000"
@@ -3287,9 +3451,12 @@ def test_ws_item_effective_venue_does_not_invent_integrated_underlying_venue():
     assert KiwoomWSManager._ws_item_effective_venue("005930") == "KRX"
     assert KiwoomWSManager._ws_item_effective_venue("005930_NX") == "NXT"
     assert KiwoomWSManager._ws_item_effective_venue("005930_AL") == ""
+    assert KiwoomWSManager._ws_item_actual_execution_venue("005930") == "UNKNOWN"
+    assert KiwoomWSManager._ws_item_actual_execution_venue("005930_NX") == "UNKNOWN"
+    assert KiwoomWSManager._ws_item_actual_execution_venue("005930_AL") == "UNKNOWN"
 
 
-def test_subscription_snapshot_opening_gap_is_not_a_no_tick_repair():
+def test_subscription_snapshot_opening_gap_without_verified_state_fails_closed():
     from datetime import datetime
 
     manager = KiwoomWSManager("test-token")
@@ -3298,9 +3465,9 @@ def test_subscription_snapshot_opening_gap_is_not_a_no_tick_repair():
     manager._required_realtime_types_by_code["005930"] = ("0B", "0D")
     gap = datetime.fromisoformat("2026-09-10T08:55:00+09:00").timestamp()
     row = manager.get_subscription_freshness_snapshot(["005930"], now_ts=gap)["rows"][0]
-    assert row["freshness_state"] == "expected_market_quiet"
-    assert row["observed_freshness_state"] == "no_tick"
-    assert row["repair_recommended"] is False
+    assert row["freshness_state"] == "no_tick"
+    assert "observed_freshness_state" not in row
+    assert row["repair_recommended"] is True
     assert row["required_realtime_received"] is False
     assert row["required_realtime_missing_types"] == ["0B", "0D"]
     opened = datetime.fromisoformat("2026-09-10T09:00:30+09:00").timestamp()
@@ -3355,12 +3522,12 @@ def test_subscription_freshness_snapshot_classifies_no_tick_stale_and_fresh(
     assert rows["000003"]["registered_item_quota_units"] == 2
     assert rows["000003"]["registered_market_suffixes"] == ["", "_AL"]
     assert rows["000003"]["registered_market_routes"] == [
-        "krx_regular",
+        "krx_only",
         "krx_nxt_integrated",
     ]
     assert rows["000003"]["registered_route_counts"] == {
         "krx_nxt_integrated": 1,
-        "krx_regular": 1,
+        "krx_only": 1,
     }
     assert rows["000003"]["multi_route_registered"] is True
     assert (

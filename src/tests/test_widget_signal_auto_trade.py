@@ -132,6 +132,22 @@ class FakeSnapshotTimeContract(FakeContract):
         )
 
 
+class FakeIntegratedAftermarketContract(FakeContract):
+    @staticmethod
+    def session_context(observed_at):
+        return SimpleNamespace(
+            active=True,
+            market_venue="UNKNOWN",
+            name="KRX_NXT_AFTERMARKET",
+            session_contract_version="market_session_contract_v2",
+            market_session_regime="KRX_NXT_AFTERMARKET",
+            decision_market_scope="KRX_NXT",
+            market_data_route="krx_nxt_integrated",
+            market_data_request_code="999999_AL",
+            actual_execution_venue="UNKNOWN",
+        )
+
+
 @dataclass
 class FakeRecorder:
     events: list
@@ -195,15 +211,15 @@ class FakeGateway:
             venues=(("NXT",) * 10 if route == "NXT" else ("KRX",) * 10),
         )
 
-    def submit_buy(self, *, code, qty, route):
+    def submit_buy(self, *, code, qty, route, **_kwargs):
         self.buy_calls.append((code, qty, route))
         return self._accepted("B")
 
-    def submit_sell(self, *, code, qty, route):
+    def submit_sell(self, *, code, qty, route, **_kwargs):
         self.sell_calls.append((code, qty, route))
         return self._accepted("S")
 
-    def submit_limit_sell(self, *, code, qty, route, price):
+    def submit_limit_sell(self, *, code, qty, route, price, **_kwargs):
         self.limit_sell_calls.append((code, qty, route, price))
         return self._accepted("L")
 
@@ -220,7 +236,7 @@ class RejectFirstBuyGateway(FakeGateway):
         super().__init__()
         self.reject_next_buy = True
 
-    def submit_buy(self, *, code, qty, route):
+    def submit_buy(self, *, code, qty, route, **_kwargs):
         self.buy_calls.append((code, qty, route))
         if self.reject_next_buy:
             self.reject_next_buy = False
@@ -1019,6 +1035,87 @@ def test_nxt_collector_entry_block_creates_no_machine_action_telegram(
     assert recorder.events[-1]["event_type"] == ("entry_blocked_execution_policy_venue")
 
 
+def test_unapproved_integrated_aftermarket_entry_is_observe_only(
+    tmp_path, monkeypatch
+):
+    now = datetime(2026, 9, 14, 16, 0, tzinfo=KST)
+    payload = _payload(now, entry_id="DUAL-ENTRY-1")
+    payload["market_venue"] = "UNKNOWN"
+    spec = WidgetSpec(
+        code="999999",
+        name="test",
+        snapshot_path=Path("unused.json"),
+        contract=FakeIntegratedAftermarketContract,
+        event_based=True,
+    )
+    gateway = FakeGateway()
+    recorder = FakeRecorder([])
+    trader = WidgetSignalAutoTrader(
+        gateway=gateway,
+        specs=(spec,),
+        state_path=tmp_path / "dual-state.json",
+        event_recorder=recorder,
+        snapshot_loader=lambda _path: payload,
+        policy_loader=FakeDatedPolicyLoader({}),
+        entry_qty=1,
+        enabled=True,
+    )
+
+    state = trader.run_once(now)
+
+    assert gateway.buy_calls == []
+    assert state["symbols"]["999999"]["orders"] == []
+    blocked = next(
+        event
+        for event in recorder.events
+        if event.get("event_type")
+        == "entry_blocked_execution_policy_session_unavailable"
+    )
+    assert blocked["actual_order_submitted"] is False
+    assert blocked["market_session_regime"] == "KRX_NXT_AFTERMARKET"
+    assert blocked["market_data_route"] == "krx_nxt_integrated"
+    assert blocked["actual_execution_venue"] == "UNKNOWN"
+
+
+def test_integrated_order_record_preserves_four_route_axes(tmp_path):
+    now = datetime(2026, 9, 14, 16, 0, tzinfo=KST)
+    spec = WidgetSpec(
+        code="999999",
+        name="test",
+        snapshot_path=Path("unused.json"),
+        contract=FakeIntegratedAftermarketContract,
+        event_based=True,
+    )
+    trader = WidgetSignalAutoTrader(
+        gateway=FakeGateway(),
+        specs=(spec,),
+        state_path=tmp_path / "dual-receipt-state.json",
+        event_recorder=FakeRecorder([]),
+        snapshot_loader=lambda _path: {},
+        policy_loader=FakeDatedPolicyLoader({}),
+        entry_qty=1,
+        enabled=True,
+    )
+
+    order = trader._order_record(
+        spec=spec,
+        side="SELL",
+        qty=1,
+        route="SOR",
+        signal_id="DUAL-SELL-1",
+        now=now,
+        order_role=engine.ORDER_ROLE_FINAL_EXIT,
+    )
+
+    assert order["market_session_regime"] == "KRX_NXT_AFTERMARKET"
+    assert order["market_data_route"] == "krx_nxt_integrated"
+    assert order["market_data_request_code"] == "999999_AL"
+    assert order["market_venue"] == "UNKNOWN"
+    assert order["broker_route_requested"] == "SOR"
+    assert order["broker_route"] == "SOR"
+    assert order["actual_execution_venue"] == "UNKNOWN"
+
+
 def _samsung_policy_payload(now, *, entry_id="ENTRY-1", exit_id=None, price=100_000):
     payload = _payload(now, entry_id=entry_id, exit_id=exit_id)
     payload["symbol"] = "005930"
@@ -1112,6 +1209,9 @@ def test_one_order_per_entry_episode_and_rearms_only_after_final_exit(
     assert first_order["market_venue"] == "KRX"
     assert first_order["broker_route"] == "SOR"
     assert first_order["route"] == "SOR"
+    assert first_order["market_session_regime"] == "KRX_REGULAR"
+    assert first_order["broker_route_requested"] == "SOR"
+    assert first_order["actual_execution_venue"] == "UNKNOWN"
 
     trader.run_once(now)
     assert len(gateway.buy_calls) == 1
@@ -1974,6 +2074,10 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert entry_order["market_venue"] == "KRX"
     assert entry_order["broker_route"] == "SOR"
     assert entry_order["broker_execution_venue"] == "NXT"
+    assert entry_order["actual_execution_venue"] == "NXT"
+    assert entry_order["actual_execution_venue_source"] == (
+        "broker_execution_snapshot"
+    )
     assert entry_order["adaptive_exit_first_fill_observation"]["first_observed_at"] == (
         now.isoformat()
     )
@@ -1993,6 +2097,10 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert reconciled["market_venue"] == "KRX"
     assert reconciled["broker_route"] == "SOR"
     assert reconciled["broker_execution_venue"] == "NXT"
+    assert reconciled["actual_execution_venue"] == "NXT"
+    assert reconciled["actual_execution_venue_source"] == (
+        "broker_execution_snapshot"
+    )
     assert reconciled["submitted_at"] == now.isoformat()
 
     restarted = WidgetSignalAutoTrader(
@@ -3001,6 +3109,92 @@ def test_gateway_routes_krx_buy_and_final_sell_through_sor(monkeypatch):
     assert buy_payload["trde_tp"] == "6"
     assert sell_payload["dmst_stex_tp"] == "SOR"
     assert sell_payload["trde_tp"] == "3"
+
+
+@pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])
+def test_gateway_aftermarket_sell_preserves_explicit_route_and_uses_best_limit(
+    monkeypatch, route
+):
+    class Response:
+        status_code = 200
+        headers = {}
+
+        @staticmethod
+        def json():
+            return {"return_code": 0, "return_msg": "OK", "ord_no": "0001234"}
+
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response()
+
+    session = RecordingSession()
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=session, token_loader=lambda: "cached-token"
+    )
+
+    result = gateway.submit_sell(
+        code="005930",
+        qty=2,
+        route=route,
+        now=datetime(2026, 9, 14, 16, 0, tzinfo=KST),
+    )
+
+    assert result.accepted is True
+    assert len(session.calls) == 1
+    payload = session.calls[0][1]["json"]
+    assert payload["dmst_stex_tp"] == route
+    assert payload["trde_tp"] == "6"
+    assert payload["ord_uv"] == ""
+
+
+def test_gateway_aftermarket_unsupported_type_is_blocked_before_transport(
+    monkeypatch,
+):
+    class FailIfCalledSession:
+        def post(self, *args, **kwargs):
+            raise AssertionError("unsupported type must not reach broker")
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=FailIfCalledSession(), token_loader=lambda: "cached-token"
+    )
+
+    result = gateway.submit_limit_sell(
+        code="005930",
+        qty=1,
+        route="SOR",
+        price=236_500,
+        order_type="16",
+        now=datetime(2026, 9, 14, 16, 0, tzinfo=KST),
+    )
+
+    assert result.accepted is False
+    assert result.return_code == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+    assert result.return_msg == "order_type_unsupported"
+
+
+def test_gateway_terminal_aftermarket_sell_requires_existing_holding():
+    class FailIfCalledSession:
+        def post(self, *args, **kwargs):
+            raise AssertionError("non-holding sell must not reach broker")
+
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        request_session=FailIfCalledSession(), token_loader=lambda: "cached-token"
+    )
+
+    result = gateway.submit_sell(
+        code="005930",
+        qty=1,
+        route="SOR",
+        now=datetime(2026, 9, 14, 19, 45, tzinfo=KST),
+    )
+
+    assert result.accepted is False
+    assert result.return_code == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+    assert result.return_msg == "existing_holding_required"
 
 
 def test_gateway_routes_krx_limit_sell_through_sor(monkeypatch):

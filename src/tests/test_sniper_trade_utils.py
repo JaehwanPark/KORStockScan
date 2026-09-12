@@ -748,3 +748,72 @@ def test_live_runtime_wrappers_forward_sell_custody_keywords(monkeypatch):
             },
         )
     ]
+
+
+def test_post_effective_holding_sell_session_uses_integrated_close_boundaries():
+    cases = (
+        ((15, 30, 0), "session_transition"),
+        ((16, 0, 0), "krx_nxt_aftermarket"),
+        ((19, 40, 0), "krx_nxt_aftermarket_close_only"),
+        ((19, 45, 0), "krx_nxt_aftermarket_terminal_exit"),
+        ((20, 0, 0), "outside_krx_nxt_window"),
+    )
+    for (hour, minute, second), expected in cases:
+        observed_at = datetime(
+            2026,
+            9,
+            14,
+            hour,
+            minute,
+            second,
+            tzinfo=sniper_trade_utils._KST,
+        )
+        assert sniper_trade_utils.holding_sell_session_bucket(observed_at) == expected
+
+
+def test_boundary_reconciliation_open_or_unknown_blocks_duplicate_sell():
+    base = {
+        "side": "SELL",
+        "symbol": "005930",
+        "intent_sha256": "a" * 64,
+        "source_sha256s": ["b" * 64],
+        "terminal": False,
+    }
+    stock = {
+        "code": "005930",
+        "buy_qty": 3,
+        "aftermarket_close_reconciliation": {**base, "state": "OPEN"},
+    }
+    assert (
+        sniper_trade_utils.holding_sell_reconciliation_block_reason(stock, "005930")
+        == "aftermarket_sell_child_open"
+    )
+
+    stock["aftermarket_close_reconciliation"] = {**base, "state": "UNKNOWN"}
+    assert (
+        sniper_trade_utils.holding_sell_reconciliation_block_reason(stock, "005930")
+        == "aftermarket_sell_reconciliation_unknown"
+    )
+
+    stock["aftermarket_close_reconciliation"] = {
+        **base,
+        "state": "TERMINAL",
+        "terminal": True,
+        "releasable_qty": 3,
+        "successor_blocked": False,
+    }
+    assert not sniper_trade_utils.holding_sell_reconciliation_block_reason(
+        stock, "005930"
+    )
+
+    stock["aftermarket_close_reconciliation"] = {
+        **base,
+        "state": "TERMINAL",
+        "terminal": True,
+        "releasable_qty": 0,
+        "successor_blocked": True,
+    }
+    assert (
+        sniper_trade_utils.holding_sell_reconciliation_block_reason(stock, "005930")
+        == "aftermarket_sell_terminal_quantity_not_released"
+    )

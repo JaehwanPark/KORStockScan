@@ -47,6 +47,12 @@ ANALYTICS_ROOT = DATA_DIR / "analytics" / "parquet"
 
 # pipeline_events에서 분석에 필요한 필드만 평탄화해 메모리 사용량을 억제한다.
 PIPELINE_FIELD_KEYS = [
+    # Preserve the execution-context tuple alongside analytics fields.  These
+    # originate in the JSONL event's `fields` object and remain strings in the
+    # fixed Arrow schema, allowing lossless JSONL -> Parquet round trips.
+    "route",
+    "session_bucket",
+    "effective_venue",
     "overbought_blocked",
     "fill_quality",
     "entry_mode",

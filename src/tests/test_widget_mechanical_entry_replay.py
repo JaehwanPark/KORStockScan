@@ -180,6 +180,36 @@ def test_report_joins_same_trace_and_keeps_runtime_authority_false():
     assert symbol["mechanical_state_counts"] == {"ENTRY_CAUTION": 1}
 
 
+def test_integrated_aftermarket_is_observe_only_and_excluded_from_economics():
+    payload = _payload()
+    payload.update(
+        effective_venue="KRX_NXT",
+        session_bucket="krx_nxt_aftermarket",
+        market_data_route="krx_nxt_integrated",
+        actual_execution_venue="UNKNOWN",
+    )
+    context = payload["sanitized_user_input"]["exact_payload"]["entry_candle_context"]
+    context.update(venue="KRX_NXT", session="krx_nxt_aftermarket")
+    label = _label()
+    label.update(effective_venue="KRX_NXT", session_bucket="krx_nxt_aftermarket")
+
+    result = replay.evaluate_portable_widget_core(payload)
+    report = replay.build_report(
+        [payload], {"analyze_target:123456:test": label}, target_date=date(2026, 8, 4)
+    )
+
+    assert result["source_issue"] == "dual_aftermarket_observe_only"
+    assert result["session"] == "KRX_NXT_AFTERMARKET"
+    assert result["actual_execution_venue"] == "UNKNOWN"
+    assert report["source"]["dual_aftermarket_observe_only_count"] == 1
+    assert report["source"]["economic_row_count"] == 0
+    assert report["summary"]["dual_aftermarket_observe_only"] == {
+        "sample_count": 1,
+        "cost_status": "not_applicable_source_only",
+    }
+    assert report["summary"]["ai_wait_drop"]["sample_count"] == 0
+
+
 def test_cli_stdout_is_machine_readable_json(capsys):
     assert replay.main(["--target-date", "2026-08-04"]) == 0
 

@@ -654,6 +654,13 @@ markdown_text = sys.argv[2]
 target_date = sys.argv[3]
 expected_report_type = sys.argv[4]
 source_paths = [Path(value) for value in sys.argv[5:]]
+contract_paths = (
+    Path("src/trading/market/session_contract.py"),
+    Path("src/trading/market/aftermarket_eligibility.py"),
+    Path("src/trading/order/aftermarket_reconciliation.py"),
+    Path("src/engine/monitoring/market_opportunity_census.py"),
+    Path("src/engine/observation_source_quality_audit.py"),
+)
 if not json_path.is_file() or json_path.stat().st_size <= 0:
     raise SystemExit(1)
 if markdown_text != "-":
@@ -667,6 +674,34 @@ except Exception:
 if str(payload.get("target_date") or "") != target_date:
     raise SystemExit(1)
 if expected_report_type != "-" and payload.get("report_type") != expected_report_type:
+    raise SystemExit(1)
+
+def sha256(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+reuse_receipt_path = json_path.with_name(f"{json_path.name}.reuse-contract.json")
+try:
+    reuse_receipt = json.loads(reuse_receipt_path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+if (
+    reuse_receipt.get("schema") != "postclose_artifact_reuse_contract_v1"
+    or reuse_receipt.get("target_date") != target_date
+    or reuse_receipt.get("artifact_sha256") != sha256(json_path)
+    or (
+        markdown_text != "-"
+        and reuse_receipt.get("markdown_sha256") != sha256(Path(markdown_text))
+    )
+    or reuse_receipt.get("aftermarket_contract_sha256s")
+    != {str(path): sha256(path) for path in contract_paths if path.is_file()}
+    or len(reuse_receipt.get("aftermarket_contract_sha256s") or {})
+    != len(contract_paths)
+):
     raise SystemExit(1)
 
 artifact_mtime = json_path.stat().st_mtime
@@ -1085,6 +1120,67 @@ wait_for_report_artifact() {
 
   wait_for_json_artifact "$json_path" "$label.json"
   wait_for_file_artifact "$md_path" "$label.md"
+  write_aftermarket_reuse_contract "$json_path" "$md_path"
+}
+
+write_aftermarket_reuse_contract() {
+  local json_path="$1"
+  local md_path="$2"
+  "$VENV_PY" - "$json_path" "$md_path" "$TARGET_DATE" <<'PY'
+import hashlib
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+json_path = Path(sys.argv[1])
+md_path = Path(sys.argv[2])
+target_date = sys.argv[3]
+contract_paths = (
+    Path("src/trading/market/session_contract.py"),
+    Path("src/trading/market/aftermarket_eligibility.py"),
+    Path("src/trading/order/aftermarket_reconciliation.py"),
+    Path("src/engine/monitoring/market_opportunity_census.py"),
+    Path("src/engine/observation_source_quality_audit.py"),
+)
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+if not json_path.is_file() or not md_path.is_file() or not all(
+    path.is_file() for path in contract_paths
+):
+    raise SystemExit(1)
+receipt = json_path.with_name(f"{json_path.name}.reuse-contract.json")
+payload = {
+    "schema": "postclose_artifact_reuse_contract_v1",
+    "target_date": target_date,
+    "artifact_path": str(json_path),
+    "artifact_sha256": sha256(json_path),
+    "markdown_path": str(md_path),
+    "markdown_sha256": sha256(md_path),
+    "aftermarket_contract_sha256s": {
+        str(path): sha256(path) for path in contract_paths
+    },
+}
+receipt.parent.mkdir(parents=True, exist_ok=True)
+fd, temp_name = tempfile.mkstemp(prefix=f".{receipt.name}.", dir=receipt.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_name, receipt)
+finally:
+    if os.path.exists(temp_name):
+        os.unlink(temp_name)
+PY
 }
 
 bottom_rebound_source_contract_ok() {
@@ -1948,6 +2044,11 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
     "$PROJECT_DIR/src/engine/pipeline_event_summary.py"
     "$PROJECT_DIR/src/utils/pipeline_event_logger.py"
     "$PROJECT_DIR/src/utils/threshold_cycle_registry.py"
+    "$PROJECT_DIR/src/trading/market/session_contract.py"
+    "$PROJECT_DIR/src/trading/market/aftermarket_eligibility.py"
+    "$PROJECT_DIR/src/trading/order/aftermarket_reconciliation.py"
+    "$PROJECT_DIR/src/engine/monitoring/market_opportunity_census.py"
+    "$PROJECT_DIR/src/engine/observation_source_quality_audit.py"
   )
   pipeline_producer_summary="$PROJECT_DIR/data/pipeline_event_summaries/pipeline_event_producer_summary_${TARGET_DATE}.jsonl"
   pipeline_producer_summary_gz="${pipeline_producer_summary}.gz"

@@ -727,6 +727,7 @@ def _premarket_route_inputs(
             "effective_venue": "PREMARKET_KRX_LIKE",
             "session_bucket": "PREMARKET_KRX_LIKE",
             "market_data_route": market_data_route,
+            "actual_execution_venue": "UNKNOWN",
         }
     )
     payload.update(
@@ -734,6 +735,7 @@ def _premarket_route_inputs(
             "effective_venue": "PREMARKET_KRX_LIKE",
             "session_bucket": "PREMARKET_KRX_LIKE",
             "market_data_route": market_data_route,
+            "actual_execution_venue": "UNKNOWN",
         }
     )
     replay_context = payload["sanitized_replay_context"]
@@ -751,6 +753,7 @@ def _premarket_route_inputs(
             "effective_venue": "PREMARKET_KRX_LIKE",
             "session_bucket": "PREMARKET_KRX_LIKE",
             "market_data_route": market_data_route,
+            "actual_execution_venue": "UNKNOWN",
             "integrated_sor_route_proven": integrated_proven,
         }
     )
@@ -3360,6 +3363,8 @@ def test_bridge_producer_version_is_effective_dated_for_immutable_history() -> N
     historical = deepcopy(evidence)
     historical["trace_decision_ts"] = "2026-08-27T09:00:17.000+09:00"
     historical["bridge_producer_version"] = bridge_module.LEGACY_BRIDGE_PRODUCER_VERSION
+    historical.pop("market_data_route")
+    historical.pop("actual_execution_venue")
     bridge_module._validate_tactical_evidence_shape(historical)
 
     current = deepcopy(historical)
@@ -3573,8 +3578,11 @@ def test_premarket_scope_requires_explicit_route_mapping() -> None:
     assert resolve_micro_scope(trace).session_bucket == "KRX_PREMARKET"
 
     trace["market_data_route"] = "krx_nxt_integrated"
-    assert resolve_micro_scope(trace).venue == "SOR"
-    assert resolve_micro_scope(trace).session_bucket == "SOR_PREMARKET"
+    integrated_scope = resolve_micro_scope(trace)
+    assert integrated_scope.venue == "SOR"
+    assert integrated_scope.session_bucket == "SOR_PREMARKET"
+    assert integrated_scope.market_data_route == "krx_nxt_integrated"
+    assert integrated_scope.actual_execution_venue == "UNKNOWN"
 
     trace["market_data_route"] = None
     assert resolve_micro_scope(trace).status == "source_unavailable"
@@ -3617,6 +3625,8 @@ def test_premarket_scope_requires_explicit_route_mapping() -> None:
         config=_verified_config(),
     )
     assert sor_evidence["trace_market_data_route"] == "krx_nxt_integrated"
+    assert sor_evidence["market_data_route"] == "krx_nxt_integrated"
+    assert sor_evidence["actual_execution_venue"] == "UNKNOWN"
     assert sor_evidence["integrated_sor_route_proven"] is True
     assert sor_evidence["micro_venue"] == "SOR"
     assert len(sor_evidence["evidence_sha256"]) == 64
@@ -3638,17 +3648,18 @@ def test_premarket_scope_requires_explicit_route_mapping() -> None:
         event_references=[blocked_reference],
         config=_verified_config(),
     )
-    assert blocked_evidence["state"] == "source_unavailable"
-    assert (
-        "integrated_route_proof_missing"
-        in blocked_evidence["source_quality"]["blockers"]
+    assert blocked_evidence["state"] == "reversion_confirmed"
+    assert blocked_evidence["integrated_sor_route_proven"] is True
+    assert blocked_evidence["market_data_route"] == "krx_nxt_integrated"
+    assert blocked_evidence["actual_execution_venue"] == "UNKNOWN"
+
+    mismatched_payload = deepcopy(blocked_payload)
+    mismatched_payload["market_data_route"] = "nxt_only"
+    _watermark, mismatch_blockers = bridge_module.exact_snapshot_watermark(
+        blocked_trace, mismatched_payload
     )
-    blocked_outcome = build_future_outcome(
-        evidence=blocked_evidence,
-        market_rows=[],
-        config=_verified_config(),
-    )
-    assert blocked_outcome["outcome_eligibility"] == "source_unavailable"
+    assert "payload_trace_market_data_route_mismatch" in mismatch_blockers
+    assert "integrated_route_proof_missing" in mismatch_blockers
 
 
 def test_report_deduplicates_same_parent_wave_per_stage() -> None:

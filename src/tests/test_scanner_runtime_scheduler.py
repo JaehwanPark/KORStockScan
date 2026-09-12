@@ -34,9 +34,29 @@ def _register(
 def test_scheduler_mode_and_venue_parsing_fail_closed():
     assert normalize_scanner_scheduler_mode("deadline_v1") == "deadline_v1"
     assert normalize_scanner_scheduler_mode("unknown") == "legacy"
-    assert parse_scanner_scheduler_venues("KRX,premarket,nxt,unknown") == frozenset(
-        {"KRX", "PREMARKET_KRX_LIKE", "NXT"}
+    assert parse_scanner_scheduler_venues(
+        "KRX,premarket,nxt,krx_nxt_integrated,unknown"
+    ) == frozenset(
+        {"KRX", "PREMARKET_KRX_LIKE", "NXT", "KRX_NXT_INTEGRATED"}
     )
+
+
+def test_integrated_aftermarket_generation_is_schedulable():
+    scheduler = ScannerRuntimeScheduler(max_active=16)
+
+    decision = scheduler.register_generation(
+        code="005930",
+        promotion_id="INTEGRATED-1",
+        record_id=1,
+        venue="KRX_NXT_INTEGRATED",
+        promotion_epoch=100.0,
+        attach_epoch=101.0,
+        observed_price=70_000,
+        source_signature="KRX_NXT_INTEGRATED_RANK",
+    )
+
+    assert decision.action == "generation_registered"
+    assert decision.item.generation.venue == "KRX_NXT_INTEGRATED"
 
 
 def test_promotion_inbox_coalesces_latest_generation_and_enforces_cap():

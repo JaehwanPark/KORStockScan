@@ -180,6 +180,60 @@ def test_nxt_buy_keeps_nxt_route_for_both_limit_legs(tmp_path):
     assert [call[1]["route"] for call in gateway.calls] == ["NXT", "NXT"]
 
 
+def test_integrated_aftermarket_sell_requires_and_preserves_explicit_sor_route(
+    tmp_path,
+):
+    gateway = _Gateway()
+    observed_at = datetime(2026, 9, 14, 16, 0, tzinfo=KST)
+
+    result = _execute(
+        _executor(tmp_path, gateway),
+        side="SELL",
+        quantity=2,
+        client_request_id="f2c10a44-1ee6-47ab-8c96-c68e69bd2f58",
+        market_venue="UNKNOWN",
+        session="KRX_NXT_AFTERMARKET",
+        snapshot_observed_at=observed_at.isoformat(),
+        now=observed_at,
+        broker_route="SOR",
+    )
+
+    assert result["orders"][0]["order_type"] == "BEST_LIMIT"
+    assert gateway.calls == [
+        (
+            "market_sell",
+            {
+                "code": "005930",
+                "qty": 2,
+                "route": "SOR",
+                "now": observed_at,
+                "existing_holding": False,
+            },
+        )
+    ]
+
+
+def test_integrated_aftermarket_manual_order_without_explicit_route_fails_closed(
+    tmp_path,
+):
+    gateway = _Gateway()
+
+    try:
+        _execute(
+            _executor(tmp_path, gateway),
+            side="SELL",
+            client_request_id="e4f21a6d-2730-4c22-a68c-f92fffe152a2",
+            market_venue="UNKNOWN",
+            session="KRX_NXT_AFTERMARKET",
+            now=datetime(2026, 9, 14, 16, 0, tzinfo=KST),
+        )
+    except ValueError as exc:
+        assert str(exc) == "explicit_order_route_required"
+    else:
+        raise AssertionError("integrated after-market order inferred a route")
+    assert gateway.calls == []
+
+
 def test_ambiguous_sell_is_not_reported_as_rejected(tmp_path):
     class AmbiguousGateway(_Gateway):
         def submit_sell(self, **kwargs) -> SubmitResult:

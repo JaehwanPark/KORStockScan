@@ -1321,6 +1321,128 @@ def test_nxt_aftermarket_early_sell_trusts_confirmed_nxt_position_route():
     assert fields["nxt_aftermarket_early_sell_confirmed_nxt_position"] is True
 
 
+@pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])
+def test_post_effective_integrated_holding_exit_preserves_recorded_route(route):
+    observed_at = datetime(2026, 9, 14, 16, 0, tzinfo=handlers._KST)
+    resolution = handlers._resolve_holding_sell_dmst_stex_tp(
+        {
+            "status": "HOLDING",
+            "buy_qty": 3,
+            "entry_execution_broker_route": route,
+        },
+        "005930",
+        now_t=observed_at.time(),
+        observed_at=observed_at,
+    )
+
+    assert resolution["blocked"] is False
+    assert resolution["dmst_stex_tp"] == route
+    assert resolution["reason"] == "holding_sell_recorded_route_preserved"
+
+
+def test_post_effective_transition_blocks_holding_sell_submission():
+    observed_at = datetime(2026, 9, 14, 15, 30, tzinfo=handlers._KST)
+    resolution = handlers._resolve_holding_sell_dmst_stex_tp(
+        {
+            "status": "HOLDING",
+            "buy_qty": 3,
+            "entry_execution_broker_route": "SOR",
+        },
+        "005930",
+        now_t=observed_at.time(),
+        observed_at=observed_at,
+    )
+
+    assert resolution["blocked"] is True
+    assert resolution["reason"] == (
+        "aftermarket_session_transition_reconciliation_only"
+    )
+
+
+@pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])
+def test_post_effective_terminal_exit_starts_at_1945_for_each_recorded_route(route):
+    stock = {
+        "status": "HOLDING",
+        "buy_qty": 3,
+        "entry_execution_broker_route": route,
+    }
+    before = datetime(2026, 9, 14, 19, 40, tzinfo=handlers._KST)
+    terminal = datetime(2026, 9, 14, 19, 45, tzinfo=handlers._KST)
+
+    before_fields = handlers._scalping_same_session_terminal_exit_fields(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        now_t=before.time(),
+        observed_at=before,
+    )
+    terminal_fields = handlers._scalping_same_session_terminal_exit_fields(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        now_t=terminal.time(),
+        observed_at=terminal,
+    )
+
+    assert before_fields["should_exit"] is False
+    assert terminal_fields["should_exit"] is True
+    assert terminal_fields["terminal_venue"] == "UNKNOWN"
+    assert terminal_fields["terminal_route"] == route
+    assert terminal_fields["reason"] == "integrated_terminal_exit_window"
+
+
+def test_boundary_open_sell_ledger_blocks_terminal_duplicate_sell():
+    stock = {
+        "code": "005930",
+        "status": "HOLDING",
+        "buy_qty": 3,
+        "entry_execution_broker_route": "SOR",
+        "aftermarket_close_reconciliation": {
+            "side": "SELL",
+            "symbol": "005930",
+            "state": "OPEN",
+            "terminal": False,
+            "intent_sha256": "a" * 64,
+            "source_sha256s": ["b" * 64],
+        },
+    }
+    terminal = datetime(2026, 9, 14, 19, 45, tzinfo=handlers._KST)
+
+    fields = handlers._scalping_same_session_terminal_exit_fields(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        now_t=terminal.time(),
+        observed_at=terminal,
+    )
+
+    assert handlers._has_active_sell_order_pending(stock) is True
+    assert fields["should_exit"] is False
+    assert fields["reason"] == "aftermarket_sell_child_open"
+
+
+def test_post_effective_integrated_quote_proves_sor_request_without_actual_venue():
+    code = "005930"
+    now_ts = datetime(2026, 9, 14, 19, 45, tzinfo=handlers._KST).timestamp()
+    fields = handlers._fast_exit_execution_route_fields(
+        {
+            "status": "HOLDING",
+            "buy_qty": 3,
+            "entry_execution_broker_route": "SOR",
+        },
+        code,
+        _nxt_quote_snapshot(code, now_ts),
+        now_ts=now_ts,
+    )
+
+    assert fields["fast_exit_broker_route"] == "SOR"
+    assert fields["fast_exit_execution_cohort"] == "KRX_NXT_INTEGRATED"
+    assert fields["fast_exit_ws_integrated_route_ready"] is True
+    assert fields["fast_exit_ws_nxt_route_ready"] is False
+    assert fields["fast_exit_route_source_quality_blocked"] is False
+    assert fields["fast_exit_route_guard_reason"] == "integrated_ws_route_proven"
+
+
 def test_sell_route_guard_blocks_inter_session_gap_even_for_nxt_holding():
     resolution = handlers._resolve_holding_sell_dmst_stex_tp(
         {"is_nxt": True},

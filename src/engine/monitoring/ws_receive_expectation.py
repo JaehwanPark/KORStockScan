@@ -1,14 +1,21 @@
-"""Opening-gap receive diagnostics; never an executable-price or health waiver."""
+"""Verified market-state receive diagnostics; never an execution-health waiver."""
 
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from math import isfinite
 from typing import Any, Mapping
 
 KST = timezone(timedelta(hours=9))
-CONTRACT_VERSION = "ws_opening_receive_expectation_v1"
+CONTRACT_VERSION = "ws_market_state_receive_expectation_v2"
+MARKET_SESSION_STATE_CONTRACT_VERSION = "kiwoom_0s_market_operation_v1"
+VERIFIED_0S_QUIET_STATES = {
+    ("KRX", "2"): "CALL_AUCTION",
+    ("KRX", "c"): "CALL_AUCTION",
+    ("NXT", "T"): "CALL_AUCTION",
+}
 ROUTES = {
     "KRX": "KRX",
     "krx_regular": "KRX",
+    "krx_only": "KRX",
     "NXT": "NXT",
     "nxt_only": "NXT",
     "SOR": "SOR",
@@ -24,23 +31,84 @@ ABSENCE_REASONS = {
 }
 
 
-def receive_expectation(row: Mapping[str, Any], at: datetime | None) -> dict[str, Any]:
-    """Use event/as-of time and explicit routes, never today's wall clock for history.
+def _aware_kst(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(KST)
 
-    No guaranteed continuous 0B/0D cadence is assumed in this opening gap.
-    Other channels and explicit failures retain their independent contracts.
-    """
+
+def _remaining_seconds(value: Any) -> int | None:
+    token = str(value or "").strip()
+    if len(token) != 6 or not token.isdigit():
+        return None
+    hours, minutes, seconds = int(token[:2]), int(token[2:4]), int(token[4:])
+    if minutes >= 60 or seconds >= 60:
+        return None
+    total = hours * 3600 + minutes * 60 + seconds
+    return total if total > 0 else None
+
+
+def _exchange_time(receipt: Mapping[str, Any], received_at: datetime) -> datetime | None:
+    token = str(receipt.get("exchange_time_raw") or "").strip()
+    if len(token) != 6 or not token.isdigit():
+        return None
+    hours, minutes, seconds = int(token[:2]), int(token[2:4]), int(token[4:])
+    if hours >= 24 or minutes >= 60 or seconds >= 60:
+        return None
+    exchange_at = received_at.replace(
+        hour=hours, minute=minutes, second=seconds, microsecond=0
+    )
+    return exchange_at if exchange_at <= received_at else None
+
+
+def _verified_quiet_receipt(
+    receipt: Any, *, scope: str, at: datetime
+) -> tuple[bool, datetime | None, datetime | None]:
+    if not isinstance(receipt, Mapping):
+        return False, None, None
+    received_at = _aware_kst(receipt.get("receive_timestamp"))
+    raw_state = str(receipt.get("market_session_state_raw") or "")
+    normalized_state = str(receipt.get("market_session_state_normalized") or "")
+    if (
+        receipt.get("market_session_state_contract_version")
+        != MARKET_SESSION_STATE_CONTRACT_VERSION
+        or receipt.get("runtime_effect") is not False
+        or receipt.get("allowed_runtime_apply") is not False
+        or receipt.get("market_session_state_known") is not True
+        or str(receipt.get("market_session_state_market_scope") or "") != scope
+        or VERIFIED_0S_QUIET_STATES.get((scope, raw_state)) != normalized_state
+        or received_at is None
+        or received_at > at
+    ):
+        return False, received_at, None
+    remaining = _remaining_seconds(receipt.get("market_session_remaining_raw"))
+    exchange_at = _exchange_time(receipt, received_at)
+    if remaining is None or exchange_at is None:
+        return False, received_at, None
+    valid_until = exchange_at + timedelta(seconds=remaining)
+    return at < valid_until, exchange_at, valid_until
+
+
+def receive_expectation(row: Mapping[str, Any], at: datetime | None) -> dict[str, Any]:
+    """Use exact event/as-of time, route, and bounded verified state receipts."""
     result = {
         "contract_version": CONTRACT_VERSION,
         "scheduled_quiet": False,
-        "reason": "outside_opening_gap_or_unverified_route_time",
+        "reason": "missing_or_unverified_market_state_quiet_receipt",
         "resume_at": None,
+        "required_market_scopes": [],
+        "verified_quiet_scopes": [],
+        "quiet_started_at": None,
     }
     if at is None or at.tzinfo is None:
         return result
     at = at.astimezone(KST)
-    if at.weekday() >= 5:
-        return result
     routes = row.get("registered_market_routes")
     if routes is None:
         routes = [
@@ -58,15 +126,33 @@ def receive_expectation(row: Mapping[str, Any], at: datetime | None) -> dict[str
     normalized = {ROUTES.get(str(route)) for route in routes}
     if None in normalized:
         return result
-    end = time(9, 0, 30) if normalized == {"NXT"} else time(9, 0)
-    if not time(8, 50) <= at.time() < end:
+    required_scopes = set()
+    for route in normalized:
+        required_scopes.update({"KRX", "NXT"} if route == "SOR" else {route})
+    result["required_market_scopes"] = sorted(required_scopes)
+    states = row.get("market_session_states_by_scope")
+    if not isinstance(states, Mapping):
         return result
+    quiet_starts = []
+    quiet_ends = []
+    verified_scopes = []
+    for scope in sorted(required_scopes):
+        verified, started_at, valid_until = _verified_quiet_receipt(
+            states.get(scope), scope=scope, at=at
+        )
+        if not verified:
+            return result
+        verified_scopes.append(scope)
+        quiet_starts.append(started_at)
+        quiet_ends.append(valid_until)
+    quiet_started_at = max(quiet_starts)
+    resume_at = min(quiet_ends)
     result.update(
         scheduled_quiet=True,
-        reason="scheduled_opening_auction_or_nxt_pause",
-        resume_at=at.replace(
-            hour=end.hour, minute=end.minute, second=end.second, microsecond=0
-        ).isoformat(),
+        reason="verified_market_session_call_auction_or_vi",
+        resume_at=resume_at.isoformat(),
+        verified_quiet_scopes=verified_scopes,
+        quiet_started_at=quiet_started_at.isoformat(),
     )
     return result
 
@@ -78,11 +164,17 @@ def classify_receive_gap(row: Mapping[str, Any], at: datetime | None) -> dict[st
     prior_expectation = row.get("receive_expectation")
     if (
         isinstance(prior_expectation, dict)
-        and prior_expectation.get("contract_version") == CONTRACT_VERSION
+        and prior_expectation.get("contract_version")
+        in {CONTRACT_VERSION, "ws_opening_receive_expectation_v1"}
     ):
+        prior_reason = str(row.get("repair_reason") or "")
         if (
             "observed_repair_reason" in row
-            and row.get("repair_reason") == "scheduled_opening_auction_or_nxt_pause"
+            and prior_reason
+            in {
+                "verified_market_session_call_auction_or_vi",
+                "scheduled_opening_auction_or_nxt_pause",
+            }
             and row.get("repair_recommended") is False
             and row.get("recommended_repair") == "none"
         ):
@@ -117,12 +209,12 @@ def classify_receive_gap(row: Mapping[str, Any], at: datetime | None) -> dict[st
         ):
             return result
         if expectation["scheduled_quiet"]:
-            local = at.astimezone(KST)
-            pre_pause_cutoff = (
-                local.replace(hour=8, minute=50, second=0, microsecond=0).timestamp()
-                - stale_after
-            )
-            if local.timestamp() - age < pre_pause_cutoff:
+            quiet_started_at = _aware_kst(expectation.get("quiet_started_at"))
+            if quiet_started_at is None:
+                return result
+            if at.astimezone(KST).timestamp() - age < (
+                quiet_started_at.timestamp() - stale_after
+            ):
                 return result
     missing = row.get("required_realtime_missing_types", [])
     if (

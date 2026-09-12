@@ -215,6 +215,47 @@ def test_session_coverage_counts_only_source_quality_passed_minutes():
     assert krx["observed_minute_count"] == 1
 
 
+def test_integrated_aftermarket_is_a_240_minute_observe_only_cohort():
+    observed_at = datetime(2026, 9, 14, 16, 0, tzinfo=KST)
+    row = _row(
+        observed_at,
+        100_000,
+        state="ENTRY_READY",
+        entry_high=100_000,
+        observation_kind="state_transition",
+        market_session="KRX_NXT_AFTERMARKET",
+        market_venue="UNKNOWN",
+    )
+    row["advisory"]["provenance"] = {
+        "market_venue": "UNKNOWN",
+        "quote_request_code": "005930_AL",
+    }
+
+    report = evaluation.build_daily_evaluation(
+        [row], target_date=observed_at.date()
+    )
+
+    assert evaluation.expected_sessions_for_date(observed_at.date()) == {
+        "NXT_PREMARKET": 50,
+        "KRX_REGULAR": 390,
+        "KRX_NXT_AFTERMARKET": 240,
+    }
+    assert "NXT_AFTERMARKET" not in report["market_session_contract"][
+        "expected_sessions"
+    ]
+    dual_coverage = next(
+        item
+        for item in report["session_coverage"]
+        if item["market_session"] == "KRX_NXT_AFTERMARKET"
+    )
+    assert dual_coverage["market_venue"] == "UNKNOWN"
+    assert dual_coverage["expected_minute_count"] == 240
+    assert report["outcomes"] == []
+    assert report["source_quality_excluded_signal_reasons"] == {
+        "dual_aftermarket_observe_only": 1
+    }
+
+
 def test_immature_horizon_is_not_counted():
     start = datetime(2026, 8, 3, 19, 59, tzinfo=KST)
     rows = [

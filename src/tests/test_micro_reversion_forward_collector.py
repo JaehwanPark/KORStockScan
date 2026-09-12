@@ -355,11 +355,13 @@ def test_release_shared_mount_captures_trade_and_depth_without_weakening_guard(
         _assert_no_symlink_ancestors(child_link / "rows.jsonl")
 
 
-def test_integrated_al_item_is_captured_as_sor_without_exchange_guess(
+def test_integrated_al_item_preserves_route_with_unknown_actual_venue(
     tmp_path,
 ) -> None:
     collector = _collector(tmp_path)
     payload = _snapshot(item="000001_AL", venue="", exchange_time="085959000")
+    payload["last_realtime_type_market_route"] = {"0B": "krx_nxt_integrated"}
+    payload["last_realtime_type_actual_execution_venue"] = {"0B": "UNKNOWN"}
     payload["last_trade_tick"]["exchange_code_9081"] = ""
     try:
         result = collector.observe_kiwoom_0b(
@@ -384,6 +386,34 @@ def test_integrated_al_item_is_captured_as_sor_without_exchange_guess(
     assert snapshot.raw_exchange_code_9081_observed_count == 0
     assert snapshot.missing_or_conflicting_venue_count == 0
     assert ("000001", "SOR", "SOR_PREMARKET") in series_keys
+
+
+@pytest.mark.parametrize(
+    "route,actual_venue",
+    [("nxt_only", "UNKNOWN"), ("krx_nxt_integrated", "NXT")],
+)
+def test_integrated_al_item_rejects_route_or_actual_venue_guess(
+    tmp_path, route, actual_venue
+) -> None:
+    collector = _collector(tmp_path)
+    payload = _snapshot(item="000001_AL", venue="", exchange_time="085959000")
+    payload["last_realtime_type_market_route"] = {"0B": route}
+    payload["last_realtime_type_actual_execution_venue"] = {
+        "0B": actual_venue
+    }
+    try:
+        result = collector.observe_kiwoom_0b(
+            "000001",
+            payload,
+            realtime_type="0B",
+        )
+        snapshot = collector.runtime_snapshot()
+    finally:
+        collector.close()
+
+    assert result is ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
+    assert snapshot.enqueued_count == 0
+    assert snapshot.missing_or_conflicting_venue_count == 1
 
 
 def test_integrated_al_item_blocks_conflicting_declared_exchange(tmp_path) -> None:

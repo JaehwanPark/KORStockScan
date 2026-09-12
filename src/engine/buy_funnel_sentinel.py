@@ -156,8 +156,15 @@ PROBE_BUNDLE_LIFECYCLE_STAGES = {
     "bundle_completed",
     "order_bundle_submitted",
 }
-EXPLICIT_TRADABLE_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+EXPLICIT_TRADABLE_VENUES = {
+    "KRX",
+    "NXT",
+    "KRX_NXT_INTEGRATED",
+    "PREMARKET_KRX_LIKE",
+}
 VENUE_SCOPE_FIELD_KEYS = (
+    "decision_market_scope",
+    "market_data_route",
     "effective_venue",
     "rising_missed_effective_venue",
     "market_venue",
@@ -166,6 +173,7 @@ VENUE_SCOPE_FIELD_KEYS = (
     "venue",
 )
 SESSION_SCOPE_FIELD_KEYS = (
+    "market_session_regime",
     "market_session_bucket",
     "rising_missed_market_session_bucket",
     "holding_context_session",
@@ -585,6 +593,12 @@ def _attempt_key(event: PipelineEvent) -> str:
 
 def _canonical_venue(value: Any) -> str | None:
     text = _safe_str(value).upper()
+    if text in {"KRX_NXT_INTEGRATED", "KRX_NXT", "KRX+NXT", "SOR"}:
+        return "KRX_NXT_INTEGRATED"
+    if text in {"NXT_ONLY", "NXT"}:
+        return "NXT"
+    if text in {"KRX_ONLY", "KRX"}:
+        return "KRX"
     if text in EXPLICIT_TRADABLE_VENUES:
         return text
     if text in {"_NX", "NXT_PREMARKET", "NXT_AFTERMARKET", "NXT_REGULAR"}:
@@ -598,6 +612,15 @@ def _canonical_session(value: Any) -> str | None:
     text = _safe_str(value).upper()
     if not text:
         return None
+    if text in {
+        "KRX_NXT_AFTERMARKET",
+        "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
+        "NXT_AFTERMARKET_SOLO",
+        "SESSION_TRANSITION",
+        "CLOSED",
+    }:
+        return text
     if "PREMARKET_KRX_LIKE" in text or "KRX_LIKE_PREMARKET" in text:
         return "PREMARKET_KRX_LIKE"
     if "NXT" in text and "PRE" in text:
@@ -616,6 +639,16 @@ def _session_for_venue(venue: str, emitted_at: datetime) -> str:
         return "PREMARKET_KRX_LIKE"
     if venue == "KRX":
         return "KRX_REGULAR"
+    if venue == "KRX_NXT_INTEGRATED":
+        if emitted_at.date() < date(2026, 9, 14):
+            return "UNKNOWN"
+        if time(16, 0) <= emitted_at.time() < time(19, 40):
+            return "KRX_NXT_AFTERMARKET"
+        if time(19, 40) <= emitted_at.time() < time(19, 45):
+            return "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+        if time(19, 45) <= emitted_at.time() < time(20, 0):
+            return "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
+        return "UNKNOWN"
     if emitted_at.time() < time(9, 0):
         return "NXT_PREMARKET"
     if emitted_at.time() > time(15, 30):
@@ -647,11 +680,14 @@ def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
     venue = venue or fallback_venue
     session = session or fallback_session
     if venue is None and session is not None:
-        venue = (
-            "PREMARKET_KRX_LIKE"
-            if session == "PREMARKET_KRX_LIKE"
-            else ("NXT" if session.startswith("NXT_") else "KRX")
-        )
+        if session.startswith("KRX_NXT_AFTERMARKET"):
+            venue = "KRX_NXT_INTEGRATED"
+        else:
+            venue = (
+                "PREMARKET_KRX_LIKE"
+                if session == "PREMARKET_KRX_LIKE"
+                else ("NXT" if session.startswith("NXT_") else "KRX")
+            )
     if venue is None:
         return None
     if session is None:
@@ -668,10 +704,19 @@ def _explicit_event_scope(event: PipelineEvent) -> tuple[str, str, str] | None:
     if (
         (venue == "NXT" and not session.startswith("NXT_"))
         or (venue == "KRX" and session != "KRX_REGULAR")
+        or (
+            venue == "KRX_NXT_INTEGRATED"
+            and not session.startswith("KRX_NXT_AFTERMARKET")
+        )
         or (venue == "PREMARKET_KRX_LIKE" and session != "PREMARKET_KRX_LIKE")
     ):
         return "CONFLICT", "CONFLICT", "conflict"
     return venue, session, "pass"
+
+
+def _actual_execution_venue(event: PipelineEvent) -> str:
+    value = _safe_str(event.fields.get("actual_execution_venue")).upper()
+    return value if value in {"KRX", "NXT"} else "UNKNOWN"
 
 
 def _partition_events_by_venue_session(
@@ -4120,6 +4165,13 @@ def build_buy_funnel_sentinel_report(
         scope_reports[scope_key] = {
             "venue": venue,
             "session": session,
+            "actual_execution_venue_counts": dict(
+                sorted(
+                    Counter(
+                        _actual_execution_venue(event) for event in source_events
+                    ).items()
+                )
+            ),
             "source_quality_status": source_quality_status,
             "summary": scope_summary,
             "baseline_same_time_summary": scope_baseline,

@@ -13,11 +13,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from src.engine.monitoring.market_halt_windows import session_events_path
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
-from src.engine.monitoring.ws_receive_expectation import (
-    classify_receive_gap,
-    receive_expectation,
-)
+from src.engine.monitoring.ws_receive_expectation import classify_receive_gap
 from src.engine.monitoring.ws_freshness_acceptance import (
     BOUNDED_REJECTIONS,
     SOURCE_QUALITY_REJECTIONS,
@@ -63,7 +61,7 @@ DEFAULT_DASHBOARD_SNAPSHOT_PATH = (
     DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
 )
 DEFAULT_STALE_SEC = 30.0
-INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v18"
+INCREMENTAL_STATE_SCHEMA_VERSION = "intraday_ws_freshness_incremental_v19"
 SCANNER_BBO_MAX_QUOTE_AGE_MS = 1_000.0
 SCANNER_BBO_GROSS_TARGET_PCT = 1.30
 SCANNER_BBO_ADVERSE_STOP_PCT = -0.70
@@ -379,6 +377,7 @@ def _load_incremental_state(
     target_date: str,
     stale_ms: float,
     source_identities: dict[str, dict[str, Any]],
+    market_session_state_sha256: str | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     if state_path is None or not state_path.exists():
         return None, "state_missing"
@@ -398,6 +397,8 @@ def _load_incremental_state(
         return None, "state_invalid"
     if cached_stale_ms != float(stale_ms):
         return None, "stale_threshold_changed"
+    if payload.get("market_session_state_sha256") != market_session_state_sha256:
+        return None, "market_session_state_generation_changed"
     cached_sources = payload.get("sources")
     if not isinstance(cached_sources, dict):
         return None, "source_state_missing"
@@ -567,6 +568,102 @@ def _event_time(row: dict[str, Any]) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=KST)
     return parsed.astimezone(KST)
+
+
+def _load_market_session_state_receipts(
+    target_date: str, path: Path | None = None
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    selected_path = path or session_events_path(target_date)
+    provenance = {
+        "path": str(selected_path),
+        "target_date": target_date,
+        "status": "missing",
+        "valid_receipt_count": 0,
+        "invalid_receipt_count": 0,
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+    }
+    try:
+        raw_payload = selected_path.read_bytes()
+        payload = json.loads(raw_payload.decode("utf-8"))
+    except FileNotFoundError:
+        return [], provenance
+    except (OSError, TypeError, ValueError, UnicodeDecodeError):
+        provenance["status"] = "invalid"
+        return [], provenance
+    if (
+        not isinstance(payload, dict)
+        or payload.get("target_date") != target_date
+        or payload.get("schema_version") != 1
+        or payload.get("decision_authority") != "source_quality_only"
+        or payload.get("runtime_effect") is not False
+        or payload.get("allowed_runtime_apply") is not False
+        or not isinstance(payload.get("session_events"), list)
+    ):
+        provenance["status"] = "invalid"
+        return [], provenance
+    provenance["artifact_sha256"] = hashlib.sha256(raw_payload).hexdigest()
+    valid = []
+    invalid_count = 0
+    for event in payload["session_events"]:
+        event_time = _event_time(
+            {
+                "timestamp": (
+                    (event or {}).get("receive_timestamp")
+                    if isinstance(event, dict)
+                    else None
+                )
+            }
+        )
+        if (
+            not isinstance(event, dict)
+            or event.get("market_session_state_contract_version")
+            != "kiwoom_0s_market_operation_v1"
+            or event.get("market_session_state_market_scope")
+            not in {"KRX", "NXT", "ALL", "DERIVATIVES"}
+            or event.get("runtime_effect") is not False
+            or event.get("allowed_runtime_apply") is not False
+            or event_time is None
+            or event_time.date().isoformat() != target_date
+        ):
+            invalid_count += 1
+            continue
+        valid.append(
+            {
+                **event,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "_receive_timestamp": event_time,
+            }
+        )
+    valid.sort(key=lambda event: event["_receive_timestamp"])
+    provenance.update(
+        status="verified" if valid else "valid_empty",
+        valid_receipt_count=len(valid),
+        invalid_receipt_count=invalid_count,
+    )
+    return valid, provenance
+
+
+def _market_session_states_at(
+    receipts: Iterable[dict[str, Any]], at: datetime | None
+) -> dict[str, dict[str, Any]]:
+    if at is None:
+        return {}
+    at = at.astimezone(KST)
+    latest: dict[str, dict[str, Any]] = {}
+    for receipt in receipts:
+        received_at = receipt.get("_receive_timestamp")
+        if not isinstance(received_at, datetime) or received_at > at:
+            continue
+        scope = str(receipt.get("market_session_state_market_scope") or "")
+        if scope in {"KRX", "NXT"}:
+            latest[scope] = {
+                key: value
+                for key, value in receipt.items()
+                if key != "_receive_timestamp"
+            }
+    return latest
 
 
 def _valid_lineage_token(value: Any) -> str:
@@ -4037,6 +4134,7 @@ def _resolve_snapshot(
     target_date: str,
     as_of: datetime | None = None,
     historical: bool = False,
+    market_session_receipts: Iterable[dict[str, Any]] = (),
 ) -> tuple[Path | None, dict[str, Any], dict[str, Any]]:
     explicit = requested_path is not None
     selected_path = requested_path if explicit else DEFAULT_DASHBOARD_SNAPSHOT_PATH
@@ -4072,23 +4170,27 @@ def _resolve_snapshot(
     # The dashboard is written on incoming REAL packets. A bounded opening
     # pause can leave the last pre-pause file unchanged without a writer fault.
     # Keep it diagnostic-only; never call its old quotes currently fresh.
-    opening_gap_snapshot = False
+    verified_quiet_snapshot = False
     if not historical and snapshot_age_sec > DEFAULT_STALE_SEC:
-        diagnostic_rows = _snapshot_rows(payload, stale_ms=DEFAULT_STALE_SEC * 1000)
-        opening_gap_snapshot = bool(
+        diagnostic_rows = _snapshot_rows(
+            payload,
+            stale_ms=DEFAULT_STALE_SEC * 1000,
+            elapsed_ms=max(0.0, snapshot_age_sec) * 1000,
+        )
+        session_states = _market_session_states_at(market_session_receipts, as_of)
+        verified_quiet_snapshot = bool(
             diagnostic_rows
-            and generated_at
-            >= as_of.replace(hour=8, minute=50, second=0, microsecond=0)
-            - timedelta(seconds=DEFAULT_STALE_SEC)
             and all(
-                receive_expectation(row, as_of)["scheduled_quiet"]
+                classify_receive_gap(
+                    {**row, "market_session_states_by_scope": session_states}, as_of
+                ).get("expected_market_quiet")
                 for row in diagnostic_rows
             )
         )
     if snapshot_age_sec < 0 or (
         not historical
         and snapshot_age_sec > DEFAULT_STALE_SEC
-        and not opening_gap_snapshot
+        and not verified_quiet_snapshot
     ):
         provenance["selection_reason"] = (
             "snapshot_future_dated" if snapshot_age_sec < 0 else "snapshot_stale"
@@ -4098,10 +4200,12 @@ def _resolve_snapshot(
         provenance.update(
             {
                 "selected": True,
-                "current_freshness_usable": not historical and not opening_gap_snapshot,
+                "current_freshness_usable": (
+                    not historical and not verified_quiet_snapshot
+                ),
                 "selection_reason": (
-                    "scheduled_opening_gap_snapshot"
-                    if opening_gap_snapshot
+                    "verified_market_state_quiet_snapshot"
+                    if verified_quiet_snapshot
                     else "explicit_path"
                 ),
                 "subscription_state_available": bool(
@@ -4118,10 +4222,10 @@ def _resolve_snapshot(
         {
             "source": "same_day_live_dashboard_snapshot_fallback",
             "selected": True,
-            "current_freshness_usable": not historical and not opening_gap_snapshot,
+            "current_freshness_usable": not historical and not verified_quiet_snapshot,
             "selection_reason": (
-                "scheduled_opening_gap_snapshot"
-                if opening_gap_snapshot
+                "verified_market_state_quiet_snapshot"
+                if verified_quiet_snapshot
                 else "same_day_schema_match"
             ),
             "subscription_state_available": False,
@@ -5198,12 +5302,19 @@ def build_report(
     generated_at: str | None = None,
     incremental_state_path: Path | None = None,
     symbol_master_path: Path | None = None,
+    market_session_events_path: Path | None = None,
     finalize: bool = False,
     history_report_dir: Path | None = None,
 ) -> dict[str, Any]:
     target_date = target_date or date.today().isoformat()
     requested_as_of = generated_at
     report_started_at = generated_at or datetime.now(KST).isoformat()
+    (
+        market_session_receipts,
+        market_session_state_provenance,
+    ) = _load_market_session_state_receipts(
+        target_date, market_session_events_path
+    )
     # Freeze the live dashboard against the report's as-of time before a slow
     # event scan. Reading it afterwards can reject a legitimate newer snapshot
     # as future-dated and silently erase the entire current diagnostic cohort.
@@ -5220,6 +5331,7 @@ def build_report(
             else None
         ),
         historical=finalize,
+        market_session_receipts=market_session_receipts,
     )
     # The default clock is sampled after the snapshot read. Explicit historical
     # as-of inputs remain strict and never advance to accommodate future data.
@@ -5240,6 +5352,9 @@ def build_report(
         target_date=target_date,
         stale_ms=stale_ms,
         source_identities=source_identities,
+        market_session_state_sha256=market_session_state_provenance.get(
+            "artifact_sha256"
+        ),
     )
     try:
         row_count_by_source = _counter_from_mapping(
@@ -5303,6 +5418,9 @@ def build_report(
             appended_event_count += 1
             source_appended_count += 1
             flattened = _flatten_event(raw)
+            flattened["market_session_states_by_scope"] = _market_session_states_at(
+                market_session_receipts, _event_time(flattened)
+            )
             item = _pipeline_event_class(flattened, stale_ms=stale_ms)
             _update_scanner_funnel_state(
                 scanner_funnel_state,
@@ -5391,6 +5509,9 @@ def build_report(
                 "schema_version": INCREMENTAL_STATE_SCHEMA_VERSION,
                 "target_date": target_date,
                 "stale_ms": stale_ms,
+                "market_session_state_sha256": market_session_state_provenance.get(
+                    "artifact_sha256"
+                ),
                 "sources": {
                     source_name: {
                         "exists": source.get("exists"),
@@ -5443,7 +5564,16 @@ def build_report(
         if finalize
         else _snapshot_generated_at({"generated_at": generated_at})
     )
-    snapshot_rows = [classify_receive_gap(row, snapshot_as_of) for row in snapshot_rows]
+    snapshot_states = _market_session_states_at(
+        market_session_receipts, snapshot_as_of
+    )
+    snapshot_rows = [
+        classify_receive_gap(
+            {**row, "market_session_states_by_scope": snapshot_states},
+            snapshot_as_of,
+        )
+        for row in snapshot_rows
+    ]
     if finalize:
         for row in snapshot_rows:
             row["freshness_state"] = (
@@ -5507,6 +5637,7 @@ def build_report(
             str(resolved_snapshot_path) if resolved_snapshot_path else None
         ),
         "subscription_snapshot_provenance": snapshot_provenance,
+        "market_session_state_provenance": market_session_state_provenance,
         "row_count_by_source": dict(row_count_by_source),
         "pipeline_counts": dict(counts),
         "pipeline_event_count": total_events,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,108 @@ def test_exhausted_entry_registry_is_terminal_source_only_patch_handoff(monkeypa
     assert paths[0]["owner"] == "MainAIPromptOptimizer"
     assert paths[0]["terminality"] == "terminal_source_observation"
     assert "new supported offline prompt" in paths[0]["acceptance_test"]
+
+
+def test_entry_consumer_blocks_mismatched_cohort_contract_hash(monkeypatch):
+    day = "2026-09-07"
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    contract = optimizer._entry_cohort_contract({})
+    changed_contract = deepcopy(contract)
+    changed_contract["version"] = "v2"
+    batch_report = {
+        "schema": consumer.entry_batch.BATCH_SCHEMA,
+        "target_date": day,
+        **_source_only(),
+        "cohort_contract": changed_contract,
+        "candidate_prompt_selection_source": {
+            "status": "optimizer_candidate_plan_applied_offline_only",
+            "artifact_content_sha256": "a" * 64,
+            "cohort_contract_sha256": contract["contract_content_sha256"],
+        },
+        "candidate_prompt_versions_by_cohort": {"KRX/KRX_REGULAR": version},
+        "cohorts": [
+            {
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "candidate_prompt_version": version,
+                "status": "hold_no_exact_entry_control",
+            }
+        ],
+    }
+    optimizer_report = {
+        "artifact_content_sha256": "a" * 64,
+        "entry_cohort_contract": contract,
+        "stage_optimizers": {
+            "entry": {
+                "cohort_optimizers": [
+                    {
+                        "effective_venue": "KRX",
+                        "session_bucket": "KRX_REGULAR",
+                        "selected_challenger": {"prompt_version": version},
+                    }
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda _: batch_report)
+
+    rows, _ = consumer._entry_base_paths(day, optimizer_report=optimizer_report)
+
+    assert rows[0]["blocking_reason"] == "entry_batch_cohort_contract_hash_mismatch"
+
+
+def test_entry_consumer_keeps_dual_route_as_terminal_source_observation(monkeypatch):
+    day = "2026-09-07"
+    contract = optimizer._entry_cohort_contract(
+        {
+            "candidate_summaries": [
+                {
+                    "stage": "entry",
+                    "effective_venue": "INTEGRATED",
+                    "session_bucket": "KRX_NXT_AFTERMARKET",
+                    "market_data_route": "SOR",
+                    "cohort_key_version": "v2",
+                    "authority_state": "OBSERVE_ONLY",
+                }
+            ]
+        }
+    )
+    batch_report = {
+        "schema": consumer.entry_batch.BATCH_SCHEMA,
+        "target_date": day,
+        **_source_only(),
+        "cohort_contract": contract,
+        "candidate_prompt_selection_source": {
+            "status": "optimizer_candidate_plan_applied_offline_only",
+            "artifact_content_sha256": "a" * 64,
+            "cohort_contract_sha256": contract["contract_content_sha256"],
+        },
+        "candidate_prompt_versions_by_cohort": {},
+        "cohorts": [
+            {
+                "effective_venue": "INTEGRATED",
+                "session_bucket": "KRX_NXT_AFTERMARKET",
+                "market_data_route": "SOR",
+                "cohort_key_version": "v2",
+                "authority_state": "OBSERVE_ONLY",
+                "status": "completed_observe_only",
+            }
+        ],
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda _: batch_report)
+
+    rows, requests = consumer._entry_base_paths(
+        day,
+        optimizer_report={
+            "artifact_content_sha256": "a" * 64,
+            "entry_cohort_contract": contract,
+            "stage_optimizers": {"entry": {"cohort_optimizers": []}},
+        },
+    )
+
+    assert requests == {}
+    assert rows[0]["blocking_reason"] == "dual_aftermarket_observe_only"
+    assert rows[0]["terminality"] == "terminal_source_observation"
 
 
 def test_consumer_rejects_replaced_calibration_generation(monkeypatch, tmp_path):

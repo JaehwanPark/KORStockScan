@@ -172,6 +172,7 @@ def test_optimizer_candidate_plan_is_hash_bound_and_cohort_isolated(
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
+        "entry_cohort_contract": optimizer._entry_cohort_contract({}),
     }
     report = {**body, "artifact_content_sha256": optimizer._canonical_sha256(body)}
     path, _markdown = optimizer.report_paths(target_date)
@@ -193,6 +194,42 @@ def test_optimizer_candidate_plan_is_hash_bound_and_cohort_isolated(
     fallback, source = batch._optimizer_candidate_plan(target_date)
     assert set(fallback.values()) == {batch.DEFAULT_CANDIDATE_PROMPT_VERSION}
     assert source["status"] == "fallback_default_candidate"
+
+
+def test_dual_aftermarket_contract_is_observe_only_without_provider_replay():
+    contract = optimizer._entry_cohort_contract(
+        {
+            "candidate_summaries": [
+                {
+                    "stage": "entry",
+                    "effective_venue": "INTEGRATED",
+                    "session_bucket": "KRX_NXT_AFTERMARKET",
+                    "market_data_route": "SOR",
+                    "cohort_key_version": "v2",
+                    "authority_state": "OBSERVE_ONLY",
+                }
+            ]
+        }
+    )
+    rows = batch._dual_source_only_cohorts({"cohort_contract": contract})
+
+    assert contract["version"] == "v2"
+    assert rows == [
+        {
+            "effective_venue": "INTEGRATED",
+            "session_bucket": "KRX_NXT_AFTERMARKET",
+            "market_data_route": "SOR",
+            "cohort_key_version": "v2",
+            "authority_state": "OBSERVE_ONLY",
+            "status": "completed_observe_only",
+            "provider_call_performed": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "next_action": "retain_route_isolated_source_observation",
+        }
+    ]
 
 
 def test_batch_waits_for_full_day_maturity_without_provider_or_artifact(monkeypatch):

@@ -112,6 +112,7 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "canonical_mark_price",
         "current_price",
         "current_price_observed",
+        "decision_market_scope",
         "effective_venue",
         "fee_krw",
         "first_seen_price",
@@ -120,6 +121,8 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "holding_ws_recovered_curr",
         "latest_price",
         "market_session_bucket",
+        "market_session_regime",
+        "market_data_route",
         "mark_price_at_submit",
         "market_data_effective_price_source",
         "market_data_effective_best_ask",
@@ -152,6 +155,8 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "executable_buy_price",
         "executable_sell_price",
         "quantity",
+        "actual_execution_venue",
+        "actual_execution_venue_source",
         "rising_missed_effective_venue",
         "rising_missed_entry_turn_bbo_capture_status",
         "rising_missed_entry_turn_bbo_bundle_schema_version",
@@ -1443,10 +1448,7 @@ def _submit_safety_block_row(
         "record_id": str(row.get("record_id") or "").strip(),
         "stock_code": _event_code(row),
         "stock_name": _event_name(row),
-        "effective_venue": _tp1_effective_venue(fields),
-        "market_session_bucket": fields.get("rising_missed_market_session_bucket")
-        or fields.get("market_session_bucket")
-        or "unknown",
+        **_tp1_market_axes(fields),
         "reason": reason,
         "blocker_bucket": bucket,
         "components": components,
@@ -2272,7 +2274,8 @@ def _build_submit_safety_and_backoff_audit(
             and age_sec >= 180.0
         )
         executable_source_quality_pass = bool(
-            item.get("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            item.get("effective_venue")
+            in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
             and _safe_float(item.get("entry_executable_best_ask")) is not None
             and _safe_int(item.get("backoff_executable_fresh_event_count"))
             >= TP1_POST_BLOCK_MIN_FRESH_PRICE_SAMPLES
@@ -2427,7 +2430,8 @@ def _build_submit_safety_and_backoff_audit(
             for item in dynamic_age_rows
         ),
         "dynamic_age_post_apply_venue_source_gap_count": sum(
-            item.get("effective_venue") not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            item.get("effective_venue")
+            not in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
             for item in dynamic_age_rows
         ),
         "dynamic_age_post_apply_outcome_source_gap_count": sum(
@@ -2436,7 +2440,8 @@ def _build_submit_safety_and_backoff_audit(
         ),
         "dynamic_age_post_apply_source_quality_pass_count": sum(
             _safe_float(item.get("entry_executable_best_ask")) is not None
-            and item.get("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            and item.get("effective_venue")
+            in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
             and _safe_int(item.get("post_apply_executable_bid_event_count")) >= 2
             for item in dynamic_age_rows
         ),
@@ -2845,7 +2850,7 @@ def _clean_baseline_rolling_latency_false_negative_candidates(
             (report_date, dict(row)) for row in daily_rows if isinstance(row, dict)
         )
 
-    valid_venues = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    valid_venues = {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
     source_gap_rows = 0
     grouped: dict[tuple[str, str, str], list[tuple[str, dict[str, Any]]]] = {}
     for report_date, row in source_rows:
@@ -3080,11 +3085,12 @@ def _tp1_cost_adjusted_label(
 
 
 def _tp1_effective_venue(fields: dict[str, Any]) -> str:
-    """Retain only explicit venue provenance; never infer a venue from session."""
+    """Return the explicit decision scope without inferring physical execution."""
 
     value = (
         str(
-            fields.get("rising_missed_effective_venue")
+            fields.get("decision_market_scope")
+            or fields.get("rising_missed_effective_venue")
             or fields.get("effective_venue")
             or fields.get("venue")
             or ""
@@ -3092,7 +3098,45 @@ def _tp1_effective_venue(fields: dict[str, Any]) -> str:
         .strip()
         .upper()
     )
-    return value if value in {"KRX", "NXT", "PREMARKET_KRX_LIKE"} else "unknown"
+    return (
+        value
+        if value in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
+        else "unknown"
+    )
+
+
+def _tp1_market_axes(fields: dict[str, Any]) -> dict[str, str]:
+    """Preserve decision, data, session, and execution axes independently."""
+
+    decision_scope = _tp1_effective_venue(fields)
+    route = str(fields.get("market_data_route") or "").strip().lower()
+    if route not in {"krx_only", "nxt_only", "krx_nxt_integrated"}:
+        route = {
+            "KRX": "krx_only",
+            "NXT": "nxt_only",
+            "KRX_NXT_INTEGRATED": "krx_nxt_integrated",
+            "PREMARKET_KRX_LIKE": "krx_only",
+        }.get(decision_scope, "unknown")
+    session_regime = str(fields.get("market_session_regime") or "").strip()
+    session_bucket = str(
+        fields.get("rising_missed_market_session_bucket")
+        or fields.get("market_session_bucket")
+        or session_regime
+        or "unknown"
+    ).strip()
+    if not session_regime:
+        session_regime = session_bucket
+    actual_venue = str(fields.get("actual_execution_venue") or "UNKNOWN").strip().upper()
+    if actual_venue not in {"KRX", "NXT"}:
+        actual_venue = "UNKNOWN"
+    return {
+        "effective_venue": decision_scope,
+        "decision_market_scope": decision_scope,
+        "market_data_route": route,
+        "market_session_bucket": session_bucket,
+        "market_session_regime": session_regime,
+        "actual_execution_venue": actual_venue,
+    }
 
 
 def _tp1_venue_resolution(fields: dict[str, Any]) -> str:
@@ -3759,13 +3803,8 @@ def _build_tp1_first_hit_labels(
                 "candidate_ts": candidate_ts_text,
                 "candidate_stage": candidate.get("stage"),
                 "candidate_lane": fields.get("rising_missed_tp1_candidate_lane"),
-                "effective_venue": _tp1_effective_venue(fields),
+                **_tp1_market_axes(fields),
                 "venue_resolution": _tp1_venue_resolution(fields),
-                "market_session_bucket": fields.get(
-                    "rising_missed_market_session_bucket"
-                )
-                or fields.get("market_session_bucket")
-                or "unknown",
                 "evaluation_id": evaluation_id or None,
                 "entry_price": entry_price,
                 "entry_price_source": entry_price_source,
@@ -3925,7 +3964,7 @@ def _build_tp1_counterfactual_submit_safety(
                 ),
                 "counterfactual_action": action,
                 "counterfactual_risks": risks,
-                "effective_venue": _tp1_effective_venue(fields),
+                **_tp1_market_axes(fields),
                 "venue_resolution": _tp1_venue_resolution(fields),
                 **_tp1_counterfactual_decision_context(fields),
                 "runtime_effect": False,
@@ -4133,13 +4172,8 @@ def _build_tp1_counterfactual_first_hit_labels(
                 "evaluation_id": evaluation_id or None,
                 "selector_reason": fields.get("selector_reason"),
                 "selector_deferred": _boolish(fields.get("selector_deferred")),
-                "effective_venue": _tp1_effective_venue(fields),
+                **_tp1_market_axes(fields),
                 "venue_resolution": _tp1_venue_resolution(fields),
-                "market_session_bucket": fields.get(
-                    "rising_missed_market_session_bucket"
-                )
-                or fields.get("market_session_bucket")
-                or "unknown",
                 "counterfactual_action": fields.get(
                     "rising_missed_tp1_counterfactual_submit_safety_action"
                 ),
@@ -4232,7 +4266,8 @@ def _tp1_counterfactual_direct_target_first_attribution(
         row
         for row in target_label_candidates
         if str(row.get("first_hit_price_source") or "").endswith(":best_bid")
-        and row.get("effective_venue") in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        and row.get("effective_venue")
+        in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
         and str(row.get("market_session_bucket") or "").strip() not in {"", "unknown"}
     ]
     selector_counts = Counter(
@@ -4256,7 +4291,11 @@ def _tp1_counterfactual_direct_target_first_attribution(
             "stock_code": row.get("stock_code"),
             "stock_name": row.get("stock_name"),
             "effective_venue": row.get("effective_venue"),
+            "decision_market_scope": row.get("decision_market_scope"),
+            "market_data_route": row.get("market_data_route"),
             "market_session_bucket": row.get("market_session_bucket"),
+            "market_session_regime": row.get("market_session_regime"),
+            "actual_execution_venue": row.get("actual_execution_venue"),
             "selector_reason": row.get("selector_reason"),
             "ai_action": row.get("ai_action"),
             "counterfactual_action": row.get("counterfactual_action"),
@@ -5533,17 +5572,7 @@ def _risky_micro_projection_from_block_event(
     )
     projected.update(
         {
-            "effective_venue": (
-                fields.get("rising_missed_effective_venue")
-                or fields.get("effective_venue")
-                or fields.get("venue")
-                or "unknown"
-            ),
-            "market_session_bucket": (
-                fields.get("rising_missed_market_session_bucket")
-                or fields.get("market_session_bucket")
-                or "unknown"
-            ),
+            **_tp1_market_axes(fields),
             "risky_micro_episode_source_event_stage": stage,
             "risky_micro_episode_source_category": source_category,
             "risky_micro_episode_source_projection_origin": (
@@ -5586,7 +5615,8 @@ def _risky_micro_ts(value: Any) -> datetime | None:
 def _risky_micro_venue_session(fields: dict[str, Any]) -> tuple[str, str]:
     venue = (
         str(
-            fields.get("rising_missed_effective_venue")
+            fields.get("decision_market_scope")
+            or fields.get("rising_missed_effective_venue")
             or fields.get("effective_venue")
             or fields.get("venue")
             or "unknown"
@@ -5596,7 +5626,8 @@ def _risky_micro_venue_session(fields: dict[str, Any]) -> tuple[str, str]:
     )
     session = (
         str(
-            fields.get("rising_missed_market_session_bucket")
+            fields.get("market_session_regime")
+            or fields.get("rising_missed_market_session_bucket")
             or fields.get("market_session_bucket")
             or "unknown"
         )
@@ -6496,7 +6527,8 @@ def _risky_micro_daily_rolling_eligible_rows(
         if (
             not code
             or candidate_status != "source_only_candidate"
-            or venue not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+            or venue
+            not in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
             or session in {"", "UNKNOWN"}
         ):
             continue

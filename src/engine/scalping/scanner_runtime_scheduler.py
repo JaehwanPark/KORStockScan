@@ -22,7 +22,9 @@ from typing import Any, Iterable
 SCANNER_DEADLINE_SCHEDULER_VERSION = "scanner_deadline_scheduler_v1"
 SCANNER_ASYNC_EVAL_VERSION = "scanner_async_eval_commit_v1"
 SUPPORTED_SCANNER_SCHEDULER_MODES = frozenset({"legacy", "deadline_v1", "async_v1"})
-SUPPORTED_SCANNER_SCHEDULER_VENUES = frozenset({"KRX", "PREMARKET_KRX_LIKE", "NXT"})
+SUPPORTED_SCANNER_SCHEDULER_VENUES = frozenset(
+    {"KRX", "PREMARKET_KRX_LIKE", "NXT", "KRX_NXT_INTEGRATED"}
+)
 
 
 class ScannerLane(str, Enum):

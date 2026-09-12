@@ -1,4 +1,5 @@
 import json
+import hashlib
 
 import pytest
 
@@ -13,6 +14,51 @@ def _isolate_pattern_lab_audit_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(
         mod, "PATTERN_LAB_PROPAGATION_AUDIT_DIR", tmp_path / "missing_propagation_audit"
     )
+
+
+def test_runtime_summary_keeps_dual_replay_observe_only():
+    dual = {
+        "cohort_key": "INTEGRATED/KRX_NXT_AFTERMARKET",
+        "cohort_key_version": "v2",
+        "effective_venue": "INTEGRATED",
+        "session_bucket": "KRX_NXT_AFTERMARKET",
+        "market_data_route": "SOR",
+        "authority_state": "OBSERVE_ONLY",
+    }
+    contract = {
+        "schema": "entry_replay_cohort_contract_v1",
+        "contract_version": "v2",
+        "expected_cohorts_by_contract_version": {"v2": [dual]},
+    }
+    digest = hashlib.sha256(
+        json.dumps(contract, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")
+    ).hexdigest()
+    batch = {
+        "target_date": "2026-09-12", "cohort_contract": contract,
+        "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_order_submitted": False, "broker_order_forbidden": True,
+        "source_cohort_contract_sha256": digest,
+        "cohorts": [{**dual, "status": "completed_observe_only", "runtime_effect": False,
+                     "allowed_runtime_apply": False, "actual_order_submitted": False,
+                     "candidate_contract_sha256": None}],
+    }
+    consumer = {
+        "target_date": "2026-09-12", "source_cohort_contract_sha256": digest,
+        "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_order_submitted": False, "broker_order_forbidden": True,
+        "request_paths": {"entry_base": {"cohorts": [{
+            **dual, "path_status": "intentionally_blocked_with_owner_and_acceptance_test",
+            "terminality": "terminal_source_observation",
+        }]}},
+    }
+
+    status = mod.entry_replay_observe_only_status(
+        batch, consumer, target_date="2026-09-12"
+    )
+
+    assert status["status"] == "pass"
+    assert status["cohorts"][0]["conversion_state"] == "terminal_source_only_exclusion"
 
 
 def test_protect_trailing_summary_matches_existing_runtime_guard():

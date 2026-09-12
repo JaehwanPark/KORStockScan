@@ -49,10 +49,15 @@ CANARY_VENUE = "KRX"
 CANARY_SESSION = "KRX_REGULAR"
 DEFAULT_COHORT = (CANARY_VENUE, CANARY_SESSION)
 SUPPORTED_LIVE_COHORTS = (DEFAULT_COHORT, ("NXT", "NXT_AFTERMARKET"))
+DUAL_OBSERVE_ONLY_COHORT = (
+    "KRX_NXT_INTEGRATED",
+    "KRX_NXT_AFTERMARKET",
+)
+REGISTERED_SOURCE_COHORTS = SUPPORTED_LIVE_COHORTS + (DUAL_OBSERVE_ONLY_COHORT,)
 
 
 def _cohort_suffix(cohort: tuple[str, str]) -> str:
-    if cohort not in SUPPORTED_LIVE_COHORTS:
+    if cohort not in REGISTERED_SOURCE_COHORTS:
         raise ValueError("entry_setup_cohort_not_registered")
     return (
         "" if cohort == DEFAULT_COHORT else f"_{cohort[0].lower()}_{cohort[1].lower()}"
@@ -242,6 +247,8 @@ def _env_value(name: str, env: dict[str, str] | None = None) -> str | None:
 def _enabled_by_operator(
     env: dict[str, str] | None = None, *, cohort: tuple[str, str] = DEFAULT_COHORT
 ) -> bool:
+    if cohort == DUAL_OBSERVE_ONLY_COHORT:
+        return False
     raw = _env_value(_cohort_env_key(cohort), env)
     if raw is None and env is not None:
         # The kill switch may be supplied by the cron/supervisor environment,
@@ -656,7 +663,9 @@ def _candidate_source_errors(
     cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> list[str]:
     errors: list[str] = []
-    if cohort not in SUPPORTED_LIVE_COHORTS:
+    if cohort == DUAL_OBSERVE_ONLY_COHORT:
+        errors.append("dual_cohort_observe_only_no_live_approval")
+    elif cohort not in SUPPORTED_LIVE_COHORTS:
         errors.append("candidate_cohort_not_registered")
     if candidate_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
         errors.append("candidate_prompt_version_not_registered_for_live")
@@ -1172,8 +1181,12 @@ def build_live_candidate(
             "detailed_report_sha256": detailed_sha256,
         },
         "activation_mode": "first_available_krx_trading_date_preopen_only",
-        "operator_approval_required": False,
-        "operator_disable_env": _cohort_env_key(cohort),
+        "operator_approval_required": cohort == DUAL_OBSERVE_ONLY_COHORT,
+        "operator_disable_env": (
+            None
+            if cohort == DUAL_OBSERVE_ONLY_COHORT
+            else _cohort_env_key(cohort)
+        ),
         "risk_contract": {
             "eligible_position_tags": list(CANARY_POSITION_TAGS),
             "one_share_probe_first_required": True,
@@ -1199,8 +1212,16 @@ def build_live_candidate(
             "same_stage_prompt_owner_count": 1,
             "nxt_promotion_separate": True,
         },
-        "metric_role": "bounded_exact_cohort_entry_prompt_live_candidate",
-        "decision_authority": "preopen_date_scoped_exact_cohort_prompt_selection_only",
+        "metric_role": (
+            "source_only_dual_entry_prompt_cohort"
+            if cohort == DUAL_OBSERVE_ONLY_COHORT
+            else "bounded_exact_cohort_entry_prompt_live_candidate"
+        ),
+        "decision_authority": (
+            "observe_only_no_live_approval"
+            if cohort == DUAL_OBSERVE_ONLY_COHORT
+            else "preopen_date_scoped_exact_cohort_prompt_selection_only"
+        ),
         "window_policy": (
             "clean_baseline_cumulative_same_contract_exact_cohort_plus_current_full_day"
         ),
@@ -1235,6 +1256,7 @@ def build_live_candidate(
             "direct_full_entry_from_ai",
             "broker_or_safety_guard_bypass",
             "intraday_cross_venue_promotion",
+            "dual_cohort_live_inheritance_without_new_immutable_approval",
             "bot_process_control",
         ],
     }
@@ -1722,6 +1744,12 @@ def resolve_live_prompt_policy(
         "runtime_effect": False,
         "canary_mode": None,
     }
+    if cohort == DUAL_OBSERVE_ONLY_COHORT:
+        result.update(
+            status="fallback_dual_observe_only_no_live_approval",
+            source_only=True,
+        )
+        return result
     if fallback != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
         result["status"] = "fallback_same_stage_owner_conflict"
         return result

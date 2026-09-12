@@ -1127,6 +1127,11 @@ class FeatureRow:
     oracle_action: int
     decision_close_price: float = 0.0
     volatility_scale_pct: float = 0.0
+    decision_market_scope: str = ""
+    market_data_route: str = ""
+    market_session_regime: str = ""
+    actual_execution_venue: str = "UNKNOWN"
+    route_source_quality: str = "PASS"
 
 
 def _optimal_actions(
@@ -1237,6 +1242,9 @@ def _session_progress(bar: base.Bar) -> float:
         "KRX_REGULAR": (time(9, 0), time(15, 30)),
         "NXT_REGULAR": (time(9, 0), time(15, 30)),
         "NXT_AFTERMARKET": (time(15, 40), time(20, 0)),
+        "KRX_NXT_AFTERMARKET": (time(16, 0), time(19, 40)),
+        "KRX_NXT_AFTERMARKET_CLOSE_ONLY": (time(19, 40), time(19, 45)),
+        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT": (time(19, 45), time(20, 0)),
     }
     start, end = bounds.get(bar.session, (time(0, 0), time(23, 59)))
     current_minutes = bar.timestamp.hour * 60 + bar.timestamp.minute
@@ -1378,6 +1386,11 @@ def build_feature_rows(
                     oracle_action=action_map.get(index, 0),
                     decision_close_price=float(bar.close),
                     volatility_scale_pct=float(volatility_scale_pct),
+                    decision_market_scope=bar.decision_market_scope,
+                    market_data_route=bar.market_data_route,
+                    market_session_regime=bar.market_session_regime,
+                    actual_execution_venue=bar.actual_execution_venue,
+                    route_source_quality=bar.route_source_quality,
                 )
             )
     oracle_summary_by_venue: dict[str, Any] = {}
@@ -1677,6 +1690,11 @@ def _simulate_evaluation_rows(
                     "trade_date": row.trade_date.isoformat(),
                     "venue": row.venue,
                     "session": row.session,
+                    "decision_market_scope": row.decision_market_scope,
+                    "market_data_route": row.market_data_route,
+                    "market_session_regime": row.market_session_regime,
+                    "actual_execution_venue": row.actual_execution_venue,
+                    "route_source_quality": row.route_source_quality,
                     "candidate_armed_at": position["candidate_armed_at"].isoformat(),
                     "entry_reason": "adaptive_buy_armed_recovery_confirmed",
                     "pairability_lane": position["pairability_lane"],

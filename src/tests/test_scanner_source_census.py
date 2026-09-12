@@ -38,7 +38,13 @@ def test_adapter_receipt_conservation_and_consumer_first_gap(monkeypatch, tmp_pa
     assert result[0]["Code"] == "005930"
     args, kw = emitted[-1]
     fields = {k: str(v) for k, v in kw["fields"].items()}
-    assert source.decode_receipt(fields) == [{"stock_code": "005930", "venue": "KRX"}]
+    assert source.decode_receipt(fields) == [
+        {
+            "stock_code": "005930",
+            "venue": "KRX",
+            "market_data_route": "krx_only",
+        }
+    ]
     at = datetime(2026, 9, 9, 10, tzinfo=census.KST)
     path = tmp_path / "source.jsonl"
     _write_jsonl(
@@ -97,6 +103,58 @@ def test_bounded_rows_do_not_change_original_candidates(monkeypatch):
     assert fields["scanner_source_omitted_count"] == 76
     assert len(targets) == 1100
     assert all(r["venue"] == "UNKNOWN" for r in source.decode_receipt(fields))
+
+
+def test_integrated_fetch_receipt_preserves_route_without_venue_inference(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        source, "emit_pipeline_event", lambda *a, **kw: emitted.append(kw["fields"])
+    )
+
+    @source.observe_cycle
+    def run():
+        return scanner._fetch_scan_source(
+            "ka10027 fixture", lambda **kw: [{"Code": "005930"}], stex_tp="3"
+        )
+
+    targets = run()
+    rows = source.decode_receipt(emitted[0])
+
+    assert targets[0]["ScannerSourceRoute"] == "krx_nxt_integrated"
+    assert targets[0]["ScannerSourceVenue"] == "UNKNOWN"
+    assert rows == [
+        {
+            "stock_code": "005930",
+            "venue": "UNKNOWN",
+            "market_data_route": "krx_nxt_integrated",
+        }
+    ]
+
+
+def test_partial_integrated_fetch_is_preserved_in_source_receipt(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        source, "emit_pipeline_event", lambda *a, **kw: emitted.append(kw["fields"])
+    )
+
+    @source.observe_cycle
+    def run():
+        return scanner._fetch_scan_source(
+            "ka10027 fixture",
+            lambda **kw: (
+                [{"Code": "005930"}],
+                {"continuous_page_limit_reached": True},
+            ),
+            stex_tp="3",
+        )
+
+    targets = run()
+
+    assert targets[0]["ScannerSourceStatus"] == "partial_adapter_return"
+    assert emitted[0]["scanner_source_status"] == "partial_adapter_return"
+    assert source.decode_receipt(emitted[0])[0]["market_data_route"] == (
+        "krx_nxt_integrated"
+    )
 
 
 def test_telemetry_failure_does_not_veto_fetch_or_pool(monkeypatch):
@@ -191,16 +249,25 @@ def test_independent_stage_reach_is_not_same_source_cycle_conversion():
 
 
 @pytest.mark.parametrize(
-    "code,request_venue,expected",
+    "code,request_venue,request_route,expected_venue,expected_route",
     [
-        ("005930_NX", "KRX", "UNKNOWN"),
-        ("005930_NX", "NXT", "NXT"),
-        ("005930_AL", "KRX", "UNKNOWN"),
-        ("005930", "UNKNOWN", "UNKNOWN"),
+        ("005930_NX", "KRX", "krx_only", "UNKNOWN", "unknown"),
+        ("005930_NX", "NXT", "nxt_only", "NXT", "nxt_only"),
+        (
+            "005930_AL",
+            "UNKNOWN",
+            "krx_nxt_integrated",
+            "UNKNOWN",
+            "krx_nxt_integrated",
+        ),
+        ("005930", "UNKNOWN", "unknown", "UNKNOWN", "unknown"),
     ],
 )
-def test_physical_route_conflict_never_overrides_request(code, request_venue, expected):
-    assert source.source_target_venue(code, request_venue) == expected
+def test_physical_route_conflict_never_overrides_request(
+    code, request_venue, request_route, expected_venue, expected_route
+):
+    assert source.source_target_venue(code, request_venue) == expected_venue
+    assert source.source_target_market_data_route(code, request_route) == expected_route
 
 
 def test_source_batch_is_not_duplicated_or_dropped_in_logger(monkeypatch):

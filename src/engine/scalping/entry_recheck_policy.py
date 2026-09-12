@@ -25,6 +25,10 @@ SCOPES = frozenset(
         "PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE",
     }
 )
+OBSERVE_ONLY_SCOPES = frozenset(
+    {"KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET"}
+)
+KNOWN_SCOPES = SCOPES | OBSERVE_ONLY_SCOPES
 ADDRESSABLE_AXES = frozenset({"UPSTREAM_GATE", "ENTRY_AI_AUTHORITY_REVALIDATION"})
 BOUNDED_PROFILE = {
     "min_ai_score": 69.0,
@@ -161,7 +165,9 @@ def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
         for k in ("ai_confirmed", "budget_pass", "order_bundle_submitted")
     )
     valid = (
-        isinstance(scope, str) and scope in SCOPES and min(ai, budget, submitted) >= 0
+        isinstance(scope, str)
+        and scope in KNOWN_SCOPES
+        and min(ai, budget, submitted) >= 0
     )
     ai_floor, budget_floor = valid and ai >= 20, valid and budget >= 3
     branches = []
@@ -220,8 +226,13 @@ def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
         },
         "denominator_floor_passed": bool(ai_floor or budget_floor),
         "critical": critical,
-        "addressable": bool(axes),
-        "addressable_critical": bool(critical and axes),
+        "addressable": bool(axes and scope in SCOPES),
+        "addressable_critical": bool(critical and axes and scope in SCOPES),
+        "authority_mode": (
+            "observe_only_no_live_approval"
+            if scope in OBSERVE_ONLY_SCOPES
+            else "existing_live_scope"
+        ),
         "trigger_branches": branches,
         "causal_bottleneck_axes": axes,
     }
@@ -378,7 +389,7 @@ def _scope_controller_decision(
         n = count(metric.get("paired_sample"))
         metric_ev = finite_number(metric.get("equal_weight_avg_profit_pct"))
         metric_net = finite_number(metric.get("realized_net_pnl_krw"))
-        if scope not in SCOPES or n <= 0 or metric_ev is None or metric_net is None:
+        if scope not in KNOWN_SCOPES or n <= 0 or metric_ev is None or metric_net is None:
             metrics_consistent = False
             continue
         scoped_pairs += n
@@ -548,12 +559,12 @@ def controller_decision(
         if any(n < 0 for n in values) or sum(values) != count(exact.get(key, 0)):
             quality = False
     for scope, row in funnels.items():
-        if scope not in SCOPES and (
+        if scope not in KNOWN_SCOPES and (
             not isinstance(row, dict)
             or any(count(row.get(key)) != 0 for key in FUNNEL_KEYS[1:])
         ):
             quality = False
-    if set(economics) - set(funnels) or set(cohorts) - set(SCOPES):
+    if set(economics) - set(funnels) or set(cohorts) - set(KNOWN_SCOPES):
         quality = False
     scoped_decisions = {}
     prior_states = previous.get("scope_states") if valid_prior else {}
@@ -701,6 +712,7 @@ def controller_decision(
         ),
         "intraday_escalation_allowed": bool(escalation),
         "intraday_escalation_scopes": escalation,
+        "observe_only_scopes": sorted(set(funnels) & OBSERVE_ONLY_SCOPES),
         "episode_renewed": any(d["episode_renewed"] for d in scoped_decisions.values()),
         "scope_decisions": scoped_decisions,
         "controller_state": {

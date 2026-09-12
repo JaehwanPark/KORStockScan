@@ -47,6 +47,24 @@ def _daily_report(target_date: date, *, source_rows: int = 10) -> dict:
     }
 
 
+def test_post_integration_samsung_calibration_keeps_dual_cohort_out_of_promotion():
+    spec = next(
+        item for item in calibration.WIDGET_SPECS if item.symbol == "005930"
+    )
+    target_date = date(2026, 9, 14)
+
+    assert calibration._expected_sessions_for_date(spec, target_date) == {
+        "NXT_PREMARKET": 50,
+        "KRX_REGULAR": 390,
+        "KRX_NXT_AFTERMARKET": 240,
+    }
+    assert calibration._calibration_sessions_for_date(spec, target_date) == (
+        "NXT_PREMARKET",
+        "KRX_REGULAR",
+    )
+
+
+
 def _write_daily_with_hits(
     spec: calibration.WidgetSpec,
     target_date: date,

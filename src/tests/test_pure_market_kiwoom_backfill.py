@@ -113,6 +113,53 @@ def test_backfill_preserves_nxt_route_and_filters_session_gaps():
     assert meta["source_quality_status"] == "PARTIAL"
 
 
+def test_backfill_classifies_post_effective_dual_session_by_source_date():
+    krx, krx_error = backfill._normalize_row(
+        _row("20260914160000"), venue="KRX", request_code="005930"
+    )
+    nxt, nxt_error = backfill._normalize_row(
+        _row("20260914194500"), venue="NXT", request_code="005930_NX"
+    )
+    transition, transition_error = backfill._normalize_row(
+        _row("20260914154500"), venue="NXT", request_code="005930_NX"
+    )
+
+    assert krx_error is None and krx is not None
+    assert krx.session == "KRX_NXT_AFTERMARKET"
+    assert krx.decision_market_scope == "KRX_NXT_INTEGRATED"
+    assert krx.market_data_route == "krx_only"
+    assert krx.actual_execution_venue == "UNKNOWN"
+    assert krx.route_source_quality == "PARTIAL"
+    assert nxt_error is None and nxt is not None
+    assert nxt.session == "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
+    assert nxt.market_data_route == "nxt_only"
+    assert nxt.actual_execution_venue == "UNKNOWN"
+    assert transition is None
+    assert transition_error == "out_of_session"
+
+    def post(_url, **_kwargs):
+        return _Response(
+            {
+                "return_code": 0,
+                "stk_min_pole_chart_qry": [
+                    _row("20260914160000"),
+                    _row("20260913150000"),
+                ],
+            }
+        )
+
+    _bars, meta = backfill.fetch_ka10080_history(
+        token="token",
+        venue="KRX",
+        start_date=date(2026, 9, 14),
+        end_date=date(2026, 9, 14),
+        page_delay_sec=0,
+        post=post,
+    )
+    assert meta["partial_route_row_count"] == 1
+    assert meta["source_quality_status"] == "PARTIAL"
+
+
 def test_backfill_auth_failure_is_fail_closed_without_retry():
     call_count = 0
 

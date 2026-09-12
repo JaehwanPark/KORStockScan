@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.trading.market import session_contract
 from src.utils.market_day import is_krx_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
@@ -46,6 +47,7 @@ NXT_PREMARKET_END = datetime_time(8, 50)
 KRX_START = datetime_time(9, 0)
 KRX_END = datetime_time(15, 30)
 NXT_AFTERMARKET_START = datetime_time(15, 40)
+KRX_NXT_AFTERMARKET_START = datetime_time(16, 0)
 NXT_AFTERMARKET_END = datetime_time(20, 0)
 PREMARKET_AUXILIARY_END = datetime_time(9, 30)
 
@@ -108,16 +110,42 @@ class SessionContext:
     end: datetime_time | None
     minimum_bars: int
     active: bool
+    session_contract_version: str = "market_session_contract_v1"
+    market_session_regime: str = "CLOSED"
+    decision_market_scope: str = "UNKNOWN"
+    market_data_route: str = "unknown"
+    actual_execution_venue: str = "UNKNOWN"
+
+    @property
+    def market_data_request_code(self) -> str:
+        return self.request_code
 
 
 def session_context(observed_at: datetime) -> SessionContext:
     now = as_kst(observed_at)
+    clock = now.time()
     if not is_krx_trading_day(now.date()):
         return SessionContext(
             "CLOSED", "KRX", "KRX", SAMSUNG_CODE, None, None, 0, False
         )
-    clock = now.time().replace(tzinfo=None)
-    if NXT_PREMARKET_START <= clock < NXT_PREMARKET_END:
+    context = session_contract.resolve_market_session(now)
+    if (
+        context.blocker is not None
+        and context.session_regime
+        not in {
+            session_contract.MARKET_SESSION_REGIME_LEGACY_TRANSITION,
+            session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION,
+        }
+    ):
+        return SessionContext(
+            "CLOSED", "KRX", "KRX", SAMSUNG_CODE, None, None, 0, False
+        )
+
+    if (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+        and clock < NXT_PREMARKET_END
+    ):
         return SessionContext(
             "NXT_PREMARKET",
             "NXT",
@@ -127,12 +155,52 @@ def session_context(observed_at: datetime) -> SessionContext:
             NXT_PREMARKET_END,
             10,
             True,
+            context.contract_version,
+            context.session_regime,
+            context.decision_market_scope,
+            "nxt_only",
+            "UNKNOWN",
         )
-    if NXT_PREMARKET_END <= clock < KRX_START:
+
+    if (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION
+    ) or (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_LEGACY_TRANSITION
+        and clock < NXT_AFTERMARKET_START
+    ) or (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+        and clock >= NXT_PREMARKET_END
+    ):
+        post_effective_transition = (
+            context.session_regime
+            == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION
+        )
+        transition_code = "KRX"
+        transition_end = (
+            KRX_NXT_AFTERMARKET_START
+            if post_effective_transition
+            else KRX_START if clock < KRX_START else NXT_AFTERMARKET_START
+        )
         return SessionContext(
-            "SESSION_TRANSITION", "KRX", "KRX", SAMSUNG_CODE, None, KRX_START, 0, False
+            "SESSION_TRANSITION",
+            transition_code,
+            transition_code,
+            f"{SAMSUNG_CODE}_{'NX' if transition_code == 'NXT' else ''}".rstrip("_"),
+            None,
+            transition_end,
+            0,
+            False,
+            context.contract_version,
+            context.session_regime,
+            context.decision_market_scope,
+            "unknown",
+            "UNKNOWN",
         )
-    if KRX_START <= clock < KRX_END:
+
+    if context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_KRX_ONLY:
         return SessionContext(
             "KRX_REGULAR",
             "KRX",
@@ -142,19 +210,21 @@ def session_context(observed_at: datetime) -> SessionContext:
             KRX_END,
             3,
             True,
+            context.contract_version,
+            context.session_regime,
+            context.decision_market_scope,
+            "krx_only",
+            "UNKNOWN",
         )
-    if KRX_END <= clock < NXT_AFTERMARKET_START:
-        return SessionContext(
-            "SESSION_TRANSITION",
-            "NXT",
-            "NXT",
-            f"{SAMSUNG_CODE}_NX",
-            None,
-            NXT_AFTERMARKET_START,
-            0,
-            False,
-        )
-    if NXT_AFTERMARKET_START <= clock < NXT_AFTERMARKET_END:
+
+    if context.session_regime in {
+        session_contract.MARKET_SESSION_REGIME_LEGACY_NXT_ONLY,
+        session_contract.MARKET_SESSION_REGIME_NXT_AFTERMARKET_SOLO,
+    } or (
+        context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_LEGACY_TRANSITION
+        and clock >= NXT_AFTERMARKET_START
+    ):
         return SessionContext(
             "NXT_AFTERMARKET",
             "NXT",
@@ -164,7 +234,51 @@ def session_context(observed_at: datetime) -> SessionContext:
             NXT_AFTERMARKET_END,
             5,
             True,
+            context.contract_version,
+            context.session_regime,
+            context.decision_market_scope,
+            "nxt_only",
+            "UNKNOWN",
         )
+
+    if context.session_regime in {
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+    }:
+        return SessionContext(
+            context.session_regime,
+            "UNKNOWN",
+            "KRX_NXT",
+            f"{SAMSUNG_CODE}_AL",
+            KRX_NXT_AFTERMARKET_START,
+            NXT_AFTERMARKET_END,
+            5,
+            True,
+            context.contract_version,
+            context.session_regime,
+            context.decision_market_scope,
+            "krx_nxt_integrated",
+            "UNKNOWN",
+        )
+
+    if context.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR:
+        return SessionContext(
+            "KRX_REGULAR",
+            "KRX",
+            "KRX",
+            SAMSUNG_CODE,
+            KRX_START,
+            KRX_END,
+            3,
+            True,
+            context.contract_version,
+            context.session_regime,
+            context.decision_market_scope,
+            "krx_only",
+            "UNKNOWN",
+        )
+
     return SessionContext("CLOSED", "KRX", "KRX", SAMSUNG_CODE, None, None, 0, False)
 
 
@@ -173,6 +287,8 @@ def legacy_market_session(context: SessionContext) -> str:
         return "krx_like_premarket"
     if context.name == "NXT_AFTERMARKET":
         return "nxt_aftermarket"
+    if context.market_data_route == "krx_nxt_integrated":
+        return "krx_nxt_aftermarket"
     return "krx_or_closed"
 
 

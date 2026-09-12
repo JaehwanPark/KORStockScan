@@ -105,6 +105,52 @@ def test_completed_rows_loader_prefers_exact_performance_fact_economics():
     assert "COALESCE(tpf.profit_rate, rh.profit_rate) IS NOT NULL" in sql
 
 
+def test_completed_economics_route_venue_cohorts_keep_unknown_and_cost_null():
+    summary = report_mod._completed_economics_route_venue_cohorts(
+        [
+            {
+                "status": "COMPLETED",
+                "profit_rate": 1.2,
+                "market_session_regime": "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+                "market_data_route": "krx_nxt_integrated",
+                "actual_execution_venue": "KRX",
+                "requested_qty": 10,
+                "filled_qty": 10,
+                "cost_adjusted_profit_rate": 0.9,
+            },
+            {
+                "status": "COMPLETED",
+                "profit_rate": -0.4,
+                "market_session_regime": "KRX_NXT_AFTERMARKET",
+                "market_data_route": "SOR",
+                "actual_execution_venue": "UNKNOWN",
+                "requested_qty": 10,
+                "filled_qty": 4,
+            },
+            {"status": "PENDING", "profit_rate": 5.0},
+            {"status": "COMPLETED", "profit_rate": None},
+        ]
+    )
+
+    assert summary["completed_valid_profit_count"] == 2
+    assert summary["excluded_counts"] == {
+        "profit_rate_missing_or_invalid": 1,
+        "status_not_completed": 1,
+    }
+    assert summary["actual_execution_venue_counts"] == {"KRX": 1, "UNKNOWN": 1}
+    assert summary["market_data_route_counts"] == {
+        "KRX_NXT_INTEGRATED": 1,
+        "SOR": 1,
+    }
+    krx = summary["cohorts"]["KRX_NXT_AFTERMARKET|KRX_NXT_INTEGRATED|KRX"]
+    unknown = summary["cohorts"]["KRX_NXT_AFTERMARKET|SOR|UNKNOWN"]
+    assert krx["fill_state_counts"] == {"FULL": 1}
+    assert krx["cost_adjusted_ev_pct"] == 0.9
+    assert unknown["fill_state_counts"] == {"PARTIAL": 1}
+    assert unknown["cost_null_count"] == 1
+    assert unknown["cost_adjusted_ev_pct"] is None
+
+
 def test_threshold_ai_cost_rejects_partial_env_price_contract(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_AI_INPUT_COST_PER_1M_USD", "0")
     monkeypatch.delenv(

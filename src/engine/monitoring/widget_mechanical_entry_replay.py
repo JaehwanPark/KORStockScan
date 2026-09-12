@@ -52,6 +52,7 @@ SESSION_MINIMUM_BARS = {
     "KRX_REGULAR": 3,
     "NXT_AFTERMARKET": 5,
 }
+DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
 
 METRIC_CONTRACT = {
     "metric_role": "counterfactual_observation",
@@ -117,9 +118,17 @@ def _load_labels(path: Path) -> dict[str, dict[str, Any]]:
     }
 
 
-def _session_name(effective_venue: str, session_bucket: str) -> str | None:
+def _session_name(
+    effective_venue: str, session_bucket: str, market_data_route: str = ""
+) -> str | None:
     normalized_venue = effective_venue.upper()
     normalized_bucket = session_bucket.lower()
+    if (
+        normalized_venue in {"KRX_NXT", "KRX_NXT_AFTERMARKET"}
+        or normalized_bucket.startswith("krx_nxt_aftermarket")
+        or market_data_route.lower() == "krx_nxt_integrated"
+    ):
+        return DUAL_AFTERMARKET_SESSION
     if normalized_venue == "PREMARKET_KRX_LIKE" or "premarket" in normalized_bucket:
         return "NXT_PREMARKET"
     if normalized_venue == "KRX" or normalized_bucket in {
@@ -183,6 +192,8 @@ def _source_issue(
         return "payload_not_exact_replay"
     if session_name is None:
         return "session_not_portable"
+    if session_name == DUAL_AFTERMARKET_SESSION:
+        return "dual_aftermarket_observe_only"
     if context.get("schema") != "entry_candle_context_v1":
         return "entry_context_schema_mismatch"
     source_quality = context.get("source_quality")
@@ -232,6 +243,11 @@ def evaluate_portable_widget_core(payload_row: dict[str, Any]) -> dict[str, Any]
     session_name = _session_name(
         str(payload_row.get("effective_venue") or context.get("venue") or ""),
         str(payload_row.get("session_bucket") or context.get("session") or ""),
+        str(
+            payload_row.get("market_data_route")
+            or context.get("market_data_route")
+            or ""
+        ),
     )
     bars = _minute_bars(context, decision_ts=decision_ts)
     source_issue = _source_issue(
@@ -243,6 +259,10 @@ def evaluate_portable_widget_core(payload_row: dict[str, Any]) -> dict[str, Any]
             "source_issue": source_issue,
             "completed_bar_count": len(bars),
             "session": session_name,
+            "market_data_route": payload_row.get("market_data_route")
+            or context.get("market_data_route"),
+            "actual_execution_venue": payload_row.get("actual_execution_venue")
+            or context.get("actual_execution_venue"),
         }
 
     current = exact_payload.get("current")
@@ -288,6 +308,10 @@ def evaluate_portable_widget_core(payload_row: dict[str, Any]) -> dict[str, Any]
     result: dict[str, Any] = {
         "state": "WATCH",
         "session": session_name,
+        "market_data_route": payload_row.get("market_data_route")
+        or context.get("market_data_route"),
+        "actual_execution_venue": payload_row.get("actual_execution_venue")
+        or context.get("actual_execution_venue"),
         "source_issue": None,
         "current_price": current_price,
         "best_bid": best_bid,
@@ -547,6 +571,14 @@ def build_report(
             "stock_code": label.get("stock_code"),
             "effective_venue": label.get("effective_venue"),
             "session_bucket": label.get("session_bucket"),
+            "market_session": mechanical.get("session"),
+            "market_data_route": mechanical.get("market_data_route"),
+            "actual_execution_venue": mechanical.get("actual_execution_venue"),
+            "economic_cohort": (
+                "dual_aftermarket_observe_only"
+                if mechanical.get("session") == DUAL_AFTERMARKET_SESSION
+                else "legacy_replay"
+            ),
             "payload_sha256": payload_row.get("payload_sha256"),
             "ai_action": label.get("action"),
             "ai_score": label.get("score"),
@@ -571,18 +603,19 @@ def build_report(
         }
         rows.append(row)
 
-    ai_buy = [row for row in rows if row["ai_action"] == "BUY"]
-    ai_block = [row for row in rows if row["ai_action"] in {"WAIT", "DROP"}]
+    economic_rows = [row for row in rows if row["economic_cohort"] == "legacy_replay"]
+    ai_buy = [row for row in economic_rows if row["ai_action"] == "BUY"]
+    ai_block = [row for row in economic_rows if row["ai_action"] in {"WAIT", "DROP"}]
     mechanical_signals_raw = [
         row
-        for row in rows
+        for row in economic_rows
         if row["mechanical_signal"] and row["mechanical_price_comparable"]
     ]
     mechanical_signals, mechanical_episode_duplicate_count = (
         _dedupe_mechanical_episodes(mechanical_signals_raw)
     )
     pre_spread_candidates_raw = [
-        row for row in rows if row["mechanical_candidate_before_spread_gate"]
+        row for row in economic_rows if row["mechanical_candidate_before_spread_gate"]
     ]
     pre_spread_candidates, pre_spread_episode_duplicate_count = (
         _dedupe_mechanical_episodes(pre_spread_candidates_raw)
@@ -594,7 +627,7 @@ def build_report(
         and row["mechanical_price_comparable"]
     ]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
+    for row in economic_rows:
         mechanical_action = "SIGNAL" if row["mechanical_signal"] else "BLOCK"
         groups[f"AI_{row['ai_action']}__MECHANICAL_{mechanical_action}"].append(row)
     spread_sensitivity = {}
@@ -607,10 +640,10 @@ def build_report(
         ]
         spread_sensitivity[f"max_{max_ticks}_ticks"] = _cohort_summary(cohort)
     symbol_cohorts: dict[str, dict[str, Any]] = {}
-    for stock_code in sorted({str(row.get("stock_code") or "") for row in rows}):
+    for stock_code in sorted({str(row.get("stock_code") or "") for row in economic_rows}):
         if not stock_code:
             continue
-        stock_rows = [row for row in rows if str(row.get("stock_code")) == stock_code]
+        stock_rows = [row for row in economic_rows if str(row.get("stock_code")) == stock_code]
         stock_signals = [row for row in stock_rows if row["mechanical_signal"]]
         stock_candidates = [
             row for row in stock_rows if row["mechanical_candidate_before_spread_gate"]
@@ -674,8 +707,14 @@ def build_report(
             "joined_mature_primary_10m_count": len(rows),
             "join_excluded_counts": dict(sorted(join_excluded.items())),
             "joined_row_source_issue_counts": dict(sorted(source_issues.items())),
+            "economic_row_count": len(economic_rows),
+            "dual_aftermarket_observe_only_count": len(rows) - len(economic_rows),
         },
         "summary": {
+            "dual_aftermarket_observe_only": {
+                "sample_count": len(rows) - len(economic_rows),
+                "cost_status": "not_applicable_source_only",
+            },
             "ai_buy": _cohort_summary(ai_buy),
             "ai_wait_drop": _cohort_summary(ai_block),
             "mechanical_signal_executable_comparable": _cohort_summary(
@@ -690,17 +729,17 @@ def build_report(
             "spread_tick_sensitivity_ai_ask_proxy": spread_sensitivity,
             "stock_code_cohorts": symbol_cohorts,
             "mechanical_signal_raw_count": sum(
-                row["mechanical_signal"] for row in rows
+                row["mechanical_signal"] for row in economic_rows
             ),
             "mechanical_signal_episode_duplicate_count": (
                 mechanical_episode_duplicate_count
             ),
             "mechanical_signal_price_noncomparable_count": sum(
                 row["mechanical_signal"] and not row["mechanical_price_comparable"]
-                for row in rows
+                for row in economic_rows
             ),
             "mechanical_candidate_before_spread_raw_count": sum(
-                row["mechanical_candidate_before_spread_gate"] for row in rows
+                row["mechanical_candidate_before_spread_gate"] for row in economic_rows
             ),
             "mechanical_candidate_before_spread_episode_duplicate_count": (
                 pre_spread_episode_duplicate_count
@@ -708,7 +747,7 @@ def build_report(
             "mechanical_candidate_before_spread_price_noncomparable_count": sum(
                 row["mechanical_candidate_before_spread_gate"]
                 and not row["mechanical_price_comparable"]
-                for row in rows
+                for row in economic_rows
             ),
             "agreement_groups": {
                 key: _cohort_summary(value) for key, value in sorted(groups.items())

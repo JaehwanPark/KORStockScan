@@ -19,17 +19,16 @@ awk '!/MARKET_OPPORTUNITY_CENSUS_/' "$TMP_CRON" > "$TMP_CRON.filtered"
 mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
-# market opportunity census source-only capture (5m cadence)
+# market opportunity census source-only capture (5m cadence; 15:30-16:00 transition excluded)
 */5 8 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_NXT_PREMARKET_5MIN
 */5 9-14 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_5MIN
 0-30/5 15 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN
-35-55/5 15 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_NXT_TRANSITION_5MIN
-*/5 16-19 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_NXT_AFTERMARKET_5MIN
+*/5 16-19 * * 1-5 $WRAPPER \$(TZ=Asia/Seoul date +\%F) >> $PROJECT_DIR/logs/run_market_opportunity_census_intraday_cron.log 2>&1 # MARKET_OPPORTUNITY_CENSUS_KRX_NXT_AFTERMARKET_5MIN
 EOF
 
 crontab "$TMP_CRON"
 crontab -l | rg 'MARKET_OPPORTUNITY_CENSUS_' > "$TMP_CRON.lines"
-test "$(wc -l < "$TMP_CRON.lines")" -eq 5
+test "$(wc -l < "$TMP_CRON.lines")" -eq 4
 
 mkdir -p "$(dirname "$RECEIPT")"
 "$PROJECT_DIR/.venv/bin/python" - "$WRAPPER" "$RECEIPT" "$TMP_CRON.lines" <<'PY'
@@ -47,12 +46,12 @@ wrapper = Path(sys.argv[1]).resolve()
 receipt = Path(sys.argv[2])
 lines_path = Path(sys.argv[3])
 trigger_lines = [line.rstrip() for line in lines_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-if len(trigger_lines) != 5:
+if len(trigger_lines) != 4:
     raise SystemExit("installed trigger line count mismatch")
 
 sha256 = lambda value: hashlib.sha256(value).hexdigest()
 payload = {
-    "schema_version": "market_opportunity_census_trigger_v2",
+    "schema_version": "market_opportunity_census_trigger_v3",
     "trigger_id": "MARKET_OPPORTUNITY_CENSUS_5MIN",
     "enabled": True,
     "contract_source": "installed_crontab_verified",

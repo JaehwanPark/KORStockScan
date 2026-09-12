@@ -1,11 +1,14 @@
 import json
 import types
 from dataclasses import replace
+from datetime import date, datetime
 
 import pytest
 
 import src.engine.kiwoom_orders as kiwoom_orders
 import src.engine.sniper_config as sniper_config
+from src.trading.market import session_contract
+from src.trading.order.owner_custody_registry import OwnerOrderContext
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +63,97 @@ def _seed_successful_deposit_for_token(token, amount, updated_at):
         "amount": int(amount),
         "updated_at": float(updated_at),
     }
+
+
+def _aftermarket_eligibility(*, krx=True, nxt=True):
+    return session_contract.resolve_symbol_venue_eligibility(
+        "005930",
+        date(2026, 9, 14),
+        {
+            "source_id": "test-aftermarket-policy",
+            "source_sha256": "fixture-sha",
+            "quality_state": session_contract.SOURCE_QUALITY_VALID,
+            "observed_at_kst": "2026-09-14T15:59:00+09:00",
+            "krx_regular_eligible": True,
+            "krx_aftermarket_eligible": krx,
+            "nxt_eligible": nxt,
+        },
+    )
+
+
+def _main_owner_context(action="ENTRY_BUY"):
+    return OwnerOrderContext(
+        owner_type="main_scalping",
+        owner_id="main_scalping:test-target",
+        position_id="main_scalping:test-target",
+        client_intent_id=f"main_scalping:test-target:cycle:{action}:1:test",
+    )
+
+
+def _install_aftermarket_canary_approval(monkeypatch, tmp_path, **overrides):
+    release_root = "/fixed/release"
+    release_commit = "a" * 40
+    contract_sha256 = "b" * 64
+    approval_path = tmp_path / "approval.json"
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_aftermarket_sor_canary_approval_path",
+        lambda _trade_date: approval_path,
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_runtime_release_identity",
+        lambda: (release_root, release_commit),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_session_contract_sha256",
+        lambda: contract_sha256,
+    )
+    approval = {
+        "schema": "krx_aftermarket_sor_canary_approval_v1",
+        "approval_id": "krx-aftermarket-sor-canary-2026-09-14",
+        "authority_source": "user_explicit_approval_2026-09-12",
+        "target_date": "2026-09-14",
+        "effective_at_kst": "2026-09-14T16:00:00+09:00",
+        "expires_at_kst": "2026-09-14T19:40:00+09:00",
+        "code_release_root": release_root,
+        "code_commit": release_commit,
+        "market_session_contract_version": "market_session_contract_v2",
+        "market_session_contract_sha256": contract_sha256,
+        "owner_type": "main_scalping",
+        "symbol_scope": "ALL_EXISTING_GUARD_ELIGIBLE_SYMBOLS",
+        "allowed_route": "SOR",
+        "allowed_order_types": ["0", "00", "6"],
+        "market_order_remap": {"3": "6"},
+        "max_order_qty": 1,
+        "existing_cap_unchanged": True,
+        "existing_cooldown_unchanged": True,
+        "hard_guards_preserved": True,
+        "krx_aftermarket_eligible": True,
+        "nxt_eligible": True,
+        "actual_canary_order_approved": True,
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+        "rollback_owner": "main operator",
+        "official_reference_commit": (
+            "234560d213acd8871ae344b5481aecd2f30287fa"
+        ),
+    }
+    approval.update(overrides)
+    approval["artifact_sha256"] = kiwoom_orders._approval_payload_sha256(approval)
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+    return approval
+
+
+def _allow_buy_time_guards(monkeypatch):
+    monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_scalping_buy_window_blocked", lambda _now=None: False
+    )
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda _now=None: False
+    )
 
 
 def test_kt00018_inventory_requires_http200_and_atomic_strict_rows(monkeypatch):
@@ -507,11 +601,252 @@ def test_send_sell_order_market_uses_requested_exchange(monkeypatch):
         dmst_stex_tp="KRX",
         reason_type="LOSS",
         strategy="SCALPING",
+        now=datetime(2026, 9, 11, 10, 0, tzinfo=session_contract.KST),
     )
 
     assert result["ord_no"] == "SKRX"
     assert captured["payload"]["dmst_stex_tp"] == "KRX"
     assert "cancel_request_api_id" not in result
+
+
+def test_aftermarket_sor_buy_market_remaps_before_single_submit(
+    monkeypatch, tmp_path
+):
+    _allow_buy_time_guards(monkeypatch)
+    approval = _install_aftermarket_canary_approval(monkeypatch, tmp_path)
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(dict(payload))
+        return DummyResponse(), {"return_code": "0", "ord_no": "B1"}
+
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_buy_order_market(
+        "005930",
+        1,
+        "TOKEN",
+        order_type="3",
+        dmst_stex_tp="SOR",
+        owner_context=_main_owner_context(),
+        now=datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
+    )
+
+    assert calls == [
+        {
+            "dmst_stex_tp": "SOR",
+            "stk_cd": "005930",
+            "ord_qty": "1",
+            "ord_uv": "",
+            "trde_tp": "6",
+            "cond_uv": "",
+        }
+    ]
+    assert result["order_type_preflight_remapped"] is True
+    assert result["order_type_preflight_effective_type"] == "6"
+    assert result["market_session_observed_at"] == "2026-09-14T16:00:00+09:00"
+    assert result["aftermarket_sor_canary_approval_valid"] is True
+    assert result["aftermarket_sor_canary_approval_id"] == approval["approval_id"]
+    assert result["aftermarket_sor_canary_approval_sha256"] == approval["artifact_sha256"]
+
+
+@pytest.mark.parametrize(
+    ("qty", "action", "tamper_hash", "expected_reason"),
+    [
+        (2, "ENTRY_BUY", False, "one_share_probe_quantity_required"),
+        (1, "ENTRY_REPRICE_BUY", False, "initial_entry_buy_action_required"),
+        (1, "ENTRY_BUY", True, "approval_hash_mismatch"),
+    ],
+)
+def test_aftermarket_main_buy_canary_scope_blocks_before_broker(
+    monkeypatch,
+    tmp_path,
+    qty,
+    action,
+    tamper_hash,
+    expected_reason,
+):
+    _allow_buy_time_guards(monkeypatch)
+    approval = _install_aftermarket_canary_approval(monkeypatch, tmp_path)
+    if tamper_hash:
+        approval["rollback_owner"] = "tampered"
+        (
+            tmp_path / "approval.json"
+        ).write_text(json.dumps(approval), encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = kiwoom_orders.send_buy_order_market(
+        "005930",
+        qty,
+        "TOKEN",
+        order_type="6",
+        dmst_stex_tp="SOR",
+        owner_context=_main_owner_context(action),
+        now=datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
+        venue_eligibility=_aftermarket_eligibility(),
+    )
+
+    assert calls == []
+    assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+    assert result["broker_order_attempted"] is False
+    assert result["aftermarket_sor_canary_approval_valid"] is False
+    assert result["aftermarket_sor_canary_approval_reason"] == expected_reason
+
+
+def test_aftermarket_existing_holding_sell_market_remaps_before_single_submit(
+    monkeypatch,
+):
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(dict(payload))
+        return DummyResponse(), {"return_code": "0", "ord_no": "S1"}
+
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+
+    result = kiwoom_orders.send_sell_order_market(
+        "005930",
+        4,
+        "TOKEN",
+        order_type="3",
+        dmst_stex_tp="SOR",
+        now=datetime(2026, 9, 14, 19, 45, tzinfo=session_contract.KST),
+        existing_holding=True,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["ord_qty"] == "4"
+    assert calls[0]["trde_tp"] == "6"
+    assert result["order_type_preflight_remapped"] is True
+    assert result["broker_route_attempted"] is True
+
+
+@pytest.mark.parametrize("side", ["buy", "sell"])
+def test_aftermarket_unsupported_type_is_blocked_before_broker(monkeypatch, side):
+    _allow_buy_time_guards(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    kwargs = {
+        "order_type": "16",
+        "dmst_stex_tp": "SOR",
+        "now": datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
+    }
+    if side == "buy":
+        kwargs["venue_eligibility"] = _aftermarket_eligibility()
+        result = kiwoom_orders.send_buy_order_market("005930", 3, "TOKEN", **kwargs)
+    else:
+        result = kiwoom_orders.send_sell_order_market("005930", 3, "TOKEN", **kwargs)
+
+    assert calls == []
+    assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+    assert result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_TYPE_UNSUPPORTED
+    assert result["broker_order_attempted"] is False
+
+
+def test_aftermarket_buy_requires_explicit_route_before_broker(monkeypatch):
+    _allow_buy_time_guards(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = kiwoom_orders.send_buy_order_market(
+        "005930",
+        1,
+        "TOKEN",
+        order_type="6",
+        now=datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
+        venue_eligibility=_aftermarket_eligibility(),
+    )
+
+    assert calls == []
+    assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+    assert result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_ROUTE_UNSUPPORTED
+    assert result["requested_dmst_stex_tp"] == "AUTO"
+
+
+def test_aftermarket_buy_unknown_eligibility_blocks_before_broker(monkeypatch):
+    _allow_buy_time_guards(monkeypatch)
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    result = kiwoom_orders.send_buy_order_market(
+        "005930",
+        1,
+        "TOKEN",
+        order_type="6",
+        dmst_stex_tp="SOR",
+        now=datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
+    )
+
+    assert calls == []
+    assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+    assert result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_ELIGIBILITY_UNKNOWN
+    assert result["broker_order_attempted"] is False
+
+
+@pytest.mark.parametrize("side", ["buy", "sell"])
+def test_broker_reject_does_not_reroute_or_retry_order_type(
+    monkeypatch, tmp_path, side
+):
+    _allow_buy_time_guards(monkeypatch)
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(dict(payload))
+        return DummyResponse(), {
+            "return_code": "407022",
+            "return_msg": "주문이 불가능한 주문종류",
+            "ord_no": "",
+        }
+
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+    monkeypatch.setattr(kiwoom_orders, "log_error", lambda *_args: None)
+
+    kwargs = {
+        "order_type": "6",
+        "dmst_stex_tp": "SOR",
+        "now": datetime(2026, 9, 14, 16, 0, tzinfo=session_contract.KST),
+    }
+    if side == "buy":
+        _install_aftermarket_canary_approval(monkeypatch, tmp_path)
+        kwargs["owner_context"] = _main_owner_context()
+        result = kiwoom_orders.send_buy_order_market("005930", 1, "TOKEN", **kwargs)
+        expected_qty = "1"
+    else:
+        result = kiwoom_orders.send_sell_order_market("005930", 2, "TOKEN", **kwargs)
+        expected_qty = "2"
+
+    assert len(calls) == 1
+    assert calls[0]["ord_qty"] == expected_qty
+    assert calls[0]["dmst_stex_tp"] == "SOR"
+    assert calls[0]["trde_tp"] == "6"
+    assert result["return_code"] == "407022"
+    assert result["broker_route_attempted"] is True
 
 
 def test_send_smart_sell_order_forwards_requested_exchange(monkeypatch):

@@ -205,6 +205,8 @@ _OPTIONAL_ARTIFACT_LABELS = {
     "samsung_machine_entry_policy_candidate",
     "machine_entry_timing_tuning",
     "machine_entry_timing_policy",
+    "ai_entry_setup_paired_replay_batch",
+    "main_ai_prompt_consumer",
 }
 _AI_EXEMPT_RUNTIME_FAMILIES = THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES
 SCALE_IN_POLICY_FAMILY = "scale_in_bucket_runtime_policy_v1"
@@ -1193,6 +1195,214 @@ def _ai_decision_action_outcome_calibration_status(
             if isinstance(report.get("ofi_action_outcome_calibration"), dict)
             else None
         ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def _entry_setup_replay_session_contract_status(
+    batch: dict[str, Any],
+    consumer: dict[str, Any],
+    *,
+    target_date: str,
+) -> dict[str, Any]:
+    """Fail closed when a versioned replay cohort leaks into prompt authority."""
+    if not batch and not consumer:
+        return {
+            "status": "not_enabled",
+            "issues": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+
+    issues: list[str] = []
+    if not batch:
+        issues.append("batch_missing")
+    if not consumer:
+        issues.append("consumer_missing")
+    if batch.get("target_date") != target_date:
+        issues.append("batch_target_date_mismatch")
+    if consumer.get("target_date") != target_date:
+        issues.append("consumer_target_date_mismatch")
+    for label, payload in (("batch", batch), ("consumer", consumer)):
+        for field, expected in (
+            ("runtime_effect", False),
+            ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False),
+        ):
+            if payload.get(field) is not expected:
+                issues.append(f"{label}_{field}_invalid")
+        if payload.get("broker_order_forbidden") is not True:
+            issues.append(f"{label}_broker_order_forbidden_invalid")
+
+    contract = batch.get("cohort_contract")
+    if not isinstance(contract, dict):
+        issues.append("cohort_contract_missing_or_invalid")
+        contract = {}
+    if contract.get("schema") != "entry_replay_cohort_contract_v1":
+        issues.append("cohort_contract_schema_invalid")
+    contract_version = contract.get("contract_version")
+    expected_by_version = contract.get("expected_cohorts_by_contract_version")
+    if (
+        not isinstance(contract_version, str)
+        or not contract_version
+        or not isinstance(expected_by_version, dict)
+        or not isinstance(expected_by_version.get(contract_version), list)
+    ):
+        issues.append("cohort_contract_expected_coverage_invalid")
+        expected_cohorts: list[dict[str, Any]] = []
+    else:
+        expected_cohorts = expected_by_version[contract_version]
+
+    required_fields = (
+        "cohort_key",
+        "cohort_key_version",
+        "effective_venue",
+        "session_bucket",
+        "market_data_route",
+        "authority_state",
+    )
+
+    def identity(row: Any) -> tuple[str, str] | None:
+        if not isinstance(row, dict):
+            return None
+        values = tuple(str(row.get(field) or "").strip() for field in required_fields[:2])
+        return values if all(values) else None
+
+    def has_unknown_session_value(row: Any) -> bool:
+        return isinstance(row, dict) and any(
+            str(row.get(field) or "").strip().upper() == "UNKNOWN"
+            for field in required_fields[2:5]
+        )
+
+    if any(
+        not isinstance(row, dict)
+        or identity(row) is None
+        or has_unknown_session_value(row)
+        or any(not str(row.get(field) or "").strip() for field in required_fields)
+        for row in expected_cohorts
+    ):
+        issues.append("cohort_contract_expected_session_invalid")
+    expected_by_identity = {
+        identity(row): row for row in expected_cohorts if identity(row) is not None
+    }
+    if len(expected_by_identity) != len(expected_cohorts):
+        issues.append("cohort_contract_expected_identity_duplicate")
+
+    cohort_rows = batch.get("cohorts")
+    if not isinstance(cohort_rows, list):
+        issues.append("batch_cohort_coverage_invalid")
+        cohort_rows = []
+    actual_by_identity = {
+        identity(row): row for row in cohort_rows if identity(row) is not None
+    }
+    if (
+        len(actual_by_identity) != len(cohort_rows)
+        or set(actual_by_identity) != set(expected_by_identity)
+    ):
+        issues.append("batch_cohort_coverage_mismatch")
+    for cohort_id, expected in expected_by_identity.items():
+        actual = actual_by_identity.get(cohort_id)
+        if not isinstance(actual, dict):
+            continue
+        if has_unknown_session_value(actual):
+            issues.append("batch_unknown_session_coverage")
+            continue
+        if any(actual.get(field) != expected.get(field) for field in required_fields):
+            issues.append("batch_cohort_reconciliation_mismatch")
+            continue
+        is_dual_aftermarket = (
+            actual.get("effective_venue") == "INTEGRATED"
+            and actual.get("session_bucket") == "KRX_NXT_AFTERMARKET"
+        )
+        if is_dual_aftermarket and (
+            actual.get("authority_state")
+            not in {"OBSERVE_ONLY", "BLOCKED_MISSING_APPROVAL"}
+            or actual.get("status")
+            not in {"completed_observe_only", "blocked_missing_approval"}
+            or any(
+                actual.get(field) is not False
+                for field in (
+                    "runtime_effect",
+                    "allowed_runtime_apply",
+                    "actual_order_submitted",
+                )
+            )
+            or actual.get("candidate_contract_sha256") is not None
+        ):
+            issues.append("dual_aftermarket_authority_or_candidate_invalid")
+
+    contract_hash = hashlib.sha256(
+        json.dumps(
+            contract,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+    def contains_contract_hash(value: Any) -> bool:
+        if isinstance(value, dict):
+            return any(
+                str(key).endswith("cohort_contract_sha256")
+                and nested == contract_hash
+                or contains_contract_hash(nested)
+                for key, nested in value.items()
+            )
+        if isinstance(value, list):
+            return any(contains_contract_hash(item) for item in value)
+        return False
+
+    if not contains_contract_hash(batch):
+        issues.append("batch_cohort_contract_hash_missing_or_invalid")
+    if not contains_contract_hash(consumer):
+        issues.append("consumer_cohort_contract_hash_missing_or_invalid")
+
+    request_paths = consumer.get("request_paths")
+    entry_base = (
+        request_paths.get("entry_base") if isinstance(request_paths, dict) else None
+    )
+    consumer_cohorts = entry_base.get("cohorts") if isinstance(entry_base, dict) else None
+    if not isinstance(consumer_cohorts, list):
+        issues.append("consumer_cohort_reconciliation_missing")
+        consumer_cohorts = []
+    consumer_by_identity = {
+        identity(row): row for row in consumer_cohorts if identity(row) is not None
+    }
+    if (
+        len(consumer_by_identity) != len(consumer_cohorts)
+        or set(consumer_by_identity) != set(expected_by_identity)
+    ):
+        issues.append("consumer_cohort_coverage_mismatch")
+    for cohort_id, expected in expected_by_identity.items():
+        observed = consumer_by_identity.get(cohort_id)
+        if not isinstance(observed, dict):
+            continue
+        if has_unknown_session_value(observed):
+            issues.append("consumer_unknown_session_coverage")
+            continue
+        if any(observed.get(field) != expected.get(field) for field in required_fields):
+            issues.append("consumer_cohort_reconciliation_mismatch")
+            continue
+        if (
+            observed.get("effective_venue") == "INTEGRATED"
+            and observed.get("session_bucket") == "KRX_NXT_AFTERMARKET"
+            and (
+                observed.get("path_status")
+                != "intentionally_blocked_with_owner_and_acceptance_test"
+                or observed.get("terminality") != "terminal_source_observation"
+            )
+        ):
+            issues.append("consumer_dual_aftermarket_nonterminal")
+
+    return {
+        "status": "fail" if issues else "pass",
+        "issues": sorted(set(issues)),
+        "contract_version": contract_version,
+        "expected_cohort_count": len(expected_by_identity),
+        "batch_cohort_count": len(actual_by_identity),
+        "consumer_cohort_count": len(consumer_by_identity),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
@@ -2642,6 +2852,12 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "runtime"
         / "machine_entry_timing_policy"
         / f"machine_entry_timing_policy_{next_day}.json",
+        "ai_entry_setup_paired_replay_batch": REPORT_DIR
+        / "ai_entry_setup_paired_replay_batch"
+        / f"ai_entry_setup_paired_replay_batch_{target_date}.json",
+        "main_ai_prompt_consumer": REPORT_DIR
+        / "main_ai_prompt_consumer"
+        / f"main_ai_prompt_consumer_{target_date}.json",
         "samsung_machine_entry_policy_candidate": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -6300,6 +6516,20 @@ def build_threshold_cycle_postclose_verification(
             f"machine_entry_timing_{issue}"
             for issue in machine_entry_timing_postclose["issues"]
         )
+    entry_setup_replay_batch = _load_json(
+        paths["ai_entry_setup_paired_replay_batch"]
+    )
+    main_ai_prompt_consumer = _load_json(paths["main_ai_prompt_consumer"])
+    entry_setup_replay_session_contract = _entry_setup_replay_session_contract_status(
+        entry_setup_replay_batch,
+        main_ai_prompt_consumer,
+        target_date=target_date,
+    )
+    if entry_setup_replay_session_contract["status"] == "fail":
+        log_issues.extend(
+            f"entry_setup_replay_{issue}"
+            for issue in entry_setup_replay_session_contract["issues"]
+        )
     threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
     threshold_cycle_calibration = _load_json(paths["threshold_cycle_calibration"])
     threshold_cycle_ai_review = _load_json(
@@ -8072,6 +8302,7 @@ def build_threshold_cycle_postclose_verification(
         "low_price_two_leg_postclose": low_price_two_leg_postclose,
         "samsung_machine_entry_postclose": samsung_machine_entry_postclose,
         "machine_entry_timing_postclose": machine_entry_timing_postclose,
+        "entry_setup_replay_session_contract": entry_setup_replay_session_contract,
         "smoothing_source_only_path_journal": smoothing_source_only_path_journal,
         "limit_down_watch": limit_down_watch_status,
         "microstructure_diagnostic_handoff": microstructure_handoff,

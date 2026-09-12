@@ -824,6 +824,54 @@ def test_session_context_separates_nxt_krx_and_transition_windows():
     )
 
 
+def test_session_context_separates_effective_solo_and_dual_aftermarket_windows():
+    assert advisory.session_context(
+        datetime(2026, 9, 14, 15, 35, tzinfo=KST)
+    ).name == "SESSION_TRANSITION"
+    assert advisory.session_context(
+        datetime(2026, 9, 14, 15, 40, tzinfo=KST)
+    ).name == "SESSION_TRANSITION"
+    context = advisory.session_context(datetime(2026, 9, 14, 16, 0, tzinfo=KST))
+    assert context.name == "KRX_NXT_AFTERMARKET"
+    assert context.market_venue == "UNKNOWN"
+    assert context.request_code == "005930_AL"
+    assert context.market_data_route == "krx_nxt_integrated"
+    assert context.actual_execution_venue == "UNKNOWN"
+    assert advisory.session_context(
+        datetime(2026, 9, 14, 20, 0, tzinfo=KST)
+    ).name == "CLOSED"
+
+
+def test_dual_aftermarket_advisory_is_observe_only_without_nxt_policy_inheritance():
+    observed_at = datetime(2026, 9, 14, 16, 10, 5, tzinfo=KST)
+    inputs = _ready_input()
+    inputs["observed_at"] = observed_at
+    inputs["context"] = advisory.session_context(observed_at)
+    inputs["bars"] = _bars(
+        datetime(2026, 9, 14, 16, 0, tzinfo=KST),
+        [
+            100_000,
+            99_900,
+            100_100,
+            100_000,
+            100_200,
+            100_100,
+            100_300,
+            100_200,
+            100_400,
+            100_400,
+        ],
+    )
+
+    result = advisory.evaluate_advisory(**inputs)
+
+    assert result["state"] == "DATA_WAIT"
+    assert "dual_aftermarket_observe_only" in result["unmet_conditions"]
+    assert result["provenance"]["market_data_route"] == "krx_nxt_integrated"
+    assert result["provenance"]["actual_execution_venue"] == "UNKNOWN"
+    assert result["derived"]["dual_aftermarket_context"]["runtime_effect"] is False
+
+
 def test_completed_bars_exclude_forming_and_cross_session_rows():
     rows = [
         {

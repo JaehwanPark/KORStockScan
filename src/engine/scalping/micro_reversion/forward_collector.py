@@ -26,7 +26,12 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .contracts import PriceObservation, normalize_symbol, registration_item_identity
+from .contracts import (
+    PriceObservation,
+    normalize_symbol,
+    registration_item_identity,
+    registration_item_market_data_identity,
+)
 from .multi_horizon import MultiHorizonShockDetector
 from .observation_adapter import (
     AdapterResult,
@@ -874,11 +879,30 @@ class ForwardObservationCollector:
             )
             venue = _explicit_item_venue(item)
             item_symbol, item_venue = registration_item_identity(item)
+            (
+                market_symbol,
+                market_data_route,
+                actual_execution_venue,
+            ) = registration_item_market_data_identity(item)
+            declared_route = str(
+                (snapshot.get("last_realtime_type_market_route") or {}).get("0B")
+                or ""
+            ).strip().lower()
+            declared_actual_venue = str(
+                (snapshot.get("last_realtime_type_actual_execution_venue") or {}).get(
+                    "0B"
+                )
+                or "UNKNOWN"
+            ).strip().upper()
             if (
                 not venue
                 or item_venue != venue
                 or item_symbol != normalize_symbol(symbol)
+                or market_symbol != item_symbol
                 or declared_venue not in {"", venue}
+                or declared_route not in {"", market_data_route}
+                or actual_execution_venue != "UNKNOWN"
+                or declared_actual_venue != "UNKNOWN"
             ):
                 self._increment("_venue_blocks")
                 return ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
@@ -1028,11 +1052,30 @@ class ForwardObservationCollector:
             )
             venue = _explicit_item_venue(item)
             item_symbol, item_venue = registration_item_identity(item)
+            (
+                market_symbol,
+                market_data_route,
+                actual_execution_venue,
+            ) = registration_item_market_data_identity(item)
+            declared_route = str(
+                (snapshot.get("last_realtime_type_market_route") or {}).get("0D")
+                or ""
+            ).strip().lower()
+            declared_actual_venue = str(
+                (snapshot.get("last_realtime_type_actual_execution_venue") or {}).get(
+                    "0D"
+                )
+                or "UNKNOWN"
+            ).strip().upper()
             if (
                 not venue
                 or item_venue != venue
                 or item_symbol != normalize_symbol(symbol)
+                or market_symbol != item_symbol
                 or declared_venue not in {"", venue}
+                or declared_route not in {"", market_data_route}
+                or actual_execution_venue != "UNKNOWN"
+                or declared_actual_venue != "UNKNOWN"
             ):
                 self._increment("_venue_blocks")
                 return ProducerCanaryResult.MISSING_OR_CONFLICTING_VENUE
@@ -2087,11 +2130,13 @@ def build_forward_collector_from_env(
 
 
 def _explicit_item_venue(item: str) -> str:
+    """Return the legacy storage partition, never an execution venue claim."""
+
     raw = str(item or "").strip().upper()
     if raw.endswith("_AL"):
-        # Kiwoom documents _AL as the explicit SOR subscription route.  It
-        # does not identify the underlying KRX/NXT execution venue, so keep it
-        # in a separate SOR cohort instead of guessing either exchange.
+        # Existing journals use SOR as the integrated-route compatibility
+        # partition. The canonical route/actual-venue identity is validated
+        # separately by registration_item_market_data_identity().
         return "SOR"
     if raw.endswith("_NX"):
         return "NXT"

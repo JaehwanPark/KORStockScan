@@ -82,6 +82,7 @@ from src.engine.sniper_time import (
     TIME_SCALPING_NEW_BUY_CUTOFF,
 )
 from src.engine.sniper_post_sell_feedback import record_post_sell_candidate
+from src.trading.market.session_contract import resolve_market_session
 from src.trading.config.symbol_owner_policy import (
     SymbolOwnerPolicyError,
     resolve_symbol_owner_policy,
@@ -392,36 +393,95 @@ def _safe_bool(value: Any) -> bool:
     return bool(value)
 
 
-def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, str]:
-    effective_venue = (
-        str(
-            stock.get("entry_execution_cohort")
-            or stock.get("rising_missed_effective_venue")
-            or stock.get("effective_venue")
-            or stock.get(
-                "rising_missed_tp1_submit_context_rising_missed_effective_venue"
+_MARKET_DATA_ROUTES = {"krx_only", "nxt_only", "krx_nxt_integrated"}
+
+
+def _receipt_market_axes(
+    stock: dict[str, Any],
+    *,
+    observed_at: datetime | None = None,
+    requested_route_keys: tuple[str, ...],
+) -> dict[str, Any]:
+    """Return four independent market axes without inferring a fill venue."""
+
+    receipt_at = observed_at
+    if receipt_at is None:
+        try:
+            receipt_at = datetime.fromisoformat(
+                str(stock.get("broker_execution_received_at") or "")
             )
-            or ""
-        )
-        .strip()
-        .upper()
-    )
-    market_session_bucket = str(
-        stock.get("rising_missed_market_session_bucket")
-        or stock.get("market_session_bucket")
-        or stock.get(
-            "rising_missed_tp1_submit_context_rising_missed_market_session_bucket"
-        )
-        or ""
+            if receipt_at.tzinfo is None:
+                raise ValueError("broker_execution_timestamp_timezone_missing")
+            receipt_at = receipt_at.astimezone(_KST)
+        except (TypeError, ValueError):
+            receipt_at = None
+
+    context = resolve_market_session(receipt_at) if receipt_at is not None else None
+    session_regime = str(stock.get("market_session_regime") or "").strip()
+    session_contract_version = str(
+        stock.get("session_contract_version") or ""
     ).strip()
-    fields: dict[str, str] = {}
-    if effective_venue in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}:
-        fields["effective_venue"] = effective_venue
-        fields["rising_missed_effective_venue"] = effective_venue
-    if market_session_bucket:
-        fields["market_session_bucket"] = market_session_bucket
-        fields["rising_missed_market_session_bucket"] = market_session_bucket
-    broker_route = str(stock.get("entry_execution_broker_route") or "").strip().upper()
+    if context is not None:
+        session_regime = context.session_regime
+        session_contract_version = context.contract_version
+
+    requested_route = ""
+    for key in requested_route_keys:
+        candidate = str(stock.get(key) or "").strip().upper()
+        if candidate in {"KRX", "NXT", "SOR"}:
+            requested_route = candidate
+            break
+
+    market_data_route = ""
+    for key in (
+        "market_data_route",
+        "post_sell_expected_market_route",
+        "rising_missed_ws_0d_route",
+    ):
+        candidate = str(stock.get(key) or "").strip().lower()
+        if candidate in _MARKET_DATA_ROUTES:
+            market_data_route = candidate
+            break
+    if not market_data_route and context is not None:
+        candidate = str(context.preferred_market_data_route or "").strip().lower()
+        if candidate in _MARKET_DATA_ROUTES:
+            market_data_route = candidate
+
+    actual_venue = str(
+        stock.get("broker_actual_execution_venue") or ""
+    ).strip().upper()
+    if actual_venue not in {"KRX", "NXT"}:
+        actual_venue = "UNKNOWN"
+    actual_venue_source = (
+        str(stock.get("broker_actual_execution_venue_source") or "").strip()
+        if actual_venue in {"KRX", "NXT"}
+        else "official_exchange_fields_ambiguous_or_missing"
+    )
+    if not actual_venue_source:
+        actual_venue_source = "official_exchange_fields_ambiguous_or_missing"
+
+    return {
+        "session_contract_version": session_contract_version or "unknown",
+        "market_session_regime": session_regime or "unknown",
+        "market_data_route": market_data_route or "unknown",
+        "broker_route_requested": requested_route or "UNKNOWN",
+        "actual_execution_venue": actual_venue,
+        "actual_execution_venue_source": actual_venue_source,
+    }
+
+
+def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, Any]:
+    fields = _receipt_market_axes(
+        stock,
+        requested_route_keys=("entry_execution_broker_route", "broker_route"),
+    )
+    effective_venue = fields["actual_execution_venue"]
+    market_session_bucket = fields["market_session_regime"]
+    broker_route = fields["broker_route_requested"]
+    fields["effective_venue"] = effective_venue
+    fields["rising_missed_effective_venue"] = effective_venue
+    fields["market_session_bucket"] = market_session_bucket
+    fields["rising_missed_market_session_bucket"] = market_session_bucket
     if broker_route in {"KRX", "NXT", "SOR"}:
         fields["broker_route"] = broker_route
         fields["entry_execution_broker_route"] = broker_route
@@ -435,20 +495,7 @@ def _probe_venue_provenance_fields(stock: dict[str, Any]) -> dict[str, str]:
 def _sell_execution_session_bucket(received_at: datetime) -> str:
     """Classify an exit from its exact packet-ingress receive timestamp."""
 
-    received_t = received_at.astimezone(_KST).time().replace(tzinfo=None)
-    if datetime_time(hour=8) <= received_t < datetime_time(hour=8, minute=50):
-        return "krx_like_premarket"
-    if datetime_time(hour=9) <= received_t < TIME_15_30:
-        return "krx_regular"
-    if datetime_time(hour=15, minute=45) <= received_t < datetime_time(hour=16):
-        return "nxt_aftermarket_early_sell"
-    if datetime_time(hour=16) <= received_t < datetime_time(hour=16, minute=10):
-        return "nxt_open_observe"
-    if datetime_time(hour=16, minute=10) <= received_t < TIME_SCALPING_NEW_BUY_CUTOFF:
-        return "nxt_entry_window"
-    if TIME_SCALPING_NEW_BUY_CUTOFF <= received_t < TIME_20_00:
-        return "nxt_close_only"
-    return "outside_krx_nxt_window"
+    return resolve_market_session(received_at.astimezone(_KST)).session_regime
 
 
 def _sell_execution_provenance_fields(
@@ -470,32 +517,22 @@ def _sell_execution_provenance_fields(
         except (TypeError, ValueError):
             packet_received_at = None
 
-    actual_venue = (
-        str(target_stock.get("broker_actual_execution_venue") or "").strip().upper()
+    axes = _receipt_market_axes(
+        target_stock,
+        observed_at=packet_received_at,
+        requested_route_keys=(
+            "last_sell_execution_broker_route",
+            "sell_submit_intended_route",
+            "broker_route",
+        ),
     )
-    if actual_venue not in {"KRX", "NXT"}:
-        actual_venue = ""
-    submitted_cohort = (
-        str(
-            target_stock.get("last_sell_execution_cohort")
-            or target_stock.get("sell_submit_intended_effective_venue")
-            or ""
-        )
-        .strip()
-        .upper()
-    )
-    effective_venue = actual_venue or (
-        submitted_cohort
-        if submitted_cohort in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
-        else "UNKNOWN"
-    )
-    if actual_venue:
-        target_stock["last_sell_execution_cohort"] = actual_venue
+    effective_venue = axes["actual_execution_venue"]
+    target_stock["last_sell_execution_cohort"] = effective_venue
 
     session_bucket = ""
     session_source = "missing_packet_ingress_receive_time"
     if packet_received_at is not None:
-        session_bucket = _sell_execution_session_bucket(packet_received_at)
+        session_bucket = axes["market_session_regime"]
         session_source = BROKER_EXECUTION_RECEIVE_TIME_SOURCE
         target_stock["last_sell_execution_session_bucket"] = session_bucket
     else:
@@ -506,9 +543,7 @@ def _sell_execution_provenance_fields(
             session_bucket = preserved_session
             session_source = "successful_sell_submit_response_received_at"
 
-    broker_route = (
-        str(target_stock.get("last_sell_execution_broker_route") or "").strip().upper()
-    )
+    broker_route = axes["broker_route_requested"]
     if broker_route not in {"KRX", "NXT", "SOR"}:
         broker_route = "-"
     route_resolution = (
@@ -518,6 +553,7 @@ def _sell_execution_provenance_fields(
         or "-"
     )
     fields: dict[str, Any] = {
+        **axes,
         "effective_venue": effective_venue,
         "exit_effective_venue": effective_venue,
         "market_session_bucket": session_bucket or "unknown",
@@ -526,6 +562,19 @@ def _sell_execution_provenance_fields(
         "broker_route": broker_route,
         "broker_route_resolution": route_resolution,
     }
+    target_stock.update(axes)
+    target_stock["last_sell_execution_broker_route_requested"] = axes[
+        "broker_route_requested"
+    ]
+    target_stock["last_sell_execution_market_data_route"] = axes[
+        "market_data_route"
+    ]
+    target_stock["last_sell_execution_market_session_regime"] = axes[
+        "market_session_regime"
+    ]
+    target_stock["last_sell_execution_actual_venue"] = axes[
+        "actual_execution_venue"
+    ]
     if packet_received_at is not None:
         fields["exit_execution_received_at"] = packet_received_at.isoformat(
             timespec="microseconds"
@@ -796,6 +845,16 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "last_sell_execution_broker_route_resolution",
     "last_sell_execution_cohort",
     "last_sell_execution_session_bucket",
+    "last_sell_execution_broker_route_requested",
+    "last_sell_execution_market_data_route",
+    "last_sell_execution_market_session_regime",
+    "last_sell_execution_actual_venue",
+    "session_contract_version",
+    "market_session_regime",
+    "market_data_route",
+    "broker_route_requested",
+    "actual_execution_venue",
+    "actual_execution_venue_source",
     "exit_receipt_submission_custody_source_gap",
     "exit_receipt_submission_custody_retry_required",
     "_sell_submit_receipt_proof",

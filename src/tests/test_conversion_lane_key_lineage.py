@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 from pathlib import Path
 
@@ -11,6 +12,69 @@ from src.engine.swing import sim_auto_approval_control_tower as swing_catalog
 def _write(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _dual_replay_payload(target_date="2026-09-12"):
+    dual = {
+        "cohort_key": "INTEGRATED/KRX_NXT_AFTERMARKET",
+        "cohort_key_version": "v2",
+        "effective_venue": "INTEGRATED",
+        "session_bucket": "KRX_NXT_AFTERMARKET",
+        "market_data_route": "SOR",
+        "authority_state": "OBSERVE_ONLY",
+    }
+    contract = {
+        "schema": "entry_replay_cohort_contract_v1",
+        "contract_version": "v2",
+        "expected_cohorts_by_contract_version": {"v2": [dual]},
+    }
+    digest = hashlib.sha256(
+        json.dumps(contract, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        .encode("utf-8")
+    ).hexdigest()
+    batch = {
+        "target_date": target_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "cohort_contract": contract,
+        "source_cohort_contract_sha256": digest,
+        "cohorts": [{
+            **dual, "status": "completed_observe_only", "runtime_effect": False,
+            "allowed_runtime_apply": False, "actual_order_submitted": False,
+            "candidate_contract_sha256": None,
+        }],
+    }
+    consumer = {
+        "target_date": target_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_cohort_contract_sha256": digest,
+        "request_paths": {"entry_base": {"cohorts": [{
+            **dual,
+            "path_status": "intentionally_blocked_with_owner_and_acceptance_test",
+            "terminality": "terminal_source_observation",
+        }]}},
+    }
+    return batch, consumer
+
+
+def test_dual_replay_lineage_is_hash_bound_and_observe_only():
+    batch, consumer = _dual_replay_payload()
+    status = ledger.entry_replay_observe_only_status(
+        batch, consumer, target_date="2026-09-12"
+    )
+
+    assert status["status"] == "pass"
+    assert len(status["cohorts"]) == 1
+    candidate = lane._dual_observe_only_conversion_candidate(status["cohorts"][0])
+    assert candidate["conversion_state"] == "terminal_source_only_exclusion"
+    assert candidate["excluded_from_real_queue_reason"] == (
+        "dual_aftermarket_observe_only_no_live_approval"
+    )
 
 
 def _patch_dirs(monkeypatch, tmp_path):

@@ -1,11 +1,12 @@
-# src/database/db_manager.py
-import pandas as pd
+import json
 import math
 import os
+
+import pandas as pd
 import src.utils.constants as const
-from datetime import datetime
+from datetime import date, datetime
 from datetime import timedelta
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import sessionmaker
 from src.utils.constants import POSTGRES_URL
 from sqlalchemy import func
@@ -24,6 +25,7 @@ from src.database.models import (
     HoldingAddHistory,
     TradePerformanceFact,
     StrategyPositionPerformanceDaily,
+    SecurityMarketEligibilityDaily,
 )
 from src.engine.sniper_position_tags import (
     normalize_position_tag,
@@ -561,6 +563,144 @@ class DBManager:
         except Exception as e:
             log_error(f"🚨 get_latest_is_nxt_map 실패: {e}")
             return {code: False for code in normalized}
+
+    @staticmethod
+    def _decode_eligibility_json(value) -> list[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        if isinstance(value, tuple):
+            return [str(item) for item in value]
+        if isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except (TypeError, ValueError):
+                return []
+            if isinstance(decoded, list):
+                return [str(item) for item in decoded]
+        return []
+
+    def get_security_market_eligibility(
+        self,
+        code: str,
+        trade_date: date | datetime | str | None = None,
+    ) -> dict | None:
+        """Read exact-date eligibility, falling back to the legacy NXT axis.
+
+        The compatibility result never infers KRX aftermarket eligibility from
+        ``daily_stock_quotes.is_nxt``.  It remains ``PARTIAL`` and explicitly
+        blocked for that unknown axis.
+        """
+        norm_code = str(code or "").replace("_AL", "").replace("_NX", "").zfill(6)
+        if not norm_code or norm_code == "000000":
+            return None
+
+        if isinstance(trade_date, datetime):
+            requested_date = trade_date.date()
+        elif isinstance(trade_date, date):
+            requested_date = trade_date
+        elif trade_date is None:
+            requested_date = None
+        else:
+            try:
+                requested_date = date.fromisoformat(str(trade_date))
+            except ValueError:
+                return None
+
+        date_filter = " AND trade_date = :trade_date" if requested_date else ""
+        eligibility_query = text(f"""
+            SELECT trade_date, stock_code, krx_regular_eligible, nxt_eligible,
+                   krx_aftermarket_eligible, eligible_venues_json, audit_info,
+                   stock_state, order_warning, market_code, source_api_id,
+                   source_revision, observed_at_kst, payload_sha256,
+                   quality_state, blocked_reasons_json
+            FROM {SecurityMarketEligibilityDaily.__tablename__}
+            WHERE stock_code = :code{date_filter}
+            ORDER BY trade_date DESC
+            LIMIT 1
+        """)
+        params = {"code": norm_code}
+        if requested_date:
+            params["trade_date"] = requested_date
+
+        try:
+            eligibility_table_exists = inspect(self.engine).has_table(
+                SecurityMarketEligibilityDaily.__tablename__
+            )
+        except Exception as exc:
+            log_error(f"🚨 get_security_market_eligibility 실패 [{norm_code}]: {exc}")
+            return None
+
+        row = None
+        if eligibility_table_exists:
+            try:
+                with self.engine.connect() as conn:
+                    row = conn.execute(eligibility_query, params).mappings().first()
+            except Exception as exc:
+                log_error(
+                    f"🚨 get_security_market_eligibility ledger 실패 "
+                    f"[{norm_code}]: {exc}"
+                )
+                return None
+
+        if row is not None:
+            result = dict(row)
+            for field in (
+                "krx_regular_eligible",
+                "nxt_eligible",
+                "krx_aftermarket_eligible",
+            ):
+                value = result.get(field)
+                result[field] = None if value is None else bool(value)
+            result["eligible_venues_json"] = self._decode_eligibility_json(
+                result.get("eligible_venues_json")
+            )
+            result["blocked_reasons_json"] = self._decode_eligibility_json(
+                result.get("blocked_reasons_json")
+            )
+            return result
+
+        quote_date_filter = " AND quote_date = :trade_date" if requested_date else ""
+        legacy_query = text(f"""
+            SELECT quote_date, is_nxt
+            FROM daily_stock_quotes
+            WHERE stock_code = :code{quote_date_filter}
+            ORDER BY quote_date DESC
+            LIMIT 1
+        """)
+        try:
+            with self.engine.connect() as conn:
+                legacy_row = conn.execute(legacy_query, params).first()
+        except Exception as exc:
+            log_error(f"🚨 get_security_market_eligibility 실패 [{norm_code}]: {exc}")
+            return None
+        if legacy_row is None:
+            return None
+
+        legacy_nxt = None if legacy_row[1] is None else bool(legacy_row[1])
+        eligible_venues = ["KRX"]
+        if legacy_nxt is True:
+            eligible_venues.append("NXT")
+        return {
+            "trade_date": legacy_row[0],
+            "stock_code": norm_code,
+            "krx_regular_eligible": True,
+            "nxt_eligible": legacy_nxt,
+            "krx_aftermarket_eligible": None,
+            "eligible_venues_json": eligible_venues,
+            "audit_info": None,
+            "stock_state": None,
+            "order_warning": None,
+            "market_code": None,
+            "source_api_id": "legacy_daily_stock_quotes.is_nxt",
+            "source_revision": None,
+            "observed_at_kst": None,
+            "payload_sha256": None,
+            "quality_state": "PARTIAL",
+            "blocked_reasons_json": [
+                "legacy_daily_stock_quote_compatibility",
+                "krx_aftermarket_eligibility_unknown",
+            ],
+        }
 
     # --------------------------------------------------------
     # 2. 매매 이력 및 종목 관리

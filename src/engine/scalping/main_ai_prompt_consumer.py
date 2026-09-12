@@ -138,6 +138,21 @@ def _cohort_key(value: Mapping[str, Any]) -> tuple[str, str]:
     )
 
 
+def _entry_cohort_contract_key(value: Mapping[str, Any]) -> tuple[str, str, str]:
+    venue, session = _cohort_key(value)
+    return venue, session, str(value.get("market_data_route") or "").upper()
+
+
+def _cohort_contract_hash(contract: Any) -> str:
+    if not isinstance(contract, Mapping):
+        return ""
+    declared = str(contract.get("contract_content_sha256") or "")
+    body = {
+        key: value for key, value in contract.items() if key != "contract_content_sha256"
+    }
+    return declared if declared and optimizer._canonical_sha256(body) == declared else ""
+
+
 def _blocked(
     *, reason: str, owner: str, acceptance_test: str, **extra: Any
 ) -> dict[str, Any]:
@@ -176,12 +191,27 @@ def _entry_base_paths(
     optimizer_sha = str(optimizer_report.get("artifact_content_sha256") or "")
     batch_source = batch.get("candidate_prompt_selection_source")
     batch_source = batch_source if isinstance(batch_source, Mapping) else {}
+    optimizer_contract = optimizer_report.get("entry_cohort_contract")
+    batch_contract = batch.get("cohort_contract")
+    optimizer_contract_hash = _cohort_contract_hash(optimizer_contract)
+    batch_contract_hash = _cohort_contract_hash(batch_contract)
+    contract_present = optimizer_contract is not None or batch_contract is not None
+    contract_bound = (
+        not contract_present
+        or (
+            bool(optimizer_contract_hash)
+            and optimizer_contract_hash == batch_contract_hash
+            and batch_source.get("cohort_contract_sha256") == optimizer_contract_hash
+            and optimizer_contract == batch_contract
+        )
+    )
     source_bound = bool(
         batch_source.get("status") == "optimizer_candidate_plan_applied_offline_only"
         and batch_source.get("artifact_content_sha256") == optimizer_sha
+        and contract_bound
     )
     batch_cohorts = {
-        _cohort_key(row): row
+        _entry_cohort_contract_key(row): row
         for row in batch.get("cohorts") or []
         if isinstance(row, Mapping)
     }
@@ -197,7 +227,7 @@ def _entry_base_paths(
         for row in entry_optimizer.get("cohort_optimizers") or []
         if isinstance(row, Mapping)
     ]
-    optimizer_keys = {_cohort_key(row) for row in cohort_census}
+    optimizer_keys = {_entry_cohort_contract_key(row) for row in cohort_census}
     for key, batch_cohort in batch_cohorts.items():
         if key in optimizer_keys:
             continue
@@ -206,13 +236,16 @@ def _entry_base_paths(
         # from the prepared optimizer pool must not erase terminal observations.
         terminal_no_source = bool(
             batch_cohort.get("status") == "hold_no_exact_entry_control"
-            and key in entry_batch.DEFAULT_COHORTS
+            and key[:2] in entry_batch.DEFAULT_COHORTS
             and version in optimizer.ENTRY_CANDIDATE_ORDER
         )
         cohort_census.append(
             {
                 "effective_venue": key[0],
                 "session_bucket": key[1],
+                "market_data_route": key[2] or None,
+                "cohort_key_version": batch_cohort.get("cohort_key_version"),
+                "authority_state": batch_cohort.get("authority_state"),
                 "selected_challenger": {
                     "prompt_version": version if terminal_no_source else ""
                 },
@@ -220,18 +253,21 @@ def _entry_base_paths(
             }
         )
     for cohort in cohort_census:
-        venue, session = _cohort_key(cohort)
+        venue, session, route = _entry_cohort_contract_key(cohort)
         version, prompt_sha = _desired_prompt_identity(stage="entry", cohort=cohort)
         row: dict[str, Any] = {
             "stage": "entry",
             "effective_venue": venue,
             "session_bucket": session,
+            "market_data_route": route or None,
+            "cohort_key_version": str(cohort.get("cohort_key_version") or "v1"),
+            "authority_state": str(cohort.get("authority_state") or "LEGACY"),
             "selected_prompt_version": version,
             "selected_prompt_sha256": prompt_sha or None,
             "batch_path": str(batch_path),
             "cohort_census_source": cohort.get("cohort_census_source", "optimizer"),
         }
-        batch_cohort = batch_cohorts.get((venue, session))
+        batch_cohort = batch_cohorts.get((venue, session, route))
         if (
             batch.get("schema") != entry_batch.BATCH_SCHEMA
             or batch.get("target_date") != target_date
@@ -249,14 +285,55 @@ def _entry_base_paths(
         if not source_bound:
             row.update(
                 _blocked(
-                    reason="entry_batch_optimizer_hash_binding_missing",
+                    reason=(
+                        "entry_batch_cohort_contract_hash_mismatch"
+                        if contract_present and not contract_bound
+                        else "entry_batch_optimizer_hash_binding_missing"
+                    ),
                     owner="AIEntrySetupPairedReplayBatch",
                     acceptance_test=(
                         "batch candidate selection must bind the exact optimizer "
-                        "artifact_content_sha256"
+                        "artifact_content_sha256 and cohort contract hash"
                     ),
                 )
             )
+            paths.append(row)
+            continue
+        if (
+            row["cohort_key_version"] == optimizer.ENTRY_COHORT_CONTRACT_V2
+            and session == optimizer.ENTRY_DUAL_AFTERMARKET_SESSION
+        ):
+            if (
+                isinstance(batch_cohort, Mapping)
+                and batch_cohort.get("status") == "completed_observe_only"
+                and batch_cohort.get("effective_venue")
+                == optimizer.ENTRY_DUAL_AFTERMARKET_VENUE
+                and batch_cohort.get("market_data_route") == route
+                and batch_cohort.get("authority_state") == "OBSERVE_ONLY"
+                and route
+            ):
+                row.update(
+                    _blocked(
+                        reason="dual_aftermarket_observe_only",
+                        owner="AIEntrySetupPairedReplayBatch",
+                        acceptance_test=(
+                            "retain an exact route-isolated source observation; "
+                            "do not run provider replay or create a live candidate"
+                        ),
+                        terminality="terminal_source_observation",
+                    )
+                )
+            else:
+                row.update(
+                    _blocked(
+                        reason="entry_batch_dual_observe_only_contract_mismatch",
+                        owner="AIEntrySetupPairedReplayBatch",
+                        acceptance_test=(
+                            "batch must preserve the optimizer's exact v2 route "
+                            "as an observe-only terminal cohort"
+                        ),
+                    )
+                )
             paths.append(row)
             continue
         declared_version = str(declared_plan.get(f"{venue}/{session}") or "")

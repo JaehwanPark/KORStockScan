@@ -98,6 +98,46 @@ def test_current_holding_nxt_phase_overrides_legacy_krx_entry_venue():
     )
 
 
+def test_dual_aftermarket_scope_keeps_broker_actual_venue_separate():
+    payload = _event(
+        "2026-09-14",
+        "19:42:00",
+        "sell_order_sent",
+        fields={
+            "decision_market_scope": "KRX_NXT_INTEGRATED",
+            "market_data_route": "krx_nxt_integrated",
+            "market_session_regime": "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+            "actual_execution_venue": "KRX",
+        },
+    )
+    event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
+
+    assert event is not None
+    assert sentinel._explicit_event_scope(event) == (
+        "KRX_NXT_INTEGRATED",
+        "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+        "pass",
+    )
+    assert sentinel._actual_execution_venue(event) == "KRX"
+
+
+def test_dual_aftermarket_missing_actual_venue_stays_unknown():
+    payload = _event(
+        "2026-09-14",
+        "19:46:00",
+        "sell_order_sent",
+        fields={
+            "decision_market_scope": "KRX_NXT_INTEGRATED",
+            "market_session_regime": "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
+            "actual_execution_venue": "SOR",
+        },
+    )
+    event = sentinel._event_from_cache_row(sentinel._payload_to_cache_row(payload))
+
+    assert event is not None
+    assert sentinel._actual_execution_venue(event) == "UNKNOWN"
+
+
 def test_premarket_venue_rejects_regular_krx_session():
     payload = _event(
         "2026-05-06",

@@ -1948,14 +1948,27 @@ def get_nxt_flag_map_ka10099(
 
 
 def get_stock_eligibility_map_ka10099(
-    token, target_codes, mrkt_tps=("0", "10")
+    token,
+    target_codes,
+    mrkt_tps=("0", "10"),
+    *,
+    trade_date=None,
+    observed_at_kst=None,
 ) -> tuple[dict[str, dict], dict]:
-    """Return official management/ventilation/warning eligibility for target codes.
+    """Return date-bound raw ``ka10099`` eligibility snapshots.
 
     Missing codes and undocumented values are left ineligible so an observation
     source cannot silently bypass the same product-quality exclusions used by
     ``ka10017(stk_cnd=10)``.
     """
+
+    source_revision = "234560d213acd8871ae344b5481aecd2f30287fa"
+    observed_at = observed_at_kst or datetime.now(_KST)
+    if isinstance(observed_at, datetime) and observed_at.tzinfo is not None:
+        observed_at = observed_at.astimezone(_KST).isoformat(timespec="seconds")
+    else:
+        observed_at = str(observed_at or "").strip()
+    source_trade_date = str(trade_date or datetime.now(_KST).date())
 
     requested_codes = {
         normalize_stock_code(code) for code in (target_codes or []) if code
@@ -1967,22 +1980,65 @@ def get_stock_eligibility_map_ka10099(
         return {}, {
             "api_id": "ka10099",
             "status": "pass",
+            "complete": True,
             "requested_code_count": 0,
             "received_code_count": 0,
-            "official_upstream_commit": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+            "official_upstream_commit": source_revision,
+            "eligibility_source_revision": source_revision,
         }
 
     url = get_api_url("/api/dostk/stkinfo")
     result: dict[str, dict] = {}
     requested_markets = [str(value) for value in (mrkt_tps or ("0", "10"))]
     page_count = 0
+    market_source_meta: list[dict] = []
+    snapshot_complete = True
     for mrkt_tp in requested_markets:
-        responses = fetch_kiwoom_api_continuous(
+        fetched = fetch_kiwoom_api_continuous(
             url=url,
             token=token,
             api_id="ka10099",
             payload={"mrkt_tp": mrkt_tp},
             use_continuous=True,
+            return_meta=True,
+        )
+        if isinstance(fetched, tuple) and len(fetched) == 2:
+            responses, source_meta = fetched
+        else:
+            # Compatibility for existing injected/offline fakes.
+            responses, source_meta = fetched, {}
+        responses = responses if isinstance(responses, list) else []
+        source_meta = dict(source_meta or {})
+        response_codes = [
+            str(response.get("return_code", response.get("rt_cd", "0"))).strip()
+            for response in responses
+            if isinstance(response, dict)
+        ]
+        market_complete = bool(
+            responses
+            and all(code == "0" for code in response_codes)
+            and not source_meta.get("continuous_next_key_missing")
+            and not source_meta.get("continuous_page_limit_reached")
+        )
+        if source_meta and source_meta.get("last_http_status_code") != 200:
+            market_complete = False
+        snapshot_complete = snapshot_complete and market_complete
+        market_source_meta.append(
+            {
+                "market": mrkt_tp,
+                "complete": market_complete,
+                "page_count": len(responses),
+                "continuous_next_key_missing": bool(
+                    source_meta.get("continuous_next_key_missing")
+                ),
+                "continuous_page_limit_reached": bool(
+                    source_meta.get("continuous_page_limit_reached")
+                ),
+                "request_attempt_count": int(
+                    source_meta.get("request_attempt_count") or 0
+                ),
+                "last_http_status_code": source_meta.get("last_http_status_code"),
+            }
         )
         page_count += len(responses or [])
         for response in responses or []:
@@ -1995,6 +2051,11 @@ def get_stock_eligibility_map_ka10099(
                 audit_info = str(item.get("auditInfo") or "").strip()
                 stock_state = str(item.get("state") or "").strip()
                 order_warning = str(item.get("orderWarning") or "").strip()
+                market_code = str(item.get("marketCode") or "").strip()
+                nxt_enable = str(item.get("nxtEnable") or "").strip().upper()
+                nxt_eligible = (
+                    True if nxt_enable == "Y" else False if nxt_enable == "N" else None
+                )
                 blocked_reasons = []
                 if "환기" in audit_info or "관리" in audit_info:
                     blocked_reasons.append("audit_info_excluded")
@@ -2006,24 +2067,121 @@ def get_stock_eligibility_map_ka10099(
                     blocked_reasons.append("order_warning_missing")
                 elif order_warning != "0":
                     blocked_reasons.append("order_warning_excluded")
-                result[code] = {
-                    "eligible": not blocked_reasons,
+                product_quality_eligible = not blocked_reasons
+                if nxt_eligible is None:
+                    blocked_reasons.append("nxt_enable_unknown")
+                blocked_reasons.append("krx_aftermarket_eligibility_unknown")
+                raw_payload_sha256 = hashlib.sha256(
+                    json.dumps(
+                        item,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        default=str,
+                    ).encode("utf-8")
+                ).hexdigest()
+                snapshot = {
+                    "trade_date": source_trade_date,
+                    "stock_code": code,
+                    "eligible": product_quality_eligible,
+                    "krx_regular_eligible": True,
+                    "nxt_eligible": nxt_eligible,
+                    "krx_aftermarket_eligible": None,
+                    "eligible_venues_json": ["NXT"] if nxt_eligible is True else [],
                     "audit_info": audit_info,
                     "state": stock_state,
+                    "stock_state": stock_state,
                     "order_warning": order_warning,
-                    "market_code": str(item.get("marketCode") or "").strip(),
+                    "market_code": market_code,
+                    "nxtEnable": nxt_enable,
+                    "source_api_id": "ka10099",
+                    "source_revision": source_revision,
+                    "observed_at_kst": observed_at,
+                    "payload_sha256": raw_payload_sha256,
+                    "quality_state": (
+                        "PARTIAL" if nxt_eligible is not None else "UNKNOWN"
+                    ),
                     "blocked_reasons": blocked_reasons,
                 }
+                previous = result.get(code)
+                if previous is not None and any(
+                    previous.get(field) != snapshot.get(field)
+                    for field in (
+                        "nxt_eligible",
+                        "audit_info",
+                        "stock_state",
+                        "order_warning",
+                        "market_code",
+                    )
+                ):
+                    snapshot["quality_state"] = "CONFLICT"
+                    snapshot["eligible_venues_json"] = []
+                    snapshot["blocked_reasons"] = list(
+                        dict.fromkeys(
+                            [
+                                *previous.get("blocked_reasons", []),
+                                *snapshot["blocked_reasons"],
+                                "official_source_conflict",
+                            ]
+                        )
+                    )
+                result[code] = snapshot
+    received_code_count = len(result)
     missing_codes = sorted(requested_codes - set(result))
+    for code in missing_codes:
+        result[code] = {
+            "trade_date": source_trade_date,
+            "stock_code": code,
+            "eligible": False,
+            "krx_regular_eligible": None,
+            "nxt_eligible": None,
+            "krx_aftermarket_eligible": None,
+            "eligible_venues_json": [],
+            "audit_info": "",
+            "state": "",
+            "stock_state": "",
+            "order_warning": "",
+            "market_code": "",
+            "nxtEnable": "",
+            "source_api_id": "ka10099",
+            "source_revision": source_revision,
+            "observed_at_kst": observed_at,
+            "payload_sha256": None,
+            "quality_state": "UNKNOWN",
+            "blocked_reasons": [
+                "official_source_row_missing",
+                "krx_aftermarket_eligibility_unknown",
+            ],
+        }
+    for snapshot in result.values():
+        snapshot["complete"] = snapshot_complete
+        if not snapshot_complete:
+            snapshot["quality_state"] = (
+                "CONFLICT"
+                if snapshot.get("quality_state") == "CONFLICT"
+                else "UNKNOWN"
+            )
+            snapshot["eligible_venues_json"] = []
+            snapshot["blocked_reasons"] = list(
+                dict.fromkeys(
+                    [
+                        *snapshot.get("blocked_reasons", []),
+                        "official_source_snapshot_incomplete",
+                    ]
+                )
+            )
     return result, {
         "api_id": "ka10099",
-        "status": "pass" if not missing_codes else "partial",
+        "status": "pass" if snapshot_complete and not missing_codes else "partial",
+        "complete": snapshot_complete,
         "requested_markets": requested_markets,
         "requested_code_count": len(requested_codes),
-        "received_code_count": len(result),
+        "received_code_count": received_code_count,
         "missing_codes": missing_codes,
         "page_count": page_count,
-        "official_upstream_commit": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
+        "market_source_meta": market_source_meta,
+        "official_upstream_commit": source_revision,
+        "eligibility_source_revision": source_revision,
         "official_upstream_paths": [
             "kiwoom_docs/종목정보.md#종목정보-리스트-ka10099",
             "kiwoom/specs.py",
@@ -2761,6 +2919,33 @@ def get_top_fluctuation_ka10027(
                 "read_rate_control_status": "wrapper_meta_unavailable",
             }
         )
+
+    response_codes = []
+    response_code_missing = False
+    for response in results if isinstance(results, list) else []:
+        if not isinstance(response, dict):
+            response_code_missing = True
+            continue
+        raw_code = response.get("return_code", response.get("rt_cd"))
+        if raw_code in (None, ""):
+            response_code_missing = True
+            continue
+        response_codes.append(str(raw_code).strip())
+    if response_codes and not response_code_missing:
+        response_contract_status = (
+            "verified_success"
+            if all(code == "0" for code in response_codes)
+            else "verified_rejected"
+        )
+    else:
+        response_contract_status = "unverified"
+    source_meta.update(
+        {
+            "response_contract_status": response_contract_status,
+            "response_return_codes": response_codes,
+            "response_page_count": len(results) if isinstance(results, list) else 0,
+        }
+    )
 
     cleaned_list = []
     if results:

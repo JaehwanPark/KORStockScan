@@ -19,7 +19,7 @@ import statistics
 import tempfile
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 from zoneinfo import ZoneInfo
@@ -44,6 +44,7 @@ OFFICIAL_MARKET_DATA_REFERENCE = {
 }
 COHORTS = ("KRX", "NXT")
 CLEAN_TUNING_BASELINE_DATE = date(2026, 6, 5)
+MARKET_SESSION_EFFECTIVE_DATE = date(2026, 9, 14)
 MIN_QUALIFIED_TRADING_DAYS = 46
 DEFAULT_COST_SCENARIOS_PCT = (0.10, 0.20, 0.30, 0.40)
 COVERAGE_MIN_BARS = {
@@ -52,6 +53,21 @@ COVERAGE_MIN_BARS = {
         "NXT_PREMARKET": 30,
         "NXT_REGULAR": 300,
         "NXT_AFTERMARKET": 180,
+    },
+}
+POST_EFFECTIVE_COVERAGE_MIN_BARS = {
+    "KRX": {
+        "KRX_REGULAR": 300,
+        "KRX_NXT_AFTERMARKET": 220,
+        "KRX_NXT_AFTERMARKET_CLOSE_ONLY": 5,
+        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT": 15,
+    },
+    "NXT": {
+        "NXT_PREMARKET": 30,
+        "NXT_REGULAR": 300,
+        "KRX_NXT_AFTERMARKET": 220,
+        "KRX_NXT_AFTERMARKET_CLOSE_ONLY": 5,
+        "KRX_NXT_AFTERMARKET_TERMINAL_EXIT": 15,
     },
 }
 OPPORTUNITY_LABEL_CONTRACT = {
@@ -107,6 +123,11 @@ class Bar:
     close: int
     volume: int
     source: str
+    decision_market_scope: str = ""
+    market_data_route: str = ""
+    market_session_regime: str = ""
+    actual_execution_venue: str = "UNKNOWN"
+    route_source_quality: str = "PASS"
 
     @property
     def trade_date(self) -> date:
@@ -228,6 +249,69 @@ def _sha256_file(path: Path) -> str | None:
     return digest.hexdigest()
 
 
+def _market_axes(
+    *,
+    timestamp: datetime,
+    venue: str,
+    legacy_session: str,
+    row: dict[str, Any],
+) -> dict[str, str] | None:
+    """Normalize session provenance from the row date, preserving legacy dates."""
+
+    route = str(row.get("market_data_route") or "").strip().lower()
+    if route not in {"krx_only", "nxt_only", "krx_nxt_integrated"}:
+        request_code = str(row.get("request_code") or "").strip().upper()
+        if request_code.endswith("_AL"):
+            route = "krx_nxt_integrated"
+        elif request_code.endswith("_NX"):
+            route = "nxt_only"
+        else:
+            route = "krx_only" if venue == "KRX" else "nxt_only"
+    if timestamp.date() < MARKET_SESSION_EFFECTIVE_DATE:
+        return {
+            "session": legacy_session,
+            "decision_market_scope": str(
+                row.get("decision_market_scope") or venue
+            ).upper(),
+            "market_data_route": route,
+            "market_session_regime": str(
+                row.get("market_session_regime") or legacy_session
+            ),
+            "actual_execution_venue": str(
+                row.get("actual_execution_venue") or "UNKNOWN"
+            ).upper(),
+            "route_source_quality": str(
+                row.get("route_source_quality") or "PASS"
+            ).upper(),
+        }
+    clock = timestamp.time()
+    if venue == "NXT" and time(8, 0) <= clock < time(8, 50):
+        session = "NXT_PREMARKET"
+    elif time(9, 0) <= clock < time(15, 30):
+        session = "KRX_REGULAR" if venue == "KRX" else "NXT_REGULAR"
+    elif time(16, 0) <= clock < time(19, 40):
+        session = "KRX_NXT_AFTERMARKET"
+    elif time(19, 40) <= clock < time(19, 45):
+        session = "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+    elif time(19, 45) <= clock < time(20, 0):
+        session = "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
+    else:
+        return None
+    integrated = session.startswith("KRX_NXT_AFTERMARKET")
+    return {
+        "session": session,
+        "decision_market_scope": "KRX_NXT_INTEGRATED" if integrated else venue,
+        "market_data_route": route,
+        "market_session_regime": session,
+        "actual_execution_venue": "UNKNOWN",
+        "route_source_quality": (
+            "PARTIAL"
+            if integrated and route != "krx_nxt_integrated"
+            else "PASS"
+        ),
+    }
+
+
 def _load_backfill_file(path: Path) -> tuple[list[Bar], list[str]]:
     bars: list[Bar] = []
     issues: list[str] = []
@@ -253,16 +337,27 @@ def _load_backfill_file(path: Path) -> tuple[list[Bar], list[str]]:
                 _positive_int(row.get(key)) for key in ("open", "high", "low", "close")
             )
             volume = _nonnegative_int(row.get("volume"))
+            venue = str(row.get("venue") or "").upper()
+            legacy_session = str(row.get("session") or "")
             if timestamp is None or not _valid_ohlcv(
                 open_=open_, high=high, low=low, close=close, volume=volume
             ):
                 issues.append(f"market_row_invalid:{path}:{line_number}")
                 continue
+            axes = _market_axes(
+                timestamp=timestamp,
+                venue=venue,
+                legacy_session=legacy_session,
+                row=row,
+            )
+            if axes is None:
+                issues.append(f"market_session_invalid:{path}:{line_number}")
+                continue
             bars.append(
                 Bar(
                     symbol=str(row.get("symbol") or SAMSUNG_CODE),
-                    venue=str(row.get("venue") or "").upper(),
-                    session=str(row.get("session") or ""),
+                    venue=venue,
+                    session=axes["session"],
                     timestamp=timestamp,
                     open=open_,
                     high=high,
@@ -270,6 +365,11 @@ def _load_backfill_file(path: Path) -> tuple[list[Bar], list[str]]:
                     close=close,
                     volume=volume,
                     source="ka10080_backfill",
+                    decision_market_scope=axes["decision_market_scope"],
+                    market_data_route=axes["market_data_route"],
+                    market_session_regime=axes["market_session_regime"],
+                    actual_execution_venue=axes["actual_execution_venue"],
+                    route_source_quality=axes["route_source_quality"],
                 )
             )
     return bars, issues
@@ -309,11 +409,20 @@ def _load_widget_observation_file(path: Path) -> tuple[list[Bar], list[str]]:
                 open_=open_, high=high, low=low, close=close, volume=volume
             ):
                 continue
+            axes = _market_axes(
+                timestamp=timestamp,
+                venue=venue,
+                legacy_session=session,
+                row=row,
+            )
+            if axes is None:
+                issues.append(f"widget_market_session_invalid:{path}:{line_number}")
+                continue
             bars.append(
                 Bar(
                     symbol=SAMSUNG_CODE,
                     venue=venue,
-                    session=session,
+                    session=axes["session"],
                     timestamp=timestamp,
                     open=open_,
                     high=high,
@@ -321,6 +430,11 @@ def _load_widget_observation_file(path: Path) -> tuple[list[Bar], list[str]]:
                     close=close,
                     volume=volume,
                     source="widget_completed_ka10080",
+                    decision_market_scope=axes["decision_market_scope"],
+                    market_data_route=axes["market_data_route"],
+                    market_session_regime=axes["market_session_regime"],
+                    actual_execution_venue=axes["actual_execution_venue"],
+                    route_source_quality=axes["route_source_quality"],
                 )
             )
     return bars, issues
@@ -403,10 +517,42 @@ def load_market_bars(
     venue_counts = Counter(bar.venue for bar in bars)
     conflict_counts_by_venue = Counter(key[0] for key in conflicts)
     date_counts = Counter(bar.trade_date.isoformat() for bar in bars)
+    dual_routes_by_date: dict[str, set[str]] = defaultdict(set)
+    for bar in bars:
+        if bar.market_session_regime.startswith("KRX_NXT_AFTERMARKET"):
+            dual_routes_by_date[bar.trade_date.isoformat()].add(bar.market_data_route)
+    post_effective_dates = {
+        bar.trade_date.isoformat()
+        for bar in bars
+        if bar.trade_date >= MARKET_SESSION_EFFECTIVE_DATE
+    }
+    dual_route_coverage = {
+        trade_date: {
+            "observed_routes": sorted(routes),
+            "missing_routes": (
+                []
+                if "krx_nxt_integrated" in routes
+                else sorted({"krx_only", "nxt_only"} - routes)
+            ),
+            "status": (
+                "PASS"
+                if "krx_nxt_integrated" in routes
+                or {"krx_only", "nxt_only"}.issubset(routes)
+                else "PARTIAL"
+            ),
+        }
+        for trade_date in sorted(post_effective_dates)
+        for routes in (dual_routes_by_date[trade_date],)
+    }
+    partial_dual_dates = [
+        trade_date
+        for trade_date, item in dual_route_coverage.items()
+        if item["status"] == "PARTIAL"
+    ]
     quality = {
         "status": (
             "PASS"
-            if bars and not conflicts and not issues
+            if bars and not conflicts and not issues and not partial_dual_dates
             else ("PARTIAL" if bars else "FAIL")
         ),
         "bar_count": len(bars),
@@ -420,6 +566,11 @@ def load_market_bars(
         },
         "issue_count": len(issues),
         "issues_sample": issues[:20],
+        "dual_route_coverage_by_date": dual_route_coverage,
+        "partial_dual_route_dates": partial_dual_dates,
+        "actual_execution_venue_counts": dict(
+            sorted(Counter(bar.actual_execution_venue for bar in bars).items())
+        ),
         "signal_fields_consumed": False,
         "ai_fields_consumed": False,
         "policy_fields_consumed": False,
@@ -437,6 +588,7 @@ def load_market_bars(
                 if venue_counts[venue] > 0
                 and conflict_counts_by_venue[venue] == 0
                 and not issues
+                and not partial_dual_dates
                 else ("PARTIAL" if venue_counts[venue] > 0 else "FAIL")
             )
             for venue in COHORTS
@@ -472,8 +624,12 @@ def assess_date_coverage(bars: Sequence[Bar]) -> dict[str, Any]:
     qualified: dict[str, list[str]] = {venue: [] for venue in COHORTS}
     excluded: dict[str, list[dict[str, Any]]] = {venue: [] for venue in COHORTS}
     for venue in COHORTS:
-        expected = COVERAGE_MIN_BARS[venue]
         for trade_date in observed_dates[venue]:
+            expected = (
+                POST_EFFECTIVE_COVERAGE_MIN_BARS[venue]
+                if trade_date >= MARKET_SESSION_EFFECTIVE_DATE
+                else COVERAGE_MIN_BARS[venue]
+            )
             missing = {
                 session: {
                     "observed": counts[(venue, trade_date, session)],
@@ -495,6 +651,11 @@ def assess_date_coverage(bars: Sequence[Bar]) -> dict[str, Any]:
     return {
         "policy": {
             "minimum_completed_bars_by_venue_session": COVERAGE_MIN_BARS,
+            "legacy_minimum_completed_bars_by_venue_session": COVERAGE_MIN_BARS,
+            "post_effective_minimum_completed_bars_by_venue_session": (
+                POST_EFFECTIVE_COVERAGE_MIN_BARS
+            ),
+            "market_session_effective_date": MARKET_SESSION_EFFECTIVE_DATE.isoformat(),
             "missing_bars_are_never_imputed": True,
         },
         "qualified_dates_by_venue": qualified,
@@ -539,6 +700,11 @@ def _close_trade(
         "trade_date": trade["trade_date"].isoformat(),
         "venue": trade["venue"],
         "session": trade["session"],
+        "decision_market_scope": trade.get("decision_market_scope"),
+        "market_data_route": trade.get("market_data_route"),
+        "market_session_regime": trade.get("market_session_regime"),
+        "actual_execution_venue": trade.get("actual_execution_venue", "UNKNOWN"),
+        "route_source_quality": trade.get("route_source_quality"),
         "candidate_armed_at": trade["candidate_armed_at"].isoformat(),
         "entry_signal_at": trade["entry_signal_at"].isoformat(),
         "entry_at": trade["entry_at"].isoformat(),
@@ -674,6 +840,11 @@ def simulate_policy(
                     "trade_date": bar.trade_date,
                     "venue": bar.venue,
                     "session": bar.session,
+                    "decision_market_scope": bar.decision_market_scope,
+                    "market_data_route": bar.market_data_route,
+                    "market_session_regime": bar.market_session_regime,
+                    "actual_execution_venue": bar.actual_execution_venue,
+                    "route_source_quality": bar.route_source_quality,
                     "candidate_armed_at": entry_candidate.armed_timestamp,
                     "entry_signal_at": series[signal_index].timestamp,
                     "entry_at": bar.timestamp,

@@ -198,7 +198,98 @@ if any(
     print("retry_required:main_ai_consumer_entry_followup_nonterminal")
     raise SystemExit(0)
 
-if batch.get("bounded_live_cohort_contract") == "exact_cohort_candidates_v1":
+cohort_contract = batch.get("cohort_contract")
+if cohort_contract is not None:
+    if not isinstance(cohort_contract, dict):
+        print("retry_required:cohort_contract_invalid")
+        raise SystemExit(0)
+    if cohort_contract.get("schema") != "entry_replay_cohort_contract_v1":
+        print("retry_required:cohort_contract_schema_invalid")
+        raise SystemExit(0)
+    contract_version = cohort_contract.get("contract_version")
+    expected_by_version = cohort_contract.get("expected_cohorts_by_contract_version")
+    if (
+        not isinstance(contract_version, str)
+        or not contract_version
+        or not isinstance(expected_by_version, dict)
+        or not isinstance(expected_by_version.get(contract_version), list)
+    ):
+        print("retry_required:cohort_contract_expected_census_invalid")
+        raise SystemExit(0)
+
+    expected_cohorts = expected_by_version[contract_version]
+    cohort_rows = batch.get("cohorts")
+    if not isinstance(cohort_rows, list):
+        print("retry_required:cohort_contract_batch_cohorts_invalid")
+        raise SystemExit(0)
+
+    identity_fields = ("cohort_key", "cohort_key_version")
+    required_fields = (
+        "cohort_key",
+        "cohort_key_version",
+        "effective_venue",
+        "session_bucket",
+        "market_data_route",
+        "authority_state",
+    )
+    if any(
+        not isinstance(row, dict)
+        or any(not isinstance(row.get(field), str) or not row.get(field) for field in required_fields)
+        for row in expected_cohorts
+    ):
+        print("retry_required:cohort_contract_expected_row_invalid")
+        raise SystemExit(0)
+    if any(not isinstance(row, dict) for row in cohort_rows):
+        print("retry_required:cohort_contract_batch_row_invalid")
+        raise SystemExit(0)
+
+    expected_by_identity = {
+        tuple(row[field] for field in identity_fields): row for row in expected_cohorts
+    }
+    actual_by_identity = {
+        tuple(row.get(field) for field in identity_fields): row for row in cohort_rows
+    }
+    if (
+        len(expected_by_identity) != len(expected_cohorts)
+        or len(actual_by_identity) != len(cohort_rows)
+        or set(actual_by_identity) != set(expected_by_identity)
+    ):
+        print("retry_required:cohort_contract_identity_census_invalid")
+        raise SystemExit(0)
+
+    for identity, expected in expected_by_identity.items():
+        actual = actual_by_identity[identity]
+        if any(actual.get(field) != expected[field] for field in required_fields):
+            print("retry_required:cohort_contract_row_mismatch")
+            raise SystemExit(0)
+        is_dual_aftermarket = (
+            actual.get("effective_venue") == "INTEGRATED"
+            and actual.get("session_bucket") == "KRX_NXT_AFTERMARKET"
+        )
+        if not is_dual_aftermarket:
+            continue
+        if actual.get("authority_state") not in {
+            "OBSERVE_ONLY",
+            "BLOCKED_MISSING_APPROVAL",
+        }:
+            print("retry_required:dual_aftermarket_live_authority_forbidden")
+            raise SystemExit(0)
+        if actual.get("status") not in {
+            "completed_observe_only",
+            "blocked_missing_approval",
+        }:
+            print("retry_required:dual_aftermarket_nonterminal_status")
+            raise SystemExit(0)
+        if any(
+            actual.get(field) is not False
+            for field in ("runtime_effect", "allowed_runtime_apply", "actual_order_submitted")
+        ) or actual.get("candidate_contract_sha256") is not None:
+            print("retry_required:dual_aftermarket_live_candidate_forbidden")
+            raise SystemExit(0)
+
+# Legacy batches have no versioned cohort contract. Preserve their exact
+# two-cohort candidate validation until their producer publishes one.
+elif batch.get("bounded_live_cohort_contract") == "exact_cohort_candidates_v1":
     refs = batch.get("bounded_live_candidates_by_cohort")
     if not isinstance(refs, dict) or set(refs) != {"KRX/KRX_REGULAR", "NXT/NXT_AFTERMARKET"}:
         print("retry_required:exact_cohort_candidate_census_invalid")

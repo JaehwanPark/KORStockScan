@@ -349,6 +349,33 @@ def _depth_row(
     }
 
 
+def test_dual_market_axes_are_preserved_source_only_without_venue_inference():
+    dual = attribution_module._market_axis_context(
+        {
+            "venue": "SOR",
+            "session_bucket": "KRX_NXT_AFTERMARKET",
+            "decision_market_scope": "KRX_NXT_INTEGRATED",
+            "market_data_route": "krx_nxt_integrated",
+        }
+    )
+    regular = attribution_module._market_axis_context(
+        {"venue": "KRX", "session_bucket": "KRX_REGULAR"}
+    )
+
+    assert dual == {
+        "decision_market_scope": "KRX_NXT_INTEGRATED",
+        "market_data_route": "krx_nxt_integrated",
+        "market_session_regime": "KRX_NXT_AFTERMARKET",
+        "actual_execution_venue": "UNKNOWN",
+        "dual_source_only": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    assert regular["dual_source_only"] is False
+    assert regular["decision_market_scope"] == "KRX"
+    assert regular["market_data_route"] == "krx_only"
+
+
 @pytest.mark.parametrize("missing_horizon", [None, 1200])
 def test_market_weakness_blocked_signal_uses_depth_backed_1_to_30m_bbo(missing_horizon):
     anchor_at = datetime(2026, 8, 31, 10, 0, tzinfo=KST)

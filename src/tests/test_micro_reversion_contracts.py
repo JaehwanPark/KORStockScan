@@ -4,6 +4,8 @@ from src.engine.scalping.micro_reversion.contracts import (
     CoverageTier,
     PriceObservation,
     ShockEvent,
+    registration_item_identity,
+    registration_item_market_data_identity,
 )
 
 
@@ -24,6 +26,30 @@ def test_price_observation_has_no_manual_control_contract() -> None:
     payload = _observation().as_dict()
     assert payload["schema"] == "scalp_micro_reversion_price_observation_v4"
     assert not any(key.startswith("manual_control") for key in payload)
+
+
+def test_registration_item_suffixes_only_prove_market_data_route() -> None:
+    assert registration_item_market_data_identity("005930") == (
+        "005930",
+        "krx_only",
+        "UNKNOWN",
+    )
+    assert registration_item_market_data_identity("005930_NX") == (
+        "005930",
+        "nxt_only",
+        "UNKNOWN",
+    )
+    assert registration_item_market_data_identity("005930_AL") == (
+        "005930",
+        "krx_nxt_integrated",
+        "UNKNOWN",
+    )
+    assert registration_item_market_data_identity("bad") == (
+        "",
+        "unknown",
+        "UNKNOWN",
+    )
+    assert registration_item_identity("005930_AL") == ("005930", "SOR")
 
 
 def test_coverage_tiers_never_impute_missing_microstructure() -> None:

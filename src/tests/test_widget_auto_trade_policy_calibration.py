@@ -877,6 +877,84 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
     assert loaded["042660"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is False
 
 
+def test_integrated_aftermarket_is_retained_only_as_observe_only_metadata() -> None:
+    symbols = {}
+    for spec in calibration.SPECS:
+        sessions = {
+            session.session: {
+                "decision": "insufficient_non_overlapping_trades",
+                "selected_policy": None,
+            }
+            for session in spec.sessions
+        }
+        if spec.symbol == "005930":
+            sessions["KRX_NXT_AFTERMARKET"] = {
+                "decision": "dual_aftermarket_observe_only",
+                "automatic_promotion_allowed": False,
+                "market_venue": "UNKNOWN",
+                "market_data_route": "krx_nxt_integrated",
+                "actual_execution_venue": "UNKNOWN",
+                "expected_minute_count": 240,
+                "reason": "integrated_aftermarket_has_no_nxt_solo_policy_inheritance",
+            }
+        symbols[spec.symbol] = {
+            "name": spec.name,
+            "source_quality_status": "PASS",
+            "execution_quality": {"runtime_apply_allowed": False},
+            "sessions": sessions,
+        }
+    policy = build_policy(
+        {
+            "target_date": "2026-09-14",
+            "effective_date": "2026-09-15",
+            "source_quality_status": "PASS",
+            "symbols": symbols,
+            "metric_contract": calibration.METRIC_CONTRACT,
+        }
+    )
+
+    assert "KRX_NXT_AFTERMARKET" not in policy["symbols"].get("005930", {}).get(
+        "sessions", {}
+    )
+    assert policy["observe_only_sessions"]["005930"]["KRX_NXT_AFTERMARKET"] == {
+        "decision": "dual_aftermarket_observe_only",
+        "reason": "integrated_aftermarket_has_no_nxt_solo_policy_inheritance",
+        "market_venue": "UNKNOWN",
+        "market_data_route": "krx_nxt_integrated",
+        "actual_execution_venue": "UNKNOWN",
+        "expected_minute_count": 240,
+        "automatic_promotion_allowed": False,
+    }
+
+
+def test_execution_quality_canonicalizes_integrated_aftermarket_close_only(
+    tmp_path,
+) -> None:
+    target_date = date(2026, 9, 14)
+    (tmp_path / "widget_signal_auto_trade_events_20260914.jsonl").write_text(
+        json.dumps(
+            {
+                "symbol": "005930",
+                "event_type": "order_submitted",
+                "actual_order_submitted": True,
+                "market_session": "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    quality = _load_execution_quality(
+        "005930",
+        target_date=target_date,
+        event_dir=tmp_path,
+        session="KRX_NXT_AFTERMARKET",
+    )
+
+    assert quality["session_attributed_event_count"] == 1
+    assert quality["accepted_order_count"] == 1
+
+
 def test_verified_low_symbol_policy_auto_promotes_on_effective_date(tmp_path) -> None:
     qualified_dates: list[str] = []
     candidate = date(2026, 8, 12)

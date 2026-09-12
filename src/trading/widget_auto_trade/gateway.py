@@ -9,6 +9,7 @@ acceptance.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable
 
 import requests
@@ -28,12 +29,13 @@ from src.trading.order.entry_liquidity_guard import (
     unavailable_entry_liquidity_snapshot,
 )
 from src.trading.order.tick_utils import get_tick_size
+from src.trading.market import session_contract
 from src.utils import kiwoom_utils
 
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
-    "retrieved_at_kst": "2026-09-03T15:52:01+09:00",
+    "retrieved_at_kst": "2026-09-11T23:16:06+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
@@ -153,9 +155,17 @@ def resolve_widget_broker_route(route: str) -> str:
     raise ValueError("invalid_order_route")
 
 
-def _validated_order_inputs(*, code: str, qty: int, route: str) -> tuple[str, int, str]:
+def _validated_order_inputs(
+    *, code: str, qty: int, route: str, preserve_explicit_route: bool = False
+) -> tuple[str, int, str]:
     clean_code = _clean_code(code)
-    clean_route = resolve_widget_broker_route(route)
+    requested_route = str(route or "").strip().upper()
+    if preserve_explicit_route:
+        if requested_route not in {"KRX", "NXT", "SOR"}:
+            raise ValueError("invalid_order_route")
+        clean_route = requested_route
+    else:
+        clean_route = resolve_widget_broker_route(requested_route)
     if isinstance(qty, bool):
         raise ValueError("invalid_order_quantity")
     clean_qty = int(qty)
@@ -164,6 +174,65 @@ def _validated_order_inputs(*, code: str, qty: int, route: str) -> tuple[str, in
     if clean_qty <= 0:
         raise ValueError("invalid_order_quantity")
     return clean_code, clean_qty, clean_route
+
+
+_INTEGRATED_AFTERMARKET_REGIMES = frozenset(
+    {
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+    }
+)
+
+
+def _validated_order_submission(
+    *,
+    code: str,
+    qty: int,
+    route: str,
+    side: str,
+    order_type: str | int,
+    now: datetime | None,
+    venue_eligibility: session_contract.SymbolVenueEligibility | None = None,
+    existing_holding: bool = False,
+) -> tuple[str, int, str, str, session_contract.OrderTypePreflight | None]:
+    """Validate an order without performing transport or changing its route."""
+
+    market_session = session_contract.resolve_market_session(now) if now else None
+    preserve_route = bool(
+        market_session
+        and market_session.session_regime in _INTEGRATED_AFTERMARKET_REGIMES
+    )
+    clean_code, clean_qty, clean_route = _validated_order_inputs(
+        code=code,
+        qty=qty,
+        route=route,
+        preserve_explicit_route=preserve_route,
+    )
+    requested_type = str(order_type).strip().upper()
+    if market_session is None:
+        return clean_code, clean_qty, clean_route, requested_type, None
+    preflight = session_contract.resolve_order_type_preflight(
+        market_session,
+        clean_route,
+        side,
+        requested_type,
+        eligibility=venue_eligibility,
+        existing_holding=existing_holding,
+    )
+    effective_type = preflight.effective_order_type or requested_type
+    return clean_code, clean_qty, clean_route, effective_type, preflight
+
+
+def _preflight_block_result(
+    preflight: session_contract.OrderTypePreflight,
+) -> SubmitResult:
+    return SubmitResult(
+        accepted=False,
+        order_no="",
+        return_code="ORDER_TYPE_PREFLIGHT_BLOCKED",
+        return_msg=preflight.reason,
+    )
 
 
 def _validated_existing_order_inputs(
@@ -393,10 +462,29 @@ class KiwoomSharedTokenOrderGateway:
             ambiguous=ambiguous,
         )
 
-    def submit_buy(self, *, code: str, qty: int, route: str) -> SubmitResult:
-        clean_code, clean_qty, clean_route = _validated_order_inputs(
-            code=code, qty=qty, route=route
+    def submit_buy(
+        self,
+        *,
+        code: str,
+        qty: int,
+        route: str,
+        now: datetime | None = None,
+        venue_eligibility: session_contract.SymbolVenueEligibility | None = None,
+        order_type: str | int = "6",
+    ) -> SubmitResult:
+        clean_code, clean_qty, clean_route, effective_type, preflight = (
+            _validated_order_submission(
+                code=code,
+                qty=qty,
+                route=route,
+                side="buy",
+                order_type=order_type,
+                now=now,
+                venue_eligibility=venue_eligibility,
+            )
         )
+        if preflight is not None and not preflight.allowed:
+            return _preflight_block_result(preflight)
         if is_buy_side_paused():
             return SubmitResult(
                 accepted=False,
@@ -412,20 +500,38 @@ class KiwoomSharedTokenOrderGateway:
                 "stk_cd": clean_code,
                 "ord_qty": str(clean_qty),
                 "ord_uv": "",
-                "trde_tp": "6",
+                "trde_tp": effective_type,
                 "cond_uv": "",
             },
         )
         return self._submit_result(response, body)
 
     def submit_limit_buy(
-        self, *, code: str, qty: int, route: str, price: int
+        self,
+        *,
+        code: str,
+        qty: int,
+        route: str,
+        price: int,
+        now: datetime | None = None,
+        venue_eligibility: session_contract.SymbolVenueEligibility | None = None,
+        order_type: str | int = "0",
     ) -> SubmitResult:
         """Submit an operator-priced limit buy through the shared token only."""
-        clean_code, clean_qty, clean_route = _validated_order_inputs(
-            code=code, qty=qty, route=route
+        clean_code, clean_qty, clean_route, effective_type, preflight = (
+            _validated_order_submission(
+                code=code,
+                qty=qty,
+                route=route,
+                side="buy",
+                order_type=order_type,
+                now=now,
+                venue_eligibility=venue_eligibility,
+            )
         )
         clean_price = _validated_limit_price(price)
+        if preflight is not None and not preflight.allowed:
+            return _preflight_block_result(preflight)
         if is_buy_side_paused():
             return SubmitResult(
                 accepted=False,
@@ -440,21 +546,41 @@ class KiwoomSharedTokenOrderGateway:
                 "dmst_stex_tp": clean_route,
                 "stk_cd": clean_code,
                 "ord_qty": str(clean_qty),
-                "ord_uv": str(clean_price),
-                "trde_tp": "0",
+                "ord_uv": (
+                    str(clean_price) if effective_type in {"0", "00"} else ""
+                ),
+                "trde_tp": effective_type,
                 "cond_uv": "",
             },
         )
         return self._submit_result(response, body)
 
-    def submit_sell(self, *, code: str, qty: int, route: str) -> SubmitResult:
-        clean_code, clean_qty, clean_route = _validated_order_inputs(
-            code=code, qty=qty, route=route
+    def submit_sell(
+        self,
+        *,
+        code: str,
+        qty: int,
+        route: str,
+        now: datetime | None = None,
+        existing_holding: bool = False,
+        order_type: str | int | None = None,
+    ) -> SubmitResult:
+        requested_type = order_type
+        if requested_type is None:
+            requested_type = "6" if str(route).strip().upper() == "NXT" else "3"
+        clean_code, clean_qty, clean_route, effective_type, preflight = (
+            _validated_order_submission(
+                code=code,
+                qty=qty,
+                route=route,
+                side="sell",
+                order_type=requested_type,
+                now=now,
+                existing_holding=existing_holding,
+            )
         )
-        # NXT does not reliably accept market orders. Use best-limit only for
-        # NXT; a KRX observation resolves to SOR and keeps an execution-oriented
-        # market order for the final exit.
-        order_type = "6" if clean_route == "NXT" else "3"
+        if preflight is not None and not preflight.allowed:
+            return _preflight_block_result(preflight)
         response, body = self._post(
             endpoint="/api/dostk/ordr",
             api_id="kt10001",
@@ -463,19 +589,37 @@ class KiwoomSharedTokenOrderGateway:
                 "stk_cd": clean_code,
                 "ord_qty": str(clean_qty),
                 "ord_uv": "",
-                "trde_tp": order_type,
+                "trde_tp": effective_type,
                 "cond_uv": "",
             },
         )
         return self._submit_result(response, body)
 
     def submit_limit_sell(
-        self, *, code: str, qty: int, route: str, price: int
+        self,
+        *,
+        code: str,
+        qty: int,
+        route: str,
+        price: int,
+        now: datetime | None = None,
+        existing_holding: bool = False,
+        order_type: str | int = "0",
     ) -> SubmitResult:
-        clean_code, clean_qty, clean_route = _validated_order_inputs(
-            code=code, qty=qty, route=route
+        clean_code, clean_qty, clean_route, effective_type, preflight = (
+            _validated_order_submission(
+                code=code,
+                qty=qty,
+                route=route,
+                side="sell",
+                order_type=order_type,
+                now=now,
+                existing_holding=existing_holding,
+            )
         )
         clean_price = _validated_limit_price(price)
+        if preflight is not None and not preflight.allowed:
+            return _preflight_block_result(preflight)
         response, body = self._post(
             endpoint="/api/dostk/ordr",
             api_id="kt10001",
@@ -483,8 +627,10 @@ class KiwoomSharedTokenOrderGateway:
                 "dmst_stex_tp": clean_route,
                 "stk_cd": clean_code,
                 "ord_qty": str(clean_qty),
-                "ord_uv": str(clean_price),
-                "trde_tp": "0",
+                "ord_uv": (
+                    str(clean_price) if effective_type in {"0", "00"} else ""
+                ),
+                "trde_tp": effective_type,
                 "cond_uv": "",
             },
         )

@@ -12,10 +12,12 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.engine.log_archive_service import load_monitor_snapshot, save_monitor_snapshot
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
+from src.trading.market.session_contract import resolve_market_session
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl, read_jsonl
 from src.utils.logger import log_error, log_info
@@ -468,172 +470,133 @@ def _post_sell_execution_route_contract(
     *,
     sell_dt: datetime,
 ) -> dict[str, str]:
-    """Freeze the executable quote route used by one completed sell."""
+    """Freeze session, data route, requested route, and proven fill venue."""
 
     source = stock if isinstance(stock, dict) else {}
-    broker_route = (
-        str(
-            source.get("last_sell_execution_broker_route")
-            or source.get("last_exit_broker_route")
-            or source.get("fast_exit_broker_route")
-            or source.get("entry_execution_broker_route")
-            or source.get("broker_route")
-            or source.get("dmst_stex_tp")
-            or ""
-        )
-        .strip()
-        .upper()
+    resolved_sell_dt = (
+        sell_dt.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        if sell_dt.tzinfo is None
+        else sell_dt
     )
-    expected_market_route = (
-        str(
-            source.get("post_sell_expected_market_route")
-            or source.get("rising_missed_ws_0d_route")
-            or ""
-        )
-        .strip()
-        .lower()
-    )
-    route_from_broker = {
-        "KRX": "krx_regular",
-        "NXT": "nxt_only",
-        "SOR": "krx_nxt_integrated",
-    }.get(broker_route, "")
-    if expected_market_route and route_from_broker:
-        route_resolution = "explicit_ws_0d_route_and_broker_route"
-        if expected_market_route != route_from_broker:
-            return {
-                "status": "route_source_quality_blocked",
-                "reason": "explicit_ws_route_conflicts_with_broker_route",
-                "broker_route": broker_route or "-",
-                "expected_market_route": expected_market_route,
-                "venue": "UNKNOWN",
-                "session": "unknown",
-            }
-    elif expected_market_route:
-        route_resolution = "explicit_ws_0d_route"
-    elif route_from_broker:
-        expected_market_route = route_from_broker
-        route_resolution = "official_broker_route_to_ws_item_contract"
-    else:
+    context = resolve_market_session(resolved_sell_dt)
+    broker_route = str(
+        source.get("last_sell_execution_broker_route_requested")
+        or source.get("broker_route_requested")
+        or source.get("last_sell_execution_broker_route")
+        or source.get("last_exit_broker_route")
+        or source.get("fast_exit_broker_route")
+        or source.get("entry_execution_broker_route")
+        or source.get("broker_route")
+        or source.get("dmst_stex_tp")
+        or ""
+    ).strip().upper()
+    market_data_route = str(
+        source.get("last_sell_execution_market_data_route")
+        or source.get("market_data_route")
+        or source.get("post_sell_expected_market_route")
+        or source.get("rising_missed_ws_0d_route")
+        or ""
+    ).strip().lower()
+    route_resolution = "explicit_market_data_route"
+    if not market_data_route:
+        market_data_route = str(
+            context.preferred_market_data_route or ""
+        ).strip().lower()
+        route_resolution = "market_session_contract_preferred_data_route"
+    if broker_route not in {"KRX", "NXT", "SOR"} or market_data_route not in {
+        "krx_only",
+        "nxt_only",
+        "krx_nxt_integrated",
+    }:
         return {
             "status": "route_source_quality_blocked",
             "reason": "broker_and_ws_route_missing",
-            "broker_route": "-",
-            "expected_market_route": "-",
+            "broker_route": broker_route or "-",
+            "expected_market_route": market_data_route or "-",
             "venue": "UNKNOWN",
             "session": "unknown",
         }
 
-    venue = (
-        str(
-            source.get("last_sell_execution_cohort")
-            or source.get("main_lifecycle_venue")
-            or source.get("rising_missed_effective_venue")
-            or source.get("effective_venue")
-            or source.get("venue")
-            or ""
-        )
-        .strip()
-        .upper()
-    )
-    session = (
-        str(
-            source.get("last_sell_execution_session_bucket")
-            or source.get("main_lifecycle_session_bucket")
-            or source.get("rising_missed_market_session_bucket")
-            or source.get("market_session_bucket")
-            or ""
-        )
-        .strip()
-        .lower()
-    )
-    sell_time = sell_dt.time()
-    if not session:
-        configured_cutoff = str(
-            getattr(TRADING_RULES, "SCALPING_NEW_BUY_CUTOFF", "19:40:00") or "19:40:00"
-        ).strip()
-        try:
-            new_buy_cutoff = datetime.strptime(configured_cutoff, "%H:%M:%S").time()
-        except ValueError:
-            new_buy_cutoff = datetime.strptime("19:40:00", "%H:%M:%S").time()
-        if (
-            datetime.strptime("08:00:00", "%H:%M:%S").time()
-            <= sell_time
-            < (datetime.strptime("08:50:00", "%H:%M:%S").time())
-        ):
-            session = "krx_like_premarket"
-        elif (
-            datetime.strptime("09:00:00", "%H:%M:%S").time()
-            <= sell_time
-            <= (datetime.strptime("15:30:00", "%H:%M:%S").time())
-        ):
-            session = "nxt_regular_overlap" if broker_route == "NXT" else "krx_regular"
-        elif (
-            datetime.strptime("16:00:00", "%H:%M:%S").time()
-            <= sell_time
-            < (datetime.strptime("16:10:00", "%H:%M:%S").time())
-        ):
-            session = "nxt_open_observe"
-        elif (
-            datetime.strptime("16:10:00", "%H:%M:%S").time()
-            <= sell_time
-            < (new_buy_cutoff)
-        ):
-            session = "nxt_entry_window"
-        elif (
-            new_buy_cutoff
-            <= sell_time
-            < datetime.strptime("20:00:00", "%H:%M:%S").time()
-        ):
-            session = "nxt_close_only"
-        else:
-            session = "outside_krx_nxt_window"
-    if not venue:
-        if session in {"krx_like_premarket", "premarket_krx_like", "nxt_premarket"}:
-            venue = "PREMARKET_KRX_LIKE"
-        elif broker_route == "NXT" and session.startswith("nxt_"):
-            venue = "NXT"
-        elif broker_route in {"KRX", "SOR"} and session == "krx_regular":
-            venue = "KRX"
+    session = str(
+        source.get("last_sell_execution_market_session_regime")
+        or source.get("market_session_regime")
+        or source.get("last_sell_execution_session_bucket")
+        or source.get("main_lifecycle_session_bucket")
+        or source.get("rising_missed_market_session_bucket")
+        or source.get("market_session_bucket")
+        or context.session_regime
+    ).strip()
+    venue = str(
+        source.get("last_sell_execution_actual_venue")
+        or source.get("actual_execution_venue")
+        or source.get("broker_actual_execution_venue")
+        or "UNKNOWN"
+    ).strip().upper()
+    if venue not in {"KRX", "NXT"}:
+        venue = "UNKNOWN"
+    if context.contract_version == "market_session_contract_v1" and venue == "UNKNOWN":
+        legacy_venue = str(source.get("last_sell_execution_cohort") or "").strip().upper()
+        if legacy_venue in {"KRX", "NXT"}:
+            venue = legacy_venue
+    venue_source = str(
+        source.get("actual_execution_venue_source")
+        or source.get("broker_actual_execution_venue_source")
+        or "official_exchange_fields_ambiguous_or_missing"
+    ).strip()
+    if venue == "UNKNOWN":
+        venue_source = "official_exchange_fields_ambiguous_or_missing"
 
-    allowed_routes = {
-        "KRX": {"krx_regular", "krx_nxt_integrated"},
-        "NXT": {"nxt_only"},
-        "PREMARKET_KRX_LIKE": {"nxt_only", "krx_nxt_integrated"},
-    }
-    allowed_sessions = {
-        "KRX": {"krx_regular"},
-        "NXT": {
-            "nxt_regular_overlap",
-            "nxt_open_observe",
-            "nxt_entry_window",
-            "nxt_close_only",
-            "nxt_aftermarket",
-        },
-        "PREMARKET_KRX_LIKE": {
-            "krx_like_premarket",
-            "premarket_krx_like",
-            "nxt_premarket",
-        },
-    }
-    if expected_market_route not in allowed_routes.get(
-        venue, set()
-    ) or session not in allowed_sessions.get(venue, set()):
+    expected_session_route = str(
+        context.preferred_market_data_route or ""
+    ).strip().lower()
+    legacy_session_matches = bool(
+        context.contract_version == "market_session_contract_v1"
+        and (
+            session == context.session_regime
+            or (
+                context.session_regime == "nxt_aftermarket"
+                and session
+                in {
+                    "nxt_aftermarket",
+                    "nxt_open_observe",
+                    "nxt_entry_window",
+                    "nxt_close_only",
+                }
+            )
+        )
+    )
+    session_matches = bool(
+        session == context.session_regime or legacy_session_matches
+    )
+    if (
+        expected_session_route in {"krx_only", "nxt_only", "krx_nxt_integrated"}
+        and market_data_route != expected_session_route
+    ) or (
+        venue != "UNKNOWN"
+        and context.open_venues
+        and venue not in context.open_venues
+    ) or not session_matches:
         return {
             "status": "route_source_quality_blocked",
             "reason": "venue_session_route_contract_mismatch",
-            "broker_route": broker_route or "-",
-            "expected_market_route": expected_market_route or "-",
-            "venue": venue or "UNKNOWN",
-            "session": session or "unknown",
+            "broker_route": broker_route,
+            "expected_market_route": market_data_route,
+            "venue": venue,
+            "session": session,
         }
     return {
         "status": "route_contract_ready",
         "reason": route_resolution,
-        "broker_route": broker_route or "-",
-        "expected_market_route": expected_market_route,
+        "broker_route": broker_route,
+        "expected_market_route": market_data_route,
         "venue": venue,
         "session": session,
+        "session_contract_version": context.contract_version,
+        "market_session_regime": session,
+        "market_data_route": market_data_route,
+        "broker_route_requested": broker_route,
+        "actual_execution_venue": venue,
+        "actual_execution_venue_source": venue_source,
     }
 
 
@@ -727,6 +690,14 @@ def _register_post_sell_executable_bbo_observer(
             "venue": route["venue"],
             "session": route["session"],
             "route_reason": route["reason"],
+            "session_contract_version": route["session_contract_version"],
+            "market_session_regime": route["market_session_regime"],
+            "market_data_route": route["market_data_route"],
+            "broker_route_requested": route["broker_route_requested"],
+            "actual_execution_venue": route["actual_execution_venue"],
+            "actual_execution_venue_source": route[
+                "actual_execution_venue_source"
+            ],
             "pending_horizons_sec": list(POST_SELL_EXECUTABLE_BBO_HORIZONS_SEC),
             "fresh_sample_count": 0,
             "first_fresh_quote_epoch": 0.0,
@@ -749,6 +720,12 @@ def _register_post_sell_executable_bbo_observer(
         "post_sell_executable_bbo_broker_route": route["broker_route"],
         "post_sell_executable_bbo_venue": route["venue"],
         "post_sell_executable_bbo_session": route["session"],
+        "session_contract_version": route["session_contract_version"],
+        "market_session_regime": route["market_session_regime"],
+        "market_data_route": route["market_data_route"],
+        "broker_route_requested": route["broker_route_requested"],
+        "actual_execution_venue": route["actual_execution_venue"],
+        "actual_execution_venue_source": route["actual_execution_venue_source"],
         "post_sell_executable_bbo_retain_until_epoch": round(observer_expires_at, 3),
     }
 
@@ -879,6 +856,7 @@ def record_post_sell_candidate(
                 "exit_decision_quote_reason",
             )
         )
+        receipt_route = _post_sell_execution_route_contract(stock, sell_dt=sell_dt)
         payload = {
             "post_sell_id": uuid.uuid4().hex[:16],
             "actual_order_submitted": True,
@@ -894,6 +872,23 @@ def record_post_sell_candidate(
             "buy_price": _safe_int(buy_price, 0),
             "sell_price": safe_sell_price,
             "profit_rate": round(_safe_float(profit_rate, 0.0), 3),
+            "sell_execution_receipt_economics_complete": (
+                stock.get("sell_execution_receipt_economics_complete") is True
+            ),
+            "realized_net_pnl_krw": (
+                _safe_float(stock.get("realized_pnl_krw"), 0.0)
+                if stock.get("sell_execution_receipt_economics_complete") is True
+                and stock.get("realized_pnl_krw")
+                not in (None, "", "-", "None", "none", "null")
+                else None
+            ),
+            "cost_attribution_status": (
+                "exact_receipt_cost_available"
+                if stock.get("sell_execution_receipt_economics_complete") is True
+                and stock.get("realized_pnl_krw")
+                not in (None, "", "-", "None", "none", "null")
+                else "cost_missing"
+            ),
             "buy_qty": _safe_int(buy_qty, 0),
             "exit_rule": resolved_exit_rule,
             "realized_result_label": _realized_result_label(profit_rate),
@@ -982,6 +977,20 @@ def record_post_sell_candidate(
                 else same_symbol_soft_stop_cooldown_would_block
             ),
             "evaluation_mode": "post_sell_minute_forward",
+            "session_contract_version": receipt_route.get(
+                "session_contract_version", "unknown"
+            ),
+            "market_session_regime": receipt_route.get("session", "unknown"),
+            "market_data_route": receipt_route.get("expected_market_route", "-"),
+            "broker_route_requested": receipt_route.get("broker_route", "-"),
+            "actual_execution_venue": receipt_route.get("venue", "UNKNOWN"),
+            "actual_execution_venue_source": receipt_route.get(
+                "actual_execution_venue_source",
+                "official_exchange_fields_ambiguous_or_missing",
+            ),
+            "market_axes_source_quality_status": receipt_route.get(
+                "status", "route_source_quality_blocked"
+            ),
             **_entry_split_post_sell_fields(stock),
         }
         for optional_key in (

@@ -109,6 +109,11 @@ def stock_scope(stock):
         source = source.get("_scanner_fast_precheck_fields") or {}
     if not isinstance(source, dict):
         return None, None
+    market_data_route = str(source.get("market_data_route") or "").strip().lower()
+    if market_data_route in {"integrated", "sor", "krx_nxt_integrated"}:
+        # Integrated market data is a decision scope, not proof of the NXT
+        # physical venue. AM-S16 owns any future dual observe-only policy.
+        return None, None
     venues = {
         str(source[key]).strip().upper()
         for key in ("venue", "effective_venue")

@@ -8,6 +8,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
 )
 from src.engine.scalping import entry_setup_live_policy as policy
+from src.engine.scalping import entry_setup_scalping_rollout as rollout
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_DECISION_COMPOSER_V2_15_VERSION,
@@ -114,6 +115,56 @@ def test_nxt_exact_candidate_preopen_and_runtime_are_isolated(monkeypatch, tmp_p
             "blocking_reasons"
         ]
     )
+
+
+def test_dual_cohort_is_source_registered_but_cannot_be_live(
+    monkeypatch, tmp_path
+) -> None:
+    _configure_paths(monkeypatch, tmp_path)
+    cohort = policy.DUAL_OBSERVE_ONLY_COHORT
+    detailed = _valid_detailed_report()
+    detailed["cohort_filter"] = dict(
+        zip(("effective_venue", "session_bucket"), cohort)
+    )
+    detailed["cumulative_learning"]["cohort_scope"].update(
+        detailed["cohort_filter"]
+    )
+    batch = _valid_batch_report()
+    batch["cohorts"][0].update(detailed["cohort_filter"])
+    detailed_path = tmp_path / "dual-detailed.json"
+    policy._atomic_write_json(detailed_path, detailed)
+
+    candidate = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        detailed_report=detailed,
+        detailed_path=detailed_path,
+        generated_at=POSTCLOSE_GENERATED_AT,
+        cohort=cohort,
+    )
+    assert candidate["status"] == "blocked"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["operator_approval_required"] is True
+    assert candidate["decision_authority"] == "observe_only_no_live_approval"
+    assert "dual_cohort_observe_only_no_live_approval" in candidate[
+        "blocking_reasons"
+    ]
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=(
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+        effective_venue=cohort[0],
+        session_bucket=cohort[1],
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 9, 14, 16, 5, tzinfo=policy.KST),
+    )
+    assert resolved["enabled"] is False
+    assert resolved["runtime_effect"] is False
+    assert resolved["status"] == "fallback_dual_observe_only_no_live_approval"
+    scope = "|".join(cohort)
+    assert scope not in rollout.SCOPES
+    assert rollout.scope_authority_mode(*cohort) == "observe_only_no_live_approval"
 
 
 def _valid_detailed_report():

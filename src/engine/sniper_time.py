@@ -3,6 +3,7 @@
 from datetime import datetime, time as dt_time, timedelta, timezone
 
 from src.utils.constants import TRADING_RULES
+from src.trading.market import session_contract
 
 DEFAULT_SCALPING_BUY_WINDOWS = "08:03:00-08:40:00,09:03:00-15:10:00,16:00:00-19:40:00"
 DEFAULT_SCALPING_PREWARM_LEAD_SEC = 180
@@ -172,30 +173,100 @@ def scalping_session_venue_provenance(now_value=None):
     """Resolve the scalping observation cohort without inferring broker route."""
 
     if now_value is None:
-        now_t = datetime.now(tz=KST).time()
+        now = datetime.now(tz=KST)
+    elif isinstance(now_value, datetime):
+        now = now_value if now_value.tzinfo else now_value.replace(tzinfo=KST)
     elif isinstance(now_value, (int, float)):
-        now_t = datetime.fromtimestamp(float(now_value), tz=KST).time()
-    elif isinstance(now_value, datetime) and now_value.tzinfo is not None:
-        now_t = now_value.astimezone(KST).time()
+        now = datetime.fromtimestamp(float(now_value), tz=KST)
+    elif isinstance(now_value, dt_time):
+        now = datetime.combine(datetime.now(tz=KST).date(), now_value, tzinfo=KST)
     else:
-        now_t = _coerce_time(now_value)
-    if dt_time(hour=8) <= now_t < dt_time(hour=9):
-        venue = "PREMARKET_KRX_LIKE"
-        session_bucket = "krx_like_premarket"
-    elif dt_time(hour=9) <= now_t < dt_time(hour=15, minute=30):
-        venue = "KRX"
-        session_bucket = "krx_regular"
-    elif dt_time(hour=16) <= now_t < dt_time(hour=20):
-        venue = "NXT"
-        session_bucket = "nxt"
-    else:
-        venue = "UNKNOWN"
-        session_bucket = "outside_supported_session"
+        now = datetime.combine(
+            datetime.now(tz=KST).date(),
+            _coerce_time(now_value),
+            tzinfo=KST,
+        )
+
+    context = session_contract.resolve_market_session(now)
+    if context.blocker is not None:
+        return {
+            "venue": "UNKNOWN",
+            "effective_venue": "UNKNOWN",
+            "venue_resolution": f"scanner_session_clock:outside_supported_session",
+            "market_session_bucket": "outside_supported_session",
+            "session_contract_version": context.contract_version,
+            "market_session_regime": context.session_regime,
+            "decision_market_scope": context.decision_market_scope,
+            "market_data_route": context.preferred_market_data_route,
+            "actual_execution_venue": "UNKNOWN",
+        }
+
+    if context.session_regime == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION:
+        return {
+            "venue": "UNKNOWN",
+            "effective_venue": "UNKNOWN",
+            "venue_resolution": "scanner_session_clock:session_transition",
+            "market_session_bucket": "SESSION_TRANSITION",
+            "session_contract_version": context.contract_version,
+            "market_session_regime": context.session_regime,
+            "decision_market_scope": context.decision_market_scope,
+            "market_data_route": context.preferred_market_data_route,
+            "actual_execution_venue": "UNKNOWN",
+        }
+
+    if context.session_regime in {
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+    }:
+        return {
+            "venue": "KRX_NXT_INTEGRATED",
+            "effective_venue": "UNKNOWN",
+            "venue_resolution": "scanner_session_clock:krx_nxt_integrated",
+            "market_session_bucket": context.session_regime,
+            "session_contract_version": context.contract_version,
+            "market_session_regime": context.session_regime,
+            "decision_market_scope": "KRX_NXT_INTEGRATED",
+            "market_data_route": context.preferred_market_data_route,
+            "actual_execution_venue": "UNKNOWN",
+        }
+
+    legacy_mapping = {
+        session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET: (
+            "PREMARKET_KRX_LIKE",
+            "PREMARKET_KRX_LIKE",
+            "krx_like_premarket",
+        ),
+        session_contract.MARKET_SESSION_REGIME_LEGACY_KRX_ONLY: (
+            "KRX",
+            "KRX",
+            "krx_regular",
+        ),
+        session_contract.MARKET_SESSION_REGIME_LEGACY_NXT_ONLY: (
+            "NXT",
+            "NXT",
+            "nxt",
+        ),
+        session_contract.MARKET_SESSION_REGIME_KRX_REGULAR: (
+            "KRX",
+            "KRX",
+            "krx_regular",
+        ),
+    }
+    venue, effective_venue, market_session_bucket = legacy_mapping.get(
+        context.session_regime,
+        ("UNKNOWN", "UNKNOWN", "outside_supported_session"),
+    )
     return {
         "venue": venue,
-        "effective_venue": venue,
-        "venue_resolution": f"scanner_session_clock:{session_bucket}",
-        "market_session_bucket": session_bucket,
+        "effective_venue": effective_venue,
+        "venue_resolution": f"scanner_session_clock:{market_session_bucket}",
+        "market_session_bucket": market_session_bucket,
+        "session_contract_version": context.contract_version,
+        "market_session_regime": context.session_regime,
+        "decision_market_scope": context.decision_market_scope,
+        "market_data_route": context.preferred_market_data_route,
+        "actual_execution_venue": "UNKNOWN",
     }
 
 

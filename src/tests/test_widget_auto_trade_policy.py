@@ -257,3 +257,40 @@ def test_loader_requires_completed_verified_evidence_report(tmp_path: Path) -> N
         )
         == {}
     )
+
+
+def test_legacy_nxt_policy_keeps_request_route_but_not_actual_venue(
+    tmp_path: Path,
+) -> None:
+    payload = _policy()
+    session = payload["symbols"]["034020"]["sessions"].pop("KRX_REGULAR")
+    session["market_venue"] = "NXT"
+    payload["symbols"]["034020"]["sessions"]["NXT_AFTERMARKET"] = session
+    _write_policy(tmp_path, "widget_auto_trade_policy_2026-08-12.json", payload)
+
+    loaded = WidgetAutoTradePolicyLoader(
+        tmp_path, include_symbol_expansion=False
+    ).resolve_all(observed_date=date(2026, 8, 12))
+    policy = loaded["034020"]["NXT_AFTERMARKET"]
+
+    assert policy["session_contract_version"] == "market_session_contract_v1"
+    assert policy["market_data_route"] == "nxt_only"
+    assert policy["market_data_request_code"] == "034020_NX"
+    assert policy["broker_route_requested"] == "NXT"
+    assert policy["actual_execution_venue"] == "UNKNOWN"
+
+
+def test_legacy_nxt_policy_is_not_inherited_by_post_effective_dual_session(
+    tmp_path: Path,
+) -> None:
+    payload = _policy()
+    session = payload["symbols"]["034020"]["sessions"].pop("KRX_REGULAR")
+    session["market_venue"] = "NXT"
+    payload["symbols"]["034020"]["sessions"]["NXT_AFTERMARKET"] = session
+    _write_policy(tmp_path, "widget_auto_trade_policy_2026-08-12.json", payload)
+
+    loaded = WidgetAutoTradePolicyLoader(
+        tmp_path, include_symbol_expansion=False
+    ).resolve_all(observed_date=date(2026, 9, 14))
+
+    assert loaded == {}

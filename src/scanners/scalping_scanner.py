@@ -77,8 +77,10 @@ from src.scanners.scanner_source_census import (
     observe_fetch,
     observe_pool,
     source_cycle_id,
+    source_target_market_data_route,
     source_target_venue,
 )
+from src.trading.market import session_contract
 from sqlalchemy import func, or_
 
 SCANNER_RISING_START_SOURCE_FAMILY = "scalping_scanner_rising_start_source_v1"
@@ -281,13 +283,30 @@ def _market_gainer_candidate_limit():
 
 def _market_gainer_stex_tp(now_ts=None):
     observed_ts = time.time() if now_ts is None else now_ts
-    venue = str(
-        scalping_session_venue_provenance(observed_ts).get("effective_venue") or ""
-    )
-    if venue == "NXT":
-        return "2"
-    if venue in {"KRX", "PREMARKET_KRX_LIKE"}:
-        return "1"
+    if isinstance(observed_ts, datetime):
+        if observed_ts.tzinfo is None:
+            return ""
+        observed_at = observed_ts.astimezone(KST)
+    else:
+        observed_at = datetime.fromtimestamp(float(observed_ts), tz=KST)
+    context = session_contract.resolve_market_session(observed_at)
+    stex_tp_by_route = {
+        session_contract.MARKET_DATA_ROUTE_KRX_ONLY: "1",
+        session_contract.MARKET_DATA_ROUTE_NXT_ONLY: "2",
+        session_contract.MARKET_DATA_ROUTE_KRX_NXT_INTEGRATED: "3",
+    }
+    stex_tp = stex_tp_by_route.get(context.preferred_market_data_route)
+    if context.blocker is None and stex_tp:
+        return stex_tp
+    if (
+        observed_at.date() >= session_contract.MARKET_SESSION_EFFECTIVE_DATE
+        and context.session_regime
+        == session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION
+    ):
+        # There is no post-effective NXT-only session.  Do not let the legacy
+        # 15:58 prewarm fallback issue a route-2 rank query before the
+        # integrated KRX/NXT aftermarket opens at 16:00.
+        return ""
     prewarm_window = scalping_prewarm_window(observed_ts)
     if prewarm_window is not None:
         return "2" if prewarm_window["window_start"].hour >= 16 else "1"
@@ -2470,6 +2489,13 @@ def _merge_candidate(candidate_pool, raw_target, source):
     source_venue = raw_target.get("ScannerSourceVenue")
     if source_venue in {"KRX", "NXT"}:
         current.setdefault("ScannerSourceVenues", set()).add(source_venue)
+    source_route = raw_target.get("ScannerSourceRoute")
+    if source_route in {"krx_only", "nxt_only", "krx_nxt_integrated"}:
+        current.setdefault("ScannerSourceRoutes", set()).add(source_route)
+    current.setdefault("ScannerSourceRoutes", set()).update(
+        set(raw_target.get("ScannerSourceRoutes") or [])
+        & {"krx_only", "nxt_only", "krx_nxt_integrated"}
+    )
     if name:
         current["Name"] = name
 
@@ -2614,6 +2640,12 @@ def _merge_candidate(candidate_pool, raw_target, source):
         )
         current["MarketGainerStExTp"] = str(raw_target.get("MarketGainerStExTp") or "")
         current["MarketGainerVenue"] = str(raw_target.get("MarketGainerVenue") or "")
+        current["MarketGainerMarketDataRoute"] = str(
+            raw_target.get("MarketGainerMarketDataRoute") or "unknown"
+        )
+        current["MarketGainerSourceObservations"] = list(
+            raw_target.get("MarketGainerSourceObservations") or []
+        )
         current["PreSig"] = raw_target.get("PreSig", current.get("PreSig", ""))
     elif source == "PRICE_JUMP_START":
         if raw_flu_present:
@@ -4045,6 +4077,14 @@ def _scanner_event_fields(target, source_guard=None):
         ),
         "scanner_market_gainer_stex_tp": target.get("MarketGainerStExTp") or "",
         "scanner_market_gainer_venue": target.get("MarketGainerVenue") or "",
+        "scanner_market_gainer_market_data_route": target.get(
+            "MarketGainerMarketDataRoute"
+        )
+        or "",
+        "scanner_market_gainer_source_observations": target.get(
+            "MarketGainerSourceObservations"
+        )
+        or [],
         "scanner_market_gainer_reserved_slots": source_guard.get(
             "scanner_market_gainer_reserved_slots", ""
         ),
@@ -4684,6 +4724,13 @@ def _scanner_runtime_target_payload(
         "scanner_market_gainer_flu_rate": fields.get("scanner_market_gainer_flu_rate"),
         "scanner_market_gainer_stex_tp": fields.get("scanner_market_gainer_stex_tp"),
         "scanner_market_gainer_venue": fields.get("scanner_market_gainer_venue"),
+        "scanner_market_gainer_market_data_route": fields.get(
+            "scanner_market_gainer_market_data_route"
+        ),
+        "scanner_market_gainer_source_observations": fields.get(
+            "scanner_market_gainer_source_observations"
+        )
+        or [],
         "scanner_market_gainer_reserved_slots": fields.get(
             "scanner_market_gainer_reserved_slots"
         ),
@@ -5882,26 +5929,69 @@ def promote_candidates(
     return new_codes_found, recent_picks
 
 
+def _scan_source_status(targets, source_meta=None):
+    if not isinstance(source_meta, dict):
+        return "returned" if targets else "empty_adapter_return_unproven_upstream"
+    if source_meta.get("rate_limit_detected") or str(
+        source_meta.get("read_rate_control_status") or ""
+    ) in {"deferred", "rejected"}:
+        return "source_deferred_or_rate_limited"
+    if (
+        source_meta.get("continuous_page_limit_reached")
+        or source_meta.get("continuous_next_key_missing")
+    ):
+        return "partial_adapter_return"
+    status_code = source_meta.get("last_http_status_code")
+    if status_code not in (None, 200, "200"):
+        return "source_http_failure"
+    return "returned" if targets else "empty_adapter_return_unproven_upstream"
+
+
 def _fetch_scan_source(source_name, fetcher, *args, **kwargs):
     try:
-        targets = fetcher(*args, **kwargs) or []
+        fetch_result = fetcher(*args, **kwargs)
+        source_meta = None
+        if (
+            isinstance(fetch_result, tuple)
+            and len(fetch_result) == 2
+            and isinstance(fetch_result[1], dict)
+        ):
+            targets, source_meta = fetch_result
+        else:
+            targets = fetch_result
+        targets = targets or []
+        source_status = _scan_source_status(targets, source_meta)
         observed_epoch = time.time()
         observe_fetch(
             source_name,
             targets,
-            status="returned" if targets else "empty_adapter_return_unproven_upstream",
+            status=source_status,
             request_venue={"1": "KRX", "2": "NXT"}.get(
                 str(kwargs.get("stex_tp")), "UNKNOWN"
             ),
+            request_route={
+                "1": "krx_only",
+                "2": "nxt_only",
+                "3": "krx_nxt_integrated",
+            }.get(str(kwargs.get("stex_tp")), "unknown"),
         )
         return [
             {
                 **target,
                 "ScannerPriceObservedEpoch": observed_epoch,
                 "ScannerSourceCycleId": source_cycle_id(),
+                "ScannerSourceStatus": source_status,
                 "ScannerSourceVenue": source_target_venue(
                     target.get("Code") or target.get("code"),
                     {"1": "KRX", "2": "NXT"}.get(str(kwargs.get("stex_tp")), "UNKNOWN"),
+                ),
+                "ScannerSourceRoute": source_target_market_data_route(
+                    target.get("Code") or target.get("code"),
+                    {
+                        "1": "krx_only",
+                        "2": "nxt_only",
+                        "3": "krx_nxt_integrated",
+                    }.get(str(kwargs.get("stex_tp")), "unknown"),
                 ),
             }
             for target in targets
@@ -5949,8 +6039,14 @@ def _annotate_source_rank(raw_targets, *, prefix, sort_type):
 
 
 def _annotate_market_gainer_targets(raw_targets, *, stex_tp, candidate_limit=None):
-    venue = "NXT" if str(stex_tp) == "2" else "KRX"
+    venue = {"1": "KRX", "2": "NXT"}.get(str(stex_tp), "UNKNOWN")
+    market_data_route = {
+        "1": "krx_only",
+        "2": "nxt_only",
+        "3": "krx_nxt_integrated",
+    }.get(str(stex_tp), "unknown")
     targets = []
+    targets_by_code = {}
     if candidate_limit is None:
         candidate_limit = _market_gainer_candidate_limit()
     candidate_limit = max(0, int(candidate_limit or 0))
@@ -5970,6 +6066,25 @@ def _annotate_market_gainer_targets(raw_targets, *, stex_tp, candidate_limit=Non
                 "reason=prev_close_gain_at_or_above_source_cap"
             )
             continue
+        code = kiwoom_utils.normalize_stock_code(
+            target.get("RawInstrumentCode") or target.get("Code") or ""
+        )
+        observation = {
+            "market_data_route": market_data_route,
+            "source_venue": venue,
+            "stex_tp": str(stex_tp),
+            "source_rank": _safe_positive_int(target.get("SourceRank")) or index,
+            "price": _safe_positive_int(target.get("Price")),
+            "volume": _safe_positive_int(target.get("Volume")),
+            "change_rate": flu_rate,
+        }
+        if code and code in targets_by_code:
+            existing = targets_by_code[code]
+            existing["MarketGainerSourceObservations"].append(observation)
+            existing.setdefault("ScannerSourceRoutes", set()).add(market_data_route)
+            if venue in {"KRX", "NXT"}:
+                existing.setdefault("ScannerSourceVenues", set()).add(venue)
+            continue
         target.update(
             {
                 "FluRate": flu_rate,
@@ -5979,11 +6094,19 @@ def _annotate_market_gainer_targets(raw_targets, *, stex_tp, candidate_limit=Non
                 "MarketGainerVolume": _safe_positive_int(target.get("Volume")),
                 "MarketGainerStExTp": str(stex_tp),
                 "MarketGainerVenue": venue,
+                "MarketGainerMarketDataRoute": market_data_route,
+                "MarketGainerSourceObservations": [observation],
+                "ScannerSourceRoute": market_data_route,
+                "ScannerSourceRoutes": {market_data_route},
                 "ScannerWatchBudgetOwner": RISING_MISSED,
                 "Source": MARKET_GAINER_SOURCE,
             }
         )
+        if venue in {"KRX", "NXT"}:
+            target.setdefault("ScannerSourceVenues", set()).add(venue)
         targets.append(target)
+        if code:
+            targets_by_code[code] = target
         if len(targets) >= candidate_limit:
             break
     return targets
@@ -6590,7 +6713,7 @@ def run_scalper_iteration(
     market_gainer_targets = []
     if _market_gainer_source_enabled():
         market_gainer_stex_tp = _market_gainer_stex_tp()
-        if market_gainer_stex_tp in {"1", "2"}:
+        if market_gainer_stex_tp in {"1", "2", "3"}:
             market_gainer_fetch_depth = _market_gainer_fetch_depth()
             market_gainer_candidate_limit = _market_gainer_candidate_limit()
             raw_market_gainer_targets = _fetch_scan_source(
@@ -6608,6 +6731,7 @@ def run_scalper_iteration(
                 pric_cnd="8",
                 trde_prica_cnd="10",
                 pure_equity_only=True,
+                return_meta=True,
             )
             market_gainer_targets = _annotate_market_gainer_targets(
                 raw_market_gainer_targets,

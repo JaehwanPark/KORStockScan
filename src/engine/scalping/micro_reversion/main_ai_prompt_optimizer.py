@@ -57,6 +57,25 @@ ENTRY_CANDIDATE_PROMPT_SHA256 = {
 }
 ENTRY_REGISTERED_BOUNDED_LIVE_PROMPT_VERSIONS = ENTRY_CANDIDATE_ORDER[:2]
 
+# The v1 keys remain the historical replay contract.  v2 adds the route to
+# the identity for the integrated KRX/NXT aftermarket; it is deliberately an
+# observation-only cohort and therefore never becomes a prompt-search cell.
+ENTRY_COHORT_CONTRACT_SCHEMA = "entry_replay_cohort_contract_v1"
+ENTRY_COHORT_CONTRACT_V1 = "v1"
+ENTRY_COHORT_CONTRACT_V2 = "v2"
+ENTRY_DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
+ENTRY_DUAL_AFTERMARKET_VENUE = "INTEGRATED"
+ENTRY_EXPECTED_COHORTS_BY_CONTRACT_VERSION = {
+    ENTRY_COHORT_CONTRACT_V1: (
+        ("KRX", "KRX_REGULAR", "", ENTRY_COHORT_CONTRACT_V1, "LEGACY"),
+        ("NXT", "NXT_AFTERMARKET", "", ENTRY_COHORT_CONTRACT_V1, "LEGACY"),
+    ),
+    ENTRY_COHORT_CONTRACT_V2: (
+        ("KRX", "KRX_REGULAR", "", ENTRY_COHORT_CONTRACT_V1, "LEGACY"),
+        ("NXT", "NXT_AFTERMARKET", "", ENTRY_COHORT_CONTRACT_V1, "LEGACY"),
+    ),
+}
+
 SOURCE_ONLY_AUTHORITY = {
     "runtime_effect": False,
     "runtime_authority": False,
@@ -126,6 +145,76 @@ def _source_only_authority_valid(payload: Mapping[str, Any]) -> bool:
         and payload.get("actual_order_submitted") is False
         and payload.get("broker_order_forbidden") is True
     )
+
+
+def _calibration_cohort_identity(row: Mapping[str, Any]) -> tuple[str, ...]:
+    """Normalize legacy calibration rows while preserving v2 route identity."""
+    version = _bounded_string(row.get("cohort_key_version")) or ENTRY_COHORT_CONTRACT_V1
+    route = _bounded_string(row.get("market_data_route")).upper()
+    authority = _bounded_string(row.get("authority_state")) or "LEGACY"
+    return tuple(
+        _bounded_string(row.get(field))
+        for field in (
+            "candidate_prompt_version",
+            "candidate_prompt_sha256",
+            "candidate_contract_sha256",
+            "stage",
+            "effective_venue",
+            "session_bucket",
+        )
+    ) + (route, version, authority)
+
+
+def _entry_cohort_contract(calibration: Mapping[str, Any]) -> dict[str, Any]:
+    """Publish the exact replay census without granting v2 search authority."""
+    dual_rows = sorted(
+        {
+            _bounded_string(row.get("market_data_route")).upper()
+            for row in calibration.get("candidate_summaries") or []
+            if isinstance(row, Mapping)
+            and _bounded_string(row.get("stage")).lower() == "entry"
+            and _bounded_string(row.get("effective_venue")).upper()
+            == ENTRY_DUAL_AFTERMARKET_VENUE
+            and _bounded_string(row.get("session_bucket")).upper()
+            == ENTRY_DUAL_AFTERMARKET_SESSION
+            and _bounded_string(row.get("cohort_key_version"))
+            == ENTRY_COHORT_CONTRACT_V2
+            and _bounded_string(row.get("authority_state")) == "OBSERVE_ONLY"
+            and _bounded_string(row.get("market_data_route"))
+        }
+    )
+    version = ENTRY_COHORT_CONTRACT_V2 if dual_rows else ENTRY_COHORT_CONTRACT_V1
+    expected = [
+        {
+            "effective_venue": venue,
+            "session_bucket": session,
+            "market_data_route": route or None,
+            "cohort_key_version": cohort_key_version,
+            "authority_state": authority,
+        }
+        for venue, session, route, cohort_key_version, authority in (
+            ENTRY_EXPECTED_COHORTS_BY_CONTRACT_VERSION[version]
+        )
+    ]
+    expected.extend(
+        {
+            "effective_venue": ENTRY_DUAL_AFTERMARKET_VENUE,
+            "session_bucket": ENTRY_DUAL_AFTERMARKET_SESSION,
+            "market_data_route": route,
+            "cohort_key_version": ENTRY_COHORT_CONTRACT_V2,
+            "authority_state": "OBSERVE_ONLY",
+        }
+        for route in dual_rows
+    )
+    body = {
+        "schema": ENTRY_COHORT_CONTRACT_SCHEMA,
+        "version": version,
+        "expected_cohorts": expected,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "dual_aftermarket_provider_forbidden": True,
+    }
+    return {**body, "contract_content_sha256": _canonical_sha256(body)}
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -239,7 +328,7 @@ def _latest_action_outcome_calibration(
         or source_contract.get("cross_cohort_outcome_conflicts_excluded") is not True
     ):
         warnings.append("action_outcome_calibration_source_contract_invalid")
-    candidate_identities: set[tuple[str, str, str, str, str, str]] = set()
+    candidate_identities: set[tuple[str, ...]] = set()
     candidate_contract_valid = isinstance(
         payload.get("candidate_summaries"), list
     ) and _native_nonnegative_int(payload.get("candidate_count")) == len(
@@ -249,24 +338,25 @@ def _latest_action_outcome_calibration(
         if not isinstance(row, Mapping):
             candidate_contract_valid = False
             continue
-        identity = tuple(
-            _bounded_string(row.get(field))
-            for field in (
-                "candidate_prompt_version",
-                "candidate_prompt_sha256",
-                "candidate_contract_sha256",
-                "stage",
-                "effective_venue",
-                "session_bucket",
-            )
-        )
+        identity = _calibration_cohort_identity(row)
+        route, cohort_version, authority = identity[-3:]
+        is_dual = cohort_version == ENTRY_COHORT_CONTRACT_V2
         if (
-            not all(identity)
+            not all(identity[:6])
             or not _is_sha256(identity[1])
             or not _is_sha256(identity[2])
             or row.get("cohort_isolated") is not True
             or row.get("runtime_apply_authority") is not False
             or identity in candidate_identities
+            or (is_dual and (
+                identity[4].upper() != ENTRY_DUAL_AFTERMARKET_VENUE
+                or identity[5].upper() != ENTRY_DUAL_AFTERMARKET_SESSION
+                or not route
+                or authority != "OBSERVE_ONLY"
+                or row.get("review_classification") != "dual_aftermarket_observe_only"
+                or row.get("review_ready_for_prompt_candidate") is not False
+            ))
+            or (not is_dual and (route or cohort_version != ENTRY_COHORT_CONTRACT_V1))
         ):
             candidate_contract_valid = False
         candidate_identities.add(identity)
@@ -288,17 +378,7 @@ def _latest_action_outcome_calibration(
     ):
         warnings.append("action_outcome_calibration_handoff_candidate_invalid")
     candidates_by_identity = {
-        tuple(
-            _bounded_string(row.get(field))
-            for field in (
-                "candidate_prompt_version",
-                "candidate_prompt_sha256",
-                "candidate_contract_sha256",
-                "stage",
-                "effective_venue",
-                "session_bucket",
-            )
-        ): row
+        _calibration_cohort_identity(row): row
         for row in candidate_summaries
         if isinstance(row, Mapping)
     }
@@ -327,17 +407,7 @@ def _latest_action_outcome_calibration(
         else:
             warnings.append("action_outcome_calibration_handoff_candidate_invalid")
     for expected_classification, reference in handoff_references:
-        identity = tuple(
-            _bounded_string(reference.get(field))
-            for field in (
-                "candidate_prompt_version",
-                "candidate_prompt_sha256",
-                "candidate_contract_sha256",
-                "stage",
-                "effective_venue",
-                "session_bucket",
-            )
-        )
+        identity = _calibration_cohort_identity(reference)
         matched = candidates_by_identity.get(identity)
         if (
             matched is None
@@ -358,6 +428,8 @@ def _action_outcome_advisory(
     effective_venue: str,
     session_bucket: str,
     candidate_prompt_version: str,
+    market_data_route: str = "",
+    cohort_key_version: str = ENTRY_COHORT_CONTRACT_V1,
 ) -> dict[str, Any] | None:
     matches = [
         row
@@ -369,6 +441,10 @@ def _action_outcome_advisory(
             and _bounded_string(row.get("session_bucket")).upper() == session_bucket
             and _bounded_string(row.get("candidate_prompt_version"))
             == candidate_prompt_version
+            and _bounded_string(row.get("market_data_route")).upper()
+            == market_data_route.upper()
+            and (_bounded_string(row.get("cohort_key_version")) or ENTRY_COHORT_CONTRACT_V1)
+            == cohort_key_version
         )
     ]
     if len(matches) != 1:
@@ -984,7 +1060,19 @@ def _frozen_entry_batch_selection(
         raise ValueError("terminal_entry_batch_required_for_selection_preservation")
     result: dict[tuple[str, str], dict[str, str]] = {}
     for cohort in batch.get("cohorts") or []:
-        if not isinstance(cohort, Mapping) or cohort.get("status") not in {
+        if not isinstance(cohort, Mapping):
+            raise ValueError("entry_batch_cohort_not_terminal")
+        if cohort.get("status") == "completed_observe_only":
+            if (
+                cohort.get("effective_venue") != ENTRY_DUAL_AFTERMARKET_VENUE
+                or cohort.get("session_bucket") != ENTRY_DUAL_AFTERMARKET_SESSION
+                or cohort.get("cohort_key_version") != ENTRY_COHORT_CONTRACT_V2
+                or cohort.get("authority_state") != "OBSERVE_ONLY"
+                or not cohort.get("market_data_route")
+            ):
+                raise ValueError("entry_batch_dual_observe_only_contract_invalid")
+            continue
+        if cohort.get("status") not in {
             "completed_offline_only",
             "hold_no_mature_exact_request",
             "hold_no_exact_entry_control",
@@ -1203,6 +1291,7 @@ def build_report(
         if preserve_entry_batch_selection
         else {}
     )
+    entry_cohort_contract = _entry_cohort_contract(action_outcome_calibration)
     for stage, summary in stages.items():
         stage_rows = [
             row
@@ -1352,6 +1441,50 @@ def build_report(
             ),
         }
 
+    # A v2 integrated aftermarket route is a terminal source observation.  Do
+    # not turn its calibration presence into an offline provider replay or a
+    # candidate prompt selection merely because it is part of the same day.
+    entry_summary = stages.get("entry")
+    if (
+        isinstance(entry_summary, dict)
+        and entry_cohort_contract["version"] == ENTRY_COHORT_CONTRACT_V2
+    ):
+        cohort_optimizers = entry_summary.get("cohort_optimizers") or []
+        for expected in entry_cohort_contract["expected_cohorts"]:
+            if expected["cohort_key_version"] != ENTRY_COHORT_CONTRACT_V2:
+                continue
+            route = expected["market_data_route"]
+            if any(
+                _bounded_string(item.get("effective_venue")).upper()
+                == expected["effective_venue"]
+                and _bounded_string(item.get("session_bucket")).upper()
+                == expected["session_bucket"]
+                and _bounded_string(item.get("market_data_route")).upper() == route
+                for item in cohort_optimizers
+                if isinstance(item, Mapping)
+            ):
+                continue
+            cohort_optimizers.append(
+                {
+                    **expected,
+                    "base_exact_parent_count": 0,
+                    "base_exact_unique_symbol_count": 0,
+                    "selected_challenger": {
+                        "prompt_version": "",
+                        "action": "dual_aftermarket_observe_only_no_provider_replay",
+                        "reason": "v2_route_isolated_source_only_contract",
+                    },
+                    "next_session_evaluation_recommendation": {
+                        "action": "retain_route_isolated_source_observation"
+                    },
+                    "selection_scope": "route_isolated_source_only",
+                    "cross_cohort_selection_forbidden": True,
+                    "cohort_blockers": ["dual_aftermarket_observe_only"],
+                    "prompt_search_ready": False,
+                }
+            )
+        entry_summary["cohort_optimizers"] = cohort_optimizers
+
     active_candidate_cohorts = {
         (
             stage,
@@ -1450,6 +1583,7 @@ def build_report(
                 else None
             ),
         },
+        "entry_cohort_contract": entry_cohort_contract,
         "blockers": blockers,
         "optional_input_warnings": input_warnings,
         "stage_optimizers": stages,

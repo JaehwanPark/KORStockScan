@@ -12,7 +12,7 @@ import json
 import re
 import tempfile
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 from zoneinfo import ZoneInfo
@@ -27,6 +27,7 @@ POLICY_VERSION = "baseline_v1"
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 SOURCE_AUDIT_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 REPORT_DIR = DATA_DIR / "report" / "ai_input_quality_baseline"
+DUAL_AFTERMARKET_EFFECTIVE_DATE = date(2026, 9, 14)
 
 OBSERVATION_CONTRACT = {
     "metric_role": "ai_input_source_quality_replay",
@@ -73,6 +74,7 @@ REAL_COHORTS = (
     "KRX",
     "NXT_REGULAR_OVERLAP",
     "NXT_AFTERMARKET",
+    "KRX_NXT_AFTERMARKET",
     "OVERNIGHT",
     "UNKNOWN",
 )
@@ -112,10 +114,13 @@ _REPLAY_FIELD_KEYS = frozenset(
     {
         "ai_input_preflight_source_allowed",
         "ai_market_snapshot_broker_route",
+        "ai_market_snapshot_actual_execution_venue",
         "ai_market_snapshot_effective_venue",
         "ai_market_snapshot_id",
         "ai_market_snapshot_market_data_route",
         "ai_market_snapshot_session_bucket",
+        "market_session_regime",
+        "session_contract_version",
         "ai_market_snapshot_underlying_event_venue",
         "ai_parse_fail",
         "ai_response_ms",
@@ -267,11 +272,29 @@ def _explicit_cohort(
         .strip()
         .upper()
     )
+    market_data_route = _market_data_route(fields)
+    post_effective = bool(
+        event_time is not None
+        and event_time.date() >= DUAL_AFTERMARKET_EFFECTIVE_DATE
+    )
     if "premarket" in session:
         return "PREMARKET_KRX_LIKE", "explicit_session"
+    if post_effective and (
+        venue in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"}
+        or "krx_nxt_aftermarket" in session
+    ):
+        if market_data_route == "krx_nxt_integrated":
+            return "KRX_NXT_AFTERMARKET", "post_effective_integrated_scope"
+        return "UNKNOWN", "post_effective_dual_route_missing"
     if venue == "KRX":
         return "KRX", "explicit_venue"
     if venue == "NXT":
+        if post_effective and (
+            "aftermarket" in session
+            or "after_market" in session
+            or "nxt_entry_window" in session
+        ):
+            return "UNKNOWN", "post_effective_legacy_nxt_aftermarket_ambiguous"
         if "aftermarket" in session or "after_market" in session:
             return "NXT_AFTERMARKET", "explicit_venue_session"
         if session and event_time is not None and event_time.hour >= 16:
@@ -339,6 +362,15 @@ def _underlying_event_venue(fields: dict[str, Any]) -> str | None:
         .upper()
     )
     return value if value in {"KRX", "NXT"} else None
+
+
+def _actual_execution_venue(fields: dict[str, Any]) -> str | None:
+    value = str(
+        fields.get("ai_market_snapshot_actual_execution_venue")
+        or fields.get("actual_execution_venue")
+        or ""
+    ).strip().upper()
+    return value if value in {"KRX", "NXT", "UNKNOWN"} else None
 
 
 def _quality_text(value: Any) -> str:
@@ -528,6 +560,8 @@ def _empty_bucket() -> dict[str, Any]:
         "broker_route_sources": Counter(),
         "market_data_route_counts": Counter(),
         "underlying_event_venue_counts": Counter(),
+        "actual_execution_venue_counts": Counter(),
+        "session_contract_version_counts": Counter(),
         "quality_reasons": Counter(),
         "event_stages": Counter(),
     }
@@ -741,6 +775,19 @@ def build_baseline_policy(
             underlying_venue = _underlying_event_venue(fields)
             if underlying_venue is not None:
                 bucket["underlying_event_venue_counts"][underlying_venue] += 1
+            actual_venue = _actual_execution_venue(fields)
+            if actual_venue is not None:
+                bucket["actual_execution_venue_counts"][actual_venue] += 1
+            contract_version = str(
+                fields.get("session_contract_version")
+                or (
+                    "market_session_contract_v2"
+                    if event_time is not None
+                    and event_time.date() >= DUAL_AFTERMARKET_EFFECTIVE_DATE
+                    else "market_session_contract_v1"
+                )
+            )
+            bucket["session_contract_version_counts"][contract_version] += 1
             bucket["event_stages"][stage] += 1
             bucket["quality_reasons"].update(reasons)
             called = _provider_called(fields)
@@ -782,6 +829,9 @@ def build_baseline_policy(
                     proxy_bucket["market_data_route_counts"][market_data_route] += 1
                 if underlying_venue is not None:
                     proxy_bucket["underlying_event_venue_counts"][underlying_venue] += 1
+                if actual_venue is not None:
+                    proxy_bucket["actual_execution_venue_counts"][actual_venue] += 1
+                proxy_bucket["session_contract_version_counts"][contract_version] += 1
                 proxy_bucket["event_stages"]["scalp_entry_action_proxy"] += 1
                 proxy_bucket["quality_reasons"].update(reasons)
 
@@ -798,6 +848,8 @@ def build_baseline_policy(
                 )
             elif row_count == 0:
                 policy_state = "unobserved_keep_runtime_fail_closed"
+            elif cohort == "KRX_NXT_AFTERMARKET":
+                policy_state = "post_effective_dual_observed_source_only"
             else:
                 policy_state = "legacy_proxy_observed_not_exact"
             matrix.append(
@@ -835,6 +887,12 @@ def build_baseline_policy(
                     ),
                     "underlying_event_venue_counts": dict(
                         sorted(bucket["underlying_event_venue_counts"].items())
+                    ),
+                    "actual_execution_venue_counts": dict(
+                        sorted(bucket["actual_execution_venue_counts"].items())
+                    ),
+                    "session_contract_version_counts": dict(
+                        sorted(bucket["session_contract_version_counts"].items())
                     ),
                     "quality_reasons": dict(bucket["quality_reasons"].most_common()),
                     "event_stages": dict(sorted(bucket["event_stages"].items())),

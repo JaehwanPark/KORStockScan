@@ -27,10 +27,11 @@ KST = ZoneInfo("Asia/Seoul")
 SAMSUNG_CODE = "005930"
 DEFAULT_OUTPUT_DIR = Path("data/market_data/pure_market_reversal")
 CLEAN_TUNING_BASELINE_DATE = date(2026, 6, 5)
+MARKET_SESSION_EFFECTIVE_DATE = date(2026, 9, 14)
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
     "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
-    "retrieved_at_kst": "2026-09-03T12:04:23+09:00",
+    "retrieved_at_kst": "2026-09-12T00:42:43+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
@@ -139,6 +140,11 @@ class MarketBar:
     close: int
     volume: int
     adjusted_price: bool
+    decision_market_scope: str
+    market_data_route: str
+    market_session_regime: str
+    actual_execution_venue: str
+    route_source_quality: str
 
 
 @dataclass(frozen=True)
@@ -176,19 +182,67 @@ def _nonnegative_int(value: object) -> int:
     return parsed
 
 
-def _session_for(*, venue: str, timestamp: str) -> str | None:
-    hhmm = timestamp[8:12]
-    if venue == "KRX":
-        return "KRX_REGULAR" if "0900" <= hhmm < "1530" else None
-    if venue != "NXT":
+def _market_axes_for(*, venue: str, timestamp: str) -> dict[str, str] | None:
+    """Classify a source row by its own trade date, never by wall clock."""
+
+    try:
+        trade_date = datetime.strptime(timestamp[:8], "%Y%m%d").date()
+    except ValueError:
         return None
-    if "0800" <= hhmm < "0850":
-        return "NXT_PREMARKET"
-    if "0900" <= hhmm < "1530":
-        return "NXT_REGULAR"
-    if "1540" <= hhmm < "2000":
-        return "NXT_AFTERMARKET"
-    return None
+    hhmm = timestamp[8:12]
+    route = "krx_only" if venue == "KRX" else "nxt_only"
+    if trade_date >= MARKET_SESSION_EFFECTIVE_DATE:
+        if venue == "NXT" and "0800" <= hhmm < "0850":
+            session = "NXT_PREMARKET"
+        elif "0900" <= hhmm < "1530":
+            session = "KRX_REGULAR" if venue == "KRX" else "NXT_REGULAR"
+        elif "1600" <= hhmm < "1940":
+            session = "KRX_NXT_AFTERMARKET"
+        elif "1940" <= hhmm < "1945":
+            session = "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+        elif "1945" <= hhmm < "2000":
+            session = "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
+        else:
+            return None
+        integrated = session.startswith("KRX_NXT_AFTERMARKET")
+        return {
+            "session": session,
+            "decision_market_scope": (
+                "KRX_NXT_INTEGRATED" if integrated else venue
+            ),
+            "market_data_route": route,
+            "market_session_regime": session,
+            "actual_execution_venue": "UNKNOWN",
+            "route_source_quality": "PARTIAL" if integrated else "PASS",
+        }
+    if venue == "KRX":
+        session = "KRX_REGULAR" if "0900" <= hhmm < "1530" else None
+    elif venue == "NXT":
+        if "0800" <= hhmm < "0850":
+            session = "NXT_PREMARKET"
+        elif "0900" <= hhmm < "1530":
+            session = "NXT_REGULAR"
+        elif "1540" <= hhmm < "2000":
+            session = "NXT_AFTERMARKET"
+        else:
+            session = None
+    else:
+        session = None
+    if session is None:
+        return None
+    return {
+        "session": session,
+        "decision_market_scope": venue,
+        "market_data_route": route,
+        "market_session_regime": session,
+        "actual_execution_venue": "UNKNOWN",
+        "route_source_quality": "PASS",
+    }
+
+
+def _session_for(*, venue: str, timestamp: str) -> str | None:
+    axes = _market_axes_for(venue=venue, timestamp=timestamp)
+    return str(axes["session"]) if axes is not None else None
 
 
 def _normalize_row(
@@ -213,8 +267,8 @@ def _normalize_row(
         or volume < 0
     ):
         return None, "invalid_ohlcv"
-    session = _session_for(venue=venue, timestamp=timestamp)
-    if session is None:
+    axes = _market_axes_for(venue=venue, timestamp=timestamp)
+    if axes is None:
         return None, "out_of_session"
     return (
         MarketBar(
@@ -222,7 +276,7 @@ def _normalize_row(
             symbol=SAMSUNG_CODE,
             request_code=request_code,
             venue=venue,
-            session=session,
+            session=axes["session"],
             source_api_id="ka10080",
             source_timestamp=timestamp,
             source_time_basis="ka10080_cntr_tm_bar_timestamp",
@@ -233,6 +287,11 @@ def _normalize_row(
             close=prices["close"],
             volume=volume,
             adjusted_price=True,
+            decision_market_scope=axes["decision_market_scope"],
+            market_data_route=axes["market_data_route"],
+            market_session_regime=axes["market_session_regime"],
+            actual_execution_venue=axes["actual_execution_venue"],
+            route_source_quality=axes["route_source_quality"],
         ),
         None,
     )
@@ -259,7 +318,7 @@ def _normalize_index_row(row: object) -> tuple[IndexBar | None, str | None]:
     ):
         return None, "invalid_ohlcv"
     session = _session_for(venue="KRX", timestamp=timestamp)
-    if session is None:
+    if session != "KRX_REGULAR":
         return None, "out_of_session"
     return (
         IndexBar(
@@ -431,6 +490,9 @@ def fetch_ka10080_history(
         <= end_date
     ]
     dates = sorted({bar.source_timestamp[:8] for bar in bars})
+    partial_route_row_count = sum(
+        bar.route_source_quality == "PARTIAL" for bar in bars
+    )
     meta = {
         "venue": normalized_venue,
         "request_code": request_code,
@@ -451,10 +513,20 @@ def fetch_ka10080_history(
         "invalid_row_count": invalid_row_count,
         "out_of_session_row_count": out_of_session_row_count,
         "duplicate_row_count": duplicate_row_count,
+        "partial_route_row_count": partial_route_row_count,
+        "market_data_route_counts": {
+            route: sum(bar.market_data_route == route for bar in bars)
+            for route in sorted({bar.market_data_route for bar in bars})
+        },
         "shared_read_control_enabled": shared_control,
         "shared_read_control_last_admission": last_admission,
         "source_quality_status": (
-            "PASS" if target_reached and bars and invalid_row_count == 0 else "PARTIAL"
+            "PASS"
+            if target_reached
+            and bars
+            and invalid_row_count == 0
+            and partial_route_row_count == 0
+            else "PARTIAL"
         ),
     }
     return bars, meta

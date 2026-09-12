@@ -63,6 +63,7 @@ EXPECTED_SESSIONS = (
     "NXT_REGULAR_OVERLAP",
     "NXT_AFTERMARKET",
 )
+DUAL_AFTERMARKET_SESSION_PREFIX = "KRX_NXT_AFTERMARKET"
 REQUIRED_REVIEW_CHECKS = ("tests", "compile", "diff_check")
 PREMARKET_REVIEW_START = time(8, 20)
 PREMARKET_REVIEW_END = time(8, 40)
@@ -127,6 +128,34 @@ OBSERVATION_CONTRACT = {
         "bot_restart",
     ],
 }
+
+
+def _dual_source_only_market_axes(trace: dict[str, Any]) -> dict[str, Any]:
+    decision_scope = str(
+        trace.get("decision_market_scope") or trace.get("effective_venue") or "UNKNOWN"
+    ).strip().upper()
+    route = str(trace.get("market_data_route") or "").strip().lower()
+    session = str(
+        trace.get("market_session_regime")
+        or trace.get("session_bucket")
+        or "UNKNOWN"
+    ).strip().upper()
+    dual_source_only = bool(
+        decision_scope == "KRX_NXT_INTEGRATED"
+        or session.startswith(DUAL_AFTERMARKET_SESSION_PREFIX)
+    )
+    actual_venue = str(
+        trace.get("actual_execution_venue") or "UNKNOWN"
+    ).strip().upper()
+    if actual_venue not in {"KRX", "NXT"}:
+        actual_venue = "UNKNOWN"
+    return {
+        "decision_market_scope": decision_scope,
+        "market_data_route": route or "unknown",
+        "market_session_regime": session,
+        "actual_execution_venue": actual_venue,
+        "dual_source_only": dual_source_only,
+    }
 
 
 def promotion_path(target_date: str) -> Path:
@@ -719,6 +748,14 @@ def evaluate_promotion(
             "sessions": list(EXPECTED_SESSIONS),
             "endpoints": list(EXPECTED_ENDPOINTS),
             "rollout": "binary_full_market_no_canary_no_partial_cohort",
+            "dual_aftermarket": {
+                "effective_from": "2026-09-14",
+                "decision_market_scope": "KRX_NXT_INTEGRATED",
+                "market_session_regime_prefix": DUAL_AFTERMARKET_SESSION_PREFIX,
+                "observation_mode": "source_only",
+                "runtime_activation": False,
+                "auto_promotion_candidate_count": 0,
+            },
         },
         "evidence_basis": {
             "premarket_exact": {
@@ -1047,6 +1084,8 @@ def build_first_observation_report(
             "generated_at": generated_at.isoformat(),
             "status": "promotion_not_authorized",
             "observations": [],
+            "dual_source_only_observations": [],
+            "dual_auto_promotion_candidate_count": 0,
             **OBSERVATION_CONTRACT,
         }
     promoted_at = _parse_ts(promotion.get("promoted_at"))
@@ -1065,6 +1104,7 @@ def build_first_observation_report(
         and payload_hash_counts[str(row.get("payload_sha256"))] == 1
     }
     first: dict[tuple[str, str, str], dict[str, Any]] = {}
+    dual_first: dict[tuple[str, str, str], dict[str, Any]] = {}
     for trace in sorted(traces, key=_trace_sort_key):
         decision_ts = _parse_ts(trace.get("decision_ts"))
         if promoted_at and (not decision_ts or decision_ts < promoted_at):
@@ -1083,6 +1123,24 @@ def build_first_observation_report(
             payload_by_unique_hash.get(payload_hash, {}),
         )
         evidence = _payload_context_evidence(payload)
+        market_axes = _dual_source_only_market_axes(trace)
+        if market_axes["dual_source_only"] is True:
+            if key not in dual_first:
+                dual_first[key] = {
+                    "endpoint": endpoint,
+                    "effective_venue": venue,
+                    "session_bucket": session,
+                    "decision_trace_id": trace.get("decision_trace_id"),
+                    "payload_sha256": trace.get("payload_sha256"),
+                    "response_sha256": trace.get("response_sha256"),
+                    "status": "source_only_observed",
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "auto_promotion_eligible": False,
+                    **market_axes,
+                    **evidence,
+                }
+            continue
         violations: list[str] = []
         expected_schema = (
             "entry_candle_context_v1"
@@ -1160,6 +1218,13 @@ def build_first_observation_report(
         "promotion_artifact": str(promotion_path(target_date)),
         "promotion_sha256": _sha256(promotion),
         "observations": list(first.values()),
+        "dual_source_only_observations": list(dual_first.values()),
+        "dual_source_only_observation_count": len(dual_first),
+        "dual_actual_execution_venue_unknown_count": sum(
+            row["actual_execution_venue"] == "UNKNOWN"
+            for row in dual_first.values()
+        ),
+        "dual_auto_promotion_candidate_count": 0,
         "pending_natural_endpoints": pending,
         "pending_natural_sessions": pending_sessions,
         "krx_post_apply_validation": krx_post_apply,

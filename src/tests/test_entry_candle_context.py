@@ -829,7 +829,7 @@ def test_krx_regular_keeps_krx_candles_when_only_order_route_is_sor(monkeypatch)
     assert snapshot["market_data_route"] == "krx_only"
 
 
-def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
+def test_integrated_aftermarket_preserves_scope_without_nxt_attribution(
     monkeypatch,
 ):
     _enable(monkeypatch)
@@ -866,22 +866,27 @@ def test_nxt_aftermarket_accepts_integrated_ws_only_with_closed_session_proof(
         "token",
         "000660",
         ws,
-        venue="NXT",
-        session="nxt_aftermarket",
+        venue="KRX_NXT_INTEGRATED",
+        session="krx_nxt_aftermarket",
         now_ts=observed_at,
         recent_candles=_candles(20, start_hour=16),
         source_meta={},
     )
 
-    assert context["request_code"] == "000660_NX"
-    assert context["route_equivalence_proven"] is True
-    assert context["route_equivalence"] == "nxt_aftermarket_integrated_ws_to_nx_rest"
-    assert context["source_quality"]["route_equivalence_proof"]["proven"] is True
+    assert context["venue"] == "KRX_NXT_INTEGRATED"
+    assert context["request_code"] == "000660_AL"
+    assert context["market_data_route"] == "krx_nxt_integrated"
+    assert context["actual_execution_venue"] == "UNKNOWN"
+    assert context["route_equivalence_proven"] is False
+    assert context["route_equivalence"] == "not_proven"
     assert context["source_quality"]["status"] == "fresh_consistent"
     assert context["source_quality"]["route_conflict_count"] == 0
     assert context["bars"][-1]["c"] == 10210
     snapshot = context["ai_market_snapshot_v1"]
-    assert snapshot["nxt_integrated_execution_view_proven"] is True
+    assert snapshot["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert snapshot["market_data_route"] == "krx_nxt_integrated"
+    assert snapshot["actual_execution_venue"] == "UNKNOWN"
+    assert snapshot["nxt_integrated_execution_view_proven"] is False
     assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
     assert snapshot["underlying_event_venue"] is None
     assert snapshot["venue_attribution_allowed"] is False
@@ -991,7 +996,7 @@ def test_nxt_aftermarket_rejects_tick_from_non_equivalent_route(monkeypatch):
         source_meta={},
     )
 
-    assert context["route_equivalence_proven"] is True
+    assert context["route_equivalence_proven"] is False
     assert context["source_quality"]["route_conflict_count"] == 1
     assert context["source_quality"]["status"] == "blocked"
 
@@ -1341,7 +1346,7 @@ def test_entry_price_skips_provider_and_blocks_submit_for_blocked_context(
     assert logs[-1][1]["broker_order_forbidden"] is True
 
 
-def test_entry_price_calls_provider_for_proven_nxt_aftermarket_equivalence(
+def test_entry_price_preserves_provider_behavior_for_integrated_scope(
     monkeypatch,
 ):
     _enable(monkeypatch)
@@ -1414,3 +1419,4 @@ def test_entry_price_calls_provider_for_proven_nxt_aftermarket_equivalence(
     assert adjusted
     assert touched is True
     assert latency_gate.get("ai_entry_price_canary_submit_blocked") is not True
+    assert latency_gate.get("ai_entry_price_provider_skipped") is not True

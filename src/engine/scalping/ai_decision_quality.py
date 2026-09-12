@@ -3570,6 +3570,8 @@ def _linked_rising_missed_post_block_outcome(
 def _request_code_for_venue(stock_code: Any, effective_venue: Any) -> str | None:
     code = _normalize_stock_code(stock_code)
     venue = _venue(effective_venue)
+    if venue == "KRX_NXT_INTEGRATED":
+        return f"{code}_AL"
     if venue == "NXT":
         return f"{code}_NX"
     if venue == "SOR":
@@ -3585,6 +3587,7 @@ def _venue_session_consistent(effective_venue: Any, session_bucket: Any) -> bool
     allowed_sessions = {
         "KRX": {"KRX_REGULAR"},
         "SOR": {"KRX_REGULAR"},
+        "KRX_NXT_INTEGRATED": {"KRX_NXT_AFTERMARKET"},
         "NXT": {
             "NXT_PREMARKET",
             "PREMARKET_KRX_LIKE",
@@ -3606,6 +3609,8 @@ def _timestamp_in_session(timestamp: datetime, session_bucket: Any) -> bool:
         return 9 * 60 <= minute <= 15 * 60 + 30
     if session == "NXT_AFTERMARKET":
         return 15 * 60 + 30 < minute <= 20 * 60
+    if session == "KRX_NXT_AFTERMARKET":
+        return 16 * 60 <= minute < 20 * 60
     return False
 
 
@@ -3810,6 +3815,8 @@ def _venue(value: Any) -> str:
     text = str(value or "").strip().upper()
     if text in {"PREMARKET", "PREMARKET_KRX_LIKE"}:
         return "PREMARKET_KRX_LIKE"
+    if text in {"INTEGRATED", "KRX_NXT_INTEGRATED"}:
+        return "KRX_NXT_INTEGRATED"
     if "NXT" in text:
         return "NXT"
     if "KRX" in text:
@@ -29663,7 +29670,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--venue",
-        choices=("KRX", "NXT", "SOR", "PREMARKET_KRX_LIKE"),
+        choices=(
+            "KRX",
+            "NXT",
+            "SOR",
+            "KRX_NXT_INTEGRATED",
+            "PREMARKET_KRX_LIKE",
+        ),
         help=(
             "Restrict control/paired/detailed artifacts to one effective venue. "
             "The filter changes offline artifact scope only."
@@ -29677,6 +29690,7 @@ def main(argv: list[str] | None = None) -> int:
             "KRX_REGULAR",
             "NXT_REGULAR_OVERLAP",
             "NXT_AFTERMARKET",
+            "KRX_NXT_AFTERMARKET",
         ),
         help=(
             "Restrict control/paired/detailed artifacts to one session bucket. "

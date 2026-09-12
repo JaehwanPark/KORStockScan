@@ -114,6 +114,40 @@ def test_session_progress_uses_known_clock_bounds_not_future_bar_count():
     assert adaptive._session_progress(bar) == pytest.approx(0.5)
 
 
+def test_session_progress_and_features_preserve_dual_route_provenance():
+    start = datetime(2026, 9, 14, 17, 50)
+    bars = [
+        base.Bar(
+            symbol="005930",
+            venue="KRX",
+            session="KRX_NXT_AFTERMARKET",
+            timestamp=start + timedelta(minutes=offset),
+            open=10_000 + offset,
+            high=10_002 + offset,
+            low=9_998 + offset,
+            close=10_001 + offset,
+            volume=100,
+            source="test",
+            decision_market_scope="KRX_NXT_INTEGRATED",
+            market_data_route="krx_only",
+            market_session_regime="KRX_NXT_AFTERMARKET",
+            actual_execution_venue="UNKNOWN",
+            route_source_quality="PARTIAL",
+        )
+        for offset in range(22)
+    ]
+
+    rows, _oracle = adaptive.build_feature_rows(bars, [], cost_pct=0.2)
+
+    assert adaptive._session_progress(bars[0]) == pytest.approx(0.5)
+    assert rows
+    assert rows[0].decision_market_scope == "KRX_NXT_INTEGRATED"
+    assert rows[0].market_data_route == "krx_only"
+    assert rows[0].market_session_regime == "KRX_NXT_AFTERMARKET"
+    assert rows[0].actual_execution_venue == "UNKNOWN"
+    assert rows[0].route_source_quality == "PARTIAL"
+
+
 def test_metric_contract_forbids_oracle_and_future_runtime_use():
     forbidden = adaptive.METRIC_CONTRACT["forbidden_uses"]
 

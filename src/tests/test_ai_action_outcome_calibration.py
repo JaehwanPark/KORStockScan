@@ -993,6 +993,107 @@ def test_same_prompt_isolated_krx_and_nxt_are_separate_candidates(
     } == {("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET")}
 
 
+def test_dual_aftermarket_uses_route_key_and_remains_observe_only(tmp_path: Path) -> None:
+    assert calibration._cohort_route_scope("KRX", "KRX_REGULAR", "") == (
+        "KRX:KRX_REGULAR"
+    )
+    rows = [
+        {
+            "decision_trace_id": "dual-known",
+            "stock_code": "005930",
+            "stage": "entry",
+            "effective_venue": "UNKNOWN",
+            "session_bucket": "KRX_NXT_AFTERMARKET",
+            "market_data_route": "krx_nxt_integrated",
+            "actual_execution_venue": "KRX",
+            "control_action": "WAIT",
+            "candidate_action": "WAIT",
+            "control_decision_value_pct": 0.0,
+            "candidate_primary_decision_value_pct": 0.1,
+            "delta_pct": 0.1,
+            "outcome_return_pct": 0.1,
+        },
+        {
+            "decision_trace_id": "dual-unknown-venue",
+            "stock_code": "005930",
+            "stage": "entry",
+            "effective_venue": "UNKNOWN",
+            "session_bucket": "KRX_NXT_AFTERMARKET",
+            "market_data_route": "krx_nxt_integrated",
+            "actual_execution_venue": "UNKNOWN",
+            "control_action": "WAIT",
+            "candidate_action": "WAIT",
+            "control_decision_value_pct": 0.0,
+            "candidate_primary_decision_value_pct": 0.1,
+            "delta_pct": 0.1,
+            "outcome_return_pct": 0.1,
+        },
+        {
+            "decision_trace_id": "dual-cost-missing",
+            "stock_code": "005930",
+            "stage": "entry",
+            "effective_venue": "UNKNOWN",
+            "session_bucket": "KRX_NXT_AFTERMARKET",
+            "market_data_route": "krx_nxt_integrated",
+            "actual_execution_venue": "NXT",
+            "control_action": "WAIT",
+            "candidate_action": "BUY",
+            "control_decision_value_pct": 0.0,
+            "candidate_primary_decision_value_pct": 0.1,
+            "delta_pct": 0.1,
+            "outcome_return_pct": 0.1,
+        },
+    ]
+    payload = _valid_detailed_payload(
+        {
+            "target_date": "2026-09-07",
+            "requests": [{"candidate": {"prompt_version": "dual_v1"}}],
+            "paired_comparisons": rows,
+        }
+    )
+    contract = payload["candidate_contract_sha256"]
+    payload["promotion_cohort_scope"] = {
+        "stages": ["entry"],
+        "effective_venues": ["INTEGRATED"],
+        "session_buckets": ["KRX_NXT_AFTERMARKET"],
+        "market_data_routes": ["krx_nxt_integrated"],
+        "isolated": True,
+        "candidate_contract_sha256": contract,
+        "candidate_contract_isolated": True,
+        "cross_cohort_promotion_forbidden": True,
+    }
+    payload["cohort_filter"] = {
+        "effective_venue": "INTEGRATED",
+        "session_bucket": "KRX_NXT_AFTERMARKET",
+        "market_data_route": "krx_nxt_integrated",
+        "runtime_effect": False,
+    }
+    payload = calibration._with_artifact_content_sha256(payload)
+    path = (
+        tmp_path
+        / "report"
+        / calibration.PAIRED_SUBDIR
+        / "ai_prompt_detailed_paired_replay_2026-09-07_dual.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = build_report(target_date="2026-09-07", data_root=tmp_path)
+
+    candidate = report["candidate_summaries"][0]
+    assert candidate["cohort_key_version"] == "v2"
+    assert candidate["market_data_route"] == "KRX_NXT_INTEGRATED"
+    assert candidate["authority_state"] == "OBSERVE_ONLY"
+    assert candidate["exact_trace_count"] == 1
+    assert candidate["review_ready_for_prompt_candidate"] is False
+    assert candidate["review_classification"] == "dual_aftermarket_observe_only"
+    assert report["source_reports"][0]["row_exclusion_reason_counts"] == {
+        "dual_actual_execution_venue_unknown": 1,
+        "dual_exposure_cost_missing_or_invalid": 1,
+    }
+    assert report["review_ready_candidates"] == []
+
+
 def test_multiple_ready_cohorts_are_not_ranked_into_one_global_selection(
     tmp_path: Path,
 ) -> None:

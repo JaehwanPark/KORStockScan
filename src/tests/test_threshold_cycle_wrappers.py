@@ -720,6 +720,18 @@ def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
     assert 'str(payload.get("target_date") or "") == target_date' in script
     assert "reusable_completed_artifact()" in script
     assert "source_mtime > artifact_mtime" in script
+    assert "postclose_artifact_reuse_contract_v1" in script
+    assert "aftermarket_contract_sha256s" in script
+    assert 'f"{json_path.name}.reuse-contract.json"' in script
+    assert 'write_aftermarket_reuse_contract "$json_path" "$md_path"' in script
+    for contract_path in (
+        "src/trading/market/session_contract.py",
+        "src/trading/market/aftermarket_eligibility.py",
+        "src/trading/order/aftermarket_reconciliation.py",
+        "src/engine/monitoring/market_opportunity_census.py",
+        "src/engine/observation_source_quality_audit.py",
+    ):
+        assert contract_path in script
     assert "completed_artifact_checkpoint" in script
     assert 'expected_report_type != "-"' in script
     assert "source_quality_blocked" in script
@@ -2894,7 +2906,7 @@ def test_stage2_ops_cron_installs_pyramid_intraday_feedback_5min():
     assert "!/SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN/" in script
 
 
-def test_stage2_ops_cron_extends_ws_freshness_monitor_into_nxt_open():
+def test_stage2_ops_cron_extends_ws_freshness_monitor_through_aftermarket_exit():
     script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
 
     assert (
@@ -2902,14 +2914,15 @@ def test_stage2_ops_cron_extends_ws_freshness_monitor_into_nxt_open():
         "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh" in script
     )
     assert (
-        "0,5,10,15,20 19 * * 1-5 "
+        "0-50/5 19 * * 1-5 "
         "$PROJECT_DIR/deploy/run_intraday_ws_freshness_monitor.sh" in script
     )
     assert "!/INTRADAY_WS_FRESHNESS_MONITOR_5MIN/" in script
     assert "!/INTRADAY_WS_FRESHNESS_MONITOR_NXT_5MIN/" in script
+    assert "INTRADAY_WS_FRESHNESS_MONITOR_AFTERMARKET_5MIN" in script
 
 
-def test_stage2_ops_cron_owns_main_sentinels_through_nxt_session():
+def test_stage2_ops_cron_owns_main_sentinels_through_integrated_aftermarket():
     script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
 
     assert "!/BUY_FUNNEL_SENTINEL_/" in script
@@ -2919,7 +2932,7 @@ def test_stage2_ops_cron_owns_main_sentinels_through_nxt_session():
         "$PROJECT_DIR/deploy/run_buy_funnel_sentinel_intraday.sh" in script
     )
     assert (
-        "0-20/5 19 * * 1-5 "
+        "0-40/5 19 * * 1-5 "
         "$PROJECT_DIR/deploy/run_buy_funnel_sentinel_intraday.sh" in script
     )
     assert (
@@ -2927,11 +2940,13 @@ def test_stage2_ops_cron_owns_main_sentinels_through_nxt_session():
         "$PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh" in script
     )
     assert (
-        "0-20/5 19 * * 1-5 "
+        "0-50/5 19 * * 1-5 "
         "$PROJECT_DIR/deploy/run_holding_exit_sentinel_intraday.sh" in script
     )
-    assert "BUY_FUNNEL_SENTINEL_NXT_1600_1855" in script
-    assert "HOLDING_EXIT_SENTINEL_NXT_1600_1855" in script
+    assert "BUY_FUNNEL_SENTINEL_AFTERMARKET_1600_1855" in script
+    assert "BUY_FUNNEL_SENTINEL_AFTERMARKET_1900_1940" in script
+    assert "HOLDING_EXIT_SENTINEL_AFTERMARKET_1600_1855" in script
+    assert "HOLDING_EXIT_SENTINEL_AFTERMARKET_1900_1950" in script
 
 
 def test_market_opportunity_census_wrapper_and_installer_are_source_only():
@@ -2952,8 +2967,12 @@ def test_market_opportunity_census_wrapper_and_installer_are_source_only():
     assert "MARKET_OPPORTUNITY_CENSUS_NXT_PREMARKET_5MIN" in installer
     assert "MARKET_OPPORTUNITY_CENSUS_KRX_NXT_5MIN" in installer
     assert "MARKET_OPPORTUNITY_CENSUS_KRX_NXT_CLOSE_5MIN" in installer
-    assert "MARKET_OPPORTUNITY_CENSUS_NXT_TRANSITION_5MIN" in installer
-    assert "MARKET_OPPORTUNITY_CENSUS_NXT_AFTERMARKET_5MIN" in installer
+    assert "MARKET_OPPORTUNITY_CENSUS_NXT_TRANSITION_5MIN" not in installer
+    assert "MARKET_OPPORTUNITY_CENSUS_KRX_NXT_AFTERMARKET_5MIN" in installer
+    assert 'test "$(wc -l < "$TMP_CRON.lines")" -eq 4' in installer
+    assert '"schema_version": "market_opportunity_census_trigger_v3"' in installer
+    assert "market_session_contract_v2" in wrapper
+    assert "SESSION_TRANSITION" in wrapper
     assert "awk '!/MARKET_OPPORTUNITY_CENSUS_/'" in installer
     assert "SYSTEM_TIMEZONE" in installer
     assert '"Asia/Seoul"' in installer

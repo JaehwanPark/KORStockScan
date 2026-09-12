@@ -202,6 +202,34 @@ def test_scope_losses_never_stop_profitable_other_market(nxt, expected):
     assert result["intraday_escalation_scopes"] == ["KRX|KRX_REGULAR"]
 
 
+def test_dual_scope_is_observed_without_recheck_or_escalation_authority():
+    scope = "KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET"
+    summary = policy.scope_summary(
+        scope,
+        {
+            "stage_unique": {
+                "ai_confirmed": 20,
+                "budget_pass": 3,
+                "order_bundle_submitted": 0,
+            },
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "critical": True,
+            "causal_bottleneck_axes": ["UPSTREAM_GATE"],
+        },
+    )
+    assert summary["critical"] is True
+    assert summary["authority_mode"] == "observe_only_no_live_approval"
+    assert summary["addressable"] is False
+    assert summary["addressable_critical"] is False
+    assert policy.eligible_scopes(
+        [
+            {"eligible_scopes": [summary]},
+            {"eligible_scopes": [summary]},
+            {"eligible_scopes": [summary]},
+        ]
+    ) == []
+
+
 def test_full_and_partial_fill_cohorts_cannot_pool_to_pass_sample_floor():
     evidence = exact()
     metric = {
