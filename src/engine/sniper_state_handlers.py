@@ -78421,8 +78421,65 @@ def _resolve_holding_sell_dmst_stex_tp(
     }
 
 
-_SCALPING_KRX_TERMINAL_EXIT_START = datetime_time(hour=15, minute=15)
+_LEGACY_SCALPING_KRX_TERMINAL_EXIT_START = datetime_time(hour=15, minute=15)
 _SCALPING_NXT_TERMINAL_EXIT_START = datetime_time(hour=19, minute=45)
+
+
+def _scalping_terminal_exit_net_ev_fields(
+    *,
+    buy_price: float | int,
+    executable_sell_price: float | int,
+) -> dict[str, Any]:
+    """Gate the post-effective terminal exit on strictly positive net return."""
+
+    cost_rate = get_trade_cost_rate()
+    buy = _safe_float(buy_price, 0.0)
+    executable_sell = _safe_float(executable_sell_price, 0.0)
+    source_valid = buy > 0 and executable_sell > 0
+    net_ev_pct = (
+        calculate_net_profit_rate(
+            buy,
+            executable_sell,
+            cost_rate=cost_rate,
+            precision=8,
+        )
+        if source_valid
+        else None
+    )
+    positive = bool(net_ev_pct is not None and net_ev_pct > 0.0)
+    return {
+        "terminal_exit_positive_net_ev_required": True,
+        "terminal_exit_net_ev_positive": positive,
+        "terminal_exit_net_ev_pct": net_ev_pct,
+        "terminal_exit_buy_price": buy if buy > 0 else None,
+        "terminal_exit_executable_sell_price": (
+            executable_sell if executable_sell > 0 else None
+        ),
+        "terminal_exit_trade_cost_rate": round(float(cost_rate), 8),
+        "terminal_exit_trade_cost_pct": round(float(cost_rate) * 100.0, 8),
+        "terminal_exit_ev_basis": (
+            "fresh_executable_sell_price_after_configured_trade_cost"
+        ),
+        "terminal_exit_ev_threshold_pct": 0.0,
+        "terminal_exit_ev_comparator": ">",
+        "terminal_exit_ev_source_valid": source_valid,
+        "terminal_exit_ev_decision": (
+            "EXIT" if positive else "CONTINUE_HOLDING_LOGIC"
+        ),
+    }
+
+
+def _scalping_terminal_exit_selected(
+    window_fields: dict[str, Any] | None,
+    net_ev_fields: dict[str, Any] | None,
+) -> bool:
+    window_fields = window_fields if isinstance(window_fields, dict) else {}
+    net_ev_fields = net_ev_fields if isinstance(net_ev_fields, dict) else {}
+    if not window_fields.get("should_exit"):
+        return False
+    if not window_fields.get("terminal_exit_positive_net_ev_required"):
+        return True
+    return bool(net_ev_fields.get("terminal_exit_net_ev_positive"))
 
 
 def _scalping_same_session_terminal_exit_fields(
@@ -78433,11 +78490,13 @@ def _scalping_same_session_terminal_exit_fields(
     now_t,
     observed_at: datetime | None = None,
 ) -> dict[str, Any]:
-    """Select the existing SELL path before the held symbol's last session closes.
+    """Select the existing SELL path in the held symbol's terminal window.
 
-    This is an operational position-finalization rule, not a tuning axis.  It
-    chooses no price, quantity, or order route and therefore remains subject to
-    the existing quote, account, order, receipt, venue, and sell-window guards.
+    Post-effective KRX regular holdings are preserved for the integrated
+    aftermarket.  A terminal-window selection is only a candidate; the caller
+    requires a strictly positive cost-adjusted executable return before using
+    the existing SELL path.  All ordinary holding and hard-safety rules remain
+    independent of this candidate.
     """
 
     stock = stock if isinstance(stock, dict) else {}
@@ -78446,18 +78505,18 @@ def _scalping_same_session_terminal_exit_fields(
         "should_exit": False,
         "exit_rule": "scalp_same_session_terminal_exit",
         "sell_reason_type": "SESSION_END",
-        "decision_authority": "same_session_position_finalization_only",
-        "metric_role": "operational_terminal_reconciliation",
-        "window_policy": "last_executable_sell_window_by_confirmed_venue",
+        "decision_authority": "same_session_positive_net_ev_exit_only",
+        "metric_role": "cost_adjusted_terminal_exit_gate",
+        "window_policy": "terminal_window_with_existing_holding_fallback",
         "sample_floor": "not_applicable_operational_rule",
-        "primary_decision_metric": "same_session_terminal_receipt",
+        "primary_decision_metric": "cost_adjusted_executable_exit_ev_pct",
         "source_quality_gate": "fresh_executable_quote_and_existing_sell_guards",
         "runtime_effect": True,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
         "forbidden_uses": (
-            "overnight_carry|ai_hold_override|price_or_quantity_override|"
+            "ordinary_holding_logic_override|price_or_quantity_override|"
             "broker_guard_bypass|hard_safety_relaxation"
         ),
     }
@@ -78465,6 +78524,10 @@ def _scalping_same_session_terminal_exit_fields(
         return {**base, "reason": "not_active_scalping_holding"}
     if now_t >= TIME_20_00:
         return {**base, "reason": "sell_session_closed"}
+
+    if observed_at is None:
+        observed_at = datetime.combine(datetime.now(_KST).date(), now_t, tzinfo=_KST)
+    session = session_contract.resolve_market_session(observed_at)
 
     if _is_scalp_simulated_position(stock, strategy):
         due = now_t >= _SCALPING_NXT_TERMINAL_EXIT_START
@@ -78474,6 +78537,10 @@ def _scalping_same_session_terminal_exit_fields(
             "terminal_venue": "SIM",
             "terminal_start": _SCALPING_NXT_TERMINAL_EXIT_START.isoformat(),
             "venue_source": "simulator_same_session",
+            "terminal_exit_positive_net_ev_required": (
+                session.contract_version
+                == session_contract.MARKET_SESSION_CONTRACT_VERSION_V2
+            ),
             "reason": (
                 "simulator_terminal_window"
                 if due
@@ -78481,9 +78548,6 @@ def _scalping_same_session_terminal_exit_fields(
             ),
         }
 
-    if observed_at is None:
-        observed_at = datetime.combine(datetime.now(_KST).date(), now_t, tzinfo=_KST)
-    session = session_contract.resolve_market_session(observed_at)
     if session.blocker is not None:
         return {
             **base,
@@ -78508,36 +78572,14 @@ def _scalping_same_session_terminal_exit_fields(
             }
 
         if session.session_regime == session_contract.MARKET_SESSION_REGIME_KRX_REGULAR:
-            future_at = observed_at.replace(hour=16, minute=0, second=0, microsecond=0)
-            future_route = _resolve_holding_sell_dmst_stex_tp(
-                stock,
-                code,
-                now_t=future_at.time(),
-                observed_at=future_at,
-            )
-            due = bool(
-                future_route.get("blocked")
-                and _SCALPING_KRX_TERMINAL_EXIT_START <= now_t < TIME_15_30
-            )
-            terminal_route = "SOR" if due else str(
-                future_route.get("dmst_stex_tp") or "UNKNOWN"
-            ).upper()
             return {
                 **base,
-                "should_exit": due,
-                "terminal_venue": "KRX" if due else "UNKNOWN",
-                "terminal_route": terminal_route,
-                "terminal_start": (
-                    _SCALPING_KRX_TERMINAL_EXIT_START if due else _SCALPING_NXT_TERMINAL_EXIT_START
-                ).isoformat(),
-                "venue_source": future_route.get("route_source")
-                or future_route.get("reason")
-                or "UNKNOWN",
-                "reason": (
-                    "last_regular_sell_window_without_aftermarket_route"
-                    if due
-                    else "aftermarket_exit_route_preserved"
-                ),
+                "terminal_venue": "UNKNOWN",
+                "terminal_route": "SOR",
+                "terminal_start": _SCALPING_NXT_TERMINAL_EXIT_START.isoformat(),
+                "venue_source": "market_session_contract_v2",
+                "terminal_exit_positive_net_ev_required": True,
+                "reason": "integrated_aftermarket_holding_logic_preserved",
             }
 
         route_resolution = _resolve_holding_sell_dmst_stex_tp(
@@ -78564,6 +78606,7 @@ def _scalping_same_session_terminal_exit_fields(
             or route_resolution.get("reason")
             or "UNKNOWN",
             "market_session_regime": session.session_regime,
+            "terminal_exit_positive_net_ev_required": True,
             "reason": (
                 "integrated_terminal_exit_window"
                 if due
@@ -78588,9 +78631,9 @@ def _scalping_same_session_terminal_exit_fields(
         terminal_venue = "NXT"
         terminal_start = _SCALPING_NXT_TERMINAL_EXIT_START
     else:
-        due = _SCALPING_KRX_TERMINAL_EXIT_START <= now_t < TIME_15_30
+        due = _LEGACY_SCALPING_KRX_TERMINAL_EXIT_START <= now_t < TIME_15_30
         terminal_venue = "KRX"
-        terminal_start = _SCALPING_KRX_TERMINAL_EXIT_START
+        terminal_start = _LEGACY_SCALPING_KRX_TERMINAL_EXIT_START
     return {
         **base,
         "should_exit": due,
@@ -78606,9 +78649,18 @@ def _scalping_same_session_terminal_exit_fields(
     }
 
 
-def unresolved_scalping_terminal_positions(targets: list[dict] | None) -> list[dict]:
-    """Return compact unresolved position custody at process shutdown."""
+def unresolved_scalping_terminal_positions(
+    targets: list[dict] | None,
+    *,
+    observed_at: datetime | None = None,
+) -> list[dict]:
+    """Return only positions lacking a valid terminal outcome or hold decision."""
 
+    evaluation_at = observed_at or datetime.now(_KST)
+    if evaluation_at.tzinfo is None:
+        evaluation_at = evaluation_at.replace(tzinfo=_KST)
+    evaluation_at = evaluation_at.astimezone(_KST)
+    evaluation_date = evaluation_at.date()
     unresolved: list[dict] = []
     for stock in targets or []:
         if not isinstance(stock, dict):
@@ -78621,6 +78673,47 @@ def unresolved_scalping_terminal_positions(targets: list[dict] | None) -> list[d
             "HOLDING",
             "SELL_ORDERED",
         }:
+            continue
+        hold_observed_at = None
+        try:
+            hold_observed_at = datetime.fromisoformat(
+                str(stock.get("terminal_exit_hold_observed_at") or "")
+            )
+            if hold_observed_at.tzinfo is None:
+                hold_observed_at = None
+        except (TypeError, ValueError):
+            hold_observed_at = None
+        try:
+            hold_net_ev_pct = float(stock.get("terminal_exit_hold_net_ev_pct"))
+        except (TypeError, ValueError):
+            hold_net_ev_pct = None
+        hold_age_sec = (
+            max(
+                0.0,
+                (evaluation_at - hold_observed_at.astimezone(_KST)).total_seconds(),
+            )
+            if hold_observed_at is not None
+            else None
+        )
+        if (
+            status == "HOLDING"
+            and stock.get("terminal_exit_hold_authorized") is True
+            and stock.get("terminal_exit_hold_source_valid") is True
+            and str(stock.get("terminal_exit_hold_basis") or "").strip()
+            == "fresh_executable_sell_price_after_configured_trade_cost"
+            and hold_net_ev_pct is not None
+            and hold_net_ev_pct <= 0.0
+            and hold_observed_at is not None
+            and hold_observed_at.astimezone(_KST).date() == evaluation_date
+            and hold_age_sec is not None
+            and hold_age_sec <= 60.0
+            and not _has_open_pending_entry_orders(stock)
+            and not _has_active_sell_order_pending(stock)
+            and not sniper_trade_utils.holding_sell_reconciliation_block_reason(
+                stock,
+                str(stock.get("code") or "").strip()[:6],
+            )
+        ):
             continue
         unresolved.append(
             {
@@ -85707,6 +85800,18 @@ def handle_holding_state(
 
     raw_strategy = (stock.get("strategy") or "KOSPI_ML").upper()
     strategy = "SCALPING" if raw_strategy in ["SCALPING", "SCALP"] else raw_strategy
+    if (
+        strategy == "SCALPING"
+        and now_dt.date() >= session_contract.MARKET_SESSION_EFFECTIVE_DATE
+        and _SCALPING_NXT_TERMINAL_EXIT_START <= now_t < TIME_20_00
+    ):
+        # Each terminal-window evaluation must earn its own valid HOLD receipt.
+        # An earlier nonpositive decision cannot hide a later ordinary exit
+        # failure, stale quote, or reconciliation gap.
+        _mutate_stock_state(
+            stock,
+            set_fields={"terminal_exit_hold_authorized": False},
+        )
     pos_tag = normalize_position_tag(strategy, stock.get("position_tag"))
     legacy_broker_recovered = bool(stock.get("broker_recovered_legacy"))
 
@@ -86176,7 +86281,61 @@ def handle_holding_state(
         now_t=now_t,
         observed_at=now_dt,
     )
-    if same_session_terminal_exit.get("should_exit"):
+    terminal_exit_ev_fields: dict[str, Any] = {}
+    if (
+        same_session_terminal_exit.get("should_exit")
+        and same_session_terminal_exit.get("terminal_exit_positive_net_ev_required")
+    ):
+        terminal_exit_ev_fields = _scalping_terminal_exit_net_ev_fields(
+            buy_price=buy_p,
+            executable_sell_price=executable_sell_price,
+        )
+        if not terminal_exit_ev_fields.get("terminal_exit_net_ev_positive"):
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "terminal_exit_hold_authorized": True,
+                    "terminal_exit_hold_observed_at": now_dt.isoformat(),
+                    "terminal_exit_hold_net_ev_pct": terminal_exit_ev_fields.get(
+                        "terminal_exit_net_ev_pct"
+                    ),
+                    "terminal_exit_hold_source_valid": terminal_exit_ev_fields.get(
+                        "terminal_exit_ev_source_valid"
+                    ),
+                    "terminal_exit_hold_basis": terminal_exit_ev_fields.get(
+                        "terminal_exit_ev_basis"
+                    ),
+                },
+            )
+            terminal_hold_key = (
+                f"{now_dt.date().isoformat()}:"
+                f"{same_session_terminal_exit.get('terminal_route') or 'UNKNOWN'}"
+            )
+            if (
+                stock.get("_same_session_terminal_exit_hold_log_key")
+                != terminal_hold_key
+            ):
+                stock["_same_session_terminal_exit_hold_log_key"] = terminal_hold_key
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "same_session_terminal_exit_continues_holding",
+                    **{
+                        **same_session_terminal_exit,
+                        **terminal_exit_ev_fields,
+                        "actual_order_submitted": False,
+                        "broker_order_forbidden": True,
+                    },
+                )
+    terminal_exit_selected = _scalping_terminal_exit_selected(
+        same_session_terminal_exit,
+        terminal_exit_ev_fields,
+    )
+    if terminal_exit_selected:
+        _mutate_stock_state(
+            stock,
+            set_fields={"terminal_exit_hold_authorized": False},
+        )
         is_sell_signal = True
         sell_reason_type = str(
             same_session_terminal_exit.get("sell_reason_type") or "SESSION_END"
@@ -86196,7 +86355,7 @@ def handle_holding_state(
                 stock,
                 code,
                 "same_session_terminal_exit_selected",
-                **same_session_terminal_exit,
+                **{**same_session_terminal_exit, **terminal_exit_ev_fields},
             )
     holding_context_forbidden_exit_candidate = (
         _holding_context_prohibited_exit_candidate(
@@ -89320,6 +89479,11 @@ def handle_holding_state(
         )
 
     if is_sell_signal:
+        if str(exit_rule or "").strip() != "scalp_same_session_terminal_exit":
+            _mutate_stock_state(
+                stock,
+                set_fields={"terminal_exit_hold_authorized": False},
+            )
         if stock.get("exit_token"):
             return
         if _pending_add_blocks_sell_dispatch(
@@ -90632,6 +90796,61 @@ def handle_holding_state(
             curr_p = int(sell_mark_price)
             profit_rate = calculate_net_profit_rate(buy_p, curr_p)
         sell_order_price = int(sell_order_price or curr_p or 0)
+        if (
+            str(exit_rule or stock.get("last_exit_rule") or "").strip()
+            == "scalp_same_session_terminal_exit"
+            and same_session_terminal_exit.get(
+                "terminal_exit_positive_net_ev_required"
+            )
+        ):
+            terminal_pre_submit_ev_fields = _scalping_terminal_exit_net_ev_fields(
+                buy_price=buy_p,
+                executable_sell_price=sell_order_price,
+            )
+            sell_quote_fields.update(terminal_pre_submit_ev_fields)
+            if not terminal_pre_submit_ev_fields.get(
+                "terminal_exit_net_ev_positive"
+            ):
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "terminal_exit_hold_authorized": True,
+                        "terminal_exit_hold_observed_at": now_dt.isoformat(),
+                        "terminal_exit_hold_net_ev_pct": (
+                            terminal_pre_submit_ev_fields.get(
+                                "terminal_exit_net_ev_pct"
+                            )
+                        ),
+                        "terminal_exit_hold_source_valid": (
+                            terminal_pre_submit_ev_fields.get(
+                                "terminal_exit_ev_source_valid"
+                            )
+                        ),
+                        "terminal_exit_hold_basis": (
+                            terminal_pre_submit_ev_fields.get(
+                                "terminal_exit_ev_basis"
+                            )
+                        ),
+                    },
+                    pop_fields=(
+                        "last_exit_rule",
+                        "last_exit_reason",
+                        "last_exit_decision_source",
+                    ),
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "same_session_terminal_exit_pre_submit_ev_blocked",
+                    exit_rule="scalp_same_session_terminal_exit",
+                    sell_reason_type=sell_reason_type or "SESSION_END",
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    runtime_effect=True,
+                    allowed_runtime_apply=False,
+                    **sell_quote_fields,
+                )
+                return
         if (
             discretionary_scalp_pre_submit_recheck
             and str(exit_rule or stock.get("last_exit_rule") or "").strip()

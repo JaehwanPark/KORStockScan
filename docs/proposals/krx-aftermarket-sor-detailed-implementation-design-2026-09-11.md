@@ -121,10 +121,10 @@ explicit SOR market order     = order type 3, pre-remapped=false
 | 15:30~16:00 | `SESSION_TRANSITION` | 주문·종목별 상태 확인 | read/reconcile only | 신규 주문 금지 |
 | 16:00~19:40 | `KRX_NXT_AFTERMARKET` | KRX+NXT | `krx_nxt_integrated` | 신규 별도 승인 전 observe-only |
 | 19:40~19:45 | `KRX_NXT_AFTERMARKET_CLOSE_ONLY` | KRX+NXT | 통합 + 실제시장 receipt | 신규 BUY 금지, 보유청산만 |
-| 19:45~20:00 | `KRX_NXT_AFTERMARKET_TERMINAL_EXIT` | KRX+NXT | 통합 + 실제시장 receipt | 기존 terminal exit safety만 |
+| 19:45~20:00 | `KRX_NXT_AFTERMARKET_TERMINAL_EXIT` | KRX+NXT | 통합 + 실제시장 receipt | 기존 holding 로직 유지; 신선한 실행가능 매도호가의 비용 차감 수익률이 `> 0`이면 terminal 청산 후보 |
 | 20:00 이후 | `CLOSED` | 없음 | reconciliation only | 신규 주문 금지 |
 
-19:40/19:45는 거래소 규칙이 아니라 현재 KORStockScan의 보수적 BUY cutoff/terminal exit 정책을 보존한 값이다. 이를 시장 개장 확대를 이유로 늦추거나 완화하지 않는다.
+19:40/19:45는 거래소 규칙이 아니라 현재 KORStockScan의 보수적 BUY cutoff/terminal 평가 시작값이다. 2026-09-14 이후에는 KRX 전종목 애프터마켓 연속성을 전제로 15:15 terminal exit를 실행하지 않는다. 19:45 이후에도 기존 holding·익절·손절·보호·AI 경로를 계속 평가하고, terminal 규칙 자체는 신선한 실행가능 매도호가 기준 비용 차감 수익률이 엄격히 `> 0`일 때만 추가 SELL 신호를 낸다. `<= 0` 또는 가격/비용 근거 결손은 terminal SELL을 만들지 않지만 다른 hard/protect/emergency 규칙을 차단하지 않는다.
 
 ### 4.2 순수 resolver API
 
@@ -306,7 +306,8 @@ schema `aftermarket_close_reconciliation_v1`은 원 주문 identity, parent/chil
 - 16:00 이후 보유의 요청 route는 원 체결/현재 주문/승인된 exit route에 따라 정한다.
 - entry가 SOR였다는 이유만으로 exit 실제시장을 SOR로 기록하지 않는다.
 - 19:40 이후 신규 BUY 금지는 유지한다.
-- 19:45 terminal exit의 eligible route는 양시장 상태·종목 자격·원 주문을 확인한다.
+- 2026-09-14 이후 KRX 15:15 terminal exit는 제거하고 정규장 holding을 16:00 통합 애프터마켓으로 그대로 이어간다. 과거 날짜 replay의 legacy 경계만 역사 재현용으로 보존한다.
+- 19:45 terminal exit의 eligible route는 양시장 상태·종목 자격·원 주문을 확인하며, 신선한 실행가능 매도호가에 현행 거래비용을 차감한 수익률이 `> 0`일 때만 기존 SELL 경로를 선택한다. 비양수이면 terminal 신호 없이 원래 holding 로직을 계속 적용한다.
 - 한 시장 VI/정지 시 다른 시장이 열려 있음을 추정하지 않고 실시간 상태와 공식 계약을 요구한다.
 - broker response가 모호하면 blind retry를 금지하고 existing reconciler에 넘긴다.
 

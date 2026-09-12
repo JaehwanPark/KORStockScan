@@ -1389,6 +1389,89 @@ def test_post_effective_terminal_exit_starts_at_1945_for_each_recorded_route(rou
     assert terminal_fields["terminal_venue"] == "UNKNOWN"
     assert terminal_fields["terminal_route"] == route
     assert terminal_fields["reason"] == "integrated_terminal_exit_window"
+    assert terminal_fields["terminal_exit_positive_net_ev_required"] is True
+
+
+def test_post_effective_1515_never_selects_terminal_exit(monkeypatch):
+    stock = {
+        "status": "HOLDING",
+        "buy_qty": 3,
+        "entry_execution_broker_route": "KRX",
+    }
+    observed_at = datetime(2026, 9, 14, 15, 15, tzinfo=handlers._KST)
+    monkeypatch.setattr(
+        handlers,
+        "_resolve_holding_sell_dmst_stex_tp",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("15:15 must not probe a future aftermarket route")
+        ),
+    )
+
+    fields = handlers._scalping_same_session_terminal_exit_fields(
+        stock,
+        "005930",
+        strategy="SCALPING",
+        now_t=observed_at.time(),
+        observed_at=observed_at,
+    )
+
+    assert fields["should_exit"] is False
+    assert fields["terminal_start"] == "19:45:00"
+    assert fields["reason"] == "integrated_aftermarket_holding_logic_preserved"
+
+
+@pytest.mark.parametrize(
+    ("executable_sell_price", "expected_positive", "expected_decision"),
+    [
+        (10_024, True, "EXIT"),
+        (10_023, False, "CONTINUE_HOLDING_LOGIC"),
+        (0, False, "CONTINUE_HOLDING_LOGIC"),
+    ],
+)
+def test_post_effective_terminal_exit_requires_strictly_positive_net_ev(
+    monkeypatch,
+    executable_sell_price,
+    expected_positive,
+    expected_decision,
+):
+    monkeypatch.setattr(handlers, "get_trade_cost_rate", lambda: 0.0023)
+    ev_fields = handlers._scalping_terminal_exit_net_ev_fields(
+        buy_price=10_000,
+        executable_sell_price=executable_sell_price,
+    )
+    window_fields = {
+        "should_exit": True,
+        "terminal_exit_positive_net_ev_required": True,
+    }
+
+    assert ev_fields["terminal_exit_net_ev_positive"] is expected_positive
+    assert ev_fields["terminal_exit_ev_decision"] == expected_decision
+    assert (
+        handlers._scalping_terminal_exit_selected(window_fields, ev_fields)
+        is expected_positive
+    )
+
+
+def test_nonpositive_terminal_ev_does_not_disable_ordinary_holding_exit():
+    ev_fields = {"terminal_exit_net_ev_positive": False}
+
+    assert (
+        handlers._scalping_terminal_exit_selected(
+            {
+                "should_exit": True,
+                "terminal_exit_positive_net_ev_required": True,
+            },
+            ev_fields,
+        )
+        is False
+    )
+    assert handlers._scalping_terminal_exit_selected(
+        {
+            "should_exit": True,
+            "terminal_exit_positive_net_ev_required": False,
+        },
+        ev_fields,
+    )
 
 
 def test_boundary_open_sell_ledger_blocks_terminal_duplicate_sell():

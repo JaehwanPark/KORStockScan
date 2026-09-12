@@ -1,8 +1,9 @@
 import ast
 import inspect
-from datetime import time as datetime_time
+from datetime import datetime, time as datetime_time
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from src.database.models import RecommendationHistory
@@ -70,6 +71,7 @@ def test_same_session_terminal_exit_uses_last_executable_venue_window(monkeypatc
         "005930",
         strategy="SCALPING",
         now_t=datetime_time(15, 15),
+        observed_at=datetime(2026, 9, 11, 15, 15, tzinfo=sniper_state_handlers._KST),
     )
     assert krx["should_exit"] is True
     assert krx["terminal_venue"] == "KRX"
@@ -85,6 +87,9 @@ def test_same_session_terminal_exit_uses_last_executable_venue_window(monkeypatc
             "005930",
             strategy="SCALPING",
             now_t=datetime_time(15, 15),
+            observed_at=datetime(
+                2026, 9, 11, 15, 15, tzinfo=sniper_state_handlers._KST
+            ),
         )
     )
     nxt_close = sniper_state_handlers._scalping_same_session_terminal_exit_fields(
@@ -92,6 +97,7 @@ def test_same_session_terminal_exit_uses_last_executable_venue_window(monkeypatc
         "005930",
         strategy="SCALPING",
         now_t=datetime_time(19, 45),
+        observed_at=datetime(2026, 9, 11, 19, 45, tzinfo=sniper_state_handlers._KST),
     )
     assert before_nxt_close["should_exit"] is False
     assert nxt_close["should_exit"] is True
@@ -131,6 +137,64 @@ def test_shutdown_reconciliation_reports_real_and_sim_scalping_positions():
     assert rows[0]["simulation"] is False
     assert rows[1]["simulation"] is True
     assert rows[2]["status"] == "BUY_ORDERED"
+
+
+def test_shutdown_reconciliation_accepts_cost_adjusted_terminal_hold():
+    rows = sniper_state_handlers.unresolved_scalping_terminal_positions(
+        [
+            {
+                "id": 1,
+                "code": "005930",
+                "strategy": "SCALPING",
+                "status": "HOLDING",
+                "buy_qty": 3,
+                "terminal_exit_hold_authorized": True,
+                "terminal_exit_hold_observed_at": "2026-09-14T19:59:45+09:00",
+                "terminal_exit_hold_basis": (
+                    "fresh_executable_sell_price_after_configured_trade_cost"
+                ),
+                "terminal_exit_hold_net_ev_pct": -0.01,
+                "terminal_exit_hold_source_valid": True,
+            }
+        ],
+        observed_at=datetime(2026, 9, 14, 20, 0, tzinfo=sniper_state_handlers._KST),
+    )
+
+    assert rows == []
+
+
+@pytest.mark.parametrize(
+    "hold_override",
+    [
+        {"terminal_exit_hold_net_ev_pct": 0.01},
+        {"terminal_exit_hold_source_valid": False},
+        {"terminal_exit_hold_observed_at": "2026-09-11T19:45:00+09:00"},
+        {"terminal_exit_hold_observed_at": "2026-09-14T19:58:59+09:00"},
+    ],
+)
+def test_shutdown_reconciliation_rejects_invalid_terminal_hold(hold_override):
+    stock = {
+        "id": 1,
+        "code": "005930",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_qty": 3,
+        "terminal_exit_hold_authorized": True,
+        "terminal_exit_hold_observed_at": "2026-09-14T19:59:45+09:00",
+        "terminal_exit_hold_basis": (
+            "fresh_executable_sell_price_after_configured_trade_cost"
+        ),
+        "terminal_exit_hold_net_ev_pct": -0.01,
+        "terminal_exit_hold_source_valid": True,
+        **hold_override,
+    }
+
+    rows = sniper_state_handlers.unresolved_scalping_terminal_positions(
+        [stock],
+        observed_at=datetime(2026, 9, 14, 20, 0, tzinfo=sniper_state_handlers._KST),
+    )
+
+    assert [row["code"] for row in rows] == ["005930"]
 
 
 def test_limit_down_live_source_forbids_overnight_hold():

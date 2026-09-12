@@ -12255,7 +12255,8 @@ def run_sniper(is_test_mode=False):
             if not is_test_mode and now_t >= TIME_20_00:
                 unresolved_scalping = (
                     sniper_state_handlers.unresolved_scalping_terminal_positions(
-                        targets
+                        targets,
+                        observed_at=now,
                     )
                 )
                 terminal_reason = "market_close"
@@ -12272,8 +12273,8 @@ def run_sniper(is_test_mode=False):
                     log_error(
                         "[SCALPING_SAME_SESSION_TERMINAL_FAIL] unresolved positions "
                         f"count={len(unresolved_scalping)} codes={unresolved_codes}; "
-                        "overnight carry is not authorized and broker/receipt "
-                        "reconciliation is required"
+                        "a valid positive-net exit or nonpositive-net HOLD decision "
+                        "is missing and broker/receipt reconciliation is required"
                     )
                     event_bus.publish(
                         "TELEGRAM_BROADCAST",
@@ -12282,8 +12283,9 @@ def run_sniper(is_test_mode=False):
                                 "🚨 **[스캘핑 당일 종결 미완료]**\n"
                                 f"미종결: `{len(unresolved_scalping)}건` "
                                 f"(`{unresolved_codes}`)\n"
-                                "overnight 보유 승인은 없으며 다음 기동에서 "
-                                "브로커/체결 영수증 재조정이 필요합니다."
+                                "양수 비용차감 청산 또는 비양수 HOLD 판정이 "
+                                "확인되지 않아 다음 기동에서 브로커/체결 "
+                                "영수증 재조정이 필요합니다."
                             )
                         },
                     )
@@ -12407,8 +12409,9 @@ def run_sniper(is_test_mode=False):
                     run_sniper.last_broker_snapshot_refresh_time = now_ts
             _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
 
-            # Overnight carry is permanently retired. Holding AI remains
-            # available until the deterministic same-session terminal exit.
+            # Legacy overnight AI is retired. Holding AI remains active through
+            # the close; the post-effective terminal rule only adds a SELL when
+            # the fresh executable return is positive after configured costs.
             eod_ai_holding_fallback = False
 
             # =====================================================
