@@ -11339,6 +11339,32 @@ def test_verify_runtime_env_handoff_rejects_recheck_without_probe_dependencies(
     assert "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY" not in finding["missing_env_keys"]
 
 
+def test_entry_recheck_contract_carry_preserves_only_existing_exact_dependencies():
+    candidate = {
+        "recommended_values": {
+            "allow_wait_probe_intent": True,
+            "require_probe_first_contract": True,
+            "require_explicit_buy_action": False,
+        }
+    }
+    previous = {
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "false",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES": "KRX|KRX_REGULAR",
+    }
+
+    carried = mod._entry_recheck_contract_carry_overrides(candidate, previous)
+
+    assert carried == {
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "false",
+    }
+    previous["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT"] = "false"
+    assert mod._entry_recheck_contract_carry_overrides(candidate, previous) == {}
+
+
 def test_entry_split_daily_operator_contract_accepts_recurring_stale_policy(
     tmp_path,
 ):

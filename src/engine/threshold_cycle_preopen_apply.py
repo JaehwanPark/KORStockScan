@@ -2529,6 +2529,42 @@ def _previous_runtime_env_overrides_for_family(
     return {}
 
 
+def _entry_recheck_contract_carry_overrides(
+    candidate: dict[str, Any], previous_env: dict[str, str]
+) -> dict[str, str]:
+    """Preserve only the already-active recheck dependency contract.
+
+    This is not a new recheck-policy selection: the persistent operator layer
+    still owns enablement, scopes, and caps. It prevents a non-selected
+    calibration candidate from orphaning the three structural values that an
+    active operator policy already requires.
+    """
+
+    recommended = (
+        candidate.get("recommended_values")
+        if isinstance(candidate.get("recommended_values"), dict)
+        else {}
+    )
+    expected = {
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "false",
+    }
+    recommended_fields = {
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "allow_wait_probe_intent",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "require_probe_first_contract",
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "require_explicit_buy_action",
+    }
+    if any(
+        _format_env_value(recommended.get(field)) != expected[key]
+        for key, field in recommended_fields.items()
+    ):
+        return {}
+    if any(str(previous_env.get(key) or "").strip() != value for key, value in expected.items()):
+        return {}
+    return expected
+
+
 def _lock_env_overrides(lock: dict[str, Any]) -> dict[str, str]:
     family = str(lock.get("family") or "").strip()
     overrides = (
@@ -4244,6 +4280,19 @@ def _select_auto_apply_candidates(
         decision["selection_change_class"] = selection_change_class
         decision["previous_selected"] = family in previous_selected_families
         decision["previous_env_overrides"] = previous_family_env
+        if (
+            family == ENTRY_OPPORTUNITY_RECHECK_FAMILY
+            and reject_reason == "runtime_apply_not_allowed"
+            and family in previous_selected_families
+        ):
+            carried_contract = _entry_recheck_contract_carry_overrides(
+                candidate, previous_family_env
+            )
+            if carried_contract:
+                decision["contract_dependency_carry"] = {
+                    "reason": "existing_operator_recheck_dependency_contract",
+                    "env_overrides": carried_contract,
+                }
         if candidate.get("quality_update_id"):
             decision["quality_update_id"] = candidate.get("quality_update_id")
             decision["evidence_contract_version"] = candidate.get(
@@ -7202,6 +7251,21 @@ def _write_runtime_env(
         for policy in succession_receipt["policies"]:
             env_overrides.update(policy["env_overrides"])
         manifest["operator_policy_succession"] = succession_receipt
+    entry_recheck_contract_carry = next(
+        (
+            item.get("contract_dependency_carry")
+            for item in (manifest.get("auto_apply_decisions") or [])
+            if isinstance(item, dict)
+            and str(item.get("family") or "") == ENTRY_OPPORTUNITY_RECHECK_FAMILY
+            and isinstance(item.get("contract_dependency_carry"), dict)
+        ),
+        None,
+    )
+    if entry_recheck_contract_carry:
+        env_overrides.update(entry_recheck_contract_carry["env_overrides"])
+        manifest["entry_opportunity_recheck_contract_carry"] = (
+            entry_recheck_contract_carry
+        )
     env_overrides = {**without_retired_env(env_overrides), **retirement_env()}
     env_overrides = {
         key: value
@@ -7237,6 +7301,11 @@ def _write_runtime_env(
         *(
             [manifest.get("limit_down_watch")]
             if (manifest.get("limit_down_watch") or {}).get("selected")
+            else []
+        ),
+        *(
+            [{"family": ENTRY_OPPORTUNITY_RECHECK_FAMILY}]
+            if entry_recheck_contract_carry
             else []
         ),
     ]
