@@ -5582,7 +5582,7 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     family = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
     assert family["apply_ready"] is True
     assert family["apply_mode"] == "candidate_grid_comparison"
-    assert family["current"]["runtime_apply_allowed"] is False
+    assert family["current"]["runtime_apply_allowed"] is True
     assert family["current"]["formula_version"] == "entry_type_5stage_cap25_v1"
     assert family["current"]["runtime_reflected"] is True
     assert family["implementation_status"] == "runtime_reflected_observed"
@@ -5615,7 +5615,7 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
         if item["family"] == "position_sizing_dynamic_formula"
     )
     assert candidate["calibration_state"] == "hold"
-    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["allowed_runtime_apply"] is True
     assert candidate["human_approval_required"] is False
 
 
@@ -6621,7 +6621,7 @@ def test_position_sizing_dynamic_formula_enters_candidate_grid_chain():
         if item["family"] == "position_sizing_dynamic_formula"
     )
     assert candidate["calibration_state"] == "hold"
-    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["allowed_runtime_apply"] is True
     assert candidate["human_approval_required"] is False
 
 
@@ -6670,7 +6670,7 @@ def test_position_sizing_dynamic_formula_does_not_use_sim_as_real_floor():
         if item["family"] == "position_sizing_dynamic_formula"
     )
     assert candidate["calibration_state"] == "hold_sample"
-    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["allowed_runtime_apply"] is True
 
 
 def test_position_sizing_dynamic_formula_candidate_grid_excludes_source_quality_blocked():

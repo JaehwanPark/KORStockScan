@@ -86,6 +86,7 @@ THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 THRESHOLD_APPLY_PLAN_DIR = THRESHOLD_CYCLE_DIR / "apply_plans"
 ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
 SCALE_IN_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "scale_in_split_order_policy"
+POSITION_SIZING_POLICY_DIR = THRESHOLD_CYCLE_DIR / "approvals"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
 CUMULATIVE_BASELINE_START_DATE = CLEAN_TUNING_BASELINE_DATE
@@ -955,7 +956,14 @@ CALIBRATION_FAMILY_METADATA = {
     "position_sizing_dynamic_formula": {
         "priority": 41,
         "source_family": "position_sizing_dynamic_formula",
-        "target_env_keys": [],
+        "target_env_keys": [
+            "POSITION_SIZING_POLICY_ENABLED",
+            "POSITION_SIZING_POLICY_FILE",
+            "POSITION_SIZING_POLICY_VERSION",
+            "POSITION_SIZING_POLICY_SOURCE_DATE",
+            "POSITION_SIZING_POLICY_SHA256",
+            "POSITION_SIZING_POLICY_ACTIVE_DATE",
+        ],
         "primary_key": "formula_version",
         "bounds": {},
         "sample_floor": 30,
@@ -971,7 +979,7 @@ CALIBRATION_FAMILY_METADATA = {
             "daily_only_allowed": False,
         },
         "sample_denominator_keys": ["real_completed_valid"],
-        "allowed_runtime_apply": False,
+        "allowed_runtime_apply": True,
         "human_approval_required": False,
     },
 }
@@ -1192,6 +1200,7 @@ def save_threshold_calibration_report(
         or (report.get("meta") or {}).get("calibration_run_phase")
         or "postclose"
     )
+    _materialize_position_sizing_policy(report, target_date)
     path = calibration_report_path_for_date(target_date, phase)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -1223,6 +1232,73 @@ def save_threshold_calibration_report(
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
+
+
+def _next_krx_trading_date(source_date: str) -> str:
+    current = date.fromisoformat(source_date) + timedelta(days=1)
+    while not is_krx_trading_day(current):
+        current += timedelta(days=1)
+    return current.isoformat()
+
+
+def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
+    """Publish a dated artifact only for the preopen selector, never a live mutation."""
+    candidate = next(
+        (
+            item
+            for item in (report.get("calibration_candidates") or [])
+            if isinstance(item, dict)
+            and item.get("family") == "position_sizing_dynamic_formula"
+            and item.get("runtime_apply_eligible_now") is True
+            and item.get("calibration_state") == "retain_current"
+        ),
+        None,
+    )
+    if not isinstance(candidate, dict):
+        return
+    effective_date = _next_krx_trading_date(source_date)
+    policy_version = f"position_sizing_dynamic_formula:{source_date}"
+    policy = {
+        "schema_version": "position_sizing_dynamic_formula_policy_v1",
+        "policy_version": policy_version,
+        "source_date": source_date,
+        "active_date": effective_date,
+        "formula_version": SCALPING_SIZING_FORMULA_VERSION,
+        "formula_allowlist": [SCALPING_SIZING_FORMULA_VERSION, SCALPING_SIZING_ROLLBACK_VERSION],
+        "decision": "retain_current",
+        "runtime_apply_allowed": True,
+        "source_quality_passed": True,
+        "canary_quantity_cap_precedence": True,
+        "gross_ev_floor_pct": 0.1,
+        "cost_adjusted_ev_pct": (candidate.get("recommended_values") or {}).get("cost_adjusted_ev_pct"),
+        "generated_at": datetime.now().astimezone().isoformat(),
+    }
+    policy["policy_content_sha256"] = hashlib.sha256(
+        json.dumps(policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    POSITION_SIZING_POLICY_DIR.mkdir(parents=True, exist_ok=True)
+    path = POSITION_SIZING_POLICY_DIR / f"position_sizing_dynamic_formula_{source_date}.json"
+    encoded = json.dumps(policy, ensure_ascii=False, indent=2).encode("utf-8")
+    temporary = path.with_suffix(".tmp")
+    temporary.write_bytes(encoded)
+    temporary.replace(path)
+    recommended = dict(candidate.get("recommended_values") or {})
+    recommended.update(
+        {
+            "enabled": True,
+            "policy_file": str(path),
+            "policy_version": policy_version,
+            "policy_source_date": source_date,
+            "policy_sha256": hashlib.sha256(encoded).hexdigest(),
+            "active_date": effective_date,
+        }
+    )
+    candidate["recommended_values"] = recommended
+    candidate["policy_artifact"] = {
+        "path": str(path),
+        "sha256": recommended["policy_sha256"],
+        "active_date": effective_date,
+    }
 
 
 def statistical_action_report_paths(target_date: str) -> tuple[Path, Path]:
@@ -6944,12 +7020,12 @@ def _build_position_sizing_dynamic_formula_family(
             "runtime_promotion_sample_floor": 30,
             "learning_floor_grants_runtime_promotion": False,
         },
-        "runtime_apply_allowed": False,
+        "runtime_apply_allowed": True,
     }
     recommended = {
         "formula_version": SCALPING_SIZING_FORMULA_VERSION,
         "formula_mode": "selected_with_flat10_rollback_comparison",
-        "runtime_apply_allowed": False,
+        "runtime_apply_allowed": True,
     }
     return {
         "family": "position_sizing_dynamic_formula",
@@ -6996,7 +7072,7 @@ def _build_position_sizing_dynamic_formula_family(
         "apply_mode": "candidate_grid_comparison",
         "metric_contract": {
             "metric_role": "primary_ev",
-            "decision_authority": "postclose_formula_comparison_only_no_runtime_mutation",
+            "decision_authority": "next_preopen_dated_policy_only_existing_formula_allowlist",
             "window_policy": (
                 "caller_window_clean_baseline_cumulative_with_daily_diagnostic"
             ),
@@ -7011,7 +7087,7 @@ def _build_position_sizing_dynamic_formula_family(
             "source_quality_gate": "all_required_inputs_present_and_real_sim_probe_split",
             "forbidden_uses": [
                 "sim_probe_single_source_live_apply",
-                "runtime_order_qty_change_without_approval_guard",
+            "runtime_order_qty_change_without_dated_policy_and_preopen_guard",
             ],
         },
         "notes": [
@@ -7023,7 +7099,7 @@ def _build_position_sizing_dynamic_formula_family(
             ),
             "sim/probe sizing rows는 actual_order_submitted=false, broker_order_forbidden=true, runtime_effect=false로 분리하며 real execution quality 분모에 섞지 않는다.",
             "source-quality 결손 후보는 EV 분모에서 제외하고 source_quality_blocked로 닫는다.",
-            "runtime_apply_allowed=false이며 report candidate 비교는 실행 중인 프로세스 수량을 변경하지 않는다.",
+            "runtime apply는 dated PREOPEN policy, exact terminal join, source-quality 및 cost-adjusted EV guard를 모두 통과한 경우에만 가능하다.",
             "후보 grid는 선택 공식과 flat_10_fallback의 postclose 비교에만 사용된다.",
         ],
     }
@@ -14915,8 +14991,39 @@ def _runtime_apply_candidate_for_state(
     return (
         bool(sample_ready)
         and bool(candidate.get("allowed_runtime_apply"))
-        and state in {"adjust_up", "adjust_down"}
+        and (
+            state in {"adjust_up", "adjust_down"}
+            or (
+                str(candidate.get("family") or "") == "position_sizing_dynamic_formula"
+                and state == "retain_current"
+            )
+        )
     )
+
+
+def _position_sizing_runtime_selection(candidate: dict) -> tuple[dict | None, str]:
+    """Return the only promotable profile, without optimizing a new formula."""
+    source = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
+    grid = source.get("candidate_grid") if isinstance(source.get("candidate_grid"), list) else []
+    current = next(
+        (item for item in grid if isinstance(item, dict) and item.get("formula_version") == SCALPING_SIZING_FORMULA_VERSION),
+        None,
+    )
+    if not isinstance(current, dict):
+        return None, "current_formula_candidate_missing"
+    exact = _safe_int(current.get("exact_terminal_join_count"), 0) or 0
+    unmatched = _safe_int(current.get("unmatched_real_submit_count"), 0) or 0
+    gross = _safe_float(current.get("gross_notional_weighted_ev_pct"), None)
+    net = _safe_float(current.get("notional_weighted_ev_pct"), None)
+    if exact < 30 or unmatched != 0:
+        return None, "exact_terminal_join_floor_or_conservation_failed"
+    if gross is None or gross < 0.1:
+        return None, "gross_ev_floor_not_met"
+    if net is None or net < 0.0:
+        return None, "cost_adjusted_ev_not_nonnegative"
+    if source.get("source_quality_passed") is not True:
+        return None, "source_quality_not_passed"
+    return current, "retain_current_exact_cost_adjusted_candidate"
 
 
 def _apply_mode_for_candidate_state(
@@ -14986,6 +15093,22 @@ def _refresh_candidate_from_primary_window(
         sample_count=primary_sample_count,
         sample_ready=primary_ready,
     )
+    if family == "position_sizing_dynamic_formula":
+        # The postclose report may compare flat-10, but it cannot promote it.
+        # A valid policy only records the already-active five-stage formula.
+        family_sample = family_like.get("sample") if isinstance(family_like.get("sample"), dict) else {}
+        source_metrics = {
+            **source_metrics,
+            "candidate_grid": family_like.get("candidate_grid") or [],
+            "source_quality_passed": family_sample.get("source_quality_passed") is True,
+        }
+        selected, selection_reason = _position_sizing_runtime_selection(
+            {"source_metrics": source_metrics}
+        )
+        if selected is not None:
+            state, reason = "retain_current", selection_reason
+        else:
+            state, reason = "hold_sample", selection_reason
     sample_floor_status = _sample_floor_status_for_candidate_state(
         state,
         primary_sample_count,
@@ -15005,6 +15128,14 @@ def _refresh_candidate_from_primary_window(
     )
     current = current if isinstance(current, dict) else {}
     recommended = recommended if isinstance(recommended, dict) else {}
+    if family == "position_sizing_dynamic_formula" and state == "retain_current":
+        selected, _ = _position_sizing_runtime_selection({"source_metrics": source_metrics})
+        recommended = {
+            "formula_version": SCALPING_SIZING_FORMULA_VERSION,
+            "decision": "retain_current",
+            "gross_notional_weighted_ev_pct": selected.get("gross_notional_weighted_ev_pct") if selected else None,
+            "cost_adjusted_ev_pct": selected.get("notional_weighted_ev_pct") if selected else None,
+        }
     if family == "score65_74_recovery_probe":
         current = dict(candidate.get("current_values") or {})
         selection = score_recovery_evaluate(source_metrics, sample_floor)

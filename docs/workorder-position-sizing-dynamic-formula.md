@@ -110,9 +110,9 @@ primary metric은 아래 둘 중 하나만 사용한다.
 
 source-quality 결손 후보는 EV 분모에서 제외하고 `source_quality_blocked`로 닫는다.
 
-runtime_apply_allowed=false로 시작하며 approval/preopen guard 테스트가 닫힌 뒤에만 bounded candidate를 연다.
+runtime apply는 selected five-stage formula를 유지하는 dated policy에만 한정한다. exact terminal join 30건 이상, unmatched submit 0, source-quality pass, gross EV `>=0.1%`, cost-adjusted EV `>=0%`, PREOPEN file/version/source-date/SHA256 검증이 모두 충족돼야 한다. `flat_10_fallback`은 신규 승격 후보가 아니라 loader의 fail-closed fallback이다.
 
-## 6.1 Approval Artifact Schema (향후)
+## 6.1 Approval Artifact Schema
 
 실주문 수량 확대 또는 산식 live 적용은 아래 artifact가 있어야 한다.
 
@@ -149,7 +149,7 @@ required fields:
 }
 ```
 
-`runtime_apply_allowed=true`는 `approval_scope=bounded_live_canary`, source-quality pass, same-stage owner guard pass, rollback guard pass가 모두 닫힌 경우에만 허용한다.
+`runtime_apply_allowed=true`는 selected formula를 그대로 소비하는 `approval_scope=bounded_live_canary`, source-quality pass, same-stage owner guard pass, rollback guard pass가 모두 닫힌 경우에만 허용한다. policy file/content hash·source date·active date가 PREOPEN env와 다르면 allocator는 `flat_10_fallback`으로 fail-closed한다. 이 policy는 canary의 one-share/cap, broker/account/order, stale/conflict, cooldown과 hard safety를 우회하거나 변경하지 않는다.
 
 ## 7. Implementation Phases
 
@@ -171,8 +171,9 @@ required fields:
    - 일반/Opening/Rising Missed/추가매수/sim/counterfactual을 중앙 배분기로 연결.
    - Rising Missed 400,000 KRW cap과 single-order collapse, 점수 선형 및 sim 100% runtime 권한 제거.
    - 현재 프로세스는 재기동하지 않았으므로 다음 승인된 process start까지 `implemented_not_runtime_reflected` 유지.
-5. `P4_runtime_approval_summary` - 미착수
-   - 향후 공식 변경 조건 충족 시 approval request만 생성.
+5. `P4_runtime_approval_summary` - 완료 (`2026-09-12`)
+   - 장후 rolling exact-economics가 selected formula를 재확인할 때만 dated approval artifact를 생성하고, 기존 PREOPEN selector가 file/version/source-date/SHA256를 검증해 다음 거래일 env로 전달한다.
+   - 신규 formula/cap 확대는 생성하지 않는다. artifact 또는 env 검증 실패는 `flat_10_fallback`이며 current PID 소비와 자연 outcome은 별도 receipt로 확인한다.
    - env override와 장중 주문 수량 변경은 생성하지 않음.
 6. `P5_preopen_apply_guard` - 미착수
    - approval artifact loader와 fail-closed guard 추가.

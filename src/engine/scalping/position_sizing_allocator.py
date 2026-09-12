@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import math
 import re
+import hashlib
+import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, time
+from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
@@ -22,6 +26,8 @@ DEFAULT_TIER_RATIOS = (0.10, 0.15, 0.20, 0.25, 0.25)
 TIER_RATIOS = DEFAULT_TIER_RATIOS
 MAX_RATIO = 0.25
 KST = ZoneInfo("Asia/Seoul")
+POSITION_SIZING_POLICY_SCHEMA_VERSION = "position_sizing_dynamic_formula_policy_v1"
+_FLAT_10_TIER_RATIOS = (0.10, 0.10, 0.10, 0.10, 0.10)
 
 _INVALID_SOURCE_TOKENS = frozenset(
     {
@@ -128,9 +134,11 @@ def max_position_qty_cap_from_budget(
     return max(0, int((float(budget_base) * ratio) // price))
 
 
-def _validated_tier_ratios() -> tuple[tuple[float, ...], bool]:
+def _validated_tier_ratios(
+    values: Iterable[Any] | None = None,
+) -> tuple[tuple[float, ...], bool]:
     try:
-        ratios = tuple(float(value) for value in TIER_RATIOS)
+        ratios = tuple(float(value) for value in (TIER_RATIOS if values is None else values))
     except (TypeError, ValueError):
         return DEFAULT_TIER_RATIOS, False
     valid = bool(
@@ -139,6 +147,52 @@ def _validated_tier_ratios() -> tuple[tuple[float, ...], bool]:
         and all(left <= right for left, right in zip(ratios, ratios[1:]))
     )
     return (ratios, True) if valid else (DEFAULT_TIER_RATIOS, False)
+
+
+def _policy_content_sha256(policy: dict[str, Any]) -> str:
+    content = {key: value for key, value in policy.items() if key != "policy_content_sha256"}
+    return hashlib.sha256(
+        json.dumps(content, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _runtime_position_sizing_policy(reference_time: Any) -> tuple[str, tuple[float, ...], str, str | None, str | None]:
+    """Load only a dated, PREOPEN-verified sizing policy.
+
+    A malformed or stale enabled policy never expands quantity: it falls back to
+    the allowlisted flat-10 profile.  The ordinary default remains the existing
+    five-stage profile when no policy was selected.
+    """
+    if str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")).strip().lower() not in {"1", "true", "yes", "on"}:
+        return FORMULA_VERSION, tuple(TIER_RATIOS), "policy_disabled_default", None, None
+    path = Path(str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE", "")).strip())
+    expected_version = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION", "")).strip()
+    expected_sha = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256", "")).strip()
+    expected_source_date = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE", "")).strip()
+    active_date = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE", "")).strip()
+    resolved = _coerce_reference_time(reference_time) or datetime.now(KST)
+    if not path.is_file() or not expected_version or not expected_sha or not expected_source_date or active_date != resolved.date().isoformat():
+        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_env_or_date_invalid_fallback", None, None
+    try:
+        raw = path.read_bytes()
+        policy = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_unreadable_fallback", None, None
+    if not isinstance(policy, dict) or hashlib.sha256(raw).hexdigest() != expected_sha:
+        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_hash_invalid_fallback", None, None
+    formula = str(policy.get("formula_version") or "")
+    if (
+        policy.get("schema_version") != POSITION_SIZING_POLICY_SCHEMA_VERSION
+        or policy.get("policy_version") != expected_version
+        or policy.get("source_date") != expected_source_date
+        or policy.get("active_date") != active_date
+        or policy.get("runtime_apply_allowed") is not True
+        or policy.get("policy_content_sha256") != _policy_content_sha256(policy)
+        or formula not in {FORMULA_VERSION, ROLLBACK_FORMULA_VERSION}
+    ):
+        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_contract_invalid_fallback", None, None
+    ratios = DEFAULT_TIER_RATIOS if formula == FORMULA_VERSION else _FLAT_10_TIER_RATIOS
+    return formula, ratios, "policy_loaded", expected_version, expected_sha
 
 
 def _time_bucket(reference_time: Any) -> str:
@@ -197,6 +251,9 @@ class ScalpingSizingDecision:
     config_valid: bool
     allocation_stage: str
     simulation: bool
+    policy_status: str = "policy_disabled_default"
+    policy_version: str | None = None
+    policy_sha256: str | None = None
 
     def event_fields(self) -> dict[str, Any]:
         return {
@@ -219,11 +276,16 @@ class ScalpingSizingDecision:
             "allocation_stage": self.allocation_stage,
             "simulation": self.simulation,
             "sizing_config_valid": self.config_valid,
+            "position_sizing_policy_status": self.policy_status,
+            "position_sizing_policy_version": self.policy_version or "-",
+            "position_sizing_policy_sha256": self.policy_sha256 or "-",
         }
 
 
 def _select_tier(
     context: ScalpingSizingContext,
+    *,
+    formula_version: str = FORMULA_VERSION,
 ) -> tuple[int, str, int, tuple[str, ...], str, str]:
     resolved_time = _coerce_reference_time(context.reference_time)
     reference_text = resolved_time.isoformat() if resolved_time else "missing"
@@ -251,7 +313,7 @@ def _select_tier(
         )
     if (
         context.initial_tier is not None
-        and context.initial_formula_version == FORMULA_VERSION
+        and context.initial_formula_version == formula_version
         and 1 <= _safe_int(context.initial_tier, 0) <= 5
     ):
         return (
@@ -331,9 +393,12 @@ def resolve_scalping_allocation(
 ) -> ScalpingSizingDecision:
     """Resolve the only supported scalping sizing decision."""
 
-    ratios, config_valid = _validated_tier_ratios()
+    formula_version, policy_ratios, policy_status, policy_version, policy_sha256 = (
+        _runtime_position_sizing_policy(context.reference_time)
+    )
+    ratios, config_valid = _validated_tier_ratios(policy_ratios)
     tier, reason, source_count, tokens, time_bucket, reference_text = _select_tier(
-        context
+        context, formula_version=formula_version
     )
     if not config_valid:
         tier = 1
@@ -406,7 +471,7 @@ def resolve_scalping_allocation(
     min_floor_applied = bool(min_floor_candidate and effective_qty == 1)
 
     return ScalpingSizingDecision(
-        formula_version=FORMULA_VERSION,
+        formula_version=formula_version,
         tier=tier,
         ratio=ratio,
         tier_reason=reason,
@@ -425,4 +490,7 @@ def resolve_scalping_allocation(
         config_valid=config_valid,
         allocation_stage=str(context.allocation_stage or "unknown"),
         simulation=bool(context.simulation),
+        policy_status=policy_status,
+        policy_version=policy_version,
+        policy_sha256=policy_sha256,
     )

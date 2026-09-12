@@ -278,6 +278,12 @@ RETIRED_RUNTIME_FAMILY_REASONS = {
 }
 
 TARGET_ENV_VALUE_KEYS = {
+    "POSITION_SIZING_POLICY_ENABLED": "enabled",
+    "POSITION_SIZING_POLICY_FILE": "policy_file",
+    "POSITION_SIZING_POLICY_VERSION": "policy_version",
+    "POSITION_SIZING_POLICY_SOURCE_DATE": "policy_source_date",
+    "POSITION_SIZING_POLICY_SHA256": "policy_sha256",
+    "POSITION_SIZING_POLICY_ACTIVE_DATE": "active_date",
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "enabled",
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC": "confirm_sec",
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT": "buffer_pct",
@@ -2631,6 +2637,7 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     calibration_state = str(candidate.get("calibration_state") or "")
     policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
     force_emit = policy_or_family in {
+        "position_sizing_dynamic_formula",
         "score65_74_recovery_probe",
         "lifecycle_decision_matrix_runtime",
         ENTRY_OPPORTUNITY_RECHECK_FAMILY,
@@ -3991,7 +3998,10 @@ def _select_auto_apply_candidates(
             reject_reason = "runtime_apply_not_currently_eligible"
         elif contract_blockers:
             reject_reason = ",".join(contract_blockers)
-        elif state in AUTO_APPLY_BLOCK_STATES or state not in AUTO_APPLY_ALLOWED_STATES:
+        elif state in AUTO_APPLY_BLOCK_STATES or (
+            state not in AUTO_APPLY_ALLOWED_STATES
+            and not (family == "position_sizing_dynamic_formula" and state == "retain_current")
+        ):
             reject_reason = f"calibration_state_blocked:{state}"
         elif not allowed:
             reject_reason = reason
@@ -4935,6 +4945,14 @@ def _lifecycle_ai_context_overlay_env(
 
 
 SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
+    "position_sizing_dynamic_formula": [
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED",
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE",
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION",
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE",
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256",
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE",
+    ],
     "entry_cancel_wait_runtime": [
         "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED",
         "KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC",
@@ -5697,6 +5715,17 @@ def _split_runtime_policy_audits(
 ) -> list[dict[str, Any]]:
     specs = (
         {
+            "family": "position_sizing_dynamic_formula",
+            "prefix": "KORSTOCKSCAN_POSITION_SIZING_POLICY_",
+            "schema": "position_sizing_dynamic_formula_policy_v1",
+            "freshness_field": "source_date",
+            "max_age_days": 5,
+            "require_runtime_apply_allowed": True,
+            "allow_missing_runtime_apply_allowed": False,
+            "active_date_key": "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE",
+            "require_sha256": True,
+        },
+        {
             "family": "entry_split_order_plan",
             "prefix": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
             "schema": "entry_split_order_policy_v1",
@@ -5728,6 +5757,11 @@ def _split_runtime_policy_audits(
     )
     for spec in specs:
         prefix = str(spec["prefix"])
+        if (
+            spec["family"] == "position_sizing_dynamic_formula"
+            and not any(key.startswith(prefix) for key in effective_env)
+        ):
+            continue
         enabled_key = f"{prefix}ENABLED"
         file_key = f"{prefix}FILE"
         version_key = f"{prefix}VERSION"
@@ -5795,6 +5829,35 @@ def _split_runtime_policy_audits(
             audit.update(status="fail", reason="policy_version_mismatch")
             audits.append(audit)
             continue
+        if spec.get("require_sha256"):
+            sha_key = f"{prefix}SHA256"
+            expected_sha = str(effective_env.get(sha_key) or "").strip()
+            audit["required_env_keys"].append(sha_key)
+            try:
+                actual_sha = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+            except OSError:
+                actual_sha = ""
+            audit["policy_sha256"] = actual_sha or None
+            if not expected_sha or expected_sha != actual_sha:
+                audit.update(status="fail", reason="policy_sha256_mismatch")
+                audits.append(audit)
+                continue
+            source_date_key = f"{prefix}SOURCE_DATE"
+            expected_source_date = str(effective_env.get(source_date_key) or "").strip()
+            audit["required_env_keys"].append(source_date_key)
+            if not expected_source_date or policy.get("source_date") != expected_source_date:
+                audit.update(status="fail", reason="policy_source_date_mismatch")
+                audits.append(audit)
+                continue
+            if (
+                policy.get("formula_version") != "entry_type_5stage_cap25_v1"
+                or policy.get("decision") != "retain_current"
+                or policy.get("canary_quantity_cap_precedence") is not True
+                or policy.get("source_quality_passed") is not True
+            ):
+                audit.update(status="fail", reason="position_sizing_policy_authority_invalid")
+                audits.append(audit)
+                continue
         if spec["family"] == "entry_split_order_plan" and {
             "exploration_seed_allowed",
             "ev_validated_runtime_apply_allowed",
