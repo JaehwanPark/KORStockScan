@@ -62,6 +62,29 @@ def replay_fixture():
     return observation, frames
 
 
+def test_policy_fingerprint_excludes_scalping_entry_and_sizing_settings():
+    base = {
+        "SCALP_STOP_LINE_TOUCH_AVG_DOWN_DEFER_ENABLED": True,
+        "SHALLOW_VOLATILITY_AVG_DOWN_ENABLED": True,
+        "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": 85,
+        "SCALPING_PROMPT_SPLIT_ENABLED": True,
+        "SCALPING_SIZING_DYNAMIC_QTY_ENABLED": True,
+        "SCALPING_AVG_DOWN_BID_DISCOUNT_TICKS": 1,
+    }
+    changed_unrelated = {
+        **base,
+        "SCALPING_PROMPT_SPLIT_ENABLED": False,
+        "SCALPING_SIZING_DYNAMIC_QTY_ENABLED": False,
+    }
+    changed_avg_down = {
+        **base,
+        "SCALPING_AVG_DOWN_BID_DISCOUNT_TICKS": 2,
+    }
+
+    assert mod.policy_fingerprint(base) == mod.policy_fingerprint(changed_unrelated)
+    assert mod.policy_fingerprint(base) != mod.policy_fingerprint(changed_avg_down)
+
+
 def decision(state, frame, policy, input_digest, *, action=None):
     # Synthetic full-policy fixture, not a replacement live exit strategy.
     if action is None:

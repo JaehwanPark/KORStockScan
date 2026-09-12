@@ -10850,6 +10850,72 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     assert audits[0]["operator_fallback_authorized"] is True
 
 
+def test_split_runtime_policy_audit_accepts_exact_flat10_sizing_policy(tmp_path):
+    policy_path = tmp_path / "position_sizing.json"
+    policy = {
+        "schema_version": "position_sizing_dynamic_formula_policy_v1",
+        "policy_version": "position-sizing-flat10",
+        "source_date": "2026-07-13",
+        "runtime_apply_allowed": True,
+        "formula_version": "flat_10_fallback",
+        "decision": "adjust_down_flat10",
+        "tier_ratios": [0.10, 0.10, 0.10, 0.10, 0.10],
+        "canary_quantity_cap_precedence": True,
+        "source_quality_passed": True,
+    }
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    audits = mod._split_runtime_policy_audits(
+        "2026-07-14",
+        {
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-07-14",
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": "position-sizing-flat10",
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
+                policy_path.read_bytes()
+            ).hexdigest(),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE": "2026-07-13",
+        },
+    )
+
+    assert audits[0]["status"] == "pass"
+    assert audits[0]["reason"] == "policy_usable"
+
+
+def test_split_runtime_policy_audit_rejects_flat10_policy_with_nonflat_tiers(tmp_path):
+    policy_path = tmp_path / "position_sizing.json"
+    policy = {
+        "schema_version": "position_sizing_dynamic_formula_policy_v1",
+        "policy_version": "position-sizing-invalid-flat10",
+        "source_date": "2026-07-13",
+        "runtime_apply_allowed": True,
+        "formula_version": "flat_10_fallback",
+        "decision": "adjust_down_flat10",
+        "tier_ratios": [0.10, 0.15, 0.20, 0.25, 0.25],
+        "canary_quantity_cap_precedence": True,
+        "source_quality_passed": True,
+    }
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    audits = mod._split_runtime_policy_audits(
+        "2026-07-14",
+        {
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-07-14",
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": (
+                "position-sizing-invalid-flat10"
+            ),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
+                policy_path.read_bytes()
+            ).hexdigest(),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE": "2026-07-13",
+        },
+    )
+
+    assert audits[0]["status"] == "fail"
+    assert audits[0]["reason"] == "position_sizing_policy_authority_invalid"
+
+
 def test_split_runtime_policy_audit_rejects_unbounded_scale_in_bucket(tmp_path):
     scale_policy = tmp_path / "scale.json"
     invalid_bucket = _valid_scale_in_split_runtime_bucket()

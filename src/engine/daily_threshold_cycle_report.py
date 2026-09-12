@@ -7896,27 +7896,53 @@ def _entry_price_real_outcome_metrics(
             if value and value != "-":
                 rows_by_key[f"{key}:{value}"] = row
 
+    def top_level_identity(event: dict) -> dict[str, Any]:
+        """Read durable submit identity before projected diagnostic fields."""
+        return {
+            key: event.get(key)
+            for key in (*join_keys, "stock_code", "code")
+            if event.get(key) not in (None, "", "-")
+        }
+
+    def event_stock_code(event: dict) -> str:
+        identity = top_level_identity(event)
+        fields = _event_fields(event)
+        return str(
+            identity.get("stock_code")
+            or identity.get("code")
+            or fields.get("stock_code")
+            or fields.get("code")
+            or ""
+        ).strip()
+
     event_stock_counts: Counter[str] = Counter()
     for event in real_events:
-        fields = _event_fields(event)
-        stock_code = str(fields.get("stock_code") or fields.get("code") or "").strip()
+        stock_code = event_stock_code(event)
         if stock_code:
             event_stock_counts[stock_code] += 1
 
     matched_rows: dict[str, dict] = {}
     for event in real_events:
+        identity = top_level_identity(event)
         fields = _event_fields(event)
         row = None
+        # Envelope identities are immutable submit provenance. Prefer them
+        # over conflicting projected broker detail.
         for key in join_keys:
-            value = str(fields.get(key) or "").strip()
+            value = str(identity.get(key) or "").strip()
             if value and value != "-":
                 row = rows_by_key.get(f"{key}:{value}")
                 if row is not None:
                     break
         if row is None:
-            stock_code = str(
-                fields.get("stock_code") or fields.get("code") or ""
-            ).strip()
+            for key in join_keys:
+                value = str(fields.get(key) or "").strip()
+                if value and value != "-":
+                    row = rows_by_key.get(f"{key}:{value}")
+                    if row is not None:
+                        break
+        if row is None:
+            stock_code = event_stock_code(event)
             stock_rows = rows_by_stock.get(stock_code) or []
             if (
                 stock_code

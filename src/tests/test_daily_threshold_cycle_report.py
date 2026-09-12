@@ -8014,6 +8014,30 @@ def test_dynamic_entry_price_counterfactual_join_diagnostics_breaks_down_reasons
     assert diagnostics["runtime_effect"] is False
 
 
+def test_entry_price_real_outcome_uses_top_level_record_id_before_projected_fields():
+    metrics = report_mod._entry_price_real_outcome_metrics(
+        [
+            {
+                "record_id": "record-1",
+                "stock_code": "005930",
+                "fields": {"broker_order_no": "stale-projection"},
+            }
+        ],
+        [
+            {"record_id": "record-1", "stock_code": "005930", "profit_rate": 0.2},
+            {
+                "broker_order_no": "stale-projection",
+                "stock_code": "005930",
+                "profit_rate": -9.9,
+            },
+        ],
+    )
+
+    assert metrics["real_outcome_joined_sample"] == 1
+    assert metrics["real_outcome_pending_count"] == 0
+    assert metrics["real_source_quality_adjusted_ev_pct"] == 0.2
+
+
 def test_dynamic_entry_price_uses_own_counterfactual_join_rate():
     report_sources = {
         "sources": {},

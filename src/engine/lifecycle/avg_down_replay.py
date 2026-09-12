@@ -33,7 +33,14 @@ def canonical_digest(value: Any) -> str:
 
 
 def policy_fingerprint(rules: Any) -> str:
-    """Freeze fixed policy inputs; the independently versioned tunable is excluded."""
+    """Freeze AVG_DOWN inputs, excluding the independently tuned threshold.
+
+    Entry sizing, prompt, and scanner settings under the broad ``SCALPING_*``
+    prefix are owned elsewhere and must not split an otherwise identical
+    AVG_DOWN cohort. The direct ``SCALPING_AVG_DOWN_*`` and
+    ``SCALPING_SCALE_IN_*`` contracts remain included, alongside ``SCALP_*``
+    stop-touch AVG_DOWN rules.
+    """
     source = (
         rules
         if isinstance(rules, Mapping)
@@ -44,7 +51,9 @@ def policy_fingerprint(rules: Any) -> str:
         for key, value in source.items()
         if str(key).startswith(
             (
-                "SCALP",
+                "SCALP_",
+                "SCALPING_AVG_DOWN_",
+                "SCALPING_SCALE_IN_",
                 "SHALLOW_",
                 "DEEP_",
                 "REVERSAL_",

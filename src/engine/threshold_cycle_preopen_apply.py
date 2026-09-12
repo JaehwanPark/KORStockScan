@@ -5866,6 +5866,34 @@ def _scalp_sim_auto_runtime_policy_audit(
     return audit
 
 
+def _position_sizing_policy_authority_valid(policy: Mapping[str, Any]) -> bool:
+    """Accept only the two pre-reviewed sizing policies and their exact tiers.
+
+    The dated policy producer may select either the incumbent five-stage formula
+    or the fail-closed flat-10 fallback. Keeping formula, decision, and ratios
+    coupled prevents PREOPEN from reinterpreting a policy as a cap change.
+    """
+    expected = {
+        "entry_type_5stage_cap25_v1": (
+            "retain_current",
+            [0.10, 0.15, 0.20, 0.25, 0.25],
+        ),
+        "flat_10_fallback": (
+            "adjust_down_flat10",
+            [0.10, 0.10, 0.10, 0.10, 0.10],
+        ),
+    }
+    formula = str(policy.get("formula_version") or "")
+    expected_decision, expected_tiers = expected.get(formula, (None, None))
+    return bool(
+        expected_decision is not None
+        and policy.get("decision") == expected_decision
+        and policy.get("tier_ratios") == expected_tiers
+        and policy.get("canary_quantity_cap_precedence") is True
+        and policy.get("source_quality_passed") is True
+    )
+
+
 def _split_runtime_policy_audits(
     target_date: str,
     effective_env: dict[str, str],
@@ -6021,11 +6049,8 @@ def _split_runtime_policy_audits(
                 audit.update(status="fail", reason="policy_source_date_mismatch")
                 audits.append(audit)
                 continue
-            if spec["family"] == "position_sizing_dynamic_formula" and (
-                policy.get("formula_version") != "entry_type_5stage_cap25_v1"
-                or policy.get("decision") != "retain_current"
-                or policy.get("canary_quantity_cap_precedence") is not True
-                or policy.get("source_quality_passed") is not True
+            if spec["family"] == "position_sizing_dynamic_formula" and not (
+                _position_sizing_policy_authority_valid(policy)
             ):
                 audit.update(status="fail", reason="position_sizing_policy_authority_invalid")
                 audits.append(audit)
