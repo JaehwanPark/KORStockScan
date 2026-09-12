@@ -106,6 +106,21 @@ def test_aftermarket_sor_canary_acceptance_reads_projected_event_fields():
     assert acceptance["status"] == "passed_broker_acceptance"
 
 
+def test_cumulative_source_uses_latest_canonical_date_not_after_target(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "CUMULATIVE_THRESHOLD_REPORT_DIR", tmp_path)
+    prior = tmp_path / "threshold_cycle_cumulative_2026-09-11.json"
+    future = tmp_path / "threshold_cycle_cumulative_2026-09-15.json"
+    prior.write_text("{}", encoding="utf-8")
+    future.write_text("{}", encoding="utf-8")
+
+    assert report_mod._cumulative_threshold_source_path("2026-09-14") == prior
+    assert report_mod._calibration_report_source_paths("2026-09-14")[
+        "threshold_cycle_cumulative"
+    ] == prior
+
+
 @pytest.mark.parametrize("candidate_count", [0, 147, 227, 300])
 def test_latency_diagnostics_do_not_subtract_event_and_candidate_counts(
     monkeypatch, tmp_path, candidate_count

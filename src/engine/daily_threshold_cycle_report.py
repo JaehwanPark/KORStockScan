@@ -2198,10 +2198,40 @@ def _existing_or_gzip_path(path: Path) -> Path:
     return path
 
 
+def _cumulative_threshold_source_path(target_date: str) -> Path:
+    """Select the newest canonical cumulative source no later than the run date.
+
+    The postclose daily report is produced before that same run writes its
+    cumulative artifact.  Reading only an exact-date path therefore drops the
+    prior clean-baseline profile evidence at every first run.  This resolver
+    permits only a canonical earlier report and never a future date.
+    """
+
+    exact = CUMULATIVE_THRESHOLD_REPORT_DIR / (
+        f"threshold_cycle_cumulative_{target_date}.json"
+    )
+    if _existing_or_gzip_path(exact).exists():
+        return exact
+    try:
+        cutoff = date.fromisoformat(target_date)
+    except ValueError:
+        return exact
+    prefix = "threshold_cycle_cumulative_"
+    candidates: list[tuple[date, Path]] = []
+    for path in CUMULATIVE_THRESHOLD_REPORT_DIR.glob(f"{prefix}*.json"):
+        suffix = path.stem.removeprefix(prefix)
+        try:
+            source_date = date.fromisoformat(suffix)
+        except ValueError:
+            continue
+        if source_date <= cutoff:
+            candidates.append((source_date, path))
+    return max(candidates, default=(cutoff, exact), key=lambda item: item[0])[1]
+
+
 def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
     return {
-        "threshold_cycle_cumulative": CUMULATIVE_THRESHOLD_REPORT_DIR
-        / f"threshold_cycle_cumulative_{target_date}.json",
+        "threshold_cycle_cumulative": _cumulative_threshold_source_path(target_date),
         "main_scalping_lifecycle_paired": REPORT_DIR
         / "main_scalping_lifecycle_paired"
         / f"main_scalping_lifecycle_paired_{target_date}.json",
