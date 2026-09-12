@@ -18012,6 +18012,32 @@ def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeyp
     assert len(logs) == 1
 
 
+def test_scale_in_arm_does_not_infer_phantom_arm_from_profit_sign():
+    assert (
+        state_handlers._scale_in_arm_from_context(
+            profit_rate=1.2,
+            action=None,
+            rejected_actions=["exit_now:no_sell_signal"],
+        )
+        == "NONE"
+    )
+    assert (
+        state_handlers._scale_in_arm_from_context(
+            profit_rate=-0.8,
+            action=None,
+            rejected_actions=["hold_wait:no_action"],
+        )
+        == "NONE"
+    )
+    assert (
+        state_handlers._scale_in_arm_from_context(
+            profit_rate=1.2,
+            rejected_actions=["pyramid_wait:profit_not_enough"],
+        )
+        == "PYRAMID"
+    )
+
+
 def test_stat_action_decision_snapshot_keeps_shallow_blocker_detail(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -20870,6 +20896,8 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
         "id": 1,
         "name": "TEST",
         "strategy": "SCALPING",
+        "scanner_promotion_id": "promotion-pyramid-submit-1",
+        "buy_price": 9_900,
         "buy_qty": 10,
         "pending_add_ai_decision_trace_id": "stale-prior-scale-in-trace",
         "last_reversal_features": {
@@ -20894,6 +20922,14 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
         "profit_rate": 2.0,
         "peak_profit": 2.1,
     }
+    action.update(
+        state_handlers._pyramid_scale_in_decision_lineage(
+            stock,
+            "123456",
+            action,
+            now_ts=1_778_000_100.25,
+        )
+    )
     ws_data = {"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000}
 
     state_handlers.execute_scale_in_order(
@@ -20926,6 +20962,13 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
     ][0]
     assert "ai_decision_trace_id" not in submitted
     assert "pending_add_ai_decision_trace_id" not in stock
+    assert submitted["position_episode_id"] == action["position_episode_id"]
+    assert submitted["scale_in_decision_id"] == action["scale_in_decision_id"]
+    submitted_leg = [
+        fields for stage, fields in logs if stage == "scale_in_order_leg_submitted"
+    ][0]
+    assert submitted_leg["position_episode_id"] == action["position_episode_id"]
+    assert submitted_leg["scale_in_decision_id"] == action["scale_in_decision_id"]
 
 
 def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(
@@ -38533,6 +38576,59 @@ def test_shallow_avg_down_pending_lineage_requires_exact_observation_context():
         )
     finally:
         state_handlers._AVG_DOWN_ROUTE_CONTEXT.reset(token)
+
+
+def test_pyramid_decision_lineage_carries_only_exact_scanner_position():
+    stock = {
+        "id": 171,
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "scanner_promotion_id": "promotion-171",
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "scalping_pyramid_ok",
+        "configured_min_profit_pct": 1.1,
+        "effective_min_profit_pct": 1.1,
+    }
+
+    lineage = state_handlers._pyramid_scale_in_decision_lineage(
+        stock,
+        "A123456",
+        action,
+        now_ts=1_778_000_000.125,
+    )
+
+    assert lineage == state_handlers._pyramid_scale_in_decision_lineage(
+        stock,
+        "123456",
+        action,
+        now_ts=1_778_000_000.125,
+    )
+    assert lineage["pyramid_decision_lineage_schema"] == (
+        "pyramid_scale_in_decision_lineage_v1"
+    )
+    assert lineage["scale_in_decision_id"].startswith("pyr-decision-")
+    assert lineage["pyramid_evaluation_id"].startswith("pyr-eval-")
+    assert state_handlers._scale_in_pending_lineage(
+        stock,
+        "123456",
+        {**action, **lineage},
+    ) == {
+        "pending_add_position_episode_id": lineage["position_episode_id"],
+        "pending_add_scale_in_decision_id": lineage["scale_in_decision_id"],
+    }
+    assert not state_handlers._pyramid_scale_in_decision_lineage(
+        {"id": 171, "buy_price": 10000, "buy_qty": 10},
+        "123456",
+        action,
+        now_ts=1_778_000_000.125,
+    )
+    assert not state_handlers._scale_in_pending_lineage(
+        {**stock, "scanner_promotion_id": "different-promotion"},
+        "123456",
+        {**action, **lineage},
+    )
 
 
 def test_add_execution_caps_duplicate_split_leg_by_order_number(monkeypatch):

@@ -21335,9 +21335,73 @@ def _scale_in_arm_from_context(profit_rate=0.0, action=None, rejected_actions=No
         return "PYRAMID"
     if "avg_down" in joined_rejected or "reversal" in joined_rejected:
         return "AVG_DOWN"
-    if _safe_float(profit_rate, 0.0) >= 0:
-        return "PYRAMID"
-    return "AVG_DOWN"
+    # A generic HOLD/EXIT snapshot is not a scale-in evaluation. Inferring an
+    # arm from the PnL sign creates phantom PYRAMID/AVG_DOWN observations in
+    # postclose replay and makes its denominator larger than the real gate
+    # population.
+    return "NONE"
+
+
+def _pyramid_scale_in_decision_lineage(
+    stock: dict, code: str, action: dict | None, *, now_ts: float
+) -> dict[str, str]:
+    """Mint source-only identity for one exact real PYRAMID evaluation.
+
+    The identity is attached only after the existing runtime selector chooses
+    PYRAMID. It has no order, quantity, threshold, or provider authority.
+    """
+    if not isinstance(stock, dict) or not isinstance(action, dict):
+        return {}
+    if str(action.get("add_type") or "").strip().upper() != "PYRAMID":
+        return {}
+    normalized_code = str(code or "").strip().upper()
+    if normalized_code.startswith("A"):
+        normalized_code = normalized_code[1:]
+    normalized_code = normalized_code[:6]
+    attempt_id = str(
+        stock.get("scanner_promotion_id") or stock.get("scanner_generation_id") or ""
+    ).strip()
+    try:
+        position_episode_id = mint_main_lifecycle_id(
+            record_id=stock.get("id"),
+            stock_code=normalized_code,
+            attempt_id=attempt_id,
+        )
+    except (TypeError, ValueError):
+        return {}
+    decision_material = {
+        "schema": "pyramid_scale_in_decision_lineage_v1",
+        "position_episode_id": position_episode_id,
+        "record_id": stock.get("id"),
+        "stock_code": normalized_code,
+        "attempt_id": attempt_id,
+        "observed_at_epoch": round(float(now_ts), 6),
+        "position_basis": {
+            "buy_price": stock.get("buy_price"),
+            "buy_qty": stock.get("buy_qty"),
+        },
+        "action": {
+            "reason": action.get("reason"),
+            "configured_min_profit_pct": action.get("configured_min_profit_pct"),
+            "effective_min_profit_pct": action.get("effective_min_profit_pct"),
+            "runtime_family": action.get("runtime_family"),
+        },
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            decision_material,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "pyramid_decision_lineage_schema": "pyramid_scale_in_decision_lineage_v1",
+        "position_episode_id": position_episode_id,
+        "scale_in_decision_id": f"pyr-decision-{digest[:32]}",
+        "pyramid_evaluation_id": f"pyr-eval-{digest[:32]}",
+    }
 
 
 def _scale_in_namespace_for_arm(arm, reason=None):
@@ -21755,6 +21819,10 @@ def _append_pyramid_probe_fields(fields: dict, probe: dict | None) -> dict:
     else:
         probe = _scale_in_feature_contract_defaults(probe)
     for key in (
+        "pyramid_decision_lineage_schema",
+        "position_episode_id",
+        "scale_in_decision_id",
+        "pyramid_evaluation_id",
         "pyramid_evaluation_schema",
         "profit_gate_mode",
         "min_profit_pct",
@@ -22038,6 +22106,41 @@ def _shallow_avg_down_pending_lineage(
     position_episode_id = str(context.get("position_episode_id") or "").strip()
     scale_in_decision_id = str(context.get("decision_id") or "").strip()
     if not position_episode_id or not scale_in_decision_id:
+        return {}
+    return {
+        "pending_add_position_episode_id": position_episode_id,
+        "pending_add_scale_in_decision_id": scale_in_decision_id,
+    }
+
+
+def _scale_in_pending_lineage(
+    stock: dict, code: str, action: dict | None
+) -> dict[str, str]:
+    """Carry an exact selected decision into the broker-receipt lifecycle."""
+    shallow_avg_down = _shallow_avg_down_pending_lineage(stock, code, action)
+    if shallow_avg_down:
+        return shallow_avg_down
+    if str((action or {}).get("add_type") or "").strip().upper() != "PYRAMID":
+        return {}
+    position_episode_id = str(
+        (action or {}).get("position_episode_id") or ""
+    ).strip()
+    scale_in_decision_id = str(
+        (action or {}).get("scale_in_decision_id") or ""
+    ).strip()
+    attempt_id = str(
+        stock.get("scanner_promotion_id") or stock.get("scanner_generation_id") or ""
+    ).strip()
+    normalized_code = str(code or "").strip().upper()
+    if normalized_code.startswith("A"):
+        normalized_code = normalized_code[1:]
+    normalized_code = normalized_code[:6]
+    if not validate_main_lifecycle_id(
+        position_episode_id,
+        record_id=stock.get("id"),
+        stock_code=normalized_code,
+        attempt_id=attempt_id,
+    ) or re.fullmatch(r"pyr-decision-[0-9a-f]{32}", scale_in_decision_id) is None:
         return {}
     return {
         "pending_add_position_episode_id": position_episode_id,
@@ -91416,6 +91519,16 @@ def handle_holding_state(
                     **scale_in_action,
                     "shallow_source_gap_recheck_add_judgment_lock_bypassed": True,
                 }
+            if str(scale_in_action.get("add_type") or "").upper() == "PYRAMID":
+                scale_in_action = {
+                    **scale_in_action,
+                    **_pyramid_scale_in_decision_lineage(
+                        stock,
+                        code,
+                        scale_in_action,
+                        now_ts=now_ts,
+                    ),
+                }
             scale_in_stop_line_pct = _safe_float(
                 locals().get("dynamic_stop_pct"),
                 _rule_float("SCALP_STOP", -1.5),
@@ -95061,7 +95174,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         return None
     pending_registered_at = time.time()
-    pending_avg_down_lineage = _shallow_avg_down_pending_lineage(stock, code, action)
+    pending_scale_in_lineage = _scale_in_pending_lineage(stock, code, action)
     _mutate_stock_state(
         stock,
         set_fields={
@@ -95076,7 +95189,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "pending_add_initial_buy_price": float(stock.get("buy_price") or 0),
             "pending_add_initial_buy_qty": _safe_int(stock.get("buy_qty"), 0),
             "pending_add_execution_notice_pending": False,
-            **pending_avg_down_lineage,
+            **pending_scale_in_lineage,
             **(
                 {
                     "pending_add_ai_decision_trace_id": scale_in_ai_trace_fields[
@@ -95123,7 +95236,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "add_order_time": pending_registered_at,
         },
         pop_fields=(
-            (() if pending_avg_down_lineage else (
+            (() if pending_scale_in_lineage else (
                 "pending_add_position_episode_id",
                 "pending_add_scale_in_decision_id",
             ))
@@ -95358,15 +95471,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         runtime_effect=False,
                         **(
                             {
-                                "position_episode_id": stock.get(
+                                "position_episode_id": pending_scale_in_lineage.get(
                                     "pending_add_position_episode_id"
                                 ),
-                                "scale_in_decision_id": stock.get(
+                                "scale_in_decision_id": pending_scale_in_lineage.get(
                                     "pending_add_scale_in_decision_id"
                                 ),
                             }
-                            if stock.get("pending_add_position_episode_id")
-                            and stock.get("pending_add_scale_in_decision_id")
+                            if pending_scale_in_lineage.get(
+                                "pending_add_position_episode_id"
+                            )
+                            and pending_scale_in_lineage.get(
+                                "pending_add_scale_in_decision_id"
+                            )
                             else {}
                         ),
                         **scale_in_ai_trace_fields,
@@ -95567,6 +95684,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             lifecycle_submission_summary_only=bool(
                 submitted_results
                 and len(submitted_order_qty_pairs) == len(submitted_results)
+            ),
+            **(
+                {
+                    "position_episode_id": pending_scale_in_lineage.get(
+                        "pending_add_position_episode_id"
+                    ),
+                    "scale_in_decision_id": pending_scale_in_lineage.get(
+                        "pending_add_scale_in_decision_id"
+                    ),
+                }
+                if pending_scale_in_lineage.get("pending_add_position_episode_id")
+                and pending_scale_in_lineage.get("pending_add_scale_in_decision_id")
+                else {}
             ),
             post_probe_winner_recovery_lane=bool(
                 action.get("post_probe_winner_recovery_lane")

@@ -1119,6 +1119,19 @@ def _pyramid_evaluation_event(row: dict[str, Any]) -> dict[str, Any] | None:
         stage == "stat_action_decision_snapshot" and arm.upper() == "PYRAMID"
     ):
         return None
+    if stage == "stat_action_decision_snapshot":
+        action_type = str(fields.get("scale_in_action_type") or "").upper()
+        rejected_actions = str(fields.get("rejected_actions") or "").lower()
+        chosen_action = str(fields.get("chosen_action") or "").lower()
+        if not (
+            action_type == "PYRAMID"
+            or "pyramid" in rejected_actions
+            or chosen_action == "pyramid_wait"
+        ):
+            # Older emitters inferred PYRAMID from positive PnL even for a
+            # generic HOLD/EXIT snapshot. Keep those already-persisted rows
+            # out of a regenerated historical replay denominator.
+            return None
     configured = _safe_float(
         fields.get("configured_min_profit_pct")
         or fields.get("base_min_profit_pct")
@@ -1148,6 +1161,9 @@ def _pyramid_evaluation_event(row: dict[str, Any]) -> dict[str, Any] | None:
         "record_id": str(row.get("record_id") or "").strip(),
         "stock_code": str(row.get("stock_code") or "").strip(),
         "stock_name": row.get("stock_name"),
+        "position_episode_id": fields.get("position_episode_id"),
+        "scale_in_decision_id": fields.get("scale_in_decision_id"),
+        "pyramid_evaluation_id": fields.get("pyramid_evaluation_id"),
         "observed_gate_selected": observed_selected,
         "observed_gate_reason": action_reason,
         "scale_in_gate_allowed": gate_allowed,
@@ -1429,10 +1445,21 @@ def _finalize_pyramid_threshold_replay_rows(
                 reasons.append("pyramid_price_resolver_limit_contract_invalid")
             if resolver_price <= 0:
                 reasons.append("pyramid_price_resolver_order_price_missing")
+            decision_id = str(item.get("scale_in_decision_id") or "").strip()
+            submit_decision_ids = {
+                str(value).strip()
+                for value in terminal.get("pyramid_submit_decision_ids") or []
+                if str(value).strip()
+            }
+            exact_submit_match = bool(
+                decision_id and decision_id in submit_decision_ids
+            )
+            legacy_submit_seen = bool(terminal.get("pyramid_submit_seen"))
             item.update(
                 {
                     "pyramid_evaluation_id": (
-                        f"{record_key}:{event_ts or 'missing'}:{index}"
+                        item.get("pyramid_evaluation_id")
+                        or f"{record_key}:{event_ts or 'missing'}:{index}"
                     ),
                     "position_key": record_key,
                     "final_ts": final_ts,
@@ -1498,9 +1525,20 @@ def _finalize_pyramid_threshold_replay_rows(
                     "submit_evaluable": False,
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
-                    "actual_order_submitted": bool(terminal.get("pyramid_submit_seen")),
-                    "broker_order_forbidden": not bool(
-                        terminal.get("pyramid_submit_seen")
+                    "actual_order_submitted": (
+                        exact_submit_match if decision_id else legacy_submit_seen
+                    ),
+                    "broker_order_forbidden": not (
+                        exact_submit_match if decision_id else legacy_submit_seen
+                    ),
+                    "pyramid_submit_match_status": (
+                        "exact_scale_in_decision_id_match"
+                        if exact_submit_match
+                        else (
+                            "exact_scale_in_decision_id_no_submit"
+                            if decision_id
+                            else "legacy_position_level_submit_attribution"
+                        )
                     ),
                     "decision_authority": (
                         "source_only_fixed_observed_exit_pyramid_gate_replay"
@@ -4178,6 +4216,8 @@ def _real_scale_in_execution_record(
         "executed_at": row.get("emitted_at"),
         "add_type": add_type or "UNKNOWN",
         "add_reason": add_reason or "-",
+        "position_episode_id": fields.get("position_episode_id"),
+        "scale_in_decision_id": fields.get("scale_in_decision_id"),
         "scale_in_outcome_cohort": (
             "winner_recovery"
             if add_reason == "post_probe_winner_recovery_first_leg"
@@ -4790,7 +4830,17 @@ def build_report(
                 )
                 _update_snapshot(one_share_records[key], row)
         if _is_pyramid_submit_event(row):
-            terminal_sell_records.setdefault(key, {})["pyramid_submit_seen"] = True
+            terminal = terminal_sell_records.setdefault(key, {})
+            terminal["pyramid_submit_seen"] = True
+            scale_in_decision_id = str(
+                fields.get("scale_in_decision_id") or ""
+            ).strip()
+            if scale_in_decision_id:
+                decision_ids = terminal.setdefault(
+                    "pyramid_submit_decision_ids", []
+                )
+                if scale_in_decision_id not in decision_ids:
+                    decision_ids.append(scale_in_decision_id)
             submitted = _pyramid_submit_record(row)
             item = candidates.setdefault(key, submitted)
             item.update({k: v for k, v in submitted.items() if v not in (None, "")})

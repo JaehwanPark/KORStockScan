@@ -3298,3 +3298,143 @@ def test_selected_pyramid_snapshot_owns_same_day_configured_threshold_provenance
         "selection_source": "same_day_unique_runtime_pyramid_evaluation",
         "ambiguous": False,
     }
+
+
+def test_generic_positive_hold_snapshot_is_not_a_pyramid_evaluation(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-04.jsonl"
+    rows = [
+        _event(
+            803,
+            "803803",
+            "generic-hold",
+            "stat_action_decision_snapshot",
+            {
+                # This is the persisted shape produced by the legacy emitter:
+                # positive PnL implied PYRAMID despite no pyramid action.
+                "scale_in_arm": "PYRAMID",
+                "scale_in_action_type": "-",
+                "chosen_action": "hold_wait",
+                "rejected_actions": "exit_now:no_sell_signal",
+                "profit_rate": 1.4,
+            },
+            emitted_at="2026-09-04T10:00:00+09:00",
+        ),
+        _event(
+            803,
+            "803803",
+            "generic-hold",
+            "sell_completed",
+            {"profit_rate": 1.6, "sell_price": 10160},
+            emitted_at="2026-09-04T10:05:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-09-04", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+
+    assert report["pyramid_threshold_replay_rows"] == []
+    assert report["pyramid_threshold_replay_coverage"]["evaluation_event_count"] == 0
+
+
+def test_pyramid_submit_attribution_uses_exact_decision_id(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-04.jsonl"
+    common = {
+        "scale_in_arm": "PYRAMID",
+        "scale_in_action_type": "PYRAMID",
+        "scale_in_action_reason": "scalping_pyramid_ok",
+        "chosen_action": "pyramid_wait",
+        "scale_in_gate_allowed": True,
+        "profit_rate": 1.2,
+        "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
+        "configured_min_profit_pct": 1.1,
+        "effective_min_profit_pct": 1.1,
+        "quote_stale": False,
+        "executable_best_ask": 10100,
+        "executable_best_bid": 10090,
+        "pyramid_price_resolver_observed": True,
+        "pyramid_price_resolver_allowed": True,
+        "pyramid_price_resolver_reason": "scale_in_price_resolved",
+        "pyramid_price_resolver_order_price": 10090,
+        "pyramid_price_resolver_price_source": "best_bid",
+        "holding_context_venue": "KRX",
+        "holding_context_session": "krx_regular",
+    }
+    rows = [
+        _event(
+            804,
+            "804804",
+            "exact-submit",
+            "stat_action_decision_snapshot",
+            {
+                **common,
+                "position_episode_id": "main-life:episode-804",
+                "scale_in_decision_id": "pyr-decision-" + "a" * 32,
+                "pyramid_evaluation_id": "pyr-eval-" + "a" * 32,
+            },
+            emitted_at="2026-09-04T10:00:00+09:00",
+        ),
+        _event(
+            804,
+            "804804",
+            "exact-submit",
+            "stat_action_decision_snapshot",
+            {
+                **common,
+                "scale_in_decision_id": "pyr-decision-" + "b" * 32,
+                "pyramid_evaluation_id": "pyr-eval-" + "b" * 32,
+            },
+            emitted_at="2026-09-04T10:01:00+09:00",
+        ),
+        _event(
+            804,
+            "804804",
+            "exact-submit",
+            "scale_in_order_submitted",
+            {
+                "add_type": "PYRAMID",
+                "actual_order_submitted": True,
+                "scale_in_decision_id": "pyr-decision-" + "b" * 32,
+            },
+            emitted_at="2026-09-04T10:01:01+09:00",
+        ),
+        _event(
+            804,
+            "804804",
+            "exact-submit",
+            "sell_completed",
+            {
+                "profit_rate": 1.5,
+                "sell_price": 10200,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+            emitted_at="2026-09-04T10:05:00+09:00",
+        ),
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+
+    report = mod.build_report(
+        "2026-09-04", pipeline_path=pipeline_path, generated_at="fixed"
+    )
+    replay = {
+        item["scale_in_decision_id"]: item
+        for item in report["pyramid_threshold_replay_rows"]
+    }
+
+    assert replay["pyr-decision-" + "a" * 32]["actual_order_submitted"] is False
+    assert replay["pyr-decision-" + "a" * 32]["pyramid_submit_match_status"] == (
+        "exact_scale_in_decision_id_no_submit"
+    )
+    assert replay["pyr-decision-" + "b" * 32]["actual_order_submitted"] is True
+    assert replay["pyr-decision-" + "b" * 32]["pyramid_submit_match_status"] == (
+        "exact_scale_in_decision_id_match"
+    )
+    assert replay["pyr-decision-" + "b" * 32]["pyramid_evaluation_id"] == (
+        "pyr-eval-" + "b" * 32
+    )
