@@ -99,6 +99,9 @@ AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approval"
 SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
+AFTERMARKET_SOR_RUNTIME_POLICY_DIR = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR
+AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA = "krx_aftermarket_sor_runtime_policy_v1"
+AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY = "krx_aftermarket_sor_runtime_policy"
 # Archive-path compatibility for isolated legacy test fixtures.  The retired
 # latency recommendation has no report loader or PREOPEN consumer.
 LATENCY_CLASSIFIER_RECOMMENDATION_DIR = (
@@ -4944,7 +4947,107 @@ def _lifecycle_ai_context_overlay_env(
     )
 
 
+def _aftermarket_sor_runtime_policy_decision(
+    source_date: str,
+    target_date: str,
+    *,
+    include_families: set[str] | None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Select only an exact-date policy emitted by the postclose canary gate."""
+
+    decision: dict[str, Any] = {
+        "family": AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
+        "stage": "order_route_session",
+        "selected": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "source_date": source_date,
+        "target_date": target_date,
+        "env_overrides": {},
+    }
+    if include_families is not None and AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY not in include_families:
+        decision["decision_reason"] = "operator_family_filter_excluded"
+        return decision, {}
+    path = (
+        AFTERMARKET_SOR_RUNTIME_POLICY_DIR
+        / f"krx_aftermarket_sor_runtime_policy_{target_date}.json"
+    )
+    if not path.is_file():
+        decision["decision_reason"] = "postclose_canary_successor_policy_missing"
+        return decision, {}
+    try:
+        encoded = path.read_bytes()
+        policy = json.loads(encoded.decode("utf-8"))
+        content = dict(policy)
+        content_sha = str(content.pop("policy_content_sha256") or "")
+        computed_content_sha = hashlib.sha256(
+            json.dumps(
+                content, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        decision["decision_reason"] = f"postclose_canary_successor_policy_invalid:{exc}"
+        return decision, {}
+    required = {
+        "schema_version": AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA,
+        "source_date": source_date,
+        "active_date": target_date,
+        "runtime_apply_allowed": True,
+        "allowed_runtime_apply": True,
+        "source_quality_passed": True,
+        "route": "SOR",
+        "allowed_order_types": ["0", "00", "6"],
+        "market_order_remap": {"3": "6"},
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
+        "existing_cap_unchanged": True,
+        "existing_cooldown_unchanged": True,
+        "hard_guards_preserved": True,
+    }
+    invalid = [key for key, expected in required.items() if policy.get(key) != expected]
+    if (
+        content_sha != computed_content_sha
+        or (policy.get("canary_acceptance") or {}).get("status")
+        != "passed_broker_acceptance"
+        or invalid
+    ):
+        decision["decision_reason"] = "postclose_canary_successor_contract_invalid"
+        decision["invalid_fields"] = invalid
+        return decision, {}
+    policy_sha = hashlib.sha256(encoded).hexdigest()
+    env = {
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_FILE": str(path),
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_VERSION": str(
+            policy.get("policy_version") or ""
+        ),
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SOURCE_DATE": source_date,
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256": policy_sha,
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ACTIVE_DATE": target_date,
+    }
+    decision.update(
+        {
+            "selected": True,
+            "runtime_effect": True,
+            "decision_reason": "postclose_canary_successor_policy_selected",
+            "policy_file": str(path),
+            "policy_sha256": policy_sha,
+            "policy_version": policy.get("policy_version"),
+            "quantity_policy_owner": policy.get("quantity_policy_owner"),
+            "env_overrides": env,
+        }
+    )
+    return decision, env
+
+
 SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
+    AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY: [
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ENABLED",
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_FILE",
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_VERSION",
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SOURCE_DATE",
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256",
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ACTIVE_DATE",
+    ],
     "position_sizing_dynamic_formula": [
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED",
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE",
@@ -5715,6 +5818,17 @@ def _split_runtime_policy_audits(
 ) -> list[dict[str, Any]]:
     specs = (
         {
+            "family": AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
+            "prefix": "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_",
+            "schema": AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA,
+            "freshness_field": "source_date",
+            "max_age_days": 5,
+            "require_runtime_apply_allowed": True,
+            "allow_missing_runtime_apply_allowed": False,
+            "active_date_key": "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ACTIVE_DATE",
+            "require_sha256": True,
+        },
+        {
             "family": "position_sizing_dynamic_formula",
             "prefix": "KORSTOCKSCAN_POSITION_SIZING_POLICY_",
             "schema": "position_sizing_dynamic_formula_policy_v1",
@@ -5758,7 +5872,11 @@ def _split_runtime_policy_audits(
     for spec in specs:
         prefix = str(spec["prefix"])
         if (
-            spec["family"] == "position_sizing_dynamic_formula"
+            spec["family"]
+            in {
+                "position_sizing_dynamic_formula",
+                AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
+            }
             and not any(key.startswith(prefix) for key in effective_env)
         ):
             continue
@@ -5849,7 +5967,7 @@ def _split_runtime_policy_audits(
                 audit.update(status="fail", reason="policy_source_date_mismatch")
                 audits.append(audit)
                 continue
-            if (
+            if spec["family"] == "position_sizing_dynamic_formula" and (
                 policy.get("formula_version") != "entry_type_5stage_cap25_v1"
                 or policy.get("decision") != "retain_current"
                 or policy.get("canary_quantity_cap_precedence") is not True
@@ -7749,6 +7867,13 @@ def build_preopen_apply_manifest(
             "env_overrides": {},
         }
         limit_down_watch_env_overrides: dict[str, str] = {}
+        aftermarket_sor_policy_decision: dict[str, Any] = {
+            "family": AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
+            "selected": False,
+            "decision_reason": "auto_apply_not_requested",
+            "env_overrides": {},
+        }
+        aftermarket_sor_runtime_policy_env_overrides: dict[str, str] = {}
         selected, decisions, env_overrides = ([], [], {})
         lifecycle_context_overlay, lifecycle_context_env_overrides = ({}, {})
         swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
@@ -7988,6 +8113,18 @@ def build_preopen_apply_manifest(
                 decisions,
                 env_overrides,
             )
+            (
+                aftermarket_sor_policy_decision,
+                aftermarket_sor_runtime_policy_env_overrides,
+            ) = _aftermarket_sor_runtime_policy_decision(
+                report_source_date,
+                target_date,
+                include_families=include_families,
+            )
+            if aftermarket_sor_policy_decision.get("selected"):
+                selected.append(dict(aftermarket_sor_policy_decision))
+            decisions.append(dict(aftermarket_sor_policy_decision))
+            env_overrides.update(aftermarket_sor_runtime_policy_env_overrides)
             env_overrides = {
                 key: value
                 for key, value in env_overrides.items()
@@ -8098,6 +8235,7 @@ def build_preopen_apply_manifest(
             "auto_apply_decisions": decisions,
             "entry_cancel_wait_runtime": entry_cancel_wait_decision,
             "limit_down_watch": limit_down_watch_decision,
+            "aftermarket_sor_runtime_policy": aftermarket_sor_policy_decision,
             "lifecycle_ai_context_overlay": lifecycle_context_overlay,
             "operator_runtime_env_locks": operator_runtime_env_locks,
             "approval_requests": approval_requests,

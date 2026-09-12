@@ -495,7 +495,10 @@ def test_v2_15_uses_registered_one_share_exploration_bridge(monkeypatch, tmp_pat
         DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
     )
     candidate = policy._read_json(policy.live_candidate_path(SOURCE_DATE))
-    assert candidate["risk_contract"]["residual_multi_leg_forbidden"] is True
+    assert candidate["risk_contract"]["residual_multi_leg_forbidden"] is False
+    assert candidate["risk_contract"]["quantity_policy_owner"] == (
+        "position_sizing_dynamic_formula"
+    )
     assert candidate["entry_decision_composer_version"] == (
         ENTRY_DECISION_COMPOSER_V2_15_VERSION
     )
@@ -833,8 +836,11 @@ def test_negative_performance_can_use_guarded_one_share_exploration(
 
     assert published["status"] == "bounded_exploration_apply_ready"
     assert candidate["canary_mode"] == policy.EXPLORATION_CANARY_MODE
-    assert candidate["risk_contract"]["residual_multi_leg_forbidden"] is True
-    assert candidate["risk_contract"]["scale_in_forbidden"] is True
+    assert candidate["risk_contract"]["residual_multi_leg_forbidden"] is False
+    assert candidate["risk_contract"]["scale_in_forbidden"] is False
+    assert candidate["risk_contract"]["quantity_policy_owner"] == (
+        "position_sizing_dynamic_formula"
+    )
     assert candidate["risk_contract"]["maximum_daily_exploration_probes"] == 3
     assert activation["status"] == "active_bounded_canary"
     resolved = policy.resolve_live_prompt_policy(

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from unittest.mock import patch
 
@@ -12,6 +13,46 @@ from src.engine.scalping import (
     scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod,
 )
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
+
+
+def test_aftermarket_sor_successor_policy_selects_exact_preopen_date(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mod, "AFTERMARKET_SOR_RUNTIME_POLICY_DIR", tmp_path)
+    policy = {
+        "schema_version": "krx_aftermarket_sor_runtime_policy_v1",
+        "policy_version": "krx_aftermarket_sor_runtime_policy:2026-09-14",
+        "source_date": "2026-09-14",
+        "active_date": "2026-09-15",
+        "runtime_apply_allowed": True,
+        "allowed_runtime_apply": True,
+        "source_quality_passed": True,
+        "canary_acceptance": {"status": "passed_broker_acceptance"},
+        "route": "SOR",
+        "allowed_order_types": ["0", "00", "6"],
+        "market_order_remap": {"3": "6"},
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
+        "existing_cap_unchanged": True,
+        "existing_cooldown_unchanged": True,
+        "hard_guards_preserved": True,
+    }
+    content = json.dumps(
+        policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    policy["policy_content_sha256"] = hashlib.sha256(content).hexdigest()
+    encoded = json.dumps(policy).encode("utf-8")
+    path = tmp_path / "krx_aftermarket_sor_runtime_policy_2026-09-15.json"
+    path.write_bytes(encoded)
+
+    decision, env = mod._aftermarket_sor_runtime_policy_decision(
+        "2026-09-14", "2026-09-15", include_families=None
+    )
+
+    assert decision["selected"] is True
+    assert env["KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_FILE"] == str(path)
+    assert env["KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256"] == hashlib.sha256(
+        encoded
+    ).hexdigest()
 
 
 def _valid_scale_in_split_runtime_refresh_evidence():

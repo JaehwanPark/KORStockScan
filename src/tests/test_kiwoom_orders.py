@@ -1,3 +1,4 @@
+import hashlib
 import json
 import types
 from dataclasses import replace
@@ -65,15 +66,15 @@ def _seed_successful_deposit_for_token(token, amount, updated_at):
     }
 
 
-def _aftermarket_eligibility(*, krx=True, nxt=True):
+def _aftermarket_eligibility(*, krx=True, nxt=True, target_date=date(2026, 9, 14)):
     return session_contract.resolve_symbol_venue_eligibility(
         "005930",
-        date(2026, 9, 14),
+        target_date,
         {
             "source_id": "test-aftermarket-policy",
             "source_sha256": "fixture-sha",
             "quality_state": session_contract.SOURCE_QUALITY_VALID,
-            "observed_at_kst": "2026-09-14T15:59:00+09:00",
+            "observed_at_kst": f"{target_date.isoformat()}T15:59:00+09:00",
             "krx_regular_eligible": True,
             "krx_aftermarket_eligible": krx,
             "nxt_eligible": nxt,
@@ -144,6 +145,40 @@ def _install_aftermarket_canary_approval(monkeypatch, tmp_path, **overrides):
     approval["artifact_sha256"] = kiwoom_orders._approval_payload_sha256(approval)
     approval_path.write_text(json.dumps(approval), encoding="utf-8")
     return approval
+
+
+def _install_aftermarket_runtime_policy(monkeypatch, tmp_path, *, active_date):
+    path = tmp_path / "aftermarket-runtime-policy.json"
+    policy = {
+        "schema_version": "krx_aftermarket_sor_runtime_policy_v1",
+        "policy_version": "krx_aftermarket_sor_runtime_policy:2026-09-14",
+        "source_date": "2026-09-14",
+        "active_date": active_date,
+        "runtime_apply_allowed": True,
+        "allowed_runtime_apply": True,
+        "source_quality_passed": True,
+        "canary_acceptance": {"status": "passed_broker_acceptance"},
+        "route": "SOR",
+        "allowed_order_types": ["0", "00", "6"],
+        "market_order_remap": {"3": "6"},
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
+        "existing_cap_unchanged": True,
+        "existing_cooldown_unchanged": True,
+        "hard_guards_preserved": True,
+    }
+    content = json.dumps(
+        policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    policy["policy_content_sha256"] = hashlib.sha256(content).hexdigest()
+    encoded = json.dumps(policy).encode("utf-8")
+    path.write_bytes(encoded)
+    monkeypatch.setenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_FILE", str(path))
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256",
+        hashlib.sha256(encoded).hexdigest(),
+    )
+    return policy
 
 
 def _allow_buy_time_guards(monkeypatch):
@@ -651,6 +686,39 @@ def test_aftermarket_sor_buy_market_remaps_before_single_submit(
     assert result["aftermarket_sor_canary_approval_valid"] is True
     assert result["aftermarket_sor_canary_approval_id"] == approval["approval_id"]
     assert result["aftermarket_sor_canary_approval_sha256"] == approval["artifact_sha256"]
+
+
+def test_aftermarket_post_canary_policy_uses_central_quantity_owner(
+    monkeypatch, tmp_path
+):
+    _allow_buy_time_guards(monkeypatch)
+    _install_aftermarket_runtime_policy(monkeypatch, tmp_path, active_date="2026-09-15")
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+
+    def fake_post(url, headers, payload, api_id, timeout=5):
+        calls.append(dict(payload))
+        return DummyResponse(), {"return_code": "0", "ord_no": "B2"}
+
+    monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
+    result = kiwoom_orders.send_buy_order_market(
+        "005930",
+        2,
+        "TOKEN",
+        order_type="6",
+        dmst_stex_tp="SOR",
+        owner_context=_main_owner_context(),
+        now=datetime(2026, 9, 15, 16, 0, tzinfo=session_contract.KST),
+        venue_eligibility=_aftermarket_eligibility(target_date=date(2026, 9, 15)),
+    )
+
+    assert calls[0]["ord_qty"] == "2"
+    assert result["aftermarket_sor_runtime_policy_valid"] is True
+    assert result["aftermarket_sor_quantity_policy_owner"] == (
+        "position_sizing_dynamic_formula"
+    )
 
 
 @pytest.mark.parametrize(

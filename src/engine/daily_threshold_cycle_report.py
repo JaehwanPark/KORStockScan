@@ -87,6 +87,9 @@ THRESHOLD_APPLY_PLAN_DIR = THRESHOLD_CYCLE_DIR / "apply_plans"
 ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
 SCALE_IN_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "scale_in_split_order_policy"
 POSITION_SIZING_POLICY_DIR = THRESHOLD_CYCLE_DIR / "approvals"
+AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA = "krx_aftermarket_sor_runtime_policy_v1"
+AFTERMARKET_SOR_RUNTIME_POLICY_DIR = POSITION_SIZING_POLICY_DIR
+AFTERMARKET_SOR_CANARY_APPROVAL_ID = "krx-aftermarket-sor-canary-2026-09-14"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 CLEAN_TUNING_BASELINE_DATE = "2026-06-05"
 CUMULATIVE_BASELINE_START_DATE = CLEAN_TUNING_BASELINE_DATE
@@ -171,6 +174,8 @@ THRESHOLD_EVENT_TOP_LEVEL_KEEP_KEYS = {
 THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "action",
     "actual_order_submitted",
+    "aftermarket_sor_canary_approval_id",
+    "aftermarket_sor_canary_approval_valid",
     "add_count",
     "add_type",
     "additional_worsen",
@@ -212,6 +217,8 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "binding_caps",
     "effective_qty",
     "effective_qty_cap",
+    "effective_dmst_stex_tp",
+    "order_type_preflight_effective_type",
     "effective_ratio",
     "formula_version",
     "eligible_actions",
@@ -1231,6 +1238,13 @@ def save_threshold_calibration_report(
         "warnings": report.get("warnings") or [],
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    aftermarket_policy = _materialize_aftermarket_sor_runtime_policy(
+        report,
+        source_date=target_date,
+        calibration_path=path,
+    )
+    if aftermarket_policy is not None:
+        report["aftermarket_sor_runtime_policy"] = aftermarket_policy
     return path
 
 
@@ -1298,6 +1312,146 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
         "path": str(path),
         "sha256": recommended["policy_sha256"],
         "active_date": effective_date,
+    }
+
+
+def _aftermarket_sor_canary_acceptance(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize only explicit main SOR-canary broker acceptance evidence.
+
+    This is deliberately not an economics gate. The central quantity policy
+    retains its cumulative-EV contract; this gate proves that the bounded
+    route/type/eligibility canary reached a broker receipt without a contract
+    violation before a later PREOPEN may remove its temporary stage cap.
+    """
+
+    def field(event: dict[str, Any], key: str) -> Any:
+        fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+        return event.get(key, fields.get(key))
+
+    canary_events = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and str(field(event, "aftermarket_sor_canary_approval_id") or "")
+        == AFTERMARKET_SOR_CANARY_APPROVAL_ID
+    ]
+    submitted = [
+        event for event in canary_events if field(event, "actual_order_submitted") is True
+    ]
+    failures = [
+        event
+        for event in canary_events
+        if field(event, "broker_order_forbidden") is True
+        or field(event, "aftermarket_sor_canary_approval_valid") is False
+    ]
+    receipt_missing = [
+        event
+        for event in submitted
+        if not str(
+            field(event, "broker_order_no")
+            or field(event, "ord_no")
+            or field(event, "entry_order_no")
+            or ""
+        ).strip()
+    ]
+    route_invalid = [
+        event
+        for event in submitted
+        if str(field(event, "effective_dmst_stex_tp") or "").upper() != "SOR"
+        or str(field(event, "order_type_preflight_effective_type") or "")
+        not in {"0", "00", "6"}
+    ]
+    if not submitted:
+        status = "not_eligible_no_broker_accepted_canary"
+    elif failures or receipt_missing or route_invalid:
+        status = "failed_contract_or_receipt"
+    else:
+        status = "passed_broker_acceptance"
+    return {
+        "schema_version": "krx_aftermarket_sor_canary_acceptance_v1",
+        "approval_id": AFTERMARKET_SOR_CANARY_APPROVAL_ID,
+        "status": status,
+        "event_count": len(canary_events),
+        "submitted_count": len(submitted),
+        "failure_count": len(failures),
+        "receipt_missing_count": len(receipt_missing),
+        "route_invalid_count": len(route_invalid),
+        "central_quantity_policy_separate": True,
+        "economics_gate_owner": "position_sizing_dynamic_formula",
+    }
+
+
+def _materialize_aftermarket_sor_runtime_policy(
+    report: dict[str, Any],
+    *,
+    source_date: str,
+    calibration_path: Path,
+) -> dict[str, Any] | None:
+    """Publish the next-PREOPEN SOR policy only after a valid bounded canary."""
+
+    acceptance = report.get("aftermarket_sor_canary_acceptance")
+    if (
+        not isinstance(acceptance, dict)
+        or acceptance.get("status") != "passed_broker_acceptance"
+    ):
+        return None
+    sizing_path = (
+        POSITION_SIZING_POLICY_DIR
+        / f"position_sizing_dynamic_formula_{source_date}.json"
+    )
+    try:
+        sizing = json.loads(sizing_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if (
+        sizing.get("schema_version") != "position_sizing_dynamic_formula_policy_v1"
+        or sizing.get("runtime_apply_allowed") is not True
+        or sizing.get("source_quality_passed") is not True
+    ):
+        return None
+    active_date = _next_krx_trading_date(source_date)
+    policy = {
+        "schema_version": AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA,
+        "policy_version": f"krx_aftermarket_sor_runtime_policy:{source_date}",
+        "source_date": source_date,
+        "active_date": active_date,
+        "runtime_apply_allowed": True,
+        "allowed_runtime_apply": True,
+        "source_quality_passed": True,
+        "canary_acceptance": acceptance,
+        "canary_approval_id": AFTERMARKET_SOR_CANARY_APPROVAL_ID,
+        "route": "SOR",
+        "allowed_order_types": ["0", "00", "6"],
+        "market_order_remap": {"3": "6"},
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
+        "position_sizing_policy_path": str(sizing_path),
+        "position_sizing_policy_sha256": hashlib.sha256(sizing_path.read_bytes()).hexdigest(),
+        "existing_cap_unchanged": True,
+        "existing_cooldown_unchanged": True,
+        "hard_guards_preserved": True,
+        "source_calibration_path": str(calibration_path),
+        "source_calibration_sha256": hashlib.sha256(calibration_path.read_bytes()).hexdigest(),
+        "generated_at": datetime.now().astimezone().isoformat(),
+    }
+    content = json.dumps(
+        policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    policy["policy_content_sha256"] = hashlib.sha256(content).hexdigest()
+    encoded = json.dumps(policy, ensure_ascii=False, indent=2).encode("utf-8")
+    AFTERMARKET_SOR_RUNTIME_POLICY_DIR.mkdir(parents=True, exist_ok=True)
+    path = (
+        AFTERMARKET_SOR_RUNTIME_POLICY_DIR
+        / f"krx_aftermarket_sor_runtime_policy_{active_date}.json"
+    )
+    temporary = path.with_suffix(".tmp")
+    temporary.write_bytes(encoded)
+    temporary.replace(path)
+    return {
+        "status": "published_next_preopen",
+        "path": str(path),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "active_date": active_date,
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
     }
 
 
@@ -19438,6 +19592,9 @@ def build_daily_threshold_cycle_report(
             ),
         },
         "same_day_runtime_apply_observation": runtime_apply_observation,
+        "aftermarket_sor_canary_acceptance": _aftermarket_sor_canary_acceptance(
+            same_day_events
+        ),
         # Compatibility alias preserves the legacy loader fallback for older
         # fixtures/artifacts. Decision consumers must use the strict window map.
         "completed_by_source": _completed_by_source_summary(

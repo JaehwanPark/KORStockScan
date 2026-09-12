@@ -1244,13 +1244,16 @@ def build_live_candidate(
         ),
         "risk_contract": {
             "eligible_position_tags": list(CANARY_POSITION_TAGS),
-            "one_share_probe_first_required": True,
+            "one_share_probe_first_required": False,
             "ai_full_entry_forbidden": True,
             "fresh_submit_revalidation_required": True,
             "post_probe_direction_recheck_required": True,
-            "residual_multi_leg_existing_owner_required": performance_ready,
-            "residual_multi_leg_forbidden": exploration_ready,
-            "scale_in_forbidden": exploration_ready,
+            "residual_multi_leg_existing_owner_required": True,
+            "residual_multi_leg_forbidden": False,
+            "scale_in_forbidden": False,
+            "quantity_policy_owner": "position_sizing_dynamic_formula",
+            "residual_policy_owner": "entry_split_order_plan",
+            "scale_in_policy_owner": "scale_in_split_order_plan",
             "maximum_daily_exploration_probes": (
                 exploration_limit if exploration_ready else None
             ),
@@ -1593,7 +1596,6 @@ def _runtime_candidate_contract_errors(
     if risk_contract.get("eligible_position_tags") != list(CANARY_POSITION_TAGS):
         errors.append("runtime_candidate_position_owner_scope_invalid")
     for key in (
-        "one_share_probe_first_required",
         "ai_full_entry_forbidden",
         "fresh_submit_revalidation_required",
         "post_probe_direction_recheck_required",
@@ -1603,6 +1605,15 @@ def _runtime_candidate_contract_errors(
     ):
         if risk_contract.get(key) is not True:
             errors.append(f"runtime_candidate_risk_contract_invalid:{key}")
+    if risk_contract.get("one_share_probe_first_required") is not False:
+        errors.append("runtime_candidate_prompt_must_not_own_quantity")
+    for key, owner in (
+        ("quantity_policy_owner", "position_sizing_dynamic_formula"),
+        ("residual_policy_owner", "entry_split_order_plan"),
+        ("scale_in_policy_owner", "scale_in_split_order_plan"),
+    ):
+        if risk_contract.get(key) != owner:
+            errors.append(f"runtime_candidate_policy_owner_invalid:{key}")
     if risk_contract.get("same_stage_prompt_owner_count") != 1:
         errors.append("runtime_candidate_same_stage_owner_invalid")
     if (
@@ -1623,9 +1634,9 @@ def _runtime_candidate_contract_errors(
             errors.append("runtime_candidate_performance_expansion_contract_invalid")
     elif canary_mode == EXPLORATION_CANARY_MODE:
         if (
-            risk_contract.get("residual_multi_leg_existing_owner_required") is not False
-            or risk_contract.get("residual_multi_leg_forbidden") is not True
-            or risk_contract.get("scale_in_forbidden") is not True
+            risk_contract.get("residual_multi_leg_existing_owner_required") is not True
+            or risk_contract.get("residual_multi_leg_forbidden") is not False
+            or risk_contract.get("scale_in_forbidden") is not False
             or not _source_exploration_limit_valid(candidate, cohort)
         ):
             errors.append("runtime_candidate_exploration_risk_contract_invalid")
@@ -1750,12 +1761,15 @@ def build_preopen_activation(
             "eligible_position_tags": candidate_risk_contract.get(
                 "eligible_position_tags"
             ),
-            "one_share_probe_first_required": True,
+            "one_share_probe_first_required": False,
             "ai_full_entry_forbidden": True,
             "residual_multi_leg_forbidden": candidate_risk_contract.get(
                 "residual_multi_leg_forbidden"
             ),
             "scale_in_forbidden": candidate_risk_contract.get("scale_in_forbidden"),
+            "quantity_policy_owner": candidate_risk_contract.get("quantity_policy_owner"),
+            "residual_policy_owner": candidate_risk_contract.get("residual_policy_owner"),
+            "scale_in_policy_owner": candidate_risk_contract.get("scale_in_policy_owner"),
             "maximum_daily_exploration_probes": candidate_risk_contract.get(
                 "maximum_daily_exploration_probes"
             ),
@@ -1977,8 +1991,8 @@ def resolve_live_prompt_policy(
         )
         or (
             canary_mode == EXPLORATION_CANARY_MODE
-            and activation_contract.get("residual_multi_leg_forbidden") is True
-            and activation_contract.get("scale_in_forbidden") is True
+            and activation_contract.get("residual_multi_leg_forbidden") is False
+            and activation_contract.get("scale_in_forbidden") is False
             and activation_contract.get("maximum_daily_exploration_probes")
             in (EXPLORATION_MAX_DAILY_PROBES, KRX_EXPLORATION_MAX_DAILY_PROBES)
         )
@@ -2015,11 +2029,15 @@ def resolve_live_prompt_policy(
         or activation_contract.get("preopen_only") is not True
         or activation_contract.get("eligible_position_tags")
         != list(CANARY_POSITION_TAGS)
-        or activation_contract.get("one_share_probe_first_required") is not True
+        or activation_contract.get("one_share_probe_first_required") is not False
         or activation_contract.get("ai_full_entry_forbidden") is not True
         or activation_contract.get("nxt_control_unchanged") is not True
         or activation_contract.get("configured_v2_13_owner_required") is not True
         or activation_contract.get("automatic_fallback_on_any_contract_gap") is not True
+        or activation_contract.get("quantity_policy_owner")
+        != "position_sizing_dynamic_formula"
+        or activation_contract.get("residual_policy_owner") != "entry_split_order_plan"
+        or activation_contract.get("scale_in_policy_owner") != "scale_in_split_order_plan"
         or not activation_mode_contract_valid
         or not candidate_path.is_file()
         or not candidate_file_sha256

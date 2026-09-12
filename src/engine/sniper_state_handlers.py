@@ -45000,10 +45000,6 @@ def _abort_entry_split_probe_residual(
         "post_probe_fresh_bbo_unavailable",
     }
     observed_at = float(time.time() if now_ts is None else now_ts)
-    bounded_exploration_probe_only = bool(
-        reason == "entry_setup_bounded_exploration_probe_only"
-        or stock.get("entry_opportunity_recheck_exploration_probe_only")
-    )
     action_guard_active = _rising_missed_ai_action_guard_active(now_ts=observed_at)
     source_quality_timeout = bool(
         reason == "residual_revalidation_timeout"
@@ -45108,16 +45104,12 @@ def _abort_entry_split_probe_residual(
             or directional_soft_abort
         )
     )
-    scale_in_recheck_allowed = bool(
-        not bounded_exploration_probe_only
-        and (soft_abort or rising_missed_normal_winner_recheck)
-    )
+    scale_in_recheck_allowed = bool(soft_abort or rising_missed_normal_winner_recheck)
     contract_integrity_abort = reason == "probe_fill_submit_contract_missing"
     residual_expand_forbidden = bool(
         preserve_position
         and (
             contract_integrity_abort
-            or bounded_exploration_probe_only
             or (action_guard_active and not soft_abort)
         )
     )
@@ -45127,7 +45119,7 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_abort_detail_reason": timeout_cause,
         "entry_split_probe_scale_in_forbidden": bool(
             preserve_position
-            and (bounded_exploration_probe_only or not scale_in_recheck_allowed)
+            and not scale_in_recheck_allowed
         ),
         # This flag remains terminal for the original residual bundle. A later
         # scale-in is owned by the ordinary scale-in path and must pass all of
@@ -45165,7 +45157,9 @@ def _abort_entry_split_probe_residual(
         ),
         "entry_split_probe_source_quality_recheck_pending": False,
         "post_probe_confirmation_grant_active": False,
-        "entry_setup_bounded_exploration_probe_only": (bounded_exploration_probe_only),
+        "entry_setup_bounded_exploration_probe_only": _truthy_field(
+            stock.get("entry_setup_bounded_exploration_probe_only")
+        ),
     }
     hard_negative_reasons = {
         "buy_authority_not_available",
@@ -57342,7 +57336,7 @@ def _entry_setup_exploration_micro_relief(
         "entry_setup_exploration_micro_relief_min_micro_vwap_bp": 0.0,
         "entry_setup_exploration_micro_relief_hard_micro_vwap_floor_bp": -5.0,
         "entry_setup_exploration_micro_relief_authority": (
-            "one_share_exploration_only_residual_and_scale_in_forbidden"
+            "exploration_recheck_only_quantity_and_split_owners_preserved"
         ),
     }
 
@@ -57352,14 +57346,7 @@ def _entry_setup_exploration_terminal_state_fields(
     *,
     trusted_result: bool,
 ) -> dict[str, Any]:
-    """Preserve a trusted one-share policy on every Entry AI call path.
-
-    The ordinary WATCHING path already attaches these terminal restrictions
-    after its micro recheck. Scanner pre-submit retry paths can become the
-    final trusted Entry AI producer immediately before broker submission, so
-    dropping the policy fields there incorrectly exposes a residual bundle and
-    later scale-in to owners that the selected policy explicitly forbids.
-    """
+    """Carry a trusted exploration recheck policy without taking quantity ownership."""
 
     decision = ai_decision if isinstance(ai_decision, dict) else {}
     mode = str(decision.get("entry_setup_live_policy_mode") or "").strip().lower()
@@ -57396,9 +57383,9 @@ def _entry_setup_exploration_terminal_state_fields(
         ),
         "entry_opportunity_recheck_exploration_probe_only": True,
         "entry_setup_bounded_exploration_probe_only": True,
-        "entry_split_probe_residual_expand_forbidden": True,
-        "entry_split_probe_scale_in_forbidden": True,
-        "probe_expand_forbidden": True,
+        "entry_setup_prompt_quantity_owner": "position_sizing_dynamic_formula",
+        "entry_setup_prompt_residual_owner": "entry_split_order_plan",
+        "entry_setup_prompt_scale_in_owner": "scale_in_split_order_plan",
     }
 
 
@@ -57478,7 +57465,11 @@ def _entry_setup_exploration_submit_cap_guard(
     now_ts: float,
     order_already_submitted: bool = False,
 ) -> dict[str, Any]:
-    """Recheck one-share shape and the durable accepted-order cap at submit."""
+    """Recheck the durable exploration submission cap at submit.
+
+    Quantity is intentionally absent: the central position sizing policy owns
+    it, while this guard only limits the approved number of exploration arms.
+    """
 
     stock = stock if isinstance(stock, dict) else {}
     active = _truthy_field(
@@ -57504,15 +57495,6 @@ def _entry_setup_exploration_submit_cap_guard(
             {
                 "allowed": False,
                 "reason": "exploration_probe_bundle_already_submitted",
-                "entry_setup_exploration_cap_ledger_ok": True,
-            }
-        )
-        return fields
-    if int(qty) != 1:
-        fields.update(
-            {
-                "allowed": False,
-                "reason": "exploration_probe_qty_not_one",
                 "entry_setup_exploration_cap_ledger_ok": True,
             }
         )
@@ -65735,11 +65717,15 @@ def _handle_watching_strategy_branch(
                                     "entry_opportunity_recheck_exploration_probe_only": (
                                         True
                                     ),
-                                    "entry_split_probe_residual_expand_forbidden": (
-                                        True
+                                    "entry_setup_prompt_quantity_owner": (
+                                        "position_sizing_dynamic_formula"
                                     ),
-                                    "entry_split_probe_scale_in_forbidden": True,
-                                    "probe_expand_forbidden": True,
+                                    "entry_setup_prompt_residual_owner": (
+                                        "entry_split_order_plan"
+                                    ),
+                                    "entry_setup_prompt_scale_in_owner": (
+                                        "scale_in_split_order_plan"
+                                    ),
                                 }
                             )
                         _mutate_stock_state(
@@ -71532,17 +71518,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "probe_confirmation_last_at": 0.0,
                     "probe_confirmation_last_state": "UNKNOWN",
                     "probe_confirmation_last_signature": "",
-                    "probe_expand_forbidden": bool(
-                        stock.get("probe_expand_forbidden")
-                        or stock.get("entry_opportunity_recheck_exploration_probe_only")
-                    ),
+                    "probe_expand_forbidden": bool(stock.get("probe_expand_forbidden")),
                     "entry_split_probe_residual_expand_forbidden": bool(
                         stock.get("entry_split_probe_residual_expand_forbidden")
-                        or stock.get("entry_opportunity_recheck_exploration_probe_only")
                     ),
                     "entry_split_probe_scale_in_forbidden": bool(
                         stock.get("entry_split_probe_scale_in_forbidden")
-                        or stock.get("entry_opportunity_recheck_exploration_probe_only")
                     ),
                 },
             )
@@ -71588,17 +71569,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 probe_confirmation_last_at=0.0,
                 probe_confirmation_last_state="UNKNOWN",
                 probe_confirmation_last_signature="",
-                probe_expand_forbidden=bool(
-                    stock.get("probe_expand_forbidden")
-                    or stock.get("entry_opportunity_recheck_exploration_probe_only")
-                ),
+                probe_expand_forbidden=bool(stock.get("probe_expand_forbidden")),
                 entry_split_probe_residual_expand_forbidden=bool(
                     stock.get("entry_split_probe_residual_expand_forbidden")
-                    or stock.get("entry_opportunity_recheck_exploration_probe_only")
                 ),
                 entry_split_probe_scale_in_forbidden=bool(
                     stock.get("entry_split_probe_scale_in_forbidden")
-                    or stock.get("entry_opportunity_recheck_exploration_probe_only")
                 ),
             )
 
@@ -72493,6 +72469,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "effective_order_type": order_resolution["effective_order_type"],
                 "order_type_remapped": order_resolution["order_type_remapped"],
                 "order_type_remap_reason": order_resolution["order_type_remap_reason"],
+                "aftermarket_sor_canary_approval_id": res.get(
+                    "aftermarket_sor_canary_approval_id"
+                ),
+                "aftermarket_sor_canary_approval_valid": res.get(
+                    "aftermarket_sor_canary_approval_valid"
+                ),
+                "order_type_preflight_effective_type": res.get(
+                    "order_type_preflight_effective_type"
+                ),
                 "entry_order_lifecycle": submit_revalidation_fields.get(
                     "entry_order_lifecycle", "standard"
                 ),
@@ -72932,6 +72917,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         best_bid=best_bid_at_submit,
         best_ask=best_ask_at_submit,
     )
+    aftermarket_canary = next(
+        (
+            order
+            for order in successful_orders
+            if str(order.get("aftermarket_sor_canary_approval_id") or "").strip()
+        ),
+        {},
+    )
     _log_entry_pipeline(
         stock,
         code,
@@ -73003,6 +72996,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         submit_attempt_id=submit_attempt_id,
         broker_route=bundle_broker_route,
         broker_route_resolution=bundle_route_resolution,
+        effective_dmst_stex_tp=bundle_broker_route,
+        aftermarket_sor_canary_approval_id=aftermarket_canary.get(
+            "aftermarket_sor_canary_approval_id"
+        ),
+        aftermarket_sor_canary_approval_valid=aftermarket_canary.get(
+            "aftermarket_sor_canary_approval_valid"
+        ),
+        order_type_preflight_effective_type=aftermarket_canary.get(
+            "order_type_preflight_effective_type"
+        ),
         effective_venue=bundle_execution_cohort,
         **_opening_rotation_provenance_fields(stock),
         **{
@@ -84108,19 +84111,6 @@ def _submit_entry_split_probe_residual_locked(
     if phase not in {"probe_filled", "probe_recheck_pending"}:
         return False
 
-    if bool(
-        stock.get("entry_opportunity_recheck_exploration_probe_only")
-        or stock.get("entry_setup_bounded_exploration_probe_only")
-    ):
-        _abort_entry_split_probe_residual(
-            stock,
-            code,
-            "entry_setup_bounded_exploration_probe_only",
-            preserve_position=True,
-            now_ts=now_ts,
-        )
-        return False
-
     requested_qty = _safe_int(stock.get("entry_split_probe_requested_qty"), 0)
     filled_qty = _safe_int(stock.get("entry_filled_qty"), 0)
     fill_price = _safe_int(stock.get("entry_split_probe_fill_price"), 0)
@@ -91810,14 +91800,6 @@ def can_consider_scale_in(
     if exit_authority_reason:
         return {"allowed": False, "reason": exit_authority_reason}
 
-    exploration_probe_only = bool(
-        _truthy_field(stock.get("entry_opportunity_recheck_exploration_probe_only"))
-        or _truthy_field(stock.get("entry_setup_bounded_exploration_probe_only"))
-        or str(stock.get("entry_setup_live_policy_mode") or "").strip().lower()
-        == "one_share_exploration"
-        or str(stock.get("entry_split_probe_terminal_abort_reason") or "")
-        == "entry_setup_bounded_exploration_probe_only"
-    )
     scale_in_recheck_allowed = bool(
         stock.get("entry_split_probe_scale_in_recheck_allowed")
     )
@@ -91825,8 +91807,7 @@ def can_consider_scale_in(
         stock.get("entry_split_probe_residual_expand_forbidden")
     )
     if (
-        exploration_probe_only
-        or (
+        (
             stock.get("probe_expand_forbidden")
             and not (scale_in_recheck_allowed and residual_expand_forbidden)
         )
@@ -91849,25 +91830,11 @@ def can_consider_scale_in(
                 if stock.get("probe_expand_forbidden")
                 else "entry_split_probe_scale_in_forbidden"
             ),
-            "scale_in_block_owner": (
-                "entry_setup_v2_14_one_share_exploration"
-                if exploration_probe_only
-                else "entry_split_probe_lifecycle"
-            ),
-            "scale_in_block_authority": (
-                "terminal_one_share_exploration_residual_and_scale_in_forbidden"
-                if exploration_probe_only
-                else "probe_lifecycle_scale_in_forbidden"
-            ),
+            "scale_in_block_owner": "entry_split_probe_lifecycle",
+            "scale_in_block_authority": "probe_lifecycle_scale_in_forbidden",
             "entry_setup_live_policy_mode": stock.get("entry_setup_live_policy_mode"),
-            "rising_missed_scout_pyramid_bridge_applicable": (
-                not exploration_probe_only
-            ),
-            "rising_missed_scout_pyramid_bridge_non_applicable_reason": (
-                "owner_priority_entry_setup_one_share_exploration"
-                if exploration_probe_only
-                else None
-            ),
+            "rising_missed_scout_pyramid_bridge_applicable": True,
+            "rising_missed_scout_pyramid_bridge_non_applicable_reason": None,
         }
 
     if _rule_bool("SCALE_IN_REQUIRE_HISTORY_TABLE", False):

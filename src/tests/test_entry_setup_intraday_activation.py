@@ -256,7 +256,7 @@ def test_hundred_budget_carries_prior_orders_and_reaches_final_guards(
     assert handlers._entry_setup_exploration_submit_cap_guard(
         stock, qty=1, now_ts=NOW.timestamp()
     )["allowed"]
-    assert not handlers._entry_setup_exploration_submit_cap_guard(
+    assert handlers._entry_setup_exploration_submit_cap_guard(
         stock, qty=2, now_ts=NOW.timestamp()
     )["allowed"]
     from src.engine.scalping.entry_opportunity_recheck import (

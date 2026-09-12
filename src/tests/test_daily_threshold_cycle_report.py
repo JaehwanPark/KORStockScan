@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -7,6 +8,71 @@ from types import SimpleNamespace
 import pytest
 
 from src.engine import daily_threshold_cycle_report as report_mod
+
+
+def test_aftermarket_sor_successor_policy_requires_broker_acceptance(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "POSITION_SIZING_POLICY_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "AFTERMARKET_SOR_RUNTIME_POLICY_DIR", tmp_path)
+    source_date = "2026-09-14"
+    sizing_path = tmp_path / f"position_sizing_dynamic_formula_{source_date}.json"
+    sizing_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "position_sizing_dynamic_formula_policy_v1",
+                "runtime_apply_allowed": True,
+                "source_quality_passed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    calibration_path = tmp_path / "calibration.json"
+    calibration_path.write_text("{}", encoding="utf-8")
+    report = {
+        "aftermarket_sor_canary_acceptance": {
+            "status": "passed_broker_acceptance"
+        }
+    }
+
+    published = report_mod._materialize_aftermarket_sor_runtime_policy(
+        report, source_date=source_date, calibration_path=calibration_path
+    )
+
+    assert published is not None
+    policy_path = tmp_path / "krx_aftermarket_sor_runtime_policy_2026-09-15.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    content = dict(policy)
+    content_sha = content.pop("policy_content_sha256")
+    assert content_sha == hashlib.sha256(
+        json.dumps(
+            content, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    assert policy["quantity_policy_owner"] == "position_sizing_dynamic_formula"
+
+
+def test_aftermarket_sor_canary_acceptance_reads_projected_event_fields():
+    acceptance = report_mod._aftermarket_sor_canary_acceptance(
+        [
+            {
+                "stage": "order_bundle_submitted",
+                "fields": {
+                    "aftermarket_sor_canary_approval_id": (
+                        "krx-aftermarket-sor-canary-2026-09-14"
+                    ),
+                    "aftermarket_sor_canary_approval_valid": True,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                    "broker_order_no": "B-1",
+                    "effective_dmst_stex_tp": "SOR",
+                    "order_type_preflight_effective_type": "6",
+                },
+            }
+        ]
+    )
+
+    assert acceptance["status"] == "passed_broker_acceptance"
 
 
 @pytest.mark.parametrize("candidate_count", [0, 147, 227, 300])

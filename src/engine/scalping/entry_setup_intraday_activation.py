@@ -172,8 +172,11 @@ def build_approval(
             "maximum_daily_exploration_probes"
         ],
         "daily_quota_reset_forbidden": True,
-        "residual_multi_leg_forbidden": True,
-        "scale_in_forbidden": True,
+        "residual_multi_leg_forbidden": False,
+        "scale_in_forbidden": False,
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
+        "residual_policy_owner": "entry_split_order_plan",
+        "scale_in_policy_owner": "scale_in_split_order_plan",
         "rollback_prompt_version": policy.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         "runtime_effect": True,
         "allowed_runtime_apply": True,
@@ -217,8 +220,12 @@ def resolve_intraday(result: dict[str, Any], *, now: datetime) -> dict[str, Any]
             or approval.get("source_maximum_daily_exploration_probes")
             not in SUPPORTED_DAILY_LIMITS
             or approval.get("daily_quota_reset_forbidden") is not True
-            or approval.get("residual_multi_leg_forbidden") is not True
-            or approval.get("scale_in_forbidden") is not True
+            or approval.get("residual_multi_leg_forbidden") is not False
+            or approval.get("scale_in_forbidden") is not False
+            or approval.get("quantity_policy_owner")
+            != "position_sizing_dynamic_formula"
+            or approval.get("residual_policy_owner") != "entry_split_order_plan"
+            or approval.get("scale_in_policy_owner") != "scale_in_split_order_plan"
             or approval.get("runtime_effect") is not True
             or approval.get("allowed_runtime_apply") is not True
             or approval.get("actual_order_submitted") is not False
