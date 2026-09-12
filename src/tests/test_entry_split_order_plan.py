@@ -61,6 +61,39 @@ def test_runtime_apply_authority_contract_rejects_malformed_authority_classes():
     assert reason == "runtime_apply_authority_classes_not_string_list"
 
 
+def test_runtime_apply_authority_contract_rejects_malformed_child_shape_gate():
+    valid, reason = split_plan.runtime_apply_authority_contract_status(
+        {
+            "runtime_apply_allowed": True,
+            "runtime_apply_compatibility_semantics": (
+                split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
+            ),
+            "exploration_seed_allowed": True,
+            "ev_validated_runtime_apply_allowed": False,
+            "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+            "buckets": {
+                "passive_wide_or_weak": {
+                    "runtime_shape_gate": {
+                        "schema": "entry_split_runtime_shape_gate_v1",
+                        "required_policy_split_variant_id": "parent",
+                        "observed_child_variant_id": "parent__child",
+                        "required_requested_legs": 3,
+                        "required_desired_legs": 2,
+                        "required_runtime_first_weight": 0.2,
+                        "require_runtime_weight_adjusted": "true",
+                        "require_market_first_leg_disabled": True,
+                        "require_probe_first_enabled": True,
+                        "require_probe_first_eligible": True,
+                    }
+                }
+            },
+        }
+    )
+
+    assert valid is False
+    assert reason == "runtime_shape_gate_require_runtime_weight_adjusted_not_boolean"
+
+
 def test_report_policy_generation_binding_uses_and_validates_immutable_report(
     monkeypatch, tmp_path
 ):
@@ -500,6 +533,111 @@ def test_split_candidate_does_not_seed_against_mature_parent_tail_evidence():
     assert candidate["sample_floor_status"] == (
         "hold_mature_parent_split_edge_contradicted"
     )
+
+
+def test_split_candidate_uses_exact_positive_child_shape_not_parent_tail():
+    parent_variant = split_plan.RUNTIME_FALLBACK_THREE_LEG_VARIANT_ID
+    child_variant = (
+        f"{parent_variant}__qty_clipped_legs2__runtime_first_weight_20"
+        f"__{split_plan.PROBE_VARIANT_SUFFIX}"
+    )
+    grid = split_plan._build_candidate_grid(
+        {
+            "passive_wide_or_weak": {
+                "real_sample_count": 20,
+                "cancel_or_fail_count": 0,
+                "late_fill_count": 0,
+            }
+        },
+        {},
+        {},
+        {("passive_wide_or_weak", parent_variant): [-3.16] * 20},
+        {("passive_wide_or_weak", child_variant): [0.169, 0.5, 0.7]},
+    )
+
+    candidate = grid[0]
+    assert candidate["candidate_passed"] is True
+    assert candidate["policy_mode"] == split_plan.POLICY_MODE_CHILD_SHAPE_EV_SEED
+    assert candidate["runtime_apply_scope"] == "child_shape_bounded_seed"
+    assert candidate["runtime_apply_authority_class"] == "bounded_exploration_seed"
+    assert candidate["source_quality_adjusted_ev_pct"] == pytest.approx(0.4563)
+    assert candidate["selected_child_variant_id"] == child_variant
+    assert candidate["runtime_shape_gate"] == {
+        "schema": "entry_split_runtime_shape_gate_v1",
+        "required_policy_split_variant_id": parent_variant,
+        "required_requested_legs": 3,
+        "required_desired_legs": 2,
+        "required_runtime_first_weight": 0.2,
+        "require_runtime_weight_adjusted": True,
+        "require_market_first_leg_disabled": True,
+        "require_probe_first_enabled": True,
+        "require_probe_first_eligible": True,
+        "observed_child_variant_id": child_variant,
+    }
+    assert (
+        candidate["post_apply_continuation_gate"]
+        ["mature_parent_tail_applies_to_selected_child_shape"]
+        is False
+    )
+
+
+def test_allocator_applies_child_shape_seed_only_for_exact_observed_shape(
+    monkeypatch, tmp_path
+):
+    policy_file = tmp_path / "entry-child-shape-policy.json"
+    now = datetime(2026, 7, 14, 9, 30, tzinfo=timezone(timedelta(hours=9)))
+    parent_variant = split_plan.RUNTIME_FALLBACK_THREE_LEG_VARIANT_ID
+    child_variant = (
+        f"{parent_variant}__qty_clipped_legs2__runtime_first_weight_20"
+        f"__{split_plan.PROBE_VARIANT_SUFFIX}"
+    )
+    template = split_plan._child_shape_seed_template(
+        "passive_wide_or_weak", child_variant
+    )
+    assert template is not None
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+                "policy_version": "child-shape-seed",
+                "source_date": "2026-07-14",
+                "runtime_apply_allowed": True,
+                "buckets": {"passive_wide_or_weak": template},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION", "child-shape-seed")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "2026-07-14")
+
+    blocked_orders, blocked_fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 2, "price": 1000}],
+        stock={"code": "005930", "id": 1, "strategy": "SCALPING"},
+        latency_gate={"spread_bps": 40, "buy_pressure_10t": 40, "action": "BUY"},
+        now=now,
+    )
+    assert blocked_orders == [{"tag": "normal", "qty": 2, "price": 1000}]
+    assert blocked_fields["entry_split_order_policy_applied"] is False
+    assert blocked_fields["entry_split_order_skip_reason"] == (
+        "runtime_shape_gate_mismatch:first_weight"
+    )
+
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        [{"tag": "normal", "qty": 2, "price": 1000}],
+        stock={"code": "005930", "id": 1, "strategy": "SCALPING"},
+        latency_gate={"spread_bps": 40, "buy_pressure_10t": 40, "action": "WAIT"},
+        now=now,
+    )
+    assert fields["entry_split_order_policy_applied"] is True
+    assert fields["entry_split_order_policy_variant_id"] == parent_variant
+    assert fields["entry_split_order_variant_id"] == child_variant
+    assert len(orders) == 1
+    assert orders[0]["qty"] == 1
 
 
 def test_runtime_loader_rejects_preopen_policy_version_mismatch(monkeypatch, tmp_path):

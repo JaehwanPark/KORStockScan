@@ -8678,6 +8678,12 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         if isinstance(item, dict)
         and item.get("policy_mode") == "real_primary_ev_optimized"
     )
+    child_shape_positive_ev_seed_candidate_count = sum(
+        1
+        for item in candidates
+        if isinstance(item, dict)
+        and item.get("policy_mode") == "child_shape_positive_ev_seed"
+    )
     best_candidate = max(
         [item for item in candidates if isinstance(item, dict)],
         key=lambda item: _safe_float(item.get("source_quality_adjusted_ev_pct"), 0.0)
@@ -8801,6 +8807,9 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "bounded_equal_split_baseline_candidate_count": bounded_equal_baseline_count,
             "post_submit_tick_band_seed_candidate_count": post_submit_tick_band_seed_count,
             "real_primary_ev_policy_candidate_count": real_primary_ev_candidate_count,
+            "child_shape_positive_ev_seed_candidate_count": (
+                child_shape_positive_ev_seed_candidate_count
+            ),
             "real_sample_count": real_sample,
             "sim_sample_count": sim_sample,
             "real_outcome_joined_sample": real_outcome_sample,
@@ -8849,6 +8858,7 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "primary_decision_metric": (
                 "source_quality_adjusted_ev_pct"
                 if ev_validated_runtime_apply_allowed
+                or child_shape_positive_ev_seed_candidate_count > 0
                 else (
                     "qty_preserving_execution_shape_guard"
                     if exploration_seed_allowed
@@ -8859,7 +8869,9 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
                 "ev_validated_variant_only"
                 if ev_validated_runtime_apply_allowed
                 else (
-                    "bounded_exploration_seed_only"
+                    "exact_child_shape_bounded_seed"
+                    if child_shape_positive_ev_seed_candidate_count > 0
+                    else "bounded_exploration_seed_only"
                     if exploration_seed_allowed
                     else "none"
                 )
@@ -13468,12 +13480,30 @@ def _calibration_state_for_family(
             _safe_int(source_metrics.get("real_primary_ev_policy_candidate_count"), 0)
             or 0
         )
+        child_shape_seed_policy_count = (
+            _safe_int(
+                source_metrics.get("child_shape_positive_ev_seed_candidate_count"), 0
+            )
+            or 0
+        )
         exploration_seed_allowed = (
             source_metrics.get("exploration_seed_allowed") is True
         )
         ev_validated_runtime_apply_allowed = (
             source_metrics.get("ev_validated_runtime_apply_allowed") is True
         )
+        if policy_count > 0 and child_shape_seed_policy_count > 0:
+            if not exploration_seed_allowed and source_metrics.get(
+                "runtime_apply_authority_contract_present"
+            ):
+                return (
+                    "hold",
+                    "entry split exact child-shape seed exists but exploration_seed_allowed is false; explicit authority contract blocks PREOPEN handoff.",
+                )
+            return (
+                "adjust_up",
+                "entry split exact child shape passed the configured 0.1pct EV, downside, provenance, and execution guards; next PREOPEN may load only that qty-preserving bounded seed.",
+            )
         if (
             policy_count > 0
             and (baseline_policy_count > 0 or tick_band_policy_count > 0)
@@ -14256,6 +14286,13 @@ def _build_calibration_candidates(
                 or 0,
                 "real_primary_ev_policy_candidate_count": _safe_int(
                     family_sample.get("real_primary_ev_policy_candidate_count"), 0
+                )
+                or 0,
+                "child_shape_positive_ev_seed_candidate_count": _safe_int(
+                    family_sample.get(
+                        "child_shape_positive_ev_seed_candidate_count"
+                    ),
+                    0,
                 )
                 or 0,
                 "real_sample_count": _safe_int(

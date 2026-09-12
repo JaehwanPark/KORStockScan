@@ -7845,6 +7845,38 @@ def test_protect_trailing_sample_ready_without_ev_edge_stays_report_only():
     assert "표본은 준비됐지만 EV live-review edge가 없음" in reason
 
 
+def test_entry_split_exact_child_shape_seed_is_a_preopen_candidate():
+    family = {
+        "apply_ready": True,
+        "current": {"enabled": False},
+        "recommended": {"enabled": True},
+    }
+    metadata = report_mod.CALIBRATION_FAMILY_METADATA["entry_split_order_plan"]
+
+    state, reason = report_mod._calibration_state_for_family(
+        "entry_split_order_plan",
+        family,
+        metadata,
+        source_metrics={
+            "report_loaded": True,
+            "source_quality_blocked": False,
+            "runtime_apply_allowed": True,
+            "runtime_apply_authority_contract_present": True,
+            "exploration_seed_allowed": True,
+            "ev_validated_runtime_apply_allowed": False,
+            "recommended_policy_candidate_count": 1,
+            "child_shape_positive_ev_seed_candidate_count": 1,
+            "real_sample_count": 20,
+            "real_outcome_joined_sample": 4,
+        },
+        sample_count=20,
+        sample_ready=True,
+    )
+
+    assert state == "adjust_up"
+    assert "exact child shape" in reason
+
+
 def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sample_is_empty():
     report = {
         "calibration_candidates": [

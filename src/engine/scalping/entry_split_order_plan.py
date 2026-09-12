@@ -43,6 +43,9 @@ SAMPLE_FLOOR_SIM = 10
 CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
 SPLIT_VARIANT_OUTCOME_FLOOR_REAL = 20
 SPLIT_VARIANT_CONTINUATION_FLOOR_REAL = 10
+CHILD_SHAPE_SEED_OUTCOME_FLOOR_REAL = 3
+CHILD_SHAPE_SEED_MIN_EV_PCT = 0.1
+CHILD_SHAPE_SEED_MAX_DOWNSIDE_P10_PCT = -2.0
 POST_SUBMIT_TICK_BAND_FLOOR_REAL = 20
 POST_SUBMIT_LOW_WINDOW_MINUTES = 10
 POST_SUBMIT_PRICE_TOKENS = (
@@ -60,6 +63,7 @@ RAW_RECORD_ID_PATTERN = re.compile(
 POLICY_MODE_REAL_PRIMARY_EV = "real_primary_ev_optimized"
 POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
 POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
+POLICY_MODE_CHILD_SHAPE_EV_SEED = "child_shape_positive_ev_seed"
 RUNTIME_APPLY_COMPATIBILITY_SEMANTICS = (
     "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed"
 )
@@ -1425,6 +1429,37 @@ def _safe_bool(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _runtime_shape_gate_contract_status(gate: Any) -> tuple[bool, str]:
+    """Validate shape gates before PREOPEN can select their policy file."""
+
+    if gate is None:
+        return True, "no_runtime_shape_gate"
+    if not isinstance(gate, dict):
+        return False, "runtime_shape_gate_not_object"
+    if gate.get("schema") != "entry_split_runtime_shape_gate_v1":
+        return False, "runtime_shape_gate_schema_invalid"
+    parent_id = str(gate.get("required_policy_split_variant_id") or "").strip()
+    child_id = str(gate.get("observed_child_variant_id") or "").strip()
+    requested_legs = _safe_int(gate.get("required_requested_legs"), 0)
+    desired_legs = _safe_int(gate.get("required_desired_legs"), 0)
+    first_weight = _safe_float(gate.get("required_runtime_first_weight"), None)
+    if not parent_id or not child_id.startswith(f"{parent_id}__"):
+        return False, "runtime_shape_gate_variant_identity_invalid"
+    if requested_legs < 2 or desired_legs < 2 or desired_legs > requested_legs:
+        return False, "runtime_shape_gate_leg_contract_invalid"
+    if first_weight is None or not 0.0 < first_weight <= 1.0:
+        return False, "runtime_shape_gate_first_weight_invalid"
+    for key in (
+        "require_runtime_weight_adjusted",
+        "require_market_first_leg_disabled",
+        "require_probe_first_enabled",
+        "require_probe_first_eligible",
+    ):
+        if not isinstance(gate.get(key), bool):
+            return False, f"runtime_shape_gate_{key}_not_boolean"
+    return True, "runtime_shape_gate_contract_valid"
+
+
 def runtime_apply_authority_contract_status(
     payload: dict[str, Any],
 ) -> tuple[bool, str]:
@@ -1498,6 +1533,16 @@ def runtime_apply_authority_contract_status(
         }
         if actual_classes != expected_classes:
             return False, "runtime_apply_authority_classes_mismatch"
+    buckets = payload.get("buckets")
+    if isinstance(buckets, dict):
+        for bucket, bucket_policy in buckets.items():
+            if not isinstance(bucket_policy, dict):
+                return False, f"runtime_bucket_policy_invalid:{bucket}"
+            gate_valid, gate_reason = _runtime_shape_gate_contract_status(
+                bucket_policy.get("runtime_shape_gate")
+            )
+            if not gate_valid:
+                return False, gate_reason
     return True, "explicit_runtime_apply_authority_split_valid"
 
 
@@ -2322,6 +2367,103 @@ def _post_submit_tick_band_template(
     return template
 
 
+def _child_shape_seed_template(
+    bucket: str, child_variant_id: str
+) -> dict[str, Any] | None:
+    """Return a policy only when the observed child maps to one exact runtime shape.
+
+    Parent variants can contain materially different runtime children (quantity
+    clipping, passive-bias weight and probe state).  A positive child must not
+    silently authorize the other shapes under the same parent.
+    """
+
+    parent_id = RUNTIME_FALLBACK_THREE_LEG_VARIANT_ID
+    expected_child = (
+        f"{parent_id}__qty_clipped_legs2__runtime_first_weight_20"
+        f"__{PROBE_VARIANT_SUFFIX}"
+    )
+    if bucket != "passive_wide_or_weak" or child_variant_id != expected_child:
+        return None
+    template = _template_for_bucket(bucket)
+    template.update(
+        {
+            "leg_count": 3,
+            "price_offsets_ticks": [0, 1, 2],
+            "price_offsets_pct": [0.0, 0.3, 0.8],
+            "qty_weight_min": 0.5,
+            "qty_weight_max": 0.5,
+            "price_candidates": [
+                "resolved_order_price",
+                "best_bid",
+                "bid-1tick",
+                "bid-2tick",
+            ],
+            "split_variant_id": parent_id,
+            "runtime_shape_gate": {
+                "schema": "entry_split_runtime_shape_gate_v1",
+                "required_policy_split_variant_id": parent_id,
+                "required_requested_legs": 3,
+                "required_desired_legs": 2,
+                "required_runtime_first_weight": 0.2,
+                "require_runtime_weight_adjusted": True,
+                "require_market_first_leg_disabled": True,
+                "require_probe_first_enabled": True,
+                "require_probe_first_eligible": True,
+                "observed_child_variant_id": child_variant_id,
+            },
+        }
+    )
+    return template
+
+
+def _child_shape_seed_evidence(
+    bucket: str,
+    values_by_child_variant: dict[tuple[str, str], list[float]],
+) -> dict[str, Any] | None:
+    """Pick the highest-EV exact child that has bounded seed evidence.
+
+    This intentionally supports only known, reproducible runtime shapes.  New
+    child suffixes remain observation-only until a separate contract maps their
+    fields to a fail-closed runtime gate.
+    """
+
+    eligible: list[dict[str, Any]] = []
+    for (observed_bucket, child_variant_id), values in values_by_child_variant.items():
+        if observed_bucket != bucket or not values:
+            continue
+        template = _child_shape_seed_template(bucket, child_variant_id)
+        if template is None:
+            continue
+        sample_count = len(values)
+        downside_p10 = sorted(values)[max(0, int(sample_count * 0.10) - 1)]
+        equal_weight_ev = round(mean(values), 4)
+        if (
+            sample_count < CHILD_SHAPE_SEED_OUTCOME_FLOOR_REAL
+            or equal_weight_ev < CHILD_SHAPE_SEED_MIN_EV_PCT
+            or downside_p10 <= CHILD_SHAPE_SEED_MAX_DOWNSIDE_P10_PCT
+        ):
+            continue
+        eligible.append(
+            {
+                "child_variant_id": child_variant_id,
+                "values": list(values),
+                "sample_count": sample_count,
+                "equal_weight_avg_profit_pct": equal_weight_ev,
+                "downside_p10_profit_rate": round(downside_p10, 4),
+                "template": template,
+            }
+        )
+    return max(
+        eligible,
+        key=lambda item: (
+            float(item["equal_weight_avg_profit_pct"]),
+            int(item["sample_count"]),
+            str(item["child_variant_id"]),
+        ),
+        default=None,
+    )
+
+
 def _percentile(values: list[int], pct: float) -> float:
     if not values:
         return 0.0
@@ -2724,7 +2866,7 @@ def _build_candidate_grid(
     post_submit_low_tick_bands = post_submit_low_tick_bands or {}
     split_variant_buckets = {
         bucket for bucket, _variant_id in real_split_variant_ev_values
-    }
+    } | {bucket for bucket, _variant_id in real_split_child_variant_ev_values}
     for bucket in sorted(
         set(buckets)
         | set(sim_ev_values)
@@ -2742,8 +2884,14 @@ def _build_candidate_grid(
         real_bucket_outcome_count = len(real_ev_list)
         real_bucket_ev = round(mean(real_ev_list), 4) if real_ev_list else None
         sim_ev = round(mean(sim_ev_list), 4) if sim_ev_list else None
+        child_shape_seed = _child_shape_seed_evidence(
+            bucket, real_split_child_variant_ev_values
+        )
         split_variant_id = ""
-        if bucket != "guarded_or_stale":
+        if child_shape_seed is not None:
+            template = dict(child_shape_seed["template"])
+            split_variant_id = str(template["split_variant_id"])
+        elif bucket != "guarded_or_stale":
             template = _post_submit_tick_band_template(bucket, tick_band)
             split_variant_id = BASELINE_SPLIT_VARIANT_ID
             if template.get("split_variant_id"):
@@ -2751,9 +2899,13 @@ def _build_candidate_grid(
                     template.get("split_variant_id") or BASELINE_SPLIT_VARIANT_ID
                 )
         split_variant_ev_list = (
-            real_split_variant_ev_values.get((bucket, split_variant_id))
-            if split_variant_id
-            else []
+            list(child_shape_seed["values"])
+            if child_shape_seed is not None
+            else (
+                real_split_variant_ev_values.get((bucket, split_variant_id))
+                if split_variant_id
+                else []
+            )
         )
         observed_split_variants = [
             {
@@ -2840,6 +2992,8 @@ def _build_candidate_grid(
             split_variant_outcome_count >= SPLIT_VARIANT_OUTCOME_FLOOR_REAL
         )
         ev_passed = (
+            child_shape_seed is None
+            and
             bucket != "guarded_or_stale"
             and real_count >= SAMPLE_FLOOR_REAL
             and split_variant_outcome_ready
@@ -2884,6 +3038,8 @@ def _build_candidate_grid(
             initial_seed_evidence_pass or early_continuation_edge_pass
         )
         execution_shape_seed_passed = (
+            child_shape_seed is None
+            and
             bucket != "guarded_or_stale"
             and real_count >= SAMPLE_FLOOR_REAL
             and not split_variant_outcome_ready
@@ -2891,7 +3047,16 @@ def _build_candidate_grid(
             and late_fill_rate <= 20.0
             and continuation_gate_pass
         )
-        if ev_passed:
+        child_shape_seed_passed = bool(
+            child_shape_seed is not None
+            and bucket != "guarded_or_stale"
+            and real_count >= SAMPLE_FLOOR_REAL
+            and cancel_rate <= 20.0
+            and late_fill_rate <= 20.0
+        )
+        if child_shape_seed_passed:
+            continuation_action = "continue_child_shape_positive_ev_seed"
+        elif ev_passed:
             continuation_action = "promote_ev_validated_variant"
         elif execution_shape_seed_passed:
             continuation_action = "continue_bounded_seed"
@@ -2901,7 +3066,16 @@ def _build_candidate_grid(
             continuation_action = "freeze_new_policy_generation"
         policy_mode = ""
         policy_generation_reason = ""
-        if ev_passed:
+        if child_shape_seed_passed:
+            floor_status = "pass_child_shape_positive_ev_seed"
+            primary_sample_book = "real_split_child_variant"
+            policy_mode = POLICY_MODE_CHILD_SHAPE_EV_SEED
+            policy_generation_reason = (
+                "exact runtime child shape passed bounded seed EV, tail, and "
+                "execution guards; parent variants with different runtime shapes "
+                "remain excluded"
+            )
+        elif ev_passed:
             floor_status = "pass_real_primary_ev"
             primary_sample_book = "real_split_variant"
             policy_mode = POLICY_MODE_REAL_PRIMARY_EV
@@ -2951,15 +3125,39 @@ def _build_candidate_grid(
         else:
             floor_status = "hold_real_outcome_pending"
             primary_sample_book = "real_outcome_pending"
-        passed = ev_passed or execution_shape_seed_passed
+        passed = ev_passed or execution_shape_seed_passed or child_shape_seed_passed
         runtime_apply_scope = (
-            "ev_optimized_variant" if ev_passed else "baseline_split_structure"
+            "child_shape_bounded_seed"
+            if child_shape_seed_passed
+            else (
+                "ev_optimized_variant" if ev_passed else "baseline_split_structure"
+            )
         )
         runtime_apply_authority_class = (
             "ev_validated_variant"
             if ev_passed
-            else ("bounded_exploration_seed" if execution_shape_seed_passed else "none")
+            else (
+                "bounded_exploration_seed"
+                if execution_shape_seed_passed or child_shape_seed_passed
+                else "none"
+            )
         )
+        if child_shape_seed_passed:
+            continuation_reason = (
+                "exact_child_shape_positive_ev_tail_and_execution_gate_passed"
+            )
+        elif ev_passed:
+            continuation_reason = "full_ev_and_tail_gate_passed"
+        elif execution_shape_seed_passed:
+            continuation_reason = "bounded_seed_execution_and_edge_gates_passed"
+        elif real_count < SAMPLE_FLOOR_REAL:
+            continuation_reason = "real_submit_sample_floor_not_reached"
+        elif mature_parent_evidence_contradictory:
+            continuation_reason = "mature_parent_variants_have_no_positive_tail_safe_edge"
+        elif split_variant_outcome_count >= SPLIT_VARIANT_CONTINUATION_FLOOR_REAL:
+            continuation_reason = "early_variant_ev_or_tail_gate_failed"
+        else:
+            continuation_reason = "execution_shape_gate_failed"
         grid.append(
             {
                 "context_bucket": bucket,
@@ -2994,6 +3192,26 @@ def _build_candidate_grid(
                     )
                     if observed_bucket == bucket and observed_values
                 ],
+                "selected_child_shape_evidence": (
+                    {
+                        "child_variant_id": child_shape_seed["child_variant_id"],
+                        "sample_count": child_shape_seed["sample_count"],
+                        "equal_weight_avg_profit_pct": child_shape_seed[
+                            "equal_weight_avg_profit_pct"
+                        ],
+                        "downside_p10_profit_rate": child_shape_seed[
+                            "downside_p10_profit_rate"
+                        ],
+                        "minimum_seed_sample": CHILD_SHAPE_SEED_OUTCOME_FLOOR_REAL,
+                        "minimum_seed_ev_pct": CHILD_SHAPE_SEED_MIN_EV_PCT,
+                        "maximum_seed_downside_p10_pct": (
+                            CHILD_SHAPE_SEED_MAX_DOWNSIDE_P10_PCT
+                        ),
+                        "runtime_shape_gate": template.get("runtime_shape_gate"),
+                    }
+                    if child_shape_seed is not None
+                    else None
+                ),
                 "cumulative_judgment_quality": {
                     "learning_sample_floor": CUMULATIVE_LEARNING_SAMPLE_FLOOR,
                     "learning_sample_count": cumulative_learning_sample_count,
@@ -3042,44 +3260,38 @@ def _build_candidate_grid(
                     "mature_parent_evidence_contradictory": (
                         mature_parent_evidence_contradictory
                     ),
+                    "mature_parent_tail_applies_to_selected_child_shape": False
+                    if child_shape_seed is not None
+                    else True,
                     "pass": passed,
                     "economic_evidence_pass": (
-                        continuation_gate_pass if not ev_passed else True
+                        True
+                        if ev_passed or child_shape_seed_passed
+                        else continuation_gate_pass
                     ),
                     "runtime_candidate_pass": passed,
                     "action": continuation_action,
-                    "reason": (
-                        "full_ev_and_tail_gate_passed"
-                        if ev_passed
-                        else (
-                            "bounded_seed_execution_and_edge_gates_passed"
-                            if execution_shape_seed_passed
-                            else (
-                                "real_submit_sample_floor_not_reached"
-                                if real_count < SAMPLE_FLOOR_REAL
-                                else (
-                                    "mature_parent_variants_have_no_positive_tail_safe_edge"
-                                    if mature_parent_evidence_contradictory
-                                    else (
-                                        "early_variant_ev_or_tail_gate_failed"
-                                        if split_variant_outcome_count
-                                        >= SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
-                                        else "execution_shape_gate_failed"
-                                    )
-                                )
-                            )
-                        )
-                    ),
+                    "reason": continuation_reason,
                     "negative_or_missing_edge_is_calibration_freeze_not_safety_rollback": True,
                 },
                 "split_variant_id": split_variant_id,
+                "selected_child_variant_id": (
+                    child_shape_seed["child_variant_id"]
+                    if child_shape_seed is not None
+                    else ""
+                ),
+                "runtime_shape_gate": template.get("runtime_shape_gate"),
                 "optimization_basis": (
-                    "split_variant_outcome"
+                    "real_split_child_variant_outcome"
+                    if child_shape_seed_passed
+                    else (
+                        "split_variant_outcome"
                     if ev_passed
                     else (
                         "post_submit_observed_low_tick_band"
                         if policy_mode == POLICY_MODE_POST_SUBMIT_TICK_BAND
                         else "bounded_execution_shape_seed"
+                        )
                     )
                 ),
                 "post_submit_low_tick_band": tick_band,
@@ -3105,18 +3317,24 @@ def _build_candidate_grid(
                 "policy_mode": policy_mode,
                 "policy_generation_reason": policy_generation_reason,
                 "candidate_passed": passed,
-                "exploration_seed_allowed": execution_shape_seed_passed,
+                "exploration_seed_allowed": (
+                    execution_shape_seed_passed or child_shape_seed_passed
+                ),
                 "ev_validated_runtime_apply_allowed": ev_passed,
                 "runtime_apply_allowed": passed,
                 "runtime_apply_scope": runtime_apply_scope if passed else "none",
                 "runtime_apply_authority_class": runtime_apply_authority_class,
                 "runtime_apply_reason": (
-                    "positive_split_variant_ev_passed"
+                    "positive_child_shape_ev_seed_passed"
+                    if child_shape_seed_passed
+                    else (
+                        "positive_split_variant_ev_passed"
                     if ev_passed
                     else (
                         "qty_preserving_execution_shape_seed_passed"
                         if execution_shape_seed_passed
                         else floor_status
+                        )
                     )
                 ),
             }
@@ -3132,6 +3350,7 @@ def _policy_payload(
         item
         for item in passed
         if item.get("runtime_apply_scope") == "ev_optimized_variant"
+        or item.get("runtime_apply_scope") == "child_shape_bounded_seed"
         or item.get("policy_mode") == POLICY_MODE_POST_SUBMIT_TICK_BAND
     ]
     exploration_seed_candidates = [
@@ -3251,6 +3470,11 @@ def _policy_payload(
                     "observed_real_split_variants"
                 ),
                 "split_variant_id": item.get("split_variant_id"),
+                "selected_child_variant_id": item.get("selected_child_variant_id"),
+                "runtime_shape_gate": item.get("runtime_shape_gate"),
+                "selected_child_shape_evidence": item.get(
+                    "selected_child_shape_evidence"
+                ),
                 "optimization_basis": item.get("optimization_basis"),
                 "runtime_apply_scope": item.get("runtime_apply_scope"),
                 "runtime_apply_reason": item.get("runtime_apply_reason"),
@@ -3537,7 +3761,26 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 "split-policy execution quality."
             ),
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
-            "primary_decision_metric_scope": "ev_validated_variant_only",
+            "primary_decision_metric_scope": (
+                "ev_validated_variant_or_exact_child_shape_bounded_seed"
+            ),
+            "child_shape_seed_metric_contract": {
+                "metric_role": "primary_ev",
+                "primary_decision_metric": "source_quality_adjusted_ev_pct",
+                "decision_authority": "bounded_exploration_seed_only",
+                "minimum_seed_sample": CHILD_SHAPE_SEED_OUTCOME_FLOOR_REAL,
+                "minimum_seed_ev_pct": CHILD_SHAPE_SEED_MIN_EV_PCT,
+                "maximum_seed_downside_p10_pct": (
+                    CHILD_SHAPE_SEED_MAX_DOWNSIDE_P10_PCT
+                ),
+                "runtime_shape_match_required": True,
+                "forbidden_uses": [
+                    "increase_requested_qty",
+                    "cap_release",
+                    "bypass_submit_or_hard_safety",
+                    "claim_parent_variant_ev_from_child_ev",
+                ],
+            },
             "exploration_seed_metric_contract": {
                 "metric_role": "execution_shape_seed",
                 "primary_decision_metric": "qty_preserving_execution_shape_guard",
@@ -3551,6 +3794,10 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
             "policy_modes": {
                 POLICY_MODE_REAL_PRIMARY_EV: "real split-variant outcome EV-positive optimized split",
+                POLICY_MODE_CHILD_SHAPE_EV_SEED: (
+                    "exact runtime child-shape EV-positive bounded seed; "
+                    "parent variants and other child shapes remain excluded"
+                ),
                 POLICY_MODE_BOUNDED_EQUAL_BASELINE: "real-submit-backed qty-preserving 2-leg 50/50 0.3pct baseline",
                 POLICY_MODE_POST_SUBMIT_TICK_BAND: "post-submit observed-low tick-band qty-preserving seed",
             },
@@ -4003,6 +4250,74 @@ def _entry_split_passive_bias_first_weight(
     return policy_first_weight, ""
 
 
+def _runtime_shape_gate_status(
+    gate: Any,
+    *,
+    policy_split_variant_id: str,
+    requested_legs: int,
+    desired_legs: int,
+    first_weight: float,
+    runtime_weight_adjusted: bool,
+    market_first_leg_active: bool,
+    probe_enabled: bool,
+    probe_eligible: bool,
+) -> tuple[bool, str]:
+    """Fail closed unless an observed child shape exactly matches at runtime."""
+
+    if gate is None:
+        return True, ""
+    if not isinstance(gate, dict) or gate.get("schema") != (
+        "entry_split_runtime_shape_gate_v1"
+    ):
+        return False, "invalid_runtime_shape_gate"
+    checks: tuple[tuple[bool, str], ...] = (
+        (
+            str(gate.get("required_policy_split_variant_id") or "")
+            == policy_split_variant_id,
+            "policy_variant",
+        ),
+        (
+            _safe_int(gate.get("required_requested_legs"), 0) == requested_legs,
+            "requested_legs",
+        ),
+        (
+            _safe_int(gate.get("required_desired_legs"), 0) == desired_legs,
+            "desired_legs",
+        ),
+        (
+            abs(
+                (_safe_float(gate.get("required_runtime_first_weight"), -1.0) or -1.0)
+                - float(first_weight)
+            )
+            <= 0.000001,
+            "first_weight",
+        ),
+        (
+            _safe_bool(gate.get("require_runtime_weight_adjusted"))
+            == bool(runtime_weight_adjusted),
+            "runtime_weight_adjusted",
+        ),
+        (
+            _safe_bool(gate.get("require_market_first_leg_disabled"))
+            == (not market_first_leg_active),
+            "market_first_leg",
+        ),
+        (
+            _safe_bool(gate.get("require_probe_first_enabled")) == bool(probe_enabled),
+            "probe_first_enabled",
+        ),
+        (
+            _safe_bool(gate.get("require_probe_first_eligible"))
+            == bool(probe_eligible),
+            "probe_first_eligible",
+        ),
+    )
+    for passed, reason in checks:
+        if not passed:
+            return False, reason
+    return True, ""
+
+
 def _market_first_leg_active(*, now: datetime | None = None) -> bool:
     if not _safe_bool(
         os.environ.get("KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED")
@@ -4359,6 +4674,30 @@ def apply_entry_split_order_policy(
     )
     probe_config = _probe_runtime_config(now=now)
     probe_eligible, probe_eligibility_reason = _probe_first_eligible(stock, total_qty)
+    runtime_shape_gate = bucket_policy.get("runtime_shape_gate")
+    shape_gate_passed, shape_gate_reason = _runtime_shape_gate_status(
+        runtime_shape_gate,
+        policy_split_variant_id=policy_split_variant_id,
+        requested_legs=requested_legs,
+        desired_legs=desired_legs,
+        first_weight=first_weight,
+        runtime_weight_adjusted=runtime_weight_adjusted,
+        market_first_leg_active=market_first_leg_active,
+        probe_enabled=_safe_bool(probe_config.get("enabled")),
+        probe_eligible=probe_eligible,
+    )
+    if not shape_gate_passed:
+        fields.update(
+            {
+                "entry_split_order_bucket": bucket,
+                "entry_split_order_policy_variant_id": policy_split_variant_id,
+                "entry_split_order_runtime_shape_gate": runtime_shape_gate,
+                "entry_split_order_skip_reason": (
+                    f"runtime_shape_gate_mismatch:{shape_gate_reason}"
+                ),
+            }
+        )
+        return orders, fields
     if probe_config["enabled"] and probe_eligible:
         probe_variant_id = f"{split_variant_id}__{PROBE_VARIANT_SUFFIX}"
         common_fields = {
