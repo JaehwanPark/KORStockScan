@@ -9,6 +9,7 @@ trap 'rm -f "$TMP_CRON"' EXIT
 crontab -l 2>/dev/null > "$TMP_CRON" || true
 awk '\
   !/update_kospi\.py/ && \
+  !/UPDATE_KOSPI_EOD_2005/ && \
   !/DASHBOARD_DB_ARCHIVE_/ && \
   !/LOG_ROTATION_CLEANUP_/ && \
   !/Postclose evening ops window/ && \

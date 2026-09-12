@@ -1756,6 +1756,7 @@ def test_eod_installer_leaves_cleanup_to_postclose_finalization():
 
     assert "LOG_ROTATION_CLEANUP_2100" not in script
     assert "21:55 postclose finalization gate" in script
+    assert "!/UPDATE_KOSPI_EOD_2005/" in script
 
 
 def test_postclose_wrapper_keeps_swing_postclose_off_until_operator_override():
