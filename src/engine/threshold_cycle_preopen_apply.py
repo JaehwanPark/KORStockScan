@@ -7303,11 +7303,6 @@ def _write_runtime_env(
             if (manifest.get("limit_down_watch") or {}).get("selected")
             else []
         ),
-        *(
-            [{"family": ENTRY_OPPORTUNITY_RECHECK_FAMILY}]
-            if entry_recheck_contract_carry
-            else []
-        ),
     ]
     selected_families: list[str] = []
     removed_selected_families: list[str] = []
