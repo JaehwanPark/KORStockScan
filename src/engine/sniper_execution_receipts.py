@@ -904,6 +904,8 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "scalp_trailing_continuation_recheck_consumed_id",
     "scalp_trailing_continuation_recheck_consumed_position_key",
     "scale_in_incremental_realized_delta_pct",
+    "last_add_position_episode_id",
+    "last_add_scale_in_decision_id",
     "sell_execution_order_no",
     "simulation_book",
     "simulation_owner",
@@ -939,6 +941,8 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "last_add_avg_price_improved",
     "last_add_receipt_economics_complete",
     "last_add_receipt_execution_no",
+    "last_add_position_episode_id",
+    "last_add_scale_in_decision_id",
     "shallow_volatility_avg_down_count",
     "shallow_volatility_avg_down_last_at",
     "simulation_book",
@@ -960,6 +964,8 @@ _PENDING_ADD_META_KEYS = (
     "pending_add_initial_buy_price",
     "pending_add_initial_buy_qty",
     "pending_add_execution_notice_pending",
+    "pending_add_position_episode_id",
+    "pending_add_scale_in_decision_id",
     "pending_add_ai_decision_trace_id",
     "pending_add_winner_recovery_ai_thesis_state",
     "pending_add_winner_recovery_ai_parent_action",
@@ -2960,6 +2966,19 @@ def _standard_sell_final_lifecycle_outbox_leg(
         "post_add_avg_price": receipt_snapshot.get("post_add_avg_price", "-"),
         "pre_add_qty": receipt_snapshot.get("pre_add_qty", "-"),
         "post_add_qty": receipt_snapshot.get("post_add_qty", "-"),
+        **(
+            {
+                "position_episode_id": receipt_snapshot.get(
+                    "last_add_position_episode_id"
+                ),
+                "scale_in_decision_id": receipt_snapshot.get(
+                    "last_add_scale_in_decision_id"
+                ),
+            }
+            if receipt_snapshot.get("last_add_position_episode_id")
+            and receipt_snapshot.get("last_add_scale_in_decision_id")
+            else {}
+        ),
         "opening_rotation_entry_time_bucket": receipt_snapshot.get(
             "opening_rotation_entry_time_bucket", "-"
         ),
@@ -10750,6 +10769,12 @@ def _handle_add_buy_execution(
     target_stock["post_add_qty"] = int(new_qty or 0)
     target_stock["last_add_type"] = add_type
     pending_add_reason = str(target_stock.get("pending_add_reason") or "").strip()
+    pending_add_position_episode_id = str(
+        target_stock.get("pending_add_position_episode_id") or ""
+    ).strip()
+    pending_add_scale_in_decision_id = str(
+        target_stock.get("pending_add_scale_in_decision_id") or ""
+    ).strip()
     pending_add_ai_decision_trace_id = str(
         target_stock.get("pending_add_ai_decision_trace_id") or ""
     ).strip()
@@ -10768,6 +10793,14 @@ def _handle_add_buy_execution(
         pending_add_ai_decision_trace_id = ""
     winner_recovery_ai_fields = _winner_recovery_ai_receipt_fields(target_stock)
     target_stock["last_add_reason"] = pending_add_reason
+    if pending_add_position_episode_id and pending_add_scale_in_decision_id:
+        target_stock["last_add_position_episode_id"] = pending_add_position_episode_id
+        target_stock["last_add_scale_in_decision_id"] = pending_add_scale_in_decision_id
+    else:
+        # Do not attribute a later, different AVG_DOWN route to an earlier
+        # shallow source-only decision merely because the position is shared.
+        target_stock.pop("last_add_position_episode_id", None)
+        target_stock.pop("last_add_scale_in_decision_id", None)
     target_stock["last_add_economic_direction"] = add_economic_direction
     target_stock["last_add_avg_price_improved"] = avg_price_improved
     target_stock["last_add_at"] = now
@@ -10990,6 +11023,14 @@ def _handle_add_buy_execution(
         add_count=int(target_stock.get("add_count", 0) or 0),
         avg_down_count=int(target_stock.get("avg_down_count", 0) or 0),
         add_reason=pending_add_reason or "-",
+        **(
+            {
+                "position_episode_id": pending_add_position_episode_id,
+                "scale_in_decision_id": pending_add_scale_in_decision_id,
+            }
+            if pending_add_position_episode_id and pending_add_scale_in_decision_id
+            else {}
+        ),
         add_economic_direction=add_economic_direction,
         avg_price_improved=avg_price_improved,
         add_reference_avg_price=f"{add_reference_avg_price:.2f}",

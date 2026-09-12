@@ -75,6 +75,9 @@ def test_policy_fingerprint_excludes_scalping_entry_and_sizing_settings():
         **base,
         "SCALPING_PROMPT_SPLIT_ENABLED": False,
         "SCALPING_SIZING_DYNAMIC_QTY_ENABLED": False,
+        "SCALP_FAST_EXIT_ENABLED": False,
+        "HOLDING_EXIT_RECHECK_ENABLED": False,
+        "LIFECYCLE_POSITION_TIMEOUT_SEC": 900,
     }
     changed_avg_down = {
         **base,

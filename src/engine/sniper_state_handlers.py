@@ -22005,6 +22005,46 @@ _AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE = None
 _AVG_DOWN_ROUTE_CONTEXT = ContextVar("avg_down_source_route_context", default=None)
 
 
+def _shallow_avg_down_pending_lineage(
+    stock: dict, code: str, action: dict | None
+) -> dict[str, str]:
+    """Return same-cycle source-only lineage for a real shallow AVG_DOWN leg.
+
+    The observer has no order authority. This only carries its already emitted
+    identity through the pending broker receipt path when the exact position,
+    symbol, and immediate decision match. Other AVG_DOWN routes deliberately
+    remain unlinked rather than borrowing shallow evidence.
+    """
+    if (
+        str((action or {}).get("add_type") or "").upper() != "AVG_DOWN"
+        or str((action or {}).get("reason") or "")
+        != "shallow_volatility_avg_down"
+    ):
+        return {}
+    context = _AVG_DOWN_ROUTE_CONTEXT.get()
+    if not isinstance(context, dict):
+        return {}
+    elapsed_sec = time.monotonic() - _safe_float(
+        context.get("observed_monotonic"), -1.0
+    )
+    if (
+        context.get("code") != code
+        or context.get("record_id") != stock.get("id")
+        or (stock.get("buy_price"), stock.get("buy_qty"))
+        != context.get("position_basis")
+        or not 0 <= elapsed_sec <= 2.0
+    ):
+        return {}
+    position_episode_id = str(context.get("position_episode_id") or "").strip()
+    scale_in_decision_id = str(context.get("decision_id") or "").strip()
+    if not position_episode_id or not scale_in_decision_id:
+        return {}
+    return {
+        "pending_add_position_episode_id": position_episode_id,
+        "pending_add_scale_in_decision_id": scale_in_decision_id,
+    }
+
+
 def _observe_avg_down_route_sizing(
     stock, code, price, budget, action, qty_details
 ) -> None:
@@ -92012,6 +92052,8 @@ def _clear_pending_add_meta(stock, reason=None):
             "pending_add_initial_buy_price",
             "pending_add_initial_buy_qty",
             "pending_add_execution_notice_pending",
+            "pending_add_position_episode_id",
+            "pending_add_scale_in_decision_id",
             "pending_add_ai_decision_trace_id",
             "pending_add_winner_recovery_ai_thesis_state",
             "pending_add_winner_recovery_ai_parent_action",
@@ -95019,6 +95061,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         return None
     pending_registered_at = time.time()
+    pending_avg_down_lineage = _shallow_avg_down_pending_lineage(stock, code, action)
     _mutate_stock_state(
         stock,
         set_fields={
@@ -95033,6 +95076,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "pending_add_initial_buy_price": float(stock.get("buy_price") or 0),
             "pending_add_initial_buy_qty": _safe_int(stock.get("buy_qty"), 0),
             "pending_add_execution_notice_pending": False,
+            **pending_avg_down_lineage,
             **(
                 {
                     "pending_add_ai_decision_trace_id": scale_in_ai_trace_fields[
@@ -95079,7 +95123,11 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "add_order_time": pending_registered_at,
         },
         pop_fields=(
-            () if scale_in_ai_trace_fields else ("pending_add_ai_decision_trace_id",)
+            (() if pending_avg_down_lineage else (
+                "pending_add_position_episode_id",
+                "pending_add_scale_in_decision_id",
+            ))
+            + (() if scale_in_ai_trace_fields else ("pending_add_ai_decision_trace_id",))
         ),
     )
     scale_in_route_plan = kiwoom_orders.describe_order_route_resolution()
@@ -95308,6 +95356,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         actual_order_submitted=True,
                         broker_order_forbidden=False,
                         runtime_effect=False,
+                        **(
+                            {
+                                "position_episode_id": stock.get(
+                                    "pending_add_position_episode_id"
+                                ),
+                                "scale_in_decision_id": stock.get(
+                                    "pending_add_scale_in_decision_id"
+                                ),
+                            }
+                            if stock.get("pending_add_position_episode_id")
+                            and stock.get("pending_add_scale_in_decision_id")
+                            else {}
+                        ),
                         **scale_in_ai_trace_fields,
                     )
                     _record_lifecycle_submit_telemetry_if_raw_appended(

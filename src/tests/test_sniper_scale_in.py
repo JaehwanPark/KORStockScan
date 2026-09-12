@@ -38357,6 +38357,8 @@ def test_add_receipt_without_order_no_matches_single_pending_target(monkeypatch)
         "pending_add_type": "AVG_DOWN",
         "pending_add_qty": 5,
         "pending_add_ord_no": "A1",
+        "last_add_position_episode_id": "stale-episode",
+        "last_add_scale_in_decision_id": "stale-decision",
         "add_count": 0,
         "avg_down_count": 0,
     }
@@ -38368,6 +38370,8 @@ def test_add_receipt_without_order_no_matches_single_pending_target(monkeypatch)
 
     assert target_stock["buy_qty"] == 15
     assert target_stock["add_count"] == 1
+    assert "last_add_position_episode_id" not in target_stock
+    assert "last_add_scale_in_decision_id" not in target_stock
 
 
 def test_add_receipt_with_order_no_matches_pending_add_before_ordno_bind(monkeypatch):
@@ -38415,6 +38419,8 @@ def test_add_receipt_with_order_no_matches_pending_add_before_ordno_bind(monkeyp
         "pending_add_reason": "late_loss_avg_down_retry",
         "pending_add_qty": 33,
         "pending_add_ord_no": "",
+        "pending_add_position_episode_id": "main-life:avg-down-1",
+        "pending_add_scale_in_decision_id": "avgdn-decision-1",
         "entry_execution_broker_route": "SOR",
         "entry_execution_broker_route_resolution": "successful_entry_submit",
         "add_count": 0,
@@ -38487,12 +38493,46 @@ def test_add_receipt_with_order_no_matches_pending_add_before_ordno_bind(monkeyp
     assert scale_in_events[-1]["order_filled_qty"] == 16
     assert scale_in_events[-1]["scale_in_receipt_reconciled_before_ordno_bind"] is True
     assert scale_in_events[-1]["scale_in_receipt_submission_custody_emitted"] is False
+    assert scale_in_events[-1]["position_episode_id"] == "main-life:avg-down-1"
+    assert scale_in_events[-1]["scale_in_decision_id"] == "avgdn-decision-1"
+    assert target_stock["last_add_position_episode_id"] == "main-life:avg-down-1"
+    assert target_stock["last_add_scale_in_decision_id"] == "avgdn-decision-1"
     assert any(
         stage == "scale_in_execution_receipt_submission_custody"
         for stage, _fields in pipeline_events
     )
     assert scale_in_events[-1]["broker_route"] == "SOR"
     assert scale_in_events[-1]["broker_route_resolution"] == "successful_entry_submit"
+
+
+def test_shallow_avg_down_pending_lineage_requires_exact_observation_context():
+    stock = {"id": 170, "buy_price": 10000, "buy_qty": 14}
+    token = state_handlers._AVG_DOWN_ROUTE_CONTEXT.set(
+        {
+            "code": "123456",
+            "record_id": 170,
+            "position_basis": (10000, 14),
+            "observed_monotonic": time.monotonic(),
+            "position_episode_id": "main-life:avg-down-1",
+            "decision_id": "avgdn-decision-1",
+        }
+    )
+    try:
+        assert state_handlers._shallow_avg_down_pending_lineage(
+            stock,
+            "123456",
+            {"add_type": "AVG_DOWN", "reason": "shallow_volatility_avg_down"},
+        ) == {
+            "pending_add_position_episode_id": "main-life:avg-down-1",
+            "pending_add_scale_in_decision_id": "avgdn-decision-1",
+        }
+        assert not state_handlers._shallow_avg_down_pending_lineage(
+            stock,
+            "123456",
+            {"add_type": "AVG_DOWN", "reason": "late_loss_avg_down_retry"},
+        )
+    finally:
+        state_handlers._AVG_DOWN_ROUTE_CONTEXT.reset(token)
 
 
 def test_add_execution_caps_duplicate_split_leg_by_order_number(monkeypatch):

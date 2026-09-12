@@ -35,11 +35,11 @@ def canonical_digest(value: Any) -> str:
 def policy_fingerprint(rules: Any) -> str:
     """Freeze AVG_DOWN inputs, excluding the independently tuned threshold.
 
-    Entry sizing, prompt, and scanner settings under the broad ``SCALPING_*``
-    prefix are owned elsewhere and must not split an otherwise identical
-    AVG_DOWN cohort. The direct ``SCALPING_AVG_DOWN_*`` and
-    ``SCALPING_SCALE_IN_*`` contracts remain included, alongside ``SCALP_*``
-    stop-touch AVG_DOWN rules.
+    Entry sizing, prompt, scanner, generic holding, and exit settings are
+    owned elsewhere and must not split an otherwise identical AVG_DOWN cohort.
+    Keep only AVG_DOWN-specific contracts plus the shared scale-in and shallow
+    source-gap contracts. A broad ``SCALP_*`` or ``HOLDING_*`` prefix would
+    otherwise turn unrelated changes into a new policy cohort.
     """
     source = (
         rules
@@ -49,18 +49,13 @@ def policy_fingerprint(rules: Any) -> str:
     values = {
         str(key): value
         for key, value in source.items()
-        if str(key).startswith(
-            (
-                "SCALP_",
-                "SCALPING_AVG_DOWN_",
-                "SCALPING_SCALE_IN_",
-                "SHALLOW_",
-                "DEEP_",
-                "REVERSAL_",
-                "AGGRESSIVE_",
-                "AVG_DOWN",
-                "HOLDING_",
-                "LIFECYCLE_",
+        if (
+            "AVG_DOWN" in str(key)
+            or str(key).startswith(
+                (
+                    "SCALPING_SCALE_IN_",
+                    "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_",
+                )
             )
         )
         and key != "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
