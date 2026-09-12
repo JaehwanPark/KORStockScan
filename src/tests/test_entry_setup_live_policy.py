@@ -566,7 +566,9 @@ def test_delayed_candidate_rolls_to_first_preopen_not_already_consumed(
     )
 
 
-def test_runtime_falls_back_when_probe_first_contract_is_missing(monkeypatch, tmp_path):
+def test_runtime_keeps_prompt_activation_when_entry_split_probe_qty_changes(
+    monkeypatch, tmp_path
+):
     _write_ready_chain(monkeypatch, tmp_path)
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "2")
 
@@ -580,9 +582,8 @@ def test_runtime_falls_back_when_probe_first_contract_is_missing(monkeypatch, tm
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
 
-    assert resolved["enabled"] is False
-    assert resolved["status"] == "fallback_probe_first_runtime_contract_invalid"
-    assert "runtime_contract_probe_qty_not_one" in resolved["runtime_contract_errors"]
+    assert resolved["enabled"] is True
+    assert resolved["status"] == "active_bounded_krx_canary"
 
 
 def test_runtime_falls_back_when_candidate_is_tampered(monkeypatch, tmp_path):

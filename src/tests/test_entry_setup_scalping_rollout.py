@@ -165,7 +165,7 @@ def test_all_scalping_entry_scopes_keep_same_guarded_global_cap(
 
 
 @pytest.mark.parametrize(
-    "change", ["hash", "future", "cap", "guard", "strategy", "unknown_scope"]
+    "change", ["hash", "future", "cap", "recheck", "strategy", "unknown_scope"]
 )
 def test_rollout_never_uses_invalid_pin_or_bypasses_guard(
     monkeypatch, tmp_path, change
@@ -186,8 +186,8 @@ def test_rollout_never_uses_invalid_pin_or_bypasses_guard(
         )
     if change == "hash":
         path.write_text("{}")
-    if change == "guard":
-        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "2")
+    if change == "recheck":
+        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "false")
     result = policy.resolve_live_prompt_policy(
         configured_prompt_version=policy.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         effective_venue="UNKNOWN" if change == "unknown_scope" else "KRX",

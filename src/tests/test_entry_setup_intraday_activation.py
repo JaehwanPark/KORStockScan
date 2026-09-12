@@ -128,7 +128,7 @@ def test_scope_time_and_owner_are_not_expanded(ready, monkeypatch, tmp_path, ove
     [
         (policy.CANARY_ENV_KEY, "false"),
         ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", ""),
-        ("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "2"),
+        ("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "false"),
         (
             "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
             "false",

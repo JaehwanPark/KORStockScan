@@ -24,3 +24,7 @@ Official reference retrieved `2026-09-12T17:54:19+09:00`: [Kiwoom-Securities/Kiw
 - Python compile for all changed modules; `bash -n src/run_bot.sh`; `git diff --check` passed.
 
 Natural canary execution, a later PREOPEN receipt, PID consumption, and cost-adjusted economics remain separate 2026-09-14+ evidence.
+
+## Follow-up correction
+
+The prompt activation's legacy `KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY == 1` check was removed after review: it incorrectly let an entry-split leg shape veto a prompt-policy activation. Probe-first/recheck enablement and the durable daily probe-count guard remain required, while the entry-split policy and central allocator retain their separate quantity authority. The correction is workspace-reviewed and awaits a separately authorized release selection update.

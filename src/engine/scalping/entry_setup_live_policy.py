@@ -323,7 +323,12 @@ def _runtime_probe_contract_errors(
     env: dict[str, str] | None = None,
     cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> list[str]:
-    """Verify that setup-risk canaries can only reach the one-share owner."""
+    """Verify that setup-risk canaries reach their recheck owner.
+
+    The entry-split policy may still choose a probe-first order shape, but its
+    leg quantity is not a prompt-policy invariant.  Central position sizing
+    remains the sole quantity owner at submit time.
+    """
 
     errors: list[str] = []
     required_true = (
@@ -380,14 +385,6 @@ def _runtime_probe_contract_errors(
     ).strip()
     if active_date.upper() not in {"DAILY", target_date}:
         errors.append("runtime_contract_probe_first_date_inactive")
-    try:
-        probe_qty = int(
-            str(_env_value("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", env) or "0").strip()
-        )
-    except ValueError:
-        probe_qty = 0
-    if probe_qty != 1:
-        errors.append("runtime_contract_probe_qty_not_one")
     return errors
 
 
