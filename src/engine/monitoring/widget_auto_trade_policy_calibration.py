@@ -533,7 +533,7 @@ def _load_rows(
                     audit_counts["invalid_price_or_bar_time_count"] += 1
                     continue
                 session = str(advisory.get("session") or "")
-                venue = str(payload.get("market_venue") or "")
+                venue = _calibration_venue(session, payload)
                 rows.append(
                     {
                         "trade_date": source_date,
@@ -612,6 +612,23 @@ def _load_rows(
             "raw_row_exclusion_applied": excluded > 0,
         },
     )
+
+
+def _calibration_venue(session: str, payload: Mapping[str, Any]) -> str:
+    """Return a policy cohort scope without asserting an execution venue."""
+
+    venue = str(payload.get("market_venue") or "")
+    if session != DUAL_AFTERMARKET_SESSION:
+        return venue
+    if (
+        payload.get("market_data_route") == "krx_nxt_integrated"
+        and payload.get("market_cohort") == "KRX_NXT"
+        and venue == "UNKNOWN"
+    ):
+        # The integrated quote has no actual execution venue before a broker
+        # receipt. Its known calibration cohort is nevertheless KRX_NXT.
+        return "KRX_NXT"
+    return venue
 
 
 def _entry_indices(

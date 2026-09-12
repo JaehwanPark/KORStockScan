@@ -953,6 +953,31 @@ def test_integrated_aftermarket_coverage_requires_all_240_minutes() -> None:
     )
 
 
+def test_integrated_aftermarket_calibration_uses_scope_not_actual_venue() -> None:
+    assert (
+        calibration._calibration_venue(
+            "KRX_NXT_AFTERMARKET",
+            {
+                "market_venue": "UNKNOWN",
+                "market_cohort": "KRX_NXT",
+                "market_data_route": "krx_nxt_integrated",
+            },
+        )
+        == "KRX_NXT"
+    )
+    assert (
+        calibration._calibration_venue(
+            "KRX_NXT_AFTERMARKET",
+            {
+                "market_venue": "UNKNOWN",
+                "market_cohort": "KRX_NXT",
+                "market_data_route": "nxt_only",
+            },
+        )
+        == "UNKNOWN"
+    )
+
+
 def test_execution_quality_canonicalizes_integrated_aftermarket_close_only(
     tmp_path,
 ) -> None:
