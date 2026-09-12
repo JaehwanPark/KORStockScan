@@ -348,6 +348,10 @@ reset_runtime_policy_env_before_handoff() {
     # must not leave a stale pin in this long-lived supervisor.
     unset KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_PATH
     unset KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_SHA256
+    # V2.15+ promotion authority is also reloaded only from the current
+    # immutable operator handoff; never inherit a prior supervisor generation.
+    unset KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_PATH
+    unset KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_SHA256
     # The supervisor is long-lived across graceful child restarts. Clear
     # startup-retired authority before loading the reviewed PREOPEN/operator
     # handoff; the verifier must reject any sourced layer that restores it.

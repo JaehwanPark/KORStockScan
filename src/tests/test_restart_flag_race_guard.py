@@ -108,6 +108,21 @@ def test_launcher_clears_intraday_pins_before_loading_dated_authority():
     subprocess.run(["bash", "-c", command], check=True)
 
 
+def test_launcher_clears_auto_promotion_pins_before_loading_handoff():
+    source = Path("src/run_bot.sh").read_text()
+    reset = source.split("reset_runtime_policy_env_before_handoff() {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    path_key = "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_PATH"
+    sha_key = "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_SHA256"
+    command = (
+        f"export {path_key}=yesterday {sha_key}=old_hash\n"
+        + reset
+        + f'\ntest -z "${{{path_key}+set}}" && test -z "${{{sha_key}+set}}"'
+    )
+    subprocess.run(["bash", "-c", command], check=True)
+
+
 def test_release_mount_resolution_preserves_artifact_no_follow_guard(tmp_path):
     from src.utils.jsonl_io import read_json_object_strict
 

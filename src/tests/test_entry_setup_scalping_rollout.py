@@ -28,6 +28,105 @@ def pin(monkeypatch, tmp_path):
     return path
 
 
+def pin_auto_promotion(monkeypatch, tmp_path):
+    payload = {
+        **rollout.AUTO_PROMOTION_CONTRACT,
+        "effective_from": "2026-09-11T11:59:00+09:00",
+        "operator_authority": "all_sessions_v2_15_plus_auto_promotion_2026_09_14",
+        "reviewed_commit": "b" * 40,
+    }
+    path = tmp_path / "auto-promotion.json"
+    path.write_text(json.dumps(payload))
+    monkeypatch.setenv(rollout.AUTO_PROMOTION_PATH_ENV, str(path))
+    monkeypatch.setenv(
+        rollout.AUTO_PROMOTION_SHA_ENV, hashlib.sha256(path.read_bytes()).hexdigest()
+    )
+    _enable_probe_contract(monkeypatch)
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-09-11")
+    for key in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
+        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + key, "100")
+    return path
+
+
+def test_auto_promotion_pin_covers_all_sessions_and_falls_back_to_v2_14(
+    monkeypatch, tmp_path
+):
+    pin_auto_promotion(monkeypatch, tmp_path)
+    monkeypatch.setattr(policy, "ACTIVATION_DIR", tmp_path / "activations")
+    loaded = rollout.load_auto_promotion(now=NOW)
+    assert loaded and loaded["valid"] is True
+    assert set(rollout.AUTO_PROMOTION_SCOPES) == set(rollout.SCOPES) | set(
+        rollout.OBSERVE_ONLY_SCOPES
+    )
+
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=policy.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=NOW,
+    )
+    assert resolved["enabled"] is True
+    assert resolved["selected_prompt_version"] == (
+        policy.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    )
+    assert resolved["scope_authority"] == "operator_all_session_auto_promotion"
+
+
+def test_auto_promotion_cli_writes_one_immutable_contract(tmp_path):
+    output = tmp_path / "auto-promotion.json"
+    assert rollout.main(
+        [
+            "--auto-promotion",
+            "--effective-from",
+            "2026-09-14T07:35:00+09:00",
+            "--reviewed-commit",
+            "c" * 40,
+            "--output",
+            str(output),
+            "--confirm",
+            "APPLY_ALL_SESSIONS_V2_15_PLUS_AUTO_PROMOTION",
+        ]
+    ) == 0
+    payload = json.loads(output.read_text())
+    assert payload["schema"] == rollout.AUTO_PROMOTION_SCHEMA
+    assert payload["operator_authority"] == (
+        "all_sessions_v2_15_plus_auto_promotion_2026_09_14"
+    )
+    with pytest.raises(SystemExit):
+        rollout.main(
+            [
+                "--auto-promotion",
+                "--effective-from",
+                "2026-09-14T07:35:00+09:00",
+                "--reviewed-commit",
+                "c" * 40,
+                "--output",
+                str(output),
+                "--confirm",
+                "APPLY_ALL_SESSIONS_V2_15_PLUS_AUTO_PROMOTION",
+            ]
+        )
+
+
+def test_auto_promotion_authorizes_exact_scope_only(monkeypatch, tmp_path):
+    path = pin_auto_promotion(monkeypatch, tmp_path)
+    decision = {
+        "entry_setup_live_policy_scope_authority": "operator_all_session_auto_promotion",
+        "entry_setup_live_policy_runtime_effect": True,
+        "entry_setup_live_policy_target_date": "2026-09-11",
+        "entry_setup_live_policy_activation_sha256": hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest(),
+        "entry_setup_live_policy_effective_venue": "KRX_NXT_INTEGRATED",
+        "entry_setup_live_policy_session_bucket": "KRX_NXT_AFTERMARKET",
+    }
+    assert rollout.decision_authorized("SCALPING", decision, now=NOW)
+    decision["entry_setup_live_policy_activation_sha256"] = "0" * 64
+    assert not rollout.decision_authorized("SCALPING", decision, now=NOW)
+
+
 @pytest.mark.parametrize("scope", rollout.SCOPES)
 @pytest.mark.parametrize("tag", ["SCANNER", "SCALP_BASE", "MIDDLE", None])
 def test_all_scalping_entry_scopes_keep_same_guarded_global_cap(

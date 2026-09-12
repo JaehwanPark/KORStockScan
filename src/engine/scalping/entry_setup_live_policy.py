@@ -48,12 +48,62 @@ CANARY_ENV_KEY = "KORSTOCKSCAN_ENTRY_SETUP_V2_14_KRX_CANARY_ENABLED"
 CANARY_VENUE = "KRX"
 CANARY_SESSION = "KRX_REGULAR"
 DEFAULT_COHORT = (CANARY_VENUE, CANARY_SESSION)
-SUPPORTED_LIVE_COHORTS = (DEFAULT_COHORT, ("NXT", "NXT_AFTERMARKET"))
-DUAL_OBSERVE_ONLY_COHORT = (
-    "KRX_NXT_INTEGRATED",
-    "KRX_NXT_AFTERMARKET",
+ALL_SESSION_LIVE_COHORTS = (
+    DEFAULT_COHORT,
+    ("NXT", "KRX_REGULAR"),
+    ("NXT", "NXT_REGULAR_OVERLAP"),
+    ("NXT", "NXT_REGULAR"),
+    ("PREMARKET_KRX_LIKE", "PREMARKET_KRX_LIKE"),
+    ("NXT", "NXT_PREMARKET"),
+    ("PREMARKET_KRX_LIKE", "NXT_PREMARKET"),
+    ("NXT", "NXT_AFTERMARKET"),
+    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"),
 )
-REGISTERED_SOURCE_COHORTS = SUPPORTED_LIVE_COHORTS + (DUAL_OBSERVE_ONLY_COHORT,)
+SUPPORTED_LIVE_COHORTS = ALL_SESSION_LIVE_COHORTS
+# This name is retained only for historical source-artifact compatibility.  The
+# explicit all-session auto-promotion policy now treats this as a normal,
+# independently-evidenced cohort; it must never inherit another cohort's result.
+DUAL_OBSERVE_ONLY_COHORT = ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET")
+REGISTERED_SOURCE_COHORTS = SUPPORTED_LIVE_COHORTS
+
+
+def _auto_promotion_policy(
+    *, current: datetime, cohort: tuple[str, str], env: dict[str, str] | None = None
+) -> dict[str, Any] | None:
+    """Return only a valid immutable V2.15+ authority for this exact cohort."""
+
+    from src.engine.scalping.entry_setup_scalping_rollout import (
+        AUTO_PROMOTION_SCOPES,
+        load_auto_promotion,
+    )
+
+    policy = load_auto_promotion(now=current, env=env)
+    if not policy or policy.get("valid") is not True:
+        return None
+    return (
+        policy
+        if f"{cohort[0]}|{cohort[1]}" in AUTO_PROMOTION_SCOPES
+        else None
+    )
+
+
+def _candidate_rollback_prompt_version(
+    *, current: datetime, cohort: tuple[str, str], env: dict[str, str] | None = None
+) -> str:
+    return (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        if _auto_promotion_policy(current=current, cohort=cohort, env=env)
+        else DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+    )
+
+
+def _inactive_fallback_status(prompt_version: str) -> str:
+    return (
+        "inactive_fallback_v2_14"
+        if prompt_version
+        == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        else "inactive_fallback_v2_13"
+    )
 
 
 def _cohort_suffix(cohort: tuple[str, str]) -> str:
@@ -663,9 +713,11 @@ def _candidate_source_errors(
     cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> list[str]:
     errors: list[str] = []
-    if cohort == DUAL_OBSERVE_ONLY_COHORT:
+    if cohort == DUAL_OBSERVE_ONLY_COHORT and not _auto_promotion_policy(
+        current=datetime.now(KST), cohort=cohort
+    ):
         errors.append("dual_cohort_observe_only_no_live_approval")
-    elif cohort not in SUPPORTED_LIVE_COHORTS:
+    if cohort not in SUPPORTED_LIVE_COHORTS:
         errors.append("candidate_cohort_not_registered")
     if candidate_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
         errors.append("candidate_prompt_version_not_registered_for_live")
@@ -689,35 +741,35 @@ def _candidate_source_errors(
         or batch_report.get("broker_order_forbidden") is not True
     ):
         errors.append("batch_authority_contract_invalid")
-    krx_rows = [
+    cohort_rows = [
         row
         for row in batch_report.get("cohorts") or []
         if isinstance(row, dict)
         and _normalize_venue(row.get("effective_venue")) == cohort[0]
         and _normalize_session(row.get("session_bucket")) == cohort[1]
     ]
-    if len(krx_rows) != 1 or krx_rows[0].get("status") != "completed_offline_only":
-        errors.append("krx_cohort_not_completed")
-    if len(krx_rows) == 1:
-        if krx_rows[0].get("candidate_prompt_version") != candidate_prompt_version:
-            errors.append("krx_candidate_prompt_version_mismatch")
-        selection = krx_rows[0].get("candidate_execution_selection")
+    if len(cohort_rows) != 1 or cohort_rows[0].get("status") != "completed_offline_only":
+        errors.append("candidate_cohort_not_completed")
+    if len(cohort_rows) == 1:
+        if cohort_rows[0].get("candidate_prompt_version") != candidate_prompt_version:
+            errors.append("candidate_cohort_prompt_version_mismatch")
+        selection = cohort_rows[0].get("candidate_execution_selection")
         if (
             not isinstance(selection, dict)
             or selection.get("outcome_blind") is not True
             or selection.get("contract_pass") is not True
         ):
-            errors.append("krx_execution_selection_invalid")
+            errors.append("candidate_cohort_execution_selection_invalid")
         elif selection.get("policy") != EXPECTED_CANDIDATE_SELECTION_POLICY:
-            errors.append("krx_execution_selection_policy_stale")
+            errors.append("candidate_cohort_execution_selection_policy_stale")
         elif not _selection_checkpoint_contract_pass(
             selection,
             evaluated_request_count=int(
-                krx_rows[0].get("evaluated_request_count") or 0
+                cohort_rows[0].get("evaluated_request_count") or 0
             ),
         ):
-            errors.append("krx_execution_selection_checkpoint_invalid")
-        if type(krx_rows[0].get("promotion_quality_gate_pass")) is not bool:
+            errors.append("candidate_cohort_execution_selection_checkpoint_invalid")
+        if type(cohort_rows[0].get("promotion_quality_gate_pass")) is not bool:
             errors.append("batch_legacy_quality_diagnostic_invalid")
 
     cohort_filter = detailed_report.get("cohort_filter")
@@ -734,7 +786,7 @@ def _candidate_source_errors(
         _normalize_venue(cohort_filter.get("effective_venue")) != cohort[0]
         or _normalize_session(cohort_filter.get("session_bucket")) != cohort[1]
     ):
-        errors.append("detailed_cohort_not_krx_regular")
+        errors.append("detailed_cohort_not_isolated")
     request_versions = {
         str((row.get("candidate") or {}).get("prompt_version") or "")
         for row in detailed_report.get("requests") or []
@@ -840,7 +892,7 @@ def _candidate_source_errors(
         or _normalize_venue(cumulative_scope.get("effective_venue")) != cohort[0]
         or _normalize_session(cumulative_scope.get("session_bucket")) != cohort[1]
     ):
-        errors.append("cumulative_cohort_not_krx_regular")
+        errors.append("cumulative_cohort_not_isolated")
     if cumulative.get("candidate_contract_sha256") != detailed_report.get(
         "candidate_contract_sha256"
     ):
@@ -1090,6 +1142,7 @@ def build_live_candidate(
         source_date=source_date, generated_at=current
     )
     exploration_limit = _new_exploration_limit(cohort, effective_date)
+    auto_promotion = _auto_promotion_policy(current=current, cohort=cohort)
     candidate = {
         "schema": LIVE_CANDIDATE_SCHEMA,
         "source_date": source_date,
@@ -1106,8 +1159,8 @@ def build_live_candidate(
         "blocking_reasons": exploration_errors if not ready else [],
         "performance_promotion_blocking_reasons": errors,
         "selected_prompt_version": (candidate_prompt_version),
-        "rollback_prompt_version": (
-            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        "rollback_prompt_version": _candidate_rollback_prompt_version(
+            current=current, cohort=cohort
         ),
         "effective_venue": cohort[0],
         "session_bucket": cohort[1],
@@ -1181,10 +1234,12 @@ def build_live_candidate(
             "detailed_report_sha256": detailed_sha256,
         },
         "activation_mode": "first_available_krx_trading_date_preopen_only",
-        "operator_approval_required": cohort == DUAL_OBSERVE_ONLY_COHORT,
+        "operator_approval_required": (
+            cohort == DUAL_OBSERVE_ONLY_COHORT and not auto_promotion
+        ),
         "operator_disable_env": (
             None
-            if cohort == DUAL_OBSERVE_ONLY_COHORT
+            if cohort == DUAL_OBSERVE_ONLY_COHORT and not auto_promotion
             else _cohort_env_key(cohort)
         ),
         "risk_contract": {
@@ -1213,14 +1268,14 @@ def build_live_candidate(
             "nxt_promotion_separate": True,
         },
         "metric_role": (
-            "source_only_dual_entry_prompt_cohort"
-            if cohort == DUAL_OBSERVE_ONLY_COHORT
-            else "bounded_exact_cohort_entry_prompt_live_candidate"
+            "bounded_exact_cohort_entry_prompt_live_candidate"
+            if auto_promotion or cohort != DUAL_OBSERVE_ONLY_COHORT
+            else "source_only_dual_entry_prompt_cohort"
         ),
         "decision_authority": (
-            "observe_only_no_live_approval"
-            if cohort == DUAL_OBSERVE_ONLY_COHORT
-            else "preopen_date_scoped_exact_cohort_prompt_selection_only"
+            "preopen_date_scoped_exact_cohort_prompt_selection_only"
+            if auto_promotion or cohort != DUAL_OBSERVE_ONLY_COHORT
+            else "observe_only_no_live_approval"
         ),
         "window_policy": (
             "clean_baseline_cumulative_same_contract_exact_cohort_plus_current_full_day"
@@ -1256,7 +1311,11 @@ def build_live_candidate(
             "direct_full_entry_from_ai",
             "broker_or_safety_guard_bypass",
             "intraday_cross_venue_promotion",
-            "dual_cohort_live_inheritance_without_new_immutable_approval",
+            (
+                "cross_cohort_prompt_inheritance"
+                if auto_promotion or cohort != DUAL_OBSERVE_ONLY_COHORT
+                else "dual_cohort_live_inheritance_without_new_immutable_approval"
+            ),
             "bot_process_control",
         ],
     }
@@ -1379,9 +1438,10 @@ def _validate_candidate_artifact(
     selected_prompt_version = str(candidate.get("selected_prompt_version") or "")
     if selected_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS:
         errors.append("candidate_selected_prompt_invalid")
-    if candidate.get("rollback_prompt_version") != (
-        DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
-    ):
+    if candidate.get("rollback_prompt_version") not in {
+        DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    }:
         errors.append("candidate_rollback_prompt_invalid")
     if candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION:
         errors.append("candidate_entry_setup_evidence_version_stale")
@@ -1503,7 +1563,10 @@ def _runtime_candidate_contract_errors(
         or candidate.get("effective_date") != target_date
         or selected_prompt_version not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
         or candidate.get("rollback_prompt_version")
-        != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        not in {
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        }
         or candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION
         or candidate.get("entry_decision_composer_version")
         != _expected_composer_version(selected_prompt_version)
@@ -1577,6 +1640,20 @@ def build_preopen_activation(
     runtime_env_load_errors: list[str] | None = None,
     cohort: tuple[str, str] = DEFAULT_COHORT,
 ) -> dict[str, Any]:
+    current = datetime.now(KST)
+    auto_policy = _auto_promotion_policy(
+        current=current, cohort=cohort, env=runtime_env
+    )
+    fallback_prompt_version = _candidate_rollback_prompt_version(
+        current=current, cohort=cohort, env=runtime_env
+    )
+    from src.engine.scalping.entry_setup_scalping_rollout import (
+        AUTO_PROMOTION_PATH_ENV,
+        AUTO_PROMOTION_SHA_ENV,
+        load_auto_promotion,
+    )
+
+    pinned_auto_policy = load_auto_promotion(now=current, env=runtime_env)
     candidates: list[tuple[str, Path, dict[str, Any]]] = []
     for path in LIVE_CANDIDATE_DIR.glob(
         "entry_setup_v2_14_bounded_live_candidate_*.json"
@@ -1607,6 +1684,17 @@ def build_preopen_activation(
                 runtime_env=runtime_env,
             )
         )
+        if auto_policy and (
+            candidate.get("selected_prompt_version")
+            == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        ):
+            errors.append("auto_promotion_candidate_version_or_fallback_invalid")
+    source = os.environ if runtime_env is None else runtime_env
+    if (
+        (source.get(AUTO_PROMOTION_PATH_ENV) or source.get(AUTO_PROMOTION_SHA_ENV))
+        and (not pinned_auto_policy or pinned_auto_policy.get("valid") is not True)
+    ):
+        errors.append("auto_promotion_policy_invalid")
     candidate_file_sha256 = (
         _safe_file_sha256(candidate_path) if candidate_path else None
     )
@@ -1621,18 +1709,20 @@ def build_preopen_activation(
     activation = {
         "schema": PREOPEN_ACTIVATION_SCHEMA,
         "target_date": target_date,
-        "generated_at": datetime.now(KST).isoformat(),
-        "status": "active_bounded_canary" if active else "inactive_fallback_v2_13",
+        "generated_at": current.isoformat(),
+        "status": (
+            "active_bounded_canary"
+            if active
+            else _inactive_fallback_status(fallback_prompt_version)
+        ),
         "canary_mode": canary_mode,
         "blocking_reasons": list(dict.fromkeys(errors)),
         "selected_prompt_version": (
             candidate.get("selected_prompt_version")
             if active
-            else DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            else fallback_prompt_version
         ),
-        "rollback_prompt_version": (
-            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
-        ),
+        "rollback_prompt_version": fallback_prompt_version,
         "effective_venue": cohort[0],
         "session_bucket": cohort[1],
         "source_date": candidate.get("source_date"),
@@ -1648,6 +1738,9 @@ def build_preopen_activation(
             "entry_structure_phase_policy_version"
         ),
         "runtime_env_provenance": dict(runtime_env_provenance or {}),
+        "auto_promotion_policy_sha256": (
+            auto_policy.get("sha256") if auto_policy else None
+        ),
         "runtime_effect": active,
         "allowed_runtime_apply": active,
         "actual_order_submitted": False,
@@ -1723,15 +1816,42 @@ def resolve_live_prompt_policy(
 ) -> dict[str, Any]:
     current = (now or datetime.now(KST)).astimezone(KST)
     target_date = current.date().isoformat()
-    fallback = str(configured_prompt_version or "").strip()
+    configured_fallback = str(configured_prompt_version or "").strip()
     cohort = (_normalize_venue(effective_venue), _normalize_session(session_bucket))
+    from src.engine.scalping.entry_setup_scalping_rollout import (
+        AUTO_PROMOTION_PATH_ENV,
+        AUTO_PROMOTION_SHA_ENV,
+        AUTO_PROMOTION_SCOPES,
+        SCOPES,
+        load_auto_promotion,
+        load_rollout,
+    )
+
+    rollout = load_rollout(now=current)
+    auto_promotion = load_auto_promotion(now=current)
+    strategy_is_scalping = str(strategy or "").upper() in {"SCALPING", "SCALP"}
+    auto_scope = bool(
+        auto_promotion
+        and auto_promotion.get("valid") is True
+        and strategy_is_scalping
+        and f"{cohort[0]}|{cohort[1]}" in AUTO_PROMOTION_SCOPES
+    )
+    rollout_scope = bool(
+        rollout
+        and rollout.get("valid") is True
+        and strategy_is_scalping
+        and f"{cohort[0]}|{cohort[1]}" in SCOPES
+    )
+    fallback = (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        if rollout_scope or auto_scope
+        else configured_fallback
+    )
     result = {
         "enabled": False,
         "status": "fallback_configured_prompt",
         "selected_prompt_version": fallback,
-        "rollback_prompt_version": (
-            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
-        ),
+        "rollback_prompt_version": fallback,
         "target_date": target_date,
         "effective_venue": _normalize_venue(effective_venue),
         "session_bucket": _normalize_session(session_bucket),
@@ -1744,25 +1864,31 @@ def resolve_live_prompt_policy(
         "runtime_effect": False,
         "canary_mode": None,
     }
-    if cohort == DUAL_OBSERVE_ONLY_COHORT:
+    if configured_fallback != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
+        result["status"] = "fallback_same_stage_owner_conflict"
+        return result
+    if cohort == DUAL_OBSERVE_ONLY_COHORT and not auto_scope:
         result.update(
             status="fallback_dual_observe_only_no_live_approval",
             source_only=True,
         )
         return result
-    if fallback != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
-        result["status"] = "fallback_same_stage_owner_conflict"
+    auto_pin_configured = bool(
+        os.getenv(AUTO_PROMOTION_PATH_ENV) or os.getenv(AUTO_PROMOTION_SHA_ENV)
+    )
+    if auto_pin_configured and (
+        not auto_promotion or auto_promotion.get("valid") is not True
+    ):
+        result["status"] = "fallback_auto_promotion_policy_invalid"
         return result
-    from src.engine.scalping.entry_setup_scalping_rollout import load_rollout, SCOPES
-
-    rollout = load_rollout(now=current)
-    if rollout is not None and str(strategy or "").upper() in {"SCALPING", "SCALP"}:
+    if rollout is not None and strategy_is_scalping:
         if not rollout.get("valid"):
             result["status"] = "fallback_operator_rollout_invalid"
             return result
-        if f"{cohort[0]}|{cohort[1]}" not in SCOPES:
+        if f"{cohort[0]}|{cohort[1]}" not in SCOPES and not auto_scope:
             result["status"] = "fallback_operator_rollout_scope_invalid"
             return result
+    if rollout_scope or auto_scope:
         if not _enabled_by_operator(cohort=cohort):
             result["status"] = "fallback_operator_disabled"
             return result
@@ -1777,27 +1903,34 @@ def resolve_live_prompt_policy(
                 runtime_contract_errors=errors,
             )
             return result
-        result.update(
-            enabled=True,
-            status=(
-                "active_bounded_krx_canary"
-                if cohort[0] == "KRX"
-                else "active_bounded_nxt_canary"
-            ),
-            selected_prompt_version=DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
-            source_date=rollout["payload"]["effective_from"][:10],
-            candidate_contract_sha256=rollout["sha256"],
-            activation_artifact_sha256=rollout["sha256"],
-            activation_path=rollout["path"],
-            entry_setup_evidence_version=ENTRY_SETUP_EVIDENCE_VERSION,
-            entry_decision_composer_version=ENTRY_DECISION_COMPOSER_VERSION,
-            entry_structure_phase_policy_version=STRUCTURE_PHASE_POLICY_VERSION,
-            canary_mode=EXPLORATION_CANARY_MODE,
-            maximum_daily_exploration_probes=100,
-            scope_authority="operator_all_scalping_rollout",
-            runtime_effect=True,
-        )
-        return result
+        # The legacy rollout remains a durable V2.14 owner. Only the new,
+        # separately pinned auto-promotion authority may consult an activation
+        # to select V2.15+; stale historical activations cannot override it.
+        if (rollout_scope and not auto_scope) or not activation_path(
+            target_date, cohort=cohort
+        ).is_file():
+            authority = auto_promotion if auto_scope else rollout
+            assert authority is not None
+            result.update(
+                enabled=True,
+                status="active_bounded_v2_14_fallback",
+                source_date=authority["payload"]["effective_from"][:10],
+                candidate_contract_sha256=authority["sha256"],
+                activation_artifact_sha256=authority["sha256"],
+                activation_path=authority["path"],
+                entry_setup_evidence_version=ENTRY_SETUP_EVIDENCE_VERSION,
+                entry_decision_composer_version=ENTRY_DECISION_COMPOSER_VERSION,
+                entry_structure_phase_policy_version=STRUCTURE_PHASE_POLICY_VERSION,
+                canary_mode=EXPLORATION_CANARY_MODE,
+                maximum_daily_exploration_probes=100,
+                scope_authority=(
+                    "operator_all_session_auto_promotion"
+                    if auto_scope
+                    else "operator_all_scalping_rollout"
+                ),
+                runtime_effect=True,
+            )
+            return result
     if not _enabled_by_operator(cohort=cohort):
         result["status"] = "fallback_operator_disabled"
         return result
@@ -1860,7 +1993,17 @@ def resolve_live_prompt_policy(
         or activation.get("broker_order_forbidden") is not True
         or activation.get("selected_prompt_version")
         not in SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS
+        or (
+            auto_scope
+            and activation.get("selected_prompt_version")
+            == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+        )
         or activation.get("rollback_prompt_version") != fallback
+        or (
+            auto_scope
+            and activation.get("auto_promotion_policy_sha256")
+            != auto_promotion["sha256"]
+        )
         or activation.get("entry_setup_evidence_version")
         != ENTRY_SETUP_EVIDENCE_VERSION
         or activation.get("entry_decision_composer_version")
@@ -1946,7 +2089,17 @@ def resolve_live_prompt_policy(
             "entry_structure_phase_policy_version": activation.get(
                 "entry_structure_phase_policy_version"
             ),
-            "activation_artifact_sha256": artifact_sha,
+            # Downstream recheck authorization binds the immutable operator pin,
+            # while this separate field preserves the exact PREOPEN artifact.
+            "activation_artifact_sha256": (
+                auto_promotion["sha256"] if auto_scope else artifact_sha
+            ),
+            "preopen_activation_artifact_sha256": artifact_sha,
+            "scope_authority": (
+                "operator_all_session_auto_promotion"
+                if auto_scope
+                else "preopen_date_scoped_exact_cohort_prompt_selection_only"
+            ),
             "canary_mode": canary_mode,
             "maximum_daily_exploration_probes": (
                 activation_contract.get("maximum_daily_exploration_probes")

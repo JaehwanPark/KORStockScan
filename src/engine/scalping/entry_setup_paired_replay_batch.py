@@ -592,13 +592,14 @@ def run_batch(
     # Every registered exact cohort gets an early invalidation marker, including
     # provider/predecessor failure paths. Never reuse yesterday's NXT readiness.
     report["bounded_live_candidates_by_cohort"] = {}
-    for selected_cohort in live_policy.SUPPORTED_LIVE_COHORTS:
+    for selected_cohort in DEFAULT_COHORTS:
         if selected_cohort == live_policy.DEFAULT_COHORT:
             continue
+        version = candidate_plan[selected_cohort]
         report["bounded_live_candidates_by_cohort"]["/".join(selected_cohort)] = (
             _publish_prompt_blocker(
                 source_date=target_date,
-                candidate_prompt_version=candidate_plan[selected_cohort],
+                candidate_prompt_version=version,
                 write=write,
                 blocking_reason="full_day_candidate_refresh_pending",
                 cohort=selected_cohort,
@@ -728,7 +729,7 @@ def run_batch(
         report["bounded_live_candidates_by_cohort"]["KRX/KRX_REGULAR"] = report[
             "krx_bounded_live_candidate"
         ]
-        for selected_cohort in live_policy.SUPPORTED_LIVE_COHORTS:
+        for selected_cohort in DEFAULT_COHORTS:
             if selected_cohort == live_policy.DEFAULT_COHORT:
                 continue
             version = candidate_plan[selected_cohort]
