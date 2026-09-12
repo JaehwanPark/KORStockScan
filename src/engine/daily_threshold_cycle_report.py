@@ -121,8 +121,15 @@ THRESHOLD_REPORT_EVENT_FAMILIES = frozenset(
 )
 CUMULATIVE_THRESHOLD_EVENT_FAMILIES = frozenset(
     {
+        # The sizing owner emits through these producer families.  Keeping
+        # only holding families here produces a false zero-input diagnosis
+        # for the cumulative position-sizing report.
+        "dynamic_entry_price_resolver",
+        "entry_mechanical_momentum",
         "holding_flow_ofi_smoothing",
+        "position_sizing_dynamic_formula",
         "protect_trailing_smoothing",
+        "scale_in_price_guard",
         "scalp_trailing_continuation_recheck",
         "scalp_trailing_take_profit",
         "score65_74_recovery_probe",
@@ -211,6 +218,8 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "elapsed_sec",
     "entry_ai_price_ofi_regime",
     "entry_order_lifecycle",
+    "entry_requested_qty",
+    "entry_filled_qty",
     "entry_passive_probe_applied",
     "entry_price_defensive_ticks",
     "entry_price_guard",
@@ -272,6 +281,12 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "ofi_force_exit_phase",
     "ofi_force_exit_terminal_reason",
     "order_price",
+    "order_no",
+    "broker_order_no",
+    "submit_attempt_id",
+    "attempt_id",
+    "main_lifecycle_id",
+    "position_episode_id",
     "orderable_amount",
     "orderable_cash",
     "peak_profit",
@@ -6319,6 +6334,44 @@ _POSITION_SIZING_FORMULA_CANDIDATES = [
 ]
 
 
+def _exact_sizing_terminal_identity(event: dict, row: dict) -> str | None:
+    """Return the shared durable identity for a sizing submit and terminal row.
+
+    A same-symbol or nearest-time match is useful for diagnostics, but it is
+    not sufficient economic evidence for a quantity policy.  Keep this small
+    and local: both sides must expose the same named identity and agree on the
+    symbol whenever both symbols are present.
+    """
+
+    event_code = str(event.get("stock_code") or "").strip()[:6]
+    row_code = str(row.get("stock_code") or "").strip()[:6]
+    if event_code and row_code and event_code != row_code:
+        return None
+    for key, aliases in (
+        ("main_lifecycle_id", ("main_lifecycle_id",)),
+        ("submit_attempt_id", ("submit_attempt_id", "attempt_id")),
+        ("broker_order_no", ("broker_order_no", "order_no", "ord_no")),
+        ("record_id", ("record_id", "trade_id", "order_id")),
+    ):
+        for event_alias in aliases:
+            event_value = str(event.get(event_alias) or "").strip()
+            if not event_value or event_value == "-":
+                continue
+            for alias in aliases:
+                row_value = str(row.get(alias) or "").strip()
+                if row_value and row_value == event_value:
+                    return f"{key}:{event_value}"
+    return None
+
+
+def _gross_profit_rate(row: dict) -> float | None:
+    buy_price = _safe_float(row.get("buy_price"), None)
+    sell_price = _safe_float(row.get("sell_price"), None)
+    if buy_price is None or sell_price is None or buy_price <= 0 or sell_price <= 0:
+        return None
+    return 100.0 * (float(sell_price) - float(buy_price)) / float(buy_price)
+
+
 def _build_candidate_metrics(
     candidate: dict,
     sizing_events: list[dict],
@@ -6550,66 +6603,46 @@ def _build_candidate_metrics(
         for row in completed_rows
         if _is_normal_only_row(row) and str(row.get("stock_code") or "").strip()
     ]
-    completed_index: dict[str, list[dict]] = {}
-    for row in completed_by_code:
+    completed_index: dict[str, list[tuple[int, dict]]] = {}
+    for index, row in enumerate(completed_by_code):
         code = str(row.get("stock_code") or "").strip()
-        completed_index.setdefault(code, []).append(row)
+        completed_index.setdefault(code, []).append((index, row))
 
-    weak_match_count = 0
-    strong_match_count = 0
+    exact_match_count = 0
+    unmatched_real_submit_count = 0
+    exact_identity_counts: Counter[str] = Counter()
+    used_terminal_rows: set[int] = set()
     candidate_weighted_sum = 0.0
     candidate_total_notional = 0.0
-    strong_weighted_sum = 0.0
-    strong_total_notional = 0.0
+    gross_weighted_sum = 0.0
+    gross_total_notional = 0.0
     for event in candidate_real_rows:
         code = str(event.get("stock_code") or "").strip()
         if not code:
+            unmatched_real_submit_count += 1
             continue
         rows = completed_index.get(code)
         if not rows:
+            unmatched_real_submit_count += 1
             continue
-        event_buy_ts = _safe_float(
-            event.get("buy_time") or event.get("emitted_at"), None
-        )
-        event_record_id = str(
-            event.get("record_id")
-            or event.get("trade_id")
-            or event.get("order_id")
-            or ""
-        )
         matched = None
-        if event_record_id:
-            for row in rows:
-                row_trade_id = str(
-                    row.get("trade_id")
-                    or row.get("order_id")
-                    or row.get("record_id")
-                    or ""
-                )
-                if row_trade_id and row_trade_id == event_record_id:
-                    matched = row
-                    break
-        if matched is None and event_buy_ts is not None:
-            best_diff = float("inf")
-            for row in rows:
-                row_buy_ts = _safe_float(
-                    row.get("buy_time") or row.get("rec_date") or row.get("sell_time"),
-                    None,
-                )
-                if row_buy_ts is not None:
-                    diff = abs(float(event_buy_ts) - float(row_buy_ts))
-                    if diff < best_diff:
-                        best_diff = diff
-                        matched = row
-            if matched is not None and best_diff > 3600:
-                matched = None
+        matched_identity = None
+        matched_index = None
+        for row_index, row in rows:
+            if row_index in used_terminal_rows:
+                continue
+            identity = _exact_sizing_terminal_identity(event, row)
+            if identity:
+                matched = row
+                matched_identity = identity
+                matched_index = row_index
+                break
         if matched is None:
-            matched = rows[0]
-            weak_match_count += 1
-            is_weak_match = True
-        else:
-            strong_match_count += 1
-            is_weak_match = False
+            unmatched_real_submit_count += 1
+            continue
+        used_terminal_rows.add(int(matched_index))
+        exact_match_count += 1
+        exact_identity_counts[str(matched_identity).split(":", 1)[0]] += 1
         profit_rate = _safe_float(matched.get("profit_rate"), None)
         if profit_rate is None:
             continue
@@ -6628,18 +6661,19 @@ def _build_candidate_metrics(
         weighted = float(profit_rate) * notional
         candidate_weighted_sum += weighted
         candidate_total_notional += notional
-        if not is_weak_match:
-            strong_weighted_sum += weighted
-            strong_total_notional += notional
+        gross_profit_rate = _gross_profit_rate(matched)
+        if gross_profit_rate is not None:
+            gross_weighted_sum += float(gross_profit_rate) * notional
+            gross_total_notional += notional
 
     candidate_notional_ev = (
         round(candidate_weighted_sum / candidate_total_notional, 4)
         if candidate_total_notional > 0
         else None
     )
-    strong_notional_ev = (
-        round(strong_weighted_sum / strong_total_notional, 4)
-        if strong_total_notional > 0
+    gross_notional_ev = (
+        round(gross_weighted_sum / gross_total_notional, 4)
+        if gross_total_notional > 0
         else None
     )
 
@@ -6648,14 +6682,7 @@ def _build_candidate_metrics(
     overall_ev = _notional_weighted_ev_pct(real_completed)
     win_rate = _safe_float(real_summary.get("win_rate"), None)
     downside_p10 = _safe_float(real_summary.get("downside_p10_profit_rate"), None)
-    source_quality_adjusted_ev = (
-        strong_notional_ev if strong_notional_ev is not None else candidate_notional_ev
-    )
-    ev_match_total = strong_match_count + weak_match_count
-    weak_match_rate = (
-        round(weak_match_count / ev_match_total, 4) if ev_match_total > 0 else None
-    )
-    weak_match_included_in_ev = weak_match_count > 0
+    source_quality_adjusted_ev = candidate_notional_ev
 
     total_order_events = (
         full_fill_count
@@ -6717,10 +6744,17 @@ def _build_candidate_metrics(
         "sim_probe_broker_order_forbidden_true_count": sim_broker_forbidden_true_count,
         "sim_probe_broker_order_forbidden_false_count": sim_broker_forbidden_false_count,
         "sim_probe_broker_order_forbidden_missing_count": sim_broker_forbidden_missing_count,
-        "ev_match_strong_count": strong_match_count,
-        "ev_match_weak_count": weak_match_count,
-        "ev_weak_match_rate": weak_match_rate,
-        "ev_weak_match_included_in_notional": weak_match_included_in_ev,
+        "exact_terminal_join_count": exact_match_count,
+        "exact_terminal_join_identity_counts": dict(sorted(exact_identity_counts.items())),
+        "unmatched_real_submit_count": unmatched_real_submit_count,
+        "ev_match_strong_count": exact_match_count,
+        "ev_match_weak_count": 0,
+        "ev_weak_match_rate": 0.0 if exact_match_count else None,
+        "ev_weak_match_included_in_notional": False,
+        "gross_notional_weighted_ev_pct": gross_notional_ev,
+        "gross_ev_cost_provenance": (
+            "exact_buy_sell_prices" if gross_notional_ev is not None else "missing"
+        ),
         "budget_authority": (
             "real_orderable_amount"
             if real_sample > 0

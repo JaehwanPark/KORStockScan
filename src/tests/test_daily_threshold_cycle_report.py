@@ -5550,19 +5550,23 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
 
     completed_rows = [
         {
+            "record_id": i,
             "profit_rate": 0.5,
             "strategy": "SCALPING",
             "stock_code": f"{100000 + i:06d}",
             "buy_price": 10000,
+            "sell_price": 10050,
             "buy_qty": 5,
         }
         for i in range(1, 21)
     ] + [
         {
+            "record_id": i + 20,
             "profit_rate": -0.2,
             "strategy": "SCALPING",
             "stock_code": f"{100000 + (i + 20):06d}",
             "buy_price": 8000,
+            "sell_price": 7984,
             "buy_qty": 4,
         }
         for i in range(1, 16)
@@ -5598,6 +5602,10 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     assert baseline["real_sample_count"] > 0
     assert baseline["sim_probe_sample_count"] == 0
     assert baseline["real_completed_overall_ev_pct"] is not None
+    assert baseline["exact_terminal_join_count"] == 35
+    assert baseline["unmatched_real_submit_count"] == 0
+    assert baseline["gross_notional_weighted_ev_pct"] is not None
+    assert baseline["gross_ev_cost_provenance"] == "exact_buy_sell_prices"
     assert baseline["source_quality_blocked"] is False
     assert baseline["real_actual_order_submitted_count"] > 0
 
@@ -5609,6 +5617,103 @@ def test_position_sizing_dynamic_formula_generates_candidate_grid():
     assert candidate["calibration_state"] == "hold"
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["human_approval_required"] is False
+
+
+def test_position_sizing_candidate_excludes_same_symbol_without_durable_identity():
+    candidate = report_mod._POSITION_SIZING_FORMULA_CANDIDATES[0]
+    sizing_event = {
+        "stage": "order_bundle_submitted",
+        "record_id": "submit-1",
+        "stock_code": "005930",
+        "fields": {
+            "strategy": "SCALPING",
+            "target_budget": 1_000_000,
+            "order_price": 100_000,
+            "actual_order_submitted": "true",
+        },
+    }
+    completed = {
+        "record_id": "different-terminal",
+        "stock_code": "005930",
+        "strategy": "SCALPING",
+        "buy_price": 100_000,
+        "sell_price": 100_100,
+        "buy_qty": 1,
+        "profit_rate": 0.1,
+    }
+
+    metrics = report_mod._build_candidate_metrics(
+        candidate, [sizing_event], [completed], [sizing_event], []
+    )
+
+    assert metrics["exact_terminal_join_count"] == 0
+    assert metrics["unmatched_real_submit_count"] == 1
+    assert metrics["notional_weighted_ev_pct"] is None
+    assert metrics["gross_notional_weighted_ev_pct"] is None
+
+
+def test_position_sizing_candidate_reports_exact_gross_ev_separately_from_profit_rate():
+    candidate = report_mod._POSITION_SIZING_FORMULA_CANDIDATES[0]
+    sizing_event = {
+        "stage": "order_bundle_submitted",
+        "record_id": "submit-1",
+        "stock_code": "005930",
+        "fields": {
+            "strategy": "SCALPING",
+            "target_budget": 1_000_000,
+            "order_price": 100_000,
+            "actual_order_submitted": "true",
+        },
+    }
+    completed = {
+        "record_id": "submit-1",
+        "stock_code": "005930",
+        "strategy": "SCALPING",
+        "buy_price": 100_000,
+        "sell_price": 100_100,
+        "buy_qty": 1,
+        "profit_rate": -0.13,
+    }
+
+    metrics = report_mod._build_candidate_metrics(
+        candidate, [sizing_event], [completed], [sizing_event], []
+    )
+
+    assert metrics["exact_terminal_join_count"] == 1
+    assert metrics["notional_weighted_ev_pct"] == -0.13
+    assert metrics["gross_notional_weighted_ev_pct"] == 0.1
+    assert metrics["gross_ev_cost_provenance"] == "exact_buy_sell_prices"
+
+
+def test_position_sizing_candidate_accepts_exact_trade_id_alias():
+    candidate = report_mod._POSITION_SIZING_FORMULA_CANDIDATES[0]
+    sizing_event = {
+        "stage": "order_bundle_submitted",
+        "trade_id": "trade-1",
+        "stock_code": "005930",
+        "fields": {
+            "strategy": "SCALPING",
+            "target_budget": 1_000_000,
+            "order_price": 100_000,
+            "actual_order_submitted": "true",
+        },
+    }
+    completed = {
+        "record_id": "trade-1",
+        "stock_code": "005930",
+        "strategy": "SCALPING",
+        "buy_price": 100_000,
+        "sell_price": 100_100,
+        "buy_qty": 1,
+        "profit_rate": -0.13,
+    }
+
+    metrics = report_mod._build_candidate_metrics(
+        candidate, [sizing_event], [completed], [sizing_event], []
+    )
+
+    assert metrics["exact_terminal_join_count"] == 1
+    assert metrics["exact_terminal_join_identity_counts"] == {"record_id": 1}
 
 
 def test_position_sizing_runtime_fields_survive_event_compaction():

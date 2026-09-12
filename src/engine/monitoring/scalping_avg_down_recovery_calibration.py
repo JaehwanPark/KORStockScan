@@ -299,6 +299,7 @@ def _collect_exact_evidence(
     diagnostics: Counter[str] = Counter()
     raw_event_count = 0
     legacy_proxy_event_count = 0
+    legacy_proxy_census: Counter[str] = Counter()
     observed: dict[str, dict[str, Any]] = {}
     observed_hashes: dict[str, str] = {}
     conflicted_ids: set[str] = set()
@@ -317,6 +318,26 @@ def _collect_exact_evidence(
             "stop_line_touch_mandatory_avg_down_submitted",
         }:
             legacy_proxy_event_count += 1
+            # Legacy rows predate the v2 route-arbitration schema.  Count
+            # their recoverability explicitly instead of treating their
+            # existence as either a valid exact decision or a zero-input
+            # condition.  They remain excluded from promotion until all
+            # durable identities and actual execution receipts are present.
+            episode_id = _identity(event)
+            decision_id = str(event.get("scale_in_decision_id") or "").strip()
+            symbol = str(event.get("stock_code") or event.get("code") or "").strip()
+            if not episode_id:
+                legacy_proxy_census["missing_position_episode_id"] += 1
+            elif not decision_id:
+                legacy_proxy_census["missing_scale_in_decision_id"] += 1
+            elif len(symbol) != 6 or not symbol.isdigit():
+                legacy_proxy_census["invalid_stock_code"] += 1
+            elif not _boolish(event.get("actual_order_submitted")):
+                legacy_proxy_census["not_actual_order_submitted"] += 1
+            elif _safe_int(event.get("requested_qty") or event.get("qty"), 0) <= 0:
+                legacy_proxy_census["missing_requested_qty"] += 1
+            else:
+                legacy_proxy_census["identity_complete_requires_terminal_join"] += 1
         observed_at = _parse_time(event.get("emitted_at"))
         source_date = str(event.get("_source_event_date") or "")
         if observed_at is None or observed_at < CLEAN_BASELINE_TS:
@@ -782,6 +803,8 @@ def _collect_exact_evidence(
     return {
         "raw_event_count": raw_event_count,
         "legacy_proxy_event_count": legacy_proxy_event_count,
+        "legacy_proxy_census": dict(sorted(legacy_proxy_census.items())),
+        "legacy_proxy_promotion_excluded": True,
         "decisions": decisions,
         "runtime_configs": runtime_configs,
         "diagnostics": dict(sorted(diagnostics.items())),

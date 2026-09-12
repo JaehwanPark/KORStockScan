@@ -227,6 +227,8 @@ def test_legacy_proxy_rows_are_diagnostic_only(tmp_path, monkeypatch):
     accounting = candidate["source_metrics"]["decision_accounting"]
     assert accounting["raw_event_count"] == 2
     assert accounting["legacy_proxy_event_count"] == 1
+    assert accounting["legacy_proxy_census"] == {"missing_position_episode_id": 1}
+    assert accounting["legacy_proxy_promotion_excluded"] is True
     assert accounting["diagnostics"] == {}
     assert accounting["unique_decision_count"] == 0
     assert accounting["unique_episode_count"] == 0
