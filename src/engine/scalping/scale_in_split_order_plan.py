@@ -55,7 +55,7 @@ RUNTIME_REFRESH_REAL_OUTCOME_FLOOR = 3
 RUNTIME_REFRESH_MFE_MAE_FLOOR = 3
 RUNTIME_REFRESH_SOURCE_DATE_FLOOR = 2
 RUNTIME_REFRESH_PRICE_JOIN_COVERAGE_FLOOR = 0.80
-RUNTIME_REFRESH_COST_ADJUSTED_EV_FLOOR_EXCLUSIVE = 0.0
+RUNTIME_REFRESH_MIN_COST_ADJUSTED_EV_PCT = 0.1
 RUNTIME_REFRESH_FILL_PARTICIPATION_FLOOR = 0.70
 RUNTIME_REFRESH_DOWNSIDE_P10_DELTA_FLOOR_PCT = -0.30
 ROLLING_REPORT_DATE_LIMIT = 20
@@ -1554,7 +1554,7 @@ def _evaluate_candidate_economics(
         blockers.append("price_join_coverage_floor")
     if (
         weighted_ev is not None
-        and weighted_ev <= RUNTIME_REFRESH_COST_ADJUSTED_EV_FLOOR_EXCLUSIVE
+        and weighted_ev < RUNTIME_REFRESH_MIN_COST_ADJUSTED_EV_PCT
     ):
         blockers.append("cost_adjusted_ev_not_positive")
     if fill_rate is not None and fill_rate < RUNTIME_REFRESH_FILL_PARTICIPATION_FLOOR:
@@ -2183,9 +2183,7 @@ def _runtime_refresh_evidence(
         "source_quality_adjusted_ev_pct": (
             round(weighted_ev, 6) if weighted_ev is not None else None
         ),
-        "cost_adjusted_ev_floor_exclusive": (
-            RUNTIME_REFRESH_COST_ADJUSTED_EV_FLOOR_EXCLUSIVE
-        ),
+        "minimum_cost_adjusted_ev_pct": RUNTIME_REFRESH_MIN_COST_ADJUSTED_EV_PCT,
         "modeled_fill_participation": (
             round(fill_participation, 4) if fill_participation is not None else None
         ),
@@ -2241,7 +2239,7 @@ def runtime_refresh_contract_error(evidence: Any) -> str:
     if (
         _safe_float(evidence.get("source_quality_adjusted_ev_pct"), None) is None
         or (_safe_float(evidence.get("source_quality_adjusted_ev_pct"), 0.0) or 0.0)
-        <= RUNTIME_REFRESH_COST_ADJUSTED_EV_FLOOR_EXCLUSIVE
+        < RUNTIME_REFRESH_MIN_COST_ADJUSTED_EV_PCT
     ):
         return "runtime_refresh_cost_adjusted_ev_floor"
     if (
@@ -2531,8 +2529,8 @@ def build_report(target_date: str) -> dict[str, Any]:
             "runtime_refresh_price_join_coverage_floor": (
                 RUNTIME_REFRESH_PRICE_JOIN_COVERAGE_FLOOR
             ),
-            "runtime_refresh_cost_adjusted_ev_floor_exclusive": (
-                RUNTIME_REFRESH_COST_ADJUSTED_EV_FLOOR_EXCLUSIVE
+            "runtime_refresh_minimum_cost_adjusted_ev_pct": (
+                RUNTIME_REFRESH_MIN_COST_ADJUSTED_EV_PCT
             ),
             "runtime_refresh_fill_participation_floor": (
                 RUNTIME_REFRESH_FILL_PARTICIPATION_FLOOR

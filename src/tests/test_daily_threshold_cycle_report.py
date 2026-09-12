@@ -21,8 +21,14 @@ def test_aftermarket_sor_successor_policy_requires_broker_acceptance(
         json.dumps(
             {
                 "schema_version": "position_sizing_dynamic_formula_policy_v1",
+                "formula_version": report_mod.SCALPING_SIZING_FORMULA_VERSION,
+                "decision": "retain_current",
+                "tier_ratios": [0.10, 0.15, 0.20, 0.25, 0.25],
                 "runtime_apply_allowed": True,
                 "source_quality_passed": True,
+                "canary_quantity_cap_precedence": True,
+                "minimum_cost_adjusted_ev_pct": 0.1,
+                "cost_adjusted_ev_pct": 0.1,
             }
         ),
         encoding="utf-8",
@@ -30,9 +36,7 @@ def test_aftermarket_sor_successor_policy_requires_broker_acceptance(
     calibration_path = tmp_path / "calibration.json"
     calibration_path.write_text("{}", encoding="utf-8")
     report = {
-        "aftermarket_sor_canary_acceptance": {
-            "status": "passed_broker_acceptance"
-        }
+        "aftermarket_sor_canary_acceptance": {"status": "passed_broker_acceptance"}
     }
 
     published = report_mod._materialize_aftermarket_sor_runtime_policy(
@@ -44,11 +48,14 @@ def test_aftermarket_sor_successor_policy_requires_broker_acceptance(
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
     content = dict(policy)
     content_sha = content.pop("policy_content_sha256")
-    assert content_sha == hashlib.sha256(
-        json.dumps(
-            content, ensure_ascii=True, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-    ).hexdigest()
+    assert (
+        content_sha
+        == hashlib.sha256(
+            json.dumps(
+                content, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     assert policy["quantity_policy_owner"] == "position_sizing_dynamic_formula"
 
 
@@ -81,6 +88,37 @@ def test_position_sizing_materialization_preserves_selected_flat10_policy(
     assert policy["formula_version"] == report_mod.SCALPING_SIZING_ROLLBACK_VERSION
     assert policy["tier_ratios"] == [0.10] * 5
     assert policy["decision"] == "adjust_down_flat10"
+    assert policy["minimum_cost_adjusted_ev_pct"] == 0.1
+    assert policy["cost_adjusted_ev_pct"] == 0.12
+
+
+def test_position_sizing_runtime_selection_requires_minimum_cost_adjusted_ev():
+    candidate = {
+        "source_metrics": {
+            "source_quality_passed": True,
+            "candidate_grid": [
+                {
+                    "formula_version": report_mod.SCALPING_SIZING_FORMULA_VERSION,
+                    "exact_terminal_join_count": 30,
+                    "gross_notional_weighted_ev_pct": 0.40,
+                    "notional_weighted_ev_pct": 0.09,
+                    "real_completed_overall_ev_pct": 0.20,
+                    "full_fill_rate": 1.0,
+                    "downside_p10_profit_rate": 0.0,
+                }
+            ],
+        }
+    }
+
+    selected, reason = report_mod._position_sizing_runtime_selection(candidate)
+
+    assert selected is None
+    assert reason == "no_exact_minimum_cost_adjusted_ev_candidate"
+
+    candidate["source_metrics"]["candidate_grid"][0]["notional_weighted_ev_pct"] = 0.10
+    selected, reason = report_mod._position_sizing_runtime_selection(candidate)
+    assert selected is not None
+    assert reason.startswith("retain_current_exact_cost_adjusted_candidate")
 
 
 def test_aftermarket_sor_canary_acceptance_reads_projected_event_fields():
@@ -116,9 +154,12 @@ def test_cumulative_source_uses_latest_canonical_date_not_after_target(
     future.write_text("{}", encoding="utf-8")
 
     assert report_mod._cumulative_threshold_source_path("2026-09-14") == prior
-    assert report_mod._calibration_report_source_paths("2026-09-14")[
-        "threshold_cycle_cumulative"
-    ] == prior
+    assert (
+        report_mod._calibration_report_source_paths("2026-09-14")[
+            "threshold_cycle_cumulative"
+        ]
+        == prior
+    )
 
 
 @pytest.mark.parametrize("candidate_count", [0, 147, 227, 300])

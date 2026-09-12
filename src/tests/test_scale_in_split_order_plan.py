@@ -1423,6 +1423,17 @@ def test_runtime_refresh_contract_rejects_non_finite_economics():
     )
 
 
+def test_runtime_refresh_contract_requires_minimum_cost_adjusted_ev():
+    evidence = _valid_runtime_refresh_evidence()
+    evidence["source_quality_adjusted_ev_pct"] = 0.09
+
+    assert split_plan.runtime_refresh_contract_error(evidence) == (
+        "runtime_refresh_cost_adjusted_ev_floor"
+    )
+    evidence["source_quality_adjusted_ev_pct"] = 0.10
+    assert split_plan.runtime_refresh_contract_error(evidence) == ""
+
+
 def test_policy_artifact_repeats_runtime_refresh_gate():
     blocked_evidence = split_plan._runtime_refresh_evidence([])
     blocked = split_plan._build_policy(

@@ -28,6 +28,7 @@ MAX_RATIO = 0.25
 KST = ZoneInfo("Asia/Seoul")
 POSITION_SIZING_POLICY_SCHEMA_VERSION = "position_sizing_dynamic_formula_policy_v1"
 _FLAT_10_TIER_RATIOS = (0.10, 0.10, 0.10, 0.10, 0.10)
+MIN_COST_ADJUSTED_EV_PCT = 0.1
 
 _INVALID_SOURCE_TOKENS = frozenset(
     {
@@ -138,7 +139,9 @@ def _validated_tier_ratios(
     values: Iterable[Any] | None = None,
 ) -> tuple[tuple[float, ...], bool]:
     try:
-        ratios = tuple(float(value) for value in (TIER_RATIOS if values is None else values))
+        ratios = tuple(
+            float(value) for value in (TIER_RATIOS if values is None else values)
+        )
     except (TypeError, ValueError):
         return DEFAULT_TIER_RATIOS, False
     valid = bool(
@@ -150,36 +153,116 @@ def _validated_tier_ratios(
 
 
 def _policy_content_sha256(policy: dict[str, Any]) -> str:
-    content = {key: value for key, value in policy.items() if key != "policy_content_sha256"}
+    content = {
+        key: value for key, value in policy.items() if key != "policy_content_sha256"
+    }
     return hashlib.sha256(
-        json.dumps(content, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            content, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     ).hexdigest()
 
 
-def _runtime_position_sizing_policy(reference_time: Any) -> tuple[str, tuple[float, ...], str, str | None, str | None]:
+def position_sizing_policy_authority_valid(policy: dict[str, Any]) -> bool:
+    """Validate the two reviewed formulas and their after-cost EV authority."""
+
+    expected = {
+        FORMULA_VERSION: ("retain_current", DEFAULT_TIER_RATIOS),
+        ROLLBACK_FORMULA_VERSION: ("adjust_down_flat10", _FLAT_10_TIER_RATIOS),
+    }
+    formula = str(policy.get("formula_version") or "")
+    expected_decision, expected_tiers = expected.get(formula, (None, None))
+    minimum_ev_raw = policy.get("minimum_cost_adjusted_ev_pct")
+    if minimum_ev_raw is None:
+        # Compatibility for already-published v1 artifacts.  The legacy gross
+        # label is accepted only when the actual net EV also clears the floor.
+        minimum_ev_raw = policy.get("gross_ev_floor_pct")
+    minimum_ev = _safe_float(minimum_ev_raw, float("nan"))
+    cost_adjusted_ev = _safe_float(policy.get("cost_adjusted_ev_pct"), float("nan"))
+    try:
+        ratios = tuple(float(value) for value in policy.get("tier_ratios") or ())
+    except (TypeError, ValueError):
+        ratios = ()
+    return bool(
+        policy.get("schema_version") == POSITION_SIZING_POLICY_SCHEMA_VERSION
+        and policy.get("runtime_apply_allowed") is True
+        and expected_decision is not None
+        and policy.get("decision") == expected_decision
+        and ratios == expected_tiers
+        and policy.get("canary_quantity_cap_precedence") is True
+        and policy.get("source_quality_passed") is True
+        and minimum_ev == MIN_COST_ADJUSTED_EV_PCT
+        and math.isfinite(cost_adjusted_ev)
+        and cost_adjusted_ev >= minimum_ev
+    )
+
+
+def _runtime_position_sizing_policy(
+    reference_time: Any,
+) -> tuple[str, tuple[float, ...], str, str | None, str | None]:
     """Load only a dated, PREOPEN-verified sizing policy.
 
     A malformed or stale enabled policy never expands quantity: it falls back to
     the allowlisted flat-10 profile.  The ordinary default remains the existing
     five-stage profile when no policy was selected.
     """
-    if str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")).strip().lower() not in {"1", "true", "yes", "on"}:
-        return FORMULA_VERSION, tuple(TIER_RATIOS), "policy_disabled_default", None, None
+    if str(
+        os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED", "")
+    ).strip().lower() not in {"1", "true", "yes", "on"}:
+        return (
+            FORMULA_VERSION,
+            tuple(TIER_RATIOS),
+            "policy_disabled_default",
+            None,
+            None,
+        )
     path = Path(str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE", "")).strip())
-    expected_version = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION", "")).strip()
-    expected_sha = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256", "")).strip()
-    expected_source_date = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE", "")).strip()
-    active_date = str(os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE", "")).strip()
+    expected_version = str(
+        os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION", "")
+    ).strip()
+    expected_sha = str(
+        os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256", "")
+    ).strip()
+    expected_source_date = str(
+        os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE", "")
+    ).strip()
+    active_date = str(
+        os.getenv("KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE", "")
+    ).strip()
     resolved = _coerce_reference_time(reference_time) or datetime.now(KST)
-    if not path.is_file() or not expected_version or not expected_sha or not expected_source_date or active_date != resolved.date().isoformat():
-        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_env_or_date_invalid_fallback", None, None
+    if (
+        not path.is_file()
+        or not expected_version
+        or not expected_sha
+        or not expected_source_date
+        or active_date != resolved.date().isoformat()
+    ):
+        return (
+            ROLLBACK_FORMULA_VERSION,
+            _FLAT_10_TIER_RATIOS,
+            "policy_env_or_date_invalid_fallback",
+            None,
+            None,
+        )
     try:
         raw = path.read_bytes()
         policy = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_unreadable_fallback", None, None
+        return (
+            ROLLBACK_FORMULA_VERSION,
+            _FLAT_10_TIER_RATIOS,
+            "policy_unreadable_fallback",
+            None,
+            None,
+        )
     if not isinstance(policy, dict) or hashlib.sha256(raw).hexdigest() != expected_sha:
-        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_hash_invalid_fallback", None, None
+        return (
+            ROLLBACK_FORMULA_VERSION,
+            _FLAT_10_TIER_RATIOS,
+            "policy_hash_invalid_fallback",
+            None,
+            None,
+        )
     formula = str(policy.get("formula_version") or "")
     if (
         policy.get("schema_version") != POSITION_SIZING_POLICY_SCHEMA_VERSION
@@ -189,12 +272,17 @@ def _runtime_position_sizing_policy(reference_time: Any) -> tuple[str, tuple[flo
         or policy.get("runtime_apply_allowed") is not True
         or policy.get("policy_content_sha256") != _policy_content_sha256(policy)
         or formula not in {FORMULA_VERSION, ROLLBACK_FORMULA_VERSION}
+        or not position_sizing_policy_authority_valid(policy)
     ):
-        return ROLLBACK_FORMULA_VERSION, _FLAT_10_TIER_RATIOS, "policy_contract_invalid_fallback", None, None
+        return (
+            ROLLBACK_FORMULA_VERSION,
+            _FLAT_10_TIER_RATIOS,
+            "policy_contract_invalid_fallback",
+            None,
+            None,
+        )
     expected_ratios = (
-        DEFAULT_TIER_RATIOS
-        if formula == FORMULA_VERSION
-        else _FLAT_10_TIER_RATIOS
+        DEFAULT_TIER_RATIOS if formula == FORMULA_VERSION else _FLAT_10_TIER_RATIOS
     )
     ratios, ratios_valid = _validated_tier_ratios(policy.get("tier_ratios"))
     # The report currently owns exactly two bounded formulas.  Do not let a

@@ -358,7 +358,9 @@ def test_all_initial_entry_lineages_share_the_same_allocator(allocation_stage):
     assert (decision.tier, decision.ratio, decision.effective_qty) == (5, 0.25, 237)
 
 
-def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(monkeypatch, tmp_path):
+def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(
+    monkeypatch, tmp_path
+):
     policy_path = tmp_path / "sizing.json"
     policy = {
         "schema_version": "position_sizing_dynamic_formula_policy_v1",
@@ -371,6 +373,8 @@ def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(monkeypa
         "runtime_apply_allowed": True,
         "canary_quantity_cap_precedence": True,
         "source_quality_passed": True,
+        "minimum_cost_adjusted_ev_pct": 0.1,
+        "cost_adjusted_ev_pct": 0.1,
     }
     policy["policy_content_sha256"] = allocator._policy_content_sha256(policy)
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -379,7 +383,9 @@ def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(monkeypa
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": policy["policy_version"],
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE": policy["source_date"],
-        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
+            policy_path.read_bytes()
+        ).hexdigest(),
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-09-14",
     }
     for key, value in env.items():
@@ -393,7 +399,9 @@ def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(monkeypa
     assert fallback.ratio == 0.10
 
 
-def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(monkeypatch, tmp_path):
+def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(
+    monkeypatch, tmp_path
+):
     policy_path = tmp_path / "flat10.json"
     policy = {
         "schema_version": "position_sizing_dynamic_formula_policy_v1",
@@ -406,6 +414,8 @@ def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(monkeypatc
         "runtime_apply_allowed": True,
         "canary_quantity_cap_precedence": True,
         "source_quality_passed": True,
+        "minimum_cost_adjusted_ev_pct": 0.1,
+        "cost_adjusted_ev_pct": 0.1,
     }
     policy["policy_content_sha256"] = allocator._policy_content_sha256(policy)
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -414,7 +424,9 @@ def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(monkeypatc
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": policy["policy_version"],
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE": policy["source_date"],
-        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
+            policy_path.read_bytes()
+        ).hexdigest(),
         "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-09-14",
     }.items():
         monkeypatch.setenv(key, value)
@@ -424,3 +436,21 @@ def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(monkeypatc
     assert decision.formula_version == allocator.ROLLBACK_FORMULA_VERSION
     assert decision.ratio == pytest.approx(0.10)
     assert decision.policy_status == "policy_loaded"
+
+
+def test_position_sizing_policy_authority_rejects_underfloor_net_ev():
+    policy = {
+        "schema_version": allocator.POSITION_SIZING_POLICY_SCHEMA_VERSION,
+        "formula_version": allocator.ROLLBACK_FORMULA_VERSION,
+        "tier_ratios": [0.10, 0.10, 0.10, 0.10, 0.10],
+        "decision": "adjust_down_flat10",
+        "runtime_apply_allowed": True,
+        "canary_quantity_cap_precedence": True,
+        "source_quality_passed": True,
+        "minimum_cost_adjusted_ev_pct": 0.1,
+        "cost_adjusted_ev_pct": 0.09,
+    }
+
+    assert allocator.position_sizing_policy_authority_valid(policy) is False
+    policy["cost_adjusted_ev_pct"] = 0.10
+    assert allocator.position_sizing_policy_authority_valid(policy) is True

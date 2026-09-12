@@ -50,9 +50,10 @@ def test_aftermarket_sor_successor_policy_selects_exact_preopen_date(
 
     assert decision["selected"] is True
     assert env["KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_FILE"] == str(path)
-    assert env["KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256"] == hashlib.sha256(
-        encoded
-    ).hexdigest()
+    assert (
+        env["KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_SHA256"]
+        == hashlib.sha256(encoded).hexdigest()
+    )
 
 
 def _valid_scale_in_split_runtime_refresh_evidence():
@@ -1967,8 +1968,10 @@ def test_drought_entry_recheck_candidate_is_deterministic_non_owner_and_can_turn
     assert mod._entry_live_tuning_owner_family(selected) == ""
 
     blocked = {**candidates[0], "source_quality_gate": "source_quality_blocked"}
-    blocked_selected, blocked_decisions, blocked_env = mod._select_auto_apply_candidates(
-        [blocked], ai_review={}, require_ai=True, target_date="2026-09-07"
+    blocked_selected, blocked_decisions, blocked_env = (
+        mod._select_auto_apply_candidates(
+            [blocked], ai_review={}, require_ai=True, target_date="2026-09-07"
+        )
     )
     assert blocked_selected == []
     assert blocked_env == {}
@@ -10921,6 +10924,8 @@ def test_split_runtime_policy_audit_accepts_exact_flat10_sizing_policy(tmp_path)
         "tier_ratios": [0.10, 0.10, 0.10, 0.10, 0.10],
         "canary_quantity_cap_precedence": True,
         "source_quality_passed": True,
+        "minimum_cost_adjusted_ev_pct": 0.1,
+        "cost_adjusted_ev_pct": 0.1,
     }
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     audits = mod._split_runtime_policy_audits(
@@ -10953,6 +10958,8 @@ def test_split_runtime_policy_audit_rejects_flat10_policy_with_nonflat_tiers(tmp
         "tier_ratios": [0.10, 0.15, 0.20, 0.25, 0.25],
         "canary_quantity_cap_precedence": True,
         "source_quality_passed": True,
+        "minimum_cost_adjusted_ev_pct": 0.1,
+        "cost_adjusted_ev_pct": 0.1,
     }
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     audits = mod._split_runtime_policy_audits(
@@ -10963,6 +10970,45 @@ def test_split_runtime_policy_audit_rejects_flat10_policy_with_nonflat_tiers(tmp
             "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
             "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": (
                 "position-sizing-invalid-flat10"
+            ),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
+                policy_path.read_bytes()
+            ).hexdigest(),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE": "2026-07-13",
+        },
+    )
+
+    assert audits[0]["status"] == "fail"
+    assert audits[0]["reason"] == "position_sizing_policy_authority_invalid"
+
+
+def test_split_runtime_policy_audit_rejects_sizing_policy_below_net_ev_floor(
+    tmp_path,
+):
+    policy_path = tmp_path / "position_sizing.json"
+    policy = {
+        "schema_version": "position_sizing_dynamic_formula_policy_v1",
+        "policy_version": "position-sizing-underfloor",
+        "source_date": "2026-07-13",
+        "runtime_apply_allowed": True,
+        "formula_version": "flat_10_fallback",
+        "decision": "adjust_down_flat10",
+        "tier_ratios": [0.10, 0.10, 0.10, 0.10, 0.10],
+        "canary_quantity_cap_precedence": True,
+        "source_quality_passed": True,
+        "minimum_cost_adjusted_ev_pct": 0.1,
+        "cost_adjusted_ev_pct": 0.09,
+    }
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+
+    audits = mod._split_runtime_policy_audits(
+        "2026-07-14",
+        {
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED": "true",
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-07-14",
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": (
+                "position-sizing-underfloor"
             ),
             "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
                 policy_path.read_bytes()
@@ -11486,7 +11532,9 @@ def test_entry_recheck_contract_carry_preserves_only_existing_exact_dependencies
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "false",
     }
-    previous["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT"] = "false"
+    previous["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT"] = (
+        "false"
+    )
     assert mod._entry_recheck_contract_carry_overrides(candidate, previous) == {}
 
 

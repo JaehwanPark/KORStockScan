@@ -80,11 +80,7 @@ def _auto_promotion_policy(
     policy = load_auto_promotion(now=current, env=env)
     if not policy or policy.get("valid") is not True:
         return None
-    return (
-        policy
-        if f"{cohort[0]}|{cohort[1]}" in AUTO_PROMOTION_SCOPES
-        else None
-    )
+    return policy if f"{cohort[0]}|{cohort[1]}" in AUTO_PROMOTION_SCOPES else None
 
 
 def _candidate_rollback_prompt_version(
@@ -216,6 +212,7 @@ CUMULATIVE_PROMOTION_CHECK_KEYS = (
     "drawdown_recovery_capture_not_decreased",
 )
 NET_ECONOMIC_GATE_BASIS = "exact_cumulative_full_cost_net_ev_v1"
+MIN_COST_ADJUSTED_EV_PCT = 0.10
 # Legacy gross/proxy EV and opportunity counts remain diagnostics. Requiring
 # every sub-pattern count to improve can reject a positive full-cost portfolio.
 # Source integrity, exposure floors and bounded tail risk are still mandatory.
@@ -745,7 +742,10 @@ def _candidate_source_errors(
         and _normalize_venue(row.get("effective_venue")) == cohort[0]
         and _normalize_session(row.get("session_bucket")) == cohort[1]
     ]
-    if len(cohort_rows) != 1 or cohort_rows[0].get("status") != "completed_offline_only":
+    if (
+        len(cohort_rows) != 1
+        or cohort_rows[0].get("status") != "completed_offline_only"
+    ):
         errors.append("candidate_cohort_not_completed")
     if len(cohort_rows) == 1:
         if cohort_rows[0].get("candidate_prompt_version") != candidate_prompt_version:
@@ -928,10 +928,8 @@ def _full_cost_economics_pass(value: Any) -> bool:
 
     metric = value if isinstance(value, dict) else {}
     try:
-        numbers = [
-            metric[key]
-            for key in ("candidate_net_ev_pct", "paired_net_decision_delta_pct")
-        ]
+        candidate_net_ev = metric["candidate_net_ev_pct"]
+        paired_net_delta = metric["paired_net_decision_delta_pct"]
         return bool(
             metric.get("schema") == "entry_paired_full_cost_economics_v1"
             and metric.get("pass") is True
@@ -948,10 +946,12 @@ def _full_cost_economics_pass(value: Any) -> bool:
             and metric["candidate_unique_symbol_count"]
             <= metric["candidate_exposure_count"]
             <= metric["verified_pair_count"]
-            and all(
-                type(number) in (int, float) and math.isfinite(number) and number > 0
-                for number in numbers
-            )
+            and type(candidate_net_ev) in (int, float)
+            and math.isfinite(candidate_net_ev)
+            and candidate_net_ev >= MIN_COST_ADJUSTED_EV_PCT
+            and type(paired_net_delta) in (int, float)
+            and math.isfinite(paired_net_delta)
+            and paired_net_delta > 0
             and metric.get("actual_fill_proven") is False
             and metric.get("additional_cost_subtracted_here") is False
         )
@@ -1169,6 +1169,7 @@ def build_live_candidate(
         "entry_structure_phase_policy_version": STRUCTURE_PHASE_POLICY_VERSION,
         "promotion_metrics": {
             "economic_gate_basis": NET_ECONOMIC_GATE_BASIS,
+            "minimum_cost_adjusted_ev_pct": MIN_COST_ADJUSTED_EV_PCT,
             "legacy_quality_diagnostics": {
                 "detailed_pass": detailed_report.get("promotion_quality_gate_pass"),
                 "cumulative_pass": cumulative.get("promotion_quality_gate_pass"),
@@ -1698,9 +1699,8 @@ def build_preopen_activation(
         ):
             errors.append("auto_promotion_candidate_version_or_fallback_invalid")
     source = os.environ if runtime_env is None else runtime_env
-    if (
-        (source.get(AUTO_PROMOTION_PATH_ENV) or source.get(AUTO_PROMOTION_SHA_ENV))
-        and (not pinned_auto_policy or pinned_auto_policy.get("valid") is not True)
+    if (source.get(AUTO_PROMOTION_PATH_ENV) or source.get(AUTO_PROMOTION_SHA_ENV)) and (
+        not pinned_auto_policy or pinned_auto_policy.get("valid") is not True
     ):
         errors.append("auto_promotion_policy_invalid")
     candidate_file_sha256 = (
@@ -1764,9 +1764,15 @@ def build_preopen_activation(
                 "residual_multi_leg_forbidden"
             ),
             "scale_in_forbidden": candidate_risk_contract.get("scale_in_forbidden"),
-            "quantity_policy_owner": candidate_risk_contract.get("quantity_policy_owner"),
-            "residual_policy_owner": candidate_risk_contract.get("residual_policy_owner"),
-            "scale_in_policy_owner": candidate_risk_contract.get("scale_in_policy_owner"),
+            "quantity_policy_owner": candidate_risk_contract.get(
+                "quantity_policy_owner"
+            ),
+            "residual_policy_owner": candidate_risk_contract.get(
+                "residual_policy_owner"
+            ),
+            "scale_in_policy_owner": candidate_risk_contract.get(
+                "scale_in_policy_owner"
+            ),
             "maximum_daily_exploration_probes": candidate_risk_contract.get(
                 "maximum_daily_exploration_probes"
             ),
@@ -1875,7 +1881,10 @@ def resolve_live_prompt_policy(
         "runtime_effect": False,
         "canary_mode": None,
     }
-    if configured_fallback != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
+    if (
+        configured_fallback
+        != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+    ):
         result["status"] = "fallback_same_stage_owner_conflict"
         return result
     if cohort == DUAL_OBSERVE_ONLY_COHORT and not auto_scope:
@@ -2034,7 +2043,8 @@ def resolve_live_prompt_policy(
         or activation_contract.get("quantity_policy_owner")
         != "position_sizing_dynamic_formula"
         or activation_contract.get("residual_policy_owner") != "entry_split_order_plan"
-        or activation_contract.get("scale_in_policy_owner") != "scale_in_split_order_plan"
+        or activation_contract.get("scale_in_policy_owner")
+        != "scale_in_split_order_plan"
         or not activation_mode_contract_valid
         or not candidate_path.is_file()
         or not candidate_file_sha256

@@ -56,6 +56,7 @@ TUNING_GRID = (80.0, 85.0, 90.0)
 BOUNDS = {"min": 80.0, "max": 90.0, "unit": "buy_pressure_pct"}
 MAX_STEP_PER_DAY = 5.0
 RUNTIME_PROMOTION_SAMPLE_FLOOR = 10
+MIN_COST_ADJUSTED_EV_PCT = 0.1
 RUNTIME_VALUE_SOURCES = frozenset({"exact_process_env", "runtime_rules_loaded_value"})
 FORBIDDEN_USES = [
     "intraday_threshold_mutation",
@@ -1196,7 +1197,7 @@ def _positive_economic_improvement(item: dict[str, Any], *, current: float) -> b
     return bool(
         ev is not None
         and delta_ev is not None
-        and (ev >= 0.0 if no_add_tightening else ev > 0.0)
+        and (ev >= 0.0 if no_add_tightening else ev >= MIN_COST_ADJUSTED_EV_PCT)
         and (pnl >= 0 if no_add_tightening else pnl > 0)
         and delta_ev > 0.0
         and item["candidate_minus_current_net_profit_krw"] > 0
@@ -1517,6 +1518,8 @@ def build_report(
         "window_policy": "clean_baseline_cumulative_same_policy_version",
         "sample_floor": "unique_complete_eligible_parent_episode>=10",
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
+        "minimum_cost_adjusted_ev_pct": MIN_COST_ADJUSTED_EV_PCT,
+        "zero_ev_no_add_tightening_is_risk_reduction_only": True,
         "source_quality_gate": "exact_route_identity_terminal_and_daily_preflight",
         "forbidden_uses": FORBIDDEN_USES,
     }

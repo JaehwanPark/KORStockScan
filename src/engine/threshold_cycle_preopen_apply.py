@@ -57,6 +57,9 @@ from src.engine.scalping.scale_in_split_order_plan import (
     policy_runtime_contract_error as scale_in_policy_runtime_contract_error,
     runtime_refresh_contract_error as scale_in_runtime_refresh_contract_error,
 )
+from src.engine.scalping.position_sizing_allocator import (
+    position_sizing_policy_authority_valid,
+)
 from src.engine.scalping.multi_timeframe_context import (
     PROMOTION_ARTIFACT_REQUIRED_FROM_DATE,
 )
@@ -1592,8 +1595,7 @@ def _winner_recovery_auto_apply_candidate(
             "real_execution_source_quality_valid_closed_count": real_count,
             "real_execution_sample_floor": real_floor,
             "real_execution_sample_floor_contract_valid": bool(
-                real_floor
-                == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
+                real_floor == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
             ),
             "real_execution_source_quality_adjusted_ev_pct": real_ev,
             "central_sizing_promotion_ev_floor_pct": (
@@ -2617,7 +2619,10 @@ def _entry_recheck_contract_carry_overrides(
         for key, field in recommended_fields.items()
     ):
         return {}
-    if any(str(previous_env.get(key) or "").strip() != value for key, value in expected.items()):
+    if any(
+        str(previous_env.get(key) or "").strip() != value
+        for key, value in expected.items()
+    ):
         return {}
     return expected
 
@@ -3882,7 +3887,10 @@ def _dual_aftermarket_live_apply_blocker(candidate: Mapping[str, Any]) -> str:
     """Never infer live authority from a v2 integrated source-only cohort."""
     session = str(candidate.get("session_bucket") or "").strip().upper()
     cohort_version = str(candidate.get("cohort_key_version") or "").strip()
-    if session != DUAL_AFTERMARKET_SESSION and cohort_version != DUAL_COHORT_KEY_VERSION:
+    if (
+        session != DUAL_AFTERMARKET_SESSION
+        and cohort_version != DUAL_COHORT_KEY_VERSION
+    ):
         return ""
     authority = str(candidate.get("authority_state") or "").strip().upper()
     if authority == "OBSERVE_ONLY":
@@ -4096,7 +4104,10 @@ def _select_auto_apply_candidates(
             reject_reason = ",".join(contract_blockers)
         elif state in AUTO_APPLY_BLOCK_STATES or (
             state not in AUTO_APPLY_ALLOWED_STATES
-            and not (family == "position_sizing_dynamic_formula" and state == "retain_current")
+            and not (
+                family == "position_sizing_dynamic_formula"
+                and state == "retain_current"
+            )
         ):
             reject_reason = f"calibration_state_blocked:{state}"
         elif not allowed:
@@ -5071,7 +5082,10 @@ def _aftermarket_sor_runtime_policy_decision(
         "target_date": target_date,
         "env_overrides": {},
     }
-    if include_families is not None and AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY not in include_families:
+    if (
+        include_families is not None
+        and AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY not in include_families
+    ):
         decision["decision_reason"] = "operator_family_filter_excluded"
         return decision, {}
     path = (
@@ -5932,31 +5946,9 @@ def _scalp_sim_auto_runtime_policy_audit(
 
 
 def _position_sizing_policy_authority_valid(policy: Mapping[str, Any]) -> bool:
-    """Accept only the two pre-reviewed sizing policies and their exact tiers.
+    """Keep the historical local entrypoint while using the runtime validator."""
 
-    The dated policy producer may select either the incumbent five-stage formula
-    or the fail-closed flat-10 fallback. Keeping formula, decision, and ratios
-    coupled prevents PREOPEN from reinterpreting a policy as a cap change.
-    """
-    expected = {
-        "entry_type_5stage_cap25_v1": (
-            "retain_current",
-            [0.10, 0.15, 0.20, 0.25, 0.25],
-        ),
-        "flat_10_fallback": (
-            "adjust_down_flat10",
-            [0.10, 0.10, 0.10, 0.10, 0.10],
-        ),
-    }
-    formula = str(policy.get("formula_version") or "")
-    expected_decision, expected_tiers = expected.get(formula, (None, None))
-    return bool(
-        expected_decision is not None
-        and policy.get("decision") == expected_decision
-        and policy.get("tier_ratios") == expected_tiers
-        and policy.get("canary_quantity_cap_precedence") is True
-        and policy.get("source_quality_passed") is True
-    )
+    return position_sizing_policy_authority_valid(dict(policy))
 
 
 def _split_runtime_policy_audits(
@@ -6018,14 +6010,10 @@ def _split_runtime_policy_audits(
     )
     for spec in specs:
         prefix = str(spec["prefix"])
-        if (
-            spec["family"]
-            in {
-                "position_sizing_dynamic_formula",
-                AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
-            }
-            and not any(key.startswith(prefix) for key in effective_env)
-        ):
+        if spec["family"] in {
+            "position_sizing_dynamic_formula",
+            AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
+        } and not any(key.startswith(prefix) for key in effective_env):
             continue
         enabled_key = f"{prefix}ENABLED"
         file_key = f"{prefix}FILE"
@@ -6110,14 +6098,19 @@ def _split_runtime_policy_audits(
             source_date_key = f"{prefix}SOURCE_DATE"
             expected_source_date = str(effective_env.get(source_date_key) or "").strip()
             audit["required_env_keys"].append(source_date_key)
-            if not expected_source_date or policy.get("source_date") != expected_source_date:
+            if (
+                not expected_source_date
+                or policy.get("source_date") != expected_source_date
+            ):
                 audit.update(status="fail", reason="policy_source_date_mismatch")
                 audits.append(audit)
                 continue
             if spec["family"] == "position_sizing_dynamic_formula" and not (
                 _position_sizing_policy_authority_valid(policy)
             ):
-                audit.update(status="fail", reason="position_sizing_policy_authority_invalid")
+                audit.update(
+                    status="fail", reason="position_sizing_policy_authority_invalid"
+                )
                 audits.append(audit)
                 continue
         if spec["family"] == "entry_split_order_plan" and {

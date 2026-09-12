@@ -31,10 +31,12 @@ from src.engine.scalping.entry_split_order_plan import (
 )
 from src.engine.scalping.position_sizing_allocator import (
     FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
+    MIN_COST_ADJUSTED_EV_PCT as POSITION_SIZING_MIN_COST_ADJUSTED_EV_PCT,
     ROLLBACK_FORMULA_VERSION as SCALPING_SIZING_ROLLBACK_VERSION,
     ScalpingSizingContext,
     infer_scalping_venue,
     max_position_qty_cap_from_budget,
+    position_sizing_policy_authority_valid,
     resolve_scalping_allocation,
 )
 from src.engine.scalping.sim_source_quality import is_synthetic_scalp_sim
@@ -1328,21 +1330,31 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
         "source_date": source_date,
         "active_date": effective_date,
         "formula_version": formula_version,
-        "formula_allowlist": [SCALPING_SIZING_FORMULA_VERSION, SCALPING_SIZING_ROLLBACK_VERSION],
+        "formula_allowlist": [
+            SCALPING_SIZING_FORMULA_VERSION,
+            SCALPING_SIZING_ROLLBACK_VERSION,
+        ],
         "tier_ratios": tier_ratios,
         "decision": decision,
         "runtime_apply_allowed": True,
         "source_quality_passed": True,
         "canary_quantity_cap_precedence": True,
-        "gross_ev_floor_pct": 0.1,
-        "cost_adjusted_ev_pct": (candidate.get("recommended_values") or {}).get("cost_adjusted_ev_pct"),
+        "minimum_cost_adjusted_ev_pct": POSITION_SIZING_MIN_COST_ADJUSTED_EV_PCT,
+        "cost_adjusted_ev_pct": (candidate.get("recommended_values") or {}).get(
+            "cost_adjusted_ev_pct"
+        ),
         "generated_at": datetime.now().astimezone().isoformat(),
     }
     policy["policy_content_sha256"] = hashlib.sha256(
-        json.dumps(policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        json.dumps(
+            policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
     ).hexdigest()
     POSITION_SIZING_POLICY_DIR.mkdir(parents=True, exist_ok=True)
-    path = POSITION_SIZING_POLICY_DIR / f"position_sizing_dynamic_formula_{source_date}.json"
+    path = (
+        POSITION_SIZING_POLICY_DIR
+        / f"position_sizing_dynamic_formula_{source_date}.json"
+    )
     encoded = json.dumps(policy, ensure_ascii=False, indent=2).encode("utf-8")
     temporary = path.with_suffix(".tmp")
     temporary.write_bytes(encoded)
@@ -1387,7 +1399,9 @@ def _aftermarket_sor_canary_acceptance(events: list[dict[str, Any]]) -> dict[str
         == AFTERMARKET_SOR_CANARY_APPROVAL_ID
     ]
     submitted = [
-        event for event in canary_events if field(event, "actual_order_submitted") is True
+        event
+        for event in canary_events
+        if field(event, "actual_order_submitted") is True
     ]
     failures = [
         event
@@ -1454,10 +1468,8 @@ def _materialize_aftermarket_sor_runtime_policy(
         sizing = json.loads(sizing_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if (
-        sizing.get("schema_version") != "position_sizing_dynamic_formula_policy_v1"
-        or sizing.get("runtime_apply_allowed") is not True
-        or sizing.get("source_quality_passed") is not True
+    if not isinstance(sizing, dict) or not position_sizing_policy_authority_valid(
+        sizing
     ):
         return None
     active_date = _next_krx_trading_date(source_date)
@@ -1476,12 +1488,16 @@ def _materialize_aftermarket_sor_runtime_policy(
         "market_order_remap": {"3": "6"},
         "quantity_policy_owner": "position_sizing_dynamic_formula",
         "position_sizing_policy_path": str(sizing_path),
-        "position_sizing_policy_sha256": hashlib.sha256(sizing_path.read_bytes()).hexdigest(),
+        "position_sizing_policy_sha256": hashlib.sha256(
+            sizing_path.read_bytes()
+        ).hexdigest(),
         "existing_cap_unchanged": True,
         "existing_cooldown_unchanged": True,
         "hard_guards_preserved": True,
         "source_calibration_path": str(calibration_path),
-        "source_calibration_sha256": hashlib.sha256(calibration_path.read_bytes()).hexdigest(),
+        "source_calibration_sha256": hashlib.sha256(
+            calibration_path.read_bytes()
+        ).hexdigest(),
         "generated_at": datetime.now().astimezone().isoformat(),
     }
     content = json.dumps(
@@ -6155,7 +6171,9 @@ def _completed_economics_route_venue_cohorts(rows: list[dict]) -> dict:
             or row.get("session")
             or "UNKNOWN"
         ).upper()
-        return "KRX_NXT_AFTERMARKET" if value.startswith("KRX_NXT_AFTERMARKET") else value
+        return (
+            "KRX_NXT_AFTERMARKET" if value.startswith("KRX_NXT_AFTERMARKET") else value
+        )
 
     def route(row: dict) -> str:
         value = str(
@@ -6173,12 +6191,21 @@ def _completed_economics_route_venue_cohorts(rows: list[dict]) -> dict:
         status = str(row.get("fill_type") or row.get("order_status") or "").lower()
         requested = _safe_float(row.get("requested_qty"), None)
         filled = _safe_float(row.get("filled_qty"), None)
-        if row.get("full_fill") is True or "full" in status or (
-            requested is not None and filled is not None and requested > 0 and filled == requested
+        if (
+            row.get("full_fill") is True
+            or "full" in status
+            or (
+                requested is not None
+                and filled is not None
+                and requested > 0
+                and filled == requested
+            )
         ):
             return "FULL"
-        if row.get("partial_fill") is True or "partial" in status or (
-            requested is not None and filled is not None and 0 < filled < requested
+        if (
+            row.get("partial_fill") is True
+            or "partial" in status
+            or (requested is not None and filled is not None and 0 < filled < requested)
         ):
             return "PARTIAL"
         return "UNKNOWN"
@@ -6211,11 +6238,15 @@ def _completed_economics_route_venue_cohorts(rows: list[dict]) -> dict:
             "actual_execution_venue": venue,
             "completed_valid_profit": _completed_profit_summary(cohort_rows),
             "fill_state_counts": dict(Counter(fill_state(row) for row in cohort_rows)),
-            "cost_status_counts": dict(Counter(cost_status(row) for row in cohort_rows)),
-            "cost_null_count": sum(cost_status(row) == "cost_null" for row in cohort_rows),
-            "cost_adjusted_ev_pct": round(_avg(cost_adjusted), 4)
-            if cost_adjusted
-            else None,
+            "cost_status_counts": dict(
+                Counter(cost_status(row) for row in cohort_rows)
+            ),
+            "cost_null_count": sum(
+                cost_status(row) == "cost_null" for row in cohort_rows
+            ),
+            "cost_adjusted_ev_pct": (
+                round(_avg(cost_adjusted), 4) if cost_adjusted else None
+            ),
         }
     return {
         "profit_basis": "COMPLETED + valid profit_rate only",
@@ -7086,7 +7117,9 @@ def _build_candidate_metrics(
         "sim_probe_broker_order_forbidden_false_count": sim_broker_forbidden_false_count,
         "sim_probe_broker_order_forbidden_missing_count": sim_broker_forbidden_missing_count,
         "exact_terminal_join_count": exact_match_count,
-        "exact_terminal_join_identity_counts": dict(sorted(exact_identity_counts.items())),
+        "exact_terminal_join_identity_counts": dict(
+            sorted(exact_identity_counts.items())
+        ),
         "unmatched_real_submit_count": unmatched_real_submit_count,
         "ev_match_strong_count": exact_match_count,
         "ev_match_weak_count": 0,
@@ -7352,7 +7385,7 @@ def _build_position_sizing_dynamic_formula_family(
             "source_quality_gate": "all_required_inputs_present_and_real_sim_probe_split",
             "forbidden_uses": [
                 "sim_probe_single_source_live_apply",
-            "runtime_order_qty_change_without_dated_policy_and_preopen_guard",
+                "runtime_order_qty_change_without_dated_policy_and_preopen_guard",
             ],
         },
         "notes": [
@@ -8201,7 +8234,9 @@ def _entry_price_profile_candidate_grid(
         ]
         profit_values = [
             value
-            for value in (_safe_float(row.get("profit_rate"), None) for row in joined_rows)
+            for value in (
+                _safe_float(row.get("profit_rate"), None) for row in joined_rows
+            )
             if value is not None
         ]
         submitted_count = len(records_for_candidate)
@@ -8225,12 +8260,16 @@ def _entry_price_profile_candidate_grid(
             )
         )
         metrics = {
-            "cancel_rate": round(cancel_count * 100.0 / submitted_count, 4)
-            if submitted_count
-            else None,
-            "late_fill_rate": round(late_count * 100.0 / submitted_count, 4)
-            if submitted_count
-            else None,
+            "cancel_rate": (
+                round(cancel_count * 100.0 / submitted_count, 4)
+                if submitted_count
+                else None
+            ),
+            "late_fill_rate": (
+                round(late_count * 100.0 / submitted_count, 4)
+                if submitted_count
+                else None
+            ),
             "missed_upside": 0.0 if joined_count else None,
             "source_quality_adjusted_ev_pct": (
                 round(sum(profit_values) / joined_count, 4) if joined_count else None
@@ -8749,12 +8788,10 @@ def _build_dynamic_entry_price_resolver_family(
             or 10
         ),
         "normal_favorable_defensive_bps": int(
-            getattr(TRADING_RULES, "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", 15)
-            or 15
+            getattr(TRADING_RULES, "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", 15) or 15
         ),
         "normal_weak_defensive_bps": int(
-            getattr(TRADING_RULES, "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", 40)
-            or 40
+            getattr(TRADING_RULES, "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", 40) or 40
         ),
         "max_below_bid_bps": int(
             getattr(
@@ -9291,9 +9328,11 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
                 else (
                     "exact_child_shape_bounded_seed"
                     if child_shape_positive_ev_seed_candidate_count > 0
-                    else "bounded_exploration_seed_only"
-                    if exploration_seed_allowed
-                    else "none"
+                    else (
+                        "bounded_exploration_seed_only"
+                        if exploration_seed_allowed
+                        else "none"
+                    )
                 )
             ),
             "runtime_apply_scope": recommended_policy.get("runtime_apply_scope") or [],
@@ -9558,7 +9597,7 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             "scale_in_split_order_plan only decomposes AVG_DOWN scale-in orders and never increases requested_qty.",
             "PYRAMID is excluded because it is not avg-down averaging.",
             "Event rows are deduplicated to qty>=2 exact AVG_DOWN attempts; qty=1 and identity-incomplete rows cannot satisfy runtime gates.",
-            "A new runtime policy requires rolling exact real outcome and MFE/MAE floors, >=80% price join, positive cost-adjusted EV, >=70% modeled fill participation, and downside p10 >= -0.30%.",
+            "A new runtime policy requires rolling exact real outcome and MFE/MAE floors, >=80% price join, >=0.10% cost-adjusted EV, >=70% modeled fill participation, and downside p10 >= -0.30%.",
             "A missing/low-sample daily artifact may carry a still-fresh previously validated policy; source-quality or negative-economic evidence does not carry forward.",
             "runtime apply is next PREOPEN env/policy-file only; intraday mutation is forbidden.",
         ],
@@ -14728,9 +14767,7 @@ def _build_calibration_candidates(
                 )
                 or 0,
                 "child_shape_positive_ev_seed_candidate_count": _safe_int(
-                    family_sample.get(
-                        "child_shape_positive_ev_seed_candidate_count"
-                    ),
+                    family_sample.get("child_shape_positive_ev_seed_candidate_count"),
                     0,
                 )
                 or 0,
@@ -15692,8 +15729,16 @@ def _runtime_apply_candidate_for_state(
 
 def _position_sizing_runtime_selection(candidate: dict) -> tuple[dict | None, str]:
     """Choose the best already-allowlisted sizing profile from exact outcomes."""
-    source = candidate.get("source_metrics") if isinstance(candidate.get("source_metrics"), dict) else {}
-    grid = source.get("candidate_grid") if isinstance(source.get("candidate_grid"), list) else []
+    source = (
+        candidate.get("source_metrics")
+        if isinstance(candidate.get("source_metrics"), dict)
+        else {}
+    )
+    grid = (
+        source.get("candidate_grid")
+        if isinstance(source.get("candidate_grid"), list)
+        else []
+    )
     if source.get("source_quality_passed") is not True:
         return None, "source_quality_not_passed"
     eligible: list[dict] = []
@@ -15709,10 +15754,15 @@ def _position_sizing_runtime_selection(candidate: dict) -> tuple[dict | None, st
         exact = _safe_int(item.get("exact_terminal_join_count"), 0) or 0
         gross = _safe_float(item.get("gross_notional_weighted_ev_pct"), None)
         net = _safe_float(item.get("notional_weighted_ev_pct"), None)
-        if exact >= 30 and gross is not None and gross >= 0.1 and net is not None and net > 0.0:
+        if (
+            exact >= 30
+            and gross is not None
+            and net is not None
+            and net >= POSITION_SIZING_MIN_COST_ADJUSTED_EV_PCT
+        ):
             eligible.append(item)
     if not eligible:
-        return None, "no_exact_positive_cost_adjusted_candidate"
+        return None, "no_exact_minimum_cost_adjusted_ev_candidate"
     selected = max(
         eligible,
         key=lambda item: (
@@ -15724,8 +15774,15 @@ def _position_sizing_runtime_selection(candidate: dict) -> tuple[dict | None, st
     )
     formula = str(selected.get("formula_version") or "")
     unmatched = _safe_int(selected.get("unmatched_real_submit_count"), 0) or 0
-    decision = "retain_current" if formula == SCALPING_SIZING_FORMULA_VERSION else "adjust_down_flat10"
-    return selected, f"{decision}_exact_cost_adjusted_candidate_unmatched_preserved:{unmatched}"
+    decision = (
+        "retain_current"
+        if formula == SCALPING_SIZING_FORMULA_VERSION
+        else "adjust_down_flat10"
+    )
+    return (
+        selected,
+        f"{decision}_exact_cost_adjusted_candidate_unmatched_preserved:{unmatched}",
+    )
 
 
 def _apply_mode_for_candidate_state(
@@ -15796,7 +15853,11 @@ def _refresh_candidate_from_primary_window(
         sample_ready=primary_ready,
     )
     if family == "position_sizing_dynamic_formula":
-        family_sample = family_like.get("sample") if isinstance(family_like.get("sample"), dict) else {}
+        family_sample = (
+            family_like.get("sample")
+            if isinstance(family_like.get("sample"), dict)
+            else {}
+        )
         source_metrics = {
             **source_metrics,
             "candidate_grid": family_like.get("candidate_grid") or [],
@@ -15834,9 +15895,16 @@ def _refresh_candidate_from_primary_window(
     )
     current = current if isinstance(current, dict) else {}
     recommended = recommended if isinstance(recommended, dict) else {}
-    if family == "position_sizing_dynamic_formula" and state in {"retain_current", "adjust_down"}:
-        selected, _ = _position_sizing_runtime_selection({"source_metrics": source_metrics})
-        selected_formula = str(selected.get("formula_version") or "") if selected else ""
+    if family == "position_sizing_dynamic_formula" and state in {
+        "retain_current",
+        "adjust_down",
+    }:
+        selected, _ = _position_sizing_runtime_selection(
+            {"source_metrics": source_metrics}
+        )
+        selected_formula = (
+            str(selected.get("formula_version") or "") if selected else ""
+        )
         recommended = {
             "formula_version": selected_formula,
             "decision": (
@@ -15844,8 +15912,12 @@ def _refresh_candidate_from_primary_window(
                 if selected_formula == SCALPING_SIZING_FORMULA_VERSION
                 else "adjust_down_flat10"
             ),
-            "gross_notional_weighted_ev_pct": selected.get("gross_notional_weighted_ev_pct") if selected else None,
-            "cost_adjusted_ev_pct": selected.get("notional_weighted_ev_pct") if selected else None,
+            "gross_notional_weighted_ev_pct": (
+                selected.get("gross_notional_weighted_ev_pct") if selected else None
+            ),
+            "cost_adjusted_ev_pct": (
+                selected.get("notional_weighted_ev_pct") if selected else None
+            ),
         }
     if family == "score65_74_recovery_probe":
         current = dict(candidate.get("current_values") or {})

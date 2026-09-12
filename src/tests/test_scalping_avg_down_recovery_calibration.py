@@ -452,6 +452,22 @@ def test_zero_increment_no_add_tightening_can_improve_negative_current(
     assert selected["candidate_minus_current_ev_pct"] > 0
 
 
+def test_add_candidate_requires_minimum_cost_adjusted_ev():
+    item = {
+        "candidate_value": 80.0,
+        "removed_add_count": 0,
+        "candidate_only_add_count": 1,
+        "source_quality_adjusted_ev_pct": 0.09,
+        "candidate_minus_current_ev_pct": 0.20,
+        "candidate_incremental_net_profit_krw": 100,
+        "candidate_minus_current_net_profit_krw": 100,
+    }
+
+    assert mod._positive_economic_improvement(item, current=85.0) is False
+    item["source_quality_adjusted_ev_pct"] = 0.10
+    assert mod._positive_economic_improvement(item, current=85.0) is True
+
+
 @pytest.mark.parametrize("missing", ["quantity", "price_permission", "downstream"])
 def test_missing_route_coverage_is_not_no_effect(tmp_path, monkeypatch, missing):
     path = _paired_ten(tmp_path, monkeypatch)

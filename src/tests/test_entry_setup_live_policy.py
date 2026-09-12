@@ -123,12 +123,8 @@ def test_dual_cohort_is_source_registered_but_cannot_be_live(
     _configure_paths(monkeypatch, tmp_path)
     cohort = policy.DUAL_OBSERVE_ONLY_COHORT
     detailed = _valid_detailed_report()
-    detailed["cohort_filter"] = dict(
-        zip(("effective_venue", "session_bucket"), cohort)
-    )
-    detailed["cumulative_learning"]["cohort_scope"].update(
-        detailed["cohort_filter"]
-    )
+    detailed["cohort_filter"] = dict(zip(("effective_venue", "session_bucket"), cohort))
+    detailed["cumulative_learning"]["cohort_scope"].update(detailed["cohort_filter"])
     batch = _valid_batch_report()
     batch["cohorts"][0].update(detailed["cohort_filter"])
     detailed_path = tmp_path / "dual-detailed.json"
@@ -146,9 +142,7 @@ def test_dual_cohort_is_source_registered_but_cannot_be_live(
     assert candidate["allowed_runtime_apply"] is False
     assert candidate["operator_approval_required"] is True
     assert candidate["decision_authority"] == "observe_only_no_live_approval"
-    assert "dual_cohort_observe_only_no_live_approval" in candidate[
-        "blocking_reasons"
-    ]
+    assert "dual_cohort_observe_only_no_live_approval" in candidate["blocking_reasons"]
     resolved = policy.resolve_live_prompt_policy(
         configured_prompt_version=(
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
@@ -249,7 +243,7 @@ def _valid_detailed_report():
                 "verified_pair_count": 12,
                 "candidate_exposure_count": 12,
                 "candidate_unique_symbol_count": 4,
-                "candidate_net_ev_pct": 0.05,
+                "candidate_net_ev_pct": 0.15,
                 "paired_net_decision_delta_pct": 0.01,
                 "actual_fill_proven": False,
                 "additional_cost_subtracted_here": False,
@@ -949,6 +943,31 @@ def test_net_positive_candidate_does_not_require_every_gross_pattern_to_improve(
     )
     assert candidate["runtime_effect"] is False
     assert candidate["actual_order_submitted"] is False
+
+
+def test_performance_promotion_requires_minimum_cost_adjusted_ev(monkeypatch, tmp_path):
+    _configure_paths(monkeypatch, tmp_path)
+    detailed = _valid_detailed_report()
+    detailed["cumulative_learning"]["full_cost_economics"][
+        "candidate_net_ev_pct"
+    ] = 0.09
+    batch = _valid_batch_report()
+    path = tmp_path / "underfloor-detailed.json"
+    policy._atomic_write_json(path, detailed)
+
+    candidate = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        detailed_report=detailed,
+        detailed_path=path,
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+
+    assert candidate["status"] != "live_auto_apply_ready"
+    assert "cumulative_full_cost_economics_not_passed" in (
+        candidate["performance_promotion_blocking_reasons"]
+    )
+    assert candidate["promotion_metrics"]["minimum_cost_adjusted_ev_pct"] == 0.1
 
 
 def test_malformed_candidate_source_paths_fail_closed_without_exception(
