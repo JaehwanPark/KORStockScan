@@ -975,7 +975,7 @@ def test_winner_recovery_real_execution_requires_positive_fee_aware_ev_and_floor
             "closed": True,
             "fill_qty": 1,
             "fill_notional_krw": 100_000,
-            "scale_in_leg_net_pnl_proxy_krw": 400,
+            "scale_in_leg_net_pnl_proxy_krw": 100,
             "source_quality_valid": True,
             "entry_effective_venue": "KRX",
             "market_session_bucket": "krx_regular",
@@ -999,13 +999,15 @@ def test_winner_recovery_real_execution_requires_positive_fee_aware_ev_and_floor
 
     assert observation["state"] == "first_planned_residual_leg_candidate_ready"
     assert observation["source_quality_valid_closed_count"] == 20
-    assert observation["source_quality_adjusted_ev_pct"] == 0.4
-    assert observation["scale_in_leg_net_pnl_proxy_krw_sum"] == 8000
+    assert observation["source_quality_adjusted_ev_pct"] == 0.1
+    assert observation["promotion_ev_floor_pct"] == 0.1
+    assert observation["promotion_ev_floor_met"] is True
+    assert observation["scale_in_leg_net_pnl_proxy_krw_sum"] == 2000
     assert observation["diagnostic_win_rate"] == 1.0
     assert observation["recommended_next_qty_stage"] == (
         "first_planned_residual_leg_from_current_position_sizing_owner"
     )
-    assert observation["operator_action_required"] is True
+    assert observation["operator_action_required"] is False
     assert observation["allowed_runtime_apply"] is False
 
 
@@ -1048,6 +1050,43 @@ def test_winner_recovery_real_execution_holds_below_floor_and_rejects_bad_source
     assert observation["source_quality_rejected_count"] == 1
     assert observation["operator_action_required"] is False
     assert observation["allowed_runtime_apply"] is False
+
+
+def test_winner_recovery_real_execution_requires_point_one_pct_ev_for_promotion():
+    row = {
+        "scale_in_outcome_cohort": "winner_recovery",
+        "closed": True,
+        "fill_qty": 1,
+        "fill_notional_krw": 100_000,
+        "scale_in_leg_net_pnl_proxy_krw": 99,
+        "source_quality_valid": True,
+        "entry_effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "decision_authority": "real_scale_in_execution_outcome_observation_only",
+        "forbidden_uses": ["runtime_threshold_apply"],
+    }
+    observation = mod._winner_recovery_real_execution_observation(
+        [
+            {
+                "real_scale_in_performance_metric_contract": {"schema_version": 1},
+                "real_scale_in_performance_rows": [
+                    {**row, "record_id": str(index)} for index in range(20)
+                ],
+            }
+        ]
+    )
+
+    assert observation["source_quality_valid_closed_count"] == 20
+    assert observation["source_quality_adjusted_ev_pct"] == 0.099
+    assert observation["promotion_ev_floor_met"] is False
+    assert observation["state"] == "promotion_ev_floor_not_met"
+    assert observation["recommended_next_qty_stage"] == (
+        "retain_one_share_winner_recovery_canary"
+    )
 
 
 def test_pyramid_quality_calibration_consumes_post_probe_real_outcomes_source_only(

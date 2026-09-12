@@ -18915,6 +18915,25 @@ def test_post_probe_winner_recovery_selects_one_share_first_leg(monkeypatch):
     assert logs[-1][1]["actual_order_submitted"] is False
     assert logs[-1][1]["primary_decision_metric"] == "notional_weighted_ev_pct"
 
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_KRX_ENABLED",
+        "true",
+    )
+    promoted = state_handlers._evaluate_post_probe_winner_recovery_scale_in(
+        dict(stock),
+        "123456",
+        now_ts=base_ts,
+        profit_rate=0.25,
+        peak_profit=0.30,
+        current_ai_score=68,
+        held_sec=15,
+        pyramid_probe=pyramid_probe,
+    )
+    assert promoted["action"]["post_probe_winner_recovery_qty_cap"] == 0
+    assert promoted["action"]["post_probe_winner_recovery_quantity_mode"] == (
+        "central_sizing_first_residual"
+    )
+
 
 def test_winner_recovery_ai_receipt_fields_freeze_pending_decision_provenance():
     stock = {
@@ -19974,6 +19993,43 @@ def test_winner_recovery_first_leg_stage_cap_limits_dynamic_sizing(monkeypatch):
     assert details["qty"] == 1
     assert details["scale_in_budget_qty"] == 1
     assert "stage_qty_cap" in details["binding_caps"]
+    assert details["position_sizing_policy_status"] != "policy_loaded"
+
+
+def test_winner_recovery_central_sizing_requires_loaded_policy():
+    action = {
+        "post_probe_winner_recovery_quantity_mode": "central_sizing_first_residual"
+    }
+    missing_policy = state_handlers._apply_post_probe_winner_recovery_sizing_guard(
+        {
+            "qty": 8,
+            "effective_qty": 8,
+            "binding_caps": "-",
+            "position_sizing_policy_status": "policy_sha256_mismatch",
+        },
+        action,
+    )
+    assert missing_policy["qty"] == 1
+    assert missing_policy["effective_qty"] == 1
+    assert missing_policy["post_probe_winner_recovery_qty_cap"] == 1
+    assert missing_policy["post_probe_winner_recovery_quantity_mode"] == (
+        "one_share_policy_validation_fallback"
+    )
+
+    loaded_policy = state_handlers._apply_post_probe_winner_recovery_sizing_guard(
+        {
+            "qty": 8,
+            "effective_qty": 8,
+            "binding_caps": "max_position_qty_cap",
+            "position_sizing_policy_status": "policy_loaded",
+        },
+        action,
+    )
+    assert loaded_policy["qty"] == 8
+    assert loaded_policy["effective_qty"] == 8
+    assert loaded_policy["post_probe_winner_recovery_quantity_mode"] == (
+        "central_sizing_first_residual"
+    )
 
 
 def test_winner_recovery_leg_is_marked_only_after_real_submit_state(monkeypatch):
@@ -19986,6 +20042,7 @@ def test_winner_recovery_leg_is_marked_only_after_real_submit_state(monkeypatch)
     def submitted_execute(**kwargs):
         kwargs["stock"]["pending_add_reason"] = action["reason"]
         kwargs["stock"]["pending_add_requested_at"] = time.time()
+        kwargs["action"]["post_probe_winner_recovery_submitted_qty"] = 4
         return {"ord_no": "P1"}
 
     monkeypatch.setattr(state_handlers, "execute_scale_in_order", submitted_execute)
@@ -19999,7 +20056,7 @@ def test_winner_recovery_leg_is_marked_only_after_real_submit_state(monkeypatch)
 
     assert result["ord_no"] == "P1"
     assert submitted_stock["post_probe_winner_recovery_leg_submitted"] is True
-    assert submitted_stock["post_probe_winner_recovery_leg_qty"] == 1
+    assert submitted_stock["post_probe_winner_recovery_leg_qty"] == 4
 
     blocked_stock = {
         "pending_add_reason": "post_probe_winner_recovery_first_leg",

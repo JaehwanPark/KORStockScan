@@ -138,6 +138,8 @@ POST_PROBE_WINNER_RECOVERY_FAMILY = "post_probe_winner_recovery"
 POST_PROBE_WINNER_RECOVERY_STAGE = "post_probe_recovery"
 POST_PROBE_WINNER_RECOVERY_READY_STATE = "bounded_one_share_canary_evidence_ready"
 POST_PROBE_WINNER_RECOVERY_VENUES = ("KRX", "NXT", "PREMARKET_KRX_LIKE")
+POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR = 20
+POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT = 0.1
 RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provenance"
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
@@ -314,6 +316,15 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALPING_PYRAMID_MIN_TICK_ACCEL": "min_tick_accel",
     "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS": "max_micro_vwap_bps",
     "SCALPING_PYRAMID_MAX_SPREAD_BPS": "max_spread_bps",
+    "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_KRX_ENABLED": (
+        "central_sizing_krx_enabled"
+    ),
+    "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_NXT_ENABLED": (
+        "central_sizing_nxt_enabled"
+    ),
+    "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_PREMARKET_ENABLED": (
+        "central_sizing_premarket_enabled"
+    ),
     "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED": "strong_continuation_enabled",
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT": "strong_continuation_min_profit_pct",
     "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT": "strong_continuation_max_drawdown_pct",
@@ -1523,6 +1534,7 @@ def _winner_recovery_auto_apply_candidate(
         if isinstance(row, dict) and row.get("effective_venue")
     }
     eligible_venues: list[str] = []
+    central_sizing_venues: list[str] = []
     blocked_venues: dict[str, list[str]] = {}
     venue_evidence: dict[str, dict[str, Any]] = {}
     for venue in POST_PROBE_WINNER_RECOVERY_VENUES:
@@ -1553,12 +1565,24 @@ def _winner_recovery_auto_apply_candidate(
         )
         real_floor = _int_or_default(real_observation.get("sample_floor"), 0) or 0
         real_ev = _bridge_candidate_float(real.get("source_quality_adjusted_ev_pct"))
+        real_promotion_ev_floor_met = bool(
+            real.get("promotion_ev_floor_met") is True
+            and _bridge_candidate_float(real.get("promotion_ev_floor_pct"))
+            == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
+        )
         if (
             real_floor > 0
             and real_count >= real_floor
             and (real_ev is None or real_ev <= 0)
         ):
             blockers.append("real_execution_ev_non_positive_rollback")
+        central_sizing_ready = bool(
+            real_floor == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
+            and real_count >= real_floor
+            and real_ev is not None
+            and real_ev >= POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
+            and real_promotion_ev_floor_met
+        )
 
         venue_evidence[venue] = {
             "counterfactual_sample_count": sample_count,
@@ -1567,17 +1591,31 @@ def _winner_recovery_auto_apply_candidate(
             "counterfactual_notional_weighted_ev_pct": counterfactual_ev,
             "real_execution_source_quality_valid_closed_count": real_count,
             "real_execution_sample_floor": real_floor,
+            "real_execution_sample_floor_contract_valid": bool(
+                real_floor
+                == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
+            ),
             "real_execution_source_quality_adjusted_ev_pct": real_ev,
+            "central_sizing_promotion_ev_floor_pct": (
+                POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
+            ),
+            "real_execution_promotion_ev_floor_contract_valid": (
+                real_promotion_ev_floor_met
+            ),
+            "central_sizing_promotion_ready": central_sizing_ready,
             "blockers": blockers,
         }
         if blockers:
             blocked_venues[venue] = blockers
         else:
             eligible_venues.append(venue)
+            if central_sizing_ready:
+                central_sizing_venues.append(venue)
 
     status.update(
         eligible_venues=eligible_venues,
         blocked_venues=blocked_venues,
+        central_sizing_venues=central_sizing_venues,
         venue_evidence=venue_evidence,
     )
     if not eligible_venues:
@@ -1591,6 +1629,11 @@ def _winner_recovery_auto_apply_candidate(
         "krx_enabled": "KRX" in eligible_venues,
         "nxt_enabled": "NXT" in eligible_venues,
         "premarket_enabled": "PREMARKET_KRX_LIKE" in eligible_venues,
+        "central_sizing_krx_enabled": "KRX" in central_sizing_venues,
+        "central_sizing_nxt_enabled": "NXT" in central_sizing_venues,
+        "central_sizing_premarket_enabled": (
+            "PREMARKET_KRX_LIKE" in central_sizing_venues
+        ),
     }
     candidate = {
         "family": POST_PROBE_WINNER_RECOVERY_FAMILY,
@@ -1599,19 +1642,23 @@ def _winner_recovery_auto_apply_candidate(
         "family_type": "bounded_tunable_post_probe_one_share_recovery",
         "calibration_state": "adjust_up",
         "calibration_reason": (
-            "positive_exact_blocker_ev_and_venue_sample_floor_auto_apply"
+            "positive_exact_blocker_ev_with_one_share_or_central_sizing_"
+            "venue_promotion"
         ),
-        "threshold_version": (f"{POST_PROBE_WINNER_RECOVERY_FAMILY}:{target_date}:v1"),
+        "threshold_version": (f"{POST_PROBE_WINNER_RECOVERY_FAMILY}:{target_date}:v2"),
         "allowed_runtime_apply": True,
         "safety_revert_required": False,
         "post_apply_attribution_required": True,
         "operator_action_required": False,
         "operator_authorization_provenance": (
-            "explicit_operator_direction_2026-08-21_"
-            "post_probe_winner_recovery_auto_apply"
+            "explicit_operator_direction_2026-09-13_"
+            "winner_recovery_central_sizing_auto_promotion"
         ),
         "initial_real_qty_cap": 1,
-        "automatic_quantity_increase_above_one_share_allowed": False,
+        "automatic_quantity_increase_above_one_share_allowed": bool(
+            central_sizing_venues
+        ),
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
         "sample_count": sum(
             int(venue_evidence[venue]["counterfactual_sample_count"])
             for venue in eligible_venues
@@ -1623,6 +1670,9 @@ def _winner_recovery_auto_apply_candidate(
             "krx_enabled": False,
             "nxt_enabled": False,
             "premarket_enabled": False,
+            "central_sizing_krx_enabled": False,
+            "central_sizing_nxt_enabled": False,
+            "central_sizing_premarket_enabled": False,
         },
         "recommended_values": recommended_values,
         "target_env_keys": [
@@ -1631,6 +1681,9 @@ def _winner_recovery_auto_apply_candidate(
             "SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED",
             "SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED",
             "SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED",
+            "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_KRX_ENABLED",
+            "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_NXT_ENABLED",
+            "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_PREMARKET_ENABLED",
         ],
         "source_quality_gate": "pass",
         "source_quality_status": "pass",
@@ -1638,6 +1691,7 @@ def _winner_recovery_auto_apply_candidate(
             "source_quality_pass": True,
             "provenance_present": True,
             "eligible_venues": eligible_venues,
+            "central_sizing_venues": central_sizing_venues,
             "blocked_venues": blocked_venues,
             "venue_evidence": venue_evidence,
         },
@@ -1649,8 +1703,11 @@ def _winner_recovery_auto_apply_candidate(
             "preopen_selection_state": "pending_not_applied",
             "manipulation_point": POST_PROBE_WINNER_RECOVERY_STAGE,
             "rollback_guard": (
-                "source_quality_block_or_venue_ev_non_positive_after_real_floor"
+                "source_quality_block_or_venue_ev_below_0_1_returns_to_one_share_"
+                "and_non_positive_ev_disables_venue"
             ),
+            "quantity_policy_owner": "position_sizing_dynamic_formula",
+            "quantity_policy_missing_or_invalid_fallback": "one_share_canary",
         },
         "runtime_effect": False,
         "actual_order_submitted": False,
@@ -1664,7 +1721,7 @@ def _winner_recovery_auto_apply_candidate(
         "forbidden_uses": [
             "intraday_runtime_apply",
             "full_residual_submit",
-            "automatic_quantity_increase_above_one_share",
+            "quantity_increase_without_valid_central_sizing_policy",
             "cross_venue_promotion",
             "hard_safety_relaxation",
             "broker_guard_bypass",
@@ -5146,6 +5203,10 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED",
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED",
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_KRX_ENABLED",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_NXT_ENABLED",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+        "CENTRAL_SIZING_PREMARKET_ENABLED",
     ],
     "scalp_sim_candidate_window_expansion": [
         "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_EXPANSION_ENABLED",

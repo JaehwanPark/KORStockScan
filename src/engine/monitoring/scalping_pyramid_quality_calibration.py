@@ -34,6 +34,7 @@ CUMULATIVE_LEARNING_SAMPLE_FLOOR = 1
 POST_PROBE_RUNTIME_PROMOTION_SAMPLE_FLOOR = 20
 WINNER_RECOVERY_COUNTERFACTUAL_SAMPLE_FLOOR = 10
 WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR = 20
+WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT = 0.1
 WINNER_RECOVERY_EXACT_BLOCKER = (
     "rising_missed_scout_pyramid_bridge_blocked:profit_not_enough"
 )
@@ -44,6 +45,15 @@ WINNER_RECOVERY_RUNTIME_ENV_KEYS = {
     "NXT": "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED",
     "PREMARKET_KRX_LIKE": (
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED"
+    ),
+    "central_sizing_KRX": (
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_KRX_ENABLED"
+    ),
+    "central_sizing_NXT": (
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_NXT_ENABLED"
+    ),
+    "central_sizing_PREMARKET_KRX_LIKE": (
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_PREMARKET_ENABLED"
     ),
 }
 CLOSED_LABELS = {
@@ -804,13 +814,19 @@ def _winner_recovery_real_execution_observation(
     valid_net_pnl = sum(
         _safe_float(row.get("scale_in_leg_net_pnl_proxy_krw"), 0.0) for row in rows
     )
+    raw_source_quality_adjusted_ev_pct = (
+        valid_net_pnl / valid_notional * 100.0 if valid_notional > 0 else None
+    )
     source_quality_adjusted_ev_pct = (
-        round(valid_net_pnl / valid_notional * 100.0, 4) if valid_notional > 0 else None
+        round(raw_source_quality_adjusted_ev_pct, 4)
+        if raw_source_quality_adjusted_ev_pct is not None
+        else None
     )
     sample_floor_met = len(rows) >= WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
-    positive_ev = bool(
-        source_quality_adjusted_ev_pct is not None
-        and source_quality_adjusted_ev_pct > 0
+    promotion_ev_floor_met = bool(
+        raw_source_quality_adjusted_ev_pct is not None
+        and raw_source_quality_adjusted_ev_pct
+        >= WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
         and valid_net_pnl > 0
     )
     state = (
@@ -821,8 +837,8 @@ def _winner_recovery_real_execution_observation(
             if not sample_floor_met
             else (
                 "first_planned_residual_leg_candidate_ready"
-                if positive_ev
-                else "non_positive_ev_hold"
+                if promotion_ev_floor_met
+                else "promotion_ev_floor_not_met"
             )
         )
     )
@@ -850,6 +866,14 @@ def _winner_recovery_real_execution_observation(
                         if bucket_notional > 0
                         else None
                     ),
+                    "promotion_ev_floor_pct": (
+                        WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
+                    ),
+                    "promotion_ev_floor_met": bool(
+                        bucket_notional > 0
+                        and bucket_net_pnl / bucket_notional * 100.0
+                        >= WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
+                    ),
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
                 }
@@ -866,6 +890,8 @@ def _winner_recovery_real_execution_observation(
         "provenance_rejected_count": provenance_rejected_count,
         "sample_floor": WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR,
         "sample_floor_met": sample_floor_met,
+        "promotion_ev_floor_pct": WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT,
+        "promotion_ev_floor_met": promotion_ev_floor_met,
         "scale_in_leg_net_pnl_proxy_krw_sum": (
             round(valid_net_pnl, 4) if rows else None
         ),
@@ -888,11 +914,9 @@ def _winner_recovery_real_execution_observation(
             if state == "first_planned_residual_leg_candidate_ready"
             else "retain_one_share_winner_recovery_canary"
         ),
-        "operator_action_required": state
-        == "first_planned_residual_leg_candidate_ready",
+        "operator_action_required": False,
         "standalone_quantity_increase_allowed": False,
         "remaining_real_authority_requirements": [
-            "explicit_operator_approval",
             "current_position_sizing_owner_leg_resolution",
             "dated_venue_cohort_runtime_selection",
             "post_apply_attribution_and_rollback",
@@ -910,7 +934,8 @@ def _winner_recovery_real_execution_observation(
             "rolling_clean_baseline_winner_recovery_scale_in_to_terminal_sell"
         ),
         "sample_floor_policy": (
-            "source_quality_valid_closed_one_share_winner_recovery_rows_ge_20"
+            "source_quality_valid_closed_one_share_winner_recovery_rows_ge_20_"
+            "and_cost_adjusted_ev_pct_ge_0_1"
         ),
         "primary_decision_metric": "source_quality_adjusted_ev_pct",
         "source_quality_gate": (
@@ -918,7 +943,7 @@ def _winner_recovery_real_execution_observation(
             "with_explicit_entry_venue_session_and_one_share_cap"
         ),
         "forbidden_uses": FORBIDDEN_USES
-        + ["automatic_quantity_increase", "full_residual_submit"],
+        + ["standalone_quantity_increase", "full_residual_submit"],
     }
 
 

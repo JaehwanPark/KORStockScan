@@ -3615,6 +3615,9 @@ def test_run_bot_winner_recovery_is_reset_and_not_auto_renewed():
         "KRX_ENABLED",
         "NXT_ENABLED",
         "PREMARKET_ENABLED",
+        "CENTRAL_SIZING_KRX_ENABLED",
+        "CENTRAL_SIZING_NXT_ENABLED",
+        "CENTRAL_SIZING_PREMARKET_ENABLED",
     ):
         assert (
             f"unset KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_{suffix}"

@@ -944,9 +944,17 @@ def test_post_probe_winner_recovery_auto_candidate_emits_dated_venue_env():
             ],
         },
         "winner_recovery_real_execution_observation": {
-            "state": "observe_one_share_canary",
+            "state": "first_planned_residual_leg_candidate_ready",
             "sample_floor": 20,
-            "by_entry_effective_venue": [],
+            "by_entry_effective_venue": [
+                {
+                    "entry_effective_venue": "KRX",
+                    "source_quality_valid_closed_count": 20,
+                    "source_quality_adjusted_ev_pct": 0.1,
+                    "promotion_ev_floor_pct": 0.1,
+                    "promotion_ev_floor_met": True,
+                }
+            ],
         },
     }
 
@@ -959,9 +967,10 @@ def test_post_probe_winner_recovery_auto_candidate_emits_dated_venue_env():
     assert status["eligible_venues"] == ["KRX"]
     assert candidate["operator_action_required"] is False
     assert candidate["initial_real_qty_cap"] == 1
-    assert candidate["automatic_quantity_increase_above_one_share_allowed"] is False
+    assert candidate["automatic_quantity_increase_above_one_share_allowed"] is True
+    assert status["central_sizing_venues"] == ["KRX"]
     assert candidate["operator_authorization_provenance"].startswith(
-        "explicit_operator_direction_2026-08-21"
+        "explicit_operator_direction_2026-09-13"
     )
     selected, decisions, env = mod._select_auto_apply_candidates(
         [candidate],
@@ -979,7 +988,57 @@ def test_post_probe_winner_recovery_auto_candidate_emits_dated_venue_env():
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED": "true",
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED": "false",
         "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED": "false",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+        "CENTRAL_SIZING_KRX_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+        "CENTRAL_SIZING_NXT_ENABLED": "false",
+        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+        "CENTRAL_SIZING_PREMARKET_ENABLED": "false",
     }
+
+
+def test_post_probe_winner_recovery_retains_one_share_below_promotion_ev_floor():
+    payload = {
+        "winner_recovery_bounded_canary_observation": {
+            "state": "bounded_one_share_canary_evidence_ready",
+            "sample_floor": 10,
+            "by_effective_venue": [
+                {
+                    "effective_venue": "KRX",
+                    "state": "bounded_one_share_canary_evidence_ready",
+                    "sample_count": 20,
+                    "ev_eligible_sample_count": 20,
+                    "sample_floor": 10,
+                    "sample_floor_met": True,
+                    "notional_weighted_ev_pct": 0.2,
+                }
+            ],
+        },
+        "winner_recovery_real_execution_observation": {
+            "state": "promotion_ev_floor_not_met",
+            "sample_floor": 20,
+            "by_entry_effective_venue": [
+                {
+                    "entry_effective_venue": "KRX",
+                    "source_quality_valid_closed_count": 20,
+                    "source_quality_adjusted_ev_pct": 0.0999,
+                    "promotion_ev_floor_pct": 0.1,
+                    "promotion_ev_floor_met": False,
+                }
+            ],
+        },
+    }
+
+    candidate, status = mod._winner_recovery_auto_apply_candidate(
+        payload,
+        target_date="2026-08-24",
+    )
+
+    assert candidate is not None
+    assert status["eligible_venues"] == ["KRX"]
+    assert status["central_sizing_venues"] == []
+    assert candidate["automatic_quantity_increase_above_one_share_allowed"] is False
+    assert candidate["recommended_values"]["central_sizing_krx_enabled"] is False
 
 
 def test_post_probe_winner_recovery_auto_candidate_rolls_back_non_positive_real_ev():

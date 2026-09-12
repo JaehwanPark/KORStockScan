@@ -26711,15 +26711,28 @@ def _post_probe_winner_recovery_runtime_config(
     if raw_venue.startswith("PREMARKET_KRX_LIKE"):
         venue = "PREMARKET_KRX_LIKE"
         cohort_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED"
+        central_sizing_key = (
+            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+            "CENTRAL_SIZING_PREMARKET_ENABLED"
+        )
     elif raw_venue == "NXT" or raw_venue.startswith("NXT_"):
         venue = "NXT"
         cohort_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED"
+        central_sizing_key = (
+            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+            "CENTRAL_SIZING_NXT_ENABLED"
+        )
     elif raw_venue == "KRX" or raw_venue.startswith("KRX_"):
         venue = "KRX"
         cohort_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED"
+        central_sizing_key = (
+            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
+            "CENTRAL_SIZING_KRX_ENABLED"
+        )
     else:
         venue = "UNKNOWN"
         cohort_key = ""
+        central_sizing_key = ""
     cohort_enabled = bool(cohort_key and _env_bool(cohort_key, False))
     date_active = bool(active_date and active_date == current_date)
     active = bool(
@@ -26728,6 +26741,9 @@ def _post_probe_winner_recovery_runtime_config(
         and date_active
         and cohort_enabled
         and venue != "UNKNOWN"
+    )
+    central_sizing_promoted = bool(
+        active and central_sizing_key and _env_bool(central_sizing_key, False)
     )
     reason = (
         "active"
@@ -26762,6 +26778,13 @@ def _post_probe_winner_recovery_runtime_config(
         "rising_missed_scope": rising_missed_scope,
         "cohort_enabled": cohort_enabled,
         "cohort_key": cohort_key or "-",
+        "central_sizing_promoted": central_sizing_promoted,
+        "central_sizing_key": central_sizing_key or "-",
+        "quantity_mode": (
+            "central_sizing_first_residual"
+            if central_sizing_promoted
+            else "one_share_canary"
+        ),
     }
 
 
@@ -27470,6 +27493,15 @@ def _observe_post_probe_hard_abort_recovery(
         post_probe_winner_recovery_runtime_cohort_key=(
             runtime_config.get("cohort_key") or "-"
         ),
+        post_probe_winner_recovery_central_sizing_promoted=bool(
+            runtime_config.get("central_sizing_promoted")
+        ),
+        post_probe_winner_recovery_central_sizing_key=(
+            runtime_config.get("central_sizing_key") or "-"
+        ),
+        post_probe_winner_recovery_quantity_mode=(
+            runtime_config.get("quantity_mode") or "one_share_canary"
+        ),
         post_probe_winner_recovery_runtime_configuration_source=(
             runtime_config.get("configuration_source") or "unknown"
         ),
@@ -27582,9 +27614,17 @@ def _evaluate_post_probe_winner_recovery_scale_in(
             "metric_role": "bounded_tunable_scale_in",
             "window_policy": "same_position_cycle_after_soft_residual_abort",
             "sample_floor": (
-                "clean_baseline_krx_profit_only_closed_ge_10_bounded_one_share_canary"
+                "source_quality_valid_closed_one_share_ge_20_and_cost_adjusted_ev_"
+                "ge_0_1_then_exact_validated_central_sizing"
+                if config["central_sizing_promoted"]
+                else "clean_baseline_krx_profit_only_closed_ge_10_"
+                "bounded_one_share_canary"
             ),
-            "primary_decision_metric": "notional_weighted_ev_pct",
+            "primary_decision_metric": (
+                "source_quality_adjusted_ev_pct"
+                if config["central_sizing_promoted"]
+                else "notional_weighted_ev_pct"
+            ),
             "source_quality_gate": (
                 "two_fresh_independent_recovery_confirmations_and_existing_pyramid_quality"
             ),
@@ -27598,8 +27638,15 @@ def _evaluate_post_probe_winner_recovery_scale_in(
                 "position_cap_release|provider_route_change|hard_exit_deferral"
             ),
             "post_probe_winner_recovery_lane": True,
-            "post_probe_winner_recovery_mode": "bounded_first_leg",
-            "post_probe_winner_recovery_qty_cap": 1,
+            "post_probe_winner_recovery_mode": (
+                "central_sizing_first_residual"
+                if config["central_sizing_promoted"]
+                else "bounded_first_leg"
+            ),
+            "post_probe_winner_recovery_quantity_mode": config["quantity_mode"],
+            "post_probe_winner_recovery_qty_cap": (
+                0 if config["central_sizing_promoted"] else 1
+            ),
             "post_probe_winner_recovery_confirmation_count": _safe_int(
                 stock.get("_post_probe_hard_abort_recovery_confirmation_count"), 0
             ),
@@ -27667,9 +27714,17 @@ def _evaluate_post_probe_winner_recovery_scale_in(
             metric_role="bounded_tunable_scale_in",
             window_policy="same_position_cycle_after_soft_residual_abort",
             sample_floor=(
-                "clean_baseline_krx_profit_only_closed_ge_10_bounded_one_share_canary"
+                "source_quality_valid_closed_one_share_ge_20_and_cost_adjusted_ev_"
+                "ge_0_1_then_exact_validated_central_sizing"
+                if config["central_sizing_promoted"]
+                else "clean_baseline_krx_profit_only_closed_ge_10_"
+                "bounded_one_share_canary"
             ),
-            primary_decision_metric="notional_weighted_ev_pct",
+            primary_decision_metric=(
+                "source_quality_adjusted_ev_pct"
+                if config["central_sizing_promoted"]
+                else "notional_weighted_ev_pct"
+            ),
             source_quality_gate=(
                 "two_fresh_independent_recovery_confirmations_and_existing_pyramid_quality"
             ),
@@ -27692,6 +27747,11 @@ def _evaluate_post_probe_winner_recovery_scale_in(
             ),
             post_probe_winner_recovery_qty_cap=(
                 action.get("post_probe_winner_recovery_qty_cap", "-") if action else "-"
+            ),
+            post_probe_winner_recovery_quantity_mode=(
+                action.get("post_probe_winner_recovery_quantity_mode", "-")
+                if action
+                else config.get("quantity_mode", "-")
             ),
             post_probe_winner_recovery_original_pyramid_reason=reason or "-",
             post_probe_winner_recovery_bridge_blockers=(
@@ -93612,7 +93672,12 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
             set_fields={
                 "post_probe_winner_recovery_leg_submitted": True,
                 "post_probe_winner_recovery_leg_submitted_at": time.time(),
-                "post_probe_winner_recovery_leg_qty": 1,
+                "post_probe_winner_recovery_leg_qty": max(
+                    1,
+                    _safe_int(
+                        action.get("post_probe_winner_recovery_submitted_qty"), 1
+                    ),
+                ),
             },
         )
     if is_sim_window_action and result is None:
@@ -93628,6 +93693,45 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
             held_sec=_safe_float(action.get("held_sec"), 0.0),
         )
     return result
+
+
+def _apply_post_probe_winner_recovery_sizing_guard(
+    qty_details: dict[str, Any], action: dict[str, Any]
+) -> dict[str, Any]:
+    """Require an exact validated central sizing policy before lifting one share."""
+
+    if action.get("post_probe_winner_recovery_quantity_mode") != (
+        "central_sizing_first_residual"
+    ):
+        return qty_details
+    qty_details["post_probe_winner_recovery_quantity_mode"] = (
+        "central_sizing_first_residual"
+    )
+    if qty_details.get("position_sizing_policy_status") == "policy_loaded":
+        return qty_details
+    fallback_qty = min(1, max(0, _safe_int(qty_details.get("qty"), 0)))
+    binding_caps = {
+        token
+        for token in str(qty_details.get("binding_caps") or "").split(",")
+        if token and token != "-"
+    }
+    binding_caps.add("winner_recovery_policy_validation_fallback")
+    qty_details.update(
+        {
+            "qty": fallback_qty,
+            "effective_qty": fallback_qty,
+            "qty_reason": "central_sizing_policy_not_loaded_one_share_fallback",
+            "binding_caps": ",".join(sorted(binding_caps)),
+            "post_probe_winner_recovery_qty_cap": 1,
+            "post_probe_winner_recovery_quantity_mode": (
+                "one_share_policy_validation_fallback"
+            ),
+            "post_probe_winner_recovery_promotion_fallback_reason": (
+                "central_sizing_policy_not_loaded"
+            ),
+        }
+    )
+    return qty_details
 
 
 def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
@@ -94267,6 +94371,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     )
     if action_stage_qty_cap > 0:
         qty_details["post_probe_winner_recovery_qty_cap"] = action_stage_qty_cap
+    qty_details = _apply_post_probe_winner_recovery_sizing_guard(qty_details, action)
     qty = int(qty_details.get("qty", 0) or 0)
     template_qty = int(qty_details.get("template_qty", 0) or 0)
     cap_qty = int(qty_details.get("cap_qty", 0) or 0)
@@ -94361,6 +94466,11 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "remaining_scale_in_qty",
             "initial_qty_cap_applied",
             "post_probe_winner_recovery_qty_cap",
+            "post_probe_winner_recovery_quantity_mode",
+            "post_probe_winner_recovery_promotion_fallback_reason",
+            "position_sizing_policy_status",
+            "position_sizing_policy_version",
+            "position_sizing_policy_sha256",
         )
         if key in qty_details
     }
@@ -95777,6 +95887,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             **scale_in_micro_estimator_fields,
         },
     )
+    if str(action.get("reason") or "") == "post_probe_winner_recovery_first_leg":
+        action["post_probe_winner_recovery_submitted_qty"] = submitted_qty
     return last_res
 
 

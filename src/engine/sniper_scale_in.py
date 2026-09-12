@@ -2545,6 +2545,11 @@ def describe_dynamic_scale_in_qty(
                 "binding_caps": ",".join(sizing_decision.binding_caps) or "-",
                 "allocation_stage": sizing_decision.allocation_stage,
                 "scale_in_sizing_authority": SCALPING_SIZING_FORMULA_VERSION,
+                "position_sizing_policy_status": sizing_decision.policy_status,
+                "position_sizing_policy_version": (
+                    sizing_decision.policy_version or "-"
+                ),
+                "position_sizing_policy_sha256": sizing_decision.policy_sha256 or "-",
             }
         )
     if cap_qty <= 0:
