@@ -229,12 +229,19 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "entry_requested_qty",
     "entry_filled_qty",
     "entry_passive_probe_applied",
+    "entry_price_defensive_bps",
+    "entry_price_defense_mode",
     "entry_price_defensive_ticks",
+    "entry_price_gap_profile",
+    "entry_price_gap_profile_bps",
+    "entry_price_gap_profile_context",
+    "entry_price_gap_profile_reason",
     "entry_price_guard",
     "exclusion_reason",
     "exit_decision_source",
     "exit_rule",
     "final_flow_action",
+    "fill_type",
     "force_reason",
     "held_sec",
     "hold_ok",
@@ -277,6 +284,7 @@ THRESHOLD_EVENT_FIELD_KEEP_KEYS = {
     "anchor_effective_price_quality",
     "close_reason",
     "last_add_type",
+    "late_fill",
     "latest_strength",
     "latest_price",
     "median_price",
@@ -604,12 +612,35 @@ CALIBRATION_FAMILY_METADATA = {
             "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED",
             "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
             "SCALPING_NORMAL_DEFENSIVE_TICKS",
+            "SCALPING_NORMAL_DEFENSIVE_BPS",
+            "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS",
+            "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS",
+            "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS",
             "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED",
         ],
         "primary_key": "normal_defensive_ticks",
         "bounds": {
             "normal_defensive_ticks": {"min": 1, "max": 3, "max_step_per_day": 1},
             "max_below_bid_bps": {"min": 60, "max": 120, "max_step_per_day": 10},
+            # These are the already reviewed percent-bps profile envelope
+            # (10/15/25/40 current; 50/35/65 historical).  The resolver may
+            # only select an observed exact-outcome value within this range.
+            "normal_defensive_bps": {"min": 20, "max": 50, "max_step_per_day": 5},
+            "conditional_strong_defensive_bps": {
+                "min": 5,
+                "max": 20,
+                "max_step_per_day": 5,
+            },
+            "normal_favorable_defensive_bps": {
+                "min": 10,
+                "max": 35,
+                "max_step_per_day": 5,
+            },
+            "normal_weak_defensive_bps": {
+                "min": 35,
+                "max": 65,
+                "max_step_per_day": 5,
+            },
         },
         "sample_floor": 20,
         "sample_window": "daily_intraday_with_rolling_confirmation",
@@ -2169,6 +2200,8 @@ def _existing_or_gzip_path(path: Path) -> Path:
 
 def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
     return {
+        "threshold_cycle_cumulative": CUMULATIVE_THRESHOLD_REPORT_DIR
+        / f"threshold_cycle_cumulative_{target_date}.json",
         "main_scalping_lifecycle_paired": REPORT_DIR
         / "main_scalping_lifecycle_paired"
         / f"main_scalping_lifecycle_paired_{target_date}.json",
@@ -2586,6 +2619,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         }
 
     buy_funnel_sentinel = _read_json_dict(source_paths["buy_funnel_sentinel"])
+    cumulative_threshold = _read_json_dict(source_paths["threshold_cycle_cumulative"])
     wait6579_ev = _read_json_dict(source_paths["wait6579_ev_cohort"])
     from src.engine.scalping import strategy_owner_components
 
@@ -2610,6 +2644,20 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         source_paths["microstructure_reaction_context"]
     )
     market_regime_continuous = _summarize_market_regime_continuous_sources(target_date)
+    cumulative_dynamic_entry = (
+        (
+            (cumulative_threshold.get("threshold_snapshot_by_window") or {})
+            .get("cumulative", {})
+            .get("dynamic_entry_price_resolver", {})
+        )
+        if isinstance(cumulative_threshold, dict)
+        else {}
+    )
+    cumulative_dynamic_sample = (
+        cumulative_dynamic_entry.get("sample")
+        if isinstance(cumulative_dynamic_entry.get("sample"), dict)
+        else {}
+    )
 
     buy_current = (
         buy_funnel_sentinel.get("current")
@@ -4172,6 +4220,19 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             ),
         },
     }
+    if cumulative_dynamic_sample:
+        source_metrics["dynamic_entry_price_resolver"] = {
+            **cumulative_dynamic_sample,
+            "candidate_grid": (
+                cumulative_dynamic_entry.get("candidate_grid")
+                if isinstance(cumulative_dynamic_entry.get("candidate_grid"), list)
+                else cumulative_dynamic_sample.get("entry_price_profile_candidate_grid")
+                or []
+            ),
+            "cumulative_source_date": str(cumulative_threshold.get("date") or ""),
+            "cumulative_source_path": str(source_paths["threshold_cycle_cumulative"]),
+            "cumulative_source_loaded": True,
+        }
     return {
         "schema_version": 1,
         "target_date": target_date,
@@ -7810,7 +7871,19 @@ ENTRY_PRICE_TARGET_ENV_VALUE_KEYS = {
     "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED": "enabled",
     "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS": "max_below_bid_bps",
     "SCALPING_NORMAL_DEFENSIVE_TICKS": "normal_defensive_ticks",
+    "SCALPING_NORMAL_DEFENSIVE_BPS": "normal_defensive_bps",
+    "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS": "conditional_strong_defensive_bps",
+    "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS": "normal_favorable_defensive_bps",
+    "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS": "normal_weak_defensive_bps",
     "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED": "conditional_1tick_real_enabled",
+}
+
+ENTRY_PRICE_PROFILE_ENV_VALUE_KEYS = {
+    "normal": "normal_defensive_bps",
+    "strong_1tick_pressure": "conditional_strong_defensive_bps",
+    "favorable_micro": "normal_favorable_defensive_bps",
+    "favorable_wide_micro": "normal_favorable_defensive_bps",
+    "weak_liquidity_wide_spread": "normal_weak_defensive_bps",
 }
 
 
@@ -7975,6 +8048,217 @@ def _entry_price_real_outcome_metrics(
             round(sum(profit_values) / joined_sample, 4) if joined_sample else None
         ),
         "real_execution_quality_ready": submitted_count >= 20 and joined_sample > 0,
+    }
+
+
+def _entry_price_event_record_key(event: dict) -> str | None:
+    """Return only durable submit identity; never use stock/time fuzzy matching."""
+
+    for source in (event, _event_fields(event)):
+        for key in (
+            "order_no",
+            "broker_order_no",
+            "broker_receipt_no",
+            "trade_id",
+            "record_id",
+            "entry_record_id",
+            "candidate_id",
+        ):
+            value = str(source.get(key) or "").strip()
+            if value and value != "-":
+                return f"{key}:{value}"
+    return None
+
+
+def _entry_price_exact_outcome_rows_by_record(
+    completed_rows: list[dict],
+) -> dict[str, dict]:
+    """Index only broker-fact completed outcomes used for runtime promotion."""
+
+    indexed: dict[str, dict] = {}
+    for row in _valid_profit_rows(completed_rows or []):
+        if _is_synthetic_test_row(row):
+            continue
+        if str(row.get("completed_economics_source") or "").strip() != (
+            "trade_performance_fact_exact_receipt"
+        ):
+            continue
+        for key in (
+            "order_no",
+            "broker_order_no",
+            "broker_receipt_no",
+            "trade_id",
+            "record_id",
+            "entry_record_id",
+            "candidate_id",
+        ):
+            value = str(row.get(key) or "").strip()
+            if value and value != "-":
+                indexed[f"{key}:{value}"] = row
+    return indexed
+
+
+def _entry_price_profile_candidate_grid(
+    real_events: list[dict],
+    related_events: list[dict],
+    completed_rows: list[dict],
+    current: dict,
+) -> dict:
+    """Build profile/BPS candidates from durable submit IDs and exact outcomes.
+
+    The grid intentionally excludes aggressive discovery overrides: their target
+    calculation is a separate runtime owner and cannot be promoted as a BPS
+    resolver value merely because the originating profile has an outcome.
+    """
+
+    records: dict[str, dict] = {}
+    identity_missing = 0
+    for event in real_events:
+        record_key = _entry_price_event_record_key(event)
+        if record_key is None:
+            identity_missing += 1
+            continue
+        fields = _event_fields(event)
+        record = records.setdefault(record_key, {"events": [], "fields": {}})
+        record["events"].append(event)
+        for key in (
+            "entry_price_gap_profile",
+            "entry_price_gap_profile_bps",
+            "aggressive_entry_price_override_applied",
+            "late_fill",
+            "fill_type",
+        ):
+            if key in fields and fields.get(key) not in (None, "", "-"):
+                record["fields"][key] = fields.get(key)
+
+    # Cancel/late events may not repeat actual_order_submitted.  Attach them
+    # only through the same durable submit identity; never broaden by symbol.
+    for event in related_events:
+        record_key = _entry_price_event_record_key(event)
+        if record_key in records:
+            # ``related_events`` includes the original submit stream as well as
+            # cancellation/late-follow-up stages.  Keep a submit event once so
+            # record-level quality rates cannot be inflated by the merge.
+            if event not in records[record_key]["events"]:
+                records[record_key]["events"].append(event)
+
+    exact_rows = _entry_price_exact_outcome_rows_by_record(completed_rows)
+    groups: dict[tuple[str, int, str], list[dict]] = defaultdict(list)
+    unclassified_record_count = 0
+    aggressive_override_record_count = 0
+    for record_key, record in records.items():
+        fields = record["fields"]
+        if _field_bool(fields.get("aggressive_entry_price_override_applied")):
+            aggressive_override_record_count += 1
+            continue
+        profile = str(fields.get("entry_price_gap_profile") or "").strip()
+        value_key = ENTRY_PRICE_PROFILE_ENV_VALUE_KEYS.get(profile)
+        bps = _safe_int(fields.get("entry_price_gap_profile_bps"), None)
+        if not value_key or bps is None or bps <= 0:
+            unclassified_record_count += 1
+            continue
+        groups[(profile, int(bps), value_key)].append(
+            {"record_key": record_key, **record}
+        )
+
+    grid: list[dict] = []
+    eligible: list[dict] = []
+    for (profile, bps, value_key), records_for_candidate in sorted(groups.items()):
+        joined_rows = [
+            exact_rows[item["record_key"]]
+            for item in records_for_candidate
+            if item["record_key"] in exact_rows
+        ]
+        profit_values = [
+            value
+            for value in (_safe_float(row.get("profit_rate"), None) for row in joined_rows)
+            if value is not None
+        ]
+        submitted_count = len(records_for_candidate)
+        joined_count = len(profit_values)
+        late_count = sum(
+            1
+            for item in records_for_candidate
+            if any(
+                _field_bool(_event_fields(event).get("late_fill"))
+                or str(_event_fields(event).get("fill_type") or "").lower()
+                == "late_fill"
+                for event in item["events"]
+            )
+        )
+        cancel_count = sum(
+            1
+            for item in records_for_candidate
+            if any(
+                str(event.get("stage") or "").startswith("entry_order_cancel_")
+                for event in item["events"]
+            )
+        )
+        metrics = {
+            "cancel_rate": round(cancel_count * 100.0 / submitted_count, 4)
+            if submitted_count
+            else None,
+            "late_fill_rate": round(late_count * 100.0 / submitted_count, 4)
+            if submitted_count
+            else None,
+            "missed_upside": 0.0 if joined_count else None,
+            "source_quality_adjusted_ev_pct": (
+                round(sum(profit_values) / joined_count, 4) if joined_count else None
+            ),
+            "real_outcome_joined_sample": joined_count,
+            "real_outcome_pending_count": submitted_count - joined_count,
+            "real_outcome_join_rate": (
+                round(joined_count / submitted_count, 4) if submitted_count else 0.0
+            ),
+            "ev_source": "trade_performance_fact_exact_receipt",
+        }
+        row = {
+            "candidate_id": f"{profile}:{bps}",
+            "candidate_label": profile,
+            "profile_bps": bps,
+            "target_value_key": value_key,
+            "current_value": current.get(value_key),
+            "metrics": metrics,
+            "exact_outcome_joined_sample": joined_count,
+            "exact_outcome_pending_count": submitted_count - joined_count,
+            "eligible_for_runtime_recommendation": bool(
+                joined_count >= 20
+                and (metrics["source_quality_adjusted_ev_pct"] or 0.0) >= 0.1
+            ),
+            "selection_exclusion": None,
+        }
+        if row["eligible_for_runtime_recommendation"]:
+            eligible.append(row)
+        elif joined_count < 20:
+            row["selection_exclusion"] = "exact_outcome_sample_below_20"
+        else:
+            row["selection_exclusion"] = "exact_outcome_ev_below_0_1pct"
+        grid.append(row)
+
+    selected = next(
+        (
+            row
+            for row in sorted(
+                eligible,
+                key=lambda item: (
+                    -float(
+                        item["metrics"].get("source_quality_adjusted_ev_pct") or 0.0
+                    ),
+                    -int(item.get("exact_outcome_joined_sample") or 0),
+                    str(item.get("candidate_id") or ""),
+                ),
+            )
+            if row.get("current_value") != row.get("profile_bps")
+        ),
+        None,
+    )
+    return {
+        "candidate_grid": grid,
+        "selected_candidate": selected,
+        "eligible_exact_candidate_count": len(eligible),
+        "identity_missing_event_count": identity_missing,
+        "unclassified_record_count": unclassified_record_count,
+        "aggressive_override_record_count": aggressive_override_record_count,
     }
 
 
@@ -8283,6 +8567,13 @@ def _entry_price_recommended_values_scope_is_sim(scope: str) -> bool:
     }
 
 
+def _entry_price_recommended_values_scope_is_real_exact(scope: str) -> bool:
+    return str(scope or "").strip().lower() in {
+        "real_exact_outcome",
+        "real_exact_receipt",
+    }
+
+
 def _entry_price_source_recommended_values(
     source_metrics: dict, current: dict, metadata: dict
 ) -> tuple[dict, dict]:
@@ -8300,7 +8591,14 @@ def _entry_price_source_recommended_values(
     if not recommended:
         return clean, audit
     scope = _entry_price_recommended_values_scope(source_metrics, recommended)
-    if not _entry_price_recommended_values_scope_is_sim(scope):
+    real_exact_ready = source_metrics.get("real_exact_outcome_policy_ready") is True
+    if not (
+        _entry_price_recommended_values_scope_is_sim(scope)
+        or (
+            _entry_price_recommended_values_scope_is_real_exact(scope)
+            and real_exact_ready
+        )
+    ):
         audit["rejected"]["recommended_values_decision_scope"] = {
             "value": scope or None,
             "reason": "required_sim_scope",
@@ -8318,7 +8616,14 @@ def _entry_price_source_recommended_values(
             audit["rejected"][key] = {"value": raw_value, "reason": "invalid_bool"}
 
     bounds = metadata.get("bounds") if isinstance(metadata.get("bounds"), dict) else {}
-    for key in ("normal_defensive_ticks", "max_below_bid_bps"):
+    for key in (
+        "normal_defensive_ticks",
+        "max_below_bid_bps",
+        "normal_defensive_bps",
+        "conditional_strong_defensive_bps",
+        "normal_favorable_defensive_bps",
+        "normal_weak_defensive_bps",
+    ):
         if key not in recommended:
             continue
         raw_value = recommended.get(key)
@@ -8340,14 +8645,29 @@ def _entry_price_source_recommended_values(
             bounded = _clamp(
                 bounded, current_value - max_step, current_value + max_step
             )
-        if key in {"normal_defensive_ticks", "max_below_bid_bps"}:
+        if key in {
+            "normal_defensive_ticks",
+            "max_below_bid_bps",
+            "normal_defensive_bps",
+            "conditional_strong_defensive_bps",
+            "normal_favorable_defensive_bps",
+            "normal_weak_defensive_bps",
+        }:
             bounded_value: Any = int(round(bounded))
         else:
             bounded_value = bounded
         clean[key] = bounded_value
         raw_numeric_equivalent = (
             int(round(numeric))
-            if key in {"normal_defensive_ticks", "max_below_bid_bps"}
+            if key
+            in {
+                "normal_defensive_ticks",
+                "max_below_bid_bps",
+                "normal_defensive_bps",
+                "conditional_strong_defensive_bps",
+                "normal_favorable_defensive_bps",
+                "normal_weak_defensive_bps",
+            }
             else numeric
         )
         if bounded_value != raw_numeric_equivalent:
@@ -8391,6 +8711,21 @@ def _build_dynamic_entry_price_resolver_family(
         "normal_defensive_ticks": int(
             getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_TICKS", 1) or 1
         ),
+        "normal_defensive_bps": int(
+            getattr(TRADING_RULES, "SCALPING_NORMAL_DEFENSIVE_BPS", 25) or 25
+        ),
+        "conditional_strong_defensive_bps": int(
+            getattr(TRADING_RULES, "SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS", 10)
+            or 10
+        ),
+        "normal_favorable_defensive_bps": int(
+            getattr(TRADING_RULES, "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS", 15)
+            or 15
+        ),
+        "normal_weak_defensive_bps": int(
+            getattr(TRADING_RULES, "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS", 40)
+            or 40
+        ),
         "max_below_bid_bps": int(
             getattr(
                 TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS", 80
@@ -8411,6 +8746,9 @@ def _build_dynamic_entry_price_resolver_family(
         "entry_ai_price_canary_skip_order",
         "entry_ai_price_canary_skip_followup",
         "entry_submit_revalidation_warning",
+        "entry_order_cancel_requested",
+        "entry_order_cancel_confirmed",
+        "entry_order_cancel_failed",
     }
     sim_stages = {
         "scalp_sim_entry_ai_price_applied",
@@ -8469,23 +8807,42 @@ def _build_dynamic_entry_price_resolver_family(
         target_date=target_date,
     )
     real_outcome = _entry_price_real_outcome_metrics(real_events, completed_rows or [])
+    profile_selection = _entry_price_profile_candidate_grid(
+        real_events,
+        real_stage_events,
+        completed_rows or [],
+        current,
+    )
+    selected_profile = profile_selection.get("selected_candidate")
+    selected_profile_metrics = (
+        selected_profile.get("metrics") if isinstance(selected_profile, dict) else {}
+    )
+    real_primary_metrics = (
+        selected_profile_metrics
+        if isinstance(selected_profile_metrics, dict) and selected_profile_metrics
+        else {
+            "missed_upside": (
+                0.0 if real_outcome.get("real_outcome_joined_sample") else None
+            ),
+            "source_quality_adjusted_ev_pct": real_outcome.get(
+                "real_source_quality_adjusted_ev_pct"
+            ),
+            "notional_weighted_ev_pct": real_outcome.get(
+                "real_notional_weighted_ev_pct"
+            ),
+            "real_outcome_joined_sample": real_outcome.get(
+                "real_outcome_joined_sample"
+            ),
+            "real_outcome_pending_count": real_outcome.get(
+                "real_outcome_pending_count"
+            ),
+            "real_outcome_join_rate": real_outcome.get("real_outcome_join_rate"),
+            "ev_source": "real_completed_profit_rate",
+        }
+    )
     candidate_metrics["real"] = {
         **candidate_metrics.get("real", {}),
-        "missed_upside": (
-            0.0 if real_outcome.get("real_outcome_joined_sample") else None
-        ),
-        "source_quality_adjusted_ev_pct": real_outcome.get(
-            "real_source_quality_adjusted_ev_pct"
-        ),
-        "notional_weighted_ev_pct": real_outcome.get("real_notional_weighted_ev_pct"),
-        "real_outcome_joined_sample": real_outcome.get("real_outcome_joined_sample"),
-        "real_outcome_pending_count": real_outcome.get("real_outcome_pending_count"),
-        "real_outcome_join_rate": real_outcome.get("real_outcome_join_rate"),
-        "ev_source": (
-            "real_completed_profit_rate"
-            if real_outcome.get("real_outcome_joined_sample")
-            else "-"
-        ),
+        **real_primary_metrics,
     }
     counterfactual_join_diagnostics = (
         _dynamic_entry_price_counterfactual_join_diagnostics(
@@ -8507,7 +8864,11 @@ def _build_dynamic_entry_price_resolver_family(
     )
     primary_sample_book, decision_authority = _entry_price_primary_sample_book(
         {
-            "real_candidate_observations": len(real_events),
+            "real_candidate_observations": (
+                int(selected_profile.get("exact_outcome_joined_sample") or 0)
+                if isinstance(selected_profile, dict)
+                else len(real_events)
+            ),
             "sim_candidate_observations": len(sim_events),
             **real_outcome,
         },
@@ -8523,12 +8884,21 @@ def _build_dynamic_entry_price_resolver_family(
         ),
     )
     sample_ready = sample_floor_ready and metrics_ready
+    recommended_values = dict(current)
+    if isinstance(selected_profile, dict):
+        recommended_values[str(selected_profile["target_value_key"])] = int(
+            selected_profile["profile_bps"]
+        )
     return {
         "family": "dynamic_entry_price_resolver",
         "stage": "entry",
         "sample": {
             "candidate_observations": len(real_events) + len(sim_events),
-            "real_candidate_observations": len(real_events),
+            "real_candidate_observations": (
+                int(selected_profile.get("exact_outcome_joined_sample") or 0)
+                if isinstance(selected_profile, dict)
+                else len(real_events)
+            ),
             "sim_candidate_observations": len(sim_events),
             "real_outcome_joined_sample": real_outcome.get(
                 "real_outcome_joined_sample"
@@ -8604,10 +8974,30 @@ def _build_dynamic_entry_price_resolver_family(
                 or 0
             ),
             "unpriced_or_stale_warning_count": sim_unpriced_or_stale_warning_count,
+            "entry_price_profile_candidate_grid": profile_selection["candidate_grid"],
+            "entry_price_profile_selected_candidate": selected_profile,
+            "entry_price_profile_eligible_exact_candidate_count": profile_selection[
+                "eligible_exact_candidate_count"
+            ],
+            "entry_price_profile_identity_missing_event_count": profile_selection[
+                "identity_missing_event_count"
+            ],
+            "entry_price_profile_unclassified_record_count": profile_selection[
+                "unclassified_record_count"
+            ],
+            "entry_price_profile_aggressive_override_record_count": profile_selection[
+                "aggressive_override_record_count"
+            ],
+            "recommended_values": recommended_values if selected_profile else {},
+            "recommended_values_decision_scope": (
+                "real_exact_outcome" if selected_profile else ""
+            ),
+            "real_exact_outcome_policy_ready": bool(selected_profile),
         },
         "apply_ready": sample_ready,
         "current": current,
-        "recommended": recommended,
+        "recommended": recommended_values,
+        "candidate_grid": profile_selection["candidate_grid"],
         "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
         "notes": [
             "가격 후보 비교와 dynamic entry tuning 전용 family다.",
@@ -9145,7 +9535,9 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     }
 
 
-def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
+def _build_entry_price_execution_quality_family(
+    events: list[dict], completed_rows: list[dict]
+) -> dict:
     stages = {
         "order_leg_request",
         "order_bundle_submitted",
@@ -9165,6 +9557,16 @@ def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
         if str(event.get("stage") or "")
         in {"order_leg_request", "order_bundle_submitted"}
     ]
+    submitted_real = [
+        event for event in submitted if _entry_price_real_execution_event(event)
+    ]
+    exact_outcome = _entry_price_exact_outcome_rows_by_record(completed_rows)
+    submitted_record_keys = {
+        key
+        for key in (_entry_price_event_record_key(event) for event in submitted_real)
+        if key is not None
+    }
+    terminal_receipt_join_count = len(submitted_record_keys & set(exact_outcome))
     return {
         "family": "entry_price_execution_quality",
         "stage": "entry",
@@ -9172,8 +9574,14 @@ def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
             "real_broker_events": len(real_events),
             "submitted_events": len(submitted),
             "cancel_events": len(cancel_events),
-            "fill_join_events": 0,
-            "fill_join_available": False,
+            "fill_join_events": terminal_receipt_join_count,
+            "fill_join_available": terminal_receipt_join_count > 0,
+            "fill_join_semantics": (
+                "completed_trade_fact_terminal_receipt_only"
+                if terminal_receipt_join_count > 0
+                else "no_exact_terminal_receipt_join"
+            ),
+            "partial_full_fill_classification_available": False,
             "candidate_metrics": _candidate_metric_pack(
                 real_events,
                 submitted_stages={"order_leg_request", "order_bundle_submitted"},
@@ -9193,6 +9601,7 @@ def _build_entry_price_execution_quality_family(events: list[dict]) -> dict:
         "apply_mode": "real_only_audit",
         "notes": [
             "real broker 제출/취소/체결 join 품질 감사 전용 family다.",
+            "completed trade fact receipt는 terminal outcome join만 증명하며 full/partial fill 분류는 없는 값을 0으로 대체하지 않는다.",
             "동적 가격 후보 EV 산정에는 직접 섞지 않고 audit/source-quality 근거로만 전달한다.",
         ],
     }
@@ -12369,7 +12778,7 @@ def _build_family_reports(
         ),
         _build_entry_split_order_plan_family(target_date=target_date),
         _build_scale_in_split_order_plan_family(target_date=target_date),
-        _build_entry_price_execution_quality_family(events),
+        _build_entry_price_execution_quality_family(events, completed_rows),
         _build_entry_filter_refined_candidate_family(
             events,
             "blocked_strength_momentum",
@@ -14629,6 +15038,20 @@ def _build_calibration_candidates(
             family_sample = (
                 family.get("sample") if isinstance(family.get("sample"), dict) else {}
             )
+            # The family is the canonical producer for profile/BPS exact-outcome
+            # candidates.  An optional external source may add diagnostics but
+            # must not erase a same-generation selected profile.
+            for key in (
+                "recommended_values",
+                "recommended_values_decision_scope",
+                "real_exact_outcome_policy_ready",
+                "entry_price_profile_candidate_grid",
+                "entry_price_profile_selected_candidate",
+                "entry_price_profile_eligible_exact_candidate_count",
+            ):
+                if key in family_sample and key not in source_metrics:
+                    source_metrics = dict(source_metrics)
+                    source_metrics[key] = family_sample.get(key)
             candidate_metrics = _merged_entry_price_candidate_metrics(
                 family_sample, source_metrics
             )
@@ -14660,6 +15083,7 @@ def _build_calibration_candidates(
                     },
                 )
                 sample_count = source_sample_count
+                source_ready = source_sample_count >= sample_floor
             required_books = (
                 (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
             )

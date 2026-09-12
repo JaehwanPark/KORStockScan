@@ -1769,6 +1769,70 @@ def test_dynamic_entry_price_resolver_rejects_recommendation_without_sim_scope()
     }
 
 
+def test_dynamic_entry_price_resolver_selects_profile_bps_from_exact_outcomes(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        report_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=True,
+            SCALPING_NORMAL_DEFENSIVE_TICKS=1,
+            SCALPING_NORMAL_DEFENSIVE_BPS=25,
+            SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS=10,
+            SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS=15,
+            SCALPING_NORMAL_WEAK_DEFENSIVE_BPS=40,
+            SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS=80,
+            SCALPING_CONDITIONAL_1TICK_REAL_ENABLED=True,
+        ),
+    )
+    events = [
+        {
+            "stage": "order_bundle_submitted",
+            "record_id": f"entry-price-{index}",
+            "fields": {
+                "actual_order_submitted": True,
+                "entry_price_gap_profile": "normal",
+                "entry_price_gap_profile_bps": 30,
+            },
+        }
+        for index in range(20)
+    ]
+    events.append(
+        {
+            "stage": "entry_order_cancel_confirmed",
+            "record_id": "entry-price-0",
+            "fields": {"actual_order_submitted": False},
+        }
+    )
+    completed_rows = [
+        {
+            "record_id": f"entry-price-{index}",
+            "profit_rate": 0.2,
+            "completed_economics_source": "trade_performance_fact_exact_receipt",
+        }
+        for index in range(20)
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: events,
+        completed_rows_loader=lambda start_date, end_date: completed_rows,
+    )
+
+    dynamic = {item["family"]: item for item in report["calibration_candidates"]}[
+        "dynamic_entry_price_resolver"
+    ]
+    assert dynamic["calibration_state"] == "adjust_up"
+    assert dynamic["recommended_values"]["normal_defensive_bps"] == 30
+    assert "SCALPING_NORMAL_DEFENSIVE_BPS" in dynamic["target_env_keys"]
+    selected = dynamic["source_metrics"]["entry_price_profile_selected_candidate"]
+    assert selected["candidate_id"] == "normal:30"
+    assert selected["exact_outcome_joined_sample"] == 20
+    assert selected["metrics"]["source_quality_adjusted_ev_pct"] == 0.2
+    assert selected["metrics"]["cancel_rate"] == 5.0
+
+
 def test_dynamic_entry_price_resolver_partial_sim_recommendation_keeps_unspecified_keys_current():
     complete_metrics = {
         "fill_rate": 62.0,
