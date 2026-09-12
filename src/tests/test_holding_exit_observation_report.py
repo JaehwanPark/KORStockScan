@@ -361,6 +361,59 @@ def test_holding_exit_observation_reads_gzip_post_sell_rows(monkeypatch, tmp_pat
     ]
 
 
+def test_holding_exit_observation_defaults_to_clean_baseline_window(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        report_mod,
+        "clean_baseline_policy",
+        lambda: {
+            "enabled": True,
+            "clean_tuning_baseline_date": "2026-06-05",
+            "pre_baseline_decision": "decision_disqualified_archive_only",
+        },
+    )
+
+    report = report_mod.build_holding_exit_observation_report(
+        target_date="2026-06-06"
+    )
+
+    assert report["month_start"] == "2026-06-05"
+    assert report["analysis_window"] == {
+        "start_date": "2026-06-05",
+        "end_date": "2026-06-06",
+        "selection": "clean_tuning_baseline_default",
+        "clean_tuning_baseline_date": "2026-06-05",
+        "clean_tuning_baseline_enabled": True,
+        "pre_baseline_decision": "decision_disqualified_archive_only",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def test_holding_exit_observation_uses_calendar_month_when_baseline_disabled(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        report_mod,
+        "clean_baseline_policy",
+        lambda: {
+            "enabled": False,
+            "clean_tuning_baseline_date": "2026-06-05",
+            "pre_baseline_decision": "decision_disqualified_archive_only",
+        },
+    )
+
+    report = report_mod.build_holding_exit_observation_report(
+        target_date="2026-09-11"
+    )
+
+    assert report["month_start"] == "2026-09-01"
+    assert report["analysis_window"]["selection"] == "calendar_month_policy_disabled"
+
+
 def test_target_pipeline_summary_streams_large_rows(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-08-05"

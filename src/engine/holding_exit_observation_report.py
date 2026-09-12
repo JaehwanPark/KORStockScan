@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy
 from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -82,6 +83,44 @@ def _date_range(month_start: str, target_date: str) -> list[str]:
         values.append(current.isoformat())
         current += timedelta(days=1)
     return values
+
+
+def _analysis_window_start(
+    *, target_date: str, month_start: str | None
+) -> tuple[str, dict[str, Any]]:
+    """Resolve the report window without silently reverting to a month-only view.
+
+    ``month_start`` remains an explicit, audit-oriented override for existing
+    callers. The normal producer instead starts at the active clean-tuning
+    baseline, so a quiet new month cannot hide mature post-sell evidence.
+    """
+
+    policy = clean_baseline_policy()
+    baseline_date = str(
+        policy.get("clean_tuning_baseline_date") or "2026-06-05"
+    ).strip()
+    explicit_start = str(month_start or "").strip()
+    clean_baseline_enabled = bool(policy.get("enabled", True))
+    default_start = baseline_date if clean_baseline_enabled else f"{target_date[:7]}-01"
+    start_date = explicit_start or default_start
+    return start_date, {
+        "start_date": start_date,
+        "end_date": target_date,
+        "selection": (
+            "explicit_month_start_audit_override"
+            if explicit_start
+            else (
+                "clean_tuning_baseline_default"
+                if clean_baseline_enabled
+                else "calendar_month_policy_disabled"
+            )
+        ),
+        "clean_tuning_baseline_date": baseline_date,
+        "clean_tuning_baseline_enabled": clean_baseline_enabled,
+        "pre_baseline_decision": policy.get("pre_baseline_decision"),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
 
 
 def _read_json(path: Path) -> dict:
@@ -998,12 +1037,15 @@ def build_holding_exit_observation_report(
     month_start: str | None = None,
 ) -> dict:
     safe_date = str(target_date or datetime.now().strftime("%Y-%m-%d")).strip()
-    safe_month_start = str(month_start or f"{safe_date[:7]}-01").strip()
+    safe_month_start, analysis_window = _analysis_window_start(
+        target_date=safe_date,
+        month_start=month_start,
+    )
     guarded = guard_stdin_heavy_build(
         snapshot_kind="holding_exit_observation",
         target_date=safe_date,
         fallback_snapshot=_load_saved_snapshot("holding_exit_observation", safe_date),
-        request_details={"month_start": safe_month_start},
+        request_details={"analysis_window": analysis_window},
     )
     if guarded is not None:
         return guarded
@@ -1039,7 +1081,11 @@ def build_holding_exit_observation_report(
     same_symbol_reentry = _build_same_symbol_reentry(valid_trades)
     report = {
         "date": safe_date,
+        # Kept for compatibility with existing readers. New readers should
+        # consume analysis_window, whose default is the clean baseline rather
+        # than the first day of the current calendar month.
         "month_start": safe_month_start,
+        "analysis_window": analysis_window,
         "readiness": _build_readiness(
             target_date=safe_date,
             target_valid_trades=target_valid_trades,
