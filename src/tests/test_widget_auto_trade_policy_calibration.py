@@ -877,7 +877,7 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
     assert loaded["042660"]["KRX_REGULAR"]["new_entry_runtime_eligible"] is False
 
 
-def test_integrated_aftermarket_is_retained_only_as_observe_only_metadata() -> None:
+def test_integrated_aftermarket_incomplete_coverage_remains_observe_only() -> None:
     symbols = {}
     for spec in calibration.SPECS:
         sessions = {
@@ -889,13 +889,13 @@ def test_integrated_aftermarket_is_retained_only_as_observe_only_metadata() -> N
         }
         if spec.symbol == "005930":
             sessions["KRX_NXT_AFTERMARKET"] = {
-                "decision": "dual_aftermarket_observe_only",
+                "decision": "insufficient_non_overlapping_trades",
                 "automatic_promotion_allowed": False,
-                "market_venue": "UNKNOWN",
+                "market_venue": "KRX_NXT",
                 "market_data_route": "krx_nxt_integrated",
                 "actual_execution_venue": "UNKNOWN",
                 "expected_minute_count": 240,
-                "reason": "integrated_aftermarket_has_no_nxt_solo_policy_inheritance",
+                "reason": "integrated_aftermarket_240_minute_coverage_incomplete",
             }
         symbols[spec.symbol] = {
             "name": spec.name,
@@ -917,14 +917,40 @@ def test_integrated_aftermarket_is_retained_only_as_observe_only_metadata() -> N
         "sessions", {}
     )
     assert policy["observe_only_sessions"]["005930"]["KRX_NXT_AFTERMARKET"] == {
-        "decision": "dual_aftermarket_observe_only",
-        "reason": "integrated_aftermarket_has_no_nxt_solo_policy_inheritance",
-        "market_venue": "UNKNOWN",
+        "decision": "insufficient_non_overlapping_trades",
+        "reason": "integrated_aftermarket_240_minute_coverage_incomplete",
+        "market_venue": "KRX_NXT",
         "market_data_route": "krx_nxt_integrated",
         "actual_execution_venue": "UNKNOWN",
         "expected_minute_count": 240,
         "automatic_promotion_allowed": False,
     }
+
+
+def test_integrated_aftermarket_coverage_requires_all_240_minutes() -> None:
+    source_date = date(2026, 9, 14)
+    rows = [
+        {
+            "session": "KRX_NXT_AFTERMARKET",
+            "venue": "KRX_NXT",
+            "trade_date": source_date,
+            "observed_at": datetime(
+                2026, 9, 14, 16 + minute // 60, minute % 60, tzinfo=KST
+            ),
+            "source_quality_status": "PASS",
+        }
+        for minute in range(240)
+    ]
+
+    complete = calibration._integrated_aftermarket_coverage(rows)
+    incomplete = calibration._integrated_aftermarket_coverage(rows[:-1])
+
+    assert complete["complete"] is True
+    assert complete["pass_unique_minute_count_by_date"] == {"2026-09-14": 240}
+    assert incomplete["complete"] is False
+    assert (
+        incomplete["reason"] == "integrated_aftermarket_240_minute_coverage_incomplete"
+    )
 
 
 def test_execution_quality_canonicalizes_integrated_aftermarket_close_only(

@@ -1013,3 +1013,29 @@ rollback은 신규 dual entry만 OFF로 돌리고 기존 주문·보유·미체�
 - 외부 Project/Calendar sync
 
 이 경계를 지켜야 “코드 준비”, “배포”, “실제 PID 소비”, “자연 체결”, “장후 체인 성공”, “비용 후 경제성”을 서로 다른 증거로 판정할 수 있다.
+
+### 17.5 2026-09-12 최소 자동승격 보완
+
+사용자 승인 범위에서 기존 `run_widget_evaluation.sh`의 calibration → dated-policy
+발행 경로만 확장한다. 새 cron, 별도 report producer, 수동 environment 주입은
+추가하지 않는다.
+
+- 2026-09-14부터 Samsung widget의 legacy `NXT_AFTERMARKET` 정책은 상속하지
+  않고, `KRX_NXT_AFTERMARKET`을 별도 cohort로 calibration한다. 기존 표본·holdout·
+  비용·실행품질 gate와 16:00~20:00 KST의 source-date별 PASS 240분 coverage가
+  모두 통과한 경우에만 exact-date policy를 자동 발행한다. 어느 하나라도 부족하면
+  observe-only로 남는다.
+- 발행 policy는 `_AL` data route, `SOR` requested route와 `UNKNOWN` actual venue를
+  명시한다. 19:40 이후 신규 BUY를 막고, runtime은 기존 exact-date KRX/NXT
+  eligibility ledger를 매 BUY 전에 다시 읽는다. ledger 결손·legacy·불명확 상태는
+  transport 전에 fail-closed한다. 실제 KRX/NXT 귀속은 broker receipt로만 확정한다.
+- Samsung/low-price episode의 신규 통합 애프터마켓 진입은 이 보완의 대상이 아니다.
+  해당 runner/profile은 여전히 regular-session source·time window를 소유하며,
+  compatible source cohort와 검증된 dated policy 없이 이를 확장하지 않는다. 기존
+  regular-session dated policy 및 보유분 SELL/reconciliation은 변경하지 않는다.
+- Kiwoom protocol gate는 2026-09-12T14:11:46+09:00에 upstream
+  `234560d213acd8871ae344b5481aecd2f30287fa`의 `kiwoom/specs.py`,
+  `kiwoom/core/client.py`, `kiwoom/realtime/*`,
+  `postman/kiwoom-openapi.postman_collection.json`으로 확인했다. 이번 변경은
+  request path, `api-id`, header, body, continuation 또는 response parser를
+  변경하지 않고 기존 중앙 preflight에 local eligibility만 전달한다.

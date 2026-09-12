@@ -294,3 +294,36 @@ def test_legacy_nxt_policy_is_not_inherited_by_post_effective_dual_session(
     ).resolve_all(observed_date=date(2026, 9, 14))
 
     assert loaded == {}
+
+
+def test_loader_accepts_verified_integrated_aftermarket_sor_policy(
+    tmp_path: Path,
+) -> None:
+    payload = _policy(effective_date="2026-09-14")
+    payload["source_target_date"] = "2026-09-11"
+    payload["symbols"] = {"005930": payload["symbols"].pop("034020")}
+    session = payload["symbols"]["005930"]["sessions"].pop("KRX_REGULAR")
+    session.update(
+        {
+            "market_venue": "KRX_NXT",
+            "new_entry_cutoff_time": "19:39:59",
+            "force_flat_at_session_end": False,
+            "force_exit_time": None,
+            "overnight_forbidden": False,
+            "source_final_exit_action": "observe_only_no_forced_sell",
+            "integrated_aftermarket_policy": True,
+            "exact_date_eligibility_required": True,
+        }
+    )
+    payload["symbols"]["005930"]["sessions"]["KRX_NXT_AFTERMARKET"] = session
+    _write_policy(tmp_path, "widget_auto_trade_policy_2026-09-14.json", payload)
+
+    loaded = WidgetAutoTradePolicyLoader(
+        tmp_path, include_symbol_expansion=False
+    ).resolve_all(observed_date=date(2026, 9, 14))
+
+    policy = loaded["005930"]["KRX_NXT_AFTERMARKET"]
+    assert policy["market_venue"] == "KRX_NXT"
+    assert policy["market_data_request_code"] == "005930_AL"
+    assert policy["broker_route_requested"] == "SOR"
+    assert policy["actual_execution_venue"] == "UNKNOWN"

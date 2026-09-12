@@ -159,6 +159,7 @@ class FakeRecorder:
 class FakeGateway:
     def __init__(self):
         self.buy_calls = []
+        self.buy_kwargs = []
         self.sell_calls = []
         self.limit_sell_calls = []
         self.cancel_calls = []
@@ -213,6 +214,7 @@ class FakeGateway:
 
     def submit_buy(self, *, code, qty, route, **_kwargs):
         self.buy_calls.append((code, qty, route))
+        self.buy_kwargs.append(_kwargs)
         return self._accepted("B")
 
     def submit_sell(self, *, code, qty, route, **_kwargs):
@@ -1035,9 +1037,7 @@ def test_nxt_collector_entry_block_creates_no_machine_action_telegram(
     assert recorder.events[-1]["event_type"] == ("entry_blocked_execution_policy_venue")
 
 
-def test_unapproved_integrated_aftermarket_entry_is_observe_only(
-    tmp_path, monkeypatch
-):
+def test_unapproved_integrated_aftermarket_entry_is_observe_only(tmp_path, monkeypatch):
     now = datetime(2026, 9, 14, 16, 0, tzinfo=KST)
     payload = _payload(now, entry_id="DUAL-ENTRY-1")
     payload["market_venue"] = "UNKNOWN"
@@ -1075,6 +1075,26 @@ def test_unapproved_integrated_aftermarket_entry_is_observe_only(
     assert blocked["market_session_regime"] == "KRX_NXT_AFTERMARKET"
     assert blocked["market_data_route"] == "krx_nxt_integrated"
     assert blocked["actual_execution_venue"] == "UNKNOWN"
+
+
+def test_integrated_aftermarket_buy_without_exact_eligibility_is_blocked_pre_transport():
+    now = datetime(2026, 9, 14, 16, 0, tzinfo=KST)
+    gateway = gateway_module.KiwoomSharedTokenOrderGateway(
+        token_loader=lambda: "must-not-be-used",
+        shared_read_control_enabled=False,
+    )
+
+    result = gateway.submit_buy(
+        code="005930",
+        qty=1,
+        route="SOR",
+        now=now,
+        venue_eligibility=None,
+    )
+
+    assert result.accepted is False
+    assert result.return_code == "ORDER_TYPE_PREFLIGHT_BLOCKED"
+    assert result.return_msg == "eligibility_unknown"
 
 
 def test_integrated_order_record_preserves_four_route_axes(tmp_path):
@@ -2075,9 +2095,7 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert entry_order["broker_route"] == "SOR"
     assert entry_order["broker_execution_venue"] == "NXT"
     assert entry_order["actual_execution_venue"] == "NXT"
-    assert entry_order["actual_execution_venue_source"] == (
-        "broker_execution_snapshot"
-    )
+    assert entry_order["actual_execution_venue_source"] == ("broker_execution_snapshot")
     assert entry_order["adaptive_exit_first_fill_observation"]["first_observed_at"] == (
         now.isoformat()
     )
@@ -2098,9 +2116,7 @@ def test_take_profit_is_submitted_only_after_fill_and_not_duplicated_on_restart(
     assert reconciled["broker_route"] == "SOR"
     assert reconciled["broker_execution_venue"] == "NXT"
     assert reconciled["actual_execution_venue"] == "NXT"
-    assert reconciled["actual_execution_venue_source"] == (
-        "broker_execution_snapshot"
-    )
+    assert reconciled["actual_execution_venue_source"] == ("broker_execution_snapshot")
     assert reconciled["submitted_at"] == now.isoformat()
 
     restarted = WidgetSignalAutoTrader(

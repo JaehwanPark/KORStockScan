@@ -185,6 +185,16 @@ class SymbolSpec:
     minimum_qualified_observation_dates: int
 
 
+DUAL_AFTERMARKET_SESSION_SPEC = SessionSpec(
+    DUAL_AFTERMARKET_SESSION,
+    "KRX_NXT",
+    ("19:20:00", "19:39:59"),
+    False,
+    (),
+    False,
+)
+
+
 SPECS = (
     SymbolSpec(
         symbol=SAMSUNG_CODE,
@@ -1171,36 +1181,68 @@ def _load_execution_quality(
     }
 
 
-def _dual_aftermarket_observe_only_calibration(
+def _active_session_specs(
+    spec: SymbolSpec, *, target_date: date
+) -> tuple[SessionSpec, ...]:
+    """Use a fresh dual cohort after the contract cutover, never NXT replay."""
+
+    if (
+        spec.symbol != SAMSUNG_CODE
+        or target_date < MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
+    ):
+        return spec.sessions
+    return tuple(
+        session_spec
+        for session_spec in spec.sessions
+        if session_spec.session != "NXT_AFTERMARKET"
+    ) + (DUAL_AFTERMARKET_SESSION_SPEC,)
+
+
+def _integrated_aftermarket_coverage(
     rows: Sequence[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Retain integrated-session provenance without creating an auto policy."""
-    source_rows = [
-        row
-        for row in rows
-        if str(row.get("session") or "") == DUAL_AFTERMARKET_SESSION
-        or str(row.get("session") or "").startswith(DUAL_AFTERMARKET_SESSION_PREFIX)
-    ]
-    pass_rows = [
-        row for row in source_rows if row.get("source_quality_status") == "PASS"
+    """Require complete 16:00--20:00 minute coverage before promotion."""
+
+    minute_buckets: dict[date, set[datetime]] = {}
+    source_dates: set[date] = set()
+    for row in rows:
+        if (
+            row.get("session") != DUAL_AFTERMARKET_SESSION
+            or row.get("venue") != "KRX_NXT"
+        ):
+            continue
+        source_date = row.get("trade_date")
+        observed_at = row.get("observed_at")
+        if not isinstance(source_date, date) or not isinstance(observed_at, datetime):
+            continue
+        source_dates.add(source_date)
+        if row.get("source_quality_status") != "PASS":
+            continue
+        minute = observed_at.astimezone(KST).replace(second=0, microsecond=0)
+        if time(16, 0) <= minute.time() < time(20, 0):
+            minute_buckets.setdefault(source_date, set()).add(minute)
+    counts = {
+        source_date.isoformat(): len(minute_buckets.get(source_date, set()))
+        for source_date in sorted(source_dates)
+    }
+    complete_dates = [
+        source_date
+        for source_date in sorted(source_dates)
+        if counts[source_date.isoformat()] == DUAL_AFTERMARKET_EXPECTED_MINUTES
     ]
     return {
-        "decision": "dual_aftermarket_observe_only",
-        "automatic_promotion_allowed": False,
-        "runtime_selected_policy": None,
-        "selected_policy": None,
-        "candidate_count": 0,
-        "source_row_count": len(source_rows),
-        "source_quality_pass_row_count": len(pass_rows),
         "expected_minute_count": DUAL_AFTERMARKET_EXPECTED_MINUTES,
-        "market_venue": "UNKNOWN",
-        "market_data_route": "krx_nxt_integrated",
-        "actual_execution_venue": "UNKNOWN",
-        "reason": "integrated_aftermarket_has_no_nxt_solo_policy_inheritance",
-        "policy_tier": "source_observation_only",
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
+        "source_dates": [
+            source_date.isoformat() for source_date in sorted(source_dates)
+        ],
+        "pass_unique_minute_count_by_date": counts,
+        "complete_dates": [source_date.isoformat() for source_date in complete_dates],
+        "complete": bool(source_dates) and len(complete_dates) == len(source_dates),
+        "reason": (
+            "integrated_aftermarket_240_minute_coverage_complete"
+            if source_dates and len(complete_dates) == len(source_dates)
+            else "integrated_aftermarket_240_minute_coverage_incomplete"
+        ),
     }
 
 
@@ -1882,15 +1924,7 @@ def build_report(
             if int(source_load_audit.get(key) or 0) > 0
         )
         source_contract_valid = not source_contract_gap_codes
-        active_session_specs = tuple(
-            session_spec
-            for session_spec in spec.sessions
-            if not (
-                spec.symbol == SAMSUNG_CODE
-                and target_date >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
-                and session_spec.session == "NXT_AFTERMARKET"
-            )
-        )
+        active_session_specs = _active_session_specs(spec, target_date=target_date)
         sessions = {
             session.session: _calibrate_session(
                 spec,
@@ -1903,13 +1937,21 @@ def build_report(
             )
             for session in active_session_specs
         }
-        if (
-            spec.symbol == SAMSUNG_CODE
-            and target_date >= MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE
-        ):
-            sessions[DUAL_AFTERMARKET_SESSION] = (
-                _dual_aftermarket_observe_only_calibration(rows)
-            )
+        if DUAL_AFTERMARKET_SESSION in sessions:
+            coverage = _integrated_aftermarket_coverage(rows)
+            sessions[DUAL_AFTERMARKET_SESSION][
+                "integrated_aftermarket_coverage"
+            ] = coverage
+            if not coverage["complete"]:
+                sessions[DUAL_AFTERMARKET_SESSION].update(
+                    {
+                        "automatic_promotion_allowed": False,
+                        "reason": coverage["reason"],
+                        "market_venue": "KRX_NXT",
+                        "market_data_route": "krx_nxt_integrated",
+                        "actual_execution_venue": "UNKNOWN",
+                    }
+                )
         if (
             target_date >= paired_replay.SELECTION_START_DATE
             and spec.symbol == SAMSUNG_CODE
@@ -1921,6 +1963,10 @@ def build_report(
             )
             confirmation_loader = WidgetCalibrationPolicyLoader()
             for session_spec in active_session_specs:
+                if session_spec.session == DUAL_AFTERMARKET_SESSION:
+                    # This is a fresh cohort.  The Samsung regular-session
+                    # paired incumbent has no authority to select its target.
+                    continue
                 previous = previous_session_policies.get(spec.symbol, {}).get(
                     session_spec.session
                 )
@@ -1963,16 +2009,13 @@ def build_report(
             for session in active_session_specs
         }
         if DUAL_AFTERMARKET_SESSION in sessions:
-            execution_quality_by_session[DUAL_AFTERMARKET_SESSION] = {
-                **_load_execution_quality(
+            execution_quality_by_session[DUAL_AFTERMARKET_SESSION] = (
+                _load_execution_quality(
                     spec.symbol,
                     target_date=target_date,
                     session=DUAL_AFTERMARKET_SESSION,
-                ),
-                "status": "OBSERVE_ONLY",
-                "runtime_apply_allowed": False,
-                "runtime_apply_block_reason": "dual_aftermarket_observe_only",
-            }
+                )
+            )
         symbol_reports[spec.symbol] = {
             "name": spec.name,
             "source_row_count": len(rows),
@@ -1990,7 +2033,7 @@ def build_report(
             "execution_quality": execution_quality,
             "execution_quality_by_session": execution_quality_by_session,
             "sessions": sessions,
-            "dual_aftermarket_observe_only": sessions.get(
+            "integrated_aftermarket_calibration": sessions.get(
                 DUAL_AFTERMARKET_SESSION
             ),
             "microstructure_prior_trading_day_diagnostic": {
@@ -2157,7 +2200,12 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
     observe_only_sessions: dict[str, dict[str, dict[str, Any]]] = {}
     for spec in SPECS:
         source = report["symbols"][spec.symbol]
-        session_specs = {value.session: value for value in spec.sessions}
+        session_specs = {
+            value.session: value
+            for value in _active_session_specs(
+                spec, target_date=date.fromisoformat(target_date)
+            )
+        }
         sessions: dict[str, Any] = {}
         for session_name, calibration in source["sessions"].items():
             if (
@@ -2176,9 +2224,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                     "reason": calibration.get("reason"),
                     "market_venue": calibration.get("market_venue"),
                     "market_data_route": calibration.get("market_data_route"),
-                    "actual_execution_venue": calibration.get(
-                        "actual_execution_venue"
-                    ),
+                    "actual_execution_venue": calibration.get("actual_execution_venue"),
                     "expected_minute_count": calibration.get("expected_minute_count"),
                     "automatic_promotion_allowed": False,
                 }
@@ -2253,6 +2299,16 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "research_accumulation_gate_status": research_accumulation["status"],
             }
+            if session_name == DUAL_AFTERMARKET_SESSION:
+                sessions[session_name].update(
+                    {
+                        "integrated_aftermarket_policy": True,
+                        "exact_date_eligibility_required": True,
+                        "integrated_aftermarket_coverage": calibration.get(
+                            "integrated_aftermarket_coverage"
+                        ),
+                    }
+                )
             if "paired_economics" in calibration:
                 sessions[session_name]["paired_selection"] = calibration[
                     "paired_economics"

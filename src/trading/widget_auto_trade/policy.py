@@ -38,23 +38,33 @@ CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT = (
     "KRX_trading_date;KRX_REGULAR/KRX;source_quality_PASS_rows>=300;"
     "first_PASS_observation<=09:30;last_PASS_observation>=15:20"
 )
-SUPPORTED_SESSIONS = frozenset({"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET"})
-SUPPORTED_VENUES = frozenset({"KRX", "NXT"})
+INTEGRATED_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
+SUPPORTED_SESSIONS = frozenset(
+    {"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET", INTEGRATED_AFTERMARKET_SESSION}
+)
+# ``KRX_NXT`` is a decision-market scope, never an asserted execution venue.
+# The broker route remains SOR and the actual venue stays UNKNOWN until receipt
+# reconciliation.  It is retained here only because widget contracts expose
+# the same scope in ``SessionContext.market_venue`` for policy matching.
+SUPPORTED_VENUES = frozenset({"KRX", "NXT", "KRX_NXT"})
 SUPPORTED_ENTRY_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
 SESSION_VENUES = {
     "NXT_PREMARKET": "NXT",
     "KRX_REGULAR": "KRX",
     "NXT_AFTERMARKET": "NXT",
+    INTEGRATED_AFTERMARKET_SESSION: "KRX_NXT",
 }
 SESSION_MARKET_DATA_ROUTES = {
     "NXT_PREMARKET": "nxt_only",
     "KRX_REGULAR": "krx_only",
     "NXT_AFTERMARKET": "nxt_only",
+    INTEGRATED_AFTERMARKET_SESSION: "krx_nxt_integrated",
 }
 SESSION_MARKET_DATA_SUFFIXES = {
     "NXT_PREMARKET": "_NX",
     "KRX_REGULAR": "",
     "NXT_AFTERMARKET": "_NX",
+    INTEGRATED_AFTERMARKET_SESSION: "_AL",
 }
 
 
@@ -135,6 +145,7 @@ def _validated_session_policy(
     force_flat = payload.get("force_flat_at_session_end") is True
     force_exit_time = _valid_clock(payload.get("force_exit_time"))
     expected_source_exit_action = SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL.get(symbol)
+    integrated_aftermarket = session == INTEGRATED_AFTERMARKET_SESSION
     if (
         session not in SUPPORTED_SESSIONS
         or venue not in SUPPORTED_VENUES
@@ -165,6 +176,14 @@ def _validated_session_policy(
         or str(payload.get("evidence_artifact") or "") != evidence_report_path
         or payload.get("actual_order_submitted") is not False
         or payload.get("broker_guard_bypass") is not False
+        or (
+            integrated_aftermarket
+            and (
+                payload.get("integrated_aftermarket_policy") is not True
+                or payload.get("exact_date_eligibility_required") is not True
+                or entry_cutoff >= "19:40:00"
+            )
+        )
     ):
         return None
     research_fields_match = True
@@ -201,10 +220,13 @@ def _validated_session_policy(
         "market_data_request_code": (
             f"{symbol}{SESSION_MARKET_DATA_SUFFIXES[session]}"
         ),
-        "broker_route_requested": venue,
+        "broker_route_requested": "SOR" if integrated_aftermarket else venue,
         "actual_execution_venue": "UNKNOWN",
         "allowed_entry_sessions": (session,),
-        "allowed_entry_venues": (venue,),
+        # Integrated after-market contexts intentionally carry UNKNOWN here:
+        # it is not an actual execution venue and must not be inferred before
+        # a broker receipt.  ``market_venue`` above remains KRX_NXT scope.
+        "allowed_entry_venues": ("UNKNOWN",) if integrated_aftermarket else (venue,),
         "allowed_entry_states": entry_states,
         "leg_quantity_each": leg_qty,
         "add_trigger_bps_from_initial_fill": add_triggers,
@@ -240,6 +262,8 @@ def _validated_session_policy(
             "minimum_qualified_observation_dates"
         ),
         "research_accumulation_gate_status": research_gate.get("status"),
+        "integrated_aftermarket_policy": integrated_aftermarket,
+        "exact_date_eligibility_required": integrated_aftermarket,
     }
 
 
@@ -408,6 +432,7 @@ def _validated_payload(
                 session_policy is not None
                 and str(symbol) == "005930"
                 and source_target_date >= date(2026, 9, 9)
+                and str(session) != INTEGRATED_AFTERMARKET_SESSION
             ):
                 from src.engine.monitoring import (
                     widget_paired_policy_replay as paired_replay,
