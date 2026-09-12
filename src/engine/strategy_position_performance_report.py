@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from datetime import date, datetime
+import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from sqlalchemy import delete
@@ -16,9 +19,15 @@ from src.database.models import StrategyPositionPerformanceDaily, TradePerforman
 from src.engine.ai_response_contracts import normalize_gatekeeper_action_key
 from src.engine.sniper_position_tags import normalize_position_tag, normalize_strategy
 from src.engine.sniper_trade_review_report import build_trade_review_report
+from src.engine.trade_profit import (
+    calculate_net_profit_rate,
+    calculate_net_realized_pnl,
+    get_trade_cost_rate,
+)
 
 _DB = DBManager()
 _PIPELINE_EVENTS_DIR = Path("data/pipeline_events")
+_FACT_SYNC_STATUS_DIR = Path("data/report/strategy_position_fact_sync")
 _SCANNER_PROMOTION_STAGES = {
     "scalping_scanner_candidate_promoted",
     "scalping_scanner_runtime_target_attach",
@@ -51,6 +60,98 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(value))
     except Exception:
         return default
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, "", "-", "None"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value in (None, "", "-", "None"):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+class FactSyncSourceError(RuntimeError):
+    """A source-wide fact-sync contract failure that must preserve prior facts."""
+
+
+def _is_completed(fact: dict[str, Any]) -> bool:
+    return str(fact.get("status") or "").upper() == "COMPLETED"
+
+
+def _has_complete_economics(fact: dict[str, Any]) -> bool:
+    if not _is_completed(fact):
+        return False
+    try:
+        return bool(
+            float(fact.get("buy_price") or 0) > 0
+            and int(fact.get("buy_qty") or 0) > 0
+            and fact.get("buy_time") is not None
+            and float(fact.get("sell_price") or 0) > 0
+            and fact.get("sell_time") is not None
+            and fact.get("profit_rate") is not None
+            and fact.get("realized_pnl_krw") is not None
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _canonical_sha256(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _status_path(target_date: str) -> Path:
+    return (
+        _FACT_SYNC_STATUS_DIR / f"strategy_position_fact_sync_{target_date}.status.json"
+    )
+
+
+def _write_status(target_date: str, payload: dict[str, Any]) -> dict[str, Any]:
+    receipt = {
+        "schema_version": 1,
+        "report_type": "strategy_position_fact_sync",
+        "target_date": target_date,
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "cost_basis": {
+            "kind": "fixed_comparison_cost_model",
+            "trade_cost_rate": get_trade_cost_rate(),
+            "broker_cost_reconciled": False,
+        },
+        **payload,
+    }
+    receipt["artifact_sha256"] = _canonical_sha256(receipt)
+    path = _status_path(target_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(receipt, handle, ensure_ascii=False, indent=2, default=str)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return receipt
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -205,7 +306,9 @@ def _select_scanner_event_for_trade(
         ]
         if before:
             return before[-1]
-    return events[-1]
+    # A promotion emitted after the BUY is not causal evidence for that BUY.
+    # Keep the source gap visible instead of assigning a future event.
+    return None
 
 
 def _enrich_scanner_provenance(
@@ -267,6 +370,20 @@ def _build_trade_fact_rows(target_date: str) -> tuple[list[dict[str, Any]], list
         exit_signal = row.get("exit_signal") or {}
         gatekeeper = row.get("gatekeeper_replay") or {}
         ai_summary = row.get("ai_review_summary") or {}
+        status = str(row.get("status") or "").upper()
+        buy_price = _safe_float(row.get("buy_price"))
+        buy_qty = _safe_int(row.get("buy_qty"))
+        buy_time = _parse_datetime(row.get("buy_time"))
+        sell_price = _safe_float(row.get("sell_price"))
+        sell_time = _parse_datetime(row.get("sell_time"))
+        economics_complete = bool(
+            status == "COMPLETED"
+            and buy_price > 0
+            and buy_qty > 0
+            and buy_time is not None
+            and sell_price > 0
+            and sell_time is not None
+        )
         facts.append(
             {
                 "recommendation_id": _safe_int(row.get("id")),
@@ -275,14 +392,25 @@ def _build_trade_fact_rows(target_date: str) -> tuple[list[dict[str, Any]], list
                 "stock_name": str(row.get("name") or ""),
                 "strategy": strategy,
                 "position_tag": position_tag,
-                "status": str(row.get("status") or "").upper(),
-                "buy_price": _safe_float(row.get("buy_price")),
-                "buy_qty": _safe_int(row.get("buy_qty")),
-                "buy_time": _parse_datetime(row.get("buy_time")),
-                "sell_price": _safe_float(row.get("sell_price")),
-                "sell_time": _parse_datetime(row.get("sell_time")),
-                "profit_rate": round(_safe_float(row.get("profit_rate")), 2),
-                "realized_pnl_krw": _safe_int(row.get("realized_pnl_krw")),
+                "status": status,
+                "buy_price": buy_price,
+                "buy_qty": buy_qty,
+                "buy_time": buy_time,
+                "sell_price": sell_price,
+                "sell_time": sell_time,
+                # The fact mart is the cost-adjusted economic source.  A
+                # completed row without executable prices/times remains NULL,
+                # rather than becoming a misleading flat trade.
+                "profit_rate": (
+                    calculate_net_profit_rate(buy_price, sell_price)
+                    if economics_complete
+                    else None
+                ),
+                "realized_pnl_krw": (
+                    calculate_net_realized_pnl(buy_price, sell_price, buy_qty)
+                    if economics_complete
+                    else None
+                ),
                 "holding_seconds": _safe_int(row.get("holding_seconds"), default=0)
                 or None,
                 "exit_rule": str(exit_signal.get("exit_rule") or ""),
@@ -312,22 +440,25 @@ def _aggregate_daily_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for (rec_date, strategy, position_tag), items in sorted(
         grouped.items(), key=lambda item: item[0]
     ):
-        completed = [item for item in items if item.get("status") == "COMPLETED"]
-        open_rows = [item for item in items if item.get("status") != "COMPLETED"]
-        profits = [_safe_float(item.get("profit_rate")) for item in completed]
+        completed = [item for item in items if _is_completed(item)]
+        economic_completed = [
+            item for item in completed if _has_complete_economics(item)
+        ]
+        open_rows = [item for item in items if not _is_completed(item)]
+        profits = [float(item["profit_rate"]) for item in economic_completed]
         holding_values = [
             _safe_int(item.get("holding_seconds"))
-            for item in completed
+            for item in economic_completed
             if _safe_int(item.get("holding_seconds")) > 0
         ]
         best = max(
-            completed,
-            key=lambda item: _safe_float(item.get("profit_rate")),
+            economic_completed,
+            key=lambda item: float(item["profit_rate"]),
             default=None,
         )
         worst = min(
-            completed,
-            key=lambda item: _safe_float(item.get("profit_rate")),
+            economic_completed,
+            key=lambda item: float(item["profit_rate"]),
             default=None,
         )
         rows.append(
@@ -337,15 +468,24 @@ def _aggregate_daily_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "position_tag": position_tag,
                 "entered_count": len(items),
                 "completed_count": len(completed),
+                "economics_valid_completed_count": len(economic_completed),
+                "economics_missing_completed_count": len(completed)
+                - len(economic_completed),
                 "open_count": len(open_rows),
                 "win_count": sum(1 for value in profits if value > 0),
                 "loss_count": sum(1 for value in profits if value < 0),
                 "flat_count": sum(1 for value in profits if value == 0),
-                "realized_pnl_krw": int(
-                    sum(_safe_int(item.get("realized_pnl_krw")) for item in completed)
+                "realized_pnl_krw": (
+                    int(
+                        sum(
+                            int(item["realized_pnl_krw"]) for item in economic_completed
+                        )
+                    )
+                    if economic_completed
+                    else None
                 ),
                 "avg_profit_rate": (
-                    round(sum(profits) / len(profits), 2) if profits else 0.0
+                    round(sum(profits) / len(profits), 2) if profits else None
                 ),
                 "avg_holding_seconds": (
                     round(sum(holding_values) / len(holding_values), 1)
@@ -385,9 +525,16 @@ def _build_scanner_discovery_rows(
 
     rows: list[dict[str, Any]] = []
     for discovery_type, items in grouped.items():
-        completed = [item for item in items if item.get("status") == "COMPLETED"]
-        profits = [_safe_float(item.get("profit_rate")) for item in completed]
-        pnl = int(sum(_safe_int(item.get("realized_pnl_krw")) for item in completed))
+        completed = [item for item in items if _is_completed(item)]
+        economic_completed = [
+            item for item in completed if _has_complete_economics(item)
+        ]
+        profits = [float(item["profit_rate"]) for item in economic_completed]
+        pnl = (
+            int(sum(int(item["realized_pnl_krw"]) for item in economic_completed))
+            if economic_completed
+            else None
+        )
         wins = sum(1 for value in profits if value > 0)
         losses = sum(1 for value in profits if value < 0)
         flats = sum(1 for value in profits if value == 0)
@@ -404,13 +551,13 @@ def _build_scanner_discovery_rows(
             if signature:
                 signature_counts[signature] += 1
         best = max(
-            completed,
-            key=lambda item: _safe_float(item.get("profit_rate")),
+            economic_completed,
+            key=lambda item: float(item["profit_rate"]),
             default=None,
         )
         worst = min(
-            completed,
-            key=lambda item: _safe_float(item.get("profit_rate")),
+            economic_completed,
+            key=lambda item: float(item["profit_rate"]),
             default=None,
         )
         rows.append(
@@ -418,18 +565,27 @@ def _build_scanner_discovery_rows(
                 "scanner_discovery_type": discovery_type,
                 "entered_count": len(items),
                 "completed_count": len(completed),
+                "economics_valid_completed_count": len(economic_completed),
+                "economics_missing_completed_count": len(completed)
+                - len(economic_completed),
                 "open_count": len(items) - len(completed),
                 "win_count": wins,
                 "loss_count": losses,
                 "flat_count": flats,
                 "win_rate": (
-                    round((wins / len(completed)) * 100, 1) if completed else 0.0
+                    round((wins / len(economic_completed)) * 100, 1)
+                    if economic_completed
+                    else None
                 ),
                 "avg_profit_rate": (
-                    round(sum(profits) / len(profits), 2) if profits else 0.0
+                    round(sum(profits) / len(profits), 2) if profits else None
                 ),
                 "realized_pnl_krw": pnl,
-                "expectancy_krw": int(round(pnl / len(completed))) if completed else 0,
+                "expectancy_krw": (
+                    int(round(pnl / len(economic_completed)))
+                    if economic_completed and pnl is not None
+                    else None
+                ),
                 "provenance_matched_count": matched_count,
                 "provenance_missing_count": len(items) - matched_count,
                 "top_promotion_reason": (
@@ -459,7 +615,11 @@ def _build_scanner_discovery_rows(
         )
     return sorted(
         rows,
-        key=lambda item: (item["realized_pnl_krw"], item["completed_count"]),
+        key=lambda item: (
+            item["realized_pnl_krw"] is not None,
+            item["realized_pnl_krw"] or 0,
+            item["completed_count"],
+        ),
         reverse=True,
     )
 
@@ -468,25 +628,49 @@ def _build_kpis(
     rows: list[dict[str, Any]], fact_rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     entered_count = sum(int(row.get("entered_count") or 0) for row in rows)
-    completed_count = sum(int(row.get("completed_count") or 0) for row in rows)
     open_count = sum(int(row.get("open_count") or 0) for row in rows)
-    win_count = sum(int(row.get("win_count") or 0) for row in rows)
-    realized_pnl = int(sum(int(row.get("realized_pnl_krw") or 0) for row in rows))
+    economic_facts = [
+        row
+        for row in fact_rows
+        if _is_completed(row)
+        and _optional_float(row.get("profit_rate")) is not None
+        and _optional_int(row.get("realized_pnl_krw")) is not None
+    ]
+    economic_completed_count = len(economic_facts)
+    win_count = sum(1 for row in economic_facts if float(row["profit_rate"]) > 0)
+    realized_pnl = (
+        sum(int(row["realized_pnl_krw"]) for row in economic_facts)
+        if economic_facts
+        else None
+    )
     avg_hold_values = [
         _safe_float(row.get("avg_holding_seconds"))
         for row in rows
         if _safe_float(row.get("avg_holding_seconds")) > 0
     ]
+    economic_rows = [
+        row for row in rows if _optional_int(row.get("realized_pnl_krw")) is not None
+    ]
     best_bucket = max(
-        rows, key=lambda item: int(item.get("realized_pnl_krw") or 0), default=None
+        economic_rows,
+        key=lambda item: _optional_int(item.get("realized_pnl_krw")) or 0,
+        default=None,
     )
     worst_bucket = min(
-        rows, key=lambda item: int(item.get("realized_pnl_krw") or 0), default=None
+        economic_rows,
+        key=lambda item: _optional_int(item.get("realized_pnl_krw")) or 0,
+        default=None,
     )
 
-    win_rate = round((win_count / completed_count) * 100, 1) if completed_count else 0.0
+    win_rate = (
+        round((win_count / economic_completed_count) * 100, 1)
+        if economic_completed_count
+        else None
+    )
     expectancy_krw = (
-        int(round(realized_pnl / completed_count)) if completed_count else 0
+        int(round(realized_pnl / economic_completed_count))
+        if economic_completed_count and realized_pnl is not None
+        else None
     )
     open_ratio = round((open_count / entered_count) * 100, 1) if entered_count else 0.0
     avg_hold_sec = (
@@ -499,36 +683,40 @@ def _build_kpis(
         (
             row
             for row in fact_rows
-            if row.get("status") == "COMPLETED"
-            and _safe_int(row.get("realized_pnl_krw")) > 0
+            if _is_completed(row)
+            and (_optional_int(row.get("realized_pnl_krw")) or 0) > 0
         ),
-        key=lambda item: _safe_int(item.get("realized_pnl_krw")),
+        key=lambda item: _optional_int(item.get("realized_pnl_krw")) or 0,
         default=None,
     )
     top_loser = min(
         (
             row
             for row in fact_rows
-            if row.get("status") == "COMPLETED"
-            and _safe_int(row.get("realized_pnl_krw")) < 0
+            if _is_completed(row)
+            and (_optional_int(row.get("realized_pnl_krw")) or 0) < 0
         ),
-        key=lambda item: _safe_int(item.get("realized_pnl_krw")),
+        key=lambda item: _optional_int(item.get("realized_pnl_krw")) or 0,
         default=None,
     )
 
     return [
         {
             "label": "종료 승률",
-            "value": f"{win_rate:.1f}%",
-            "tone": "good" if win_rate >= 55 else "warn" if win_rate >= 45 else "bad",
-            "detail": f"종료 {completed_count}건 중 승 {win_count}건",
+            "value": f"{win_rate:.1f}%" if win_rate is not None else "-",
+            "tone": (
+                "good"
+                if win_rate is not None and win_rate >= 55
+                else "warn" if win_rate is not None and win_rate >= 45 else "bad"
+            ),
+            "detail": f"경제성 유효 종료 {economic_completed_count}건 중 승 {win_count}건",
         },
         {
             "label": "평균 기대손익",
-            "value": f"{expectancy_krw:,}원",
+            "value": f"{expectancy_krw:,}원" if expectancy_krw is not None else "-",
             "tone": (
                 "good"
-                if expectancy_krw > 0
+                if expectancy_krw is not None and expectancy_krw > 0
                 else "warn" if expectancy_krw == 0 else "bad"
             ),
             "detail": "종료 거래 1건당 평균 실현손익",
@@ -617,6 +805,14 @@ def _build_kpis(
 def _build_report_payload(
     target_date: str, fact_rows: list[dict[str, Any]], rows: list[dict[str, Any]]
 ) -> dict[str, Any]:
+    economic_facts = [
+        row
+        for row in fact_rows
+        if _is_completed(row)
+        and _optional_float(row.get("profit_rate")) is not None
+        and _optional_int(row.get("realized_pnl_krw")) is not None
+    ]
+    completed_fact_count = sum(1 for row in fact_rows if _is_completed(row))
     strategy_totals: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "strategy": "",
@@ -626,7 +822,9 @@ def _build_report_payload(
             "win_count": 0,
             "loss_count": 0,
             "flat_count": 0,
-            "realized_pnl_krw": 0,
+            "economics_valid_completed_count": 0,
+            "economics_missing_completed_count": 0,
+            "realized_pnl_krw": None,
         }
     )
     for row in rows:
@@ -639,22 +837,28 @@ def _build_report_payload(
             "win_count",
             "loss_count",
             "flat_count",
-            "realized_pnl_krw",
+            "economics_valid_completed_count",
+            "economics_missing_completed_count",
         ):
             bucket[key] += int(row.get(key) or 0)
+        realized_pnl = _optional_int(row.get("realized_pnl_krw"))
+        if realized_pnl is not None:
+            bucket["realized_pnl_krw"] = (
+                int(bucket["realized_pnl_krw"] or 0) + realized_pnl
+            )
 
     top_winners = [
         row
         for row in fact_rows
-        if row["status"] == "COMPLETED" and row["profit_rate"] > 0
+        if _is_completed(row) and (_optional_float(row.get("profit_rate")) or 0) > 0
     ][:5]
     top_losers = sorted(
         [
             row
             for row in fact_rows
-            if row["status"] == "COMPLETED" and row["profit_rate"] < 0
+            if _is_completed(row) and (_optional_float(row.get("profit_rate")) or 0) < 0
         ],
-        key=lambda item: item["profit_rate"],
+        key=lambda item: _optional_float(item.get("profit_rate")) or 0,
     )[:5]
     scanner_discovery_rows = _build_scanner_discovery_rows(fact_rows)
 
@@ -666,8 +870,15 @@ def _build_report_payload(
             "tag_group_count": len(rows),
             "entered_count": sum(row["entered_count"] for row in rows),
             "completed_count": sum(row["completed_count"] for row in rows),
+            "economics_valid_completed_count": len(economic_facts),
+            "economics_missing_completed_count": completed_fact_count
+            - len(economic_facts),
             "open_count": sum(row["open_count"] for row in rows),
-            "realized_pnl_krw": int(sum(row["realized_pnl_krw"] for row in rows)),
+            "realized_pnl_krw": (
+                int(sum(int(row["realized_pnl_krw"]) for row in economic_facts))
+                if economic_facts
+                else None
+            ),
             "scanner_discovery_type_count": len(scanner_discovery_rows),
             "scanner_provenance_matched_count": sum(
                 int(row.get("provenance_matched_count") or 0)
@@ -681,7 +892,10 @@ def _build_report_payload(
         "kpis": _build_kpis(rows, fact_rows),
         "strategy_totals": sorted(
             strategy_totals.values(),
-            key=lambda item: item["realized_pnl_krw"],
+            key=lambda item: (
+                item["realized_pnl_krw"] is not None,
+                item["realized_pnl_krw"] or 0,
+            ),
             reverse=True,
         ),
         "rows": rows,
@@ -698,12 +912,97 @@ def _trade_fact_db_payload(fact: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in fact.items() if key in allowed}
 
 
+def _summary_db_payload(row: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        column.name for column in StrategyPositionPerformanceDaily.__table__.columns
+    }
+    return {key: value for key, value in row.items() if key in allowed}
+
+
+def _validate_fact_batch(
+    facts: list[dict[str, Any]], warnings: list[str], target_date: str
+) -> list[str]:
+    issues = [f"source_warning:{warning}" for warning in warnings]
+    target = _parse_date(target_date)
+    seen_ids: set[int] = set()
+    for fact in facts:
+        recommendation_id = _safe_int(fact.get("recommendation_id"))
+        if recommendation_id <= 0:
+            issues.append("recommendation_id_invalid")
+        elif recommendation_id in seen_ids:
+            issues.append(f"recommendation_id_duplicate:{recommendation_id}")
+        seen_ids.add(recommendation_id)
+        if fact.get("rec_date") != target:
+            issues.append("rec_date_mismatch")
+        if not str(fact.get("stock_code") or "").strip():
+            issues.append("stock_code_missing")
+        if not str(fact.get("strategy") or "").strip():
+            issues.append("strategy_missing")
+        if not str(fact.get("position_tag") or "").strip():
+            issues.append("position_tag_missing")
+        if not str(fact.get("status") or "").strip():
+            issues.append("status_missing")
+    return sorted(set(issues))
+
+
+def _sync_status_payload(
+    *,
+    status: str,
+    facts: list[dict[str, Any]],
+    warnings: list[str],
+    issues: list[str],
+    prior_fact_count: int | None,
+    source_digest: str,
+) -> dict[str, Any]:
+    completed = [fact for fact in facts if _is_completed(fact)]
+    economics_valid = [fact for fact in completed if _has_complete_economics(fact)]
+    return {
+        "status": status,
+        "consumer_ready": status in {"succeeded", "valid_empty"},
+        "source_fact_count": len(facts),
+        "fact_count": len(facts),
+        "completed_count": len(completed),
+        "economics_valid_completed_count": len(economics_valid),
+        "economics_missing_completed_count": len(completed) - len(economics_valid),
+        "prior_fact_count": prior_fact_count,
+        "warning_count": len(warnings),
+        "warnings": warnings,
+        "issues": issues,
+        "source_digest": source_digest,
+    }
+
+
 def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
     _DB.init_db()
     facts, warnings = _build_trade_fact_rows(target_date)
-    summary_rows = _aggregate_daily_rows(facts)
     rec_date = _parse_date(target_date)
 
+    with _DB.get_session() as session:
+        prior_fact_count = int(
+            session.query(TradePerformanceFact)
+            .filter(TradePerformanceFact.rec_date == rec_date)
+            .count()
+        )
+    source_digest = _canonical_sha256(facts)
+    issues = _validate_fact_batch(facts, warnings, target_date)
+    if issues:
+        receipt = _write_status(
+            target_date,
+            _sync_status_payload(
+                status="source_blocked",
+                facts=facts,
+                warnings=warnings,
+                issues=issues,
+                prior_fact_count=prior_fact_count,
+                source_digest=source_digest,
+            ),
+        )
+        raise FactSyncSourceError(
+            f"strategy_position_fact_sync_source_blocked:{receipt['artifact_sha256']}"
+        )
+
+    summary_rows = _aggregate_daily_rows(facts)
+    sync_status = "succeeded" if facts else "valid_empty"
     with _DB.get_session() as session:
         session.execute(
             delete(TradePerformanceFact).where(
@@ -727,16 +1026,33 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
         if summary_rows:
             session.bulk_insert_mappings(
                 StrategyPositionPerformanceDaily,
-                [{**row, "synced_at": synced_at} for row in summary_rows],
+                [
+                    {**_summary_db_payload(row), "synced_at": synced_at}
+                    for row in summary_rows
+                ],
             )
 
     _DB.analyze_performance_tables()
+    receipt = _write_status(
+        target_date,
+        _sync_status_payload(
+            status=sync_status,
+            facts=facts,
+            warnings=warnings,
+            issues=[],
+            prior_fact_count=prior_fact_count,
+            source_digest=source_digest,
+        ),
+    )
 
     return {
         "target_date": target_date,
         "fact_count": len(facts),
         "summary_count": len(summary_rows),
         "warnings": warnings,
+        "status": sync_status,
+        "status_path": str(_status_path(target_date)),
+        "artifact_sha256": receipt["artifact_sha256"],
     }
 
 
@@ -805,8 +1121,12 @@ def build_strategy_position_performance_report(
                 "win_count": int(row.win_count or 0),
                 "loss_count": int(row.loss_count or 0),
                 "flat_count": int(row.flat_count or 0),
-                "realized_pnl_krw": int(row.realized_pnl_krw or 0),
-                "avg_profit_rate": round(_safe_float(row.avg_profit_rate), 2),
+                "realized_pnl_krw": _optional_int(row.realized_pnl_krw),
+                "avg_profit_rate": (
+                    round(float(row.avg_profit_rate), 2)
+                    if row.avg_profit_rate is not None
+                    else None
+                ),
                 "avg_holding_seconds": round(_safe_float(row.avg_holding_seconds), 1),
                 "best_trade_code": row.best_trade_code or "",
                 "best_trade_name": row.best_trade_name or "",
@@ -834,8 +1154,12 @@ def build_strategy_position_performance_report(
                 "strategy": fact.strategy,
                 "position_tag": fact.position_tag,
                 "status": fact.status,
-                "profit_rate": round(_safe_float(fact.profit_rate), 2),
-                "realized_pnl_krw": int(fact.realized_pnl_krw or 0),
+                "profit_rate": (
+                    round(float(fact.profit_rate), 2)
+                    if fact.profit_rate is not None
+                    else None
+                ),
+                "realized_pnl_krw": _optional_int(fact.realized_pnl_krw),
                 "exit_rule": fact.exit_rule or "",
                 "sell_reason_type": fact.sell_reason_type or "",
                 "buy_time": (
@@ -862,8 +1186,12 @@ def build_strategy_position_performance_report(
                 "strategy": fact["strategy"],
                 "position_tag": fact["position_tag"],
                 "status": fact["status"],
-                "profit_rate": round(_safe_float(fact["profit_rate"]), 2),
-                "realized_pnl_krw": int(fact["realized_pnl_krw"]),
+                "profit_rate": (
+                    round(float(fact["profit_rate"]), 2)
+                    if fact["profit_rate"] is not None
+                    else None
+                ),
+                "realized_pnl_krw": _optional_int(fact["realized_pnl_krw"]),
                 "exit_rule": fact["exit_rule"],
                 "sell_reason_type": fact["sell_reason_type"],
                 "buy_time": (
@@ -906,7 +1234,36 @@ def main(argv: list[str] | None = None) -> int:
         help="Print the synchronization summary as JSON.",
     )
     args = parser.parse_args(argv)
-    result = sync_trade_performance_for_date(args.target_date)
+    try:
+        result = sync_trade_performance_for_date(args.target_date)
+    except FactSyncSourceError as exc:
+        if args.print_stdout:
+            print(json.dumps({"status": "source_blocked", "reason": str(exc)}))
+        return 2
+    except Exception as exc:
+        try:
+            _write_status(
+                args.target_date,
+                {
+                    "status": "failed",
+                    "consumer_ready": False,
+                    "source_fact_count": None,
+                    "fact_count": None,
+                    "completed_count": None,
+                    "economics_valid_completed_count": None,
+                    "economics_missing_completed_count": None,
+                    "prior_fact_count": None,
+                    "warning_count": 0,
+                    "warnings": [],
+                    "issues": [f"exception:{type(exc).__name__}"],
+                    "source_digest": None,
+                },
+            )
+        except Exception:
+            pass
+        if args.print_stdout:
+            print(json.dumps({"status": "failed", "reason": str(exc)}))
+        return 1
     if args.print_stdout:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
     return 0

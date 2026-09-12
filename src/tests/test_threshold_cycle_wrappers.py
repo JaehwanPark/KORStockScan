@@ -226,6 +226,8 @@ def test_postclose_wrapper_syncs_exact_trade_facts_before_daily_calibration():
     ]
     assert "reason=skip_db" in sync_block
     assert "src.engine.strategy_position_performance_report" in sync_block
+    assert "FACT_SYNC_STATUS_FILE" in sync_block
+    assert "validate_fact_sync_receipt" in sync_block
 
 
 def test_postclose_materializes_current_lifecycle_before_single_daily_consumer():

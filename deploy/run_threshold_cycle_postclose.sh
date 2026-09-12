@@ -296,6 +296,7 @@ ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
 STATUS_DIR="$PROJECT_DIR/data/report/threshold_cycle_postclose_status"
 STATUS_FILE="$STATUS_DIR/threshold_cycle_postclose_${TARGET_DATE}.status.json"
+FACT_SYNC_STATUS_FILE="$PROJECT_DIR/data/report/strategy_position_fact_sync/strategy_position_fact_sync_${TARGET_DATE}.status.json"
 POSTCLOSE_MARKER_LOG="${THRESHOLD_CYCLE_POSTCLOSE_MARKER_LOG:-$PROJECT_DIR/logs/threshold_cycle_postclose_cron.log}"
 POSTCLOSE_MARKER_LOG_ENABLED="${THRESHOLD_CYCLE_POSTCLOSE_MARKER_LOG_ENABLED:-true}"
 POSTCLOSE_BOT_ISOLATION_MARKER="$PROJECT_DIR/tmp/postclose_bot_isolation.json"
@@ -1070,6 +1071,38 @@ json.loads(path.read_text(encoding="utf-8"))
 PY
 }
 
+validate_fact_sync_receipt() {
+  local path="$1"
+  "$VENV_PY" - "$path" "$TARGET_DATE" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target_date = sys.argv[2]
+payload = json.loads(path.read_text(encoding="utf-8"))
+expected_hash = str(payload.pop("artifact_sha256", ""))
+actual_hash = hashlib.sha256(
+    json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+).hexdigest()
+if (
+    payload.get("target_date") != target_date
+    or payload.get("status") not in {"succeeded", "valid_empty"}
+    or payload.get("consumer_ready") is not True
+    or len(expected_hash) != 64
+    or expected_hash != actual_hash
+):
+    raise SystemExit(1)
+PY
+}
+
 wait_for_file_artifact() {
   local path="$1"
   local label="$2"
@@ -1747,6 +1780,11 @@ if [ "$SKIP_DB" != "true" ]; then
   wait_for_postclose_resources "strategy_position_performance_sync"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.strategy_position_performance_report \
     --date "$TARGET_DATE"
+  wait_for_json_artifact "$FACT_SYNC_STATUS_FILE" "strategy_position_fact_sync"
+  if ! validate_fact_sync_receipt "$FACT_SYNC_STATUS_FILE"; then
+    echo "[threshold-cycle] exact trade fact sync receipt invalid target_date=$TARGET_DATE path=$FACT_SYNC_STATUS_FILE" >&2
+    exit 1
+  fi
 else
   echo "[threshold-cycle] skip exact trade fact sync target_date=$TARGET_DATE reason=skip_db"
 fi
