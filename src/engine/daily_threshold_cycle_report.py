@@ -18370,6 +18370,10 @@ def _threshold_snapshot_from_families(
             ),
             "current": family["current"],
             "recommended": family["recommended"],
+            # Window-policy re-evaluation needs the same exact terminal
+            # economics grid as the daily family.  Omitting it makes a valid
+            # rolling sample indistinguishable from a producer with no grid.
+            "candidate_grid": family.get("candidate_grid", []),
             **(
                 {"implementation_status": family["implementation_status"]}
                 if "implementation_status" in family

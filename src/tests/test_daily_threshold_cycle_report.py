@@ -5716,6 +5716,37 @@ def test_position_sizing_candidate_accepts_exact_trade_id_alias():
     assert metrics["exact_terminal_join_identity_counts"] == {"record_id": 1}
 
 
+def test_cumulative_snapshot_preserves_position_sizing_candidate_grid():
+    snapshot = report_mod._threshold_snapshot_from_families(
+        [
+            {
+                "family": "position_sizing_dynamic_formula",
+                "stage": "position_sizing",
+                "sample": {"real_completed_valid": 40},
+                "apply_ready": True,
+                "current": {"formula_version": "entry_type_5stage_cap25_v1"},
+                "recommended": {"formula_version": "entry_type_5stage_cap25_v1"},
+                "candidate_grid": [
+                    {
+                        "formula_candidate_id": "entry_type_5stage_cap25_v1",
+                        "exact_terminal_join_count": 13,
+                    }
+                ],
+            }
+        ],
+        report_only=True,
+    )
+
+    family = snapshot["position_sizing_dynamic_formula"]
+    assert family["apply_mode"] == "report_only_reference"
+    assert family["candidate_grid"] == [
+        {
+            "formula_candidate_id": "entry_type_5stage_cap25_v1",
+            "exact_terminal_join_count": 13,
+        }
+    ]
+
+
 def test_position_sizing_runtime_fields_survive_event_compaction():
     event = report_mod._compact_threshold_cycle_event(
         {
