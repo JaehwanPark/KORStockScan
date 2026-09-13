@@ -7,7 +7,7 @@
 | 매일 19:30 시작, 휴일 포함. 19:59까지 매분 미완료/남은 시도 확인 | [장후 작업지시문](./postclose-tuning-result-review-task-instructions.md) |
 | 매분 읽기 전용 완료 확인 후 source-date당 한 번 | [장중 작업지시문](./intraday-monitoring-task-instructions.md) |
 
-장후 종료는 `postclose_finalization_cron.log`의 해당 source-date 최신 terminal이 `postclose_final_detector ... finalization=done detector=done`이고, 같은 날짜 strict verifier의 summary handoff PASS, 실제 controller DONE 및 현재 source/tower/checklist hash 검증이 모두 성립해야 한다. 중간 finalization DONE·이전 PASS·dry-run은 종료가 아니다. 재시작/실패 marker가 뒤따르면 기다린다. 자정 이후에도 전일 source-date를 유지하며 오늘/전일만 확인한다. 설치 전 source-date는 자동 소급 실행하지 않는다.
+장후 종료는 `postclose_finalization_cron.log`의 해당 source-date 최신 terminal이 `postclose_final_detector ... finalization=done detector=done`이고, 같은 source-date strict verifier의 summary handoff PASS, 실제 controller DONE, source-date tower와 다음 KRX 거래일 체크리스트의 현재 source hash 검증이 모두 성립해야 한다. 중간 finalization DONE·이전 PASS·dry-run은 종료가 아니다. 재시작/실패 marker가 뒤따르면 기다린다. 자정 이후에도 전일 source-date를 유지하며 오늘/전일만 확인한다. 설치 전 source-date는 자동 소급 실행하지 않는다.
 
 ## API와 문서 게시 계약
 

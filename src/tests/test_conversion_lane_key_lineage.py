@@ -1,10 +1,10 @@
 import gzip
-import hashlib
 import json
 from pathlib import Path
 
 from src.engine.automation import conversion_lane as lane
 from src.engine.automation import key_lineage_ledger as ledger
+from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
 from src.engine.scalping import scalp_sim_auto_approval_control_tower as scalp_catalog
 from src.engine.swing import sim_auto_approval_control_tower as swing_catalog
 
@@ -15,23 +15,22 @@ def _write(path: Path, payload: dict) -> None:
 
 
 def _dual_replay_payload(target_date="2026-09-12"):
-    dual = {
-        "cohort_key": "INTEGRATED/KRX_NXT_AFTERMARKET",
-        "cohort_key_version": "v2",
-        "effective_venue": "INTEGRATED",
-        "session_bucket": "KRX_NXT_AFTERMARKET",
-        "market_data_route": "SOR",
-        "authority_state": "OBSERVE_ONLY",
-    }
-    contract = {
-        "schema": "entry_replay_cohort_contract_v1",
-        "contract_version": "v2",
-        "expected_cohorts_by_contract_version": {"v2": [dual]},
-    }
-    digest = hashlib.sha256(
-        json.dumps(contract, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        .encode("utf-8")
-    ).hexdigest()
+    contract = optimizer._entry_cohort_contract(
+        {
+            "candidate_summaries": [
+                {
+                    "stage": "entry",
+                    "effective_venue": "INTEGRATED",
+                    "session_bucket": "KRX_NXT_AFTERMARKET",
+                    "market_data_route": "SOR",
+                    "cohort_key_version": "v2",
+                    "authority_state": "OBSERVE_ONLY",
+                }
+            ]
+        }
+    )
+    dual = contract["expected_cohorts"][-1]
+    digest = contract["contract_content_sha256"]
     batch = {
         "target_date": target_date,
         "runtime_effect": False,
@@ -39,7 +38,8 @@ def _dual_replay_payload(target_date="2026-09-12"):
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "cohort_contract": contract,
-        "source_cohort_contract_sha256": digest,
+        "cohort_contract_sha256": digest,
+        "candidate_prompt_selection_source": {"cohort_contract_sha256": digest},
         "cohorts": [{
             **dual, "status": "completed_observe_only", "runtime_effect": False,
             "allowed_runtime_apply": False, "actual_order_submitted": False,
@@ -52,7 +52,7 @@ def _dual_replay_payload(target_date="2026-09-12"):
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
-        "source_cohort_contract_sha256": digest,
+        "source_bindings": {"entry_cohort_contract_sha256": digest},
         "request_paths": {"entry_base": {"cohorts": [{
             **dual,
             "path_status": "intentionally_blocked_with_owner_and_acceptance_test",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.engine.lifecycle.retirement import retired_artifact, current_report_view
+from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer
 
 import argparse
 import ast
@@ -132,7 +133,12 @@ def _bool_field(value: Any, default: bool | None = None) -> bool | None:
 def entry_replay_observe_only_status(
     batch: dict[str, Any], consumer: dict[str, Any], *, target_date: str
 ) -> dict[str, Any]:
-    """Bind dual-aftermarket replay evidence without creating runtime lineage."""
+    """Bind producer-owned dual replay evidence without runtime lineage.
+
+    A v1 census has no dual-aftermarket row. That is a normal not-applicable
+    observation, not a failure. The postclose verifier owns full cohort
+    coverage; this helper only validates an explicitly declared dual route.
+    """
     if not batch and not consumer:
         return {
             "status": "not_enabled",
@@ -142,8 +148,10 @@ def entry_replay_observe_only_status(
         }
     issues: list[str] = []
     contract = batch.get("cohort_contract") if isinstance(batch, dict) else None
-    if not isinstance(contract, dict) or batch.get("target_date") != target_date:
+    if batch.get("target_date") != target_date:
         issues.append("batch_contract_or_date_invalid")
+    if not main_ai_prompt_optimizer.entry_cohort_contract_valid(contract):
+        issues.append("cohort_contract_invalid")
         contract = {}
     if not consumer or consumer.get("target_date") != target_date:
         issues.append("consumer_missing_or_date_invalid")
@@ -157,113 +165,127 @@ def entry_replay_observe_only_status(
                 issues.append(f"{label}_{field}_invalid")
         if payload.get("broker_order_forbidden") is not True:
             issues.append(f"{label}_broker_order_forbidden_invalid")
-    expected = (
-        (contract.get("expected_cohorts_by_contract_version") or {}).get(
-            contract.get("contract_version")
-        )
-        if isinstance(contract.get("expected_cohorts_by_contract_version"), dict)
-        else None
-    )
-    if contract.get("schema") != "entry_replay_cohort_contract_v1" or not isinstance(
-        expected, list
-    ):
+    expected = contract.get("expected_cohorts") if contract else []
+    if not isinstance(expected, list):
         issues.append("cohort_contract_invalid")
         expected = []
-    contract_hash = hashlib.sha256(
-        json.dumps(
-            contract,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
+    contract_hash = main_ai_prompt_optimizer.entry_cohort_contract_content_sha256(
+        contract
+    )
+    batch_source = batch.get("candidate_prompt_selection_source")
+    batch_source = batch_source if isinstance(batch_source, dict) else {}
+    source_bindings = consumer.get("source_bindings")
+    source_bindings = source_bindings if isinstance(source_bindings, dict) else {}
+    if (
+        not contract_hash
+        or batch.get("cohort_contract_sha256") != contract_hash
+        or batch_source.get("cohort_contract_sha256") != contract_hash
+    ):
+        issues.append("batch_contract_hash_invalid")
+    if source_bindings.get("entry_cohort_contract_sha256") != contract_hash:
+        issues.append("consumer_contract_hash_invalid")
 
-    def identity(row: Any) -> tuple[str, str] | None:
+    def identity(row: Any) -> tuple[str, str, str, str, str] | None:
         if not isinstance(row, dict):
             return None
-        key = str(row.get("cohort_key") or "").strip()
+        venue = str(row.get("effective_venue") or "").strip().upper()
+        session = str(row.get("session_bucket") or "").strip().upper()
+        route = str(row.get("market_data_route") or "").strip().upper()
         version = str(row.get("cohort_key_version") or "").strip()
-        return (key, version) if key and version else None
+        authority = str(row.get("authority_state") or "").strip()
+        if not venue or not session or not version or not authority:
+            return None
+        return venue, session, route, version, authority
 
-    def has_hash(payload: Any) -> bool:
-        if isinstance(payload, dict):
-            return any(
-                (str(key).endswith("cohort_contract_sha256") and value == contract_hash)
-                or has_hash(value)
-                for key, value in payload.items()
-            )
-        if isinstance(payload, list):
-            return any(has_hash(value) for value in payload)
-        return False
+    expected_dual = [
+        row
+        for row in expected
+        if isinstance(row, dict)
+        and str(row.get("effective_venue") or "").upper()
+        == main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_VENUE
+        and str(row.get("session_bucket") or "").upper()
+        == main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_SESSION
+    ]
+    if not expected_dual and not issues:
+        return {
+            "status": "not_applicable",
+            "issues": [],
+            "contract_hash": contract_hash,
+            "cohorts": [],
+        }
 
-    if not has_hash(batch):
-        issues.append("batch_contract_hash_invalid")
-    if not has_hash(consumer):
-        issues.append("consumer_contract_hash_invalid")
-    batch_rows = {identity(row): row for row in batch.get("cohorts") or [] if identity(row)}
+    batch_rows = {
+        identity(row): row for row in batch.get("cohorts") or [] if identity(row)
+    }
     request_paths = consumer.get("request_paths") if isinstance(consumer, dict) else {}
     entry_base = request_paths.get("entry_base") if isinstance(request_paths, dict) else {}
     consumer_rows = {
         identity(row): row
-        for row in (entry_base.get("cohorts") if isinstance(entry_base, dict) else []) or []
+        for row in (entry_base.get("cohorts") if isinstance(entry_base, dict) else [])
+        or []
         if identity(row)
     }
     cohorts: list[dict[str, Any]] = []
-    for row in expected:
+    for row in expected_dual:
         cohort_id = identity(row)
         if cohort_id is None:
             issues.append("expected_cohort_identity_invalid")
             continue
-        venue = str(row.get("effective_venue") or "")
-        session = str(row.get("session_bucket") or "")
-        route = str(row.get("market_data_route") or "")
-        if "UNKNOWN" in {venue.upper(), session.upper(), route.upper()}:
+        venue, session, route, version, authority = cohort_id
+        if (
+            not route
+            or version != main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V2
+            or authority != "OBSERVE_ONLY"
+        ):
+            issues.append("dual_observe_only_authority_invalid")
+        if "UNKNOWN" in {venue, session, route}:
             issues.append("unknown_session_coverage")
-        if venue != "INTEGRATED" or session != "KRX_NXT_AFTERMARKET":
-            continue
         batch_row = batch_rows.get(cohort_id)
         consumer_row = consumer_rows.get(cohort_id)
-        # Compare the contract fields only; batch adds terminal receipts.
-        if not isinstance(batch_row, dict) or any(
-            batch_row.get(field) != row.get(field)
-            for field in (
-                "cohort_key", "cohort_key_version", "effective_venue",
-                "session_bucket", "market_data_route", "authority_state",
-            )
-        ):
+        if not isinstance(batch_row, dict):
             issues.append("batch_dual_cohort_reconciliation_invalid")
-        if not isinstance(consumer_row, dict) or any(
-            consumer_row.get(field) != row.get(field)
-            for field in (
-                "cohort_key", "cohort_key_version", "effective_venue",
-                "session_bucket", "market_data_route", "authority_state",
-            )
-        ):
+        if not isinstance(consumer_row, dict):
             issues.append("consumer_dual_cohort_reconciliation_invalid")
         if (
             not isinstance(batch_row, dict)
-            or batch_row.get("authority_state") not in {"OBSERVE_ONLY", "BLOCKED_MISSING_APPROVAL"}
-            or batch_row.get("status") not in {"completed_observe_only", "blocked_missing_approval"}
-            or any(batch_row.get(field) is not False for field in (
-                "runtime_effect", "allowed_runtime_apply", "actual_order_submitted"
-            ))
+            or batch_row.get("status")
+            not in {"completed_observe_only", "blocked_missing_approval"}
+            or any(
+                batch_row.get(field) is not False
+                for field in (
+                    "runtime_effect",
+                    "allowed_runtime_apply",
+                    "actual_order_submitted",
+                )
+            )
             or batch_row.get("candidate_contract_sha256") is not None
             or not isinstance(consumer_row, dict)
-            or consumer_row.get("path_status") != "intentionally_blocked_with_owner_and_acceptance_test"
+            or consumer_row.get("path_status")
+            != "intentionally_blocked_with_owner_and_acceptance_test"
             or consumer_row.get("terminality") != "terminal_source_observation"
         ):
             issues.append("dual_observe_only_authority_invalid")
-        cohorts.append({
-            "cohort_key": cohort_id[0], "cohort_key_version": cohort_id[1],
-            "effective_venue": venue, "session_bucket": session,
-            "market_data_route": route, "authority_state": row.get("authority_state"),
-            "contract_hash": contract_hash,
-            "conversion_state": "terminal_source_only_exclusion",
-            "excluded_from_real_queue_reason": "dual_aftermarket_observe_only_no_live_approval",
-        })
-    return {"status": "fail" if issues else "pass", "issues": sorted(set(issues)),
-            "contract_hash": contract_hash, "cohorts": cohorts}
+        cohorts.append(
+            {
+                "cohort_key": f"{venue}/{session}/{route}",
+                "cohort_key_version": version,
+                "effective_venue": venue,
+                "session_bucket": session,
+                "market_data_route": route,
+                "authority_state": authority,
+                "contract_hash": contract_hash,
+                "conversion_state": "terminal_source_only_exclusion",
+                "excluded_from_real_queue_reason": (
+                    "dual_aftermarket_observe_only_no_live_approval"
+                ),
+            }
+        )
+    return {
+        "status": "fail" if issues else "pass",
+        "issues": sorted(set(issues)),
+        "contract_hash": contract_hash,
+        "cohorts": cohorts,
+    }
 
 
 def _serialized_sequence(value: Any) -> list[Any]:

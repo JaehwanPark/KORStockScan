@@ -199,6 +199,7 @@ Source가 전일 보고서를 지정한 오후 점검은 당일 20:10 producer �
 
 ```bash
 jq '{schema, workspace, release_root, git_commit, review_evidence}' data/runtime/runtime_release_selection.json
+jq '{release_root, git_commit}' data/runtime/unified_runtime_deployment.json
 jq '{release_root, git_commit, policy_path, policy_sha256, effective_from, persistence, units}' data/runtime/machine_profit_stagnation_deployment.json
 bash deploy/run_runtime_release.sh --check-cron
 bash deploy/run_runtime_release.sh postclose "$TARGET_DATE" --print-plan

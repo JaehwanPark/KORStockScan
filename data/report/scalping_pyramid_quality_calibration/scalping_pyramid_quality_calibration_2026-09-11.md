@@ -1,0 +1,60 @@
+# 2026-09-11 Scalping Pyramid Quality Calibration
+
+- generated_at: 2026-09-11T20:33:57+09:00
+- family: scalping_pyramid_quality_gate
+- stage: scale_in
+- calibration_state: source_quality_blocked
+- calibration_reason: threshold_replay_no_comparable_episodes
+- condition_feasibility: {"allowed_runtime_apply": false, "best_exploratory_min_profit_pct": null, "best_exploratory_net_contribution_pct": null, "condition_currently_achievable": false, "decision_authority": "source_only_threshold_feasibility_review", "future_success_probability": null, "indefinite_wait_appropriate": true, "next_action": "resolve_named_source_or_baseline_blockers", "positive_exploratory_candidate_present": false, "probability_status": "not_estimated_from_observational_grid", "profit_improvement_demonstrated": false, "reconsideration_trigger": "new_valid_closed_outcomes_or_revised_source_only_hypothesis", "runtime_baseline_blockers": [], "runtime_effect": false, "runtime_scope_blockers": [], "source_blockers": ["threshold_replay_no_comparable_episodes"], "state": "evidence_not_ready"}
+- allowed_runtime_apply: false
+- runtime_baseline_gate: pass
+- current_min_profit_pct: 1.1
+- current_min_profit_source: same_day_runtime_feedback_observation
+- source_quality_excluded_dates: [{"artifact": null, "blocked_reason": "source_quality_preflight_missing", "hard_blocking_contract_gap_count": 0, "load_error": "FileNotFoundError", "source_date": "2026-06-13", "source_quality_gate": "blocked_contract_gap", "status": "missing"}, {"artifact": null, "blocked_reason": "source_quality_preflight_missing", "hard_blocking_contract_gap_count": 0, "load_error": "FileNotFoundError", "source_date": "2026-06-14", "source_quality_gate": "blocked_contract_gap", "status": "missing"}, {"artifact": "/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-06-19.json", "blocked_reason": "blocked_contract_gap", "hard_blocking_contract_gap_count": 3, "load_error": null, "source_date": "2026-06-19", "source_quality_gate": "blocked_contract_gap", "status": "fail"}, {"artifact": null, "blocked_reason": "source_quality_preflight_missing", "hard_blocking_contract_gap_count": 0, "load_error": "FileNotFoundError", "source_date": "2026-08-17", "source_quality_gate": "blocked_contract_gap", "status": "missing"}]
+- runtime_effect: false
+- decision_authority: postclose_calibration_candidate_preopen_only
+- forbidden_uses: intraday_threshold_mutation, intraday_runtime_apply, hard_safety_relaxation, broker_guard_bypass, order_guard_relaxation, quantity_guard_relaxation, position_cap_release, provider_route_change, bot_restart, real_execution_quality_approval
+
+## Metrics
+
+- calibration_source_scope: timestamped_pyramid_gate_fixed_exit_replay
+- one_share_event_source_present: True
+- one_share_closed_pyramid_row_count: 87
+- sample_count: 87
+- recovered_or_extended_rate: 0.24
+- reversal_or_flat_rate: 0.16
+- correctly_blocked_rate: 0.60
+- one_share_pyramid_avg_opportunity_cost_pct: 0.56
+- profit_threshold_grid_status: hold
+- profit_threshold_grid_reason: grid_eligible_rows_lt_20
+- profit_threshold_grid_objective: maximize_fee_aware_expected_net_profit_contribution
+- profit_threshold_grid_exploratory_selected_min_profit_pct: None
+- profit_threshold_grid_selected_min_profit_pct: 1.1
+- profit_threshold_grid_selected_avg_incremental_exit_profit_pct: 0.00
+- profit_threshold_grid_selected_expected_net_profit_contribution_pct: 0.0000
+- source_quality_pass: True
+- source_quality_excluded_row_count: 219
+- provenance_present: True
+- normal_winner_expansion_state: non_positive_ev_hold
+- normal_winner_expansion_sample_count: 31
+- normal_winner_expansion_ev_eligible_sample_count: 31
+- normal_winner_expansion_notional_weighted_ev_pct: -0.3007
+- normal_winner_expansion_loosen_veto_applied: False
+- post_probe_real_outcome_state: hold_sample
+- post_probe_real_outcome_closed_count: 47
+- post_probe_confirmation_ready_count: 1
+- post_probe_confirmation_ready_winner_count: 1
+- post_probe_confirmation_ready_loss_or_flat_count: 0
+- post_probe_confirmation_ready_notional_weighted_ev_pct: 0.2700
+- winner_recovery_bounded_canary_state: bounded_one_share_canary_evidence_ready
+- winner_recovery_bounded_canary_exact_blocker_sample_count: 13
+- winner_recovery_real_execution_state: observe_one_share_canary
+- winner_recovery_real_source_quality_valid_closed_count: 0
+- winner_recovery_real_source_quality_adjusted_ev_pct: 0.0000
+- winner_recovery_recommended_next_qty_stage: retain_one_share_winner_recovery_canary
+- winner_recovery_runtime_funnel_state: no_runtime_gate_observation
+- winner_recovery_runtime_selected_count: 0
+- winner_recovery_downstream_guard_blocked_count: 0
+- winner_recovery_order_submitted_count: 0
+- winner_recovery_executed_count: 0
+- winner_recovery_dominant_non_execution_layer: none
