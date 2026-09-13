@@ -1523,7 +1523,7 @@ def test_entry_split_summary_separates_exploration_from_ev_authority(
                 "candidate_grid": [],
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
-                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed_with_scoped_bucket_fallback_v2",
                     "exploration_seed_allowed": True,
                     "ev_validated_runtime_apply_allowed": False,
                     "runtime_apply_authority_classes": ["bounded_exploration_seed"],

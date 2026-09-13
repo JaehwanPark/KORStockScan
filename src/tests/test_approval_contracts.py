@@ -55,20 +55,19 @@ def test_annotate_approval_request_does_not_restore_retired_entry_bridge():
     assert request["approval_artifact_consumer"] is None
 
 
-def test_approval_contract_registry_marks_dynamic_formula_as_not_runtime_reflected():
+def test_approval_contract_registry_marks_dynamic_formula_as_dated_preopen_guarded():
     request = annotate_approval_request(
         {"family": "position_sizing_dynamic_formula"}, "2026-06-10"
     )
 
-    assert request["approval_contract_status"] == "implemented_not_runtime_reflected"
+    assert request["approval_contract_status"] == "dated_preopen_policy_guarded"
     assert request["approval_mode"] == (
-        "selected_formula_with_flat10_report_comparison"
+        "retain_current_formula_with_flat10_fail_closed_fallback"
     )
-    assert request["approval_artifact_required"] is False
+    assert request["approval_artifact_required"] is True
     assert request["approval_live_ready"] is False
     assert request["approval_artifact_path"].endswith(
         "position_sizing_dynamic_formula_2026-06-10.json"
     )
-    assert request["approval_contract_missing_components"] == [
-        "current_process_restart_not_authorized"
-    ]
+    assert request["approval_contract_missing_components"] == []
+    assert request["approval_artifact_consumer"] == "threshold_cycle_preopen_apply"

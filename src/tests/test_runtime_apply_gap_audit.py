@@ -118,6 +118,7 @@ def test_runtime_apply_gap_audit_surfaces_direct_preopen_policy_families(
             "source_quality_passed": True,
             "minimum_cost_adjusted_ev_pct": 0.1,
             "cost_adjusted_ev_pct": 0.18,
+            "exact_terminal_sample_count": 31,
         },
     )
     _write_json(
@@ -178,8 +179,12 @@ def test_runtime_apply_gap_audit_surfaces_direct_preopen_policy_families(
     )
     krx = rows["post_probe_winner_recovery:2026-05-22:KRX"]
     assert entry["preopen_apply_state"] == "consumed_by_next_preopen"
-    assert entry["final_disposition"] == ("post_apply_attribution_pending")
+    assert entry["final_disposition"] == "live_auto_apply_ready"
+    assert entry["bridge_state"] == "not_required_direct_preopen_owner"
+    assert entry["post_apply_attribution_instrumentation_state"] == "ready"
+    assert entry["post_apply_attribution_state"] == "instrumented_evidence_pending"
     assert sizing["primary_ev"] == 0.18
+    assert sizing["sample"] == 31
     assert sizing["preopen_apply_state"] == "consumed_by_next_preopen"
     assert krx["primary_ev"] == 0.12
     assert krx["preopen_apply_state"] == "consumed_by_next_preopen"
@@ -188,6 +193,10 @@ def test_runtime_apply_gap_audit_surfaces_direct_preopen_policy_families(
         == "pending_next_preopen"
     )
     assert report["runtime_uptake_kpi"]["candidate_count"] == 4
+    assert report["runtime_uptake_kpi"]["live_auto_apply_ready_count"] == 3
+    assert report["runtime_uptake_kpi"]["preopen_selected_count"] == 3
+    assert report["runtime_uptake_kpi"]["post_apply_evidence_pending_count"] == 3
+    assert report["summary"]["bridge_blocker_ledger_count"] == 0
 
 
 def _runtime_openai_bedrock_config() -> PostcloseAIReviewConfig:

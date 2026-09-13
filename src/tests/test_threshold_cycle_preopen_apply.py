@@ -10927,6 +10927,8 @@ def test_split_runtime_policy_audit_accepts_exact_flat10_sizing_policy(tmp_path)
         "source_quality_passed": True,
         "minimum_cost_adjusted_ev_pct": 0.1,
         "cost_adjusted_ev_pct": 0.1,
+        "exact_terminal_sample_count": 30,
+        "runtime_promotion_sample_floor": 30,
     }
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     audits = mod._split_runtime_policy_audits(
@@ -10961,6 +10963,8 @@ def test_split_runtime_policy_audit_rejects_flat10_policy_with_nonflat_tiers(tmp
         "source_quality_passed": True,
         "minimum_cost_adjusted_ev_pct": 0.1,
         "cost_adjusted_ev_pct": 0.1,
+        "exact_terminal_sample_count": 30,
+        "runtime_promotion_sample_floor": 30,
     }
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
     audits = mod._split_runtime_policy_audits(
@@ -10999,6 +11003,8 @@ def test_split_runtime_policy_audit_rejects_sizing_policy_below_net_ev_floor(
         "source_quality_passed": True,
         "minimum_cost_adjusted_ev_pct": 0.1,
         "cost_adjusted_ev_pct": 0.09,
+        "exact_terminal_sample_count": 30,
+        "runtime_promotion_sample_floor": 30,
     }
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
 

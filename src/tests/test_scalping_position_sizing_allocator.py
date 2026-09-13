@@ -375,6 +375,8 @@ def test_dated_position_sizing_policy_loads_and_invalid_hash_falls_back(
         "source_quality_passed": True,
         "minimum_cost_adjusted_ev_pct": 0.1,
         "cost_adjusted_ev_pct": 0.1,
+        "exact_terminal_sample_count": 30,
+        "runtime_promotion_sample_floor": 30,
     }
     policy["policy_content_sha256"] = allocator._policy_content_sha256(policy)
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -416,6 +418,8 @@ def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(
         "source_quality_passed": True,
         "minimum_cost_adjusted_ev_pct": 0.1,
         "cost_adjusted_ev_pct": 0.1,
+        "exact_terminal_sample_count": 30,
+        "runtime_promotion_sample_floor": 30,
     }
     policy["policy_content_sha256"] = allocator._policy_content_sha256(policy)
     policy_path.write_text(json.dumps(policy), encoding="utf-8")
@@ -449,8 +453,12 @@ def test_position_sizing_policy_authority_rejects_underfloor_net_ev():
         "source_quality_passed": True,
         "minimum_cost_adjusted_ev_pct": 0.1,
         "cost_adjusted_ev_pct": 0.09,
+        "exact_terminal_sample_count": 30,
+        "runtime_promotion_sample_floor": 30,
     }
 
     assert allocator.position_sizing_policy_authority_valid(policy) is False
     policy["cost_adjusted_ev_pct"] = 0.10
     assert allocator.position_sizing_policy_authority_valid(policy) is True
+    policy["exact_terminal_sample_count"] = 29
+    assert allocator.position_sizing_policy_authority_valid(policy) is False

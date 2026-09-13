@@ -1275,11 +1275,14 @@ def _dedicated_policy_ledger(
                     "consumed_by_next_preopen" if consumed else "pending_next_preopen"
                 ),
                 "runtime_hook_state": "mapped" if target_env_keys else "not_mapped",
-                "post_apply_attribution_state": "pending" if ready else "not_ready",
+                "post_apply_attribution_state": (
+                    "instrumented_evidence_pending" if ready else "not_ready"
+                ),
+                "post_apply_attribution_instrumentation_state": (
+                    "ready" if ready else "not_ready"
+                ),
                 "final_disposition": (
-                    "post_apply_attribution_pending"
-                    if ready
-                    else "source_only_keep_collecting"
+                    "live_auto_apply_ready" if ready else "source_only_keep_collecting"
                 ),
                 "failure_state": "pass",
                 "failure_reason": "",
@@ -1345,7 +1348,7 @@ def _dedicated_policy_ledger(
             stage="sizing",
             source_artifact="position_sizing_dynamic_formula",
             primary_ev=sizing_ev,
-            sample=0,
+            sample=_safe_int(sizing.get("exact_terminal_sample_count")),
             source_quality_gate=sizing_gate,
             ready=(
                 sizing.get("runtime_apply_allowed") is True
@@ -2409,10 +2412,22 @@ def _runtime_uptake_kpi(ledger: list[dict[str, Any]]) -> dict[str, Any]:
     ]
     fail = [row for row in ledger if row.get("failure_state") == "fail"]
     retry = [row for row in ledger if row.get("failure_state") == "retry_pending"]
+    preopen_selected = [
+        row
+        for row in ready
+        if row.get("preopen_apply_state") == "consumed_by_next_preopen"
+    ]
+    evidence_pending = [
+        row
+        for row in ready
+        if row.get("post_apply_attribution_state") == "instrumented_evidence_pending"
+    ]
     return {
         "candidate_count": len(ledger),
         "positive_edge_source_quality_pass_count": len(positive),
         "live_auto_apply_ready_count": len(ready),
+        "preopen_selected_count": len(preopen_selected),
+        "post_apply_evidence_pending_count": len(evidence_pending),
         "fail_count": len(fail),
         "retry_pending_count": len(retry),
         "runtime_uptake_rate_pct": (
@@ -2526,6 +2541,7 @@ def _conversion_blocker_rank(
             "joined",
             "ready",
             "live_auto_apply_ready",
+            "not_required_direct_preopen_owner",
         }:
             bridge_ledger.append(
                 {

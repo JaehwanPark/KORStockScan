@@ -53,6 +53,7 @@
 - [ ] `[ThresholdEnvAutoApplyPreopen0914] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-09-14`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-09-11.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-11.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
+  - Entry Split 판정: exact 비용 후 결과가 최소10건 이상에서 EV/tail을 탈락하고 전체 후보가0이면 명시 OFF envelope로 이전 split policy가 제거됐는지 확인한다. real submit 20건과 취소·late-fill guard를 통과한 초기 수량보존 seed는 exact 결과10건 전까지 관찰을 생성할 수 있으며, 그 외 표본 부족·guarded bucket은 HOLD이고 OFF로 확대하지 않는다. 실주문 제출률·sim 체결률·비용 차감 양수 terminal 빈도는 각각 다른 분모로 대사한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
 

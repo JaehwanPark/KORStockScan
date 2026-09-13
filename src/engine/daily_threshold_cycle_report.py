@@ -1006,6 +1006,14 @@ CALIBRATION_FAMILY_METADATA = {
         ],
         "primary_key": "formula_version",
         "bounds": {},
+        "value_contract": {
+            "type": "enum",
+            "allowed_values": [
+                SCALPING_SIZING_FORMULA_VERSION,
+                SCALPING_SIZING_ROLLBACK_VERSION,
+            ],
+            "proposal_must_match_deterministic_recommendation": True,
+        },
         "sample_floor": 30,
         "sample_window": "rolling_10d_with_real_denominator",
         "window_policy": {
@@ -1343,6 +1351,15 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
         "cost_adjusted_ev_pct": (candidate.get("recommended_values") or {}).get(
             "cost_adjusted_ev_pct"
         ),
+        "exact_terminal_sample_count": _safe_int(
+            (candidate.get("recommended_values") or {}).get(
+                "exact_terminal_sample_count"
+            ),
+            0,
+        )
+        or 0,
+        "runtime_promotion_sample_floor": _safe_int(candidate.get("sample_floor"), 0)
+        or 30,
         "generated_at": datetime.now().astimezone().isoformat(),
     }
     policy["policy_content_sha256"] = hashlib.sha256(
@@ -9117,6 +9134,17 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         if isinstance(recommended_policy.get("candidates"), list)
         else []
     )
+    runtime_disable_recommended = bool(
+        not candidates
+        and any(
+            isinstance(item, dict)
+            and (
+                (item.get("post_apply_continuation_gate") or {}).get("action")
+                == "disable_previous_policy_next_preopen"
+            )
+            for item in candidate_grid
+        )
+    )
     bounded_equal_baseline_count = sum(
         1
         for item in candidates
@@ -9251,6 +9279,13 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         "exploration_seed_allowed": exploration_seed_allowed,
         "ev_validated_runtime_apply_allowed": ev_validated_runtime_apply_allowed,
     }
+    if runtime_disable_recommended:
+        recommended = {
+            **recommended,
+            "enabled": False,
+            "policy_file": "",
+            "policy_version": "",
+        }
     return {
         "family": "entry_split_order_plan",
         "stage": "submit",
@@ -9291,6 +9326,7 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
+            "runtime_disable_recommended": runtime_disable_recommended,
             "runtime_apply_compatibility_allowed": (
                 runtime_apply_compatibility_allowed
             ),
@@ -13932,6 +13968,11 @@ def _calibration_state_for_family(
                 "source_quality_blocked",
                 "entry_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
             )
+        if source_metrics.get("runtime_disable_recommended") is True:
+            return (
+                "adjust_down",
+                "entry split has sufficient exact outcome evidence but failed the cost-adjusted EV or downside gate; emit an explicit OFF envelope for the next PREOPEN instead of carrying the prior split policy.",
+            )
         if source_metrics.get("runtime_apply_allowed") is not True:
             return (
                 "hold",
@@ -14806,6 +14847,10 @@ def _build_calibration_candidates(
                 "policy_version": family_sample.get("policy_version"),
                 "runtime_apply_allowed": family_sample.get("runtime_apply_allowed")
                 is True,
+                "runtime_disable_recommended": family_sample.get(
+                    "runtime_disable_recommended"
+                )
+                is True,
                 "runtime_apply_compatibility_allowed": family_sample.get(
                     "runtime_apply_compatibility_allowed"
                 )
@@ -15311,7 +15356,12 @@ def _build_calibration_candidates(
             round(min(1.0, sample_count / sample_floor), 4) if sample_floor > 0 else 0.0
         )
         primary_key = str(metadata.get("primary_key") or "")
-        runtime_apply_candidate = (
+        runtime_disable_family = bool(
+            output_family == "entry_split_order_plan"
+            and source_metrics.get("runtime_disable_recommended") is True
+            and calibration_state == "adjust_down"
+        )
+        runtime_apply_candidate = runtime_disable_family or (
             sample_ready
             and bool(metadata.get("allowed_runtime_apply"))
             and output_family not in source_only_smoothing_families
@@ -15358,6 +15408,7 @@ def _build_calibration_candidates(
             .get(primary_key, {})
             .get("max_step_per_day"),
             "bounds": metadata.get("bounds") or {},
+            "value_contract": dict(metadata.get("value_contract") or {}),
             "sample_window": metadata.get("sample_window", "daily"),
             "window_policy": dict(metadata.get("window_policy") or {}),
             "sample_count": sample_count,
@@ -15408,6 +15459,7 @@ def _build_calibration_candidates(
             and output_family not in source_only_smoothing_families,
             "runtime_apply_capable": runtime_apply_capable,
             "runtime_apply_eligible_now": runtime_apply_candidate,
+            "runtime_disable_family": runtime_disable_family,
             "runtime_apply_block_reason": metadata.get("runtime_apply_block_reason"),
             "human_approval_required": bool(metadata.get("human_approval_required"))
             or calibration_state == "approval_required",
@@ -15917,6 +15969,11 @@ def _refresh_candidate_from_primary_window(
             ),
             "cost_adjusted_ev_pct": (
                 selected.get("notional_weighted_ev_pct") if selected else None
+            ),
+            "exact_terminal_sample_count": (
+                _safe_int(selected.get("exact_terminal_join_count"), 0)
+                if selected
+                else 0
             ),
         }
     if family == "score65_74_recovery_probe":
@@ -16906,7 +16963,71 @@ def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
 
     if proposed_value not in (None, ""):
         if isinstance(current_value, bool):
-            effective_value = bool(proposed_value)
+            if not isinstance(proposed_value, bool):
+                return {
+                    "guard_accepted": False,
+                    "guard_reject_reason": "proposed_value_not_boolean",
+                    "effective_state": "hold_sample",
+                    "effective_value": current_value,
+                    "clamped": False,
+                    "anomaly_route": anomaly_route,
+                    "route_action": "reject_or_hold_sample",
+                    "runtime_change": False,
+                }
+            effective_value = proposed_value
+            guard_accepted = True
+        elif isinstance(current_value, str):
+            value_contract = (
+                candidate.get("value_contract")
+                if isinstance(candidate.get("value_contract"), dict)
+                else {}
+            )
+            allowed_values = {
+                str(value)
+                for value in (value_contract.get("allowed_values") or [])
+                if str(value)
+            }
+            proposed_text = str(proposed_value)
+            if value_contract.get("type") != "enum" or not allowed_values:
+                return {
+                    "guard_accepted": False,
+                    "guard_reject_reason": "missing_enum_value_contract",
+                    "effective_state": "hold_sample",
+                    "effective_value": current_value,
+                    "clamped": False,
+                    "anomaly_route": anomaly_route,
+                    "route_action": "reject_or_hold_sample",
+                    "runtime_change": False,
+                }
+            if proposed_text not in allowed_values:
+                return {
+                    "guard_accepted": False,
+                    "guard_reject_reason": "proposed_value_not_in_enum_allowlist",
+                    "effective_state": "hold_sample",
+                    "effective_value": current_value,
+                    "clamped": False,
+                    "anomaly_route": anomaly_route,
+                    "route_action": "reject_or_hold_sample",
+                    "runtime_change": False,
+                }
+            if value_contract.get(
+                "proposal_must_match_deterministic_recommendation"
+            ) is True and proposed_text != str(
+                candidate.get("recommended_value") or ""
+            ):
+                return {
+                    "guard_accepted": False,
+                    "guard_reject_reason": (
+                        "enum_proposal_mismatches_deterministic_recommendation"
+                    ),
+                    "effective_state": "hold_sample",
+                    "effective_value": current_value,
+                    "clamped": False,
+                    "anomaly_route": anomaly_route,
+                    "route_action": "reject_or_hold_sample",
+                    "runtime_change": False,
+                }
+            effective_value = proposed_text
             guard_accepted = True
         else:
             numeric_value = _safe_float(proposed_value, None)
@@ -17412,6 +17533,7 @@ def _build_ai_correction_input_context(
             "window_policy": candidate.get("window_policy"),
             "bounds": candidate.get("bounds"),
             "max_step_per_day": candidate.get("max_step_per_day"),
+            "value_contract": candidate.get("value_contract"),
             "safety_revert_required": candidate.get("safety_revert_required"),
             "allowed_runtime_apply": candidate.get("allowed_runtime_apply"),
             "runtime_handoff_contract": _ai_runtime_handoff_summary(

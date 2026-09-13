@@ -3099,8 +3099,16 @@ def _build_candidate_grid(
             continuation_action = "continue_bounded_seed"
         elif real_count < SAMPLE_FLOOR_REAL:
             continuation_action = "hold_observation"
+        elif bucket != "guarded_or_stale" and (
+            mature_parent_evidence_contradictory
+            or (
+                split_variant_outcome_count >= SPLIT_VARIANT_CONTINUATION_FLOOR_REAL
+                and not early_continuation_edge_pass
+            )
+        ):
+            continuation_action = "disable_previous_policy_next_preopen"
         else:
-            continuation_action = "freeze_new_policy_generation"
+            continuation_action = "hold_observation"
         policy_mode = ""
         policy_generation_reason = ""
         if child_shape_seed_passed:
@@ -3309,7 +3317,12 @@ def _build_candidate_grid(
                     "runtime_candidate_pass": passed,
                     "action": continuation_action,
                     "reason": continuation_reason,
-                    "negative_or_missing_edge_is_calibration_freeze_not_safety_rollback": True,
+                    "sample_shortfall_holds_but_negative_edge_disables_next_preopen": (
+                        True
+                    ),
+                    "negative_or_missing_edge_is_calibration_freeze_not_safety_rollback": (
+                        False
+                    ),
                 },
                 "split_variant_id": split_variant_id,
                 "selected_child_variant_id": (
@@ -3333,6 +3346,32 @@ def _build_candidate_grid(
                 ),
                 "post_submit_low_tick_band": tick_band,
                 "primary_sample_book": primary_sample_book,
+                "real_submit_count": _safe_int(counts.get("real_submitted_count"), 0),
+                "real_submit_rate_pct": (
+                    _pct(
+                        _safe_int(counts.get("real_submitted_count"), 0),
+                        event_real_count,
+                    )
+                    if event_real_count > 0
+                    else None
+                ),
+                "sim_fill_count": _safe_int(counts.get("sim_fill_count"), 0),
+                "sim_fill_rate_pct": (
+                    _pct(_safe_int(counts.get("sim_fill_count"), 0), sim_count)
+                    if sim_count > 0
+                    else None
+                ),
+                "cost_adjusted_positive_terminal_count": sum(
+                    1 for value in split_variant_ev_list or [] if value > 0
+                ),
+                "cost_adjusted_positive_terminal_rate_pct": (
+                    _pct(
+                        sum(1 for value in split_variant_ev_list or [] if value > 0),
+                        split_variant_outcome_count,
+                    )
+                    if split_variant_outcome_count > 0
+                    else None
+                ),
                 "fill_quality": round(
                     (
                         _safe_int(counts.get("real_submitted_count"), 0)
@@ -3340,6 +3379,9 @@ def _build_candidate_grid(
                     )
                     / total,
                     4,
+                ),
+                "fill_quality_scope": (
+                    "legacy_mixed_real_submit_and_sim_fill_diagnostic_not_runtime_gate"
                 ),
                 "missed_upside": round(max(0.0, primary_ev or 0.0), 4),
                 "source_quality_adjusted_ev_pct": primary_ev,
@@ -3413,27 +3455,35 @@ def _policy_payload(
         "minimum_observed_split_outcome_sample": SPLIT_VARIANT_OUTCOME_FLOOR_REAL,
         "metrics": [
             "fill_rate_delta",
+            "real_submit_rate_pct_delta",
+            "sim_fill_rate_pct_delta",
+            "cost_adjusted_positive_terminal_rate_pct_delta",
             "cancel_rate_delta",
             "missed_upside_rate_delta",
             "source_quality_adjusted_ev_pct_delta",
         ],
+        "fill_rate_delta_scope": (
+            "legacy_compatibility_only_use_explicit_real_and_sim_metrics"
+        ),
         "separate_partial_and_full_fill": True,
     }
     continuation_gate = {
         "active": True,
         "minimum_early_review_sample": SPLIT_VARIANT_CONTINUATION_FLOOR_REAL,
         "minimum_promotion_sample": SPLIT_VARIANT_OUTCOME_FLOOR_REAL,
-        "negative_ev_or_tail_action": "freeze_new_policy_generation",
-        "mature_parent_contradiction_action": "freeze_new_policy_generation",
-        "freeze_is_not_safety_rollback": True,
+        "negative_ev_or_tail_action": "disable_previous_policy_next_preopen",
+        "mature_parent_contradiction_action": ("disable_previous_policy_next_preopen"),
+        "negative_economic_disable_is_not_hard_safety_rollback": True,
+        "freeze_is_not_safety_rollback": False,
         "evaluated_bucket_count": len(candidate_grid),
         "continued_bucket_count": len(passed),
-        "frozen_buckets": [
+        "disabled_next_preopen_buckets": [
             str(item.get("context_bucket") or "")
             for item in candidate_grid
             if (item.get("post_apply_continuation_gate") or {}).get("action")
-            == "freeze_new_policy_generation"
+            == "disable_previous_policy_next_preopen"
         ],
+        "frozen_buckets": [],
     }
     rollback_guard = {
         "action": "fail_closed_to_existing_operator_or_runtime_fallback",
@@ -3443,7 +3493,7 @@ def _policy_payload(
             "hard_safety_or_submit_contract_breach",
             "catastrophic_tail_loss",
         ],
-        "ordinary_negative_ev_action": "freeze_new_policy_generation",
+        "ordinary_negative_ev_action": "disable_previous_policy_next_preopen",
         "ordinary_sample_shortfall_action": "hold_observation",
     }
     baseline_runtime_defaults_enabled = any(

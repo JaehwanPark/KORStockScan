@@ -29,6 +29,7 @@ KST = ZoneInfo("Asia/Seoul")
 POSITION_SIZING_POLICY_SCHEMA_VERSION = "position_sizing_dynamic_formula_policy_v1"
 _FLAT_10_TIER_RATIOS = (0.10, 0.10, 0.10, 0.10, 0.10)
 MIN_COST_ADJUSTED_EV_PCT = 0.1
+RUNTIME_PROMOTION_SAMPLE_FLOOR = 30
 
 _INVALID_SOURCE_TOKENS = frozenset(
     {
@@ -179,6 +180,12 @@ def position_sizing_policy_authority_valid(policy: dict[str, Any]) -> bool:
         minimum_ev_raw = policy.get("gross_ev_floor_pct")
     minimum_ev = _safe_float(minimum_ev_raw, float("nan"))
     cost_adjusted_ev = _safe_float(policy.get("cost_adjusted_ev_pct"), float("nan"))
+    exact_terminal_sample_count = _safe_int(
+        policy.get("exact_terminal_sample_count"), -1
+    )
+    runtime_promotion_sample_floor = _safe_int(
+        policy.get("runtime_promotion_sample_floor"), -1
+    )
     try:
         ratios = tuple(float(value) for value in policy.get("tier_ratios") or ())
     except (TypeError, ValueError):
@@ -194,6 +201,8 @@ def position_sizing_policy_authority_valid(policy: dict[str, Any]) -> bool:
         and minimum_ev == MIN_COST_ADJUSTED_EV_PCT
         and math.isfinite(cost_adjusted_ev)
         and cost_adjusted_ev >= minimum_ev
+        and runtime_promotion_sample_floor == RUNTIME_PROMOTION_SAMPLE_FLOOR
+        and exact_terminal_sample_count >= runtime_promotion_sample_floor
     )
 
 

@@ -8,8 +8,8 @@
 - exploration_seed_allowed: `True` / count: `1`
 - ev_validated_runtime_apply_allowed: `False` / count: `0`
 - runtime_apply_authority_classes: `['bounded_exploration_seed']`
-- policy_version: `entry_split_order_plan:2026-09-11:a3dc5947d9`
-- artifact_generation_id: `9c38faa64a77a5502fd18ff4d5200238b99e21de558e78d7335856c55315cd98`
+- policy_version: `entry_split_order_plan:2026-09-11:a59cc28d35`
+- artifact_generation_id: `a067dcac6a74440c9317768249cdebfa89a28ec33bf279b24ae1b47fd9c22bf7`
 - baseline_runtime_defaults_enabled: `False`
 - missing_bucket_action: `keep_original_order`
 - explicit_bucket_count: `1`

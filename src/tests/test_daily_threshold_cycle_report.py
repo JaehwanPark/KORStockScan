@@ -29,6 +29,8 @@ def test_aftermarket_sor_successor_policy_requires_broker_acceptance(
                 "canary_quantity_cap_precedence": True,
                 "minimum_cost_adjusted_ev_pct": 0.1,
                 "cost_adjusted_ev_pct": 0.1,
+                "exact_terminal_sample_count": 30,
+                "runtime_promotion_sample_floor": 30,
             }
         ),
         encoding="utf-8",
@@ -73,7 +75,9 @@ def test_position_sizing_materialization_preserves_selected_flat10_policy(
                     "formula_version": report_mod.SCALPING_SIZING_ROLLBACK_VERSION,
                     "decision": "adjust_down_flat10",
                     "cost_adjusted_ev_pct": 0.12,
+                    "exact_terminal_sample_count": 31,
                 },
+                "sample_floor": 30,
             }
         ]
     }
@@ -90,6 +94,8 @@ def test_position_sizing_materialization_preserves_selected_flat10_policy(
     assert policy["decision"] == "adjust_down_flat10"
     assert policy["minimum_cost_adjusted_ev_pct"] == 0.1
     assert policy["cost_adjusted_ev_pct"] == 0.12
+    assert policy["exact_terminal_sample_count"] == 31
+    assert policy["runtime_promotion_sample_floor"] == 30
 
 
 def test_position_sizing_runtime_selection_requires_minimum_cost_adjusted_ev():
@@ -9358,3 +9364,81 @@ def test_owned_scale_in_window_source_distinguishes_zero_from_missing(
         ]
         is False
     )
+
+
+def test_ai_guard_accepts_only_allowlisted_deterministic_enum_recommendation():
+    candidate = {
+        "family": "position_sizing_dynamic_formula",
+        "current_value": report_mod.SCALPING_SIZING_FORMULA_VERSION,
+        "recommended_value": report_mod.SCALPING_SIZING_ROLLBACK_VERSION,
+        "allowed_runtime_apply": True,
+        "sample_floor": 30,
+        "source_sample_count": 31,
+        "window_policy": {
+            "primary": "rolling_10d",
+            "daily_only_allowed": False,
+        },
+        "value_contract": {
+            "type": "enum",
+            "allowed_values": [
+                report_mod.SCALPING_SIZING_FORMULA_VERSION,
+                report_mod.SCALPING_SIZING_ROLLBACK_VERSION,
+            ],
+            "proposal_must_match_deterministic_recommendation": True,
+        },
+    }
+    proposal = {
+        "proposed_state": "adjust_down",
+        "proposed_value": report_mod.SCALPING_SIZING_ROLLBACK_VERSION,
+        "anomaly_route": "threshold_candidate",
+        "sample_window": "rolling_10d",
+    }
+
+    accepted = report_mod._guard_ai_correction_proposal(candidate, proposal)
+    assert accepted["guard_accepted"] is True
+    assert accepted["effective_value"] == report_mod.SCALPING_SIZING_ROLLBACK_VERSION
+
+    rejected = report_mod._guard_ai_correction_proposal(
+        candidate,
+        {**proposal, "proposed_value": "unreviewed_formula"},
+    )
+    assert rejected["guard_accepted"] is False
+    assert rejected["guard_reject_reason"] == "proposed_value_not_in_enum_allowlist"
+
+    mismatch = report_mod._guard_ai_correction_proposal(
+        candidate,
+        {
+            **proposal,
+            "proposed_value": report_mod.SCALPING_SIZING_FORMULA_VERSION,
+        },
+    )
+    assert mismatch["guard_accepted"] is False
+    assert mismatch["guard_reject_reason"] == (
+        "enum_proposal_mismatches_deterministic_recommendation"
+    )
+
+
+def test_ai_guard_requires_typed_boolean_proposal():
+    candidate = {
+        "current_value": True,
+        "recommended_value": False,
+        "calibration_state": "adjust_down",
+        "sample_floor": 0,
+        "source_sample_count": 0,
+        "window_policy": {},
+    }
+    proposal = {
+        "proposed_state": "adjust_down",
+        "proposed_value": "false",
+        "anomaly_route": "threshold_candidate",
+    }
+
+    rejected = report_mod._guard_ai_correction_proposal(candidate, proposal)
+    assert rejected["guard_accepted"] is False
+    assert rejected["guard_reject_reason"] == "proposed_value_not_boolean"
+
+    accepted = report_mod._guard_ai_correction_proposal(
+        candidate, {**proposal, "proposed_value": False}
+    )
+    assert accepted["guard_accepted"] is True
+    assert accepted["effective_value"] is False

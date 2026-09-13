@@ -466,7 +466,7 @@ def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_spli
     )
 
 
-def test_split_candidate_freezes_after_mature_negative_early_ev():
+def test_split_candidate_disables_previous_policy_after_mature_negative_early_ev():
     grid = split_plan._build_candidate_grid(
         {"balanced_normal": {"real_sample_count": 20}},
         {},
@@ -480,8 +480,46 @@ def test_split_candidate_freezes_after_mature_negative_early_ev():
         "hold_early_split_variant_edge_not_positive"
     )
     assert candidate["post_apply_continuation_gate"]["action"] == (
-        "freeze_new_policy_generation"
+        "disable_previous_policy_next_preopen"
     )
+
+
+def test_split_candidate_separates_real_submit_sim_fill_and_positive_terminals():
+    grid = split_plan._build_candidate_grid(
+        {
+            "balanced_normal": {
+                "real_sample_count": 20,
+                "real_submitted_count": 5,
+                "sim_sample_count": 10,
+                "sim_fill_count": 8,
+            }
+        },
+        {},
+        {},
+        {
+            ("balanced_normal", split_plan.BASELINE_SPLIT_VARIANT_ID): [
+                0.2,
+                -0.1,
+                0.3,
+                -0.2,
+                0.4,
+                0.1,
+                -0.1,
+                0.2,
+                0.1,
+                0.2,
+            ]
+        },
+    )
+
+    candidate = grid[0]
+    assert candidate["real_submit_count"] == 5
+    assert candidate["real_submit_rate_pct"] == 25.0
+    assert candidate["sim_fill_count"] == 8
+    assert candidate["sim_fill_rate_pct"] == 80.0
+    assert candidate["cost_adjusted_positive_terminal_count"] == 7
+    assert candidate["cost_adjusted_positive_terminal_rate_pct"] == 70.0
+    assert candidate["fill_quality_scope"].startswith("legacy_mixed_")
 
 
 def test_split_candidate_holds_observation_before_real_submit_floor():
@@ -501,6 +539,30 @@ def test_split_candidate_holds_observation_before_real_submit_floor():
     assert candidate["post_apply_continuation_gate"]["reason"] == (
         "real_submit_sample_floor_not_reached"
     )
+
+
+def test_split_candidate_holds_when_exact_outcome_is_missing_despite_submit_floor():
+    grid = split_plan._build_candidate_grid(
+        {"balanced_normal": {"real_sample_count": 20}},
+        {},
+        {},
+        {},
+    )
+
+    candidate = grid[0]
+    assert candidate["candidate_passed"] is True
+    assert candidate["post_apply_continuation_gate"]["action"] == (
+        "continue_bounded_seed"
+    )
+
+    guarded = split_plan._build_candidate_grid(
+        {"guarded_or_stale": {"real_sample_count": 20}},
+        {},
+        {},
+        {},
+    )[0]
+    assert guarded["candidate_passed"] is False
+    assert guarded["post_apply_continuation_gate"]["action"] == "hold_observation"
 
 
 def test_generation_snapshot_path_rejects_non_iso_date():
@@ -4037,6 +4099,97 @@ def test_daily_report_handoff_blocks_runtime_disallowed_policy(monkeypatch, tmp_
     assert family["sample"]["runtime_apply_allowed"] is False
     assert candidate["recommended_value"] is False
     assert candidate["calibration_state"] == "hold"
+
+
+def test_daily_report_negative_economics_emits_next_preopen_off_envelope(
+    monkeypatch, tmp_path
+):
+    target_date = "2026-07-07"
+    report_dir = tmp_path / "report" / "entry_split_order_plan"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(daily_report, "ENTRY_SPLIT_ORDER_PLAN_DIR", report_dir)
+    (report_dir / f"entry_split_order_plan_{target_date}.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_plan_v1",
+                "source_quality": {"status": "pass", "tuning_input_allowed": True},
+                "candidate_grid": [
+                    {
+                        "context_bucket": "balanced_normal",
+                        "real_sample_count": 20,
+                        "real_outcome_joined_sample": 10,
+                        "sim_sample_count": 0,
+                        "post_apply_continuation_gate": {
+                            "action": "disable_previous_policy_next_preopen"
+                        },
+                    }
+                ],
+                "recommended_policy": {
+                    "runtime_apply_allowed": False,
+                    "runtime_apply_compatibility_semantics": split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS,
+                    "exploration_seed_allowed": False,
+                    "ev_validated_runtime_apply_allowed": False,
+                    "policy_version": "entry_split_order_plan:negative",
+                    "candidates": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    family = daily_report._build_entry_split_order_plan_family(target_date=target_date)
+    candidate = next(
+        item
+        for item in daily_report._build_calibration_candidates([family], {})
+        if item["family"] == "entry_split_order_plan"
+    )
+
+    assert family["sample"]["runtime_disable_recommended"] is True
+    assert candidate["calibration_state"] == "adjust_down"
+    assert candidate["runtime_disable_family"] is True
+    assert candidate["runtime_apply_eligible_now"] is True
+    assert candidate["recommended_values"] == {
+        "enabled": False,
+        "policy_file": "",
+        "policy_version": "",
+        "runtime_apply_authority": "none",
+        "exploration_seed_allowed": False,
+        "ev_validated_runtime_apply_allowed": False,
+    }
+
+    selected, decisions, env = preopen_apply._select_auto_apply_candidates(
+        [candidate],
+        ai_review={},
+        require_ai=True,
+        target_date="2026-07-08",
+    )
+    assert len(selected) == 1
+    assert selected[0]["family"] == "entry_split_order_plan"
+    assert selected[0]["runtime_disable_family"] is True
+    assert decisions[0]["selected"] is True
+    assert decisions[0]["runtime_disable_family"] is True
+    assert decisions[0]["same_stage_owner_claim"] is False
+    assert decisions[0]["decision_reason"] == (
+        "economic_off_next_preopen:entry_split_order_plan"
+    )
+    assert env == {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "false",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": "",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "",
+    }
+
+    blocked_family = {
+        **family,
+        "sample": {**family["sample"], "source_quality_blocked": True},
+    }
+    blocked_candidate = next(
+        item
+        for item in daily_report._build_calibration_candidates([blocked_family], {})
+        if item["family"] == "entry_split_order_plan"
+    )
+    assert blocked_candidate["calibration_state"] == "source_quality_blocked"
+    assert blocked_candidate["runtime_disable_family"] is False
+    assert blocked_candidate["runtime_apply_eligible_now"] is False
 
 
 def test_daily_report_handoff_does_not_expose_declared_authority_when_contract_invalid(

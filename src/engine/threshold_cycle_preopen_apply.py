@@ -4025,7 +4025,8 @@ def _select_auto_apply_candidates(
             str(candidate.get("runtime_update_mode") or "")
             == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
         )
-        claims_stage_owner = not (
+        runtime_disable_family = bool(candidate.get("runtime_disable_family"))
+        claims_stage_owner = not runtime_disable_family and not (
             family == ENTRY_OPPORTUNITY_RECHECK_FAMILY
             and candidate.get("same_stage_owner_claim") is False
         )
@@ -4053,12 +4054,14 @@ def _select_auto_apply_candidates(
         elif dual_blocker := _dual_aftermarket_live_apply_blocker(candidate):
             reject_reason = dual_blocker
         elif not bool(candidate.get("allowed_runtime_apply")) and not (
-            avg_down_hold_carry_forward or scale_in_split_hold_carry_forward
+            runtime_disable_family
+            or avg_down_hold_carry_forward
+            or scale_in_split_hold_carry_forward
         ):
             reject_reason = "runtime_apply_not_allowed"
         elif bool(candidate.get("safety_revert_required")):
             reject_reason = "safety_revert_required"
-        elif (
+        elif not runtime_disable_family and (
             state in HOLD_CARRY_FORWARD_STATES
             or avg_down_hold_carry_forward
             or scale_in_split_hold_carry_forward
@@ -4139,6 +4142,9 @@ def _select_auto_apply_candidates(
             reject_reason = (
                 f"same_stage_owner_conflict:{selected_by_stage[stage].get('family')}"
             )
+
+        if runtime_disable_family and not reject_reason:
+            reason = f"economic_off_next_preopen:{family}"
 
         if family == "score65_74_recovery_probe" and (
             lock is None or target_date >= policy_succession.EFFECTIVE_DATE
