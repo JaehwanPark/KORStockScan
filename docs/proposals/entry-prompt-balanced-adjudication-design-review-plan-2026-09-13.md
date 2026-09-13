@@ -613,6 +613,14 @@ AI prompt variant는 `machine_first_pass_veto_v2`다. 실제 English ASCII promp
 - 실제9/14 threshold→operator→dated env의 읽기 전용 resolver preview: parse errors0, `enabled=true`, `active_bounded_krx_canary`, V2.15.2, 기계 primary, AI PASS/VETO role, 새 bundle hash 일치. 이는 정책 로딩 사전 검증이지 실제 미래 PREOPEN/PID receipt가 아니다.
 - 승인된 배포는 main/common routing 대상이다. 독립 widget/episode unit·custody·정책 pin은 변경하지 않는다.9/13 일요일 main PID와 장후 chain이 없으며9/13 exact-date env도 없어 주말 수동 기동이나9/14 env 복사로 우회하지 않는다.9/14 기존07:35 PREOPEN→07:55 예약 기동에서 실제 소비를 확인한다.
 
+### 16.3 승인된 커밋·푸시·메인 배포
+
+- 코드 commit `f12a9373ea6d9465b9144311f33e202f3c23c16b`를 origin/main에 push 완료했다. 이 작업의 누적30개 파일 변경을 포함하며 ignored runtime state·정책 원장을 Git에 일괄 포함하지 않았다.
+- 선택 release: `/home/ubuntu/KORStockScan-runtime-releases/machine-ai-pass-veto-20260914`. 별도 detached worktree에 검토 commit을 고정하고 공유6개 경로를 연결했다. 선택 source `src/deploy/restart.sh` clean, 핵심 evidence/publisher 테스트 **105 passed**를 배포 root에서 다시 확인했다.
+- main PID/장후 worker가 없는 상태에서 selector를 원자 전환했다. 원 selector SHA `037fc6de49afb7155789e428755b99ff5994985d683bcdc2fa9ab0799e2af6eb`와 `tmp/machine-ai-pass-veto-deploy-20260913/previous-selection.json`, 이전 `entry-split-ai-policy-20260914`/`b1891f9c` release를 보존했다. 기계 초기 policy의 이전 generation도 그대로 있다.
+- `--check-cron`9개 PASS, 다음 거래일 preopen/start/postclose `--print-plan`이 새 root/commit으로 일치했다. cron 시각·env는 변경하지 않았다. 독립 machine manifest SHA `caa1e8071daf226fe4c67e0e9654e84a4ae5a7b71c9e749bcde3b2c9f01ed893` 전후 동일하며 해당 unit/drop-in/PID는 변경하지 않았다.
+- 배포 root의 실제 `entry_setup_live_policy.__file__`를 확인한9/14 읽기 전용 preview도 enabled/PASS-VETO role/새 bundle 일치다. **실제 주말 기동은 수행하지 않았다.** 당일 env 없는9/13 실행을9/14 env로 가장하지 않으며, 기존 다음 거래일07:35/07:55 예약을 그대로 둔다. PID 소비·자연 판정·비용 후 성과 미확인은9/14 기존 PREOPEN/Runtime owner에서 확인한다. 이후 문서 receipt commit과 선택된 코드 commit은 별개다.
+
 사용자 선택 문서 외부 동기화(정책 적용/봇 기동의 선행 조건 아님):
 
 ```bash
