@@ -999,6 +999,66 @@ def capture_canonical_context_candidate(
         return {}
 
 
+def capture_machine_observation(
+    *, exact_payload: dict, setup_evidence: dict, assessment: dict, bundle_sha256: str
+) -> dict:
+    """Capture every machine anchor without inventing an AI request/outcome.
+
+    The existing payload store owns retention. A separate schema ensures that
+    provider replay cannot accidentally send these machine-only observations.
+    """
+    if not trace_enabled():
+        return {"machine_capture_status": "disabled"}
+    now = _now()
+    context = _request_context(exact_payload, {}, endpoint_name="scalping_entry")
+    context["entry_conservative_execution_cost_pct"] = _safe_number(
+        _first_value(
+            exact_payload,
+            (
+                "entry_conservative_execution_cost_pct",
+                "conservative_execution_cost_pct",
+            ),
+        )
+    )
+    source, redacted = _sanitize(
+        {
+            "exact_payload": exact_payload,
+            "setup_evidence": setup_evidence,
+            "assessment": assessment,
+        }
+    )
+    context, context_redacted = _sanitize(context)
+    redacted = redacted or context_redacted
+    body = {
+        "schema": "mechanistic_entry_observation_v1",
+        "captured_at": now.isoformat(),
+        "label_context": context,
+        "bundle_sha256": bundle_sha256,
+        "source": source,
+        "redacted": redacted,
+        "provider_called": False,
+        "actual_order_submitted": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "broker_order_forbidden": True,
+    }
+    digest = hashlib.sha256(_json_bytes(body)).hexdigest()
+    try:
+        _append_jsonl(
+            _payload_path(_date_text(now)),
+            {**body, "machine_observation_sha256": digest},
+        )
+    except OSError as exc:
+        return {
+            "machine_capture_status": "write_failed",
+            "machine_capture_error": type(exc).__name__,
+        }
+    return {
+        "machine_capture_status": "redacted_ineligible" if redacted else "captured",
+        "machine_observation_sha256": digest,
+    }
+
+
 def capture_ai_request(
     *,
     prompt: Any,

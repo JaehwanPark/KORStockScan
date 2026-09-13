@@ -8849,6 +8849,36 @@ class GPTSniperEngine:
                     ),
                 )
                 machine_exact = json.loads(machine_hot_payload)
+                # Preserve explicit identity for both common and child policy
+                # observations; no venue/session is inferred from the symbol.
+                for key in ("stock_code", "effective_venue", "session_bucket"):
+                    if key not in machine_exact:
+                        machine_exact[key] = pre_prompt_snapshot.get(
+                            key
+                        ) or ws_data.get(key)
+                from src.trading.market.micro_confirmation import (
+                    load_live_dynamic_confirmation_source,
+                )
+                from src.trading.market.entry_adverse_flow import evaluate_snapshot
+
+                # Observe before first child adoption too: collection must not
+                # require the policy whose evidence it is meant to produce.
+                cutoff_ms = int(time.time() * 1000)
+                snapshot, snapshot_status = load_live_dynamic_confirmation_source()
+                machine_exact["mechanistic_micro_window"] = (
+                    evaluate_snapshot(
+                        snapshot=snapshot,
+                        symbol=machine_exact["stock_code"],
+                        route=machine_exact["effective_venue"],
+                        cutoff_ms=cutoff_ms,
+                    )
+                    if snapshot is not None
+                    else {
+                        "source_quality_status": "source_gap",
+                        "reason": snapshot_status,
+                    }
+                )
+                machine_hot_payload = json.dumps(machine_exact, ensure_ascii=True)
                 machine_analysis = build_exact_payload_analysis_v1(
                     machine_exact, stage="entry", live_entry=True
                 )
@@ -8869,6 +8899,16 @@ class GPTSniperEngine:
                 machine_assessment = mechanistic_entry_policy_decision(
                     machine_setup,
                     policy=entry_setup_live_policy["mechanistic_threshold_policy"],
+                )
+                from src.engine.scalping.ai_decision_trace import (
+                    capture_machine_observation,
+                )
+
+                machine_capture = capture_machine_observation(
+                    exact_payload=machine_exact,
+                    setup_evidence=machine_setup,
+                    assessment=machine_assessment,
+                    bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
                 )
                 machine_first_context = {
                     "assessment": machine_assessment,
@@ -8891,6 +8931,7 @@ class GPTSniperEngine:
                         machine_bundle_sha256=machine_first_context["bundle_sha256"],
                         mechanistic_entry_assessment=machine_assessment,
                         machine_decision_before_provider=True,
+                        **machine_capture,
                     )
                     if (
                         decision.get("entry_probe_intent") is True

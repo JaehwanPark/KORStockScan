@@ -76,19 +76,22 @@ def test_auto_promotion_pin_covers_all_sessions_and_falls_back_to_v2_14(
 
 def test_auto_promotion_cli_writes_one_immutable_contract(tmp_path):
     output = tmp_path / "auto-promotion.json"
-    assert rollout.main(
-        [
-            "--auto-promotion",
-            "--effective-from",
-            "2026-09-14T07:35:00+09:00",
-            "--reviewed-commit",
-            "c" * 40,
-            "--output",
-            str(output),
-            "--confirm",
-            "APPLY_ALL_SESSIONS_V2_15_PLUS_AUTO_PROMOTION",
-        ]
-    ) == 0
+    assert (
+        rollout.main(
+            [
+                "--auto-promotion",
+                "--effective-from",
+                "2026-09-14T07:35:00+09:00",
+                "--reviewed-commit",
+                "c" * 40,
+                "--output",
+                str(output),
+                "--confirm",
+                "APPLY_ALL_SESSIONS_V2_15_PLUS_AUTO_PROMOTION",
+            ]
+        )
+        == 0
+    )
     payload = json.loads(output.read_text())
     assert payload["schema"] == rollout.AUTO_PROMOTION_SCHEMA
     assert payload["operator_authority"] == (
@@ -125,6 +128,16 @@ def test_auto_promotion_authorizes_exact_scope_only(monkeypatch, tmp_path):
     assert rollout.decision_authorized("SCALPING", decision, now=NOW)
     decision["entry_setup_live_policy_activation_sha256"] = "0" * 64
     assert not rollout.decision_authorized("SCALPING", decision, now=NOW)
+
+
+def test_recheck_scope_includes_only_valid_auto_promotion_pin(monkeypatch, tmp_path):
+    path = pin_auto_promotion(monkeypatch, tmp_path)
+    scope = "KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET"
+    assert scope in rollout.authorized_scopes(now=NOW)
+    assert "KRX|CLOSING_AUCTION" not in rollout.authorized_scopes(now=NOW)
+    monkeypatch.setenv(rollout.AUTO_PROMOTION_SHA_ENV, "0" * 64)
+    assert scope not in rollout.authorized_scopes(now=NOW)
+    assert path.is_file()
 
 
 @pytest.mark.parametrize("scope", rollout.SCOPES)

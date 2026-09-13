@@ -1,4 +1,4 @@
-"""Initial machine-first policy and dated postclose succession for main KRX.
+"""Initial machine-first policy and exact-scope postclose succession for main.
 
 This is a policy publisher/consumer, not another market-data producer. Initial
 operator adoption is distinct from evidence-qualified threshold promotion.
@@ -120,6 +120,11 @@ def validate(bundle: dict, *, target_date: str) -> None:
         raise ValueError("machine_bundle_date_invalid")
     if validate_mechanistic_entry_threshold_policy(bundle.get("machine_policy")):
         raise ValueError("machine_bundle_threshold_invalid")
+    if (
+        "hierarchy" in bundle["machine_policy"]
+        and bundle.get("hierarchy_adopted") is not True
+    ):
+        raise ValueError("machine_hierarchy_adoption_missing")
     ai = bundle.get("ai_policy") or {}
     if not isinstance(ai, dict):
         raise ValueError("machine_bundle_ai_policy_invalid")
@@ -130,13 +135,78 @@ def validate(bundle: dict, *, target_date: str) -> None:
         or ai.get("system_prompt") != auxiliary_prompt(bundle.get("historical_context"))
     ):
         raise ValueError("machine_bundle_ai_policy_invalid")
+    scopes = bundle.get("scope_policies")
+    if bundle.get("all_continuous_adopted") is True:
+        from src.engine.scalping.entry_setup_scalping_rollout import (
+            AUTO_PROMOTION_SCOPES,
+        )
+
+        if not isinstance(scopes, dict) or set(scopes) != set(AUTO_PROMOTION_SCOPES):
+            raise ValueError("machine_bundle_scope_coverage_invalid")
+        for scope, scoped in scopes.items():
+            if not isinstance(scoped, dict):
+                raise ValueError("machine_scope_policy_invalid")
+            policy, sai, context = (
+                scoped.get("machine_policy"),
+                scoped.get("ai_policy"),
+                scoped.get("historical_context"),
+            )
+            if (
+                validate_mechanistic_entry_threshold_policy(policy)
+                or not isinstance(sai, dict)
+                or not isinstance(context, dict)
+            ):
+                raise ValueError("machine_scope_policy_invalid")
+            if (
+                context.get("scope") != scope
+                or sai.get("prompt_version") != AI_VERSION
+                or sai.get("variant") != "machine_first_pass_veto_v2"
+                or sai.get("system_prompt") != auxiliary_prompt(context)
+                or sai.get("system_prompt_sha256") != digest(sai.get("system_prompt"))
+            ):
+                raise ValueError("machine_scope_ai_binding_invalid")
+            if policy.get("hierarchy") and (
+                bundle.get("hierarchy_adopted") is not True
+                or any(
+                    f"{r['match']['venue']}|{r['match']['session_bucket']}" != scope
+                    for r in policy["hierarchy"]["rules"]
+                )
+            ):
+                raise ValueError("machine_scope_rule_leak")
+        if scopes["KRX|KRX_REGULAR"]["machine_policy"] != bundle["machine_policy"]:
+            raise ValueError("machine_scope_legacy_projection_mismatch")
+    elif scopes is not None:
+        raise ValueError("machine_scope_adoption_missing")
+
+
+def for_cohort(bundle: dict | None, cohort: tuple[str, str]) -> dict | None:
+    """Project a validated bundle without borrowing another market's child."""
+    if bundle is None:
+        return None
+    if bundle.get("all_continuous_adopted") is True:
+        scoped = bundle["scope_policies"].get("|".join(cohort))
+        return {**bundle, **scoped, "selected_scope": list(cohort)} if scoped else None
+    return bundle if list(cohort) == COHORT else None
 
 
 def auxiliary_prompt(context: object) -> str:
+    hierarchy_role = (
+        "\nA validated hierarchical machine trigger can resolve a legacy setup "
+        "WAIT_CONFIRMATION. Do not require the common READY label again. "
+        "Assess the selected group, effective symbol thresholds and exact micro "
+        "receipt in mechanistic_entry_assessment. For PASS, acknowledge current "
+        "supporting facts and every bound adverse fact; trusted micro buy flow "
+        "and positive price response may support the validated group trigger. "
+        "Missing required micro is a machine RECHECK, never permission to invent "
+        "support. Your fact-bound VETO and all final guards remain binding.\n"
+        if isinstance(context, dict) and context.get("hierarchy_role_version") == "v1"
+        else ""
+    )
     return (
         decision_quality_balanced_entry_system_prompt("entry", bounded_recovery=True)
         + "\n\n"
         + AI_ADDENDUM
+        + hierarchy_role
         + "\n\nHistorical policy context (not current facts):\n"
         + json.dumps(context, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     )
@@ -180,7 +250,9 @@ def publish(
     data_root: Path,
     bootstrap: bool = False,
     replace_initial_role: bool = False,
+    adopt_hierarchy: bool = False,
     now: datetime | None = None,
+    adopt_all_continuous: bool = False,
 ) -> dict | None:
     """Refresh a future date until PREOPEN, then retain its frozen generation.
 
@@ -260,6 +332,11 @@ def publish(
             existing is not None
             and existing.get("role_contract") == MECHANISTIC_PRIMARY_ROLE_CONTRACT
             and existing["source_artifact_sha256"] == source["artifact_content_sha256"]
+            and (not adopt_hierarchy or existing.get("hierarchy_adopted") is True)
+            and (
+                not adopt_all_continuous
+                or existing.get("all_continuous_adopted") is True
+            )
         ):
             return existing
         # A late postclose recovery may publish before PREOPEN, never intraday.
@@ -312,6 +389,38 @@ def publish(
         if projection is not None:
             machine = projection["threshold_policy"]
             disposition = "evidence_qualified_threshold_update"
+        hierarchy_adopted = adopt_hierarchy or bool(
+            previous and previous.get("hierarchy_adopted") is True
+        )
+        hierarchy = (source.get("hierarchical_entry_quality") or {}).get(
+            "runtime_extension"
+        ) or {}
+        child = hierarchy.get("policy_candidate")
+        hierarchy_disposition = (
+            "not_adopted" if not hierarchy_adopted else "incumbent_child_carried"
+        )
+        if hierarchy_adopted and child is not None:
+            errors = calibration.validate_hierarchy_candidate(
+                hierarchy, source_date=source_date
+            )
+            if errors:
+                raise ValueError(
+                    "machine_hierarchy_candidate_invalid:" + ",".join(errors)
+                )
+            child_policy = child["threshold_policy"]
+            if child_policy["thresholds"] == machine["thresholds"]:
+                machine = copy.deepcopy(child_policy)
+                hierarchy_disposition = "evidence_qualified_hierarchy_update"
+            else:
+                hierarchy_disposition = "candidate_parent_changed_revalidation_required"
+        # A qualified common replacement cannot retain residuals bound to its
+        # predecessor. The old complete generation remains in the archive.
+        if (
+            previous
+            and "hierarchy" in previous["machine_policy"]
+            and "hierarchy" not in machine
+        ):
+            hierarchy_disposition = "parent_updated_children_require_revalidation"
         refinement = source.get("mechanistic_entry_refinement") or {}
         flows = source.get("mechanistic_flow_groups") or {}
         context = {
@@ -329,8 +438,102 @@ def publish(
             "economics": "unverified_initial_or_carry_is_not_positive_ev_evidence",
             "objective": "prompt_small_net_profits_without_deep_adverse_excursion_or_prolonged_stagnation",
             "optional_micro_features": "use_only_valid_present_measurements_no_missing_data_veto",
+            "hierarchy_disposition": hierarchy_disposition,
+            "hierarchy_status": hierarchy.get("status"),
+            "hierarchy_role_version": "v1" if hierarchy_adopted else None,
         }
+        if hierarchy_adopted:
+            context["hierarchy_counterfactual_holdout"] = [
+                {"id": e["id"], "status": e.get("status"), "holdout": e.get("holdout")}
+                for e in hierarchy.get("evaluations", [])[:8]
+                if isinstance(e, dict) and "id" in e
+            ]
         prompt = auxiliary_prompt(context)
+        all_continuous = adopt_all_continuous or bool(
+            previous and previous.get("all_continuous_adopted") is True
+        )
+        scope_policies = {}
+        if all_continuous:
+            from src.engine.scalping.entry_setup_scalping_rollout import (
+                AUTO_PROMOTION_SCOPES,
+            )
+
+            extensions = (source.get("hierarchical_entry_quality") or {}).get(
+                "runtime_extensions_by_scope"
+            ) or {}
+            for scope in AUTO_PROMOTION_SCOPES:
+                old = ((previous or {}).get("scope_policies") or {}).get(scope)
+                scoped_machine = copy.deepcopy(
+                    old["machine_policy"]
+                    if old
+                    else MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+                )
+                scoped_disposition = (
+                    "incumbent_scope_carried"
+                    if old
+                    else "authorized_common_seed_not_cohort_optimized"
+                )
+                extension = extensions.get(scope) or {}
+                if scope == "KRX|KRX_REGULAR":
+                    scoped_machine, scoped_disposition = (
+                        copy.deepcopy(machine),
+                        disposition,
+                    )
+                elif (
+                    hierarchy_adopted and extension.get("policy_candidate") is not None
+                ):
+                    errors = calibration.validate_hierarchy_candidate(
+                        extension,
+                        source_date=source_date,
+                        cohort=tuple(scope.split("|")),
+                    )
+                    if errors:
+                        raise ValueError(
+                            "machine_scope_candidate_invalid:"
+                            + scope
+                            + ":"
+                            + ",".join(errors)
+                        )
+                    scoped_child = extension["policy_candidate"]["threshold_policy"]
+                    if scoped_child["thresholds"] == scoped_machine["thresholds"]:
+                        scoped_machine = copy.deepcopy(scoped_child)
+                        scoped_disposition = "evidence_qualified_exact_scope_update"
+                    else:
+                        scoped_disposition = (
+                            "candidate_parent_changed_revalidation_required"
+                        )
+                scoped_context = {
+                    **(context if scope == "KRX|KRX_REGULAR" else {}),
+                    "source_date": source_date,
+                    "scope": scope,
+                    "threshold_disposition": scoped_disposition,
+                    "hierarchy_role_version": "v1" if hierarchy_adopted else None,
+                    "economics": "initial_or_carry_is_not_positive_ev_evidence",
+                    "cross_scope_optimized_threshold_inheritance": False,
+                    "hierarchy_status": extension.get("status"),
+                    "source_count": extension.get("source_count"),
+                    "hierarchy_counterfactual_holdout": [
+                        {
+                            "id": e["id"],
+                            "status": e.get("status"),
+                            "holdout": e.get("holdout"),
+                        }
+                        for e in extension.get("evaluations", [])[:8]
+                        if isinstance(e, dict) and "id" in e
+                    ],
+                }
+                scoped_prompt = auxiliary_prompt(scoped_context)
+                scope_policies[scope] = {
+                    "machine_policy": scoped_machine,
+                    "machine_disposition": scoped_disposition,
+                    "historical_context": scoped_context,
+                    "ai_policy": {
+                        "prompt_version": AI_VERSION,
+                        "variant": "machine_first_pass_veto_v2",
+                        "system_prompt": scoped_prompt,
+                        "system_prompt_sha256": digest(scoped_prompt),
+                    },
+                }
         bundle = {
             "schema": SCHEMA,
             "target_date": target,
@@ -342,6 +545,7 @@ def publish(
             "adoption_basis": "user_authorized_initial_policy_with_guarded_succession",
             "machine_policy": machine,
             "machine_disposition": disposition,
+            "hierarchy_adopted": hierarchy_adopted,
             "previous_bundle_sha256": previous["bundle_sha256"] if previous else None,
             "historical_context": context,
             "ai_policy": {
@@ -355,6 +559,11 @@ def publish(
             "generated_at": current.isoformat(),
         }
         bundle["bundle_sha256"] = digest(bundle)
+        if all_continuous:
+            bundle.update(all_continuous_adopted=True, scope_policies=scope_policies)
+            bundle["bundle_sha256"] = digest(
+                {k: v for k, v in bundle.items() if k != "bundle_sha256"}
+            )
         validate(bundle, target_date=target)
         if existing is not None:
             calibration._atomic_write_json(
@@ -374,12 +583,20 @@ def main() -> int:
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--bootstrap", action="store_true")
     parser.add_argument("--replace-initial-role", action="store_true")
+    parser.add_argument("--adopt-all-continuous", action="store_true")
+    parser.add_argument(
+        "--adopt-hierarchy",
+        action="store_true",
+        help="Explicit initial adoption; later dated succession is automatic",
+    )
     args = parser.parse_args()
     bundle = publish(
         args.source,
         data_root=args.data_root,
         bootstrap=args.bootstrap,
         replace_initial_role=args.replace_initial_role,
+        adopt_hierarchy=args.adopt_hierarchy,
+        adopt_all_continuous=args.adopt_all_continuous,
     )
     print(
         json.dumps(

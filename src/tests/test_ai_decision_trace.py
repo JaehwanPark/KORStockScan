@@ -28,6 +28,25 @@ def _enable(monkeypatch, tmp_path):
     trace._SEEN_CONTEXT_CANDIDATE_HASHES.clear()
 
 
+def test_machine_observation_keeps_exact_input_without_provider_request(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    result = trace.capture_machine_observation(
+        exact_payload={"stock_code": "005930", "name": "삼성전자", "best_ask": 10000},
+        setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
+        assessment={"action": "RECHECK"},
+        bundle_sha256="b" * 64,
+    )
+    assert result["machine_capture_status"] == "captured"
+    row = _rows(trace._payload_path(trace._date_text()))[0]
+    assert row["schema"] == "mechanistic_entry_observation_v1"
+    assert row["provider_called"] is False
+    assert row["source"]["exact_payload"]["name"] == "삼성전자"
+    assert not (tmp_path / "ai_decision_prompts").exists()
+    assert not (tmp_path / "ai_decision_outcomes").exists()
+
+
 def test_append_jsonl_fails_closed_on_parent_directory_replacement(
     tmp_path,
     monkeypatch,

@@ -56,6 +56,118 @@ def test_initial_policy_does_not_require_promotion_candidate(tmp_path):
     assert policy.load(data_root=tmp_path, target_date="2026-09-14") == bundle
 
 
+def test_all_continuous_adoption_carry_and_exact_scope_projection(tmp_path):
+    from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
+
+    legacy = initial(tmp_path)
+    assert policy.for_cohort(legacy, ("NXT", "NXT_AFTERMARKET")) is None
+    bundle = policy.publish(
+        source(tmp_path),
+        data_root=tmp_path,
+        adopt_all_continuous=True,
+        adopt_hierarchy=True,
+        now=datetime(2026, 9, 13, 22, tzinfo=policy.KST),
+    )
+    assert set(bundle["scope_policies"]) == set(AUTO_PROMOTION_SCOPES)
+    policy.validate(bundle, target_date="2026-09-14")
+    for scope in AUTO_PROMOTION_SCOPES:
+        projected = policy.for_cohort(bundle, tuple(scope.split("|")))
+        assert projected["historical_context"]["scope"] == scope
+        assert (
+            projected["machine_policy"] == policy.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+        )
+    assert policy.for_cohort(bundle, ("KRX", "CLOSING_AUCTION")) is None
+    carried = policy.publish(
+        source(tmp_path, "2026-09-14"),
+        data_root=tmp_path,
+        now=datetime(2026, 9, 14, 22, tzinfo=policy.KST),
+    )
+    assert carried["all_continuous_adopted"] is True
+    assert set(carried["scope_policies"]) == set(AUTO_PROMOTION_SCOPES)
+    del carried["scope_policies"]["NXT|NXT_AFTERMARKET"]
+    carried["bundle_sha256"] = policy.digest(
+        {k: v for k, v in carried.items() if k != "bundle_sha256"}
+    )
+    with pytest.raises(ValueError, match="coverage"):
+        policy.validate(carried, target_date="2026-09-15")
+
+
+def test_hierarchy_adoption_is_explicit_and_preserves_existing_daily_freeze(tmp_path):
+    before = initial(tmp_path)
+    after = policy.publish(
+        source(tmp_path),
+        data_root=tmp_path,
+        adopt_hierarchy=True,
+        now=datetime(2026, 9, 13, 21, tzinfo=policy.KST),
+    )
+    assert after["hierarchy_adopted"] is True
+    assert after["machine_policy"] == before["machine_policy"]
+    assert after["bundle_sha256"] != before["bundle_sha256"]
+    assert (
+        policy.root(tmp_path) / "generations" / f"{before['bundle_sha256']}.json"
+    ).is_file()
+    assert (
+        policy.publish(
+            source(tmp_path),
+            data_root=tmp_path,
+            now=datetime(2026, 9, 14, 8, tzinfo=policy.KST),
+        )
+        == after
+    )
+
+
+def test_hierarchy_child_cannot_be_loaded_without_adoption(tmp_path):
+    bundle = initial(tmp_path)
+    machine = bundle["machine_policy"]
+    machine["hierarchy"] = {
+        "schema": "mechanistic_entry_hierarchy_v1",
+        "parent_sha256": policy.digest(machine["thresholds"]),
+        "rules": [],
+    }
+    bundle["bundle_sha256"] = policy.digest(
+        {k: v for k, v in bundle.items() if k != "bundle_sha256"}
+    )
+    with pytest.raises(ValueError, match="adoption_missing"):
+        policy.validate(bundle, target_date="2026-09-14")
+
+
+def test_qualified_hierarchy_publishes_loads_and_automatically_carries(tmp_path):
+    from src.tests.test_ai_action_outcome_calibration import _hierarchy_training_rows
+
+    initial(tmp_path)
+    path = source(tmp_path, "2026-09-15")
+    report = json.loads(path.read_text())
+    report["hierarchical_entry_quality"] = {
+        "runtime_extension": calibration.build_mechanistic_hierarchy_candidate(
+            _hierarchy_training_rows(), target_date="2026-09-15"
+        )
+    }
+    report.pop("artifact_content_sha256")
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
+    unadopted = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST)
+    )
+    assert "hierarchy" not in unadopted["machine_policy"]
+    adopted = policy.publish(
+        path,
+        data_root=tmp_path,
+        adopt_hierarchy=True,
+        now=datetime(2026, 9, 15, 22, tzinfo=policy.KST),
+    )
+    assert adopted["machine_policy"]["hierarchy"]["rules"]
+    assert "WAIT_CONFIRMATION" in adopted["ai_policy"]["system_prompt"]
+    assert policy.load(data_root=tmp_path, target_date="2026-09-16") == adopted
+    carried = policy.publish(
+        source(tmp_path, "2026-09-16"),
+        data_root=tmp_path,
+        now=datetime(2026, 9, 16, 21, tzinfo=policy.KST),
+    )
+    assert carried["machine_policy"] == adopted["machine_policy"]
+    assert carried["hierarchy_adopted"] is True
+
+
 @pytest.mark.parametrize(
     "explicit,late,corrupt",
     [

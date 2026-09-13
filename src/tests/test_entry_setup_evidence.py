@@ -785,6 +785,149 @@ def _machine_screen_case(verdict):
     return evidence, risk
 
 
+def _hierarchy_case(*, micro=None):
+    from src.engine.scalping import entry_setup_evidence as module
+
+    setup, risk = _machine_screen_case("PASS")
+    setup["setup_state"] = "WAIT_CONFIRMATION"
+    setup["execution_readiness_state"] = "WAIT_CONFIRMATION"
+    setup["recheck_reasons"] = ["SETUP_DISCOVERY_RECHECK"]
+    context = {
+        "symbol": "005930",
+        "group": {
+            "key_parts": {
+                "venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "price_tick_band": "P1",
+                "volatility_band": "V1",
+            }
+        },
+        "flow": {"matched_families": ["DEPTH_SUPPORTED_STAIRCASE"]},
+        "micro_window": micro,
+    }
+    setup["mechanistic_context"] = {
+        **context,
+        "context_sha256": module._canonical_sha256(context),
+    }
+    setup["evidence_sha256"] = module._canonical_sha256(
+        {k: v for k, v in setup.items() if k != "evidence_sha256"}
+    )
+    policy = deepcopy(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    rule = {
+        "id": "staircase",
+        "match": {"venue": "KRX", "session_bucket": "KRX_REGULAR"},
+        "flow_family": "DEPTH_SUPPORTED_STAIRCASE",
+        "thresholds": {
+            k: policy["thresholds"][k] for k in module.MECHANISTIC_PARAMETER_BOUNDS
+        },
+        "symbols": {},
+        "micro": None,
+    }
+    policy["hierarchy"] = {
+        "schema": module.MECHANISTIC_HIERARCHY_SCHEMA,
+        "parent_sha256": module._canonical_sha256(policy["thresholds"]),
+        "rules": [rule],
+    }
+    return setup, risk, policy
+
+
+@pytest.mark.parametrize(
+    "verdict,exposure",
+    [("PASS", True), ("VETO", False), ("CAUTION", False), ("ABSENT", False)],
+)
+def test_hierarchy_can_confirm_legacy_recheck_but_ai_remains_binding(verdict, exposure):
+    setup, _, policy = _hierarchy_case()
+    _, risk = _machine_screen_case(verdict)
+    common = compose_mechanistic_primary_decision(
+        setup_evidence=setup, ai_risk_adjudication=risk
+    )
+    result = compose_mechanistic_primary_decision(
+        setup_evidence=setup, ai_risk_adjudication=risk, policy=policy
+    )
+    assert common["entry_mechanistic_action"] == "RECHECK"
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    assert result["entry_probe_intent"] is exposure
+
+
+def test_hierarchy_residual_is_shrunk_and_deterministic_with_parent_binding():
+    from src.engine.scalping import entry_setup_evidence as module
+
+    setup, _, policy = _hierarchy_case()
+    rule = policy["hierarchy"]["rules"][0]
+    rule["symbols"]["005930"] = {
+        "count": 20,
+        "delta": {
+            "maximum_spread_bp": -40,
+            "minimum_fillability_score": 0,
+            "maximum_top3_ask_to_bid_ratio": 0,
+        },
+    }
+    decision = module.mechanistic_entry_policy_decision(setup, policy=policy)
+    receipt = decision["hierarchy_selection"]
+    assert receipt["level"] == "symbol"
+    assert receipt["effective_thresholds"]["maximum_spread_bp"] == 80
+    policy["thresholds"]["maximum_spread_bp"] = 80
+    assert module.validate_mechanistic_entry_threshold_policy(policy) == [
+        "mechanistic_hierarchy_contract_invalid"
+    ]
+
+
+@pytest.mark.parametrize(
+    "gap,backed,refill,expected",
+    [
+        (False, 0.9, 0.1, "ENTER_NOW"),
+        (True, 0.9, 0.1, "RECHECK"),
+        (False, 0.1, 0.1, "RECHECK"),
+        (False, 0.9, 0.9, "RECHECK"),
+    ],
+)
+def test_hierarchy_combined_micro_never_uses_cancel_only_or_incomplete_window(
+    gap, backed, refill, expected
+):
+    from src.engine.scalping import entry_setup_evidence as module
+
+    window = {
+        "source_quality_status": "eligible",
+        "action": "CONTINUE",
+        "bid_start": 100,
+        "bid_end": 101,
+        "feature": {
+            "feature_version": "machine_confirmation_fixed_price_window_v1",
+            "eligible_for_feature_ablation": not gap,
+            "source_gap_reasons": ["truncated"] if gap else [],
+            "anchor_depth": {"quantity": 1000},
+            "best_ask_depletion_velocity_qty_per_sec": 500,
+            "aggressive_buy_trade_backed_ratio": backed,
+            "refill_ratio": refill,
+            "downward_reprice_observed": False,
+        },
+    }
+    setup, _, policy = _hierarchy_case(micro=window)
+    policy["hierarchy"]["rules"][0]["micro"] = {
+        "minimum_depletion_fraction_per_sec": 0.1,
+        "minimum_trade_backed_ratio": 0.75,
+        "maximum_refill_ratio": 0.5,
+    }
+    assert (
+        module.mechanistic_entry_policy_decision(setup, policy=policy)["action"]
+        == expected
+    )
+    setup["setup_state"] = "INVALID"
+    assert (
+        module.mechanistic_entry_policy_decision(setup, policy=policy)["action"]
+        == "BLOCK"
+    )
+
+
+def test_hierarchy_corrupt_context_does_not_fall_back():
+    from src.engine.scalping import entry_setup_evidence as module
+
+    setup, _, policy = _hierarchy_case()
+    setup["mechanistic_context"]["symbol"] = "000000"
+    with pytest.raises(ValueError, match="context_hash"):
+        module.mechanistic_entry_policy_decision(setup, policy=policy)
+
+
 @pytest.mark.parametrize("verdict", ["PASS", "VETO", "CAUTION", "MALFORMED", "ABSENT"])
 def test_machine_point_has_binding_ai_screen(verdict):
     evidence, risk = _machine_screen_case(verdict)

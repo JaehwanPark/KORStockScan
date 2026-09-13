@@ -111,9 +111,15 @@ def load_auto_promotion(
             for key, value in AUTO_PROMOTION_CONTRACT.items()
         ):
             return {**result, "reason": "auto_promotion_contract_invalid"}
-        if re.fullmatch(r"[0-9a-f]{40}", str(payload.get("reviewed_commit") or "")) is None:
+        if (
+            re.fullmatch(r"[0-9a-f]{40}", str(payload.get("reviewed_commit") or ""))
+            is None
+        ):
             return result
-        if payload.get("operator_authority") != "all_sessions_v2_15_plus_auto_promotion_2026_09_14":
+        if (
+            payload.get("operator_authority")
+            != "all_sessions_v2_15_plus_auto_promotion_2026_09_14"
+        ):
             return result
         return {"valid": True, "sha256": digest, "path": path, "payload": payload}
     except (OSError, ValueError, TypeError, KeyError):
@@ -183,13 +189,13 @@ def authorized_scopes(
     *, env: dict[str, str] | None = None, now: datetime | None = None
 ) -> frozenset[str]:
     rollout = load_rollout(env=env, now=now)
+    auto_promotion = load_auto_promotion(env=env, now=now)
     from src.engine.scalping.entry_recheck_policy import runtime_scope
 
-    return (
-        frozenset(runtime_scope(*scope.split("|")) for scope in SCOPES)
-        if rollout and rollout.get("valid") is True
-        else frozenset()
-    )
+    scopes = set(SCOPES) if rollout and rollout.get("valid") is True else set()
+    if auto_promotion and auto_promotion.get("valid") is True:
+        scopes.update(AUTO_PROMOTION_SCOPES)
+    return frozenset(runtime_scope(*scope.split("|")) for scope in scopes)
 
 
 def decision_authorized(
@@ -200,7 +206,10 @@ def decision_authorized(
         return False
     if decision.get("entry_setup_live_policy_runtime_effect") is not True:
         return False
-    if decision.get("entry_setup_live_policy_target_date") != current.date().isoformat():
+    if (
+        decision.get("entry_setup_live_policy_target_date")
+        != current.date().isoformat()
+    ):
         return False
     venue = decision.get("entry_setup_live_policy_effective_venue")
     session = decision.get("entry_setup_live_policy_session_bucket")
@@ -216,7 +225,9 @@ def decision_authorized(
         )
     if authority == "operator_all_session_auto_promotion":
         auto_promotion = load_auto_promotion(now=current)
-        scope = f"{str(venue or '').strip().upper()}|{str(session or '').strip().upper()}"
+        scope = (
+            f"{str(venue or '').strip().upper()}|{str(session or '').strip().upper()}"
+        )
         return bool(
             str(strategy or "").strip().upper() in {"SCALPING", "SCALP"}
             and auto_promotion

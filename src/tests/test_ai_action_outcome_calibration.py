@@ -320,6 +320,404 @@ def _valid_prior_calibration_payload(payload: dict) -> dict:
     return calibration._with_artifact_content_sha256(value)
 
 
+def _hierarchy_training_rows():
+    from src.engine.scalping import entry_setup_evidence as evidence
+
+    rows = []
+    dates = [
+        "2026-09-07",
+        "2026-09-08",
+        "2026-09-09",
+        "2026-09-10",
+        "2026-09-11",
+        "2026-09-14",
+        "2026-09-15",
+    ]
+    parts = {
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "price_tick_band": "P1",
+        "volatility_band": "V1",
+    }
+    for day in dates:
+        for i in range(4):
+            setup = _mechanistic_evidence()
+            setup.update(
+                setup_state="WAIT_CONFIRMATION",
+                micro_recovery_observation={
+                    "source_usable": True,
+                    "net_aggressive_delta_10t": 20,
+                    "price_change_10t_pct": 0.1,
+                },
+            )
+            context = {
+                "symbol": "005930",
+                "group": {"key_parts": parts},
+                "flow": {"matched_families": ["DEPTH_SUPPORTED_STAIRCASE"]},
+                "micro_window": None,
+            }
+            setup["mechanistic_context"] = {
+                **context,
+                "context_sha256": evidence._canonical_sha256(context),
+            }
+            rows.append(
+                {
+                    "decision_trace_id": f"{day}-{i}",
+                    "decision_ts": f"{day}T10:{i*10:02d}:00+09:00",
+                    "source_date": day,
+                    "stock_code": "005930",
+                    "setup_evidence": setup,
+                    "entry_group_observation": context["group"],
+                    "entry_group_contract_valid": True,
+                    "mechanistic_flow_observation": context["flow"],
+                    "mechanistic_flow_observation_contract_valid": True,
+                    "entry_quality_path": {
+                        "status": "evaluable",
+                        "entry_quality_label": "CLEAN_FAST_PROFIT",
+                        "conservative_execution_cost_pct": 0.2,
+                    },
+                    "entry_quality_contract_valid": True,
+                    "source_provenance_verified": True,
+                    "source_report_hash_verified": True,
+                    "comparison": {
+                        "entry_cost_contract": {
+                            "schema": "entry_round_trip_cost_v1",
+                            "source_date": day,
+                            "effective_venue": "KRX",
+                            "session_bucket": "KRX_REGULAR",
+                            "basis": "source_bound_estimate",
+                            "source_sha256": "a" * 64,
+                            "components_pct": {
+                                "buy_fee": 0.01,
+                                "sell_fee": 0.01,
+                                "sell_tax": 0.15,
+                                "slippage": 0.03,
+                            },
+                        },
+                        "control_action": "WAIT",
+                        "entry_path_first_hit": "target_first",
+                        "entry_path_target_pct": 0.5,
+                        "entry_path_adverse_pct": -1.0,
+                        "conservative_execution_cost_pct": 0.2,
+                    },
+                }
+            )
+    return rows
+
+
+def test_hierarchy_nxt_fit_is_not_a_krx_candidate():
+    import copy
+    from src.engine.scalping import entry_setup_evidence as evidence
+
+    rows = copy.deepcopy(_hierarchy_training_rows())
+    cohort = ("NXT", "NXT_AFTERMARKET")
+    for row in rows:
+        parts = row["entry_group_observation"]["key_parts"]
+        parts.update(venue=cohort[0], session_bucket=cohort[1])
+        context = row["setup_evidence"]["mechanistic_context"]
+        context["group"]["key_parts"] = parts
+        context["context_sha256"] = evidence._canonical_sha256(
+            {k: v for k, v in context.items() if k != "context_sha256"}
+        )
+        row["comparison"]["entry_cost_contract"].update(
+            effective_venue=cohort[0], session_bucket=cohort[1]
+        )
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-15", cohort=cohort
+    )
+    assert result["promotion_pass"] is True
+    assert (
+        calibration.validate_hierarchy_candidate(
+            result, source_date="2026-09-15", cohort=cohort
+        )
+        == []
+    )
+    assert "candidate_cohort_invalid" in calibration.validate_hierarchy_candidate(
+        result, source_date="2026-09-15"
+    )
+    assert (
+        calibration.build_mechanistic_hierarchy_candidate(
+            rows, target_date="2026-09-15"
+        )["source_count"]
+        == 0
+    )
+    for row in rows:
+        row["comparison"]["entry_cost_contract"]["effective_venue"] = "KRX"
+    assert (
+        calibration.build_mechanistic_hierarchy_candidate(
+            rows, target_date="2026-09-15", cohort=cohort
+        )["source_count"]
+        == 0
+    )
+
+
+def test_hierarchy_fits_groups_and_never_uses_pre_freeze_dates_as_holdout():
+    rows = _hierarchy_training_rows()
+    prior = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-11"
+    )
+    assert prior["policy_candidate"] is None
+    assert prior["holdout_dates"] == []
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-15"
+    )
+    assert result["promotion_pass"] is True
+    assert (
+        calibration.validate_hierarchy_candidate(result, source_date="2026-09-15") == []
+    )
+    assert result["calibration_dates"][-1] == "2026-09-11"
+    candidate = result["policy_candidate"]
+    assert candidate["threshold_policy"]["hierarchy"]["rules"]
+    for r in rows:
+        if r["source_date"] > "2026-09-11":
+            r["entry_quality_path"]["entry_quality_label"] = "PROFIT_AFTER_DEEP_ADVERSE"
+    rejected = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-15"
+    )
+    assert rejected["policy_candidate"] is None
+    assert rejected["evaluations"][0]["rule"] == result["evaluations"][0]["rule"]
+
+
+def test_hierarchy_excludes_overlap_and_future_rows():
+    rows = _hierarchy_training_rows()
+    extra = dict(
+        rows[0], decision_trace_id="repeat", decision_ts="2026-09-07T10:00:10+09:00"
+    )
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        rows + [extra], target_date="2026-09-15"
+    )
+    assert result["excluded"]["duplicate_or_overlapping_anchor"] == 1
+
+
+def test_hierarchy_never_promotes_half_spread_only_cost_as_net_ev():
+    rows = _hierarchy_training_rows()
+    for row in rows:
+        row["comparison"].pop("entry_cost_contract")
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-15"
+    )
+    assert result["policy_candidate"] is None
+    assert result["excluded"]["full_cost_or_relabel_required"] == len(rows)
+
+
+def test_machine_capture_matures_with_existing_cost_owner_without_ai(
+    monkeypatch, tmp_path
+):
+    from datetime import datetime, timedelta
+    from src.engine.scalping import (
+        ai_decision_quality as quality,
+        ai_decision_trace as trace,
+    )
+    from src.tests.test_ai_decision_trace import _enable
+    from src.tests.test_entry_setup_evidence import _hierarchy_case
+
+    _enable(monkeypatch, tmp_path)
+    day = "2026-09-14"
+    now = datetime.fromisoformat(day + "T10:00:00+09:00")
+    monkeypatch.setattr(trace, "_now", lambda: now)
+    setup = _hierarchy_case()[0]
+    profile = {
+        "profile_id": "reviewed",
+        "economic_source_sha256": "a" * 64,
+        "buy_fee_bps": 1,
+        "sell_fee_bps": 1,
+        "statutory_sell_tax_bps": 15,
+        "uncertainty_buffer_bps": 1,
+    }
+    monkeypatch.setattr(
+        calibration,
+        "_hierarchy_cost_profiles",
+        lambda root, d, venue="KRX": {"005930": profile},
+    )
+    prices = [
+        {
+            "stock_code": "005930",
+            "timestamp": (now + timedelta(seconds=i * 30)).isoformat(),
+            "price": 10050,
+            "high": 10055,
+            "low": 10000,
+            "close": 10050,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "pass",
+        }
+        for i in range(1, 21)
+    ]
+    monkeypatch.setattr(
+        quality,
+        "load_pipeline_price_and_lifecycle_rows",
+        lambda *args, **kwargs: (prices, []),
+    )
+    capture = trace.capture_machine_observation(
+        exact_payload={
+            "stock_code": "005930",
+            "name": "삼성전자",
+            "best_ask": 10000,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "conservative_execution_cost_pct": 0.02,
+        },
+        setup_evidence=setup,
+        assessment={"action": "RECHECK"},
+        bundle_sha256="b" * 64,
+    )
+    assert capture["machine_capture_status"] == "captured"
+    rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day)
+    assert census == {"captured": 1, "evaluable": 1}
+    assert len(rows) == 1
+    assert rows[0]["comparison"]["conservative_execution_cost_pct"] == pytest.approx(
+        0.20
+    )
+    assert rows[0]["exit_cohort"] == "existing_fixed_boundary_counterfactual"
+    assert rows[0]["machine_observation_hash_verified"] is True
+    assert rows[0]["entry_quality_path"][
+        "conservative_execution_cost_pct"
+    ] == pytest.approx(0.20)
+
+
+def test_hierarchy_cost_owner_rejects_changed_raw_source(tmp_path):
+    import hashlib
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+
+    raw = tmp_path / "fee.json"
+    raw.write_text("{}")
+    profile = {"profile_id": "reviewed"}
+    catalog = {"profiles": [profile]}
+    catalog["content_sha256"] = content_sha256(catalog)
+    artifact = {
+        "schema": "micro_reversion_economic_reference_daily_resolution_v2",
+        "verified": True,
+        "target_date": "2026-09-14",
+        "tuning_input_allowed": True,
+        "source_artifacts": [
+            {
+                "kind": kind,
+                "verified": True,
+                "resolved_path": str(raw),
+                "expected_sha256": hashlib.sha256(raw.read_bytes()).hexdigest(),
+            }
+            for kind in ("broker_fee", "statutory_tax", "symbol_product_master")
+        ],
+        "canonical_reviewed_cost_payload": catalog,
+        "coverage_rows": [
+            {
+                "status": "eligible",
+                "venue": "KRX",
+                "symbol": "005930",
+                "reviewed_cost_profile_id": "reviewed",
+            }
+        ],
+    }
+    artifact["artifact_content_sha256"] = content_sha256(artifact)
+    path = (
+        tmp_path
+        / "report/micro_reversion_economic_reference/micro_reversion_economic_reference_2026-09-14.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(artifact))
+    assert "005930" in calibration._hierarchy_cost_profiles(tmp_path, "2026-09-14")
+    raw.write_text('{"changed":true}')
+    assert calibration._hierarchy_cost_profiles(tmp_path, "2026-09-14") == {}
+
+
+def test_hierarchy_fits_a_real_symbol_delta_instead_of_only_counting_symbols():
+    import copy
+
+    rows = []
+    for template in _hierarchy_training_rows()[::4]:
+        for i in range(10):
+            row = copy.deepcopy(template)
+            row["decision_trace_id"] += f"-s{i}"
+            row["decision_ts"] = (
+                f"{row['source_date']}T{10 + i // 6:02d}:{i % 6 * 10:02d}:00+09:00"
+            )
+            row["stock_code"] = "005930" if i < 5 else "000660"
+            row["setup_evidence"]["tail_risk_assessment"]["inputs"]["spread_bp"] = (
+                80 if i < 5 else (90 if i < 8 else 20)
+            )
+            if 5 <= i < 8:
+                row["entry_quality_path"][
+                    "entry_quality_label"
+                ] = "PROFIT_AFTER_SIDEWAYS"
+            rows.append(row)
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-15"
+    )
+    assert result["promotion_pass"] is True
+    rule = result["policy_candidate"]["threshold_policy"]["hierarchy"]["rules"][0]
+    assert rule["symbols"]["000660"]["delta"]["maximum_spread_bp"] < 0
+    assert result["evaluations"][0]["symbol_holdout_checks"] == {"000660": True}
+
+
+def test_hierarchy_net_ev_exact_floor_survives_float_roundoff():
+    rows = _hierarchy_training_rows()
+    for row in rows:
+        row["comparison"]["entry_cost_contract"]["components_pct"]["sell_tax"] = 0.35
+        row["comparison"]["conservative_execution_cost_pct"] = 0.4
+        row["entry_quality_path"]["conservative_execution_cost_pct"] = 0.4
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-15"
+    )
+    assert result["promotion_pass"] is True
+    assert (
+        calibration.validate_hierarchy_candidate(result, source_date="2026-09-15") == []
+    )
+    assert (
+        result["economic_contract_diagnostics"][
+            "rows_whose_gross_target_cannot_clear_net_ev_floor"
+        ]
+        == 0
+    )
+
+
+def test_hierarchy_learns_micro_child_and_reports_same_population_four_arms():
+    from src.engine.scalping.entry_setup_evidence import _canonical_sha256
+
+    rows = _hierarchy_training_rows()
+    for i, row in enumerate(rows):
+        good = i % 4 < 2
+        context = row["setup_evidence"]["mechanistic_context"]
+        context["micro_window"] = {
+            "source_quality_status": "eligible",
+            "action": "CONTINUE",
+            "bid_start": 100,
+            "bid_end": 101,
+            "feature": {
+                "feature_version": "machine_confirmation_fixed_price_window_v1",
+                "eligible_for_feature_ablation": True,
+                "source_gap_reasons": [],
+                "anchor_depth": {"quantity": 1000},
+                "best_ask_depletion_velocity_qty_per_sec": 500,
+                "aggressive_buy_trade_backed_ratio": 0.9 if good else 0.1,
+                "refill_ratio": 0.1,
+                "downward_reprice_observed": False,
+            },
+        }
+        context["context_sha256"] = _canonical_sha256(
+            {k: v for k, v in context.items() if k != "context_sha256"}
+        )
+        if not good:
+            row["entry_quality_path"][
+                "entry_quality_label"
+            ] = "CLEAN_FAST_LOSS_OR_ADVERSE"
+            row["comparison"]["entry_path_first_hit"] = "adverse_first"
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        rows, target_date="2026-09-15"
+    )
+    assert result["promotion_pass"] is True
+    evaluation = result["evaluations"][0]
+    assert evaluation["rule"]["micro"] is not None
+    ablation = evaluation["feature_ablation_study"]["holdout"]
+    assert ablation["intersection_count"] == 8
+    assert set(ablation["arms"]) == {
+        "baseline",
+        "bid_rebound",
+        "depletion_trade_refill",
+        "combined",
+    }
+    assert ablation["arms"]["combined"]["row_count"] == 4
+
+
 def _mechanistic_evidence(
     *,
     spread_bp: float = 30.0,

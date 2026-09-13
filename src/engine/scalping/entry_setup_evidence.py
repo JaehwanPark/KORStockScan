@@ -150,6 +150,48 @@ MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1 = {
     "actual_order_submitted": False,
     "broker_order_forbidden": True,
 }
+# One producer/consumer contract; legacy v1 policy files remain readable.
+MECHANISTIC_REFINEMENT_GATE = {
+    "minimum_cost_adjusted_ev_pct": 0.10,
+    "minimum_calibration_exposure_count": 10,
+    "minimum_calibration_symbol_count": 5,
+    "minimum_calibration_source_date_count": 5,
+    "minimum_calibration_terminal_evaluable_count": 10,
+    "minimum_holdout_exposure_count": 3,
+    "minimum_holdout_source_date_count": 2,
+    "minimum_holdout_terminal_evaluable_count": 3,
+    "holdout_source_date_count": 3,
+}
+MECHANISTIC_HIERARCHY_SCHEMA = "mechanistic_entry_hierarchy_v1"
+HIERARCHICAL_ENTRY_QUALITY_GATE = {
+    "minimum_group_terminal_count": 5,
+    "minimum_group_source_date_count": 3,
+    "minimum_walk_forward_fold_count": 2,
+    "minimum_cost_adjusted_ev_pct": 0.10,
+    "symbol_residual_minimum_terminal_count": 15,
+    "symbol_residual_minimum_source_date_count": 5,
+    "symbol_residual_shrinkage_prior_count": 20,
+}
+MECHANISTIC_PARAMETER_BOUNDS = {
+    "maximum_spread_bp": (40.0, 100.0),
+    "minimum_fillability_score": (15.0, 60.0),
+    "maximum_top3_ask_to_bid_ratio": (1.0, 5.0),
+}
+MECHANISTIC_FLOW_FAMILIES = {
+    "DEPTH_SUPPORTED",
+    "HIGH_VELOCITY_CONTINUATION",
+    "MID_HORIZON_STAIRCASE",
+    "REBOUND_DECELERATION",
+    "VOLUME_EXPANSION",
+    "RECENT_SESSION_HIGH",
+    "DEPTH_SUPPORTED_STAIRCASE",
+    "STAIRCASE_RECENT_HIGH",
+}
+MECHANISTIC_MICRO_BOUNDS = {
+    "minimum_depletion_fraction_per_sec": (0.0, 10.0),
+    "minimum_trade_backed_ratio": (0.5, 1.0),
+    "maximum_refill_ratio": (0.0, 1.0),
+}
 RISK_CODES = {
     "NO_BLOCKING_RISK",
     "SOURCE_QUALITY_GAP",
@@ -1512,6 +1554,11 @@ def build_entry_setup_evidence(
         evidence[ENTRY_TIMING_OBSERVATION_SCHEMA] = timing_observation
     if balanced_policy:
         evidence["risk_fact_bindings"] = _risk_fact_bindings(evidence)
+        evidence["mechanistic_context"] = build_mechanistic_context(
+            exact_payload=payload,
+            exact_analysis=exact,
+            micro_window=payload.get("mechanistic_micro_window"),
+        )
     evidence["evidence_sha256"] = _canonical_sha256(evidence)
     return evidence
 
@@ -1807,7 +1854,7 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
         "actual_order_submitted",
         "broker_order_forbidden",
     }
-    if set(value) != expected_fields:
+    if set(value) - {"hierarchy"} != expected_fields:
         errors.append("mechanistic_entry_threshold_policy_fields_invalid")
     if value.get("schema") != MECHANISTIC_ENTRY_THRESHOLD_POLICY_SCHEMA:
         errors.append("mechanistic_entry_threshold_policy_schema_invalid")
@@ -1876,7 +1923,228 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
         or value.get("broker_order_forbidden") is not True
     ):
         errors.append("mechanistic_entry_offline_authority_invalid")
+    if "hierarchy" in value:
+        errors.extend(validate_mechanistic_hierarchy(value))
     return list(dict.fromkeys(errors))
+
+
+def mechanistic_scope_supported(venue: Any, session: Any) -> bool:
+    from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
+
+    return f"{venue}|{session}" in AUTO_PROMOTION_SCOPES
+
+
+def validate_mechanistic_hierarchy(policy: Any) -> list[str]:
+    """Validate bounded child policies; no field can carry order authority."""
+    value = _as_dict(policy)
+    hierarchy = _as_dict(value.get("hierarchy"))
+    errors = []
+    if (
+        set(hierarchy) != {"schema", "parent_sha256", "rules"}
+        or hierarchy.get("schema") != MECHANISTIC_HIERARCHY_SCHEMA
+        or hierarchy.get("parent_sha256") != _canonical_sha256(value.get("thresholds"))
+        or not isinstance(hierarchy.get("rules"), list)
+        or len(hierarchy.get("rules", [])) > 64
+    ):
+        return ["mechanistic_hierarchy_contract_invalid"]
+    seen = set()
+    for rule in hierarchy["rules"]:
+        if not isinstance(rule, dict):
+            return ["mechanistic_hierarchy_rule_invalid"]
+        if not isinstance(rule.get("id"), str) or not isinstance(
+            rule.get("flow_family"), str
+        ):
+            return ["mechanistic_hierarchy_match_invalid"]
+        match = _as_dict(rule.get("match"))
+        fields = {"id", "match", "flow_family", "thresholds", "symbols", "micro"}
+        if (
+            set(rule) != fields
+            or not isinstance(rule.get("id"), str)
+            or not rule["id"]
+            or rule["id"] in seen
+            or rule.get("flow_family") not in MECHANISTIC_FLOW_FAMILIES
+            or not {"venue", "session_bucket"} <= set(match)
+            or set(match)
+            - {
+                "venue",
+                "session_bucket",
+                "price_tick_band",
+                "liquidity_band",
+                "volatility_band",
+                "structure_phase",
+                "watch_age_band",
+                "extension_band",
+            }
+            or not mechanistic_scope_supported(
+                match.get("venue"), match.get("session_bucket")
+            )
+            or any(
+                not isinstance(v, str) or v in {"", "UNKNOWN"} for v in match.values()
+            )
+        ):
+            errors.append("mechanistic_hierarchy_match_invalid")
+        seen.add(rule.get("id"))
+        thresholds = _as_dict(rule.get("thresholds"))
+        if set(thresholds) != set(MECHANISTIC_PARAMETER_BOUNDS) or any(
+            type(thresholds.get(k)) not in (int, float)
+            or (n := _number(thresholds.get(k))) is None
+            or not lo <= n <= hi
+            for k, (lo, hi) in MECHANISTIC_PARAMETER_BOUNDS.items()
+        ):
+            errors.append("mechanistic_hierarchy_threshold_invalid")
+        micro = rule.get("micro")
+        if micro is not None and (
+            not isinstance(micro, dict)
+            or set(micro) != set(MECHANISTIC_MICRO_BOUNDS)
+            or any(
+                type(micro.get(k)) not in (int, float)
+                or (n := _number(micro.get(k))) is None
+                or not lo <= n <= hi
+                for k, (lo, hi) in MECHANISTIC_MICRO_BOUNDS.items()
+            )
+        ):
+            errors.append("mechanistic_hierarchy_micro_invalid")
+        symbols = rule.get("symbols")
+        if not isinstance(symbols, dict):
+            errors.append("mechanistic_hierarchy_symbols_invalid")
+            continue
+        for symbol, residual in symbols.items():
+            if (
+                not isinstance(symbol, str)
+                or len(symbol) != 6
+                or not symbol.isdigit()
+                or not isinstance(residual, dict)
+                or set(residual) != {"count", "delta"}
+            ):
+                errors.append("mechanistic_hierarchy_residual_invalid")
+                continue
+            n = residual.get("count")
+            delta = _as_dict(residual.get("delta"))
+            if (
+                type(n) is not int
+                or n
+                < HIERARCHICAL_ENTRY_QUALITY_GATE[
+                    "symbol_residual_minimum_terminal_count"
+                ]
+                or set(delta) != set(MECHANISTIC_PARAMETER_BOUNDS)
+                or any(
+                    type(delta.get(k)) not in (int, float)
+                    or (v := _number(delta.get(k))) is None
+                    or abs(v) > hi - lo
+                    for k, (lo, hi) in MECHANISTIC_PARAMETER_BOUNDS.items()
+                )
+            ):
+                errors.append("mechanistic_hierarchy_residual_invalid")
+    return sorted(set(errors))
+
+
+def build_mechanistic_context(
+    *, exact_payload: Any, exact_analysis: Any, micro_window: Any = None
+) -> dict[str, Any]:
+    """Freeze predecision observations, including the exact micro receipt."""
+    payload = _as_dict(exact_payload)
+    body = {
+        "symbol": str(payload.get("stock_code") or payload.get("symbol") or ""),
+        "group": build_entry_predecision_group_observation(
+            exact_payload=payload,
+            exact_analysis=exact_analysis,
+            entry_timing_context=payload.get("entry_timing_context"),
+            balanced_policy=True,
+        ),
+        "flow": build_mechanistic_entry_flow_observation(exact_analysis),
+        "micro_window": micro_window,
+    }
+    return {**body, "context_sha256": _canonical_sha256(body)}
+
+
+def _mechanistic_hierarchy_selection(
+    setup: dict, policy: dict
+) -> tuple[dict, dict | None, dict]:
+    context = _as_dict(setup.get("mechanistic_context"))
+    receipt = {"level": "common", "rule_id": None, "reason": "no_matching_valid_child"}
+    effective = {**policy, "thresholds": dict(policy["thresholds"])}
+    if not policy.get("hierarchy"):
+        return effective, None, receipt
+    if not context or context.get("context_sha256") != _canonical_sha256(
+        {k: v for k, v in context.items() if k != "context_sha256"}
+    ):
+        # A supplied corrupt context cannot silently select a permissive parent.
+        if context:
+            raise ValueError("mechanistic_context_hash_invalid")
+        return effective, None, receipt
+    parts = _as_dict(_as_dict(context.get("group")).get("key_parts"))
+    families = _as_dict(context.get("flow")).get("matched_families", [])
+    matches = [
+        r
+        for r in policy["hierarchy"]["rules"]
+        if all(parts.get(k) == v for k, v in r["match"].items())
+        and r["flow_family"] in families
+    ]
+    if not matches:
+        return effective, None, receipt
+    rule = sorted(matches, key=lambda r: (-len(r["match"]), r["id"]))[0]
+    effective["thresholds"].update(rule["thresholds"])
+    receipt.update(level="group", rule_id=rule["id"], reason="matched_group")
+    residual = rule["symbols"].get(context.get("symbol"))
+    if residual:
+        weight = residual["count"] / (
+            residual["count"]
+            + HIERARCHICAL_ENTRY_QUALITY_GATE["symbol_residual_shrinkage_prior_count"]
+        )
+        for key, (lo, hi) in MECHANISTIC_PARAMETER_BOUNDS.items():
+            effective["thresholds"][key] = min(
+                hi,
+                max(lo, effective["thresholds"][key] + weight * residual["delta"][key]),
+            )
+        receipt.update(level="symbol", reason="shrunk_symbol_residual", weight=weight)
+    # The effective leaf is evaluated by the old scalar core, not recursively.
+    effective.pop("hierarchy", None)
+    receipt["effective_thresholds"] = effective["thresholds"]
+    receipt["effective_sha256"] = _canonical_sha256(effective["thresholds"])
+    return effective, rule, receipt
+
+
+def _mechanistic_micro_pass(
+    context: dict, thresholds: dict, *, diagnostic_arm: str = "combined"
+) -> tuple[bool, str]:
+    observation = _as_dict(context.get("micro_window"))
+    feature = _as_dict(observation.get("feature"))
+    anchor = _as_dict(feature.get("anchor_depth"))
+    velocity = _number(feature.get("best_ask_depletion_velocity_qty_per_sec"))
+    quantity = _number(anchor.get("quantity"))
+    backed = _number(feature.get("aggressive_buy_trade_backed_ratio"))
+    refill = _number(feature.get("refill_ratio"))
+    bid_start, bid_end = _number(observation.get("bid_start")), _number(
+        observation.get("bid_end")
+    )
+    if (
+        feature.get("feature_version") != "machine_confirmation_fixed_price_window_v1"
+        or feature.get("eligible_for_feature_ablation") is not True
+        or feature.get("source_gap_reasons") != []
+        or observation.get("source_quality_status") != "eligible"
+        or None in (velocity, quantity, backed, refill, bid_start, bid_end)
+        or quantity <= 0
+    ):
+        return False, "micro_required_source_unavailable"
+    bid_support = (
+        observation.get("action") != "DEFER_ADVERSE_FLOW"
+        and bid_end >= bid_start
+        and feature.get("downward_reprice_observed") is False
+    )
+    depletion_support = (
+        velocity / quantity > thresholds["minimum_depletion_fraction_per_sec"]
+        and backed >= thresholds["minimum_trade_backed_ratio"]
+        and refill <= thresholds["maximum_refill_ratio"]
+    )
+    passed = {
+        "baseline": True,
+        "bid_rebound": bid_support,
+        "depletion_trade_refill": depletion_support,
+        "combined": bid_support and depletion_support,
+    }[diagnostic_arm]
+    return passed, (
+        "micro_combined_supportive" if passed else "micro_combined_adverse_or_neutral"
+    )
 
 
 def mechanistic_entry_action_core(
@@ -2032,8 +2300,11 @@ def mechanistic_entry_policy_decision(
         raise ValueError(
             f"mechanistic_entry_threshold_policy_invalid:{','.join(policy_errors)}"
         )
-    comparison = mechanistic_entry_action_core(setup, policy=selected_policy)
-    thresholds = _as_dict(selected_policy.get("thresholds"))
+    effective, rule, selection = _mechanistic_hierarchy_selection(
+        setup, selected_policy
+    )
+    comparison = mechanistic_entry_action_core(setup, policy=effective)
+    thresholds = _as_dict(effective.get("thresholds"))
     tail_inputs = _as_dict(_as_dict(setup.get("tail_risk_assessment")).get("inputs"))
     observed = {
         "spread_bp": _number(tail_inputs.get("spread_bp")),
@@ -2050,10 +2321,44 @@ def mechanistic_entry_policy_decision(
         < float(thresholds["maximum_top3_ask_to_bid_ratio"])
     )
     core_action = str(comparison.get("preferred_action") or "BLOCK").upper()
+    group_trigger = False
+    micro_reason = "not_selected"
+    if rule is not None and core_action != "BLOCK":
+        micro = _as_dict(setup.get("micro_recovery_observation"))
+        price = _number(micro.get("price_change_10t_pct"))
+        delta = _number(micro.get("net_aggressive_delta_10t"))
+        # A family match alone is not an entry. Current buy flow and price
+        # response must confirm it; only missing-trigger rechecks may resolve.
+        group_trigger = bool(
+            micro.get("source_usable") is True
+            and price is not None
+            and delta is not None
+            and price > thresholds["minimum_micro_price_change_10t_pct"]
+            and delta >= thresholds["minimum_micro_net_aggressive_delta_10t"]
+            and all(
+                a["disposition"] == "COMPENSATED"
+                or (
+                    a["risk_code"] == "CONFIRMATION_MISSING"
+                    and a["fact_id"]
+                    in {"trigger_confirmation_missing", "volume_confirmation_missing"}
+                )
+                for a in comparison["risk_assessments"]
+            )
+        )
+        if rule["micro"] is not None:
+            micro_pass, micro_reason = _mechanistic_micro_pass(
+                _as_dict(setup.get("mechanistic_context")), rule["micro"]
+            )
+            group_trigger = group_trigger and micro_pass
+        else:
+            micro_reason = "existing_tape_price_confirmation"
     if core_action == "BLOCK":
         action = "BLOCK"
         reason = "mechanistic_hard_or_source_block"
-    elif core_action == "RECHECK":
+    elif rule is not None and not group_trigger:
+        action = "RECHECK"
+        reason = micro_reason if rule["micro"] else "group_trigger_confirmation_missing"
+    elif core_action == "RECHECK" and not group_trigger:
         action = "RECHECK"
         reason = str(comparison.get("recheck_reason") or "MECHANISTIC_RECHECK")
     elif not liquidity_complete:
@@ -2074,6 +2379,8 @@ def mechanistic_entry_policy_decision(
         "liquidity_inputs_complete": liquidity_complete,
         "liquidity_threshold_pass": liquidity_pass,
         "policy_version": selected_policy.get("version"),
+        "hierarchy_selection": {**selection, "micro_reason": micro_reason},
+        "group_trigger_pass": group_trigger,
         "primary_decision_owner": MECHANISTIC_PRIMARY_DECISION_OWNER,
         "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
         "runtime_effect": False,
@@ -2084,7 +2391,7 @@ def mechanistic_entry_policy_decision(
 
 
 def validate_mechanistic_risk_screen(
-    response: Any, *, setup_evidence: Any
+    response: Any, *, setup_evidence: Any, policy: Any = None
 ) -> list[str]:
     """Validate a binding second opinion, without changing legacy AI owners.
 
@@ -2105,6 +2412,26 @@ def validate_mechanistic_risk_screen(
         and risk.get("supporting_fact_ids")
     ):
         errors = [e for e in errors if e != "entry_risk_veto_requires_blocking_risk"]
+    if _as_dict(policy).get("hierarchy") and risk.get("risk_verdict") == "PASS":
+        decision = mechanistic_entry_policy_decision(setup_evidence, policy=policy)
+        if decision["action"] == "ENTER_NOW" and decision.get("group_trigger_pass"):
+            errors = [
+                e
+                for e in errors
+                if e
+                not in {
+                    "entry_risk_wait_confirmation_pass",
+                    "entry_risk_unconfirmed_pass",
+                }
+            ]
+            if {"micro_trusted_buy_flow", "micro_positive_price_response"} <= set(
+                risk.get("supporting_fact_ids") or []
+            ):
+                errors = [
+                    e
+                    for e in errors
+                    if e != "entry_risk_pass_setup_and_trigger_support_required"
+                ]
     return errors
 
 
@@ -2130,7 +2457,7 @@ def compose_mechanistic_primary_decision(
     )
     advisory = _as_dict(ai_risk_adjudication)
     advisory_errors = (
-        validate_mechanistic_risk_screen(advisory, setup_evidence=setup)
+        validate_mechanistic_risk_screen(advisory, setup_evidence=setup, policy=policy)
         if advisory
         else ["ai_advisory_not_available"]
     )
@@ -2172,6 +2499,20 @@ def compose_mechanistic_primary_decision(
         screen_status = (
             "response_invalid" if advisory_errors else advisory_verdict.lower()
         )
+        if screen_status == "pass" and policy_decision.get("group_trigger_pass"):
+            # The independent machine trigger is not validated as a legacy AI
+            # comparison. Keep its unchanged comparison as audit evidence only.
+            result.update(
+                action="WAIT",
+                score=70,
+                edge_state="EDGE",
+                entry_composed_action="WAIT",
+                entry_probe_intent=True,
+                entry_probe_intent_status="eligible",
+                entry_recheck_intent=False,
+                entry_composed_reason="machine_group_trigger_ai_pass",
+                reason="machine_group_trigger_ai_pass",
+            )
         if advisory_errors or advisory_verdict != "PASS":
             veto = not advisory_errors and advisory_verdict == "VETO"
             screened_action = "DROP" if veto else "WAIT"

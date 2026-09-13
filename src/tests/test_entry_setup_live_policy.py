@@ -77,6 +77,52 @@ def _pin_auto_promotion(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.parametrize("scope", rollout.AUTO_PROMOTION_SCOPES)
+def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial
+    from src.tests.test_mechanistic_entry_runtime_policy import source
+
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    _pin_auto_promotion(monkeypatch, tmp_path)
+    monkeypatch.setenv(policy.CANARY_ENV_KEY, "true")
+    for name in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
+        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + name, "100")
+    bundle = initial.publish(
+        source(tmp_path, SOURCE_DATE),
+        data_root=tmp_path,
+        bootstrap=True,
+        adopt_all_continuous=True,
+        now=datetime(2026, 8, 6, 22, tzinfo=policy.KST),
+    )
+    venue, session = scope.split("|")
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue=venue,
+        session_bucket=session,
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 8, 7, 10, tzinfo=policy.KST),
+    )
+    assert resolved["enabled"] is True, resolved
+    assert (
+        resolved["primary_decision_owner"] == "mechanistic_entry_adjudicator"
+    ), resolved
+    assert resolved["machine_bundle_sha256"] == bundle["bundle_sha256"]
+    assert resolved["machine_policy_scope"] == [venue, session]
+    assert resolved["auxiliary_historical_context"]["scope"] == scope
+    monkeypatch.setenv(policy._cohort_env_key((venue, session)), "false")
+    disabled = policy.resolve_live_prompt_policy(
+        configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue=venue,
+        session_bucket=session,
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 8, 7, 10, tzinfo=policy.KST),
+    )
+    assert disabled["status"] == "fallback_operator_disabled"
+
+
 def test_initial_machine_policy_resolves_without_performance_candidate(
     monkeypatch, tmp_path
 ):

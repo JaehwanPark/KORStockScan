@@ -1793,6 +1793,23 @@ def test_ai_decision_action_outcome_calibration_status_rejects_tampered_candidat
     assert "candidate_count_mismatch" in status["contract_errors"]
 
 
+def test_hierarchy_scope_handoff_rejects_rehashed_cross_market_projection(tmp_path):
+    report = calibration.build_report(target_date="2026-09-11", data_root=tmp_path)
+    assert (
+        mod._ai_decision_action_outcome_calibration_status(report)["status"] == "pass"
+    )
+    extensions = report["hierarchical_entry_quality"]["runtime_extensions_by_scope"]
+    extensions["NXT|NXT_AFTERMARKET"]["cohort"] = ["KRX", "KRX_REGULAR"]
+    handoff = report["optimizer_handoff"]
+    handoff["hierarchical_entry_quality"]["runtime_extensions_by_scope"] = extensions
+    handoff["handoff_content_sha256"] = calibration._canonical_sha256(
+        {k: v for k, v in handoff.items() if k != "handoff_content_sha256"}
+    )
+    report = calibration._with_artifact_content_sha256(report)
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+    assert "mechanistic_hierarchy_scope_invalid" in status["contract_errors"]
+
+
 def test_ai_decision_action_outcome_calibration_status_rejects_rehashed_handoff_drift(
     tmp_path: Path,
 ):

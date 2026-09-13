@@ -28,9 +28,16 @@ from src.trading.order.tick_utils import get_tick_size
 from src.engine.scalping.entry_setup_evidence import (
     MECHANISTIC_ENTRY_FLOW_OBSERVATION_SCHEMA,
     MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    MECHANISTIC_REFINEMENT_GATE,
+    MECHANISTIC_HIERARCHY_SCHEMA,
+    MECHANISTIC_PARAMETER_BOUNDS,
+    HIERARCHICAL_ENTRY_QUALITY_GATE,
+    validate_mechanistic_entry_threshold_policy,
     build_mechanistic_entry_flow_observation,
     mechanistic_entry_action_core,
     mechanistic_entry_policy_decision,
+    _mechanistic_micro_pass,
+    mechanistic_scope_supported,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -67,15 +74,6 @@ ENTRY_QUALITY_LABELS = frozenset(
         "CENSORED_OR_SOURCE_GAP",
     }
 )
-HIERARCHICAL_ENTRY_QUALITY_GATE = {
-    "minimum_group_terminal_count": 5,
-    "minimum_group_source_date_count": 3,
-    "minimum_walk_forward_fold_count": 2,
-    "minimum_cost_adjusted_ev_pct": 0.10,
-    "symbol_residual_minimum_terminal_count": 15,
-    "symbol_residual_minimum_source_date_count": 5,
-    "symbol_residual_shrinkage_prior_count": 20,
-}
 MECHANISTIC_FLOW_RECHECK_GATE = {
     "minimum_cost_adjusted_mfe_pct": 0.10,
     "minimum_calibration_terminal_count": 20,
@@ -186,17 +184,6 @@ MECHANISTIC_COMMON_FEATURE_GRID = {
     "maximum_spread_bp": (40.0, 60.0, 80.0, 100.0),
     "minimum_fillability_score": (15.0, 30.0, 45.0, 60.0),
     "maximum_top3_ask_to_bid_ratio": (1.0, 1.5, 2.0, 3.0, 5.0),
-}
-MECHANISTIC_REFINEMENT_GATE = {
-    "minimum_cost_adjusted_ev_pct": 0.10,
-    "minimum_calibration_exposure_count": 10,
-    "minimum_calibration_symbol_count": 5,
-    "minimum_calibration_source_date_count": 5,
-    "minimum_calibration_terminal_evaluable_count": 10,
-    "minimum_holdout_exposure_count": 3,
-    "minimum_holdout_source_date_count": 2,
-    "minimum_holdout_terminal_evaluable_count": 3,
-    "holdout_source_date_count": 3,
 }
 
 
@@ -954,6 +941,7 @@ def _mechanistic_source_rows(
     paired_dir: Path,
     *,
     target_date: str,
+    all_supported_cohorts: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Load common-feature entry rows from clean-baseline detailed replays."""
 
@@ -1052,10 +1040,17 @@ def _mechanistic_source_rows(
                 continue
             elif not isinstance(evidence, dict) or not isinstance(comparison, dict):
                 exclusions["request_comparison_or_evidence_join_missing"] += 1
-            elif (
-                _normalized_stage(request.get("stage")) != "entry"
-                or _normalized_venue(request.get("effective_venue")) != "KRX"
-                or _normalized_session(request.get("session_bucket")) != "KRX_REGULAR"
+            elif _normalized_stage(request.get("stage")) != "entry" or (
+                not mechanistic_scope_supported(
+                    _normalized_venue(request.get("effective_venue")),
+                    _normalized_session(request.get("session_bucket")),
+                )
+                if all_supported_cohorts
+                else (
+                    _normalized_venue(request.get("effective_venue")) != "KRX"
+                    or _normalized_session(request.get("session_bucket"))
+                    != "KRX_REGULAR"
+                )
             ):
                 exclusions["request_scope_mismatch"] += 1
             elif not row_date or row_date != source_date:
@@ -1224,8 +1219,24 @@ def _mechanistic_source_rows(
                     ),
                     "mechanistic_flow_observation_status": flow_observation_status,
                     "entry_quality_path": entry_quality_path,
+                    "label_context": {
+                        k: request.get(k)
+                        for k in (
+                            "stock_code",
+                            "reference_price",
+                            "reference_price_type",
+                            "best_ask",
+                            "effective_venue",
+                            "session_bucket",
+                            "market_data_route",
+                            "broker_route",
+                            "adverse_pct",
+                            "adverse_price",
+                        )
+                    },
                     "entry_quality_contract_valid": entry_quality_contract_valid,
                     "comparison": {
+                        "entry_cost_contract": comparison.get("entry_cost_contract"),
                         "control_action": str(
                             comparison.get("control_action") or ""
                         ).upper(),
@@ -2784,6 +2795,935 @@ def _actual_entry_quality_source_audit(
     }
 
 
+def _full_entry_cost_pct(contract: Any, *, source_date: str) -> float | None:
+    """Do not relabel the legacy half-spread/age proxy as net economics."""
+    c = _as_dict(contract)
+    components = _as_dict(c.get("components_pct"))
+    if (
+        c.get("schema") != "entry_round_trip_cost_v1"
+        or c.get("source_date") != source_date
+        or not mechanistic_scope_supported(
+            c.get("effective_venue"), c.get("session_bucket")
+        )
+        or c.get("basis") not in {"source_bound_estimate", "reconciled_execution_cost"}
+        or not _is_sha256(c.get("source_sha256"))
+        or set(components) != {"buy_fee", "sell_fee", "sell_tax", "slippage"}
+        or any((n := _number(v)) is None or n < 0 for v in components.values())
+    ):
+        return None
+    return sum(float(v) for v in components.values())
+
+
+def _hierarchy_cost_profiles(
+    data_root: Path, day: str, venue: str = "KRX"
+) -> dict[str, dict]:
+    """Read the existing exact-date main economic owner; never infer tax class."""
+    from src.engine.scalping.micro_reversion.economic_reference import content_sha256
+
+    path = existing_or_gzip_path(
+        data_root
+        / "report"
+        / "micro_reversion_economic_reference"
+        / f"micro_reversion_economic_reference_{day}.json"
+    )
+    artifact = _load_json(path) if path else {}
+    if (
+        artifact.get("schema")
+        != "micro_reversion_economic_reference_daily_resolution_v2"
+        or artifact.get("target_date") != day
+        or artifact.get("verified") is not True
+        or artifact.get("tuning_input_allowed") is not True
+        or artifact.get("artifact_content_sha256")
+        != content_sha256(
+            {k: v for k, v in artifact.items() if k != "artifact_content_sha256"}
+        )
+    ):
+        return {}
+    sources = artifact.get("source_artifacts") or []
+    if (
+        not isinstance(sources, list)
+        or not sources
+        or any(not isinstance(s, dict) for s in sources)
+    ):
+        return {}
+    if {s.get("kind") for s in sources} != {
+        "broker_fee",
+        "statutory_tax",
+        "symbol_product_master",
+    } or any(
+        s.get("verified") is not True
+        or _observed_file_sha256(Path(str(s.get("resolved_path") or "")))
+        != s.get("expected_sha256")
+        for s in sources
+    ):
+        return {}
+    catalog = _as_dict(artifact.get("canonical_reviewed_cost_payload"))
+    if catalog.get("content_sha256") != content_sha256(
+        {k: v for k, v in catalog.items() if k != "content_sha256"}
+    ):
+        return {}
+    profiles = {p["profile_id"]: p for p in catalog.get("profiles", [])}
+    return {
+        r["symbol"]: {
+            **profiles[r["reviewed_cost_profile_id"]],
+            "economic_source_sha256": artifact["artifact_content_sha256"],
+        }
+        for r in artifact.get("coverage_rows", [])
+        if r.get("status") == "eligible"
+        and r.get("venue") == venue
+        and r.get("reviewed_cost_profile_id") in profiles
+    }
+
+
+def _hierarchy_cost_contract(
+    profile: dict,
+    day: str,
+    friction: Any,
+    cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
+) -> dict | None:
+    friction = _number(friction)
+    if not profile or friction is None or friction < 0:
+        return None
+    fields = (
+        "buy_fee_bps",
+        "sell_fee_bps",
+        "statutory_sell_tax_bps",
+        "uncertainty_buffer_bps",
+    )
+    values = [_number(profile.get(k)) for k in fields]
+    if any(v is None or v < 0 for v in values):
+        return None
+    return {
+        "schema": "entry_round_trip_cost_v1",
+        "source_date": day,
+        "effective_venue": cohort[0],
+        "session_bucket": cohort[1],
+        "basis": "source_bound_estimate",
+        "source_sha256": profile["economic_source_sha256"],
+        "profile_id": profile["profile_id"],
+        "components_pct": {
+            "buy_fee": values[0] / 100,
+            "sell_fee": values[1] / 100,
+            "sell_tax": values[2] / 100,
+            "slippage": friction + values[3] / 100,
+        },
+    }
+
+
+def relabel_hierarchy_source_rows(
+    source_rows: list[dict],
+    data_root: Path,
+    *,
+    cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
+) -> tuple[list[dict], dict]:
+    """Reprice existing CF paths with full costs, preserving original reports."""
+    from src.engine.scalping import ai_decision_quality as quality
+
+    result, counts, by_day = [], Counter(), defaultdict(list)
+    for row in source_rows:
+        by_day[row["source_date"]].append(row)
+    for day, rows in sorted(by_day.items()):
+        profiles = _hierarchy_cost_profiles(data_root, day, cohort[0])
+        if not profiles:
+            counts["economic_owner_missing_or_unverified"] += len(rows)
+            result.extend(rows)
+            continue
+        if not any(
+            r["stock_code"] in profiles
+            and (r.get("label_context") or {}).get("reference_price_type")
+            == "executable_ask"
+            for r in rows
+        ):
+            counts["executable_reference_missing"] += len(rows)
+            result.extend(rows)
+            continue
+        pipeline = existing_or_gzip_path(
+            data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+        )
+        prices, _ = quality.load_pipeline_price_and_lifecycle_rows(
+            iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
+            stock_codes={r["stock_code"] for r in rows},
+        )
+        prices_by_symbol = defaultdict(list)
+        for price in prices:
+            prices_by_symbol[price.get("stock_code")].append(price)
+        for row in rows:
+            comparison = row["comparison"]
+            if (
+                _full_entry_cost_pct(
+                    comparison.get("entry_cost_contract"), source_date=day
+                )
+                is not None
+            ):
+                result.append(row)
+                continue
+            cost = _hierarchy_cost_contract(
+                profiles.get(row["stock_code"], {}),
+                day,
+                comparison.get("conservative_execution_cost_pct"),
+                cohort,
+            )
+            context = dict(row.get("label_context") or {})
+            if cost is None or context.get("reference_price_type") != "executable_ask":
+                counts["cost_or_executable_reference_missing"] += 1
+                result.append(row)
+                continue
+            full_cost = _full_entry_cost_pct(cost, source_date=day)
+            pending = {
+                **context,
+                "stock_code": row["stock_code"],
+                "decision_ts": row["decision_ts"],
+                "decision_trace_id": row["decision_trace_id"],
+                "decision_stage": "entry",
+                "invalid_reasons": [],
+                "adverse_pct": quality.ENTRY_PATH_ADVERSE_PCT,
+                "entry_conservative_execution_cost_pct": full_cost,
+            }
+            labeled = quality.mature_outcome_labels(
+                pending_labels=[pending],
+                price_rows=prices_by_symbol[row["stock_code"]],
+                lifecycle_rows=[],
+                as_of=datetime.fromisoformat(day + "T23:59:59+09:00"),
+            )[0]
+            metric = labeled.get("horizon_metrics", {}).get("10m", {})
+            path = metric.get("entry_quality_path")
+            if not isinstance(path, dict) or path.get("status") != "evaluable":
+                counts["raw_path_missing"] += 1
+                result.append(row)
+                continue
+            result.append(
+                {
+                    **row,
+                    "entry_quality_path": path,
+                    "entry_quality_contract_valid": True,
+                    "exit_cohort": "existing_fixed_boundary_counterfactual",
+                    "comparison": {
+                        **comparison,
+                        "entry_cost_contract": cost,
+                        "conservative_execution_cost_pct": full_cost,
+                        **{
+                            k: metric.get(k)
+                            for k in (
+                                "entry_path_first_hit",
+                                "entry_path_target_pct",
+                                "entry_path_adverse_pct",
+                            )
+                        },
+                    },
+                }
+            )
+            counts["full_cost_path_relabeled"] += 1
+    return result, dict(counts)
+
+
+def load_machine_observation_rows(
+    data_root: Path, *, target_date: str
+) -> tuple[list[dict], dict]:
+    """Reuse the payload archive and existing path labeler, with no AI calls."""
+    from src.engine.scalping import ai_decision_quality as quality
+    from src.engine.scalping.entry_setup_evidence import validate_entry_setup_evidence
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+
+    result, counts = [], Counter()
+    for path in sorted((data_root / "ai_decision_payloads").glob("*.jsonl*")):
+        match = re.search(r"(\d{4}-\d{2}-\d{2})\.jsonl", path.name)
+        if not match or not "2026-09-13" <= match[1] <= target_date:
+            continue
+        if path.suffix == ".gz" and path.with_suffix("").is_file():
+            continue
+        # Snapshot files contain both real provider inputs and machine-only
+        # observations. Never convert one schema into the other's authority.
+        captures = [
+            r
+            for r in iter_jsonl(path)
+            if r.get("schema") == "mechanistic_entry_observation_v1"
+        ]
+        if not captures:
+            continue
+        by_day = defaultdict(list)
+        for capture in captures:
+            counts["captured"] += 1
+            day = _kst_date_from_aware_timestamp(capture.get("captured_at"))
+            source = _as_dict(capture.get("source"))
+            evidence = source.get("setup_evidence")
+            if (
+                not day
+                or not CLEAN_BASELINE_DATE <= day <= target_date
+                or capture.get("machine_observation_sha256")
+                != hashlib.sha256(
+                    _json_bytes(
+                        {
+                            k: v
+                            for k, v in capture.items()
+                            if k != "machine_observation_sha256"
+                        }
+                    )
+                ).hexdigest()
+                or capture.get("redacted") is not False
+                or capture.get("provider_called") is not False
+                or any(
+                    capture.get(k) is not v
+                    for k, v in (
+                        ("runtime_effect", False),
+                        ("allowed_runtime_apply", False),
+                        ("actual_order_submitted", False),
+                        ("broker_order_forbidden", True),
+                    )
+                )
+                or validate_entry_setup_evidence(evidence)
+            ):
+                counts["invalid_capture"] += 1
+                continue
+            by_day[day].append(capture)
+        for day, observations in by_day.items():
+            cost_profiles_by_venue = {}
+            pipeline = existing_or_gzip_path(
+                data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+            )
+            prices, _ = quality.load_pipeline_price_and_lifecycle_rows(
+                iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
+                stock_codes={
+                    str(c.get("label_context", {}).get("stock_code") or "")
+                    for c in observations
+                },
+            )
+            prices_by_symbol = defaultdict(list)
+            for price in prices:
+                prices_by_symbol[price.get("stock_code")].append(price)
+            for capture in observations:
+                context = dict(capture.get("label_context") or {})
+                cohort = (context.get("effective_venue"), context.get("session_bucket"))
+                if not mechanistic_scope_supported(*cohort):
+                    counts["unsupported_cohort"] += 1
+                    continue
+                if cohort[0] not in cost_profiles_by_venue:
+                    cost_profiles_by_venue[cohort[0]] = _hierarchy_cost_profiles(
+                        data_root, day, cohort[0]
+                    )
+                cost_profiles = cost_profiles_by_venue[cohort[0]]
+                cost_contract = capture["source"]["exact_payload"].get(
+                    "entry_cost_contract"
+                )
+                if cost_contract is None:
+                    friction = context.get("entry_conservative_execution_cost_pct")
+                    if friction is None:
+                        spread = _number(
+                            _as_dict(
+                                _as_dict(
+                                    capture["source"]["setup_evidence"].get(
+                                        "tail_risk_assessment"
+                                    )
+                                ).get("inputs")
+                            ).get("spread_bp")
+                        )
+                        friction = spread / 200 if spread is not None else None
+                    cost_contract = _hierarchy_cost_contract(
+                        cost_profiles.get(context.get("stock_code"), {}),
+                        day,
+                        friction,
+                        cohort,
+                    )
+                full_cost = _full_entry_cost_pct(cost_contract, source_date=day)
+                if (
+                    _as_dict(cost_contract).get("effective_venue"),
+                    _as_dict(cost_contract).get("session_bucket"),
+                ) != cohort:
+                    full_cost = None
+                if full_cost is None:
+                    counts["full_round_trip_cost_missing"] += 1
+                    continue
+                context["entry_conservative_execution_cost_pct"] = full_cost
+                # Fixed-exit CF cohort, not an assertion about the user's live stop.
+                context["adverse_pct"] = quality.ENTRY_PATH_ADVERSE_PCT
+                if context.get("reference_price_type") != "executable_ask":
+                    counts["executable_reference_missing"] += 1
+                    continue
+                pending = {
+                    **context,
+                    "decision_ts": capture["captured_at"],
+                    "decision_trace_id": capture["machine_observation_sha256"],
+                    "decision_stage": "entry",
+                    "invalid_reasons": [],
+                }
+                labeled = quality.mature_outcome_labels(
+                    pending_labels=[pending],
+                    price_rows=prices_by_symbol[context.get("stock_code")],
+                    lifecycle_rows=[],
+                    as_of=datetime.fromisoformat(target_date + "T23:59:59+09:00"),
+                )[0]
+                metric = labeled.get("horizon_metrics", {}).get("10m", {})
+                entry_path = metric.get("entry_quality_path")
+                if (
+                    not isinstance(entry_path, dict)
+                    or entry_path.get("status") != "evaluable"
+                ):
+                    counts["path_or_cost_missing"] += 1
+                    continue
+                evidence = capture["source"]["setup_evidence"]
+                mc = evidence.get("mechanistic_context") or {}
+                cost = context.get("entry_conservative_execution_cost_pct")
+                result.append(
+                    {
+                        "decision_trace_id": capture["machine_observation_sha256"],
+                        "decision_ts": capture["captured_at"],
+                        "source_date": day,
+                        "stock_code": context.get("stock_code"),
+                        "setup_evidence": evidence,
+                        "entry_group_observation": mc.get("group", {}),
+                        "entry_group_contract_valid": True,
+                        "mechanistic_flow_observation": mc.get("flow", {}),
+                        "mechanistic_flow_observation_contract_valid": True,
+                        "entry_quality_path": entry_path,
+                        "entry_quality_contract_valid": True,
+                        "source_report_hash_verified": False,
+                        "machine_observation_hash_verified": True,
+                        "source_provenance_verified": True,
+                        "comparison": {
+                            "entry_cost_contract": cost_contract,
+                            "control_action": "WAIT",
+                            "entry_path_first_hit": metric.get("entry_path_first_hit"),
+                            "entry_path_target_pct": metric.get(
+                                "entry_path_target_pct"
+                            ),
+                            "entry_path_adverse_pct": metric.get(
+                                "entry_path_adverse_pct"
+                            ),
+                            "conservative_execution_cost_pct": cost,
+                        },
+                        "source_lane": "machine_observation_counterfactual_no_provider",
+                        "exit_cohort": "existing_fixed_boundary_counterfactual",
+                    }
+                )
+                counts["evaluable"] += 1
+    return result, dict(counts)
+
+
+def validate_hierarchy_candidate(
+    extension: dict,
+    *,
+    source_date: str,
+    cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
+) -> list[str]:
+    if not isinstance(extension.get("evaluations"), list):
+        return ["candidate_evaluations_invalid"]
+    candidate = extension.get("policy_candidate")
+    if not isinstance(candidate, dict):
+        return ["candidate_missing"]
+    body = {k: v for k, v in candidate.items() if k != "candidate_content_sha256"}
+    errors = validate_mechanistic_entry_threshold_policy(
+        candidate.get("threshold_policy")
+    )
+    if (
+        not mechanistic_scope_supported(*cohort)
+        or extension.get("cohort", ["KRX", "KRX_REGULAR"]) != list(cohort)
+        or candidate.get("cohort", ["KRX", "KRX_REGULAR"]) != list(cohort)
+    ):
+        errors.append("candidate_cohort_invalid")
+    train, test = candidate.get("calibration_dates"), candidate.get("holdout_dates")
+    if (
+        extension.get("schema") != MECHANISTIC_HIERARCHY_SCHEMA
+        or extension.get("promotion_pass") is not True
+        or candidate.get("source_date") != source_date
+        or candidate.get("candidate_content_sha256") != _canonical_sha256(body)
+        or candidate.get("evaluations_sha256")
+        != _canonical_sha256(extension.get("evaluations"))
+        or not isinstance(train, list)
+        or not isinstance(test, list)
+        or len(train) < 3
+        or len(test) < 2
+        or not all(
+            isinstance(d, str) and CLEAN_BASELINE_DATE <= d <= source_date
+            for d in train + test
+        )
+        or sorted(set(train)) != train
+        or sorted(set(test)) != test
+        or max(train) >= min(test)
+        or min(test) <= MECHANISTIC_FLOW_BOUNDARY_FREEZE_DATE
+        or any(
+            candidate.get(k) is not v
+            for k, v in (
+                ("runtime_effect", False),
+                ("allowed_runtime_apply", False),
+                ("actual_order_submitted", False),
+                ("broker_order_forbidden", True),
+            )
+        )
+    ):
+        errors.append("candidate_source_or_authority_invalid")
+    rules = _as_dict(_as_dict(candidate.get("threshold_policy")).get("hierarchy")).get(
+        "rules"
+    )
+    qualified = [
+        e.get("rule")
+        for e in extension.get("evaluations", [])
+        if isinstance(e, dict) and e.get("status") == "qualified"
+    ]
+    if not rules or rules != qualified:
+        errors.append("candidate_rule_lineage_invalid")
+    if isinstance(rules, list) and any(
+        (
+            _as_dict(_as_dict(r).get("match")).get("venue"),
+            _as_dict(_as_dict(r).get("match")).get("session_bucket"),
+        )
+        != cohort
+        for r in rules
+    ):
+        errors.append("candidate_rule_cohort_invalid")
+    if any(
+        any(v is not True for v in _as_dict(e.get("symbol_holdout_checks")).values())
+        for e in extension["evaluations"]
+        if isinstance(e, dict) and e.get("status") == "qualified"
+    ):
+        errors.append("candidate_symbol_holdout_invalid")
+    for metrics in [candidate.get("holdout")] + [
+        e.get("holdout")
+        for e in extension.get("evaluations", [])
+        if isinstance(e, dict) and e.get("status") == "qualified"
+    ]:
+        m = _as_dict(metrics)
+        ev = _number(m.get("cost_adjusted_terminal_proxy_ev_pct"))
+        if (
+            ev is None
+            or ev
+            < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+            or (_number(m.get("row_count")) or 0) < 3
+            or (_number(m.get("independent_source_date_count")) or 0) < 2
+            or m.get("terminal_proxy_evaluable_count") != m.get("row_count")
+            or m.get("unusable_label_count") != 0
+            or (_number(m.get("clean_fast_count")) or 0)
+            <= (_number(m.get("dirty_profit_count")) or 0)
+            + (_number(m.get("adverse_count")) or 0)
+        ):
+            errors.append("candidate_holdout_invalid")
+    return sorted(set(errors))
+
+
+def build_mechanistic_hierarchy_candidate(
+    source_rows: list[dict],
+    *,
+    target_date: str,
+    parent_policy: dict | None = None,
+    cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
+) -> dict:
+    """Bounded group/symbol fitting using the same runtime decision function.
+
+    The old flow research is not promoted by relabeling. Every selected rule
+    is re-evaluated with current confirmation, quality labels and sealed dates.
+    Counterfactual evidence never certifies real fills or realized economics.
+    """
+    if not mechanistic_scope_supported(*cohort):
+        raise ValueError("hierarchy_cohort_unsupported")
+    parent = json.loads(
+        json.dumps(parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    )
+    parent.pop("hierarchy", None)
+    parent["postclose_selection"].update(
+        minimum_unique_symbol_count=MECHANISTIC_REFINEMENT_GATE[
+            "minimum_calibration_symbol_count"
+        ],
+        minimum_independent_source_date_count=MECHANISTIC_REFINEMENT_GATE[
+            "minimum_calibration_source_date_count"
+        ],
+    )
+    if validate_mechanistic_entry_threshold_policy(parent):
+        raise ValueError("hierarchy_parent_invalid")
+    rows, excluded, seen, last_anchor = [], Counter(), set(), {}
+    for original in sorted(source_rows, key=lambda r: str(r.get("decision_ts") or "")):
+        parts = _as_dict(
+            _as_dict(original.get("entry_group_observation")).get("key_parts")
+        )
+        if (parts.get("venue"), parts.get("session_bucket")) != cohort:
+            excluded["different_cohort"] += 1
+            continue
+        if (
+            not CLEAN_BASELINE_DATE
+            <= str(original.get("source_date") or "")
+            <= target_date
+            or original.get("entry_group_contract_valid") is not True
+            or original.get("mechanistic_flow_observation_contract_valid") is not True
+            or original.get("entry_quality_contract_valid") is not True
+            or original.get("source_provenance_verified") is not True
+            or not (
+                original.get("source_report_hash_verified") is True
+                or original.get("machine_observation_hash_verified") is True
+            )
+        ):
+            excluded["source_contract"] += 1
+            continue
+        try:
+            stamp = datetime.fromisoformat(original["decision_ts"])
+            if (
+                stamp.utcoffset() is None
+                or _kst_date_from_aware_timestamp(original["decision_ts"])
+                != original["source_date"]
+            ):
+                raise ValueError("timestamp")
+            epoch = stamp.timestamp()
+        except (KeyError, TypeError, ValueError):
+            excluded["decision_timestamp"] += 1
+            continue
+        symbol = original.get("stock_code")
+        key = (symbol, original["source_date"])
+        trace = original.get("decision_trace_id")
+        if (
+            not trace
+            or trace in seen
+            or epoch - last_anchor.get(key, -float("inf")) < 300
+        ):
+            excluded["duplicate_or_overlapping_anchor"] += 1
+            continue
+        seen.add(trace)
+        last_anchor[key] = epoch
+        row = {**original, "setup_evidence": dict(original["setup_evidence"])}
+        full_cost = _full_entry_cost_pct(
+            row["comparison"].get("entry_cost_contract"), source_date=row["source_date"]
+        )
+        cost_scope = _as_dict(row["comparison"].get("entry_cost_contract"))
+        if (
+            cost_scope.get("effective_venue"),
+            cost_scope.get("session_bucket"),
+        ) != cohort:
+            full_cost = None
+        if full_cost is None or any(
+            value is None or not math.isclose(value, full_cost, rel_tol=0, abs_tol=1e-9)
+            for value in (
+                _number(row["comparison"].get("conservative_execution_cost_pct")),
+                _number(
+                    row["entry_quality_path"].get("conservative_execution_cost_pct")
+                ),
+            )
+        ):
+            excluded["full_cost_or_relabel_required"] += 1
+            continue
+        captured = _as_dict(row["setup_evidence"].get("mechanistic_context"))
+        if captured and captured.get("context_sha256") != _canonical_sha256(
+            {k: v for k, v in captured.items() if k != "context_sha256"}
+        ):
+            excluded["context_hash_invalid"] += 1
+            continue
+        body = {
+            "symbol": symbol,
+            "group": row["entry_group_observation"],
+            "flow": row["mechanistic_flow_observation"],
+            "micro_window": captured.get("micro_window"),
+        }
+        context = {**body, "context_sha256": _canonical_sha256(body)}
+        row["source_evidence_sha256"] = row["setup_evidence"].get("evidence_sha256")
+        row["setup_evidence"]["mechanistic_context"] = context
+        row["setup_evidence"]["evidence_sha256"] = _canonical_sha256(
+            {k: v for k, v in row["setup_evidence"].items() if k != "evidence_sha256"}
+        )
+        rows.append(row)
+    dates = sorted({r["source_date"] for r in rows})
+    # Existing family boundaries were examined through 9/11. Do not reuse
+    # those same dates as prospective holdout for this semantic expansion.
+    forward = [d for d in dates if d > MECHANISTIC_FLOW_BOUNDARY_FREEZE_DATE]
+    holdout_dates = forward[-3:] if len(forward) >= 2 else []
+    train = [
+        r for r in rows if not holdout_dates or r["source_date"] < holdout_dates[0]
+    ]
+    holdout = [r for r in rows if r["source_date"] in holdout_dates]
+    parent_hash = _canonical_sha256(parent["thresholds"])
+
+    def policy_for(rules):
+        return {
+            **parent,
+            "hierarchy": {
+                "schema": MECHANISTIC_HIERARCHY_SCHEMA,
+                "parent_sha256": parent_hash,
+                "rules": rules,
+            },
+        }
+
+    def selected(population, rules):
+        policy = policy_for(rules)
+        return [
+            r
+            for r in population
+            if mechanistic_entry_policy_decision(r["setup_evidence"], policy=policy)[
+                "action"
+            ]
+            == "ENTER_NOW"
+        ]
+
+    def metrics(population):
+        result = _entry_quality_population_metrics(population)
+        result["unusable_label_count"] = sum(
+            r["entry_quality_path"].get("status") != "evaluable" for r in population
+        )
+        return result
+
+    def qualifies(m, *, validation=False):
+        ev = _number(m["cost_adjusted_terminal_proxy_ev_pct"])
+        return (
+            m["row_count"]
+            >= (
+                MECHANISTIC_REFINEMENT_GATE["minimum_holdout_exposure_count"]
+                if validation
+                else HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_group_terminal_count"]
+            )
+            and m["independent_source_date_count"]
+            >= (
+                MECHANISTIC_REFINEMENT_GATE["minimum_holdout_source_date_count"]
+                if validation
+                else HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_group_source_date_count"]
+            )
+            and m["unusable_label_count"] == 0
+            and m["terminal_proxy_evaluable_count"] == m["row_count"]
+            and ev is not None
+            and ev
+            >= HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+            and m["clean_fast_count"] > m["dirty_profit_count"] + m["adverse_count"]
+        )
+
+    def rank(m):
+        # Predeclared ranking; holdout is never used for parameter selection.
+        return (
+            m["clean_fast_count"] - m["dirty_profit_count"] - m["adverse_count"],
+            m["cost_adjusted_terminal_proxy_ev_pct"] or -float("inf"),
+            m["row_count"],
+        )
+
+    groups = {}
+    for row in train:
+        parts = row["entry_group_observation"]["key_parts"]
+        # Three dimensions, not a Cartesian expansion of all eight bands.
+        match = {
+            k: parts.get(k)
+            for k in ("venue", "session_bucket", "price_tick_band", "volatility_band")
+        }
+        if (match["venue"], match["session_bucket"]) != cohort or any(
+            v in (None, "UNKNOWN", "") for v in match.values()
+        ):
+            continue
+        for family in row["mechanistic_flow_observation"].get("matched_families", []):
+            identity = _canonical_sha256([match, family])[:20]
+            groups.setdefault(identity, (match, family))
+    evaluations, accepted = [], []
+    for identity, (match, family) in sorted(groups.items())[:64]:
+        base = {
+            "id": identity,
+            "match": match,
+            "flow_family": family,
+            "thresholds": {
+                k: parent["thresholds"][k] for k in MECHANISTIC_PARAMETER_BOUNDS
+            },
+            "symbols": {},
+            "micro": None,
+        }
+        scoped = [
+            r
+            for r in train
+            if all(
+                r["entry_group_observation"]["key_parts"].get(k) == v
+                for k, v in match.items()
+            )
+            and family in r["mechanistic_flow_observation"].get("matched_families", [])
+        ]
+        # One-coordinate refinements reuse the existing bounded grid.
+        variants = [base]
+        for key, values in MECHANISTIC_COMMON_FEATURE_GRID.items():
+            variants.extend(
+                {**base, "thresholds": {**base["thresholds"], key: v}} for v in values
+            )
+        micro_base = {
+            "minimum_depletion_fraction_per_sec": 0.0,
+            "minimum_trade_backed_ratio": 0.5,
+            "maximum_refill_ratio": 0.5,
+        }
+        micro_variants = [micro_base]
+        for key, values in {
+            "minimum_depletion_fraction_per_sec": (0.1, 0.25, 0.5),
+            "minimum_trade_backed_ratio": (0.75, 1.0),
+            "maximum_refill_ratio": (0.0, 0.25),
+        }.items():
+            micro_variants.extend({**micro_base, key: value} for value in values)
+        for micro_thresholds in micro_variants:
+            variants.append(
+                {
+                    **base,
+                    "micro": micro_thresholds,
+                }
+            )
+        fits = [(rule, metrics(selected(scoped, [rule]))) for rule in variants]
+        passing = [(rule, m) for rule, m in fits if qualifies(m)]
+        if not passing:
+            evaluations.append({"id": identity, "status": "calibration_not_qualified"})
+            continue
+        best, train_metrics = max(passing, key=lambda pair: rank(pair[1]))
+        best = json.loads(json.dumps(best))
+        # Fit symbol residuals on train only, then validate the entire policy.
+        for symbol in sorted({r["stock_code"] for r in scoped}):
+            symbol_rows = [r for r in scoped if r["stock_code"] == symbol]
+            n = len(symbol_rows)
+            if (
+                n
+                < HIERARCHICAL_ENTRY_QUALITY_GATE[
+                    "symbol_residual_minimum_terminal_count"
+                ]
+                or len({r["source_date"] for r in symbol_rows})
+                < HIERARCHICAL_ENTRY_QUALITY_GATE[
+                    "symbol_residual_minimum_source_date_count"
+                ]
+            ):
+                continue
+            best_metric = metrics(selected(symbol_rows, [best]))
+            fitted = None
+            for key, values in MECHANISTIC_COMMON_FEATURE_GRID.items():
+                for v in values:
+                    delta = {k: 0.0 for k in MECHANISTIC_PARAMETER_BOUNDS}
+                    delta[key] = v - best["thresholds"][key]
+                    residual = {"count": n, "delta": delta}
+                    rule = {**best, "symbols": {**best["symbols"], symbol: residual}}
+                    m = metrics(selected(symbol_rows, [rule]))
+                    if qualifies(m) and rank(m) > rank(best_metric):
+                        fitted, best_metric = residual, m
+            if fitted is not None:
+                best["symbols"][symbol] = fitted
+        validation_rows = [
+            r
+            for r in holdout
+            if all(
+                r["entry_group_observation"]["key_parts"].get(k) == v
+                for k, v in match.items()
+            )
+            and family in r["mechanistic_flow_observation"].get("matched_families", [])
+        ]
+        validation = metrics(selected(validation_rows, [best]))
+        baseline = metrics(
+            [
+                r
+                for r in validation_rows
+                if mechanistic_entry_policy_decision(
+                    r["setup_evidence"], policy=parent
+                )["action"]
+                == "ENTER_NOW"
+            ]
+        )
+        # No per-group fallback after a failed holdout. Rejected rule remains
+        # evidence only; the existing live parent is retained by the publisher.
+        passed = qualifies(validation, validation=True) and (
+            validation["clean_fast_count"]
+            - validation["dirty_profit_count"]
+            - validation["adverse_count"]
+            > baseline["clean_fast_count"]
+            - baseline["dirty_profit_count"]
+            - baseline["adverse_count"]
+        )
+        residual_checks = {}
+        for symbol in best["symbols"]:
+            symbol_holdout = [r for r in validation_rows if r["stock_code"] == symbol]
+            m = metrics(selected(symbol_holdout, [best]))
+            without = {
+                **best,
+                "symbols": {k: v for k, v in best["symbols"].items() if k != symbol},
+            }
+            baseline_symbol = metrics(selected(symbol_holdout, [without]))
+            residual_checks[symbol] = qualifies(m, validation=True) and rank(m) > rank(
+                baseline_symbol
+            )
+        passed = passed and all(residual_checks.values())
+        train_metrics = metrics(selected(scoped, [best]))
+        # Same complete-window population and exit/cost contract in all arms.
+        # This is a diagnostic, never a holdout-driven alternative selector.
+        ablation = {}
+        for lane, population in (("calibration", scoped), ("holdout", validation_rows)):
+            structural = selected(population, [{**best, "micro": None}])
+            complete = [
+                r
+                for r in structural
+                if _mechanistic_micro_pass(
+                    r["setup_evidence"]["mechanistic_context"],
+                    best["micro"] or micro_base,
+                    diagnostic_arm="baseline",
+                )[0]
+            ]
+            ablation[lane] = {
+                "intersection_count": len(complete),
+                "intersection_sha256": _canonical_sha256(
+                    [r["decision_trace_id"] for r in complete]
+                ),
+                "arms": {
+                    arm: metrics(
+                        [
+                            r
+                            for r in complete
+                            if _mechanistic_micro_pass(
+                                r["setup_evidence"]["mechanistic_context"],
+                                best["micro"] or micro_base,
+                                diagnostic_arm=arm,
+                            )[0]
+                        ]
+                    )
+                    for arm in (
+                        "baseline",
+                        "bid_rebound",
+                        "depletion_trade_refill",
+                        "combined",
+                    )
+                },
+            }
+        evaluations.append(
+            {
+                "id": identity,
+                "rule": best,
+                "calibration": train_metrics,
+                "holdout": validation,
+                "baseline_holdout": baseline,
+                "symbol_holdout_checks": residual_checks,
+                "feature_ablation_study": ablation,
+                "status": "qualified" if passed else "holdout_not_qualified",
+            }
+        )
+        if passed:
+            accepted.append(best)
+    combined = metrics(selected(holdout, accepted)) if accepted else metrics([])
+    passes = bool(accepted) and qualifies(combined, validation=True)
+    candidate = (
+        {
+            "threshold_policy": policy_for(accepted),
+            "source_date": target_date,
+            "cohort": list(cohort),
+            "calibration_dates": sorted({r["source_date"] for r in train}),
+            "holdout_dates": holdout_dates,
+            "source_rows_sha256": _canonical_sha256(rows),
+            "evaluations_sha256": _canonical_sha256(evaluations),
+            "holdout": combined,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+        }
+        if passes
+        else None
+    )
+    if candidate:
+        candidate["candidate_content_sha256"] = _canonical_sha256(candidate)
+    return {
+        "schema": MECHANISTIC_HIERARCHY_SCHEMA,
+        "policy_candidate": candidate,
+        "cohort": list(cohort),
+        "status": "candidate_ready" if passes else "incumbent_carry_no_qualified_child",
+        "promotion_pass": passes,
+        "evaluations": evaluations,
+        "source_count": len(rows),
+        "excluded": dict(excluded),
+        "economic_contract_diagnostics": {
+            "lane": "fixed_boundary_counterfactual_not_realized_pnl",
+            "rows_whose_gross_target_cannot_clear_net_ev_floor": sum(
+                (_number(r["comparison"].get("entry_path_target_pct")) or 0)
+                - (_number(r["comparison"].get("conservative_execution_cost_pct")) or 0)
+                < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+                for r in rows
+            ),
+            "ceiling_is_reported_not_used_to_remove_losing_rows": True,
+        },
+        "calibration_dates": sorted({r["source_date"] for r in train}),
+        "holdout_dates": holdout_dates,
+        "counterfactual_only_not_realized_pnl": True,
+    }
+
+
 def build_hierarchical_entry_quality_walk_forward(
     paired_dir: Path,
     *,
@@ -4240,6 +5180,72 @@ def build_report(
         source_rows=mechanistic_source_rows,
         source_contract=mechanistic_source_contract,
     )
+    hierarchy_parent = json.loads(json.dumps(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+
+    incumbent = load_effective(data_root=data_root, target_date=target_date)
+    if incumbent is not None:
+        hierarchy_parent = json.loads(json.dumps(incumbent["machine_policy"]))
+        hierarchy_parent.pop("hierarchy", None)
+    if mechanistic_refinement.get("policy_candidate"):
+        hierarchy_parent["thresholds"].update(
+            mechanistic_refinement["policy_candidate"]["thresholds"]
+        )
+    machine_observations, machine_capture_census = load_machine_observation_rows(
+        data_root, target_date=target_date
+    )
+    hierarchy_rows, hierarchy_cost_census = relabel_hierarchy_source_rows(
+        mechanistic_source_rows, data_root
+    )
+    hierarchical_entry_quality["runtime_extension"] = (
+        build_mechanistic_hierarchy_candidate(
+            hierarchy_rows + machine_observations,
+            target_date=target_date,
+            parent_policy=hierarchy_parent,
+        )
+    )
+    hierarchical_entry_quality["runtime_extension"][
+        "machine_capture_census"
+    ] = machine_capture_census
+    hierarchical_entry_quality["runtime_extension"][
+        "full_cost_relabel_census"
+    ] = hierarchy_cost_census
+    from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
+
+    all_scope_rows, _ = _mechanistic_source_rows(
+        report_root / PAIRED_SUBDIR, target_date=target_date, all_supported_cohorts=True
+    )
+    extensions = {"KRX|KRX_REGULAR": hierarchical_entry_quality["runtime_extension"]}
+    for scope in AUTO_PROMOTION_SCOPES:
+        if scope == "KRX|KRX_REGULAR":
+            continue
+        cohort = tuple(scope.split("|"))
+        scoped_rows = [
+            r
+            for r in all_scope_rows
+            if tuple(
+                _as_dict(
+                    _as_dict(r.get("entry_group_observation")).get("key_parts")
+                ).get(k)
+                for k in ("venue", "session_bucket")
+            )
+            == cohort
+        ]
+        repriced, census = relabel_hierarchy_source_rows(
+            scoped_rows, data_root, cohort=cohort
+        )
+        scoped_incumbent = _as_dict(
+            _as_dict((incumbent or {}).get("scope_policies")).get(scope)
+        )
+        extension = build_mechanistic_hierarchy_candidate(
+            repriced + machine_observations,
+            target_date=target_date,
+            parent_policy=scoped_incumbent.get("machine_policy"),
+            cohort=cohort,
+        )
+        extension["full_cost_relabel_census"] = census
+        extensions[scope] = extension
+    hierarchical_entry_quality["runtime_extensions_by_scope"] = extensions
     current_result_count = int(
         source_contract_summary.get("current_date_accepted_row_count") or 0
     )
@@ -4290,6 +5296,10 @@ def build_report(
             "status": hierarchical_entry_quality["status"],
             "promotion_pass": hierarchical_entry_quality["promotion_pass"],
             "policy_candidate": hierarchical_entry_quality["policy_candidate"],
+            "runtime_extension": hierarchical_entry_quality["runtime_extension"],
+            "runtime_extensions_by_scope": hierarchical_entry_quality[
+                "runtime_extensions_by_scope"
+            ],
             "source_rows_sha256": hierarchical_entry_quality["source_population"][
                 "source_rows_sha256"
             ],

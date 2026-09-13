@@ -621,6 +621,189 @@ AI prompt variant는 `machine_first_pass_veto_v2`다. 실제 English ASCII promp
 - `--check-cron`9개 PASS, 다음 거래일 preopen/start/postclose `--print-plan`이 새 root/commit으로 일치했다. cron 시각·env는 변경하지 않았다. 독립 machine manifest SHA `caa1e8071daf226fe4c67e0e9654e84a4ae5a7b71c9e749bcde3b2c9f01ed893` 전후 동일하며 해당 unit/drop-in/PID는 변경하지 않았다.
 - 배포 root의 실제 `entry_setup_live_policy.__file__`를 확인한9/14 읽기 전용 preview도 enabled/PASS-VETO role/새 bundle 일치다. **실제 주말 기동은 수행하지 않았다.** 당일 env 없는9/13 실행을9/14 env로 가장하지 않으며, 기존 다음 거래일07:35/07:55 예약을 그대로 둔다. PID 소비·자연 판정·비용 후 성과 미확인은9/14 기존 PREOPEN/Runtime owner에서 확인한다. 이후 문서 receipt commit과 선택된 코드 commit은 별개다.
 
+## 17. 그룹·종목 보정·매도잔량 micro의 실전 연결 상세 구현안
+
+작성: 2026-09-13. **계획 수립만 수행했으며 아래 기능의 구현·정책 발행·배포 receipt가 아니다.** §12/§14의 연구 전용 경계는 아래 구현 대상으로 연결하되, 현재 운영은 §16의 기계 primary·AI PASS/VETO 계약을 유지한다. 불필요한 신규 코드·중복 연구·Provider 호출을 최소화한다. 9/13 당일 체크리스트는 없으므로 실행 권한을 과거 날짜에서 추정하지 않는다. [9/14 체크리스트](../checklists/2026-09-14-stage2-todo-checklist.md)의 기존 장전/Runtime/CodeImprovement owner는 미래 확인 경로이지 이번 계획의 실행 receipt가 아니다.
+
+### 17.1 확정할 구조와 현재 결손
+
+목표는 **종목의 당시 흐름에서 빠른 타점을 기계가 찾고, AI가 반대 근거를 심사하며, 누적 장후 자료로 두 정책을 갱신하는 것**이다. 최종 익절만으로 좋은 진입을 정의하지 않는다. 비용 후 +0.10% 도달시간·그 전 역행·횡보와 실제 순익/참여/자본시간을 함께 평가한다.
+
+| 필요한 기능 | 확인한 현재 구현 | 이번 후속의 완료 조건 |
+| --- | --- | --- |
+| 종목별 임계치 | `build_hierarchical_entry_quality_walk_forward`는 종목 표본과 shrinkage 계약을 보고하지만 실제 종목 보정값을 산출·적용하지 않음 | 종목별 effective threshold와 상속/독자 보정의 출처가 runtime·replay에서 같고, 적격 보정은 다음 정책에 자동 반영 |
+| 유사 흐름 그룹의 타점 | hierarchical `policy_candidate=None`; flow study는 RECHECK 연구 후보이며 ENTER consumer 없음 | 검증된 그룹 규칙이 `ENTER_NOW` 후보를 발급하고 AI PASS/VETO→최종 guard로 연결 |
+| 새 micro의 진입 반영 | 공통 고정 1초 kernel은 존재. `entry_adverse_flow.evaluate_snapshot`은 bid/trade veto이며 depletion/refill은 진단으로 명시 | 속도·실제 BUY 설명·refill과 반등/bid 지지를 함께 소비하는 별도 명시적 진입 variant 및 동일 계산 replay |
+
+‘모든 종목에 서로 다른 **최적값**이 이미 있다’는 상태를 목표 receipt로 만들지 않는다. 모든 대상 종목에 유효 정책은 존재하게 하되, 자료가 부족한 종목은 그룹/공통 값을 상속한다. 독자 보정과 상속을 숨기지 않는 것이 필수다. 표본 부족은 미검증 자식 정책의 승격을 제한할 수 있지만 정책 resolver·publisher·consumer 자체를 미구현으로 남길 이유는 아니다.
+
+### 17.2 수정 위치 — 새 판정 서비스·report producer 없이 연결
+
+아래 기존 파일의 함수/계약을 확장한다. 구현 중 단순 import/호환 변경이 필요한 직접 consumer만 추가하며, 새 engine-root 모듈·DB·CLI·timer·병렬 장후 producer는 만들지 않는다. 기존 테스트 파일에 회귀 사례를 추가한다.
+
+| 기존 owner | 최소 변경 |
+| --- | --- |
+| `src/engine/scalping/entry_setup_evidence.py` | 그룹 관측·공통 action core 재사용. 공통 hard 차단과 학습 가능한 trigger를 분리하고 하나의 계층 resolver/결정 함수로 live·replay 통일 |
+| `src/trading/market/confirmation_window.py` | `build_confirmation_window` 계산은 우선 변경 없이 재사용. 새 BUY 판단을 이 순수 feature kernel에 넣지 않음 |
+| `src/engine/ai_engine_openai.py` | 기존 감시 평가 지점에서 동일 frozen input으로 계층 판정. 선택 rule/threshold/micro receipt를 AI에 전달하고 AI 미호출 기계 판정도 기록 |
+| `src/engine/scalping/ai_decision_trace.py` | 기존 trace/payload 저장 경로에 기계 평가 source 보존. Provider 미호출과 실제 AI 판정 분모는 계속 분리 |
+| `src/engine/scalping/ai_decision_quality.py` | 기존 6종 경로 라벨·180초 primary·30/60/180/300초 진단 재사용. 필요한 경우 실제 executable 경로/기계 anchor adapter만 보완 |
+| `src/engine/scalping/ai_action_outcome_calibration.py` | 기존 누적 source·walk-forward·flow/hierarchical/refinement 결과를 하나의 계층 candidate로 연결. 종목 보정 추정과 micro ablation 추가; 기존 연구를 통째로 다시 만들지 않음 |
+| `src/engine/scalping/mechanistic_entry_runtime_policy.py` | 기존 bundle에 계층·micro·단일 gate contract 추가. 기존 원자 publish/immutable source/기존 정책 유지/freeze 재사용 |
+| `src/engine/scalping/entry_setup_live_policy.py`, `src/engine/verify_threshold_cycle_postclose_chain.py` | 해당 bundle의 실제 선택·검증·후행 handoff를 확장. 연구 통과를 runtime 승인으로 자동 재라벨링하지 않음 |
+
+`src/engine/scalping/micro_reversion/ai_quality_bridge.py`는 기존 원천 투영이 필요한 필드를 이미 전달하는지 먼저 확인한다. 전달 결손이 입증된 필드만 보완한다. 같은 이름의 `micro_reversion/confirmation_window.py`는 120/180초 **사후 라벨** 코드이므로 실전 1초 feature kernel로 잘못 사용하지 않는다. 기존 widget/episode adapter의 주문·custody나 adverse-flow veto 의미를 공용 수정으로 바꾸지 않는다. Kiwoom protocol/parser 변경이 실제 필요해질 때만 공식 reference gate를 수행한다.
+
+### 17.3 단일 정책 계약과 판정 순서
+
+기존 bundle의 후속 schema에 다음 정보를 넣는다. 필드명은 구현 시 기존 schema와 대사하되 별도 정책 원장을 새로 만들지 않는다.
+
+- 공통: schema/feature/gate 버전, source/effective date, source hash, AI role/prompt hash, 허용 venue/session, 기존 authority와 expiry.
+- 그룹: stable rule key, 사전 정의된 match 조건·우선순위·required features, 구조 trigger, threshold override, parent hash, 검증 evidence와 `inherited|initial_authorized|validated_challenger` 구분.
+- 종목: symbol+venue/session+group 결속, 보정 가능한 parameter와 bounded delta, shrinkage weight, 학습 날짜·노출 수·holdout/hash. 종목명 자체를 예측 feature로 외우지 않음.
+- micro: 사용하는 결합 variant, 필수 feature·단위·유효 창, 각 threshold, missing/negative 처리와 원천 도입일. threshold는 calibration에서 선택하거나 명시적으로 승인한 초기값이며 문서에서 최적값을 발명하지 않음.
+- 판정 receipt: matched rule, selected level, effective threshold/hash, 상속 사유, 원천 as-of, micro completeness, machine action/reason, AI 결과, 최종 제출/미제출 사유.
+
+실행 순서는 `유효 입력·기존 hard 차단 → 그룹 매칭 → 유효 종목 보정 → 구조+micro 타점 → AI PASS/VETO → 최종 freshness/authority/주문 guard`다.
+
+1. 동일 입력의 계층 선택은 결정적이어야 한다. 후보 그룹이 겹치면 정책에 고정한 specificity→priority→stable key 순으로 하나를 고른다. 실시간 수익 추정에 따라 그때그때 다른 그룹을 고르지 않는다.
+2. 공통 hard 차단은 어떤 자식도 덮지 못한다. 반면 **공통 `READY`를 먼저 요구한 뒤 그룹 ENTER를 허용하면 빠른 그룹 타점이 다시 막힌다.** 공통의 비위험 RECHECK와 hard invalidation을 reason별로 분리하고, 그룹은 전자에 대해 자기 trigger로 ENTER를 제안할 수 있게 한다.
+3. 승인된 자식이 없거나 선택적 종목 보정이 표본 부족이면 부모 정책을 사용한다. 전체 bundle 무결성·권한 오류는 fail-closed다. 이미 선택된 규칙의 실제 불리한 증거나 필수 원천 오류를 숨기기 위해 덜 엄격한 부모로 재시도하지 않는다.
+4. 그룹 ENTER는 broker BUY가 아니다. AI 유효 PASS만 후행에 전달하고 VETO는 DROP, CAUTION/INSUFFICIENT/오류는 WAIT다. 기계 RECHECK/BLOCK을 AI가 승격하지 못한다. 기존 수량·cap·cooldown·손절·청산·owner를 변경하지 않는다.
+5. 기존 감시 평가 loop를 사용한다. 새 WS-tick scheduler를 만들지 않으며, 정책 계산시간과 감시 주기/AI 대기/최종 제출 지연을 각각 기록한다. ‘실시간 판정’이라는 이름만으로 첫 감시 이전 탐색 결손이나 AI 대기시간이 해결됐다고 보고하지 않는다.
+
+### 17.4 그룹과 종목 보정 — 표본을 버리지 않고 과적합 제한
+
+기존 가격/틱·유동성·변동성·structure phase·watch age·extension·venue/session 관측과 다중 시간축 흐름 feature를 재사용한다. 모든 차원의 Cartesian grid를 생성하지 않는다. 기존 continuation/recovery/pullback 흐름을 bounded 규칙 집합으로 먼저 평가하고, 희소 조합은 미리 선언한 부모 그룹으로 묶는다. 당일 미래 고저점·나중의 상승 종목 목록은 match 조건에 쓰지 않는다.
+
+- calibration에서만 그룹 규칙·보정 후보를 고르고 날짜순 holdout을 한 번 평가한다. 동일 종목의 겹치는 경로/같은 움직임을 독립 15건으로 세지 않도록 기존 lifecycle/anchor identity와 시간 겹침을 대사한다.
+- 종목 residual은 그룹 대비 허용된 소수 threshold만 보정한다. 기존 `n/(n+20)` 수축식을 출발점으로 사용하며 n은 중복 제거된 유효 노출 수다. `effective = clip(parent + n/(n+20) * fitted_delta, approved_bounds)`로 계산하고 fitted_delta는 calibration의 기존 bounded 후보 집합에서만 선택한다. 범위·단위와 parent 제약을 validator가 검증한다. 실제 임계치 fitting 없이 eligible symbol count만 출력하면 미완료다.
+- 현재 연구의 종목 15건/5일 조건과 기계 refinement의 calibration 10노출/5종목/5일은 **서로 다른 평가 계약**이다. 이를 모든 그룹/종목/기존 정책 소비에 중첩 적용하지 않는다. 15건은 독자 최적화의 자동 증명이 아니며 부모 정책 사용을 막는 조건도 아니다.
+- 초기 그룹이 아직 경제성 검증을 통과하지 못하면 기존 실행 가능한 공통 정책을 유지하면서 새 후보를 비교한다. 연구 전용 RECHECK를 이름만 ENTER로 바꾸지 않는다. 독립 그룹의 최초 live 의미 확장은 코드 검증과 명시적 초기 활성화 승인에 결속하고 이후 정상 장후 갱신은 기존 자동 계약으로 처리한다.
+
+### 17.5 매도잔량 속도·체결 설명·refill 결합
+
+한 시점 `t`의 판단에는 `t`까지 수신된 자료로 완결된 고정 1초 창만 사용한다. 시작 호가의 고정 ask 가격·최소 잔량·최소점 이전 같은 가격 BUY·그 뒤 cutoff까지 refill, bid 지지/반등을 같은 route/epoch/sequence로 묶는다. 120행 버퍼 존재는 1초 completeness 증명이 아니다.
+
+1. 원시 qty/sec와 함께 초기 잔량 대비 감소율·해당 그룹/종목의 **과거** 평시 수준 대비 값을 보존한다. 절대 잔량 하나로 대형주와 얇은 종목의 임계치를 공통화하지 않는다. 정상화 기준도 정책 source에 고정한다.
+2. 결합 규칙은 `구조 trigger + bid/가격 반응 + 감소속도 + 실제 BUY 설명 + refill 제약`이다. 취소 추정 감소가 대부분이거나 refill로 소진이 상쇄되는 경우를 긍정 근거로 세지 않는다. 각 feature는 독립 threshold와 단위가 있고 매도잔량 감소 하나만으로 ENTER하지 않는다.
+3. `valid_supportive`, `valid_adverse`, `unavailable`을 분리한다. 아직 micro가 없는 과거 표본은 구조 정책 lane에 남기고 0값으로 메우지 않는다. 새 micro가 필수인 선택 규칙은 incomplete/UNKNOWN/cross-epoch에서 RECHECK하며 adverse를 missing으로 바꾸지 않는다. micro 비의존 부모 정책을 쓰는 경우에는 그 선택과 비사용 사유를 명시한다.
+4. 기존 adverse-flow adapter는 일부 fixed-ask gap을 진단상 제외한다. 그 완화된 결과를 새 depletion BUY 근거로 전용하지 않고, 새 결합에는 공통 kernel의 **전체 필수 feature validity**를 검증한다. kernel 계약 변경이 필요하지 않으면 그대로 둔다.
+5. 장후에는 baseline / bid·rebound / depletion·trade backing·refill / combined의 동일 표본·비용·exit 교집합을 비교한다. 신규 원천 도입 전 날짜를 combined 학습 표본으로 합성하지 않는다. micro 변수를 매일 무제한 추가하지 않고 기존 bounded 후보 집합으로 증분효과를 확인한다.
+
+### 17.6 누적 데이터·라벨·승격 조건
+
+9/11만 재사용하는 일회성 비교가 아니라 clean baseline 이후 이용 가능한 적격 날짜를 기존 누적 source loader로 읽는다. 실제 체결, 미체결 기회, AI VETO, 기계 RECHECK/BLOCK의 분모·원천 품질은 분리한다. AI 미호출 branch에도 frozen 기계 입력과 anchor/hash를 기존 저장 경로로 남겨 향후 학습 누락을 닫는다. 과거 저장되지 않은 입력을 현재 값으로 복원하지 않으며 Provider 미호출을 AI WAIT 정답으로 세지 않는다.
+
+- 진입품질 정답은 §12의 6종 라벨과 primary 180초를 재사용한다. 오래 횡보하거나 near-stop 뒤 익절은 실현 이익으로 보존하되 clean-fast 양성으로 학습하지 않는다. 30/60/300초는 진단이며 전 구간 동시 통과를 새 gate로 붙이지 않는다.
+- **비용 후 +0.10%에 닿은 사례와 평균 비용 후 EV ≥0.10%는 다르다.** 전자는 경로 라벨, 후자는 손실·미체결·비용을 포함한 선언된 평가 lane의 정책 승격 지표다. MFE/고가 touch·terminal proxy·실현 EV를 바꿔 쓰지 않는다. executable 증거가 부족하면 해당 lane의 한계를 남긴다.
+- 실제 사용자 손절/청산 override는 별도 cohort로 보존한다. 그 결과의 손실을 삭제하지 않고, 진입 타점 비교에는 사전에 고정한 동일 exit/cost의 counterfactual lane을 함께 본다. 실제 lane과 CF lane의 EV를 합산하지 않는다.
+- gate 수치는 한 source of truth로 정리한다. 현재 threshold-policy 요약의 3종목/2일과 producer의 5종목/5일 차이를 먼저 contract test로 고정하고, 단순히 작은 숫자에 맞춰 완화하지 않는다. 공통 refinement·그룹·종목·micro 각 후보가 통과할 계약을 명시하고 상호 무관한 gate를 누적하지 않는다.
+- 후보 순위는 동일 비용 계약의 holdout EV·일별 순익/자본시간, clean-fast precision/recall·참여, adverse/tail을 함께 보고 결정한다. 순익/자본시간은 분모가 유효할 때만 계산한다. 무진입 정책이나 한 건 고수익으로 빈번한 작은 수익 목표를 달성했다고 하지 않는다.
+- 초기 승인 정책 발행, 검증된 challenger 교체, 기존 정책 유지, 실제 경제성 수락을 별도 상태로 둔다. actual 체결 1건의 존재를 source-only 코드 검증 또는 이미 승인된 부모 정책 유지의 선행 gate로 만들지 않는다. 새 후보의 부정적 holdout이나 hard source 결손을 승인 편의를 위해 지우지도 않는다.
+
+### 17.7 장후 갱신·AI 보조·다음 장전 연결
+
+기존 `누적 calibration → candidate/activation 검증 → mechanistic bundle publisher → dated loader/PREOPEN → main PID` 한 경로를 사용한다. 그룹/종목/micro용 별도 cron과 publisher를 추가하지 않는다.
+
+- 새 후보가 적격이면 그 계층만 교체하고 영향 없는 부모/자식의 provenance를 보존한다. 부모 변경으로 자식의 기준이 달라지면 재검증하거나 자식을 명시적으로 비선택 처리한다. 무조건 오래된 자식 delta를 새 부모에 더하지 않는다.
+- 후보가 없으면 검증된 기존 정책으로 다음 거래일 bundle을 생성/유지한다. 매일 새 승자나 종목별 독자값을 강제하지 않는다. 기존 07:35 freeze·정확한 거래일·원자 발행·source snapshot·rollback generation을 보존하고, canonical report 재생성으로 이미 pin된 정책을 조용히 교체하지 않는다.
+- AI에는 선택된 그룹/종목 보정·micro 근거·명시적 결손을 같은 frozen input으로 제공한다. AI는 타점 재선정기가 아닌 fact-bound PASS/VETO 심사자다. schema 오류/보수성만으로 자동 PASS시키지 않는다.
+- 기존 AI prompt calibration/optimizer 경로에 그룹별 VETO 뒤 clean-fast 기회 손실과 PASS 뒤 adverse를 전달한다. 누적 통계 context 갱신과 검증된 prompt 후보 교체를 구분하며, 비교 후보가 없으면 기존 PASS/VETO prompt를 유지한다. 신규 AI 학습 서비스나 이번 기능 확인을 위한 Provider 전체 재호출은 만들지 않는다.
+- 코드 배포와 정책 자동 적용은 별개다. 구현 후 검증된 main release·관련 분석 consumer의 schema 호환성을 확인한 뒤 승인 범위에서만 배포한다. 독립 widget/episode release와 최소 보조청산 pin은 변경하지 않는다. 다음 PREOPEN/PID 소비는 실제 해당 시각 receipt로만 닫는다.
+
+### 17.8 실행 순서·테스트·종료조건
+
+다음 W 번호는 이 계획의 작업 순서이며 native workorder ID가 아니다. 별도 구현 지시가 오면 기존 owner에 연결하고 완료된 연구/역할 교정은 새 계약에 영향받는 부분만 다시 검증한다.
+
+| 순서 | 구현/확인 | 종료 근거 |
+| --- | --- | --- |
+| W1 | 기존 fixture로 3개 결손과 gate 요약/실제 불일치 재현; 누적 source·기계 미호출 census·micro 전달 대사 | 첫 결손 producer/consumer와 원천 분모 고정, 중복 구현 없음 |
+| W2 | 기존 action core/그룹 resolver/종목 delta/micro variant와 trace 연결 | 같은 입력·정책 live/replay parity; 그룹이 비위험 공통 RECHECK에서 ENTER 가능하고 hard BLOCK은 불가 |
+| W3 | 누적 calibration에서 실제 그룹/종목/micro 후보 추정·검증; gate 단일화 | 후보 또는 구체적인 reject/carry 사유; parameter·date split·source hash 재현 가능 |
+| W4 | 기존 bundle 발행/validator/AI context/직접 verifier 확장 | candidate→다음 거래일 bundle→loader preview의 계층/role/hash 일치 |
+| W5 | review→수정→재리뷰→targeted validation 반복; 격리 재생성 후 영향 consumer만 갱신 | 미해결 범위 내 finding 0, generation 일치, 현재 정책/pin 보존 |
+
+필수 회귀 사례는 다음과 같다.
+
+- 부모 상속/그룹 중복 매칭/종목 보정 범위 초과/부모 hash 변경/미래 데이터 혼입/겹치는 anchor 중복 집계.
+- 공통 RECHECK→그룹 ENTER→AI PASS와 AI VETO 각각; hard BLOCK·malformed AI·missing source에서 probe/BUY 누출 0.
+- 같은 구조에서 취소성 감소만 있는 창, BUY 설명이 있는 창, 과도 refill, 정상 반등/bid 지지, 고빈도 120행 truncation·stale 시작·route/epoch 불일치. 모든 경우 offline/runtime metric·action 동일.
+- 실제 빠른 익절/횡보 후 익절/near-stop 후 익절/손실/동일 bar 순서 불명/기계 미호출/AI VETO를 각 원래 lane과 라벨로 보존.
+- 다음 날짜 기존 정책 유지·유효 challenger 교체·부모 교체 시 자식 무효화·손상 bundle fail-closed·07:35 이후 동결·원자 publish 실패 시 이전 generation 보존.
+
+검증은 변경한 기존 pytest 파일과 인접 consumer, compile, `git diff --check`, 문서 print-only parser로 제한한다. 비교 가능한 fixture/checkpoint를 우선 재사용한다. 필요한 재생성은 **최초 변경 source/label부터 calibration→policy→영향 handoff**까지 한 번 수행하고, 이후 새 결함이 있는 단계만 다시 실행한다. expensive replay/Provider·장후 전체 wrapper·매매 process는 자동으로 재실행하지 않는다. canonical 반영이 기존 verifier/controller/요약을 stale하게 만들 때만 해당 source date의 필요한 후행을 다시 닫는다.
+
+완료 보고는 ① 세 기능 코드/계약 연결 ② 정책 생성·loader 검증 ③ 배포·실제 PID 소비 ④ 자연 clean-fast/비용 후 EV·순익/참여·tail을 분리한다. 기대효과는 **흐름별 빠른 기회 포착, 종목별 과도한 공통 threshold 감소, 취소성 잔량 감소에 속는 진입 감소, 미진입 데이터까지 누적 개선에 반영**이다. 효과의 크기와 수익 개선은 비교 결과 전에는 보장하지 않는다. 이번 문서 작성은 ①의 구현 완료나 신규 live 활성화가 아니다.
+
+계획 자체의 리뷰에서는 공통 READY 중복 선행, adverse-flow의 완화된 fixed-ask validity 전용, 서로 다른 gate 중첩, 기계 미호출 원천 누락, 부모 변경 뒤 종목 보정 오적용을 점검해 위 실행/검증 항목에 반영했다. 문서 print-only parser 30개 task와 `git diff --check`를 통과했다. Python/Provider/replay·운영 재생성은 문서 변경 범위가 아니므로 실행하지 않았다. 코드·현재 정책·선택 release·PID는 변경하지 않았다.
+
+## 18. §17 사용자 구현 지시 후 review/fix 결과
+
+작성: 2026-09-13. 이 절은 workspace 구현·테스트 기록이며 새 계층 정책의 실제 발행·배포·PID 소비 receipt가 아니다. §17의 계획 수립 당시 상태는 이력으로 보존한다. 이번 실행에서 선택 release, canonical 정책/report, 주문·custody, 매매 process는 변경하지 않았다. 9/13 체크리스트 부재를 9/14의 실행 승인으로 대체하지 않았다.
+
+### 18.1 구현한 연결
+
+| 축 | 구현·검증한 동작 |
+| --- | --- |
+| 그룹·종목 | 기존 evidence owner에 단일 resolver와 bounded 계층 schema를 추가했다. 가격/틱·변동성·venue/session과 기존 흐름 family로 매칭하고 specificity→stable ID로 하나를 선택한다. 선택된 자식의 불리한 증거/필수 micro 결손 뒤 부모로 재시도하지 않는다. 종목 residual은 실제 calibration fitting 및 `n/(n+20)` 수축·범위 제한·종목별 holdout을 거친다. 자료 부족 종목은 부모 상속이지 강제 개별 최적값이 아니다. |
+| 기계→AI | 그룹은 공통 hard BLOCK을 보존하면서 비위험 confirmation RECHECK를 자기 trigger+현재 BUY 체결/가격 반응으로 해소할 수 있다. selected threshold/hash·flow·micro를 frozen 입력과 AI에 결속한다. AI 유효 PASS만 기존 probe/최종 guard로 전달하고 VETO/CAUTION/오류로 실주문 권한이 새지 않음을 검증했다. |
+| 새 micro | 기존 WS snapshot adapter·고정 1초 kernel을 변경 없이 읽는다. 초기 잔량 대비 감소속도·실제 BUY 설명·refill과 bid/가격 지지를 결합한다. 속도/설명/refill의 소수 one-coordinate 후보를 calibration에서만 고르며, 같은 complete-window/exit/cost 교집합의 4군 진단을 보고한다. 그룹별 정상화는 초기 잔량 대비 속도에 대한 그룹별 threshold fitting이며 별도 과거 평시 속도 모델을 구현했다고 주장하지 않는다. |
+| 누적 원천 | Provider 호출 전 기계 ENTER/RECHECK/BLOCK을 기존 payload archive의 별도 schema로 보존한다. AI request/WAIT 정답을 합성하지 않는다. 최초 child가 없어도 micro를 관측하여 정책이 있어야 학습 원천이 생기는 순환 의존성을 제거했다. clean baseline 이후 기존 누적 source loader와 기존 경로 labeler를 재사용한다. |
+| 정책·장후 | 기존 calibration의 `hierarchical_entry_quality.runtime_extension`→기존 publisher→dated loader→direct verifier를 연결했다. 최초 계층 채택은 기존 CLI의 명시적 `--adopt-hierarchy`; 채택 뒤 정상 장후 후보 교체/기존 정책 유지에는 매일 새 승인을 요구하지 않는다. 부모 hash 변경 시 자식을 명시적으로 재검증 대상으로 돌리며 07:35 freeze·immutable source·atomic publish를 유지한다. |
+
+새 서비스·cron·DB·engine-root 모듈·독립 report producer는 추가하지 않았다. 공통 refinement와 그룹/종목 gate는 evidence owner의 기존 계약 상수로 연결했다. 공통 5종목/5일을 모든 그룹·종목에 중첩하지 않는다. 그룹은 기존 5노출/3일 calibration, 날짜분리 holdout 3노출/2일, 종목 residual은 15노출/5일 및 별도 holdout을 사용한다. 이미 검사한 9/11까지의 흐름 경계를 독립 holdout으로 재사용하지 않는다. 기존 실행 가능한 부모 정책을 유지하는 데 이 challenger 조건을 부과하지 않는다.
+
+### 18.2 리뷰에서 수정한 직접 결함
+
+- 종목 표본수만 세고 보정하지 않는 경로를 실제 delta fitting으로 연결하고, calibration 보정이 종목별 holdout에서 개선되지 않으면 탈락시켰다.
+- stale 부모 hash·변조 context·일자 혼입·겹치는 300초 anchor·숫자 문자열/범위 오류와 malformed handoff를 검증했다. 그룹 PASS의 기존 공통 WAIT 중복 veto는 해당 검증된 그룹에만 한정해 보완했다.
+- adapter가 진단상 허용하는 일부 fixed-ask gap을 새 BUY에 전용하지 않고 kernel 전체 validity를 요구했다. 기계 capture hash의 Unicode 직렬화 차이와 label context sanitization도 수정했다.
+- `conservative_execution_cost_pct`가 기존 replay에서 half-spread+source-age penalty일 수 있음을 확인했다. 이를 수수료·세금까지 포함한 순비용으로 재라벨링하지 않는다. 기존 exact-date economic reference의 hash·원시 source·종목/venue coverage를 확인한 뒤 fee/tax/buffer와 기록된 friction을 묶고, 기존 raw 경로를 동일 비용으로 재라벨링한다. 세율·종목 상품군·누락 비용을 추정하지 않는다. 비용 profile 미검증·raw 경로 결손은 해당 행의 명시적 잔여 조건이다.
+- 재라벨링은 `existing_fixed_boundary_counterfactual`이며 실제 사용자 손절/청산 override의 변경·실현수익 복원이 아니다. 원 report를 덮어쓰지 않고 새 계층 후보의 입력으로만 사용한다. 종목별 경로를 재사용하고 경제성 owner가 없는 날짜는 raw 전체를 불필요하게 다시 읽지 않는다.
+- 기존 고정 target 0.30%에서 전체 비용이 0.20%를 넘으면 순 EV 0.10%가 불가능해지는 **출구/비용 평가 계약의 상한**을 별도 진단한다. 이 이유로 손실 행을 삭제하거나 수수료/목표를 임의 변경하지 않는다. 이 진단만으로 타점 로직 실패 또는 실제 전략의 음수 EV를 단정하지 않는다.
+
+### 18.3 검증 및 남은 경계
+
+- 변경 범위 6개 test suite **512 passed**. 그룹 ENTER→AI PASS/VETO/CAUTION, 종목 shrinkage/holdout, micro cancellation/refill/source-gap, 4군 동일 교집합, capture→기존 비용 owner→경로 라벨, 후보→최초 채택→다음 날짜 carry→loader 및 순 EV 0.10%의 부동소수점 경계를 포함한다. synthetic 후보의 비용 후 EV 통과는 코드 연결 테스트이지 실전 수익 근거가 아니다.
+- `compileall`, 변경 파일 Ruff와 `git diff --check` 통과. `ai_engine_openai.py`의 기존 E402/E722는 Ruff 검사에서 제외했고 다른 변경 파일은 제외 없이 통과했다. 문서 print-only parser는 30개 task, 이번에 수정한 9/14 체크리스트는 stable ID 14개·중복0을 확인했다. 인접 OpenAI audit suite의 `computed_not_sent` 대 `not_attempted` 기대 불일치 1건은 변경 전 HEAD engine을 메모리에 로드한 재검사에서도 동일하게 재현했다. 이 기존 감사 표시 차이는 이번 계층 코드의 회귀로 세지 않았으며 전체 저장소 finding 0으로 확대하지 않는다.
+- 실제 누적 detailed source는 **21개 날짜·936행**, executable reference 936행을 확인했다. 최초 비용 재평가의 중복 계산을 줄이기 위해 이번 세션이 시작한 read-only 분석만 중단·재실행했으며 운영 worker는 건드리지 않았다. 최종 읽기 전용 재평가: 경제성 owner 미검증/부재438·raw path 결손436·행별 비용/실행가능 reference 결손24·full-cost 경로 재라벨링38로 합계936이다. 이후 기존 그룹/흐름/품질 등 source contract 제외856·full-cost 또는 재라벨 필요76·계층 적격4행(9/9·9/11)으로 별도 보존된다. 두 단계의 제외 계수는 합산하지 않는다. forward holdout 날짜0, `promotion_pass=false`, `incumbent_carry_no_qualified_child`이며 자연 새 정책/양수 EV 성공으로 보고하지 않는다.
+- 현재 초기 부모 정책과 새 child의 자격은 별개다. 첫 계층 활성화/배포·다음 PID 소비는 미실행이다. 기존 [9/14 Runtime owner](../checklists/2026-09-14-stage2-todo-checklist.md)에서 actual root/bundle/role/source를 확인하고, 기존 CodeImprovement owner에서 다음 누적 candidate와 cost/exit 상한·forward holdout·미관측 micro를 대사한다.
+- 기대효과는 공통 threshold에 가려진 빠른 그룹 타점, 종목별 bounded 보정, 취소성 잔량 감소 오판 억제, AI 미호출 기회까지 포함한 누적 개선이다. 자연 적용 뒤 clean-fast precision/recall·참여·역행/횡보·비용 후 실현 순익을 각각 확인해야 하며 승률이나 코드 테스트만으로 효과를 확정하지 않는다.
+
+## 19. 지원 연속매매 전체 scope 확장과 정책 작동 계약
+
+2026-09-13 사용자 승인: 전체 변경 커밋·푸시·배포·기동, 시장 범위는 **지원 연속매매 세션 전체 우선**. 동시호가·시간외 단일가는 이번 범위가 아니다. 과거 §15~18의 KRX 한정·미배포 상태는 당시 기록이며 이번 실행 결과와 혼합하지 않는다. 독립 widget/episode 정책·service는 메인 진입 변경의 대상이 아니다.
+
+### 19.1 적용 범위와 실제 의미
+
+기존 `entry_setup_scalping_rollout.AUTO_PROMOTION_SCOPES`의 9개 내부 scope key를 재사용한다: `KRX|KRX_REGULAR`, `NXT|KRX_REGULAR`, `NXT|NXT_REGULAR_OVERLAP`, `NXT|NXT_REGULAR`, `PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE`, `NXT|NXT_PREMARKET`, `PREMARKET_KRX_LIKE|NXT_PREMARKET`, `NXT|NXT_AFTERMARKET`, `KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET`. 이는 9개 별도 시장을 뜻하지 않는다. SOR 통합 경로의 기존 종목 적격성·실제 route/receipt·수량/canary 제한은 최종 주문 owner가 계속 검사한다.
+
+기존 KRX 한정은 초기 bundle의 단일 cohort와 resolver의 명시적 분기 때문이었다. 기존 publisher에 `--adopt-all-continuous`를 추가해 명시적 최초 채택 후에는 일별 자동승계를 유지한다. 과거 v1 KRX-only bundle은 비KRX 권한으로 해석하지 않는다. 추가 리뷰에서 통합 aftermarket의 옛 observe-only 차단과 recheck allowed-scope의 auto-promotion 누락을 발견했다. 유효한 기존 all-session pin이 있는 경우에만 두 consumer를 연결하고 운영자 OFF·변조/만료 pin 차단은 보존했다.
+
+### 19.2 판정 순서와 예시
+
+`기존 scanner/감시 평가 → exact venue/session 정책 → 기계 ENTER_NOW/RECHECK/BLOCK → ENTER_NOW만 AI PASS/VETO 심사 → 기존 recheck/submit·broker guard → 주문/체결`이다. 독립 고빈도 WS 주문기계나 새 AI 호출 루프를 추가하지 않았다. 원래 scanner 진입 전 놓친 구간을 이 변경으로 복원했다고 주장하지 않는다.
+
+- **현재 공통 초기값:** micro 순공격 delta 최소1, micro 가격변화 양수, spread 100bp 미만, fillability 15 초과, top3 ask/bid 5 미만. 이 값만 충족하면 BUY라는 뜻은 아니다. 원래 setup/source·hard-risk 및 최종 가격/수량/주문 guard가 함께 작동하며 spread 100bp는 허용 체결비용이나 목표수익이 아니다.
+- **예시 A — 정상 진입:** 유효 setup에서 micro delta20·가격반응 +0.10%, spread10bp·fillability60·ask/bid1.2라면 기계가 다른 필수 조건까지 검사한다. ENTER_NOW 뒤 AI가 현재 지지·불리한 사실을 함께 검토하여 PASS하면 기존 제출 경로로 진행한다. VETO면 그 타점은 거절하며, CAUTION/INSUFFICIENT/응답 오류는 노출을 허용하지 않는다. AI가 기계 RECHECK/BLOCK을 BUY로 승격할 수 없다.
+- **예시 B — 종목 보정:** 자격을 갖춘 특정 그룹의 parent threshold100, 종목 calibration20건에서 delta−40이 선택되면 `100 + 20/(20+20)×(−40)=80`을 bounded 범위 내에서 검증한다. 종목별 holdout까지 통과해야 선택한다. 이는 산식 설명이며 현재 모든 종목에 해당 보정이 발행됐다는 뜻이 아니다.
+- **예시 C — 취소성 감소:** 매도잔량이 빠르게 줄어도 실제 같은 가격 BUY 설명이 부족하거나 refill이 커지면 선택된 micro 조건을 통과하지 못한다. 필요한 고정1초 창이 불완전하면 RECHECK이며 부모 정책으로 재시도하지 않는다. 아직 micro child가 없는 scope에서는 해당 자료를 수집·학습하되 활성 조건으로 표시하지 않는다.
+
+### 19.3 누적 튜닝·승계와 과도한 gate 점검
+
+기존 calibration에서 `runtime_extensions_by_scope`로 비용·흐름·그룹·holdout을 분리하고, 기존 optimizer handoff/verifier와 publisher/loader까지 결속한다. 비KRX 초기값은 공통 seed이며 KRX에서 최적화한 값의 복사가 아니다. 경제성 owner의 exact venue/product 근거가 없는 alias는 원천 결손으로 남기고 다른 시장의 세금/비용으로 대체하지 않는다. 새 서비스·cron·DB·report producer를 추가하지 않는다.
+
+초기정책 사용에는 challenger 표본수를 요구하지 않는다. 이후 그룹/종목/micro challenger는 §18의 날짜분리·전체 비용 후 EV 최소 +0.10% 및 빠른 수익/역행·횡보 기준을 적용한다. 표본15건이라는 이유만으로 승인하거나 거절하지 않고 날짜·비용·독립 holdout·parent binding을 함께 본다. 0.10%는 학습 평가의 목표이며 매 주문 보장수익이 아니다. source9/11의 forward holdout0·child0은 그대로 유지하며 강제 BUY·손실행 제거·비용축소로 통과시키지 않는다.
+
+기존 calibration `--write`가 dated machine+AI bundle을 갱신하고, 다음 장전에는 기존 exact-date env·all-session pin과 policy loader가 이를 소비한다. 자격 있는 새 child가 없으면 실행 가능한 incumbent를 유지한다. AI도 기존 같은 scope의 optimizer→PREOPEN 검증을 통과한 base prompt를 선택하고 PASS/VETO 역할 부록을 유지한다. 코드 자동생성/무제한 프롬프트 수정이 아니라 등록·검증된 정책의 자동 선택이다. 07:35 이후 당일 bundle을 다시 쓰지 않는다.
+
+### 19.4 배포·기동 검증 경계
+
+변경 범위 테스트·소스 검증 뒤 검토 commit을 새 release로 고정하고 공통 selector를 전환한다. 기존 release/선택 원장/정책 generation은 rollback용으로 보존한다. 실제 배포 hash·정책 hash·검증 결과는 아래 실행 receipt에 기록한다. 9/13 일요일에는 main PID와 당일 runtime env가 없으므로 9/14 env를 복사해 강제 기동하지 않는다. 기존 9/14 07:35 PREOPEN·07:55 기동 예약을 유지하며 미래 PID 성공으로 보고하지 않는다.
+
+최종 변경/인접 10개 suite **694 passed**: 9 scope resolver·운영자 OFF, legacy KRX-only 격리, 변조 pin·recheck authority, NXT 독립 fitting/비용 scope 혼입 거절, 재해시한 cross-market handoff 거절, publisher/loader·기존 recheck와 release routing을 포함한다. scoped Ruff·compile·`git diff --check`와 print-only parser(30 task)를 통과했다. §18에 기록한 기존 OpenAI audit 표시 불일치는 별도 잔여 이력이며 전체 저장소 무결함으로 확대하지 않는다. 실주문/Provider 호출·고비용 과거 전체 재생성은 이 검증에 사용하지 않았다. 기존 bundle이 보존한 source9/11 snapshot으로 초기 범위 채택만 발행하고, 누적 신규 challenger 재평가는 다음 자연 장후 owner에 연결한다.
+
 사용자 선택 문서 외부 동기화(정책 적용/봇 기동의 선행 조건 아님):
 
 ```bash

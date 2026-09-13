@@ -428,9 +428,12 @@ def _env_value(name: str, env: dict[str, str] | None = None) -> str | None:
 
 
 def _enabled_by_operator(
-    env: dict[str, str] | None = None, *, cohort: tuple[str, str] = DEFAULT_COHORT
+    env: dict[str, str] | None = None,
+    *,
+    cohort: tuple[str, str] = DEFAULT_COHORT,
+    auto_scope_authorized: bool = False,
 ) -> bool:
-    if cohort == DUAL_OBSERVE_ONLY_COHORT:
+    if cohort == DUAL_OBSERVE_ONLY_COHORT and not auto_scope_authorized:
         return False
     raw = _env_value(_cohort_env_key(cohort), env)
     if raw is None and env is not None:
@@ -1848,7 +1851,9 @@ def build_preopen_activation(
     candidates.sort(key=lambda item: item[0], reverse=True)
     selected = candidates[0] if candidates else None
     errors: list[str] = list(runtime_env_load_errors or [])
-    if not _enabled_by_operator(runtime_env, cohort=cohort):
+    if not _enabled_by_operator(
+        runtime_env, cohort=cohort, auto_scope_authorized=bool(auto_policy)
+    ):
         errors.append("operator_disabled")
     if selected is None:
         errors.append("no_effective_date_candidate")
@@ -2090,7 +2095,7 @@ def resolve_live_prompt_policy(
             result["status"] = "fallback_operator_rollout_scope_invalid"
             return result
     if rollout_scope or auto_scope:
-        if not _enabled_by_operator(cohort=cohort):
+        if not _enabled_by_operator(cohort=cohort, auto_scope_authorized=auto_scope):
             result["status"] = "fallback_operator_disabled"
             return result
         errors = _runtime_probe_contract_errors(target_date=target_date, cohort=cohort)
@@ -2110,15 +2115,17 @@ def resolve_live_prompt_policy(
         if (
             _allow_initial_policy
             and auto_scope
-            and cohort == DEFAULT_COHORT
             and result["position_tag"] in CANARY_POSITION_TAGS
         ):
             from src.engine.scalping.mechanistic_entry_runtime_policy import (
                 load_effective,
+                for_cohort,
             )
 
             try:
-                initial = load_effective(data_root=DATA_DIR, target_date=target_date)
+                initial = for_cohort(
+                    load_effective(data_root=DATA_DIR, target_date=target_date), cohort
+                )
             except (ValueError, OSError, TypeError, KeyError) as exc:
                 result.update(
                     status="fallback_machine_policy_invalid",
@@ -2170,6 +2177,9 @@ def resolve_live_prompt_policy(
                         else "operator_all_scalping_rollout"
                     ),
                     machine_adoption_basis=initial["adoption_basis"],
+                    machine_policy_scope=list(cohort),
+                    machine_policy_all_continuous=initial.get("all_continuous_adopted")
+                    is True,
                     runtime_effect=True,
                     primary_decision_owner=MECHANISTIC_PRIMARY_DECISION_OWNER,
                     ai_role=MECHANISTIC_AI_ADVISORY_ROLE,
@@ -2223,7 +2233,7 @@ def resolve_live_prompt_policy(
                 runtime_effect=True,
             )
             return result
-    if not _enabled_by_operator(cohort=cohort):
+    if not _enabled_by_operator(cohort=cohort, auto_scope_authorized=auto_scope):
         result["status"] = "fallback_operator_disabled"
         return result
     if cohort not in SUPPORTED_LIVE_COHORTS:

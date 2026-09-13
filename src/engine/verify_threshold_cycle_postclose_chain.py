@@ -1209,6 +1209,59 @@ def _ai_decision_action_outcome_calibration_status(
     elif mechanistic_candidate is not None:
         errors.append("mechanistic_entry_candidate_without_promotion_pass")
     hierarchical = report.get("hierarchical_entry_quality")
+    if (
+        isinstance(hierarchical, dict)
+        and "runtime_extension" in hierarchical
+        and not isinstance(hierarchical["runtime_extension"], dict)
+    ):
+        errors.append("mechanistic_hierarchy_extension_invalid")
+    if isinstance(hierarchical, dict) and isinstance(
+        hierarchical.get("runtime_extension"), dict
+    ):
+        extension = hierarchical["runtime_extension"]
+        if extension.get("policy_candidate") is not None:
+            from src.engine.scalping.ai_action_outcome_calibration import (
+                validate_hierarchy_candidate,
+            )
+
+            errors.extend(
+                "mechanistic_hierarchy:" + error
+                for error in validate_hierarchy_candidate(
+                    extension, source_date=str(report.get("target_date") or "")
+                )
+            )
+    if isinstance(hierarchical, dict) and "runtime_extensions_by_scope" in hierarchical:
+        from src.engine.scalping.entry_setup_scalping_rollout import (
+            AUTO_PROMOTION_SCOPES,
+        )
+        from src.engine.scalping.ai_action_outcome_calibration import (
+            validate_hierarchy_candidate,
+        )
+
+        extensions = hierarchical["runtime_extensions_by_scope"]
+        if not isinstance(extensions, dict) or set(extensions) != set(
+            AUTO_PROMOTION_SCOPES
+        ):
+            errors.append("mechanistic_hierarchy_scope_set_invalid")
+        else:
+            for scope, extension in extensions.items():
+                if not isinstance(extension, dict) or extension.get(
+                    "cohort"
+                ) != scope.split("|"):
+                    errors.append("mechanistic_hierarchy_scope_invalid")
+                elif extension.get("policy_candidate") is not None:
+                    errors.extend(
+                        "mechanistic_hierarchy:" + scope + ":" + error
+                        for error in validate_hierarchy_candidate(
+                            extension,
+                            source_date=str(report.get("target_date") or ""),
+                            cohort=tuple(scope.split("|")),
+                        )
+                    )
+            if extensions.get("KRX|KRX_REGULAR") != hierarchical.get(
+                "runtime_extension"
+            ):
+                errors.append("mechanistic_hierarchy_krx_projection_mismatch")
     if not isinstance(hierarchical, dict):
         errors.append("hierarchical_entry_quality_invalid")
         hierarchical = {}
@@ -1679,6 +1732,14 @@ def _ai_decision_action_outcome_calibration_status(
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
+        if "runtime_extension" in hierarchical:
+            expected_hierarchical_handoff["runtime_extension"] = hierarchical[
+                "runtime_extension"
+            ]
+        if "runtime_extensions_by_scope" in hierarchical:
+            expected_hierarchical_handoff["runtime_extensions_by_scope"] = hierarchical[
+                "runtime_extensions_by_scope"
+            ]
         if handoff.get("hierarchical_entry_quality") != (expected_hierarchical_handoff):
             errors.append("optimizer_handoff_hierarchical_reference_mismatch")
         expected_flow_handoff = {
