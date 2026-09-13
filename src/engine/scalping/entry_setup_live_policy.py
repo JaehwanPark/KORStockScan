@@ -458,6 +458,7 @@ def _runtime_probe_contract_errors(
     target_date: str,
     env: dict[str, str] | None = None,
     cohort: tuple[str, str] = DEFAULT_COHORT,
+    now: datetime | None = None,
 ) -> list[str]:
     """Verify that setup-risk canaries reach their recheck owner.
 
@@ -489,7 +490,7 @@ def _runtime_probe_contract_errors(
     }
     from src.engine.scalping.entry_setup_scalping_rollout import authorized_scopes
 
-    allowed_scopes.update(authorized_scopes(env=env))
+    allowed_scopes.update(authorized_scopes(env=env, now=now))
     from src.engine.scalping.entry_recheck_policy import runtime_scope
 
     if runtime_scope(*cohort) not in allowed_scopes:
@@ -2098,7 +2099,9 @@ def resolve_live_prompt_policy(
         if not _enabled_by_operator(cohort=cohort, auto_scope_authorized=auto_scope):
             result["status"] = "fallback_operator_disabled"
             return result
-        errors = _runtime_probe_contract_errors(target_date=target_date, cohort=cohort)
+        errors = _runtime_probe_contract_errors(
+            target_date=target_date, cohort=cohort, now=current
+        )
         # The approved global cap is shared by all scopes; never reset by tag or venue.
         for key in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
             if os.getenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + key) != "100":
@@ -2243,7 +2246,7 @@ def resolve_live_prompt_policy(
         result["status"] = "fallback_position_owner_out_of_scope"
         return result
     runtime_contract_errors = _runtime_probe_contract_errors(
-        target_date=target_date, cohort=cohort
+        target_date=target_date, cohort=cohort, now=current
     )
     if runtime_contract_errors:
         result["status"] = "fallback_probe_first_runtime_contract_invalid"

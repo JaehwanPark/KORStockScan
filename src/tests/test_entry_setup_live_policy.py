@@ -85,6 +85,14 @@ def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope):
     _configure_paths(monkeypatch, tmp_path)
     _enable_probe_contract(monkeypatch)
     _pin_auto_promotion(monkeypatch, tmp_path)
+
+    class BeforeActivationClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 8, 6, 22, tzinfo=policy.KST)
+
+    # Explicit evaluation time must reach the recheck authority consumer too.
+    monkeypatch.setattr(rollout, "datetime", BeforeActivationClock)
     monkeypatch.setenv(policy.CANARY_ENV_KEY, "true")
     for name in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
         monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + name, "100")
