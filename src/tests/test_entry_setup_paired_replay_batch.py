@@ -16,9 +16,12 @@ def test_refresh_rebinds_only_metadata_without_provider_or_runtime_evidence_chan
     monkeypatch.setattr(optimizer, "ENTRY_BATCH_DIR", batch.BATCH_DIR)
     version = optimizer.ENTRY_CANDIDATE_ORDER[0]
     plan = {cohort: version for cohort in batch.DEFAULT_COHORTS}
+    cohort_contract = optimizer._entry_cohort_contract({})
     source = {
         "status": "optimizer_candidate_plan_applied_offline_only",
         "artifact_content_sha256": "f" * 64,
+        "cohort_contract": cohort_contract,
+        "cohort_contract_sha256": cohort_contract["contract_content_sha256"],
     }
     monkeypatch.setattr(batch, "_optimizer_candidate_plan", lambda _: (plan, source))
     monkeypatch.setattr(
@@ -56,6 +59,10 @@ def test_refresh_rebinds_only_metadata_without_provider_or_runtime_evidence_chan
     batch._atomic_write_json(batch.batch_status_path(day), original)
     result = batch.refresh_optimizer_binding(target_date=day, write=True)
     assert result["candidate_prompt_selection_source"] == source
+    assert result["cohort_contract"] == cohort_contract
+    assert (
+        result["cohort_contract_sha256"] == cohort_contract["contract_content_sha256"]
+    )
     assert result["optimizer_binding_refresh_provider_calls"] == 0
     assert batch.live_policy._batch_evidence(
         result

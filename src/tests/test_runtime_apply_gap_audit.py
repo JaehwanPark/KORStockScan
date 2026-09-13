@@ -82,6 +82,114 @@ def _write_core_artifacts(report_dir: Path, target_date: str = "2026-05-22"):
     )
 
 
+def test_runtime_apply_gap_audit_surfaces_direct_preopen_policy_families(
+    tmp_path, monkeypatch
+):
+    report_dir = _patch_dirs(tmp_path, monkeypatch)
+    approval_dir = tmp_path / "data" / "threshold_cycle" / "approvals"
+    monkeypatch.setattr(mod, "POSITION_SIZING_APPROVAL_DIR", approval_dir)
+    _write_core_artifacts(report_dir, "2026-05-22")
+    _write_json(
+        report_dir
+        / "entry_split_order_plan"
+        / "entry_split_order_plan_2026-05-22.json",
+        {
+            "source_quality": {"tuning_input_allowed": True},
+            "recommended_policy": {
+                "policy_version": "entry-split-v1",
+                "candidates": [
+                    {
+                        "context_bucket": "passive_wide_or_weak",
+                        "selected_child_variant_id": "child-v1",
+                        "source_quality_adjusted_ev_pct": 0.24,
+                        "real_split_variant_outcome_joined_sample": 4,
+                        "runtime_apply_allowed": True,
+                    }
+                ],
+            },
+        },
+    )
+    _write_json(
+        approval_dir / "position_sizing_dynamic_formula_2026-05-22.json",
+        {
+            "policy_version": "sizing-v1",
+            "decision": "adjust_down_flat10",
+            "runtime_apply_allowed": True,
+            "source_quality_passed": True,
+            "minimum_cost_adjusted_ev_pct": 0.1,
+            "cost_adjusted_ev_pct": 0.18,
+        },
+    )
+    _write_json(
+        report_dir
+        / "scalping_pyramid_quality_calibration"
+        / "scalping_pyramid_quality_calibration_2026-05-22.json",
+        {
+            "winner_recovery_bounded_canary_observation": {
+                "by_effective_venue": [
+                    {
+                        "effective_venue": "KRX",
+                        "state": "bounded_one_share_canary_evidence_ready",
+                        "sample_floor_met": True,
+                        "sample_count": 10,
+                        "notional_weighted_ev_pct": 0.12,
+                    },
+                    {
+                        "effective_venue": "NXT",
+                        "state": "hold_sample",
+                        "sample_floor_met": False,
+                        "sample_count": 1,
+                        "notional_weighted_ev_pct": 0.3,
+                    },
+                ]
+            }
+        },
+    )
+    _write_json(
+        mod.APPLY_PLAN_DIR / "threshold_apply_2026-05-23.json",
+        {
+            "auto_apply_selected": [
+                {"family": "entry_split_order_plan"},
+                {"family": "position_sizing_dynamic_formula"},
+                {"family": "post_probe_winner_recovery"},
+            ],
+            "runtime_env_overrides": {
+                "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+                "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry-split-v1",
+                "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED": "true",
+                "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": "sizing-v1",
+                "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "true",
+                "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED": "true",
+                "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED": "false",
+            },
+        },
+    )
+
+    report = mod.build_runtime_apply_gap_audit("2026-05-22", ai_review_provider="none")
+    rows = {row["candidate_id"]: row for row in report["candidate_route_ledger"]}
+
+    entry = next(
+        row for row in rows.values() if row["family"] == "entry_split_order_plan"
+    )
+    sizing = next(
+        row
+        for row in rows.values()
+        if row["family"] == "position_sizing_dynamic_formula"
+    )
+    krx = rows["post_probe_winner_recovery:2026-05-22:KRX"]
+    assert entry["preopen_apply_state"] == "consumed_by_next_preopen"
+    assert entry["final_disposition"] == ("post_apply_attribution_pending")
+    assert sizing["primary_ev"] == 0.18
+    assert sizing["preopen_apply_state"] == "consumed_by_next_preopen"
+    assert krx["primary_ev"] == 0.12
+    assert krx["preopen_apply_state"] == "consumed_by_next_preopen"
+    assert (
+        rows["post_probe_winner_recovery:2026-05-22:NXT"]["preopen_apply_state"]
+        == "pending_next_preopen"
+    )
+    assert report["runtime_uptake_kpi"]["candidate_count"] == 4
+
+
 def _runtime_openai_bedrock_config() -> PostcloseAIReviewConfig:
     return PostcloseAIReviewConfig(
         artifact="RUNTIME_APPLY_GAP_AUDIT",

@@ -148,9 +148,13 @@ def _cohort_contract_hash(contract: Any) -> str:
         return ""
     declared = str(contract.get("contract_content_sha256") or "")
     body = {
-        key: value for key, value in contract.items() if key != "contract_content_sha256"
+        key: value
+        for key, value in contract.items()
+        if key != "contract_content_sha256"
     }
-    return declared if declared and optimizer._canonical_sha256(body) == declared else ""
+    return (
+        declared if declared and optimizer._canonical_sha256(body) == declared else ""
+    )
 
 
 def _blocked(
@@ -196,14 +200,11 @@ def _entry_base_paths(
     optimizer_contract_hash = _cohort_contract_hash(optimizer_contract)
     batch_contract_hash = _cohort_contract_hash(batch_contract)
     contract_present = optimizer_contract is not None or batch_contract is not None
-    contract_bound = (
-        not contract_present
-        or (
-            bool(optimizer_contract_hash)
-            and optimizer_contract_hash == batch_contract_hash
-            and batch_source.get("cohort_contract_sha256") == optimizer_contract_hash
-            and optimizer_contract == batch_contract
-        )
+    contract_bound = not contract_present or (
+        bool(optimizer_contract_hash)
+        and optimizer_contract_hash == batch_contract_hash
+        and batch_source.get("cohort_contract_sha256") == optimizer_contract_hash
+        and optimizer_contract == batch_contract
     )
     source_bound = bool(
         batch_source.get("status") == "optimizer_candidate_plan_applied_offline_only"
@@ -1229,6 +1230,10 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     optimizer_sources = (
         optimizer_sources if isinstance(optimizer_sources, Mapping) else {}
     )
+    entry_cohort_contract = optimizer_report.get("entry_cohort_contract")
+    entry_cohort_contract_hash = optimizer.entry_cohort_contract_content_sha256(
+        entry_cohort_contract
+    )
     calibration_sha = optimizer_sources.get(
         "action_outcome_calibration_artifact_content_sha256"
     )
@@ -1404,6 +1409,12 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
             "optimizer_path": str(optimizer_path),
             "optimizer_artifact_content_sha256": optimizer_report.get(
                 "artifact_content_sha256"
+            ),
+            "entry_cohort_contract_sha256": entry_cohort_contract_hash or None,
+            "entry_cohort_contract_version": (
+                entry_cohort_contract.get("version")
+                if isinstance(entry_cohort_contract, Mapping)
+                else None
             ),
             "prepared_request_path": str(prepared_path),
             "prepared_request_artifact_content_sha256": prepared.get(

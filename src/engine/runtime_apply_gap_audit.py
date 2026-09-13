@@ -36,6 +36,7 @@ from src.utils.constants import DATA_DIR
 REPORT_SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / "runtime_apply_gap_audit"
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
+POSITION_SIZING_APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 AI_REVIEW_SCHEMA_NAME = "runtime_apply_gap_ai_review_v1"
 AI_REVIEWER_NAME = "runtime_apply_gap_ai_review"
 AI_REVIEW_MODEL = "gpt-5.4"
@@ -162,6 +163,14 @@ def _artifact_path(label: str, target_date: str) -> Path:
         / "swing_lifecycle_decision_matrix"
         / f"swing_lifecycle_decision_matrix_{target_date}.json",
         "threshold_preopen_apply_next": _next_preopen_apply_path(target_date),
+        "entry_split_order_plan": BASE_REPORT_DIR
+        / "entry_split_order_plan"
+        / f"entry_split_order_plan_{target_date}.json",
+        "position_sizing_dynamic_formula": POSITION_SIZING_APPROVAL_DIR
+        / f"position_sizing_dynamic_formula_{target_date}.json",
+        "scalping_pyramid_quality_calibration": BASE_REPORT_DIR
+        / "scalping_pyramid_quality_calibration"
+        / f"scalping_pyramid_quality_calibration_{target_date}.json",
     }
     return file_map[label]
 
@@ -180,6 +189,9 @@ def _artifact_status(
         "threshold_cycle_ev",
         "lifecycle_decision_matrix",
         "threshold_preopen_apply_next",
+        "entry_split_order_plan",
+        "position_sizing_dynamic_formula",
+        "scalping_pyramid_quality_calibration",
     ]
     if include_swing:
         labels.extend(
@@ -250,6 +262,22 @@ def _preopen_apply_consumed_candidate(
         if family and str(item.get("family") or item.get("policy_id") or "") == family:
             return True
     return False
+
+
+def _direct_preopen_policy_consumed(
+    apply_plan: dict[str, Any], family: str, required_env: dict[str, str]
+) -> bool:
+    """Require both the selected family and its exact emitted PREOPEN values."""
+
+    if not _preopen_apply_consumed_candidate(apply_plan, "", family):
+        return False
+    overrides = apply_plan.get("runtime_env_overrides")
+    if not isinstance(overrides, dict):
+        return False
+    return all(
+        str(overrides.get(key) or "").strip().lower() == value.lower()
+        for key, value in required_env.items()
+    )
 
 
 def _model_at_least_gpt54(model: str) -> bool:
@@ -1205,6 +1233,174 @@ def _ledger_from_bridge(
     return ledger
 
 
+def _dedicated_policy_ledger(
+    payloads: dict[str, dict[str, Any]], *, target_date: str
+) -> list[dict[str, Any]]:
+    """Surface bounded policy families consumed directly by PREOPEN."""
+
+    preopen_apply = payloads.get("threshold_preopen_apply_next") or {}
+    rows: list[dict[str, Any]] = []
+
+    def append_row(
+        *,
+        candidate_id: str,
+        family: str,
+        stage: str,
+        source_artifact: str,
+        primary_ev: float | None,
+        sample: int,
+        source_quality_gate: str,
+        ready: bool,
+        target_env_keys: list[str],
+        selected_env: dict[str, str],
+        producer_state: str,
+    ) -> None:
+        consumed = _direct_preopen_policy_consumed(preopen_apply, family, selected_env)
+        rows.append(
+            {
+                "candidate_id": candidate_id,
+                "family": family,
+                "domain": "scalping",
+                "stage": stage,
+                "source_artifact": source_artifact,
+                "producer_state": producer_state,
+                "consumer_state": "direct_preopen_apply",
+                "sample": sample,
+                "primary_ev": primary_ev,
+                "source_quality_gate": source_quality_gate,
+                "recommended_route": "threshold_cycle_preopen_apply",
+                "actual_route": "direct_preopen_apply",
+                "bridge_state": "not_required_direct_preopen_owner",
+                "preopen_apply_state": (
+                    "consumed_by_next_preopen" if consumed else "pending_next_preopen"
+                ),
+                "runtime_hook_state": "mapped" if target_env_keys else "not_mapped",
+                "post_apply_attribution_state": "pending" if ready else "not_ready",
+                "final_disposition": (
+                    "post_apply_attribution_pending"
+                    if ready
+                    else "source_only_keep_collecting"
+                ),
+                "failure_state": "pass",
+                "failure_reason": "",
+                "retryable": False,
+                "retry_reason": "",
+                "retry_owner": "",
+                "next_retry_stage": "",
+                "retry_deadline": "",
+                "surface_channel": "runtime_apply_gap_audit",
+                "target_env_keys": target_env_keys,
+                "explicit_runtime_exclusion": False,
+                "runtime_exclusion_reason": "",
+                "direct_preopen_owner": True,
+            }
+        )
+
+    entry_split = payloads.get("entry_split_order_plan") or {}
+    recommendation = entry_split.get("recommended_policy") or {}
+    source_quality = entry_split.get("source_quality") or {}
+    entry_gate = (
+        "pass" if source_quality.get("tuning_input_allowed") is True else "blocked"
+    )
+    policy_version = str(recommendation.get("policy_version") or "")
+    for item in recommendation.get("candidates") or []:
+        if not isinstance(item, dict):
+            continue
+        bucket = str(item.get("context_bucket") or "unknown")
+        child = str(item.get("selected_child_variant_id") or "unknown")
+        append_row(
+            candidate_id=f"entry_split_order_plan:{policy_version}:{bucket}:{child}",
+            family="entry_split_order_plan",
+            stage="entry",
+            source_artifact="entry_split_order_plan",
+            primary_ev=_safe_float(item.get("source_quality_adjusted_ev_pct")),
+            sample=_safe_int(item.get("real_split_variant_outcome_joined_sample")),
+            source_quality_gate=entry_gate,
+            ready=bool(item.get("runtime_apply_allowed")) and entry_gate == "pass",
+            target_env_keys=[
+                "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED",
+                "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE",
+                "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION",
+            ],
+            selected_env={
+                "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+                "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": policy_version,
+            },
+            producer_state=(
+                "next_preopen_candidate_ready"
+                if item.get("runtime_apply_allowed") is True
+                else "hold_candidate"
+            ),
+        )
+
+    sizing = payloads.get("position_sizing_dynamic_formula") or {}
+    sizing_version = str(sizing.get("policy_version") or "")
+    sizing_ev = _safe_float(sizing.get("cost_adjusted_ev_pct"))
+    sizing_floor = _safe_float(sizing.get("minimum_cost_adjusted_ev_pct"))
+    sizing_gate = "pass" if sizing.get("source_quality_passed") is True else "blocked"
+    if sizing_version:
+        append_row(
+            candidate_id=f"position_sizing_dynamic_formula:{sizing_version}",
+            family="position_sizing_dynamic_formula",
+            stage="sizing",
+            source_artifact="position_sizing_dynamic_formula",
+            primary_ev=sizing_ev,
+            sample=0,
+            source_quality_gate=sizing_gate,
+            ready=(
+                sizing.get("runtime_apply_allowed") is True
+                and sizing_gate == "pass"
+                and sizing_ev is not None
+                and sizing_floor is not None
+                and sizing_ev >= sizing_floor
+            ),
+            target_env_keys=[
+                "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED",
+                "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE",
+                "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION",
+            ],
+            selected_env={
+                "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED": "true",
+                "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": sizing_version,
+            },
+            producer_state=str(sizing.get("decision") or "hold_candidate"),
+        )
+
+    pyramid = payloads.get("scalping_pyramid_quality_calibration") or {}
+    observation = pyramid.get("winner_recovery_bounded_canary_observation") or {}
+    for venue in observation.get("by_effective_venue") or []:
+        if not isinstance(venue, dict):
+            continue
+        venue_name = str(venue.get("effective_venue") or "UNKNOWN").upper()
+        venue_ev = _safe_float(venue.get("notional_weighted_ev_pct"))
+        ready = (
+            str(venue.get("state") or "") == "bounded_one_share_canary_evidence_ready"
+            and venue.get("sample_floor_met") is True
+            and venue_ev is not None
+            and venue_ev >= 0.1
+        )
+        append_row(
+            candidate_id=f"post_probe_winner_recovery:{target_date}:{venue_name}",
+            family="post_probe_winner_recovery",
+            stage="scale_in",
+            source_artifact="scalping_pyramid_quality_calibration",
+            primary_ev=venue_ev,
+            sample=_safe_int(venue.get("sample_count")),
+            source_quality_gate="pass" if ready else "hold_sample",
+            ready=ready,
+            target_env_keys=[
+                "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED",
+                f"KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_{venue_name}_ENABLED",
+            ],
+            selected_env={
+                "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "true",
+                f"KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_{venue_name}_ENABLED": "true",
+            },
+            producer_state=str(venue.get("state") or "hold_candidate"),
+        )
+    return rows
+
+
 def _next_day(target_date: str) -> str:
     try:
         return (date.fromisoformat(target_date) + timedelta(days=1)).isoformat()
@@ -1224,7 +1420,9 @@ def _merge_ledger_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     }
     for row in rows:
         candidate_id = str(row.get("candidate_id") or "")
-        if row.get("source_artifact") == "swing_lifecycle_bucket_discovery":
+        if row.get("source_artifact") == "swing_lifecycle_bucket_discovery" or row.get(
+            "direct_preopen_owner"
+        ):
             key = candidate_id
         else:
             key = str(row.get("family") or candidate_id)
@@ -2450,6 +2648,7 @@ def build_runtime_apply_gap_audit(
                 preopen_apply=payloads.get("threshold_preopen_apply_next") or {},
             )
         )
+    ledger_rows.extend(_dedicated_policy_ledger(payloads, target_date=target_date))
     ledger = _merge_ledger_rows(ledger_rows)
     drift = _producer_consumer_contract_drift(ledger, payloads)
     retry_queue = _retry_queue_from_failures(ledger, artifact_status)

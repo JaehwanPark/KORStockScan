@@ -217,6 +217,43 @@ def _entry_cohort_contract(calibration: Mapping[str, Any]) -> dict[str, Any]:
     return {**body, "contract_content_sha256": _canonical_sha256(body)}
 
 
+def entry_cohort_contract_content_sha256(contract: Any) -> str:
+    """Return the producer-owned content digest for a valid cohort contract.
+
+    The digest deliberately excludes ``contract_content_sha256`` itself.  Batch,
+    consumer, and verifier must compare this value rather than independently
+    hashing a different representation of the same contract.
+    """
+    if not isinstance(contract, Mapping):
+        return ""
+    declared = str(contract.get("contract_content_sha256") or "")
+    body = {
+        key: value
+        for key, value in contract.items()
+        if key != "contract_content_sha256"
+    }
+    return (
+        declared if _is_sha256(declared) and _canonical_sha256(body) == declared else ""
+    )
+
+
+def entry_cohort_contract_valid(contract: Any) -> bool:
+    """Validate the stable producer schema shared by replay consumers."""
+    if not isinstance(contract, Mapping):
+        return False
+    return bool(
+        contract.get("schema") == ENTRY_COHORT_CONTRACT_SCHEMA
+        and contract.get("version")
+        in {ENTRY_COHORT_CONTRACT_V1, ENTRY_COHORT_CONTRACT_V2}
+        and isinstance(contract.get("expected_cohorts"), list)
+        and bool(contract.get("expected_cohorts"))
+        and contract.get("runtime_effect") is False
+        and contract.get("allowed_runtime_apply") is False
+        and contract.get("dual_aftermarket_provider_forbidden") is True
+        and entry_cohort_contract_content_sha256(contract)
+    )
+
+
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -348,14 +385,18 @@ def _latest_action_outcome_calibration(
             or row.get("cohort_isolated") is not True
             or row.get("runtime_apply_authority") is not False
             or identity in candidate_identities
-            or (is_dual and (
-                identity[4].upper() != ENTRY_DUAL_AFTERMARKET_VENUE
-                or identity[5].upper() != ENTRY_DUAL_AFTERMARKET_SESSION
-                or not route
-                or authority != "OBSERVE_ONLY"
-                or row.get("review_classification") != "dual_aftermarket_observe_only"
-                or row.get("review_ready_for_prompt_candidate") is not False
-            ))
+            or (
+                is_dual
+                and (
+                    identity[4].upper() != ENTRY_DUAL_AFTERMARKET_VENUE
+                    or identity[5].upper() != ENTRY_DUAL_AFTERMARKET_SESSION
+                    or not route
+                    or authority != "OBSERVE_ONLY"
+                    or row.get("review_classification")
+                    != "dual_aftermarket_observe_only"
+                    or row.get("review_ready_for_prompt_candidate") is not False
+                )
+            )
             or (not is_dual and (route or cohort_version != ENTRY_COHORT_CONTRACT_V1))
         ):
             candidate_contract_valid = False
@@ -443,7 +484,10 @@ def _action_outcome_advisory(
             == candidate_prompt_version
             and _bounded_string(row.get("market_data_route")).upper()
             == market_data_route.upper()
-            and (_bounded_string(row.get("cohort_key_version")) or ENTRY_COHORT_CONTRACT_V1)
+            and (
+                _bounded_string(row.get("cohort_key_version"))
+                or ENTRY_COHORT_CONTRACT_V1
+            )
             == cohort_key_version
         )
     ]
@@ -675,7 +719,9 @@ def _detailed_reports(target_date: str) -> list[dict[str, Any]]:
             and payload.get("broker_order_forbidden") is True
             and payload.get("entry_setup_evidence_version")
             == ENTRY_SETUP_EVIDENCE_VERSION
-            and _full_cost_economics_pass(cumulative.get("full_cost_economics"))
+            and _full_cost_economics_pass(
+                cumulative.get("full_cost_economics"), require_runtime_floor=False
+            )
             and isinstance(cumulative.get("candidate_probe_risk_budget"), Mapping)
             and cumulative["candidate_probe_risk_budget"].get("pass") is True
             and isinstance(cumulative.get("promotion_evidence_floor"), Mapping)

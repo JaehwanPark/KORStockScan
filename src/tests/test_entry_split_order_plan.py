@@ -94,6 +94,27 @@ def test_runtime_apply_authority_contract_rejects_malformed_child_shape_gate():
     assert reason == "runtime_shape_gate_require_runtime_weight_adjusted_not_boolean"
 
 
+def test_runtime_apply_authority_contract_rejects_scoped_default_fallback():
+    valid, reason = split_plan.runtime_apply_authority_contract_status(
+        {
+            "runtime_apply_allowed": True,
+            "runtime_apply_compatibility_semantics": (
+                split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
+            ),
+            "exploration_seed_allowed": True,
+            "ev_validated_runtime_apply_allowed": False,
+            "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+            "baseline_runtime_defaults_enabled": False,
+            "missing_bucket_action": "runtime_default_fallback",
+            "explicit_bucket_count": 1,
+            "buckets": {"passive_wide_or_weak": {}},
+        }
+    )
+
+    assert valid is False
+    assert reason == "missing_bucket_action_inconsistent_with_baseline_scope"
+
+
 def test_report_policy_generation_binding_uses_and_validates_immutable_report(
     monkeypatch, tmp_path
 ):
@@ -575,8 +596,9 @@ def test_split_candidate_uses_exact_positive_child_shape_not_parent_tail():
         "observed_child_variant_id": child_variant,
     }
     assert (
-        candidate["post_apply_continuation_gate"]
-        ["mature_parent_tail_applies_to_selected_child_shape"]
+        candidate["post_apply_continuation_gate"][
+            "mature_parent_tail_applies_to_selected_child_shape"
+        ]
         is False
     )
 
@@ -610,8 +632,12 @@ def test_allocator_applies_child_shape_seed_only_for_exact_observed_shape(
     monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION", "child-shape-seed")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-14")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION", "child-shape-seed"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE", "2026-07-14"
+    )
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "2026-07-14")
 
@@ -777,6 +803,20 @@ def test_build_report_merges_late_candidate_and_reconstructs_split_provenance(
             }
         ],
     )
+    _write_jsonl(
+        data_dir / "post_sell" / f"post_sell_evaluations_{target_date}.jsonl",
+        [
+            {
+                "post_sell_id": "late-candidate",
+                "signal_date": target_date,
+                "recommendation_id": 123,
+                "actual_order_submitted": True,
+                "profit_rate": 1.25,
+                "spread_bps": 18,
+                "buy_pressure_10t": 55,
+            }
+        ],
+    )
     source_quality_path = (
         data_dir
         / "report"
@@ -809,9 +849,9 @@ def test_build_report_merges_late_candidate_and_reconstructs_split_provenance(
     ]
     assert report["input_summary"]["real_post_sell_join"] == {
         "candidate_count": 1,
-        "evaluation_count": 0,
-        "matched_evaluation_count": 0,
-        "pending_evaluation_count": 1,
+        "evaluation_count": 1,
+        "matched_evaluation_count": 1,
+        "pending_evaluation_count": 0,
         "merged_count": 1,
         "reconstructed_split_provenance_count": 1,
     }
@@ -3507,6 +3547,58 @@ def test_allocator_daily_operator_contract_keeps_probe_first_and_policy_active(
     assert orders[0]["qty"] == 1
 
 
+def test_allocator_keeps_original_order_when_scoped_policy_omits_bucket(
+    monkeypatch, tmp_path
+):
+    policy_file = tmp_path / "entry-policy-scoped.json"
+    policy_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "entry_split_order_policy_v1",
+                "policy_version": "scoped-child-seed",
+                "source_date": "2026-09-01",
+                "runtime_apply_allowed": True,
+                "runtime_apply_compatibility_semantics": (
+                    split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
+                ),
+                "exploration_seed_allowed": True,
+                "ev_validated_runtime_apply_allowed": False,
+                "runtime_apply_authority_classes": ["bounded_exploration_seed"],
+                "baseline_runtime_defaults_enabled": False,
+                "missing_bucket_action": "keep_original_order",
+                "explicit_bucket_count": 1,
+                "buckets": {
+                    "passive_wide_or_weak": {
+                        "leg_count": 2,
+                        "price_offsets_ticks": [0, 1],
+                        "qty_weight_min": 0.5,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED", "true")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE", str(policy_file))
+
+    original_orders = [{"tag": "normal", "qty": 4, "price": 1000}]
+    orders, fields = split_plan.apply_entry_split_order_policy(
+        original_orders,
+        stock={"code": "005930", "id": 1, "strategy": "SCALPING"},
+        latency_gate={
+            "spread_bps": 18,
+            "buy_pressure_10t": 55,
+            "latency_state": "SAFE",
+        },
+        now=datetime(2026, 9, 3, 9, 3, tzinfo=timezone(timedelta(hours=9))),
+    )
+
+    assert orders == original_orders
+    assert fields["entry_split_order_policy_applied"] is False
+    assert fields["entry_split_order_bucket"] == "balanced_normal"
+    assert fields["entry_split_order_skip_reason"] == "policy_bucket_not_selected"
+
+
 def test_allocator_daily_contract_does_not_authorize_stale_standard_policy(
     monkeypatch, tmp_path
 ):
@@ -3605,7 +3697,7 @@ def test_allocator_rejects_contradictory_runtime_apply_authority_contract(
                 "source_date": "2026-07-14",
                 "runtime_apply_allowed": True,
                 "runtime_apply_compatibility_semantics": (
-                    "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed"
+                    split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
                 ),
                 "exploration_seed_allowed": False,
                 "ev_validated_runtime_apply_allowed": False,
@@ -3766,7 +3858,7 @@ def test_daily_report_candidate_and_preopen_env_handoff(monkeypatch, tmp_path):
                 ],
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
-                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "runtime_apply_compatibility_semantics": split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS,
                     "exploration_seed_allowed": False,
                     "ev_validated_runtime_apply_allowed": True,
                     "runtime_apply_authority_classes": ["ev_validated_variant"],
@@ -3842,7 +3934,7 @@ def test_daily_report_handoff_accepts_bounded_equal_baseline(monkeypatch, tmp_pa
                 ],
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
-                    "runtime_apply_compatibility_semantics": "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed",
+                    "runtime_apply_compatibility_semantics": split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS,
                     "exploration_seed_allowed": True,
                     "ev_validated_runtime_apply_allowed": False,
                     "runtime_apply_authority_classes": ["bounded_exploration_seed"],
@@ -4021,17 +4113,29 @@ def test_hydrated_exploration_restores_terminal_guards_exact_target(
 ):
     monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "state.json")
     now = datetime(2026, 9, 11, 11, tzinfo=timezone(timedelta(hours=9)))
-    split_plan._write_probe_runtime_state({
-        "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
-        "target_date": "2026-09-11", "bundles": {"bundle": {
-            "bundle_id": "bundle", "code": "123456", "target_id": "10",
-            "phase": "aborted", "fill_qty": 1,
-            "terminal_abort_reason": "entry_setup_bounded_exploration_probe_only",
-        }},
-    })
-    stock = {"id": "11" if wrong_target else "10", "code": "123456", "buy_qty": 1,
-             "entry_split_probe_bundle_id": "bundle",
-             "entry_split_probe_scale_in_forbidden": existing}
+    split_plan._write_probe_runtime_state(
+        {
+            "schema_version": split_plan.PROBE_RUNTIME_STATE_SCHEMA_VERSION,
+            "target_date": "2026-09-11",
+            "bundles": {
+                "bundle": {
+                    "bundle_id": "bundle",
+                    "code": "123456",
+                    "target_id": "10",
+                    "phase": "aborted",
+                    "fill_qty": 1,
+                    "terminal_abort_reason": "entry_setup_bounded_exploration_probe_only",
+                }
+            },
+        }
+    )
+    stock = {
+        "id": "11" if wrong_target else "10",
+        "code": "123456",
+        "buy_qty": 1,
+        "entry_split_probe_bundle_id": "bundle",
+        "entry_split_probe_scale_in_forbidden": existing,
+    }
     before = dict(stock)
     result = split_plan.recover_probe_runtime_bundle_for_stock(stock, now=now)
     if wrong_target:
@@ -4039,8 +4143,11 @@ def test_hydrated_exploration_restores_terminal_guards_exact_target(
         assert stock == before
     else:
         assert result["recovered"]
-        for key in ("entry_split_probe_scale_in_forbidden",
-                    "entry_split_probe_residual_expand_forbidden", "probe_expand_forbidden"):
+        for key in (
+            "entry_split_probe_scale_in_forbidden",
+            "entry_split_probe_residual_expand_forbidden",
+            "probe_expand_forbidden",
+        ):
             assert stock[key] is True
         assert stock["entry_split_probe_terminal_abort_reason"] == (
             "entry_setup_bounded_exploration_probe_only"

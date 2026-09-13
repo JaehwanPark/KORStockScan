@@ -48,6 +48,7 @@ from src.engine.lifecycle.retirement import (
 from src.engine.monitoring.limit_down_watch_report import (
     CONTRACT as LIMIT_DOWN_WATCH_CONTRACT,
 )
+from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer
 from src.engine.threshold_cycle_preopen_apply import (
     AVG_DOWN_EVIDENCE_AUTHORITY,
     AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
@@ -1206,7 +1207,13 @@ def _entry_setup_replay_session_contract_status(
     *,
     target_date: str,
 ) -> dict[str, Any]:
-    """Fail closed when a versioned replay cohort leaks into prompt authority."""
+    """Reconcile the producer-owned replay cohort census through its consumer.
+
+    The replay batch is source-only, but its venue/session identity is still
+    required to prevent a prompt result from crossing into a different cohort.
+    Use the optimizer's schema and content hash directly; a verifier-specific
+    projection must not become a second incompatible contract.
+    """
     if not batch and not consumer:
         return {
             "status": "not_enabled",
@@ -1236,88 +1243,154 @@ def _entry_setup_replay_session_contract_status(
             issues.append(f"{label}_broker_order_forbidden_invalid")
 
     contract = batch.get("cohort_contract")
-    if not isinstance(contract, dict):
+    if not main_ai_prompt_optimizer.entry_cohort_contract_valid(contract):
         issues.append("cohort_contract_missing_or_invalid")
         contract = {}
-    if contract.get("schema") != "entry_replay_cohort_contract_v1":
-        issues.append("cohort_contract_schema_invalid")
-    contract_version = contract.get("contract_version")
-    expected_by_version = contract.get("expected_cohorts_by_contract_version")
-    if (
-        not isinstance(contract_version, str)
-        or not contract_version
-        or not isinstance(expected_by_version, dict)
-        or not isinstance(expected_by_version.get(contract_version), list)
-    ):
+    contract_version = str(contract.get("version") or "")
+    expected_cohorts = contract.get("expected_cohorts") if contract else []
+    if not isinstance(expected_cohorts, list):
         issues.append("cohort_contract_expected_coverage_invalid")
-        expected_cohorts: list[dict[str, Any]] = []
-    else:
-        expected_cohorts = expected_by_version[contract_version]
+        expected_cohorts = []
 
-    required_fields = (
-        "cohort_key",
-        "cohort_key_version",
-        "effective_venue",
-        "session_bucket",
-        "market_data_route",
-        "authority_state",
-    )
+    base_cohorts = {
+        (venue, session, route, version, authority)
+        for venue, session, route, version, authority in main_ai_prompt_optimizer.ENTRY_EXPECTED_COHORTS_BY_CONTRACT_VERSION[
+            main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V1
+        ]
+    }
 
-    def identity(row: Any) -> tuple[str, str] | None:
+    def identity(
+        row: Any, *, allow_legacy_defaults: bool
+    ) -> tuple[str, str, str, str, str] | None:
         if not isinstance(row, dict):
             return None
-        values = tuple(str(row.get(field) or "").strip() for field in required_fields[:2])
-        return values if all(values) else None
+        venue = str(row.get("effective_venue") or "").strip().upper()
+        session = str(row.get("session_bucket") or "").strip().upper()
+        route = str(row.get("market_data_route") or "").strip().upper()
+        if (
+            not venue
+            or not session
+            or any(value == "UNKNOWN" for value in (venue, session, route))
+        ):
+            return None
+        is_base = (
+            venue,
+            session,
+            route,
+            main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V1,
+            "LEGACY",
+        ) in base_cohorts
+        version = str(row.get("cohort_key_version") or "").strip()
+        authority = str(row.get("authority_state") or "").strip()
+        if allow_legacy_defaults and is_base:
+            version = version or main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V1
+            authority = authority or "LEGACY"
+        if not version or not authority:
+            return None
+        return venue, session, route, version, authority
 
-    def has_unknown_session_value(row: Any) -> bool:
-        return isinstance(row, dict) and any(
-            str(row.get(field) or "").strip().upper() == "UNKNOWN"
-            for field in required_fields[2:5]
-        )
-
-    if any(
-        not isinstance(row, dict)
-        or identity(row) is None
-        or has_unknown_session_value(row)
-        or any(not str(row.get(field) or "").strip() for field in required_fields)
-        for row in expected_cohorts
-    ):
-        issues.append("cohort_contract_expected_session_invalid")
     expected_by_identity = {
-        identity(row): row for row in expected_cohorts if identity(row) is not None
+        identity(row, allow_legacy_defaults=False): row
+        for row in expected_cohorts
+        if identity(row, allow_legacy_defaults=False) is not None
     }
-    if len(expected_by_identity) != len(expected_cohorts):
-        issues.append("cohort_contract_expected_identity_duplicate")
+    if (
+        len(expected_by_identity) != len(expected_cohorts)
+        or not expected_by_identity
+        or contract_version
+        not in {
+            main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V1,
+            main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V2,
+        }
+    ):
+        issues.append("cohort_contract_expected_coverage_invalid")
+
+    expected_base = {
+        identity(
+            {
+                "effective_venue": venue,
+                "session_bucket": session,
+                "market_data_route": route,
+                "cohort_key_version": version,
+                "authority_state": authority,
+            },
+            allow_legacy_defaults=False,
+        )
+        for venue, session, route, version, authority in base_cohorts
+    }
+    if not expected_base.issubset(set(expected_by_identity)):
+        issues.append("cohort_contract_base_coverage_invalid")
+    dual_expected = {
+        cohort_id
+        for cohort_id in expected_by_identity
+        if cohort_id[0] == main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_VENUE
+        and cohort_id[1] == main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_SESSION
+        and cohort_id[2]
+        and cohort_id[3] == main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V2
+        and cohort_id[4] == "OBSERVE_ONLY"
+    }
+    if (
+        contract_version == main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V1
+        and set(expected_by_identity) != expected_base
+    ) or (
+        contract_version == main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V2
+        and not dual_expected
+    ):
+        issues.append("cohort_contract_version_coverage_invalid")
+    for row in expected_cohorts:
+        cohort_id = identity(row, allow_legacy_defaults=False)
+        if cohort_id is None:
+            issues.append("cohort_contract_expected_session_invalid")
+            continue
+        is_dual_aftermarket = cohort_id[:2] == (
+            main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_VENUE,
+            main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_SESSION,
+        )
+        if is_dual_aftermarket:
+            if cohort_id not in dual_expected:
+                issues.append("dual_aftermarket_authority_or_candidate_invalid")
+        elif cohort_id not in expected_base:
+            issues.append("cohort_contract_expected_session_invalid")
+
+    contract_hash = main_ai_prompt_optimizer.entry_cohort_contract_content_sha256(
+        contract
+    )
+    batch_source = batch.get("candidate_prompt_selection_source")
+    batch_source = batch_source if isinstance(batch_source, dict) else {}
+    if (
+        not contract_hash
+        or batch.get("cohort_contract_sha256") != contract_hash
+        or batch_source.get("cohort_contract_sha256") != contract_hash
+    ):
+        issues.append("batch_cohort_contract_hash_missing_or_invalid")
+    source_bindings = consumer.get("source_bindings")
+    source_bindings = source_bindings if isinstance(source_bindings, dict) else {}
+    if source_bindings.get("entry_cohort_contract_sha256") != contract_hash:
+        issues.append("consumer_cohort_contract_hash_missing_or_invalid")
 
     cohort_rows = batch.get("cohorts")
     if not isinstance(cohort_rows, list):
         issues.append("batch_cohort_coverage_invalid")
         cohort_rows = []
     actual_by_identity = {
-        identity(row): row for row in cohort_rows if identity(row) is not None
+        identity(row, allow_legacy_defaults=True): row
+        for row in cohort_rows
+        if identity(row, allow_legacy_defaults=True) is not None
     }
-    if (
-        len(actual_by_identity) != len(cohort_rows)
-        or set(actual_by_identity) != set(expected_by_identity)
+    if len(actual_by_identity) != len(cohort_rows) or set(actual_by_identity) != set(
+        expected_by_identity
     ):
         issues.append("batch_cohort_coverage_mismatch")
-    for cohort_id, expected in expected_by_identity.items():
-        actual = actual_by_identity.get(cohort_id)
-        if not isinstance(actual, dict):
+    for cohort_id, actual in actual_by_identity.items():
+        if not isinstance(actual, dict) or cohort_id[:2] != (
+            main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_VENUE,
+            main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_SESSION,
+        ):
             continue
-        if has_unknown_session_value(actual):
-            issues.append("batch_unknown_session_coverage")
-            continue
-        if any(actual.get(field) != expected.get(field) for field in required_fields):
-            issues.append("batch_cohort_reconciliation_mismatch")
-            continue
-        is_dual_aftermarket = (
-            actual.get("effective_venue") == "INTEGRATED"
-            and actual.get("session_bucket") == "KRX_NXT_AFTERMARKET"
-        )
-        if is_dual_aftermarket and (
-            actual.get("authority_state")
-            not in {"OBSERVE_ONLY", "BLOCKED_MISSING_APPROVAL"}
+        if (
+            cohort_id not in dual_expected
+            or cohort_id[3] != main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V2
+            or cohort_id[4] != "OBSERVE_ONLY"
             or actual.get("status")
             not in {"completed_observe_only", "blocked_missing_approval"}
             or any(
@@ -1332,67 +1405,38 @@ def _entry_setup_replay_session_contract_status(
         ):
             issues.append("dual_aftermarket_authority_or_candidate_invalid")
 
-    contract_hash = hashlib.sha256(
-        json.dumps(
-            contract,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
-
-    def contains_contract_hash(value: Any) -> bool:
-        if isinstance(value, dict):
-            return any(
-                str(key).endswith("cohort_contract_sha256")
-                and nested == contract_hash
-                or contains_contract_hash(nested)
-                for key, nested in value.items()
-            )
-        if isinstance(value, list):
-            return any(contains_contract_hash(item) for item in value)
-        return False
-
-    if not contains_contract_hash(batch):
-        issues.append("batch_cohort_contract_hash_missing_or_invalid")
-    if not contains_contract_hash(consumer):
-        issues.append("consumer_cohort_contract_hash_missing_or_invalid")
-
     request_paths = consumer.get("request_paths")
     entry_base = (
         request_paths.get("entry_base") if isinstance(request_paths, dict) else None
     )
-    consumer_cohorts = entry_base.get("cohorts") if isinstance(entry_base, dict) else None
+    consumer_cohorts = (
+        entry_base.get("cohorts") if isinstance(entry_base, dict) else None
+    )
     if not isinstance(consumer_cohorts, list):
         issues.append("consumer_cohort_reconciliation_missing")
         consumer_cohorts = []
     consumer_by_identity = {
-        identity(row): row for row in consumer_cohorts if identity(row) is not None
+        identity(row, allow_legacy_defaults=True): row
+        for row in consumer_cohorts
+        if identity(row, allow_legacy_defaults=True) is not None
     }
-    if (
-        len(consumer_by_identity) != len(consumer_cohorts)
-        or set(consumer_by_identity) != set(expected_by_identity)
-    ):
+    if len(consumer_by_identity) != len(consumer_cohorts) or set(
+        consumer_by_identity
+    ) != set(expected_by_identity):
         issues.append("consumer_cohort_coverage_mismatch")
-    for cohort_id, expected in expected_by_identity.items():
-        observed = consumer_by_identity.get(cohort_id)
-        if not isinstance(observed, dict):
-            continue
-        if has_unknown_session_value(observed):
-            issues.append("consumer_unknown_session_coverage")
-            continue
-        if any(observed.get(field) != expected.get(field) for field in required_fields):
-            issues.append("consumer_cohort_reconciliation_mismatch")
+    for cohort_id, observed in consumer_by_identity.items():
+        if not isinstance(observed, dict) or cohort_id[:2] != (
+            main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_VENUE,
+            main_ai_prompt_optimizer.ENTRY_DUAL_AFTERMARKET_SESSION,
+        ):
             continue
         if (
-            observed.get("effective_venue") == "INTEGRATED"
-            and observed.get("session_bucket") == "KRX_NXT_AFTERMARKET"
-            and (
-                observed.get("path_status")
-                != "intentionally_blocked_with_owner_and_acceptance_test"
-                or observed.get("terminality") != "terminal_source_observation"
-            )
+            cohort_id not in dual_expected
+            or cohort_id[3] != main_ai_prompt_optimizer.ENTRY_COHORT_CONTRACT_V2
+            or cohort_id[4] != "OBSERVE_ONLY"
+            or observed.get("path_status")
+            != "intentionally_blocked_with_owner_and_acceptance_test"
+            or observed.get("terminality") != "terminal_source_observation"
         ):
             issues.append("consumer_dual_aftermarket_nonterminal")
 
@@ -6516,9 +6560,7 @@ def build_threshold_cycle_postclose_verification(
             f"machine_entry_timing_{issue}"
             for issue in machine_entry_timing_postclose["issues"]
         )
-    entry_setup_replay_batch = _load_json(
-        paths["ai_entry_setup_paired_replay_batch"]
-    )
+    entry_setup_replay_batch = _load_json(paths["ai_entry_setup_paired_replay_batch"])
     main_ai_prompt_consumer = _load_json(paths["main_ai_prompt_consumer"])
     entry_setup_replay_session_contract = _entry_setup_replay_session_contract_status(
         entry_setup_replay_batch,

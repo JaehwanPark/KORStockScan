@@ -9,6 +9,7 @@ from src.engine import scalp_sim_scale_in_window_approval as scale_in_approval_m
 from src.engine import threshold_cycle_preopen_apply as mod
 from src.engine.monitoring import limit_down_watch_research
 from src.engine.scalping import (
+    entry_split_order_plan as split_plan,
     limit_down_watch,
     scalp_sim_auto_approval_control_tower as scalp_sim_auto_mod,
 )
@@ -11178,7 +11179,7 @@ def test_split_runtime_policy_audit_rejects_entry_authority_union_mismatch(
                 "source_date": "2026-07-20",
                 "runtime_apply_allowed": True,
                 "runtime_apply_compatibility_semantics": (
-                    "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed"
+                    split_plan.RUNTIME_APPLY_COMPATIBILITY_SEMANTICS
                 ),
                 "exploration_seed_allowed": False,
                 "ev_validated_runtime_apply_allowed": False,

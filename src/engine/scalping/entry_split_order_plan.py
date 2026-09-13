@@ -65,7 +65,8 @@ POLICY_MODE_BOUNDED_EQUAL_BASELINE = "bounded_equal_split_baseline"
 POLICY_MODE_POST_SUBMIT_TICK_BAND = "post_submit_tick_band_seed"
 POLICY_MODE_CHILD_SHAPE_EV_SEED = "child_shape_positive_ev_seed"
 RUNTIME_APPLY_COMPATIBILITY_SEMANTICS = (
-    "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed"
+    "union_of_exploration_seed_allowed_and_ev_validated_runtime_apply_allowed_"
+    "with_scoped_bucket_fallback_v2"
 )
 BASELINE_SPLIT_VARIANT_ID = "equal_50_50_offset_0pct_0_3pct"
 PCT_BAND_3LEG_VARIANT_ID = "equal_3leg_offset_0pct_0_3pct_0_8pct"
@@ -1488,6 +1489,15 @@ def runtime_apply_authority_contract_status(
         payload.get("baseline_runtime_defaults_enabled"), bool
     ):
         return False, "baseline_runtime_defaults_enabled_not_boolean"
+    missing_bucket_action = payload.get("missing_bucket_action")
+    if missing_bucket_action is not None:
+        expected_action = (
+            "runtime_default_fallback"
+            if _safe_bool(payload.get("baseline_runtime_defaults_enabled"))
+            else "keep_original_order"
+        )
+        if missing_bucket_action != expected_action:
+            return False, "missing_bucket_action_inconsistent_with_baseline_scope"
     for field in ("exploration_seed_count", "ev_validated_bucket_count"):
         if field not in payload:
             continue
@@ -1535,6 +1545,19 @@ def runtime_apply_authority_contract_status(
             return False, "runtime_apply_authority_classes_mismatch"
     buckets = payload.get("buckets")
     if isinstance(buckets, dict):
+        explicit_bucket_count = payload.get("explicit_bucket_count")
+        if explicit_bucket_count is not None and (
+            isinstance(explicit_bucket_count, bool)
+            or not isinstance(explicit_bucket_count, int)
+            or explicit_bucket_count != len(buckets)
+        ):
+            return False, "explicit_bucket_count_mismatch"
+        if (
+            payload.get("runtime_apply_allowed") is True
+            and not _safe_bool(payload.get("baseline_runtime_defaults_enabled"))
+            and not buckets
+        ):
+            return False, "scoped_runtime_policy_has_no_selected_buckets"
         for bucket, bucket_policy in buckets.items():
             if not isinstance(bucket_policy, dict):
                 return False, f"runtime_bucket_policy_invalid:{bucket}"
@@ -1811,11 +1834,23 @@ def _load_real_post_sell_rows(
     target_date: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     candidates = [
-        _event_fields(item)
+        {
+            **_event_fields(item),
+            "post_sell_evaluation_joined": False,
+            "terminal_outcome_state": "pending_evaluation",
+        }
         for item in iter_jsonl(_real_post_sell_candidate_path(target_date))
     ]
     evaluations = [
-        _event_fields(item) for item in iter_jsonl(_real_post_sell_path(target_date))
+        {
+            **_event_fields(item),
+            "post_sell_evaluation_joined": True,
+            # The evaluation publisher emits terminal post-sell outcomes; keep
+            # that provenance explicit so a candidate-only record can never
+            # enter a cost-adjusted EV sample.
+            "terminal_outcome_state": "COMPLETED",
+        }
+        for item in iter_jsonl(_real_post_sell_path(target_date))
     ]
     merged: list[dict[str, Any]] = []
     by_post_sell_id: dict[str, int] = {}
@@ -2125,6 +2160,8 @@ def _load_real_ev_values(
         )
         if event_date and event_date != target_date:
             continue
+        if not _safe_bool(fields.get("post_sell_evaluation_joined")):
+            continue
         if not _safe_bool(fields.get("actual_order_submitted")):
             continue
         profit = _safe_float(
@@ -2206,6 +2243,8 @@ def _load_real_split_variant_ev_values(
             or str(fields.get("entry_date") or fields.get("sell_date") or "")[:10]
         )
         if event_date and event_date != target_date:
+            continue
+        if not _safe_bool(fields.get("post_sell_evaluation_joined")):
             continue
         if not _safe_bool(fields.get("actual_order_submitted")):
             continue
@@ -2993,8 +3032,7 @@ def _build_candidate_grid(
         )
         ev_passed = (
             child_shape_seed is None
-            and
-            bucket != "guarded_or_stale"
+            and bucket != "guarded_or_stale"
             and real_count >= SAMPLE_FLOOR_REAL
             and split_variant_outcome_ready
             and split_variant_ev is not None
@@ -3039,8 +3077,7 @@ def _build_candidate_grid(
         )
         execution_shape_seed_passed = (
             child_shape_seed is None
-            and
-            bucket != "guarded_or_stale"
+            and bucket != "guarded_or_stale"
             and real_count >= SAMPLE_FLOOR_REAL
             and not split_variant_outcome_ready
             and cancel_rate <= 20.0
@@ -3129,9 +3166,7 @@ def _build_candidate_grid(
         runtime_apply_scope = (
             "child_shape_bounded_seed"
             if child_shape_seed_passed
-            else (
-                "ev_optimized_variant" if ev_passed else "baseline_split_structure"
-            )
+            else ("ev_optimized_variant" if ev_passed else "baseline_split_structure")
         )
         runtime_apply_authority_class = (
             "ev_validated_variant"
@@ -3153,7 +3188,9 @@ def _build_candidate_grid(
         elif real_count < SAMPLE_FLOOR_REAL:
             continuation_reason = "real_submit_sample_floor_not_reached"
         elif mature_parent_evidence_contradictory:
-            continuation_reason = "mature_parent_variants_have_no_positive_tail_safe_edge"
+            continuation_reason = (
+                "mature_parent_variants_have_no_positive_tail_safe_edge"
+            )
         elif split_variant_outcome_count >= SPLIT_VARIANT_CONTINUATION_FLOOR_REAL:
             continuation_reason = "early_variant_ev_or_tail_gate_failed"
         else:
@@ -3260,9 +3297,9 @@ def _build_candidate_grid(
                     "mature_parent_evidence_contradictory": (
                         mature_parent_evidence_contradictory
                     ),
-                    "mature_parent_tail_applies_to_selected_child_shape": False
-                    if child_shape_seed is not None
-                    else True,
+                    "mature_parent_tail_applies_to_selected_child_shape": (
+                        False if child_shape_seed is not None else True
+                    ),
                     "pass": passed,
                     "economic_evidence_pass": (
                         True
@@ -3286,11 +3323,11 @@ def _build_candidate_grid(
                     if child_shape_seed_passed
                     else (
                         "split_variant_outcome"
-                    if ev_passed
-                    else (
-                        "post_submit_observed_low_tick_band"
-                        if policy_mode == POLICY_MODE_POST_SUBMIT_TICK_BAND
-                        else "bounded_execution_shape_seed"
+                        if ev_passed
+                        else (
+                            "post_submit_observed_low_tick_band"
+                            if policy_mode == POLICY_MODE_POST_SUBMIT_TICK_BAND
+                            else "bounded_execution_shape_seed"
                         )
                     )
                 ),
@@ -3329,11 +3366,11 @@ def _build_candidate_grid(
                     if child_shape_seed_passed
                     else (
                         "positive_split_variant_ev_passed"
-                    if ev_passed
-                    else (
-                        "qty_preserving_execution_shape_seed_passed"
-                        if execution_shape_seed_passed
-                        else floor_status
+                        if ev_passed
+                        else (
+                            "qty_preserving_execution_shape_seed_passed"
+                            if execution_shape_seed_passed
+                            else floor_status
                         )
                     )
                 ),
@@ -3409,6 +3446,9 @@ def _policy_payload(
         "ordinary_negative_ev_action": "freeze_new_policy_generation",
         "ordinary_sample_shortfall_action": "hold_observation",
     }
+    baseline_runtime_defaults_enabled = any(
+        item.get("runtime_apply_scope") == "baseline_split_structure" for item in passed
+    )
     return {
         "schema_version": POLICY_SCHEMA_VERSION,
         "policy_version": policy_version,
@@ -3427,9 +3467,14 @@ def _policy_payload(
                 if str(item.get("runtime_apply_authority_class") or "")
             }
         ),
-        "baseline_runtime_defaults_enabled": any(
-            item.get("runtime_apply_scope") == "baseline_split_structure"
-            for item in passed
+        "baseline_runtime_defaults_enabled": baseline_runtime_defaults_enabled,
+        # A scoped policy is authoritative only for the buckets it explicitly
+        # selected.  Falling back in another bucket would turn a bounded,
+        # cost-reviewed seed into an unreviewed runtime split.
+        "missing_bucket_action": (
+            "runtime_default_fallback"
+            if baseline_runtime_defaults_enabled
+            else "keep_original_order"
         ),
         "explicit_bucket_count": len(explicit_bucket_candidates),
         "preopen_guard_required": True,
@@ -3930,6 +3975,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 "baseline_runtime_defaults_enabled"
             )
             is True,
+            "missing_bucket_action": policy.get("missing_bucket_action"),
             "explicit_bucket_count": _safe_int(policy.get("explicit_bucket_count"), 0),
             "preopen_guard_required": True,
             "policy_file": str(policy_json),
@@ -3974,6 +4020,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- policy_version: `{rec.get('policy_version') or '-'}`",
         f"- artifact_generation_id: `{(report.get('artifact_generation_binding') or {}).get('generation_id') or '-'}`",
         f"- baseline_runtime_defaults_enabled: `{rec.get('baseline_runtime_defaults_enabled')}`",
+        f"- missing_bucket_action: `{rec.get('missing_bucket_action') or '-'}`",
         f"- explicit_bucket_count: `{rec.get('explicit_bucket_count')}`",
         f"- policy_file: `{rec.get('policy_file') or '-'}`",
         "",
@@ -4116,6 +4163,36 @@ def _stale_baseline_policy_operator_authorized(policy: dict[str, Any]) -> bool:
         and _safe_bool(policy.get("entry_split_order_daily_baseline_fallback_applied"))
         and _safe_bool(policy.get("baseline_runtime_defaults_enabled"))
         and not (policy.get("buckets") or {})
+    )
+
+
+def _runtime_default_bucket_fallback_authorized(policy: dict[str, Any]) -> bool:
+    """Return whether a missing bucket may use the legacy default split.
+
+    A deliberately bucketless baseline may retain its approved fallback.  A
+    standard dated policy is instead scoped to its explicit buckets; it can
+    use a fallback only when the separately date-bounded operator fallback
+    contract has been loaded.
+    """
+
+    explicit_authority_contract = bool(
+        {
+            "runtime_apply_compatibility_semantics",
+            "exploration_seed_allowed",
+            "ev_validated_runtime_apply_allowed",
+            "missing_bucket_action",
+        }.intersection(policy)
+    )
+    return bool(
+        (
+            _safe_bool(policy.get("baseline_runtime_defaults_enabled"))
+            and not (policy.get("buckets") or {})
+        )
+        or _safe_bool(policy.get("entry_split_order_operator_fallback_authorized"))
+        # Policies from before the explicit authority split were deliberately
+        # bucketless.  Keep their compatibility path; a policy that declares
+        # the newer authority contract never receives this implicit fallback.
+        or not explicit_authority_contract
     )
 
 
@@ -4594,6 +4671,16 @@ def apply_entry_split_order_policy(
     bucket_policy = (policy.get("buckets") or {}).get(bucket)
     fallback_policy_applied = False
     if not isinstance(bucket_policy, dict):
+        if not _runtime_default_bucket_fallback_authorized(policy):
+            fields.update(
+                {
+                    "entry_split_order_bucket": bucket,
+                    "entry_split_order_policy_version": policy.get("policy_version"),
+                    "entry_split_order_runtime_default_policy_applied": False,
+                    "entry_split_order_skip_reason": "policy_bucket_not_selected",
+                }
+            )
+            return orders, fields
         bucket_policy = _runtime_default_bucket_policy(bucket)
         fallback_policy_applied = True
     policy_mode = str(bucket_policy.get("policy_mode") or "").strip()

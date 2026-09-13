@@ -141,25 +141,7 @@ def _optimizer_candidate_plan(
         return fallback, source
     cohort_contract = report.get("entry_cohort_contract")
     cohort_contract = cohort_contract if isinstance(cohort_contract, dict) else {}
-    cohort_contract_body = {
-        key: value
-        for key, value in cohort_contract.items()
-        if key != "contract_content_sha256"
-    }
-    contract_valid = bool(
-        cohort_contract.get("schema") == optimizer.ENTRY_COHORT_CONTRACT_SCHEMA
-        and cohort_contract.get("version")
-        in {
-            optimizer.ENTRY_COHORT_CONTRACT_V1,
-            optimizer.ENTRY_COHORT_CONTRACT_V2,
-        }
-        and isinstance(cohort_contract.get("expected_cohorts"), list)
-        and cohort_contract.get("contract_content_sha256")
-        == optimizer._canonical_sha256(cohort_contract_body)
-        and cohort_contract.get("runtime_effect") is False
-        and cohort_contract.get("allowed_runtime_apply") is False
-        and cohort_contract.get("dual_aftermarket_provider_forbidden") is True
-    )
+    contract_valid = bool(optimizer.entry_cohort_contract_valid(cohort_contract))
     if not contract_valid:
         return fallback, source
     entry = (report.get("stage_optimizers") or {}).get("entry") or {}
@@ -220,8 +202,7 @@ def _dual_source_only_cohorts(source: dict[str, Any]) -> list[dict[str, Any]]:
         if (
             cohort.get("effective_venue") != DUAL_AFTERMARKET_VENUE
             or cohort.get("session_bucket") != DUAL_AFTERMARKET_SESSION
-            or cohort.get("cohort_key_version")
-            != optimizer.ENTRY_COHORT_CONTRACT_V2
+            or cohort.get("cohort_key_version") != optimizer.ENTRY_COHORT_CONTRACT_V2
             or cohort.get("authority_state") != "OBSERVE_ONLY"
             or not cohort.get("market_data_route")
         ):
@@ -580,6 +561,7 @@ def run_batch(
         },
         "candidate_prompt_selection_source": candidate_plan_source,
         "cohort_contract": candidate_plan_source.get("cohort_contract"),
+        "cohort_contract_sha256": candidate_plan_source.get("cohort_contract_sha256"),
         "full_day_maturity_time_kst": "21:00:00",
         "max_new_requests_per_cohort": max_new_requests,
         "cohorts": _dual_source_only_cohorts(candidate_plan_source),
@@ -812,6 +794,12 @@ def refresh_optimizer_binding(*, target_date: str, write: bool) -> dict[str, Any
     original_evidence = live_policy._batch_evidence(report)
     report = {
         **report,
+        # This is metadata-only and intentionally excluded from
+        # ``_batch_evidence``.  It binds an older terminal replay to the
+        # exact current optimizer cohort census without changing executed
+        # requests, selected prompts, or any live-candidate evidence.
+        "cohort_contract": source["cohort_contract"],
+        "cohort_contract_sha256": source["cohort_contract_sha256"],
         "candidate_prompt_selection_source": source,
         "optimizer_binding_refreshed_at": datetime.now(quality.KST).isoformat(),
         "optimizer_binding_refresh_provider_calls": 0,

@@ -923,7 +923,15 @@ def _candidate_source_errors(
     return list(dict.fromkeys(errors))
 
 
-def _full_cost_economics_pass(value: Any) -> bool:
+def _full_cost_economics_pass(
+    value: Any, *, require_runtime_floor: bool = True
+) -> bool:
+    """Validate full-cost evidence for live promotion or source-only learning.
+
+    A positive exact net result is enough to retain a source-only challenger
+    for further paired observation.  It is never enough to promote a policy:
+    the normal caller keeps the 0.1% post-cost runtime floor.
+    """
     import math
 
     metric = value if isinstance(value, dict) else {}
@@ -948,7 +956,11 @@ def _full_cost_economics_pass(value: Any) -> bool:
             <= metric["verified_pair_count"]
             and type(candidate_net_ev) in (int, float)
             and math.isfinite(candidate_net_ev)
-            and candidate_net_ev >= MIN_COST_ADJUSTED_EV_PCT
+            and (
+                candidate_net_ev >= MIN_COST_ADJUSTED_EV_PCT
+                if require_runtime_floor
+                else candidate_net_ev > 0
+            )
             and type(paired_net_delta) in (int, float)
             and math.isfinite(paired_net_delta)
             and paired_net_delta > 0

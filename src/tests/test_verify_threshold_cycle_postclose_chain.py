@@ -1,5 +1,4 @@
 import gzip
-import hashlib
 import json
 import os
 from datetime import datetime
@@ -9,6 +8,7 @@ import pytest
 
 from src.engine import verify_threshold_cycle_postclose_chain as mod
 from src.engine.scalping import ai_action_outcome_calibration as calibration
+from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
 
 
 def test_retired_latency_is_not_an_ai_candidate_or_an_exemption():
@@ -91,46 +91,22 @@ def _entry_setup_session_cohort(
 
 
 def _entry_setup_session_contract_payload(target_date="2026-09-12"):
-    expected = [
-        _entry_setup_session_cohort(
-            "KRX/KRX_REGULAR",
-            "v1",
-            "KRX",
-            "KRX_REGULAR",
-            "KRX",
-            "SOURCE_ONLY",
-        ),
-        _entry_setup_session_cohort(
-            "NXT/NXT_AFTERMARKET",
-            "v1",
-            "NXT",
-            "NXT_AFTERMARKET",
-            "NXT",
-            "SOURCE_ONLY",
-        ),
-        _entry_setup_session_cohort(
-            "INTEGRATED/KRX_NXT_AFTERMARKET",
-            "v2",
-            "INTEGRATED",
-            "KRX_NXT_AFTERMARKET",
-            "SOR",
-            "OBSERVE_ONLY",
-        ),
-    ]
-    contract = {
-        "schema": "entry_replay_cohort_contract_v1",
-        "contract_version": "v2",
-        "expected_cohorts_by_contract_version": {"v2": expected},
-    }
-    contract_hash = hashlib.sha256(
-        json.dumps(
-            contract,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
+    contract = optimizer._entry_cohort_contract(
+        {
+            "candidate_summaries": [
+                {
+                    "stage": "entry",
+                    "effective_venue": "INTEGRATED",
+                    "session_bucket": "KRX_NXT_AFTERMARKET",
+                    "market_data_route": "SOR",
+                    "cohort_key_version": "v2",
+                    "authority_state": "OBSERVE_ONLY",
+                }
+            ]
+        }
+    )
+    expected = contract["expected_cohorts"]
+    contract_hash = contract["contract_content_sha256"]
     batch_cohorts = [
         {**expected[0], "status": "completed_offline_only"},
         {**expected[1], "status": "completed_offline_only"},
@@ -159,7 +135,10 @@ def _entry_setup_session_contract_payload(target_date="2026-09-12"):
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "cohort_contract": contract,
-        "source_cohort_contract_sha256": contract_hash,
+        "cohort_contract_sha256": contract_hash,
+        "candidate_prompt_selection_source": {
+            "cohort_contract_sha256": contract_hash,
+        },
         "cohorts": batch_cohorts,
     }
     consumer = {
@@ -168,7 +147,7 @@ def _entry_setup_session_contract_payload(target_date="2026-09-12"):
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
-        "source_cohort_contract_sha256": contract_hash,
+        "source_bindings": {"entry_cohort_contract_sha256": contract_hash},
         "request_paths": {"entry_base": {"cohorts": consumer_cohorts}},
     }
     return batch, consumer
@@ -187,13 +166,80 @@ def test_entry_setup_replay_session_contract_accepts_versioned_observe_only_dual
     assert status["consumer_cohort_count"] == 3
 
 
+def test_entry_setup_replay_session_contract_accepts_producer_v1_legacy_routes():
+    contract = optimizer._entry_cohort_contract({})
+    contract_hash = contract["contract_content_sha256"]
+    expected = contract["expected_cohorts"]
+    batch = {
+        "target_date": "2026-09-11",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "cohort_contract": contract,
+        "cohort_contract_sha256": contract_hash,
+        "candidate_prompt_selection_source": {
+            "cohort_contract_sha256": contract_hash,
+        },
+        # Historic terminal batches did not duplicate v1 metadata on every
+        # row.  The producer contract is the authoritative default.
+        "cohorts": [
+            {
+                "effective_venue": row["effective_venue"],
+                "session_bucket": row["session_bucket"],
+                "status": "completed_offline_only",
+            }
+            for row in expected
+        ],
+    }
+    consumer = {
+        "target_date": "2026-09-11",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_bindings": {"entry_cohort_contract_sha256": contract_hash},
+        "request_paths": {
+            "entry_base": {
+                "cohorts": [
+                    {
+                        **row,
+                        "path_status": "connected_and_hash_bound",
+                    }
+                    for row in expected
+                ]
+            }
+        },
+    }
+
+    status = mod._entry_setup_replay_session_contract_status(
+        batch, consumer, target_date="2026-09-11"
+    )
+
+    assert status["status"] == "pass"
+    assert status["contract_version"] == "v1"
+    assert status["expected_cohort_count"] == 2
+
+
 def test_entry_setup_replay_session_contract_rejects_hash_date_or_unknown_coverage():
     batch, consumer = _entry_setup_session_contract_payload()
     consumer["target_date"] = "2026-09-11"
-    consumer["source_cohort_contract_sha256"] = "b" * 64
-    batch["cohort_contract"]["expected_cohorts_by_contract_version"]["v2"][2][
-        "market_data_route"
-    ] = "UNKNOWN"
+    consumer["source_bindings"]["entry_cohort_contract_sha256"] = "b" * 64
+    batch["cohort_contract"]["expected_cohorts"][2]["market_data_route"] = "UNKNOWN"
+    body = {
+        key: value
+        for key, value in batch["cohort_contract"].items()
+        if key != "contract_content_sha256"
+    }
+    batch["cohort_contract"]["contract_content_sha256"] = optimizer._canonical_sha256(
+        body
+    )
+    batch["cohort_contract_sha256"] = batch["cohort_contract"][
+        "contract_content_sha256"
+    ]
+    batch["candidate_prompt_selection_source"]["cohort_contract_sha256"] = batch[
+        "cohort_contract"
+    ]["contract_content_sha256"]
 
     status = mod._entry_setup_replay_session_contract_status(
         batch, consumer, target_date="2026-09-12"
@@ -230,21 +276,18 @@ def test_entry_setup_replay_session_contract_rejects_dual_authority_leak():
     batch, consumer = _entry_setup_session_contract_payload()
     dual = batch["cohorts"][2]
     dual["authority_state"] = "LIVE_APPROVED"
-    batch["cohort_contract"]["expected_cohorts_by_contract_version"]["v2"][2][
-        "authority_state"
-    ] = "LIVE_APPROVED"
+    batch["cohort_contract"]["expected_cohorts"][2]["authority_state"] = "LIVE_APPROVED"
     contract = batch["cohort_contract"]
-    contract_hash = hashlib.sha256(
-        json.dumps(
-            contract,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
-    batch["source_cohort_contract_sha256"] = contract_hash
-    consumer["source_cohort_contract_sha256"] = contract_hash
+    body = {
+        key: value
+        for key, value in contract.items()
+        if key != "contract_content_sha256"
+    }
+    contract_hash = optimizer._canonical_sha256(body)
+    contract["contract_content_sha256"] = contract_hash
+    batch["cohort_contract_sha256"] = contract_hash
+    batch["candidate_prompt_selection_source"]["cohort_contract_sha256"] = contract_hash
+    consumer["source_bindings"]["entry_cohort_contract_sha256"] = contract_hash
     consumer["request_paths"]["entry_base"]["cohorts"][2][
         "authority_state"
     ] = "LIVE_APPROVED"

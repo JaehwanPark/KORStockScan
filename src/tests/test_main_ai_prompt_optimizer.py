@@ -873,6 +873,12 @@ def test_optimizer_preserves_full_cost_positive_challenger_without_gross_veto(
     }
     path = tmp_path / "net-detailed.json"
     _write(path, payload)
+    assert (
+        policy._full_cost_economics_pass(
+            payload["cumulative_learning"]["full_cost_economics"]
+        )
+        is False
+    )
     evaluations = optimizer._detailed_reports("2026-09-10")
     assert len(evaluations) == 1
     assert evaluations[0]["net_economic_review_pass"] is True
